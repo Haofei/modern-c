@@ -131,6 +131,15 @@ fn e_type(p: *mut Parser, sb: *mut StrBuf, tn: u32) -> void {
         sb_put_str(sb, arg_lex);
         return;
     }
+    // A `*mut dyn TRAIT` / `*dyn TRAIT` trait object (P5.10) is the fat-pointer struct `TRAIT__dyn`
+    // ({ void* data; const TRAIT__vtable* vtbl; }, emitted by `e_trait_typedefs`) — passed BY VALUE,
+    // so no trailing `*`. main_token names the trait.
+    if nd.kind == .type_dyn {
+        let tr: []const u8 = e_tok_text(p, nd.main_token);
+        sb_put_str(sb, tr);
+        sb_put_cstr(sb, "__dyn");
+        return;
+    }
     // The `type` keyword annotation (a `comptime T: type` param) has no C spelling; it is dropped
     // from emitted signatures (see `e_gfn_sig_mono`), so nothing is emitted here.
     if nd.kind == .type_kw {
@@ -327,6 +336,163 @@ fn e_base_is_slice(p: *mut Parser, base: u32) -> bool {
     }
     let tnode: Node = e_node(p, tn);
     return tnode.kind == .type_slice_const || tnode.kind == .type_slice_mut;
+}
+
+// True when `base` is a plain-pointer-typed identifier (`*T`/`*mut T`) in the current function — so a
+// member access `base.field` must lower to `base->field` in C (MC auto-derefs a `.` through a pointer,
+// e.g. an `impl` method's `self: *mut TYPE`). A trait-object (`type_dyn`) is a by-value fat pointer,
+// NOT a plain pointer, so it stays `.` (its `.data`/`.vtbl` are direct fields). (P5.10)
+fn e_base_is_ptr(p: *mut Parser, base: u32) -> bool {
+    let bn: Node = e_node(p, base);
+    if bn.kind != .ident_expr {
+        return false;
+    }
+    let name: []const u8 = e_tok_text(p, bn.main_token);
+    let tn: u32 = e_local_type_node(p, name);
+    if tn == 0 {
+        return false;
+    }
+    let tnode: Node = e_node(p, tn);
+    return tnode.kind == .type_ptr;
+}
+
+// True when `base` is a trait-object-typed identifier (`*mut dyn TRAIT`) in the current function — so
+// a method call `base.m(..)` lowers to a vtable dispatch `(base).vtbl->m((base).data, ..)`. (P5.10)
+fn e_base_is_dyn(p: *mut Parser, base: u32) -> bool {
+    let bn: Node = e_node(p, base);
+    if bn.kind != .ident_expr {
+        return false;
+    }
+    let name: []const u8 = e_tok_text(p, bn.main_token);
+    let tn: u32 = e_local_type_node(p, name);
+    if tn == 0 {
+        return false;
+    }
+    let tnode: Node = e_node(p, tn);
+    return tnode.kind == .type_dyn;
+}
+
+// Emit a dynamic-dispatch call `recv.m(args)` (P5.10) as `(recv).vtbl->m((recv).data, args)`: the
+// method is looked up through the receiver's rodata vtable and `self` is threaded as the erased
+// `void*` data pointer. `n` is the `.call` node; its callee is a `.field` (`recv.m`).
+fn e_dyn_dispatch(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
+    let nd: Node = e_node(p, n);
+    let cnode: Node = e_node(p, nd.lhs);
+    let recv: u32 = cnode.lhs;
+    let mname: []const u8 = e_tok_text(p, cnode.main_token);
+    sb_put_cstr(sb, "(");
+    e_expr(p, sb, recv);
+    sb_put_cstr(sb, ").vtbl->");
+    sb_put_str(sb, mname);
+    sb_put_cstr(sb, "((");
+    e_expr(p, sb, recv);
+    sb_put_cstr(sb, ").data");
+    let arg_run: u32 = nd.rhs;
+    let argc: u32 = e_extra(p, arg_run);
+    var k: u32 = 0;
+    while k < argc {
+        sb_put_cstr(sb, ", ");
+        let arg: u32 = e_extra(p, arg_run + 1 + k);
+        e_expr(p, sb, arg);
+        k = k + 1;
+    }
+    sb_put_cstr(sb, ")");
+}
+
+// Find the module-level `fn_decl` named `name`, returning its node index (or 0 if none). Used at a
+// call site to recover the callee's declared param types so a `*mut TYPE` argument passed where a
+// `*mut dyn TRAIT` is expected can be coerced to a fat pointer. (P5.10)
+fn e_find_fn(p: *mut Parser, name: []const u8) -> u32 {
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var i: u32 = 0;
+    while i < count {
+        let d: u32 = e_extra(p, run + 1 + i);
+        let dn: Node = e_node(p, d);
+        if dn.kind == .fn_decl {
+            let nm: []const u8 = e_tok_text(p, dn.main_token);
+            let m: bool = mem_eql(name, nm);
+            if m {
+                return d;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// The declared type node of param `k` of fn `fn_node`, or 0 if out of range. (P5.10)
+fn e_fn_param_type_node(p: *mut Parser, fn_node: u32, k: u32) -> u32 {
+    let nd: Node = e_node(p, fn_node);
+    let frec: u32 = nd.lhs;
+    let params_run: u32 = e_extra(p, frec + 1);
+    let pc: u32 = e_extra(p, params_run);
+    if k >= pc {
+        return 0;
+    }
+    let pn: u32 = e_extra(p, params_run + 1 + k);
+    let pnode: Node = e_node(p, pn);
+    return pnode.lhs;
+}
+
+// The `type_name` node whose lexeme names the CONCRETE type of a coercion argument (P5.10): for `&x`
+// or a bare pointer `x`, resolve `x`'s declared type — a value/`*mut TYPE` yields the `TYPE` name node.
+// Returns 0 when the concrete type can't be recovered (e.g. the arg is already a trait object).
+fn e_dyn_concrete_type_node(p: *mut Parser, arg: u32) -> u32 {
+    let an: Node = e_node(p, arg);
+    var target: u32 = arg;
+    if an.kind == .un_addr {
+        target = an.lhs;
+    }
+    let tn: Node = e_node(p, target);
+    if tn.kind != .ident_expr {
+        return 0;
+    }
+    let nm: []const u8 = e_tok_text(p, tn.main_token);
+    let tnode_idx: u32 = e_local_type_node(p, nm);
+    if tnode_idx == 0 {
+        return 0;
+    }
+    let tnode: Node = e_node(p, tnode_idx);
+    if tnode.kind == .type_name {
+        return tnode_idx;
+    }
+    if tnode.kind == .type_ptr {
+        let pointee_idx: u32 = tnode.lhs;
+        let pointee: Node = e_node(p, pointee_idx);
+        if pointee.kind == .type_name {
+            return pointee_idx;
+        }
+    }
+    return 0;
+}
+
+// Emit a trait-object coercion at a call arg (P5.10): a `*mut TYPE` value passed where a
+// `*mut dyn TRAIT` is expected becomes the fat pointer
+//   `(TRAIT__dyn){ .data = (void*)(<arg>), .vtbl = &TYPE__TRAIT__vtable }`.
+// `dyn_type_node` is the parameter's `type_dyn` node (naming the trait). When the concrete type can't
+// be recovered (the arg is already a trait object), the arg is passed through unchanged.
+fn e_dyn_coerce(p: *mut Parser, sb: *mut StrBuf, arg: u32, dyn_type_node: u32) -> void {
+    let dn: Node = e_node(p, dyn_type_node);
+    let trait: []const u8 = e_tok_text(p, dn.main_token);
+    let concrete_node: u32 = e_dyn_concrete_type_node(p, arg);
+    if concrete_node == 0 {
+        e_expr(p, sb, arg); // already a trait object (or unresolved): pass through
+        return;
+    }
+    let cn: Node = e_node(p, concrete_node);
+    let concrete: []const u8 = e_tok_text(p, cn.main_token);
+    sb_put_cstr(sb, "(");
+    sb_put_str(sb, trait);
+    sb_put_cstr(sb, "__dyn){ .data = (void*)(");
+    e_expr(p, sb, arg);
+    sb_put_cstr(sb, "), .vtbl = &");
+    sb_put_str(sb, concrete);
+    sb_put_cstr(sb, "__");
+    sb_put_str(sb, trait);
+    sb_put_cstr(sb, "__vtable }");
 }
 
 // Emit the fat-pointer struct type NAME for a base identifier's declared slice/array type, e.g.
@@ -653,6 +819,15 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
                 return;
             }
         }
+        // P5.10: a dynamic-dispatch call `d.m(args)` on a trait-object receiver (`*mut dyn TRAIT`)
+        // lowers to `(d).vtbl->m((d).data, args)`.
+        if cnode.kind == .field {
+            let recv_dyn: bool = e_base_is_dyn(p, cnode.lhs);
+            if recv_dyn {
+                e_dyn_dispatch(p, sb, n);
+                return;
+            }
+        }
         // P5.5: a GENERIC call `f(u32, ...)` lowers to `f_u32(...)` — the mangled monomorphic callee
         // with the leading type argument DROPPED (it selected the instantiation, it is not a value).
         if cnode.kind == .ident_expr {
@@ -684,13 +859,33 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         sb_put_cstr(sb, "(");
         let arg_run: u32 = nd.rhs;
         let argc: u32 = e_extra(p, arg_run);
+        // P5.10: recover the callee's declared params so a `*mut TYPE` arg passed where a
+        // `*mut dyn TRAIT` is expected is coerced to a `{data,vtable}` fat pointer at this site.
+        var callee_fn: u32 = 0;
+        if cnode.kind == .ident_expr {
+            let cnm: []const u8 = e_tok_text(p, cnode.main_token);
+            callee_fn = e_find_fn(p, cnm);
+        }
         var k: u32 = 0;
         while k < argc {
             if k > 0 {
                 sb_put_cstr(sb, ", ");
             }
             let arg: u32 = e_extra(p, arg_run + 1 + k);
-            e_expr(p, sb, arg);
+            var ptn: u32 = 0;
+            if callee_fn != 0 {
+                ptn = e_fn_param_type_node(p, callee_fn, k);
+            }
+            var is_dyn_param: bool = false;
+            if ptn != 0 {
+                let ptnode: Node = e_node(p, ptn);
+                is_dyn_param = ptnode.kind == .type_dyn;
+            }
+            if is_dyn_param {
+                e_dyn_coerce(p, sb, arg, ptn);
+            } else {
+                e_expr(p, sb, arg);
+            }
             k = k + 1;
         }
         sb_put_cstr(sb, ")");
@@ -737,8 +932,15 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         return;
     }
     if nd.kind == .field {
+        // A pointer-typed base auto-derefs: `p.field` -> `p->field` (P5.10, e.g. `self->total` in an
+        // impl method whose `self` is `*mut TYPE`). A value/dyn base keeps `.`.
+        let base_ptr: bool = e_base_is_ptr(p, nd.lhs);
         e_expr(p, sb, nd.lhs);
-        sb_put_cstr(sb, ".");
+        if base_ptr {
+            sb_put_cstr(sb, "->");
+        } else {
+            sb_put_cstr(sb, ".");
+        }
         let fld: []const u8 = e_tok_text(p, nd.main_token);
         sb_put_str(sb, fld);
         return;
@@ -1252,6 +1454,291 @@ fn e_enum_decl(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
     sb_put_cstr(sb, "};\n\n");
 }
 
+// ----- P5.10 traits + `*dyn` dynamic dispatch -----
+
+// Emit a trait's two C typedefs (P5.10): the fn-pointer vtable and the {data,vtable} fat pointer —
+// matching MC's real Tier-2 `*dyn` C representation (src/lower_c: a rodata vtable + a fat pointer,
+// no heap). Each trait method `m(self: *mut Self, p: T) -> R` becomes a slot
+// `R (*m)(void* self, T p)` (the `self` receiver is erased to `void*`; the first param is skipped).
+//   typedef struct TRAIT__vtable { R (*m)(void* self, ..); .. } TRAIT__vtable;
+//   typedef struct TRAIT__dyn { void* data; const TRAIT__vtable* vtbl; } TRAIT__dyn;
+fn e_trait_typedef(p: *mut Parser, sb: *mut StrBuf, trait_node: u32) -> void {
+    let nd: Node = e_node(p, trait_node);
+    let tname: []const u8 = e_tok_text(p, nd.main_token);
+    let mrun: u32 = nd.lhs;
+    let mcount: u32 = e_extra(p, mrun);
+    sb_put_cstr(sb, "typedef struct ");
+    sb_put_str(sb, tname);
+    sb_put_cstr(sb, "__vtable {\n");
+    var mi: u32 = 0;
+    while mi < mcount {
+        let m: u32 = e_extra(p, mrun + 1 + mi);
+        let mn: Node = e_node(p, m); // trait_method
+        let mmname: []const u8 = e_tok_text(p, mn.main_token);
+        let params_run: u32 = mn.lhs;
+        let ret_ty: u32 = mn.rhs;
+        sb_put_cstr(sb, "    ");
+        e_type(p, sb, ret_ty);
+        sb_put_cstr(sb, " (*");
+        sb_put_str(sb, mmname);
+        sb_put_cstr(sb, ")(void* self");
+        let pc: u32 = e_extra(p, params_run);
+        var k: u32 = 1; // skip the `self` receiver at index 0
+        while k < pc {
+            sb_put_cstr(sb, ", ");
+            let pn: u32 = e_extra(p, params_run + 1 + k);
+            let pnode: Node = e_node(p, pn);
+            let pname: []const u8 = e_tok_text(p, pnode.main_token);
+            e_emit_decl(p, sb, pnode.lhs, pname);
+            k = k + 1;
+        }
+        sb_put_cstr(sb, ");\n");
+        mi = mi + 1;
+    }
+    sb_put_cstr(sb, "} ");
+    sb_put_str(sb, tname);
+    sb_put_cstr(sb, "__vtable;\n");
+    sb_put_cstr(sb, "typedef struct ");
+    sb_put_str(sb, tname);
+    sb_put_cstr(sb, "__dyn {\n    void* data;\n    const ");
+    sb_put_str(sb, tname);
+    sb_put_cstr(sb, "__vtable* vtbl;\n} ");
+    sb_put_str(sb, tname);
+    sb_put_cstr(sb, "__dyn;\n\n");
+}
+
+// Emit every trait's typedefs (vtable + fat pointer). Called before the prototype pass, since a fn
+// signature may take a `TRAIT__dyn` by value (e.g. `drive(c: *mut dyn Counter, ..)`).
+fn e_trait_typedefs(p: *mut Parser, sb: *mut StrBuf) -> void {
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var i: u32 = 0;
+    while i < count {
+        let d: u32 = e_extra(p, run + 1 + i);
+        let dn: Node = e_node(p, d);
+        if dn.kind == .trait_decl {
+            e_trait_typedef(p, sb, d);
+        }
+        i = i + 1;
+    }
+}
+
+// Find the module-level `trait_decl` named `name`, or 0. Used to emit a vtable's slots in TRAIT order.
+fn e_find_trait(p: *mut Parser, name: []const u8) -> u32 {
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var i: u32 = 0;
+    while i < count {
+        let d: u32 = e_extra(p, run + 1 + i);
+        let dn: Node = e_node(p, d);
+        if dn.kind == .trait_decl {
+            let nm: []const u8 = e_tok_text(p, dn.main_token);
+            let m: bool = mem_eql(name, nm);
+            if m {
+                return d;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// True when a type node is `void` (a 0 node, or a `type_name` whose lexeme is "void"). Lets an
+// impl thunk drop the `return` for a void-returning method (a `return void_call();` is illegal C).
+fn e_type_is_void(p: *mut Parser, ty_node: u32) -> bool {
+    if ty_node == 0 {
+        return true;
+    }
+    let nd: Node = e_node(p, ty_node);
+    if nd.kind != .type_name {
+        return false;
+    }
+    var b_void: [4]u8 = .{ 118, 111, 105, 100 }; // "void"
+    let txt: []const u8 = e_tok_text(p, nd.main_token);
+    return mem_eql(txt, mem.as_bytes(&b_void));
+}
+
+// Emit an impl method's free-fn signature `RET TYPE__mname(PARAMS)` (P5.10) — the method desugared to
+// an inherent-style free function. `method_node` is a `fn_decl`; its `self` param stays a concrete
+// `*mut TYPE` (so `self->field` accesses lower directly). `type_name` is the impl target type.
+fn e_impl_method_sig(p: *mut Parser, sb: *mut StrBuf, type_name: []const u8, method_node: u32) -> void {
+    let nd: Node = e_node(p, method_node);
+    let frec: u32 = nd.lhs;
+    let params_run: u32 = e_extra(p, frec + 1);
+    let ret_ty: u32 = e_extra(p, frec + 2);
+    e_type(p, sb, ret_ty);
+    sb_put_cstr(sb, " ");
+    sb_put_str(sb, type_name);
+    sb_put_cstr(sb, "__");
+    let mname: []const u8 = e_tok_text(p, nd.main_token);
+    sb_put_str(sb, mname);
+    sb_put_cstr(sb, "(");
+    let pcount: u32 = e_extra(p, params_run);
+    if pcount == 0 {
+        sb_put_cstr(sb, "void");
+    } else {
+        var k: u32 = 0;
+        while k < pcount {
+            if k > 0 {
+                sb_put_cstr(sb, ", ");
+            }
+            let pn: u32 = e_extra(p, params_run + 1 + k);
+            let pnode: Node = e_node(p, pn);
+            let pname: []const u8 = e_tok_text(p, pnode.main_token);
+            e_emit_decl(p, sb, pnode.lhs, pname);
+            k = k + 1;
+        }
+    }
+    sb_put_cstr(sb, ")");
+}
+
+// Emit an impl method's free-fn DEFINITION `RET TYPE__mname(PARAMS) { body }` (P5.10). `cur_fn` is set
+// so pointer-`self` field accesses lower to `self->field` and slice-aware accesses resolve.
+fn e_impl_method_def(p: *mut Parser, sb: *mut StrBuf, type_name: []const u8, method_node: u32) -> void {
+    let nd: Node = e_node(p, method_node);
+    let frec: u32 = nd.lhs;
+    let body: u32 = e_extra(p, frec + 3);
+    e_impl_method_sig(p, sb, type_name, method_node);
+    sb_put_cstr(sb, " ");
+    p.cur_fn = method_node;
+    e_block(p, sb, body, 0);
+    p.cur_fn = 0;
+    sb_put_cstr(sb, "\n\n");
+}
+
+// Emit an impl method's `void*`-self THUNK (P5.10): the vtable slot points here, casting the erased
+// receiver back to the concrete type — so the vtable is a plain fn-pointer table with no
+// `-Wincompatible-pointer-types` casts at the call site (matching the real backend's thunk approach):
+//   static RET TYPE__mname__dyn(void* self, <rest>) { return TYPE__mname((TYPE*)self, <rest>); }
+fn e_impl_thunk(p: *mut Parser, sb: *mut StrBuf, type_name: []const u8, method_node: u32) -> void {
+    let nd: Node = e_node(p, method_node);
+    let frec: u32 = nd.lhs;
+    let params_run: u32 = e_extra(p, frec + 1);
+    let ret_ty: u32 = e_extra(p, frec + 2);
+    let mname: []const u8 = e_tok_text(p, nd.main_token);
+    let is_void: bool = e_type_is_void(p, ret_ty);
+    sb_put_cstr(sb, "static ");
+    e_type(p, sb, ret_ty);
+    sb_put_cstr(sb, " ");
+    sb_put_str(sb, type_name);
+    sb_put_cstr(sb, "__");
+    sb_put_str(sb, mname);
+    sb_put_cstr(sb, "__dyn(void* self");
+    let pc: u32 = e_extra(p, params_run);
+    var k: u32 = 1; // skip the `self` receiver
+    while k < pc {
+        sb_put_cstr(sb, ", ");
+        let pn: u32 = e_extra(p, params_run + 1 + k);
+        let pnode: Node = e_node(p, pn);
+        let pname: []const u8 = e_tok_text(p, pnode.main_token);
+        e_emit_decl(p, sb, pnode.lhs, pname);
+        k = k + 1;
+    }
+    sb_put_cstr(sb, ") {\n    ");
+    if !is_void {
+        sb_put_cstr(sb, "return ");
+    }
+    sb_put_str(sb, type_name);
+    sb_put_cstr(sb, "__");
+    sb_put_str(sb, mname);
+    sb_put_cstr(sb, "((");
+    sb_put_str(sb, type_name);
+    sb_put_cstr(sb, "*)self");
+    var k2: u32 = 1;
+    while k2 < pc {
+        sb_put_cstr(sb, ", ");
+        let pn2: u32 = e_extra(p, params_run + 1 + k2);
+        let pnode2: Node = e_node(p, pn2);
+        let pname2: []const u8 = e_tok_text(p, pnode2.main_token);
+        sb_put_str(sb, pname2);
+        k2 = k2 + 1;
+    }
+    sb_put_cstr(sb, ");\n}\n\n");
+}
+
+// Emit the rodata vtable instance for an `impl TRAIT for TYPE` (P5.10):
+//   static const TRAIT__vtable TYPE__TRAIT__vtable = { &TYPE__m__dyn, .. };
+// Slots are laid out in TRAIT declaration order (found via `e_find_trait`); each slot is the thunk
+// for the same-named method. `const` places it in rodata (no heap), as the real backend does.
+fn e_impl_vtable(p: *mut Parser, sb: *mut StrBuf, trait_name: []const u8, type_name: []const u8) -> void {
+    sb_put_cstr(sb, "static const ");
+    sb_put_str(sb, trait_name);
+    sb_put_cstr(sb, "__vtable ");
+    sb_put_str(sb, type_name);
+    sb_put_cstr(sb, "__");
+    sb_put_str(sb, trait_name);
+    sb_put_cstr(sb, "__vtable = { ");
+    let trait_node: u32 = e_find_trait(p, trait_name);
+    if trait_node != 0 {
+        let tn: Node = e_node(p, trait_node);
+        let mrun: u32 = tn.lhs;
+        let mc: u32 = e_extra(p, mrun);
+        var mi: u32 = 0;
+        while mi < mc {
+            if mi > 0 {
+                sb_put_cstr(sb, ", ");
+            }
+            let m: u32 = e_extra(p, mrun + 1 + mi);
+            let mn: Node = e_node(p, m);
+            let mname: []const u8 = e_tok_text(p, mn.main_token);
+            sb_put_cstr(sb, "&");
+            sb_put_str(sb, type_name);
+            sb_put_cstr(sb, "__");
+            sb_put_str(sb, mname);
+            sb_put_cstr(sb, "__dyn");
+            mi = mi + 1;
+        }
+    }
+    sb_put_cstr(sb, " };\n\n");
+}
+
+// Emit a whole `impl TRAIT for TYPE` block (P5.10): each method's free-fn definition, then each
+// method's `void*`-self thunk, then the rodata vtable. The rec is [type_name_tok, methods_run].
+fn e_impl_decl(p: *mut Parser, sb: *mut StrBuf, impl_node: u32) -> void {
+    let nd: Node = e_node(p, impl_node);
+    let trait_name: []const u8 = e_tok_text(p, nd.main_token);
+    let rec: u32 = nd.lhs;
+    let type_tok: u32 = e_extra(p, rec);
+    let methods_run: u32 = e_extra(p, rec + 1);
+    let type_name: []const u8 = e_tok_text(p, type_tok);
+    let mcount: u32 = e_extra(p, methods_run);
+    var mi: u32 = 0;
+    while mi < mcount {
+        let mdef: u32 = e_extra(p, methods_run + 1 + mi);
+        e_impl_method_def(p, sb, type_name, mdef);
+        mi = mi + 1;
+    }
+    var ti: u32 = 0;
+    while ti < mcount {
+        let mthk: u32 = e_extra(p, methods_run + 1 + ti);
+        e_impl_thunk(p, sb, type_name, mthk);
+        ti = ti + 1;
+    }
+    e_impl_vtable(p, sb, trait_name, type_name);
+}
+
+// Emit every `impl` block. Placed after all prototypes (so a method body can call any fn) and before
+// the normal fn definitions (so a rodata vtable precedes any coercion site that takes its address).
+fn e_impl_decls(p: *mut Parser, sb: *mut StrBuf) -> void {
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var i: u32 = 0;
+    while i < count {
+        let d: u32 = e_extra(p, run + 1 + i);
+        let dn: Node = e_node(p, d);
+        if dn.kind == .impl_decl {
+            e_impl_decl(p, sb, d);
+        }
+        i = i + 1;
+    }
+}
+
 // ----- P5.5 monomorphization -----
 
 // True when a fn's param run contains a `comptime` param (`param_decl.rhs == 1`) — i.e. the fn is a
@@ -1570,6 +2057,9 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
         }
         gsi = gsi + 1;
     }
+    // P5.10 trait typedefs: each trait's `TRAIT__vtable` fn-pointer table + `TRAIT__dyn` fat pointer.
+    // Emitted before the prototypes (a fn signature may take a `TRAIT__dyn` by value).
+    e_trait_typedefs(p, sb);
     // Forward prototypes for every function, so a call resolves regardless of the order the loader
     // concatenated the modules in (an importer may textually precede the module it depends on). A
     // generic template is skipped here and emitted as monomorphic prototypes below.
@@ -1618,6 +2108,10 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
         gpi = gpi + 1;
     }
     sb_put_cstr(sb, "\n");
+    // P5.10 impl blocks: each `impl TRAIT for TYPE` emits its methods' free fns + `void*`-self thunks
+    // + the rodata vtable. Placed after all prototypes (a method may call any fn) and before the normal
+    // fn definitions (a vtable must be defined before a coercion site takes its address).
+    e_impl_decls(p, sb);
     var i: u32 = 0;
     while i < count {
         let d: u32 = e_extra(p, run + 1 + i);

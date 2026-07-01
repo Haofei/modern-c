@@ -129,6 +129,21 @@ open enum NodeKind: u32 {
                       //    types as `usize`. A generic type param T is substituted at emit (P5.5).
     alignof_op,       // 55 `alignof(TYPE)`: main_token = the `alignof` keyword; lhs = the TYPE node.
                       //    Emits `_Alignof(<ctype>)`; types as `usize`.
+    // ----- P5.10 traits + `*dyn` dynamic dispatch additions (appended to keep prior ordinals stable) -----
+    trait_decl,       // 56 `trait NAME { fn m(self: *mut Self, ..) -> R; .. }`: main_token = the trait
+                      //    name; lhs = a length-prefixed run of `trait_method` node indices. Emits a
+                      //    `NAME__vtable` fn-pointer typedef + a `NAME__dyn` {data,vtable} fat-pointer typedef.
+    trait_method,     // 57 one bodyless trait-method signature: main_token = method name; lhs = params
+                      //    run (its first param is `self`); rhs = the return-type node.
+    impl_decl,        // 58 `impl TRAIT for TYPE { fn m(self: *mut TYPE, ..) -> R { body } .. }`:
+                      //    main_token = the TRAIT name; lhs = a fixed rec [type_name_tok, methods_run]
+                      //    where methods_run is a length-prefixed run of `fn_decl` node indices. Each
+                      //    method is emitted as a free fn `TYPE__m`, plus a `void*`-self thunk and a
+                      //    `static const TYPE__TRAIT__vtable` rodata vtable.
+    type_dyn,         // 59 `*mut dyn NAME` / `*dyn NAME` TYPE (a trait-object fat pointer): main_token =
+                      //    the trait NAME token; rhs = 1 if `*mut` else 0. The leading `*`/`*mut` is
+                      //    consumed into this node (the fat pointer struct `NAME__dyn` IS the value),
+                      //    so it carries no separate pointer wrapper.
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -307,6 +322,19 @@ fn parse_type(p: *mut Parser) -> u32 {
         } else if eat(p, .kw_const) {
             is_mut = 0;
         }
+        // `*mut dyn NAME` / `*dyn NAME` (P5.10): a trait-object fat pointer. `dyn` is NOT a lexer
+        // keyword (it lexes as a plain identifier, like `as`/`raw`); recognize it by lexeme, consume
+        // it and the trait name, and fold the whole thing into a single `type_dyn` node (the fat
+        // pointer struct IS the value, so no separate `type_ptr` wrapper is produced).
+        if at(p, .identifier) {
+            let is_dyn: bool = tok_is_dyn(p, p.tok as u32);
+            if is_dyn {
+                p_advance(p); // `dyn`
+                let tr_tok: u32 = p.tok as u32;
+                expect(p, .identifier);
+                return add_node(p, .type_dyn, tr_tok, 0, is_mut);
+            }
+        }
         let pointee: u32 = parse_type(p);
         return add_node(p, .type_ptr, 0, pointee, is_mut);
     }
@@ -468,6 +496,30 @@ fn tok_is_raw(p: *mut Parser, tok: u32) -> bool {
 fn tok_is_as(p: *mut Parser, tok: u32) -> bool {
     let lex: []const u8 = tok_lexeme(p, tok);
     var kw: [2]u8 = .{ 97, 115 }; // "as"
+    return mem_eql(lex, mem.as_bytes(&kw));
+}
+
+// True when token `tok` is the identifier `dyn` (the trait-object marker, which is NOT a lexer
+// keyword — it lexes as a plain identifier, like `as`/`raw`). Bound to a local per G13. (P5.10)
+fn tok_is_dyn(p: *mut Parser, tok: u32) -> bool {
+    let lex: []const u8 = tok_lexeme(p, tok);
+    var kw: [3]u8 = .{ 100, 121, 110 }; // "dyn"
+    return mem_eql(lex, mem.as_bytes(&kw));
+}
+
+// True when token `tok` is the identifier `trait` (the trait-decl keyword — NOT a lexer keyword;
+// it lexes as a plain identifier, like `import`). Bound to a local per G13. (P5.10)
+fn tok_is_trait(p: *mut Parser, tok: u32) -> bool {
+    let lex: []const u8 = tok_lexeme(p, tok);
+    var kw: [5]u8 = .{ 116, 114, 97, 105, 116 }; // "trait"
+    return mem_eql(lex, mem.as_bytes(&kw));
+}
+
+// True when token `tok` is the identifier `impl` (the impl-block keyword — NOT a lexer keyword;
+// it lexes as a plain identifier, like `import`). Bound to a local per G13. (P5.10)
+fn tok_is_impl(p: *mut Parser, tok: u32) -> bool {
+    let lex: []const u8 = tok_lexeme(p, tok);
+    var kw: [4]u8 = .{ 105, 109, 112, 108 }; // "impl"
     return mem_eql(lex, mem.as_bytes(&kw));
 }
 
@@ -1054,12 +1106,124 @@ fn parse_extern_fn(p: *mut Parser) -> u32 {
     return add_node(p, .extern_fn, fn_name, ext_rec, 0);
 }
 
-// decl := `import` STRING `;` | `extern` ... | `export`? `open`? (`enum` ... | `fn` ... | `struct` ...)
+// trait := `trait` IDENT `{` (`fn` IDENT `(` Params `)` `->` Type `;`?)* `}`  (P5.10). Each method is a
+// bodyless signature stored as a `trait_method` node (main_token = method name; lhs = params run whose
+// FIRST param is `self`; rhs = return type). The trailing `;` after a method is OPTIONAL (both `-> R;`
+// and `-> R` before the next `fn`/`}` are accepted). The cursor is at the `trait` identifier.
+fn parse_trait(p: *mut Parser) -> u32 {
+    p_advance(p); // `trait`
+    let tname: u32 = p.tok as u32;
+    expect(p, .identifier);
+    expect(p, .l_brace);
+    var methods: Vec<u32> = vec_new(u32, p.a);
+    while true {
+        if at(p, .r_brace) {
+            break;
+        }
+        if at(p, .eof) {
+            record_error(p);
+            break;
+        }
+        let before: usize = p.tok;
+        expect(p, .kw_fn);
+        let mname: u32 = p.tok as u32;
+        expect(p, .identifier);
+        expect(p, .l_paren);
+        var params: Vec<u32> = vec_new(u32, p.a);
+        if !at(p, .r_paren) {
+            while true {
+                let param_name: u32 = p.tok as u32;
+                expect(p, .identifier);
+                expect(p, .colon);
+                let param_ty: u32 = parse_type(p);
+                let param: u32 = add_node(p, .param_decl, param_name, param_ty, 0);
+                vec_push(u32, &params, param);
+                if !eat(p, .comma) {
+                    break;
+                }
+            }
+        }
+        expect(p, .r_paren);
+        expect(p, .arrow);
+        let ret_ty: u32 = parse_type(p);
+        eat(p, .semicolon); // optional method terminator
+        let mrun: u32 = emit_list(p, &params);
+        vec_free(u32, &params);
+        let m: u32 = add_node(p, .trait_method, mname, mrun, ret_ty);
+        vec_push(u32, &methods, m);
+        if p.tok == before {
+            p_advance(p); // no-progress guard
+        }
+        if p.err_count > 100 {
+            break;
+        }
+    }
+    expect(p, .r_brace);
+    let methods_run: u32 = emit_list(p, &methods);
+    vec_free(u32, &methods);
+    return add_node(p, .trait_decl, tname, methods_run, 0);
+}
+
+// impl := `impl` IDENT `for` IDENT `{` (`fn` ...)* `}`  (P5.10). Each method is a FULL `fn` with a body,
+// parsed by `parse_fn` into a `fn_decl` node (its `self` param is a concrete `*mut TYPE`). The fixed rec
+// [type_name_tok, methods_run] records the impl target type + the run of `fn_decl` node indices. The
+// cursor is at the `impl` identifier.
+fn parse_impl(p: *mut Parser) -> u32 {
+    p_advance(p); // `impl`
+    let trait_tok: u32 = p.tok as u32;
+    expect(p, .identifier);
+    expect(p, .kw_for);
+    let type_tok: u32 = p.tok as u32;
+    expect(p, .identifier);
+    expect(p, .l_brace);
+    var methods: Vec<u32> = vec_new(u32, p.a);
+    while true {
+        if at(p, .r_brace) {
+            break;
+        }
+        if at(p, .eof) {
+            record_error(p);
+            break;
+        }
+        let before: usize = p.tok;
+        if at(p, .kw_fn) {
+            let m: u32 = parse_fn(p, 0); // a full fn_decl (with a body)
+            vec_push(u32, &methods, m);
+        } else {
+            record_error(p);
+            p_advance(p);
+        }
+        if p.tok == before {
+            p_advance(p); // no-progress guard
+        }
+        if p.err_count > 100 {
+            break;
+        }
+    }
+    expect(p, .r_brace);
+    let methods_run: u32 = emit_list(p, &methods);
+    vec_free(u32, &methods);
+    // Fixed rec [type_name_tok, methods_run].
+    let irec: u32 = vec_len(u32, &p.extra) as u32;
+    vec_push(u32, &p.extra, type_tok);
+    vec_push(u32, &p.extra, methods_run);
+    return add_node(p, .impl_decl, trait_tok, irec, 0);
+}
+
+// decl := `import` STRING `;` | `extern` ... | `trait` ... | `impl` ... | `export`? `open`? (`enum` ... | `fn` ... | `struct` ...)
 fn parse_decl(p: *mut Parser) -> u32 {
     // A leading `import "..."` is the module directive (an identifier `import`, not a keyword).
     if at(p, .identifier) {
         if tok_is_import(p, p.tok as u32) {
             return parse_import(p);
+        }
+        // `trait NAME { .. }` / `impl TRAIT for TYPE { .. }` (P5.10): `trait`/`impl` are identifiers,
+        // not lexer keywords, so they are recognized here by lexeme (like `import`).
+        if tok_is_trait(p, p.tok as u32) {
+            return parse_trait(p);
+        }
+        if tok_is_impl(p, p.tok as u32) {
+            return parse_impl(p);
         }
     }
     // `extern "C" fn NAME(...) -> RET;` — a bodyless C-symbol prototype (P5.8).

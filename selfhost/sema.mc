@@ -58,6 +58,9 @@ open enum SmKind: u32 {
     isize_,    // 14
     named_,    // 15 a named (struct) type; identify by lexeme at [nstart .. nstart+nlen]
     array_,    // 16 `[N]T` fixed array (P5.6): `arr_len` = N; `elem`/`nstart`/`nlen` describe T
+    dyn_,      // 17 `*mut dyn TRAIT` / `*dyn TRAIT` trait-object fat pointer (P5.10): `nstart`/`nlen`
+               //    identify the TRAIT name's lexeme (like `named_`). A method call `d.m(..)` resolves
+               //    its result via the trait's collected method signatures.
 }
 
 // The first-error code surfaced to the gate (an `open enum` so `.raw()` gives the ordinal the C
@@ -126,6 +129,18 @@ struct SmStruct {
     is_generic: u32,
 }
 
+// One collected trait method (P5.10): the owning trait's name lexeme + the method name lexeme + its
+// return type. Enough to type a dynamic-dispatch call `d.m(..)` (whose result is this return type).
+// Trait method BODIES do not exist (they are bodyless signatures); impl method bodies are not checked
+// in the subset (see the ledger note on the mutable-through-pointer gap).
+struct SmTraitMethod {
+    tr_nstart: usize,
+    tr_nlen: usize,
+    m_nstart: usize,
+    m_nlen: usize,
+    ret: SmType,
+}
+
 // One enum variant: its name (recovered by lexeme offsets, like a named `SmType`).
 struct SmEVar {
     nstart: usize,
@@ -157,6 +172,7 @@ struct SmState {
     enums: StrHashMap<u32>,    // enum name -> enum_defs index + 1 (0 = absent)
     enum_defs: Vec<SmEnum>,
     evariants: Vec<SmEVar>,    // flattened variants for all enums
+    tmethods: Vec<SmTraitMethod>, // P5.10: all trait methods (scanned linearly for dyn dispatch)
     cur_ret: SmType,
     err_count: u32,
     first_err: SmErr,
@@ -354,6 +370,15 @@ fn sm_type_from_node(s: *mut SmState, tn: u32) -> SmType {
         let len: usize = sm_parse_uint(ltxt);
         return sm_arr(elem_ty, len);
     }
+    // A `*mut dyn TRAIT` / `*dyn TRAIT` trait object (P5.10) resolves to a `dyn_` type carrying the
+    // TRAIT name's lexeme offsets — enough to type a dynamic-dispatch call and to recognize a
+    // conformance-coercion site. It is a fat-pointer VALUE (ptr_depth 0), not a bare pointer.
+    if nd.kind == .type_dyn {
+        let par: *mut Parser = &s.p;
+        let dst: usize = token_start_at(&par.tl, nd.main_token as usize);
+        let dln: usize = token_len_at(&par.tl, nd.main_token as usize);
+        return .{ .kind = .dyn_, .ptr_depth = 0, .nstart = dst, .nlen = dln, .arr_len = 0, .elem = .unknown };
+    }
     // The `type` keyword annotation of a `comptime T: type` param has no value type in the subset.
     if nd.kind == .type_kw {
         return sm_ty_unknown();
@@ -516,6 +541,33 @@ fn sm_walk_args(s: *mut SmState, args_run: u32, argc: u32) -> void {
     }
 }
 
+// Resolve the return type of a dynamic-dispatch call `d.m(..)` where `d` has trait-object type `recv`
+// (kind `dyn_`, carrying the TRAIT name). The trait's collected methods are scanned for one whose
+// (trait name, method name) matches; its return type is returned. An unresolved method yields
+// `unknown` without a spurious error (sema is lenient here — see the ledger). (P5.10)
+fn sm_dyn_method_ret(s: *mut SmState, recv: SmType, method_tok: u32) -> SmType {
+    let tname: []const u8 = sm_name_text(s, recv);
+    let mname: []const u8 = sm_tok_text(s, method_tok);
+    let n: usize = vec_len(SmTraitMethod, &s.tmethods);
+    var i: usize = 0;
+    while i < n {
+        let tm: SmTraitMethod = vec_get(SmTraitMethod, &s.tmethods, i);
+        let par: *mut Parser = &s.p;
+        let src: []const u8 = par.source;
+        let tend: usize = tm.tr_nstart + tm.tr_nlen;
+        let ttext: []const u8 = src[tm.tr_nstart..tend];
+        let mend: usize = tm.m_nstart + tm.m_nlen;
+        let mtext: []const u8 = src[tm.m_nstart..mend];
+        let tmatch: bool = mem_eql(tname, ttext);
+        let mmatch: bool = mem_eql(mname, mtext);
+        if tmatch && mmatch {
+            return tm.ret;
+        }
+        i = i + 1;
+    }
+    return sm_ty_unknown();
+}
+
 // Type-check a call: callee names a known fn; arg count matches; each arg type matches its param.
 fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
     let nd: Node = sm_node(s, node);
@@ -551,6 +603,17 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
             }
             // `.raw()` on a non-enum is outside the subset; yield unknown without a spurious error.
             return sm_ty_unknown();
+        }
+    }
+    // Dynamic dispatch `d.m(args)` (P5.10): the callee is a `.field` whose receiver is a trait-object
+    // (`dyn_`). The result is the trait method's return type; args are walked for their own errors, but
+    // are NOT individually checked against the (abstract) method params in the subset (see the ledger).
+    if cnode.kind == .field {
+        let recv: SmType = sm_type_of_expr(s, cnode.lhs);
+        if recv.kind.raw() == 17 {
+            let mret: SmType = sm_dyn_method_ret(s, recv, cnode.main_token);
+            sm_walk_args(s, args_run, argc);
+            return mret;
         }
     }
     if cnode.kind != .ident_expr {
@@ -596,9 +659,18 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
         let at: SmType = sm_type_of_expr(s, an);
         if i < sig.param_count {
             let pty: SmType = vec_get(SmType, &s.ptypes, (sig.param_start + i) as usize);
-            let matched: bool = sm_types_match(s, pty, at);
-            if !matched {
-                sm_err(s, .arg_type);
+            // P5.10: a `*mut dyn TRAIT` param accepts any `*mut TYPE` that impls the trait — the
+            // conformance/coercion is LENIENT in the subset (no impl-lookup), so skip the type check
+            // when the param is a trait object. (The emitter builds the {data,vtable} fat pointer.)
+            // `.raw()` is bound to a local before comparing (a `let bool = <call> == lit` cannot
+            // recover its operand type on the C backend — gap G23).
+            let pk: u32 = pty.kind.raw();
+            let pdyn: bool = pk == 17;
+            if !pdyn {
+                let matched: bool = sm_types_match(s, pty, at);
+                if !matched {
+                    sm_err(s, .arg_type);
+                }
             }
         }
         i = i + 1;
@@ -1352,6 +1424,26 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let ename: []const u8 = sm_tok_text(s, dn.main_token);
             strmap_put(u32, &s.enums, ename, eidx + 1);
         }
+        if dn.kind == .trait_decl {
+            // P5.10: record each trait method's (trait, method, return type) for dyn-dispatch typing.
+            // `lhs` is a length-prefixed run of `trait_method` node indices; each method's `main_token`
+            // is its name, `lhs` its params run (self first), `rhs` its return-type node.
+            let tpar: *mut Parser = &s.p;
+            let tr_st: usize = token_start_at(&tpar.tl, dn.main_token as usize);
+            let tr_ln: usize = token_len_at(&tpar.tl, dn.main_token as usize);
+            let mrun: u32 = dn.lhs;
+            let mcount: u32 = sm_extra(s, mrun);
+            var mi: u32 = 0;
+            while mi < mcount {
+                let mnode_idx: u32 = sm_extra(s, mrun + 1 + mi);
+                let mnode: Node = sm_node(s, mnode_idx);
+                let m_st: usize = token_start_at(&tpar.tl, mnode.main_token as usize);
+                let m_ln: usize = token_len_at(&tpar.tl, mnode.main_token as usize);
+                let mret: SmType = sm_type_from_node(s, mnode.rhs);
+                vec_push(SmTraitMethod, &s.tmethods, .{ .tr_nstart = tr_st, .tr_nlen = tr_ln, .m_nstart = m_st, .m_nlen = m_ln, .ret = mret });
+                mi = mi + 1;
+            }
+        }
         if dn.kind == .extern_fn {
             // `extern "C" fn NAME(params) -> RET;` (P5.8): collect a plain (non-generic) signature so
             // calls resolve like any fn. The record is [params_run, ret_type] (no exported flag, no
@@ -1486,6 +1578,7 @@ export fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
         .enums = strmap_new(u32, a),
         .enum_defs = vec_new(SmEnum, a),
         .evariants = vec_new(SmEVar, a),
+        .tmethods = vec_new(SmTraitMethod, a),
         .cur_ret = sm_ty_unknown(),
         .err_count = 0,
         .first_err = .none,
@@ -1522,6 +1615,7 @@ export fn sema_free(s: *mut SmState) -> void {
     vec_free(SmField, &s.fields);
     vec_free(SmEnum, &s.enum_defs);
     vec_free(SmEVar, &s.evariants);
+    vec_free(SmTraitMethod, &s.tmethods);
     vec_free(SmSig, &s.sigs);
     vec_free(SmType, &s.ptypes);
     parser_free(&s.p);
