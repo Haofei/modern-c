@@ -212,7 +212,14 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   green (`pick`); all 5 prior gates pass. Found G28 (enum-lit node lacks its enum) + fixed a real
   double-paren `if` codegen bug. Next vertical: **`switch`** (lets mcc2 stop paying the G25 if/else tax and
   match its own dispatch idiom), then generics.
-- **STATUS: P1–P4 + CLI + perf + structs + enums COMPLETE — a working, fast, subset MC-compiler-in-MC.** Remaining for
+- **2026-07-01 — P5.3 (`switch` vertical) DONE** (`be68e27`). `switch` statement over enum subjects with
+  `.variant`/`_` arms, real exhaustiveness (closed→all variants or error; open→`_` required; duplicate-arm
+  error) — the payoff the G25 if/else workaround couldn't express. C `switch` on the transparent-int enum
+  (no `-Wswitch` hazard). `selfhost-switch-test` green (accept + 2 reject); all 6 prior gates pass. No new
+  gaps (smoothest vertical). Note: `sema.mc` itself now uses `switch`, so mcc2's own source already needs
+  this. Next vertical: **multi-module imports** (mcc2 is split across selfhost/*.mc + std/* — can't resolve
+  yet), then generics.
+- **STATUS: P1–P4 + CLI + perf + structs + enums + switch COMPLETE — a working, fast, subset MC-compiler-in-MC.** Remaining for
   *true* self-compile (P5): widen the front end across the P5 gap list (structs/enums/generics/slices/
   match/imports/…). That is a large, multi-phase effort; the subset milestone + the G9–G26 gap ledger +
   perf data already deliver the stress-test's north star ("what MC doesn't support, or is slow").
