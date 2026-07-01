@@ -72,10 +72,16 @@ express them, that is the single most important finding of the whole exercise.
 |---|---|---|
 | 0.0 | **DECIDED (b): allocate-copy-free**, no trait change. The `Allocator` trait exposes only `alloc`/`free`; growth allocates a new block (capacity ×2, start 4), copies, frees the old. Amortized O(1). | resolved by the spike; copy cost tracked in perf ledger |
 | 0.1 | **DONE** — `std/collections/dynarray.mc` (`Vec<T>`, heap-backed, growable, allocator stored as provenance like `Arc`); `vec-test` gate green host+Docker. Generics fully express it; `Vec<T>` is copyable (not `move`), `vec_free` is manual. | ✅ answered: generic struct holds `PAddr`+`*mut dyn Allocator`, grows, monomorphizes at `Vec<u32>`; element access via `raw.load/store<T>` |
-| 0.2 | `std/collections/hashmap.mc` → `HashMap<K,V>` open-addressing, string keys first | Generic over 2 params + hash/eq as trait bounds? rehash-on-grow? |
-| 0.3 | `std/strbuf.mc` → growable string builder + `allocPrint`-equivalent | Growable byte buffer + formatting into it |
-| 0.4 | `argv`/`argc` access for hosted `main` | Language/runtime gap — CLI entry |
-| 0.5 | `std/mem.mc` string trio: `eql`, `indexOf`, `startsWith`, `splitScalar` | Slice-of-bytes ergonomics |
+| 0.2 | **DONE** — `std/collections/hashmap.mc` `StrHashMap<V>` (string keys, open-addressing, FNV-1a, grow+rehash); hashmap-test green. | fully-generic key blocked by no Hash/Eq bounds (G16); grow+rehash works |
+| 0.3 | **DONE** — `std/strbuf.mc` `StrBuf` over `Vec<u8>`; strbuf-test green. | growable byte buffer + put_u32/hex works; `sb_as_slice` blocked by G12 |
+| 0.4 | **DONE** — `std/hosted_args.mc` + `hosted_args_rt.c` shim; argv-test green. | MC has no compiler-level `main`; entry is a link concern |
+| 0.5 | **DONE** — `std/mem.mc` `mem_eql`/`starts_with`/`index_of[_byte]`/`split_*`; memstr-test green (C+LLVM). | `.len`/indexing/sub-slice work; `?usize` returns blocked by G11 |
+
+**All Phase 0 gates green (host + integrated); 5 new m0 gates registered.** Two dominant gaps
+surfaced — **G11 (value optionals `?V` not expressible)** and **G12 (`[]const u8` half-implemented)**
+— see the gap ledger. Both are used pervasively by a compiler, so a **candidate Phase 0.6**
+(fix them properly in the compiler) is likely higher-ROI than working around them per-site
+through P1–P5. Decision pending before starting the lexer (P1).
 
 **Gates (MC rules):** each ships with a first-principle before/after **cycle-count bench** +
 **m0 green both backends**. Any container that cannot be expressed → immediate top-priority
