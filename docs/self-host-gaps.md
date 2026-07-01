@@ -114,6 +114,14 @@ every full struct-literal site (MC requires all fields present) — O(literal-si
 an ABSTRACT type param isn't type-checkable (element type is `named_ T`); works only inside generic-fn bodies
 (sema-skipped) whose return substitutes to concrete — same pattern as P5.5.
 
+**P5.7 slices — the accumulating structural cost:** the emitter has NO shared typed IR (parser/sema/emit
+are 3 separate passes over the flat arena), so to lower `s[i]`/`s[a..b]`/`.len` correctly the emitter had to
+build its own mini local-type resolver (~150 of 349 LOC: a `cur_fn` scratch field + a recursive scan of
+params/`let`/`var` to recover a base identifier's declared type). This re-derivation recurs for EVERY
+type-directed lowering and is the compounding tax of not having sema annotate the arena. Slice C repr matches
+the real backend (`mc_slice_const_<T>{ const T* ptr; size_t len; }`). Also: added a `&` address-of node
+(`un_addr`) for `mem.as_bytes(&arr)`; still no `as` casts (cross-width arithmetic must be avoided).
+
 **Structural observation (P5.1):** parser/sema/emit each re-implement length-prefixed "pair run" walking
 (`[count,(a,b)*]`, `fi*2(+1)` indexing) with no shared arena-access module → off-by-one-prone duplication
 across 3 files. A shared `selfhost/ast.mc` accessor layer would cut this; deferred (works, just repetitive).
