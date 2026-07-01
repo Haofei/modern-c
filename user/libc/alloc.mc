@@ -58,7 +58,6 @@ fn ensure_init() -> void {
 // "growth unavailable" (returns the -1 sentinel); user/libc/syscall_user.mc overrides it with the real
 // ecall, so ONLY a confined agent that can ecall actually grows — plain host-side libc users keep the
 // fixed arena and identical behaviour.
-const HEAP_BASE: usize = 0x6000_0000;         // must match app_run_demo.mc's HEAP_BASE
 const SBRK_FAIL: usize = 0xFFFF_FFFF_FFFF_FFFF;
 const GROW_CHUNK: usize = 4194304;            // 4 MiB per SYS_SBRK, amortizing the syscall over small mallocs
 const GROW_PAGE: usize = 4096;
@@ -66,10 +65,37 @@ const GROW_PAGE: usize = 4096;
 global g_grown: Heap;
 global g_grown_inited: u8;
 
+// Demand growth is OPT-IN. Default OFF: an agent (and every host-side libc user) keeps the fixed 14
+// MiB arena and prior behaviour byte-for-byte — malloc returns NULL at arena exhaustion, exactly as
+// before. An agent that wants to grow into real RAM calls mc_heap_grow_enable() once at start. This
+// keeps the WASM host's linear-memory bound unchanged for now: correct large-scale WASM memory.grow
+// (WAMR reallocs the whole linear buffer, an O(n^2) copy pattern) is a separate, later step — until
+// then only agents that explicitly opt in grow.
+global g_grow_enabled: u8;
+
+export fn mc_heap_grow_enable() -> void {
+    g_grow_enabled = 1;
+}
+
 // Weak default: no syscall shim linked -> the heap is the fixed arena only (growth unavailable).
 #[weak]
 export fn __sbrk(delta: usize) -> usize {
     return SBRK_FAIL;
+}
+
+// Does `user` point inside the static arena's payload region? Used to route free()/realloc() to the
+// right heap without assuming any absolute address layout (the arena may sit above OR below the grown
+// heap depending on M-mode/host vs confined-U-mode link). g_arena is a real object, so base + len
+// cannot overflow the address space.
+fn in_arena(user: usize) -> bool {
+    let base: usize = (&g_arena[0]) as usize;
+    if user < base {
+        return false;
+    }
+    if user >= base + ARENA_BYTES {
+        return false;
+    }
+    return true;
 }
 
 // Is `sbrk`'s return an error (a negative errno, or the -1 unavailable sentinel)? Valid break VAs are
@@ -159,8 +185,12 @@ fn malloc_addr(size: usize) -> usize {
     switch heap_try_alloc(&g_heap, total, HEADER) {
         ok(b) => { block = b; }
         err(e) => {
-            // Arena exhausted: spill into the demand-grown heap (sbrk-backed). Returns 0 (NULL) if
-            // growth is unavailable or the per-agent grow cap is reached — never a trap.
+            // Arena exhausted. If the agent opted into demand growth, spill into the sbrk-backed
+            // grown heap (returns 0/NULL if growth is unavailable or the per-agent cap is reached —
+            // never a trap). Otherwise fail exactly as the fixed arena always did.
+            if g_grow_enabled == 0 {
+                return 0;
+            }
             return grown_alloc(total);
         }
     }
@@ -179,12 +209,15 @@ fn free_addr(user: usize) -> void {
     unsafe {
         total = raw.load<usize>(block);
     }
-    // Route by address: blocks at/above HEAP_BASE were carved from the demand-grown heap; everything
-    // below came from the fixed arena. Each heap validates the free against its own backing range.
-    if user >= HEAP_BASE {
-        heap_free(&g_grown, block, total);
-    } else {
+    // Route by the arena's ACTUAL range, not a fixed VA: a block that falls inside the static arena
+    // came from g_heap; anything else was carved from the demand-grown heap. (Routing by a fixed
+    // HEAP_BASE is wrong — in M-mode/host builds the .bss arena itself sits above HEAP_BASE, so an
+    // arena block would misroute into the uninitialized grown heap and trap. The arena-range test is
+    // correct in both the confined agent and the flat host layout.)
+    if in_arena(user) {
         heap_free(&g_heap, block, total);
+    } else {
+        heap_free(&g_grown, block, total);
     }
 }
 

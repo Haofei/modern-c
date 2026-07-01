@@ -10,6 +10,7 @@
 
 extern long sys_write(unsigned long fd, const void *buf, unsigned long len);
 extern void *malloc(unsigned long);
+extern void mc_heap_grow_enable(void);   // opt into demand growth (default off = fixed arena)
 
 static void emit(const char *s) {
     unsigned long n = 0;
@@ -22,6 +23,8 @@ static void emit(const char *s) {
 #define CHUNKS 40          // 40 MiB total — well past the multi-MiB static arena, forcing SYS_SBRK
 
 int main(void) {
+    mc_heap_grow_enable();   // this agent wants its heap to grow past the fixed arena
+
     // Keep the chunk pointers so nothing is freed mid-run (proves pure growth, and keeps every mapped
     // region live so a later read genuinely re-reads its own frame).
     static volatile unsigned char *chunks[CHUNKS];
