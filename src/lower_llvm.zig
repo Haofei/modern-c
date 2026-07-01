@@ -1983,11 +1983,20 @@ const LlvmEmitter = struct {
         if (isRawStoreCall(call.callee.*)) {
             if (call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedLlvmEmission;
             const value_ty = call.type_args[0];
-            _ = rawScalarTypeName(value_ty) orelse return error.UnsupportedLlvmEmission;
             const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
             const value = try self.emitExpr(call.args[1], value_ty);
             const ptr = try self.nextTemp();
             const llvm_ty = try self.llvmType(value_ty);
+            if (rawScalarTypeName(value_ty) == null) {
+                // Aggregate (non-scalar) T: whole-object typed store, mirroring how
+                // `raw.ptr<T>(addr)` + deref already lowers a struct assignment. The
+                // sanitizer hooks below key off scalar-sized accesses, so aggregate
+                // stores lower to a plain (uninstrumented) typed store, matching the C
+                // backend where aggregate stores bypass the mc_raw_store_* helpers.
+                try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}, align {d}{s}\n", .{ llvm_ty, value, ptr, self.llvmAlignOf(value_ty), try self.debugCallSuffix() });
+                return true;
+            }
             // KASAN (D2.1): consult the shadow before the store — a poisoned (freed/
             // redzone) target traps in mc_ksan_check. Scalar size == llvmAlignOf here.
             // KASAN (D2.1) pre-store check (write to freed/redzone traps). Under the msan
@@ -3427,11 +3436,18 @@ const LlvmEmitter = struct {
         if (isRawLoadCall(call.callee.*)) {
             if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const value_ty = call.type_args[0];
-            _ = rawScalarTypeName(value_ty) orelse return error.UnsupportedLlvmEmission;
             const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
             const ptr = try self.nextTemp();
             const result = try self.nextTemp();
             const llvm_ty = try self.llvmType(value_ty);
+            if (rawScalarTypeName(value_ty) == null) {
+                // Aggregate (non-scalar) T: whole-object typed load, mirroring how
+                // `raw.ptr<T>(addr)` + deref already lowers a struct read. Plain
+                // (uninstrumented) typed load, matching the C backend's aggregate path.
+                try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
+                try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}, align {d}{s}\n", .{ result, llvm_ty, ptr, self.llvmAlignOf(value_ty), try self.debugCallSuffix() });
+                return result;
+            }
             // KASAN (D2.1): consult the shadow before the load — a use-after-free read
             // of poisoned (freed) memory traps in mc_ksan_check before the deref.
             if (self.ksan) try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });

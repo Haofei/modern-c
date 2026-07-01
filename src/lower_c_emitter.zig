@@ -3213,13 +3213,19 @@ const CEmitter = struct {
         const call = callExpr(expr) orelse return false;
         if (!isRawStoreCall(call.callee.*)) return false;
         if (call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedCEmission;
-        const type_name = typeName(call.type_args[0]) orelse return error.UnsupportedCEmission;
-        const suffix = rawScalarSuffix(type_name) orelse return error.UnsupportedCEmission;
 
         const addr_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, simpleNameType("PAddr", call.args[0].span));
         const value_temp = try self.emitSequencedCallArgTemp(call.args[1], locals, call.type_args[0]);
         try self.writeIndent();
-        try self.out.print(self.allocator, "mc_raw_store_{s}({s}, {s});\n", .{ suffix, addr_temp.name, value_temp.name });
+        if (typeName(call.type_args[0])) |type_name| {
+            if (rawScalarSuffix(type_name)) |suffix| {
+                try self.out.print(self.allocator, "mc_raw_store_{s}({s}, {s});\n", .{ suffix, addr_temp.name, value_temp.name });
+                return true;
+            }
+        }
+        // Aggregate (non-scalar) T: whole-object typed store, mirroring how
+        // `raw.ptr<T>(addr)` + deref already lowers a struct assignment.
+        try self.out.print(self.allocator, "*({s} *){s} = {s};\n", .{ try self.cTypeFor(call.type_args[0], .typedef_name), addr_temp.name, value_temp.name });
         return true;
     }
 

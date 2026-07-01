@@ -475,11 +475,22 @@ pub fn emitNamedDiscardCall(ctx: Context, call: anytype, locals: ?*std.StringHas
 pub fn emitRawAddressCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     if (isRawLoadCall(call.callee.*)) {
         if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
-        const name = typeName(call.type_args[0]) orelse return error.UnsupportedCEmission;
-        const suffix = rawScalarSuffix(name) orelse return error.UnsupportedCEmission;
-        try ctx.out.print(ctx.allocator, "mc_raw_load_{s}(", .{suffix});
+        if (typeName(call.type_args[0])) |name| {
+            if (rawScalarSuffix(name)) |suffix| {
+                try ctx.out.print(ctx.allocator, "mc_raw_load_{s}(", .{suffix});
+                try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+                try ctx.out.appendSlice(ctx.allocator, ")");
+                return true;
+            }
+        }
+        // Aggregate (non-scalar) T: whole-object typed load, mirroring how
+        // `raw.ptr<T>(addr)` + deref already lowers a struct. `(*(T *)(addr))`
+        // is a struct-typed lvalue read.
+        try ctx.out.appendSlice(ctx.allocator, "(*(");
+        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, call.type_args[0]));
+        try ctx.out.appendSlice(ctx.allocator, " *)(");
         try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
-        try ctx.out.appendSlice(ctx.allocator, ")");
+        try ctx.out.appendSlice(ctx.allocator, "))");
         return true;
     }
     if (isRawPtrCall(call.callee.*)) {
