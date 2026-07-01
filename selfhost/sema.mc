@@ -43,7 +43,8 @@ open enum SmKind: u32 {
     unknown,   // 0  error / unresolved
     void_,     // 1
     bool_,     // 2
-    slice_,    // 3  `[]const T` / `[]mut T` (element type not tracked in the subset)
+    slice_,    // 3  `[]const T` / `[]mut T` fat pointer (P5.7): `elem`/`nstart`/`nlen` describe the
+               //    element T (like `array_`); `arr_len` reused as the mutability flag (1 = `[]mut`).
     int_lit,   // 4  untyped integer literal (unifies with any concrete numeric)
     u8_,       // 5
     u16_,      // 6
@@ -171,6 +172,18 @@ fn sm_ty(k: SmKind) -> SmType {
 // An `[N]T` array type: `len` = N; `elem_ty` describes the element T (its kind + named offsets).
 fn sm_arr(elem_ty: SmType, len: usize) -> SmType {
     return .{ .kind = .array_, .ptr_depth = 0, .nstart = elem_ty.nstart, .nlen = elem_ty.nlen, .arr_len = len, .elem = elem_ty.kind };
+}
+
+// A slice type `[]const T` / `[]mut T` (P5.7): the element T is flattened in like `sm_arr`, and
+// `arr_len` carries the mutability flag (1 = `[]mut`). Element-type + mutability let the emitter pick
+// the right fat-pointer struct (`mc_slice_const_T` / `mc_slice_mut_T`).
+fn sm_slice(elem_ty: SmType, is_mut: usize) -> SmType {
+    return .{ .kind = .slice_, .ptr_depth = 0, .nstart = elem_ty.nstart, .nlen = elem_ty.nlen, .arr_len = is_mut, .elem = elem_ty.kind };
+}
+
+// Reconstruct the element `SmType` of a slice (mirrors `sm_arr_elem`). Meaningful when `t.kind == slice_`.
+fn sm_slice_elem(t: SmType) -> SmType {
+    return .{ .kind = t.elem, .ptr_depth = 0, .nstart = t.nstart, .nlen = t.nlen, .arr_len = 0, .elem = .unknown };
 }
 
 // Reconstruct the element `SmType` of an `[N]T` array (its kind + named offsets were flattened into
@@ -316,10 +329,12 @@ fn sm_type_from_node(s: *mut SmState, tn: u32) -> SmType {
         return inner;
     }
     if nd.kind == .type_slice_const {
-        return sm_ty(.slice_);
+        let elem_c: SmType = sm_type_from_node(s, nd.lhs);
+        return sm_slice(elem_c, 0);
     }
     if nd.kind == .type_slice_mut {
-        return sm_ty(.slice_);
+        let elem_m: SmType = sm_type_from_node(s, nd.lhs);
+        return sm_slice(elem_m, 1);
     }
     // A generic instance `S<T>` (P5.5) resolves to a `named_` type carrying the BASE name's lexeme
     // offsets — enough for struct-literal field-NAME checking (which is all generic instances get in
@@ -393,6 +408,14 @@ fn sm_types_match(s: *mut SmState, a: SmType, b: SmType) -> bool {
         let ea: SmType = sm_arr_elem(a);
         let eb: SmType = sm_arr_elem(b);
         return sm_types_match(s, ea, eb);
+    }
+    if ak == 3 {
+        // Slices (P5.7): matching element type. Mutability (`arr_len`) is intentionally NOT compared,
+        // so a `[]mut T` value binds to a `[]const T` target (the common, safe direction); rejecting
+        // the reverse `[]const -> []mut` niceties is deferred (gap G12c).
+        let esa: SmType = sm_slice_elem(a);
+        let esb: SmType = sm_slice_elem(b);
+        return sm_types_match(s, esa, esb);
     }
     return true;
 }
@@ -503,6 +526,17 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
     // `enumval.raw()` is a method-shaped call: callee is a `.field` named `raw` with zero args on an
     // enum-typed receiver. It yields the enum's repr integer type. (Closed enums reject `.raw()` in
     // the full language, but the subset does not model closedness — see the ledger.)
+    if cnode.kind == .field {
+        // `mem.as_bytes(&x)` is a compiler builtin returning `[]const u8` (a byte view of `x`). It is
+        // matched syntactically (callee is `.as_bytes` with one arg); the arg is walked for errors.
+        var b_asb: [8]u8 = .{ 97, 115, 95, 98, 121, 116, 101, 115 }; // "as_bytes"
+        let cfname: []const u8 = sm_tok_text(s, cnode.main_token);
+        let is_asb: bool = mem_eql(cfname, mem.as_bytes(&b_asb));
+        if is_asb && argc == 1 {
+            sm_walk_args(s, args_run, argc);
+            return sm_slice(sm_ty(.u8_), 0);
+        }
+    }
     if cnode.kind == .field {
         var b_raw: [3]u8 = .{ 114, 97, 119 }; // "raw"
         let fname: []const u8 = sm_tok_text(s, cnode.main_token);
@@ -756,17 +790,53 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
         .index => {
             let base: SmType = sm_type_of_expr(s, nd.lhs);
             sm_type_of_expr(s, nd.rhs); // walk the subscript for errors (any numeric index accepted)
-            // Indexing an `[N]T` array yields its element type T (P5.6); a slice/other base is not
-            // element-typed in the subset (yields `unknown`, matching the prior behavior). The
-            // `.raw()` is bound to a local before comparing (gap G23).
+            // Indexing an `[N]T` array yields its element type T (P5.6); indexing a slice yields its
+            // element T (P5.7); any other base is not element-typed (yields `unknown`). The `.raw()`
+            // is bound to a local before comparing (gap G23).
             let bk: u32 = base.kind.raw();
             if bk == 16 {
                 return sm_arr_elem(base);
             }
+            if bk == 3 {
+                return sm_slice_elem(base);
+            }
             return sm_ty_unknown();
+        }
+        .slice_range => {
+            // Sub-slice `base[start..end]` (P5.7): result is a slice of the base's element type. An
+            // array base yields a `[]const T`; a slice base yields the same slice type. Bounds are
+            // NOT checked in the subset (deferred). Endpoints are walked for errors.
+            let sbase: SmType = sm_type_of_expr(s, nd.lhs);
+            sm_type_of_expr(s, sm_extra(s, nd.rhs));     // start
+            sm_type_of_expr(s, sm_extra(s, nd.rhs + 1)); // end
+            let sbk: u32 = sbase.kind.raw();
+            if sbk == 16 {
+                let ael: SmType = sm_arr_elem(sbase);
+                return sm_slice(ael, 0);
+            }
+            if sbk == 3 {
+                return sbase;
+            }
+            return sm_ty_unknown();
+        }
+        .un_addr => {
+            var pt: SmType = sm_type_of_expr(s, nd.lhs);
+            pt.ptr_depth = pt.ptr_depth + 1;
+            return pt;
         }
         .field => {
             let obj: SmType = sm_type_of_expr(s, nd.lhs);
+            // `.len` on a slice or array is the usize length (P5.6/P5.7); other members fall through
+            // to the struct-field resolver (which errors on a non-struct base).
+            let okind: u32 = obj.kind.raw();
+            if okind == 3 || okind == 16 {
+                var b_len: [3]u8 = .{ 108, 101, 110 }; // "len"
+                let fname: []const u8 = sm_tok_text(s, nd.main_token);
+                let is_len: bool = mem_eql(fname, mem.as_bytes(&b_len));
+                if is_len {
+                    return sm_ty(.usize_);
+                }
+            }
             return sm_field_type(s, obj, nd.main_token);
         }
         .struct_lit => {

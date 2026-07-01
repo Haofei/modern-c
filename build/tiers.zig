@@ -393,6 +393,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-generic-test"));
     // selfhost-array-test exercises P5.6 fixed [N]T ARRAYS (parser+sema+emit_c, incl. array-in-generic -> clang).
     m0_step.dependOn(ctx.cmd("selfhost-array-test"));
+    // selfhost-slice-test exercises P5.7 PROPER SLICES (fat pointers: .len, index, sub-slice, by-value, as_bytes).
+    m0_step.dependOn(ctx.cmd("selfhost-slice-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

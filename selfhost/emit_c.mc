@@ -107,13 +107,17 @@ fn e_type(p: *mut Parser, sb: *mut StrBuf, tn: u32) -> void {
         return;
     }
     if nd.kind == .type_slice_const {
-        e_type(p, sb, nd.lhs);
-        sb_put_cstr(sb, "*");
+        // P5.7: a slice is a fat-pointer struct `mc_slice_const_<T>` (see `e_slice_typedefs`), not a
+        // bare element pointer — so `.len`, sub-slicing, and by-value passing all work.
+        sb_put_cstr(sb, "mc_slice_const_");
+        let selc: []const u8 = e_type_arg_lexeme(p, nd.lhs);
+        sb_put_str(sb, selc);
         return;
     }
     if nd.kind == .type_slice_mut {
-        e_type(p, sb, nd.lhs);
-        sb_put_cstr(sb, "*");
+        sb_put_cstr(sb, "mc_slice_mut_");
+        let selm: []const u8 = e_type_arg_lexeme(p, nd.lhs);
+        sb_put_str(sb, selm);
         return;
     }
     // A generic instance `S<T>` (P5.5) emits the MANGLED monomorphic name `S_<concrete>` (the type
@@ -218,6 +222,306 @@ fn e_clear_sub(p: *mut Parser) -> void {
     p.sub_concrete = 0;
 }
 
+// ----- P5.7 slice (fat-pointer) support -----
+
+// True when a `[]const/mut T` element node names a plain scalar (so a fat-pointer struct can be
+// generated for it). Generic type-param elements are skipped (deferred — see the ledger).
+fn e_slice_elem_is_scalar(p: *mut Parser, elem_node: u32) -> bool {
+    let nd: Node = e_node(p, elem_node);
+    if nd.kind != .type_name {
+        return false;
+    }
+    let txt: []const u8 = e_tok_text(p, nd.main_token);
+    return e_is_scalar_lexeme(txt);
+}
+
+// Find the declared type node of a local named `name` in the function currently being emitted
+// (`p.cur_fn`): scan the params, then the body's `let`/`var` decls (recursing into nested blocks).
+// Returns the type node index, or 0 if not found / no current function. Lets the emitter tell a
+// slice base (`s.ptr[i]`) from an array base (`a[i]`) without threading sema types through emit.
+fn e_local_type_node(p: *mut Parser, name: []const u8) -> u32 {
+    let fnn: u32 = p.cur_fn;
+    if fnn == 0 {
+        return 0;
+    }
+    let nd: Node = e_node(p, fnn);
+    let frec: u32 = nd.lhs;
+    let params_run: u32 = e_extra(p, frec + 1);
+    let pcount: u32 = e_extra(p, params_run);
+    var k: u32 = 0;
+    while k < pcount {
+        let pn: u32 = e_extra(p, params_run + 1 + k);
+        let pnode: Node = e_node(p, pn);
+        let pname: []const u8 = e_tok_text(p, pnode.main_token);
+        let hit: bool = mem_eql(pname, name);
+        if hit {
+            return pnode.lhs;
+        }
+        k = k + 1;
+    }
+    let body: u32 = e_extra(p, frec + 3);
+    return e_find_local_in_block(p, body, name);
+}
+
+// Recurse a block's statements looking for a `let`/`var` decl of `name`; returns its type node or 0.
+fn e_find_local_in_block(p: *mut Parser, block_node: u32, name: []const u8) -> u32 {
+    let nd: Node = e_node(p, block_node);
+    let run: u32 = nd.lhs;
+    let count: u32 = e_extra(p, run);
+    var i: u32 = 0;
+    while i < count {
+        let st: u32 = e_extra(p, run + 1 + i);
+        let r: u32 = e_find_local_in_stmt(p, st, name);
+        if r != 0 {
+            return r;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Inspect one statement (and any nested blocks) for a `let`/`var` decl of `name`.
+fn e_find_local_in_stmt(p: *mut Parser, st: u32, name: []const u8) -> u32 {
+    let sn: Node = e_node(p, st);
+    if sn.kind == .let_decl || sn.kind == .var_decl {
+        let nm: []const u8 = e_tok_text(p, sn.main_token);
+        let hit: bool = mem_eql(nm, name);
+        if hit {
+            return sn.lhs;
+        }
+        return 0;
+    }
+    if sn.kind == .block {
+        return e_find_local_in_block(p, st, name);
+    }
+    if sn.kind == .if_stmt {
+        let then_b: u32 = e_extra(p, sn.rhs);
+        let else_b: u32 = e_extra(p, sn.rhs + 1);
+        let rt: u32 = e_find_local_in_stmt(p, then_b, name);
+        if rt != 0 {
+            return rt;
+        }
+        if else_b != 0 {
+            return e_find_local_in_stmt(p, else_b, name);
+        }
+        return 0;
+    }
+    if sn.kind == .while_stmt {
+        return e_find_local_in_stmt(p, sn.rhs, name);
+    }
+    return 0;
+}
+
+// True when `base` is a slice-typed identifier in the current function (its declared type node is a
+// `[]const/mut T`). Only bare identifiers are resolved (a field/index base is treated as non-slice —
+// deferred; see the ledger).
+fn e_base_is_slice(p: *mut Parser, base: u32) -> bool {
+    let bn: Node = e_node(p, base);
+    if bn.kind != .ident_expr {
+        return false;
+    }
+    let name: []const u8 = e_tok_text(p, bn.main_token);
+    let tn: u32 = e_local_type_node(p, name);
+    if tn == 0 {
+        return false;
+    }
+    let tnode: Node = e_node(p, tn);
+    return tnode.kind == .type_slice_const || tnode.kind == .type_slice_mut;
+}
+
+// Emit the fat-pointer struct type NAME for a base identifier's declared slice/array type, e.g.
+// `mc_slice_const_u32`. For a slice base it mirrors the base's own const/mut and element; for an
+// array base it is always a `[]const <elem>`. Precondition: base is a slice- or array-typed ident.
+fn e_emit_base_slice_name(p: *mut Parser, sb: *mut StrBuf, base: u32) -> void {
+    let bn: Node = e_node(p, base);
+    let name: []const u8 = e_tok_text(p, bn.main_token);
+    let tn: u32 = e_local_type_node(p, name);
+    let tnode: Node = e_node(p, tn);
+    if tnode.kind == .type_slice_mut {
+        sb_put_cstr(sb, "mc_slice_mut_");
+    } else {
+        sb_put_cstr(sb, "mc_slice_const_");
+    }
+    let lex: []const u8 = e_type_arg_lexeme(p, tnode.lhs);
+    sb_put_str(sb, lex);
+}
+
+// Emit all fat-pointer struct typedefs used in the module, deduped by (mutability, element). A slice
+// `[]const/mut T` lowers to `typedef struct mc_slice_<m>_<T> { const T* ptr; size_t len; } ...;` —
+// matching the real C backend's `mc_slice_const_u8` naming (src/lower_c_names.zig) so semantics are
+// identical. `size_t` (not the real backend's `uintptr_t`) is used for `len` so it agrees with the
+// subset's `usize` spelling. Emitted before all other typedefs (a struct field may embed a slice).
+fn e_slice_typedefs(p: *mut Parser, sb: *mut StrBuf) -> void {
+    let total: u32 = vec_len(Node, &p.nodes) as u32;
+    var emitted: u32 = 0;
+    var i: u32 = 1;
+    while i < total {
+        let nd: Node = e_node(p, i);
+        let is_const: bool = nd.kind == .type_slice_const;
+        let is_mut: bool = nd.kind == .type_slice_mut;
+        if is_const || is_mut {
+            let scalar: bool = e_slice_elem_is_scalar(p, nd.lhs);
+            if scalar {
+                let mflag: u32 = e_slice_mut_flag(is_mut);
+                let lex: []const u8 = e_tok_text(p, e_node(p, nd.lhs).main_token);
+                let dup: bool = e_slice_dup_before(p, i, mflag, lex);
+                if !dup {
+                    e_emit_one_slice_typedef(sb, mflag, lex);
+                    emitted = emitted + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    // Only add the separating blank line when at least one typedef was emitted, so a module with no
+    // slices produces byte-identical output to before P5.7.
+    if emitted > 0 {
+        sb_put_cstr(sb, "\n");
+    }
+}
+
+// 1 for a `[]mut` element, 0 for `[]const` (bound to a local per G23-style clarity).
+fn e_slice_mut_flag(is_mut: bool) -> u32 {
+    if is_mut {
+        return 1;
+    }
+    return 0;
+}
+
+// True when a slice typedef with the same (mutability, element lexeme) was already emitted by an
+// EARLIER slice type node (index < `cur`) — the dedup for `e_slice_typedefs`.
+fn e_slice_dup_before(p: *mut Parser, cur: u32, mflag: u32, lex: []const u8) -> bool {
+    var j: u32 = 1;
+    while j < cur {
+        let nd: Node = e_node(p, j);
+        let jc: bool = nd.kind == .type_slice_const;
+        let jm: bool = nd.kind == .type_slice_mut;
+        if jc || jm {
+            let jscalar: bool = e_slice_elem_is_scalar(p, nd.lhs);
+            if jscalar {
+                let jflag: u32 = e_slice_mut_flag(jm);
+                if jflag == mflag {
+                    let jlex: []const u8 = e_tok_text(p, e_node(p, nd.lhs).main_token);
+                    let same: bool = mem_eql(jlex, lex);
+                    if same {
+                        return true;
+                    }
+                }
+            }
+        }
+        j = j + 1;
+    }
+    return false;
+}
+
+// Emit one `typedef struct mc_slice_<m>_<T> { <cv> <cT>* ptr; size_t len; } mc_slice_<m>_<T>;`.
+fn e_emit_one_slice_typedef(sb: *mut StrBuf, mflag: u32, lex: []const u8) -> void {
+    sb_put_cstr(sb, "typedef struct mc_slice_");
+    if mflag == 1 {
+        sb_put_cstr(sb, "mut_");
+    } else {
+        sb_put_cstr(sb, "const_");
+    }
+    sb_put_str(sb, lex);
+    sb_put_cstr(sb, " {\n    ");
+    if mflag == 0 {
+        sb_put_cstr(sb, "const ");
+    }
+    e_scalar_name(sb, lex);
+    sb_put_cstr(sb, "* ptr;\n    size_t len;\n} mc_slice_");
+    if mflag == 1 {
+        sb_put_cstr(sb, "mut_");
+    } else {
+        sb_put_cstr(sb, "const_");
+    }
+    sb_put_str(sb, lex);
+    sb_put_cstr(sb, ";\n");
+}
+
+// Emit a sub-slice `base[start..end]` as a fat-pointer compound literal (P5.7). For a SLICE base:
+//   `(mc_slice_<m>_<T>){ .ptr = (base).ptr + (start), .len = (end) - (start) }`
+// For an ARRAY base (which decays to a pointer): `.ptr = (base) + (start)` — i.e. `&base[start]`.
+// Bounds are NOT checked in the subset (deferred). Endpoints are emitted inline (the subset only
+// forms sub-slices with simple, side-effect-free endpoints — see the ledger note on G13).
+fn e_slice_range(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
+    let nd: Node = e_node(p, n);
+    let base: u32 = nd.lhs;
+    let rec: u32 = nd.rhs;
+    let start_e: u32 = e_extra(p, rec);
+    let end_e: u32 = e_extra(p, rec + 1);
+    let base_is_slice: bool = e_base_is_slice(p, base);
+    sb_put_cstr(sb, "(");
+    if base_is_slice {
+        e_emit_base_slice_name(p, sb, base);
+    } else {
+        // Array base: the result is a `[]const <elem>`.
+        e_emit_base_array_slice_name(p, sb, base);
+    }
+    sb_put_cstr(sb, "){ .ptr = ");
+    if base_is_slice {
+        sb_put_cstr(sb, "(");
+        e_expr(p, sb, base);
+        sb_put_cstr(sb, ").ptr + (");
+    } else {
+        sb_put_cstr(sb, "(");
+        e_expr(p, sb, base);
+        sb_put_cstr(sb, ") + (");
+    }
+    e_expr(p, sb, start_e);
+    sb_put_cstr(sb, "), .len = (");
+    e_expr(p, sb, end_e);
+    sb_put_cstr(sb, ") - (");
+    e_expr(p, sb, start_e);
+    sb_put_cstr(sb, ") }");
+}
+
+// Emit the `mc_slice_const_<elem>` name for an array-typed base identifier (its element becomes the
+// slice element). Precondition: `base` is an array-typed ident.
+fn e_emit_base_array_slice_name(p: *mut Parser, sb: *mut StrBuf, base: u32) -> void {
+    let bn: Node = e_node(p, base);
+    let name: []const u8 = e_tok_text(p, bn.main_token);
+    let tn: u32 = e_local_type_node(p, name);
+    let tnode: Node = e_node(p, tn);
+    sb_put_cstr(sb, "mc_slice_const_");
+    // `type_array` lhs is the element type node.
+    let lex: []const u8 = e_type_arg_lexeme(p, tnode.lhs);
+    sb_put_str(sb, lex);
+}
+
+// True when call node `n` is `<recv>.as_bytes(<one arg>)` — the `mem.as_bytes` slice builtin.
+fn e_call_is_as_bytes(p: *mut Parser, n: u32) -> bool {
+    let nd: Node = e_node(p, n);
+    let cnode: Node = e_node(p, nd.lhs);
+    if cnode.kind != .field {
+        return false;
+    }
+    var b_asb: [8]u8 = .{ 97, 115, 95, 98, 121, 116, 101, 115 }; // "as_bytes"
+    let fname: []const u8 = e_tok_text(p, cnode.main_token);
+    let is_asb: bool = mem_eql(fname, mem.as_bytes(&b_asb));
+    if !is_asb {
+        return false;
+    }
+    let argc: u32 = e_extra(p, nd.rhs);
+    return argc == 1;
+}
+
+// Emit `mem.as_bytes(&x)` as `(mc_slice_const_u8){ .ptr = (const uint8_t*)(&(x)), .len = sizeof(x) }`.
+fn e_as_bytes(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
+    let nd: Node = e_node(p, n);
+    let arg: u32 = e_extra(p, nd.rhs + 1);
+    let an: Node = e_node(p, arg);
+    sb_put_cstr(sb, "(mc_slice_const_u8){ .ptr = (const uint8_t*)(");
+    e_expr(p, sb, arg);
+    sb_put_cstr(sb, "), .len = sizeof(");
+    // `sizeof` must be of the pointee OBJECT, not the pointer: unwrap a leading `&`.
+    if an.kind == .un_addr {
+        e_expr(p, sb, an.lhs);
+    } else {
+        e_expr(p, sb, arg);
+    }
+    sb_put_cstr(sb, ") }");
+}
+
 // ----- expression emission -----
 
 // Emit the C spelling (with surrounding spaces) of a binary NodeKind operator.
@@ -281,6 +585,15 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         return;
     }
     if nd.kind == .call {
+        // `mem.as_bytes(&x)` (P5.7) is a builtin producing a `[]const u8` byte view of `x`:
+        //   `(mc_slice_const_u8){ .ptr = (const uint8_t*)(&x), .len = sizeof(x) }`
+        // The `.len` uses `sizeof` of the address-of operand (the object), not the pointer. This
+        // matches the real backend's byte-view semantics.
+        let asb: bool = e_call_is_as_bytes(p, n);
+        if asb {
+            e_as_bytes(p, sb, n);
+            return;
+        }
         // `enumval.raw()` lowers to the receiver itself: the enum's C type is a transparent typedef
         // of its repr integer, so the value already IS the raw integer (no cast needed).
         let cnode: Node = e_node(p, nd.lhs);
@@ -338,10 +651,32 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         return;
     }
     if nd.kind == .index {
+        // A slice index `s[i]` lowers to `(s).ptr[i]` (fat-pointer element access, P5.7); an array (or
+        // other) base keeps the plain `a[i]`. Bounds are NOT checked in the subset (deferred). The
+        // slice check binds to a local first (gap G23).
+        let idx_is_slice: bool = e_base_is_slice(p, nd.lhs);
+        if idx_is_slice {
+            sb_put_cstr(sb, "(");
+            e_expr(p, sb, nd.lhs);
+            sb_put_cstr(sb, ").ptr[");
+            e_expr(p, sb, nd.rhs);
+            sb_put_cstr(sb, "]");
+            return;
+        }
         e_expr(p, sb, nd.lhs);
         sb_put_cstr(sb, "[");
         e_expr(p, sb, nd.rhs);
         sb_put_cstr(sb, "]");
+        return;
+    }
+    if nd.kind == .slice_range {
+        e_slice_range(p, sb, n);
+        return;
+    }
+    if nd.kind == .un_addr {
+        sb_put_cstr(sb, "&(");
+        e_expr(p, sb, nd.lhs);
+        sb_put_cstr(sb, ")");
         return;
     }
     if nd.kind == .field {
@@ -729,7 +1064,9 @@ fn e_fn(p: *mut Parser, sb: *mut StrBuf, fn_node: u32) -> void {
     let body: u32 = e_extra(p, frec + 3);
     e_fn_sig(p, sb, fn_node);
     sb_put_cstr(sb, " ");
+    p.cur_fn = fn_node; // P5.7: slice-aware accesses resolve base types against this function
     e_block(p, sb, body, 0);
+    p.cur_fn = 0;
     sb_put_cstr(sb, "\n\n");
 }
 
@@ -1055,7 +1392,9 @@ fn e_gfn_mono(p: *mut Parser, sb: *mut StrBuf, fn_node: u32, concrete_node: u32)
     e_set_sub(p, tparam_tok, concrete_node);
     e_gfn_sig_mono(p, sb, fn_node, concrete_node);
     sb_put_cstr(sb, " ");
+    p.cur_fn = fn_node;
     e_block(p, sb, body, 0);
+    p.cur_fn = 0;
     sb_put_cstr(sb, "\n\n");
     e_clear_sub(p);
 }
@@ -1064,6 +1403,8 @@ fn e_gfn_mono(p: *mut Parser, sb: *mut StrBuf, fn_node: u32, concrete_node: u32)
 // use), then one C function per `fn` decl.
 fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
     sb_put_cstr(sb, "#include <stdint.h>\n#include <stddef.h>\n#include <stdbool.h>\n\n");
+    // P5.7: fat-pointer slice typedefs first (a struct field or fn signature may reference one).
+    e_slice_typedefs(p, sb);
     let root: u32 = p.root;
     let rnode: Node = e_node(p, root);
     let run: u32 = rnode.lhs;

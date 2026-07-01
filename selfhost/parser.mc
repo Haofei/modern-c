@@ -101,6 +101,12 @@ open enum NodeKind: u32 {
     array_lit,        // 46 `.{ e0, e1, ... }` positional array literal: main_token = leading `.`; lhs =
                       //    extra run of element expr node indices. Distinct from `struct_lit` (whose
                       //    elements are `.field = e`); disambiguated by a `.ident =` lookahead.
+    // ----- P5.7 slice (fat-pointer) additions (appended to keep prior ordinals stable) -----
+    slice_range,      // 47 sub-slice `base[start..end]`: main_token = `[`; lhs = base; rhs = a fixed
+                      //    2-slot extra record [start_expr, end_expr] (NOT length-prefixed — read
+                      //    directly at rhs+0 / rhs+1, like the `if_stmt` then/else record).
+    un_addr,          // 48 address-of `&expr`: main_token = `&`; lhs = operand. Used by the
+                      //    `mem.as_bytes(&arr)` slice builtin (and general pointer taking).
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -132,6 +138,10 @@ struct Parser {
     sub_name_start: usize,
     sub_name_len: usize,
     sub_concrete: u32,
+    // P5.7 emit-time scratch: the fn decl node currently being emitted, so a slice-aware access
+    // (`s.ptr[i]` / sub-slice) can resolve a base identifier's declared type (param or local) by
+    // scanning this function. 0 while not emitting a function body. Not used by parse/sema.
+    cur_fn: u32,
 }
 
 // Prefix-operator operand binding power: above every binary `left_bp` (max 19, `* / %`) so a
@@ -490,6 +500,19 @@ fn parse_postfix(p: *mut Parser, input: u32) -> u32 {
             let idx_tok: u32 = p.tok as u32;
             p_advance(p); // `[`
             let subscript: u32 = parse_expr(p, 0);
+            // A `..` after the first index makes this a SUB-SLICE `base[start..end]` (P5.7): parse the
+            // end expr and record a fixed 2-slot [start, end] extra record. Otherwise it is a plain
+            // element index `base[i]`.
+            if at(p, .dot_dot) {
+                p_advance(p); // `..`
+                let end_expr: u32 = parse_expr(p, 0);
+                expect(p, .r_bracket);
+                let rec: u32 = vec_len(u32, &p.extra) as u32;
+                vec_push(u32, &p.extra, subscript);
+                vec_push(u32, &p.extra, end_expr);
+                expr = add_node(p, .slice_range, idx_tok, expr, rec);
+                continue;
+            }
             expect(p, .r_bracket);
             expr = add_node(p, .index, idx_tok, expr, subscript);
             continue;
@@ -519,6 +542,14 @@ fn parse_prefix(p: *mut Parser) -> u32 {
         p_advance(p);
         let not_operand: u32 = parse_expr(p, PREFIX_OPERAND_BP);
         return add_node(p, .un_not, not_tok, not_operand, 0);
+    }
+    // Address-of `&expr` (P5.7): needed for the `mem.as_bytes(&arr)` slice builtin, and useful for
+    // taking pointers generally. Binds like the other prefix operators.
+    if at(p, .amp) {
+        let amp_tok: u32 = p.tok as u32;
+        p_advance(p);
+        let addr_operand: u32 = parse_expr(p, PREFIX_OPERAND_BP);
+        return add_node(p, .un_addr, amp_tok, addr_operand, 0);
     }
     let prim: u32 = parse_primary(p);
     return prim;
@@ -936,6 +967,7 @@ export fn parser_run(source: []const u8, a: *mut dyn Allocator) -> Parser {
         .sub_name_start = 0,
         .sub_name_len = 0,
         .sub_concrete = 0,
+        .cur_fn = 0,
     };
     lex(source, &p.tl);
     // Node index 0 is the reserved `.invalid` sentinel ("none").
