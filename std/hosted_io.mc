@@ -46,6 +46,14 @@ export const MODE_0644: i32 = 420;
 
 // AT_FDCWD: resolve relative paths against the current working directory. Used
 // with `openat` (we bind `openat`, not `open`, because `open` is an MC keyword).
+//
+// PLATFORM LIMITATION (gap G29): this value is LINUX-specific (`-100`). The hosted
+// profile targets Linux libc (see §0 above), which is where CI/Docker run, so this is
+// correct there. On macOS the constant is `-2`, so a RELATIVE path passed to `io_open`
+// on a macOS host fails (ENOENT/`OpenFailed`); ABSOLUTE paths work everywhere (dirfd is
+// ignored). Consequence: the `mcc2` hosted CLI resolves relative input/import paths only
+// on Linux; on a macOS host, pass absolute paths (or run under Docker). A portable fix
+// needs compile-time target-OS selection, which the language does not yet expose.
 const AT_FDCWD: i32 = -100;
 
 // One typed error for every I/O failure. `code` is the raw negative return from
