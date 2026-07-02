@@ -68,26 +68,16 @@ fn e_indent(sb: *mut StrBuf, depth: u32) -> void {
 
 // Emit the C spelling of a scalar type name lexeme, or the lexeme verbatim if not a known scalar.
 fn e_scalar_name(sb: *mut StrBuf, txt: []const u8) -> void {
-    var b_u8: [2]u8 = .{ 117, 56 }; // "u8"
-    if mem_eql(txt, mem.as_bytes(&b_u8)) { sb_put_cstr(sb, "uint8_t"); return; }
-    var b_u16: [3]u8 = .{ 117, 49, 54 }; // "u16"
-    if mem_eql(txt, mem.as_bytes(&b_u16)) { sb_put_cstr(sb, "uint16_t"); return; }
-    var b_u32: [3]u8 = .{ 117, 51, 50 }; // "u32"
-    if mem_eql(txt, mem.as_bytes(&b_u32)) { sb_put_cstr(sb, "uint32_t"); return; }
-    var b_u64: [3]u8 = .{ 117, 54, 52 }; // "u64"
-    if mem_eql(txt, mem.as_bytes(&b_u64)) { sb_put_cstr(sb, "uint64_t"); return; }
-    var b_usize: [5]u8 = .{ 117, 115, 105, 122, 101 }; // "usize"
-    if mem_eql(txt, mem.as_bytes(&b_usize)) { sb_put_cstr(sb, "size_t"); return; }
-    var b_i8: [2]u8 = .{ 105, 56 }; // "i8"
-    if mem_eql(txt, mem.as_bytes(&b_i8)) { sb_put_cstr(sb, "int8_t"); return; }
-    var b_i16: [3]u8 = .{ 105, 49, 54 }; // "i16"
-    if mem_eql(txt, mem.as_bytes(&b_i16)) { sb_put_cstr(sb, "int16_t"); return; }
-    var b_i32: [3]u8 = .{ 105, 51, 50 }; // "i32"
-    if mem_eql(txt, mem.as_bytes(&b_i32)) { sb_put_cstr(sb, "int32_t"); return; }
-    var b_i64: [3]u8 = .{ 105, 54, 52 }; // "i64"
-    if mem_eql(txt, mem.as_bytes(&b_i64)) { sb_put_cstr(sb, "int64_t"); return; }
-    var b_isize: [5]u8 = .{ 105, 115, 105, 122, 101 }; // "isize"
-    if mem_eql(txt, mem.as_bytes(&b_isize)) { sb_put_cstr(sb, "ptrdiff_t"); return; }
+    if mem_eql(txt, "u8") { sb_put_cstr(sb, "uint8_t"); return; }
+    if mem_eql(txt, "u16") { sb_put_cstr(sb, "uint16_t"); return; }
+    if mem_eql(txt, "u32") { sb_put_cstr(sb, "uint32_t"); return; }
+    if mem_eql(txt, "u64") { sb_put_cstr(sb, "uint64_t"); return; }
+    if mem_eql(txt, "usize") { sb_put_cstr(sb, "size_t"); return; }
+    if mem_eql(txt, "i8") { sb_put_cstr(sb, "int8_t"); return; }
+    if mem_eql(txt, "i16") { sb_put_cstr(sb, "int16_t"); return; }
+    if mem_eql(txt, "i32") { sb_put_cstr(sb, "int32_t"); return; }
+    if mem_eql(txt, "i64") { sb_put_cstr(sb, "int64_t"); return; }
+    if mem_eql(txt, "isize") { sb_put_cstr(sb, "ptrdiff_t"); return; }
     // Unknown named type (a struct in the fuller language): emit its lexeme verbatim.
     sb_put_str(sb, txt);
 }
@@ -661,9 +651,8 @@ fn e_call_is_as_bytes(p: *mut Parser, n: u32) -> bool {
     if cnode.kind != .field {
         return false;
     }
-    var b_asb: [8]u8 = .{ 97, 115, 95, 98, 121, 116, 101, 115 }; // "as_bytes"
     let fname: []const u8 = e_tok_text(p, cnode.main_token);
-    let is_asb: bool = mem_eql(fname, mem.as_bytes(&b_asb));
+    let is_asb: bool = mem_eql(fname, "as_bytes");
     if !is_asb {
         return false;
     }
@@ -704,8 +693,7 @@ fn e_raw_op(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
     let arg0: u32 = e_extra(p, rec);
     let arg1: u32 = e_extra(p, rec + 1);
     let member: []const u8 = e_tok_text(p, nd.main_token);
-    var b_ptr: [3]u8 = .{ 112, 116, 114 }; // "ptr"
-    let is_ptr: bool = mem_eql(member, mem.as_bytes(&b_ptr));
+    let is_ptr: bool = mem_eql(member, "ptr");
     if is_ptr {
         sb_put_cstr(sb, "(");
         e_type(p, sb, ty);
@@ -714,8 +702,7 @@ fn e_raw_op(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         sb_put_cstr(sb, ")");
         return;
     }
-    var b_load: [4]u8 = .{ 108, 111, 97, 100 }; // "load"
-    let is_load: bool = mem_eql(member, mem.as_bytes(&b_load));
+    let is_load: bool = mem_eql(member, "load");
     if is_load {
         sb_put_cstr(sb, "(*(");
         e_type(p, sb, ty);
@@ -810,10 +797,9 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         // of its repr integer, so the value already IS the raw integer (no cast needed).
         let cnode: Node = e_node(p, nd.lhs);
         if cnode.kind == .field {
-            var b_raw: [3]u8 = .{ 114, 97, 119 }; // "raw"
             let fname: []const u8 = e_tok_text(p, cnode.main_token);
             let argc0: u32 = e_extra(p, nd.rhs);
-            let is_raw: bool = mem_eql(fname, mem.as_bytes(&b_raw));
+            let is_raw: bool = mem_eql(fname, "raw");
             if is_raw && argc0 == 0 {
                 e_expr(p, sb, cnode.lhs); // emit just the receiver
                 return;
@@ -1557,9 +1543,8 @@ fn e_type_is_void(p: *mut Parser, ty_node: u32) -> bool {
     if nd.kind != .type_name {
         return false;
     }
-    var b_void: [4]u8 = .{ 118, 111, 105, 100 }; // "void"
     let txt: []const u8 = e_tok_text(p, nd.main_token);
-    return mem_eql(txt, mem.as_bytes(&b_void));
+    return mem_eql(txt, "void");
 }
 
 // Emit an impl method's free-fn signature `RET TYPE__mname(PARAMS)` (P5.10) — the method desugared to
@@ -1809,26 +1794,16 @@ fn e_gfn_tparam(p: *mut Parser, fn_node: u32) -> u32 {
 // itself (e.g. `Box<T>` in a template's own signature), which would otherwise self-substitute
 // `T -> T` forever. Nested/struct type args are deferred (see the ledger).
 fn e_is_scalar_lexeme(txt: []const u8) -> bool {
-    var b_u8: [2]u8 = .{ 117, 56 }; // "u8"
-    if mem_eql(txt, mem.as_bytes(&b_u8)) { return true; }
-    var b_u16: [3]u8 = .{ 117, 49, 54 }; // "u16"
-    if mem_eql(txt, mem.as_bytes(&b_u16)) { return true; }
-    var b_u32: [3]u8 = .{ 117, 51, 50 }; // "u32"
-    if mem_eql(txt, mem.as_bytes(&b_u32)) { return true; }
-    var b_u64: [3]u8 = .{ 117, 54, 52 }; // "u64"
-    if mem_eql(txt, mem.as_bytes(&b_u64)) { return true; }
-    var b_usize: [5]u8 = .{ 117, 115, 105, 122, 101 }; // "usize"
-    if mem_eql(txt, mem.as_bytes(&b_usize)) { return true; }
-    var b_i8: [2]u8 = .{ 105, 56 }; // "i8"
-    if mem_eql(txt, mem.as_bytes(&b_i8)) { return true; }
-    var b_i16: [3]u8 = .{ 105, 49, 54 }; // "i16"
-    if mem_eql(txt, mem.as_bytes(&b_i16)) { return true; }
-    var b_i32: [3]u8 = .{ 105, 51, 50 }; // "i32"
-    if mem_eql(txt, mem.as_bytes(&b_i32)) { return true; }
-    var b_i64: [3]u8 = .{ 105, 54, 52 }; // "i64"
-    if mem_eql(txt, mem.as_bytes(&b_i64)) { return true; }
-    var b_isize: [5]u8 = .{ 105, 115, 105, 122, 101 }; // "isize"
-    if mem_eql(txt, mem.as_bytes(&b_isize)) { return true; }
+    if mem_eql(txt, "u8") { return true; }
+    if mem_eql(txt, "u16") { return true; }
+    if mem_eql(txt, "u32") { return true; }
+    if mem_eql(txt, "u64") { return true; }
+    if mem_eql(txt, "usize") { return true; }
+    if mem_eql(txt, "i8") { return true; }
+    if mem_eql(txt, "i16") { return true; }
+    if mem_eql(txt, "i32") { return true; }
+    if mem_eql(txt, "i64") { return true; }
+    if mem_eql(txt, "isize") { return true; }
     return false;
 }
 

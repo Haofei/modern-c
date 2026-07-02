@@ -16,9 +16,6 @@
 //     but every read copies it into a PLAIN LOCAL first (`let s = lx.source;`) before
 //     indexing/sub-slicing: the C emitter can recover a slice's source type from a
 //     plain local or param, but NOT from a struct-field access directly.
-//   * KEYWORD MATCHING via `[N]u8` byte arrays + `mem.as_bytes` + `mem_eql` — string
-//     literals lower to `*const u8` (a pointer, not a `[]const u8`), so a keyword
-//     table cannot be written as string literals; each entry is a byte array.
 //   * NO value-optionals — `keyword_kind` returns a plain `TokKind` with an
 //     `.identifier` fallback instead of `?TokKind` (MC optionals are pointer-only).
 //
@@ -237,103 +234,54 @@ fn make(lx: *mut Lexer, kind: TokKind, start_off: usize, start_line: usize, star
 }
 
 // Map an identifier lexeme to its keyword kind, or `.identifier` when it is not a keyword.
-// GAP: no string-literal `[]const u8`, so each of the 47 keywords is a byte array compared
-// with mem_eql — ~2 lines each vs one `.{ .name = "...", .kind = ... }` row in Zig.
 fn keyword_kind(lex: []const u8) -> TokKind {
-    var k0: [7]u8 = .{ 97, 108, 105, 103, 110, 111, 102 }; // "alignof"
-    if mem_eql(lex, mem.as_bytes(&k0)) { return .kw_alignof; }
-    var k1: [3]u8 = .{ 97, 115, 109 }; // "asm"
-    if mem_eql(lex, mem.as_bytes(&k1)) { return .kw_asm; }
-    var k2: [6]u8 = .{ 97, 115, 115, 101, 114, 116 }; // "assert"
-    if mem_eql(lex, mem.as_bytes(&k2)) { return .kw_assert; }
-    var k3: [6]u8 = .{ 97, 116, 111, 109, 105, 99 }; // "atomic"
-    if mem_eql(lex, mem.as_bytes(&k3)) { return .kw_atomic; }
-    var k4: [4]u8 = .{ 98, 111, 111, 108 }; // "bool"
-    if mem_eql(lex, mem.as_bytes(&k4)) { return .kw_bool; }
-    var k5: [5]u8 = .{ 98, 114, 101, 97, 107 }; // "break"
-    if mem_eql(lex, mem.as_bytes(&k5)) { return .kw_break; }
-    var k6: [7]u8 = .{ 99, 108, 111, 115, 117, 114, 101 }; // "closure"
-    if mem_eql(lex, mem.as_bytes(&k6)) { return .kw_closure; }
-    var k7: [8]u8 = .{ 99, 111, 109, 112, 116, 105, 109, 101 }; // "comptime"
-    if mem_eql(lex, mem.as_bytes(&k7)) { return .kw_comptime; }
-    var k8: [5]u8 = .{ 99, 111, 110, 115, 116 }; // "const"
-    if mem_eql(lex, mem.as_bytes(&k8)) { return .kw_const; }
-    var k9: [8]u8 = .{ 99, 111, 110, 116, 105, 110, 117, 101 }; // "continue"
-    if mem_eql(lex, mem.as_bytes(&k9)) { return .kw_continue; }
-    var k10: [5]u8 = .{ 100, 101, 102, 101, 114 }; // "defer"
-    if mem_eql(lex, mem.as_bytes(&k10)) { return .kw_defer; }
-    var k11: [4]u8 = .{ 101, 108, 115, 101 }; // "else"
-    if mem_eql(lex, mem.as_bytes(&k11)) { return .kw_else; }
-    var k12: [4]u8 = .{ 101, 110, 117, 109 }; // "enum"
-    if mem_eql(lex, mem.as_bytes(&k12)) { return .kw_enum; }
-    var k13: [3]u8 = .{ 101, 114, 114 }; // "err"
-    if mem_eql(lex, mem.as_bytes(&k13)) { return .kw_err; }
-    var k14: [6]u8 = .{ 101, 120, 112, 111, 114, 116 }; // "export"
-    if mem_eql(lex, mem.as_bytes(&k14)) { return .kw_export; }
-    var k15: [6]u8 = .{ 101, 120, 116, 101, 114, 110 }; // "extern"
-    if mem_eql(lex, mem.as_bytes(&k15)) { return .kw_extern; }
-    var k16: [5]u8 = .{ 102, 97, 108, 115, 101 }; // "false"
-    if mem_eql(lex, mem.as_bytes(&k16)) { return .kw_false; }
-    var k17: [2]u8 = .{ 102, 110 }; // "fn"
-    if mem_eql(lex, mem.as_bytes(&k17)) { return .kw_fn; }
-    var k18: [3]u8 = .{ 102, 111, 114 }; // "for"
-    if mem_eql(lex, mem.as_bytes(&k18)) { return .kw_for; }
-    var k19: [2]u8 = .{ 105, 102 }; // "if"
-    if mem_eql(lex, mem.as_bytes(&k19)) { return .kw_if; }
-    var k20: [3]u8 = .{ 108, 101, 116 }; // "let"
-    if mem_eql(lex, mem.as_bytes(&k20)) { return .kw_let; }
-    var k21: [5]u8 = .{ 109, 97, 116, 99, 104 }; // "match"
-    if mem_eql(lex, mem.as_bytes(&k21)) { return .kw_match; }
-    var k22: [3]u8 = .{ 109, 117, 116 }; // "mut"
-    if mem_eql(lex, mem.as_bytes(&k22)) { return .kw_mut; }
-    var k23: [5]u8 = .{ 110, 101, 118, 101, 114 }; // "never"
-    if mem_eql(lex, mem.as_bytes(&k23)) { return .kw_never; }
-    var k24: [4]u8 = .{ 110, 117, 108, 108 }; // "null"
-    if mem_eql(lex, mem.as_bytes(&k24)) { return .kw_null; }
-    var k25: [2]u8 = .{ 111, 107 }; // "ok"
-    if mem_eql(lex, mem.as_bytes(&k25)) { return .kw_ok; }
-    var k26: [4]u8 = .{ 111, 112, 101, 110 }; // "open"
-    if mem_eql(lex, mem.as_bytes(&k26)) { return .kw_open; }
-    var k27: [7]u8 = .{ 111, 118, 101, 114, 108, 97, 121 }; // "overlay"
-    if mem_eql(lex, mem.as_bytes(&k27)) { return .kw_overlay; }
-    var k28: [6]u8 = .{ 112, 97, 99, 107, 101, 100 }; // "packed"
-    if mem_eql(lex, mem.as_bytes(&k28)) { return .kw_packed; }
-    var k29: [3]u8 = .{ 112, 117, 98 }; // "pub"
-    if mem_eql(lex, mem.as_bytes(&k29)) { return .kw_pub; }
-    var k30: [6]u8 = .{ 114, 101, 116, 117, 114, 110 }; // "return"
-    if mem_eql(lex, mem.as_bytes(&k30)) { return .kw_return; }
-    var k31: [3]u8 = .{ 115, 97, 116 }; // "sat"
-    if mem_eql(lex, mem.as_bytes(&k31)) { return .kw_sat; }
-    var k32: [6]u8 = .{ 115, 101, 114, 105, 97, 108 }; // "serial"
-    if mem_eql(lex, mem.as_bytes(&k32)) { return .kw_serial; }
-    var k33: [6]u8 = .{ 115, 105, 122, 101, 111, 102 }; // "sizeof"
-    if mem_eql(lex, mem.as_bytes(&k33)) { return .kw_sizeof; }
-    var k34: [6]u8 = .{ 115, 116, 114, 117, 99, 116 }; // "struct"
-    if mem_eql(lex, mem.as_bytes(&k34)) { return .kw_struct; }
-    var k35: [6]u8 = .{ 115, 119, 105, 116, 99, 104 }; // "switch"
-    if mem_eql(lex, mem.as_bytes(&k35)) { return .kw_switch; }
-    var k36: [4]u8 = .{ 116, 114, 117, 101 }; // "true"
-    if mem_eql(lex, mem.as_bytes(&k36)) { return .kw_true; }
-    var k37: [4]u8 = .{ 116, 121, 112, 101 }; // "type"
-    if mem_eql(lex, mem.as_bytes(&k37)) { return .kw_type; }
-    var k38: [5]u8 = .{ 117, 110, 105, 111, 110 }; // "union"
-    if mem_eql(lex, mem.as_bytes(&k38)) { return .kw_union; }
-    var k39: [6]u8 = .{ 117, 110, 105, 110, 105, 116 }; // "uninit"
-    if mem_eql(lex, mem.as_bytes(&k39)) { return .kw_uninit; }
-    var k40: [6]u8 = .{ 117, 110, 115, 97, 102, 101 }; // "unsafe"
-    if mem_eql(lex, mem.as_bytes(&k40)) { return .kw_unsafe; }
-    var k41: [11]u8 = .{ 117, 110, 114, 101, 97, 99, 104, 97, 98, 108, 101 }; // "unreachable"
-    if mem_eql(lex, mem.as_bytes(&k41)) { return .kw_unreachable; }
-    var k42: [3]u8 = .{ 117, 115, 101 }; // "use"
-    if mem_eql(lex, mem.as_bytes(&k42)) { return .kw_use; }
-    var k43: [3]u8 = .{ 118, 97, 114 }; // "var"
-    if mem_eql(lex, mem.as_bytes(&k43)) { return .kw_var; }
-    var k44: [4]u8 = .{ 118, 111, 105, 100 }; // "void"
-    if mem_eql(lex, mem.as_bytes(&k44)) { return .kw_void; }
-    var k45: [5]u8 = .{ 119, 104, 105, 108, 101 }; // "while"
-    if mem_eql(lex, mem.as_bytes(&k45)) { return .kw_while; }
-    var k46: [4]u8 = .{ 119, 114, 97, 112 }; // "wrap"
-    if mem_eql(lex, mem.as_bytes(&k46)) { return .kw_wrap; }
+    if mem_eql(lex, "alignof") { return .kw_alignof; }
+    if mem_eql(lex, "asm") { return .kw_asm; }
+    if mem_eql(lex, "assert") { return .kw_assert; }
+    if mem_eql(lex, "atomic") { return .kw_atomic; }
+    if mem_eql(lex, "bool") { return .kw_bool; }
+    if mem_eql(lex, "break") { return .kw_break; }
+    if mem_eql(lex, "closure") { return .kw_closure; }
+    if mem_eql(lex, "comptime") { return .kw_comptime; }
+    if mem_eql(lex, "const") { return .kw_const; }
+    if mem_eql(lex, "continue") { return .kw_continue; }
+    if mem_eql(lex, "defer") { return .kw_defer; }
+    if mem_eql(lex, "else") { return .kw_else; }
+    if mem_eql(lex, "enum") { return .kw_enum; }
+    if mem_eql(lex, "err") { return .kw_err; }
+    if mem_eql(lex, "export") { return .kw_export; }
+    if mem_eql(lex, "extern") { return .kw_extern; }
+    if mem_eql(lex, "false") { return .kw_false; }
+    if mem_eql(lex, "fn") { return .kw_fn; }
+    if mem_eql(lex, "for") { return .kw_for; }
+    if mem_eql(lex, "if") { return .kw_if; }
+    if mem_eql(lex, "let") { return .kw_let; }
+    if mem_eql(lex, "match") { return .kw_match; }
+    if mem_eql(lex, "mut") { return .kw_mut; }
+    if mem_eql(lex, "never") { return .kw_never; }
+    if mem_eql(lex, "null") { return .kw_null; }
+    if mem_eql(lex, "ok") { return .kw_ok; }
+    if mem_eql(lex, "open") { return .kw_open; }
+    if mem_eql(lex, "overlay") { return .kw_overlay; }
+    if mem_eql(lex, "packed") { return .kw_packed; }
+    if mem_eql(lex, "pub") { return .kw_pub; }
+    if mem_eql(lex, "return") { return .kw_return; }
+    if mem_eql(lex, "sat") { return .kw_sat; }
+    if mem_eql(lex, "serial") { return .kw_serial; }
+    if mem_eql(lex, "sizeof") { return .kw_sizeof; }
+    if mem_eql(lex, "struct") { return .kw_struct; }
+    if mem_eql(lex, "switch") { return .kw_switch; }
+    if mem_eql(lex, "true") { return .kw_true; }
+    if mem_eql(lex, "type") { return .kw_type; }
+    if mem_eql(lex, "union") { return .kw_union; }
+    if mem_eql(lex, "uninit") { return .kw_uninit; }
+    if mem_eql(lex, "unsafe") { return .kw_unsafe; }
+    if mem_eql(lex, "unreachable") { return .kw_unreachable; }
+    if mem_eql(lex, "use") { return .kw_use; }
+    if mem_eql(lex, "var") { return .kw_var; }
+    if mem_eql(lex, "void") { return .kw_void; }
+    if mem_eql(lex, "while") { return .kw_while; }
+    if mem_eql(lex, "wrap") { return .kw_wrap; }
     return .identifier;
 }
 
@@ -388,17 +336,14 @@ fn identifier(lx: *mut Lexer, start_off: usize, start_line: usize, start_col: us
     let end: usize = lx.index;
     let lexeme: []const u8 = s[start_off..end];
     // `_` alone is the underscore token, not an identifier.
-    var us: [1]u8 = .{ 95 }; // "_"
-    if mem_eql(lexeme, mem.as_bytes(&us)) {
+    if mem_eql(lexeme, "_") {
         return make(lx, .underscore, start_off, start_line, start_col);
     }
     // `inf`/`nan` are IEEE float constants, lexed as float literals (see src/lexer.zig).
-    var infb: [3]u8 = .{ 105, 110, 102 }; // "inf"
-    var nanb: [3]u8 = .{ 110, 97, 110 };  // "nan"
-    if mem_eql(lexeme, mem.as_bytes(&infb)) {
+    if mem_eql(lexeme, "inf") {
         return make(lx, .float_literal, start_off, start_line, start_col);
     }
-    if mem_eql(lexeme, mem.as_bytes(&nanb)) {
+    if mem_eql(lexeme, "nan") {
         return make(lx, .float_literal, start_off, start_line, start_col);
     }
     let k: TokKind = keyword_kind(lexeme);
@@ -439,10 +384,10 @@ fn integer(lx: *mut Lexer, start_off: usize, start_line: usize, start_col: usize
         is_float = true;
         advance(lx);
         while !is_at_end(lx) {
-            let cf: u8 = peek(lx);
-            if is_digit(cf) {
+            let c: u8 = peek(lx);
+            if is_digit(c) {
                 advance(lx);
-            } else if cf == '_' {
+            } else if c == '_' {
                 if is_ident_start(peek_next(lx)) { break; }
                 advance(lx);
             } else {
@@ -459,10 +404,10 @@ fn integer(lx: *mut Lexer, start_off: usize, start_line: usize, start_col: usize
             advance(lx);
         }
         while !is_at_end(lx) {
-            let ce: u8 = peek(lx);
-            if is_digit(ce) {
+            let c: u8 = peek(lx);
+            if is_digit(c) {
                 advance(lx);
-            } else if ce == '_' {
+            } else if c == '_' {
                 if is_ident_start(peek_next(lx)) { break; }
                 advance(lx);
             } else {

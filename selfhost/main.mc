@@ -257,9 +257,8 @@ fn mc_scan_imports(nread: usize) -> void {
         } else if depth == 0 && mc_kind_is(k, .identifier) {
             let st: usize = token_start_at(&tl, i);
             let ln: usize = token_len_at(&tl, i);
-            var kw: [6]u8 = .{ 105, 109, 112, 111, 114, 116 }; // "import"
             let lex_word: []const u8 = mem.as_bytes(&g_src)[st..st + ln];
-            if mem_eql(lex_word, mem.as_bytes(&kw)) && i + 2 < n {
+            if mem_eql(lex_word, "import") && i + 2 < n {
                 let k1: u32 = token_kind_at(&tl, i + 1);
                 let k2: u32 = token_kind_at(&tl, i + 2);
                 if mc_kind_is(k1, .string_literal) && mc_kind_is(k2, .semicolon) {

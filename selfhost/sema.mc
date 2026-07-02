@@ -305,30 +305,18 @@ fn sm_is_enum_type(s: *mut SmState, t: SmType) -> bool {
 
 // Map a scalar type name lexeme to its `SmKind`, or `.unknown` when it is not a scalar keyword.
 fn sm_scalar_kind(txt: []const u8) -> SmKind {
-    var b_void: [4]u8 = .{ 118, 111, 105, 100 }; // "void"
-    if mem_eql(txt, mem.as_bytes(&b_void)) { return .void_; }
-    var b_bool: [4]u8 = .{ 98, 111, 111, 108 }; // "bool"
-    if mem_eql(txt, mem.as_bytes(&b_bool)) { return .bool_; }
-    var b_u8: [2]u8 = .{ 117, 56 }; // "u8"
-    if mem_eql(txt, mem.as_bytes(&b_u8)) { return .u8_; }
-    var b_u16: [3]u8 = .{ 117, 49, 54 }; // "u16"
-    if mem_eql(txt, mem.as_bytes(&b_u16)) { return .u16_; }
-    var b_u32: [3]u8 = .{ 117, 51, 50 }; // "u32"
-    if mem_eql(txt, mem.as_bytes(&b_u32)) { return .u32_; }
-    var b_u64: [3]u8 = .{ 117, 54, 52 }; // "u64"
-    if mem_eql(txt, mem.as_bytes(&b_u64)) { return .u64_; }
-    var b_usize: [5]u8 = .{ 117, 115, 105, 122, 101 }; // "usize"
-    if mem_eql(txt, mem.as_bytes(&b_usize)) { return .usize_; }
-    var b_i8: [2]u8 = .{ 105, 56 }; // "i8"
-    if mem_eql(txt, mem.as_bytes(&b_i8)) { return .i8_; }
-    var b_i16: [3]u8 = .{ 105, 49, 54 }; // "i16"
-    if mem_eql(txt, mem.as_bytes(&b_i16)) { return .i16_; }
-    var b_i32: [3]u8 = .{ 105, 51, 50 }; // "i32"
-    if mem_eql(txt, mem.as_bytes(&b_i32)) { return .i32_; }
-    var b_i64: [3]u8 = .{ 105, 54, 52 }; // "i64"
-    if mem_eql(txt, mem.as_bytes(&b_i64)) { return .i64_; }
-    var b_isize: [5]u8 = .{ 105, 115, 105, 122, 101 }; // "isize"
-    if mem_eql(txt, mem.as_bytes(&b_isize)) { return .isize_; }
+    if mem_eql(txt, "void") { return .void_; }
+    if mem_eql(txt, "bool") { return .bool_; }
+    if mem_eql(txt, "u8") { return .u8_; }
+    if mem_eql(txt, "u16") { return .u16_; }
+    if mem_eql(txt, "u32") { return .u32_; }
+    if mem_eql(txt, "u64") { return .u64_; }
+    if mem_eql(txt, "usize") { return .usize_; }
+    if mem_eql(txt, "i8") { return .i8_; }
+    if mem_eql(txt, "i16") { return .i16_; }
+    if mem_eql(txt, "i32") { return .i32_; }
+    if mem_eql(txt, "i64") { return .i64_; }
+    if mem_eql(txt, "isize") { return .isize_; }
     return .unknown;
 }
 
@@ -581,18 +569,16 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
     if cnode.kind == .field {
         // `mem.as_bytes(&x)` is a compiler builtin returning `[]const u8` (a byte view of `x`). It is
         // matched syntactically (callee is `.as_bytes` with one arg); the arg is walked for errors.
-        var b_asb: [8]u8 = .{ 97, 115, 95, 98, 121, 116, 101, 115 }; // "as_bytes"
         let cfname: []const u8 = sm_tok_text(s, cnode.main_token);
-        let is_asb: bool = mem_eql(cfname, mem.as_bytes(&b_asb));
+        let is_asb: bool = mem_eql(cfname, "as_bytes");
         if is_asb && argc == 1 {
             sm_walk_args(s, args_run, argc);
             return sm_slice(sm_ty(.u8_), 0);
         }
     }
     if cnode.kind == .field {
-        var b_raw: [3]u8 = .{ 114, 97, 119 }; // "raw"
         let fname: []const u8 = sm_tok_text(s, cnode.main_token);
-        let is_raw: bool = mem_eql(fname, mem.as_bytes(&b_raw));
+        let is_raw: bool = mem_eql(fname, "raw");
         if is_raw && argc == 0 {
             let recv: SmType = sm_type_of_expr(s, cnode.lhs);
             if sm_is_enum_type(s, recv) {
@@ -852,15 +838,13 @@ fn sm_raw_op(s: *mut SmState, node: u32) -> SmType {
     let arg1: u32 = sm_extra(s, rec + 1);
     sm_type_of_expr(s, arg0); // walk the address operand for errors (lenient on its type)
     let member: []const u8 = sm_tok_text(s, nd.main_token);
-    var b_ptr: [3]u8 = .{ 112, 116, 114 }; // "ptr"
-    let is_ptr: bool = mem_eql(member, mem.as_bytes(&b_ptr));
+    let is_ptr: bool = mem_eql(member, "ptr");
     if is_ptr {
         var pt: SmType = elem;
         pt.ptr_depth = pt.ptr_depth + 1;
         return pt;
     }
-    var b_load: [4]u8 = .{ 108, 111, 97, 100 }; // "load"
-    let is_load: bool = mem_eql(member, mem.as_bytes(&b_load));
+    let is_load: bool = mem_eql(member, "load");
     if is_load {
         return elem;
     }
@@ -970,9 +954,8 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
             // to the struct-field resolver (which errors on a non-struct base).
             let okind: u32 = obj.kind.raw();
             if okind == 3 || okind == 16 {
-                var b_len: [3]u8 = .{ 108, 101, 110 }; // "len"
                 let fname: []const u8 = sm_tok_text(s, nd.main_token);
-                let is_len: bool = mem_eql(fname, mem.as_bytes(&b_len));
+                let is_len: bool = mem_eql(fname, "len");
                 if is_len {
                     return sm_ty(.usize_);
                 }

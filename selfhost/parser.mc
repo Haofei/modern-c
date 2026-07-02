@@ -486,8 +486,8 @@ fn dot_is_struct_lit(p: *mut Parser) -> bool {
 // lexer keyword — it lexes as a plain identifier, like `import`). Bound to a local per G13.
 fn tok_is_raw(p: *mut Parser, tok: u32) -> bool {
     let lex: []const u8 = tok_lexeme(p, tok);
-    var kw: [3]u8 = .{ 114, 97, 119 }; // "raw"
-    return mem_eql(lex, mem.as_bytes(&kw));
+
+    return mem_eql(lex, "raw");
 }
 
 // True when token `tok` is the identifier `as` (the cast operator, which is NOT a lexer keyword —
@@ -495,32 +495,32 @@ fn tok_is_raw(p: *mut Parser, tok: u32) -> bool {
 // `self.current.kind == .identifier and eql(self.current.lexeme, "as")`). Bound to a local per G13.
 fn tok_is_as(p: *mut Parser, tok: u32) -> bool {
     let lex: []const u8 = tok_lexeme(p, tok);
-    var kw: [2]u8 = .{ 97, 115 }; // "as"
-    return mem_eql(lex, mem.as_bytes(&kw));
+
+    return mem_eql(lex, "as");
 }
 
 // True when token `tok` is the identifier `dyn` (the trait-object marker, which is NOT a lexer
 // keyword — it lexes as a plain identifier, like `as`/`raw`). Bound to a local per G13. (P5.10)
 fn tok_is_dyn(p: *mut Parser, tok: u32) -> bool {
     let lex: []const u8 = tok_lexeme(p, tok);
-    var kw: [3]u8 = .{ 100, 121, 110 }; // "dyn"
-    return mem_eql(lex, mem.as_bytes(&kw));
+
+    return mem_eql(lex, "dyn");
 }
 
 // True when token `tok` is the identifier `trait` (the trait-decl keyword — NOT a lexer keyword;
 // it lexes as a plain identifier, like `import`). Bound to a local per G13. (P5.10)
 fn tok_is_trait(p: *mut Parser, tok: u32) -> bool {
     let lex: []const u8 = tok_lexeme(p, tok);
-    var kw: [5]u8 = .{ 116, 114, 97, 105, 116 }; // "trait"
-    return mem_eql(lex, mem.as_bytes(&kw));
+
+    return mem_eql(lex, "trait");
 }
 
 // True when token `tok` is the identifier `impl` (the impl-block keyword — NOT a lexer keyword;
 // it lexes as a plain identifier, like `import`). Bound to a local per G13. (P5.10)
 fn tok_is_impl(p: *mut Parser, tok: u32) -> bool {
     let lex: []const u8 = tok_lexeme(p, tok);
-    var kw: [4]u8 = .{ 105, 109, 112, 108 }; // "impl"
-    return mem_eql(lex, mem.as_bytes(&kw));
+
+    return mem_eql(lex, "impl");
 }
 
 // raw_op := `raw` `.` (`ptr`|`load`|`store`) `<` Type `>` `(` Expr (`,` Expr)? `)`  (P5.8). The
@@ -1069,8 +1069,8 @@ fn tok_lexeme(p: *mut Parser, tok: u32) -> []const u8 {
 // lexer keyword — it lexes as a plain identifier, exactly as MC's real loader recognizes it).
 fn tok_is_import(p: *mut Parser, tok: u32) -> bool {
     let lex: []const u8 = tok_lexeme(p, tok);
-    var kw: [6]u8 = .{ 105, 109, 112, 111, 114, 116 }; // "import"
-    return mem_eql(lex, mem.as_bytes(&kw));
+
+    return mem_eql(lex, "import");
 }
 
 // import := `import` STRING `;`  (a top-level directive). The path string is kept as the node's
