@@ -41,6 +41,14 @@ EOF
 if ! "$WORK/prog"; then echo "FAIL: mcc2-cli-test — round-trip add(2,3)!=5"; exit 1; fi
 echo "PASS: mcc2-cli-test — CLI round-trip: mcc2 add.mc -> C -> clang -> run, add(2,3)==5"
 
+# ----- Stage EXIT-CODE: invalid input must FAIL (nonzero), valid must succeed (0) -----
+# Regression guard: mcc2 emits best-effort C even on error, but the EXIT CODE must reflect
+# validity so CI/scripts reject bad MC (previously a semantic error still exited 0).
+"$WORK/mcc2" "$WORK/add.mc" >/dev/null 2>&1 || { echo "FAIL: mcc2-cli-test — valid input did not exit 0"; exit 1; }
+printf 'export fn bad() -> u32 { return no_such_fn(1); }\n' > "$WORK/bad.mc"
+if "$WORK/mcc2" "$WORK/bad.mc" >/dev/null 2>&1; then echo "FAIL: mcc2-cli-test — invalid MC (unknown call) exited 0; CI would accept bad input"; exit 1; fi
+echo "PASS: mcc2-cli-test — exit code reflects validity (valid=0, semantic-error=nonzero)"
+
 # ----- Stage PERF: ~1000 subset-valid functions; time mcc2 and clang -----
 NFUNS=1000
 awk -v n="$NFUNS" 'BEGIN {
