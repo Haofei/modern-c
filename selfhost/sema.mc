@@ -174,6 +174,7 @@ struct SmState {
     sigs: Vec<SmSig>,
     ptypes: Vec<SmType>,       // flattened param types for all sigs
     locals: StrHashMap<SmType>,// current function's params + lets
+    globals: StrHashMap<SmType>,// module-level `const NAME: T` declarations -> type T (persists)
     muts: StrHashMap<u32>,     // current function's MUTABLE locals (a `var`); value 1 = mutable
     structs: StrHashMap<u32>,  // struct name -> struct_defs index (absence via strmap_contains)
     struct_defs: Vec<SmStruct>,
@@ -573,6 +574,10 @@ fn sm_type_of_ident(s: *mut SmState, tok: u32) -> SmType {
     if is_local {
         return strmap_get_or(SmType, &s.locals, name, sm_ty_unknown());
     }
+    let is_global: bool = strmap_contains(SmType, &s.globals, name);
+    if is_global {
+        return strmap_get_or(SmType, &s.globals, name, sm_ty_unknown());
+    }
     let is_fn: bool = strmap_contains(u32, &s.fns, name);
     if is_fn {
         return sm_ty_unknown();
@@ -802,22 +807,36 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
     var i: u32 = 0;
     while i < argc {
         let an: u32 = sm_extra(s, args_run + 1 + i);
-        let at: SmType = sm_type_of_expr(s, an);
+        let anode: Node = sm_node(s, an);
         if i < sig.param_count {
             let pty: SmType = vec_get(SmType, &s.ptypes, (sig.param_start + i) as usize);
-            // P5.10: a `*mut dyn TRAIT` param accepts any `*mut TYPE` that impls the trait — the
-            // conformance/coercion is LENIENT in the subset (no impl-lookup), so skip the type check
-            // when the param is a trait object. (The emitter builds the {data,vtable} fat pointer.)
-            // `.raw()` is bound to a local before comparing (a `let bool = <call> == lit` cannot
-            // recover its operand type on the C backend — gap G23).
-            let pk: u32 = pty.kind.raw();
-            let pdyn: bool = pk == 17;
-            if !pdyn {
-                let matched: bool = sm_types_match(s, pty, at);
-                if !matched {
-                    sm_err(s, .arg_type);
+            // An enum/struct/array literal ARGUMENT has no standalone type — it must be checked
+            // against the PARAMETER's type (the target), exactly as a typed init/return threads its
+            // annotation. Without this, `f(.variant)` / `f(.{..})` spuriously errors.
+            if anode.kind == .enum_lit {
+                sm_check_enum_lit(s, an, pty);
+            } else if anode.kind == .struct_lit {
+                sm_check_struct_lit(s, an, pty);
+            } else if anode.kind == .array_lit {
+                sm_check_array_lit(s, an, pty);
+            } else {
+                let at: SmType = sm_type_of_expr(s, an);
+                // P5.10: a `*mut dyn TRAIT` param accepts any `*mut TYPE` that impls the trait — the
+                // conformance/coercion is LENIENT in the subset (no impl-lookup), so skip the type check
+                // when the param is a trait object. (The emitter builds the {data,vtable} fat pointer.)
+                // `.raw()` is bound to a local before comparing (a `let bool = <call> == lit` cannot
+                // recover its operand type on the C backend — gap G23).
+                let pk: u32 = pty.kind.raw();
+                let pdyn: bool = pk == 17;
+                if !pdyn {
+                    let matched: bool = sm_types_match(s, pty, at);
+                    if !matched {
+                        sm_err(s, .arg_type);
+                    }
                 }
             }
+        } else {
+            sm_type_of_expr(s, an); // excess arg: still walk for its own errors
         }
         i = i + 1;
     }
@@ -1066,10 +1085,20 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
     let nd: Node = sm_node(s, node);
     switch nd.kind {
         .int_literal => { return sm_ty(.int_lit); }
+        // A char literal `'a'` is a byte constant — types as `u8` (matching the real backend's `u8`
+        // char-literal type).
+        .char_literal => { return sm_ty(.u8_); }
+        // A string literal `"..."` is a byte slice `[]const u8` (matching the real backend), so it
+        // matches a `[]const u8` parameter (e.g. `mem_eql(lex, "const")`).
+        .string_literal => { return sm_slice(sm_ty(.u8_), 0); }
         .bool_literal => { return sm_ty(.bool_); }
         // `null` (G11): the absent value of a value optional. Its type unifies with any `?T` (see
         // sm_types_match), so `opt == null` compares and `return null;`/`let x: ?T = null;` coerce.
         .null_literal => { return sm_ty(.null_); }
+        // `uninit`: an untyped uninitialized value; it takes the declared type of its binding, so it
+        // has no standalone type. `unknown` unifies harmlessly (a `let x: T = uninit` is special-cased
+        // to skip the match — see the let/var check).
+        .uninit_literal => { return sm_ty_unknown(); }
         .ident_expr => { return sm_type_of_ident(s, nd.main_token); }
         .call => { return sm_check_call(s, node); }
         .un_neg => {
@@ -1293,7 +1322,17 @@ fn sm_check_switch(s: *mut SmState, node: u32) -> void {
     let arm_count: u32 = sm_extra(s, run);
     let is_enum: bool = sm_is_enum_type(s, subj_ty);
     if !is_enum {
-        sm_err(s, .switch_subject);
+        // A `switch` over a `bool` or an integer is also valid (arms are `true`/`false`/int-literal
+        // patterns, or `_`); it lowers to a direct C `switch`. Only a genuinely non-switchable
+        // subject (struct/slice/etc.) is an error. Exhaustiveness is not enforced for these (a
+        // `_`/default arm is the idiomatic completion, as in ascii.mc's bool switches).
+        let sk: u32 = subj_ty.kind.raw();
+        let is_bool: bool = sk == 2;
+        let is_num: bool = sm_is_num_raw(sk);
+        let ok_subject: bool = is_bool || is_num;
+        if !ok_subject {
+            sm_err(s, .switch_subject);
+        }
         // Still walk every arm block so nested errors are not lost.
         var wi: u32 = 0;
         while wi < arm_count {
@@ -1451,6 +1490,8 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
                 sm_check_array_lit(s, nd.rhs, ann);
             } else if init_nd.kind == .enum_lit {
                 sm_check_enum_lit(s, nd.rhs, ann);
+            } else if init_nd.kind == .uninit_literal {
+                // `var x: T = uninit;` — no value to check; the binding takes the annotated type T.
             } else {
                 let it: SmType = sm_type_of_expr(s, nd.rhs);
                 let matched: bool = sm_types_match(s, ann, it);
@@ -1663,6 +1704,13 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
         if dn.kind == .struct_decl {
             sm_collect_struct(s, dn.main_token, dn.lhs, 0);
         }
+        if dn.kind == .const_decl {
+            // Module-level `const NAME: T = ...` — register NAME as a global of the declared type T so
+            // every use resolves (like a fn/local). The initializer is type-checked in a later pass.
+            let cty: SmType = sm_type_from_node(s, dn.lhs);
+            let cname: []const u8 = sm_tok_text(s, dn.main_token);
+            strmap_put(SmType, &s.globals, cname, cty);
+        }
         if dn.kind == .struct_gdecl {
             // Generic struct rec [tparam_tok, fields_run, exported]; register the template by name
             // with its fields (field types may reference the abstract type param T).
@@ -1789,6 +1837,29 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
     }
 }
 
+// PASS 1.5: type-check each module-level `const NAME: T = init` initializer against T. Runs AFTER
+// collect so an init may reference any const/fn declared later, and with an EMPTY locals table (a
+// const init is a constant expression — it references no locals). A mismatch is a `type_mismatch`.
+fn sm_check_consts(s: *mut SmState, root: u32) -> void {
+    let rnode: Node = sm_node(s, root);
+    let drun: u32 = rnode.lhs;
+    let dcount: u32 = sm_extra(s, drun);
+    var di: u32 = 0;
+    while di < dcount {
+        let d: u32 = sm_extra(s, drun + 1 + di);
+        let dn: Node = sm_node(s, d);
+        if dn.kind == .const_decl {
+            let decl_ty: SmType = sm_type_from_node(s, dn.lhs);
+            let init_ty: SmType = sm_type_of_expr(s, dn.rhs);
+            let ok: bool = sm_types_match(s, decl_ty, init_ty);
+            if !ok {
+                sm_err(s, .type_mismatch);
+            }
+        }
+        di = di + 1;
+    }
+}
+
 // PASS 2: check each `fn` body with a fresh per-function locals table seeded with its params.
 fn sm_check_fns(s: *mut SmState, root: u32) -> void {
     let rnode: Node = sm_node(s, root);
@@ -1843,6 +1914,7 @@ export fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
         .sigs = vec_new(SmSig, a),
         .ptypes = vec_new(SmType, a),
         .locals = strmap_new(SmType, a),
+        .globals = strmap_new(SmType, a),
         .muts = strmap_new(u32, a),
         .structs = strmap_new(u32, a),
         .struct_defs = vec_new(SmStruct, a),
@@ -1857,6 +1929,7 @@ export fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
     };
     let root: u32 = parser_root(&s.p);
     sm_collect(&s, root);
+    sm_check_consts(&s, root);
     sm_check_fns(&s, root);
     return s;
 }
@@ -1879,6 +1952,7 @@ export fn sema_parse_err_count(s: *SmState) -> u32 {
 // Release the parser arena and all symbol tables. Call exactly once when done.
 export fn sema_free(s: *mut SmState) -> void {
     strmap_free(SmType, &s.locals);
+    strmap_free(SmType, &s.globals);
     strmap_free(u32, &s.muts);
     strmap_free(u32, &s.structs);
     strmap_free(u32, &s.enums);

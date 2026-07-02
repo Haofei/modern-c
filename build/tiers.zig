@@ -413,6 +413,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-mem-test"));
     // selfhost-result-test (RESULT milestone): mcc2 gains `Result<T,E>` + `ok/err` construction + Result `switch`/`if let` pattern-matching + the `?` propagation operator (lowered to the real backend's tagged `mc_result_<T>_<E>`), asserted behaviorally, plus a real-module check emitting std/hosted_io.mc's Result machinery to C.
     m0_step.dependOn(ctx.cmd("selfhost-result-test"));
+    // selfhost-lexself-test (SELF-COMPILE LANDMARK): after adding CHARACTER LITERALS and MODULE-LEVEL `const` to the subset (plus the std-dep-driven `const fn`/`move struct`/bool `switch`/`uninit`/string-literal/transitive-monomorphization fixes), mcc2 compiles its OWN lexer selfhost/lexer.mc to clang-clean C, plus a char-literal + module-const behavioral round-trip -> clang -Werror -> run.
+    m0_step.dependOn(ctx.cmd("selfhost-lexself-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

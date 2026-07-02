@@ -220,7 +220,12 @@ fn e_type_arg_lexeme(p: *mut Parser, arg_node: u32) -> []const u8 {
     let nd: Node = e_node(p, arg_node);
     let txt: []const u8 = e_tok_text(p, nd.main_token);
     if p.sub_concrete != 0 {
-        if nd.kind == .type_name {
+        // A type arg written as a bare `T` is a `type_name` in a TYPE position (struct field, sig) but
+        // an `ident_expr` in an EXPRESSION position (a call's leading type arg, e.g. `vec_reserve(T, ..)`);
+        // both carry the spelling in `main_token` and must substitute to the active concrete type.
+        let is_type_name: bool = nd.kind == .type_name;
+        let is_ident: bool = nd.kind == .ident_expr;
+        if is_type_name || is_ident {
             let subname: []const u8 = e_sub_name(p);
             let hit: bool = mem_eql(txt, subname);
             if hit {
@@ -1252,6 +1257,25 @@ fn e_is_binop(k: NodeKind) -> bool {
     return o >= 60 && o <= 64;
 }
 
+// The decoded byte length of a string literal from its LEXEME (surrounding quotes included). Each
+// escape sequence (`\n \t \r \0 \\ \' \"`) is two source chars but ONE decoded byte; every other
+// char is one byte. Matches the `.len` a `[]const u8` slice literal must carry (no trailing NUL).
+fn e_str_byte_len(lex: []const u8) -> usize {
+    var n: usize = 0;
+    var i: usize = 1;            // skip the opening quote
+    let last: usize = lex.len - 1; // index of the closing quote
+    while i < last {
+        let c: u8 = lex[i];
+        if c == 92 { // backslash: a two-char escape -> one byte
+            i = i + 2;
+        } else {
+            i = i + 1;
+        }
+        n = n + 1;
+    }
+    return n;
+}
+
 // Emit an expression node. Binary exprs are FULLY PARENTHESIZED so C precedence is preserved.
 fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
     if n == 0 {
@@ -1261,6 +1285,26 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
     if nd.kind == .int_literal {
         let txt: []const u8 = e_tok_text(p, nd.main_token);
         sb_put_str(sb, txt);
+        return;
+    }
+    // A char literal's lexeme (quotes included) is emitted verbatim — it is already a valid C char
+    // literal (MC's `\n \t \r \0 \\ \' \"` escapes are all valid C escapes too).
+    if nd.kind == .char_literal {
+        let ctxt: []const u8 = e_tok_text(p, nd.main_token);
+        sb_put_str(sb, ctxt);
+        return;
+    }
+    // A string literal `"..."` is a `[]const u8` — emit the fat-pointer slice value over the static C
+    // string literal (which is program-lifetime, so the borrow is always valid). The pointer is the
+    // lexeme itself (a valid C string literal); the length is the decoded byte count.
+    if nd.kind == .string_literal {
+        let stxt: []const u8 = e_tok_text(p, nd.main_token);
+        let blen: usize = e_str_byte_len(stxt);
+        sb_put_cstr(sb, "((mc_slice_const_u8){ .ptr = (const uint8_t*)");
+        sb_put_str(sb, stxt);
+        sb_put_cstr(sb, ", .len = ");
+        sb_put_u32(sb, blen as u32);
+        sb_put_cstr(sb, " })");
         return;
     }
     if nd.kind == .bool_literal {
@@ -1396,7 +1440,10 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
                 let grun: u32 = nd.rhs;
                 let gargc: u32 = e_extra(p, grun);
                 let a0: u32 = e_extra(p, grun + 1);
-                let a0lex: []const u8 = e_node_lexeme(p, a0);
+                // Use the SUBSTITUTED lexeme: inside a monomorphic body the type arg may itself be the
+                // enclosing fn's type param `T` (e.g. `vec_reserve(T, ..)` inside `vec_push<usize>`),
+                // which must mangle to the concrete `vec_reserve_usize`, not `vec_reserve_T`.
+                let a0lex: []const u8 = e_type_arg_lexeme(p, a0);
                 sb_put_str(sb, cname);
                 sb_put_cstr(sb, "_");
                 sb_put_str(sb, a0lex);
@@ -1687,8 +1734,14 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
         // always annotates in practice; a bare `let`/`var` would emit `void name`. `var` == `let` in C.
         let name: []const u8 = e_tok_text(p, nd.main_token);
         e_emit_decl(p, sb, nd.lhs, name);
-        sb_put_cstr(sb, " = ");
         let init_nd: Node = e_node(p, nd.rhs);
+        // `var x: T = uninit;` -> a bare C declaration `T x;` (no initializer), matching the real
+        // backend's uninitialized-local lowering.
+        if init_nd.kind == .uninit_literal {
+            sb_put_cstr(sb, ";\n");
+            return;
+        }
+        sb_put_cstr(sb, " = ");
         // `let x: ?T = <init>;` (G11): coerce the init into the tagged optional (`null` -> absent, an
         // optional-typed source -> pass-through, any other value -> present). The declared type node
         // is `nd.lhs`; `e_emit_decl` already emitted `mc_opt_<T> x`.
@@ -2542,6 +2595,100 @@ fn e_collect_call_insts(p: *mut Parser, fn_text: []const u8, out: *mut Vec<u32>)
     }
 }
 
+// True when SOME call in the module invokes generic fn `callee_name` FORWARDING the type-param lexeme
+// `tparam_lex` as its type argument (e.g. `vec_reserve(T, ..)`). Used to propagate a caller generic
+// fn's concrete instantiations to the generic fns it forwards its own type param to (transitive
+// monomorphization). (The subset's type params are conventionally named `T`; the check is by lexeme.)
+fn e_generic_forwards_to(p: *mut Parser, callee_name: []const u8, tparam_lex: []const u8) -> bool {
+    let total: u32 = vec_len(Node, &p.nodes) as u32;
+    var i: u32 = 1;
+    while i < total {
+        let nd: Node = e_node(p, i);
+        if nd.kind == .call {
+            let cnode: Node = e_node(p, nd.lhs);
+            if cnode.kind == .ident_expr {
+                let cn: []const u8 = e_tok_text(p, cnode.main_token);
+                let mc: bool = mem_eql(cn, callee_name);
+                if mc {
+                    let arg_run: u32 = nd.rhs;
+                    let argc: u32 = e_extra(p, arg_run);
+                    if argc >= 1 {
+                        let a0: u32 = e_extra(p, arg_run + 1);
+                        let a0n: Node = e_node(p, a0);
+                        if a0n.kind == .ident_expr {
+                            let a0lex: []const u8 = e_tok_text(p, a0n.main_token);
+                            let ma: bool = mem_eql(a0lex, tparam_lex);
+                            if ma {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// Merge every concrete node in `src` into `out`, deduped by lexeme (linear scan; the subset has no set).
+fn e_merge_insts(p: *mut Parser, out: *mut Vec<u32>, src: *Vec<u32>) -> void {
+    let n: usize = vec_len(u32, src);
+    var i: usize = 0;
+    while i < n {
+        let c: u32 = vec_get(u32, src, i);
+        let present: bool = e_arg_present(p, &*out, c);
+        if !present {
+            vec_push(u32, out, c);
+        }
+        i = i + 1;
+    }
+}
+
+// Collect the DISTINCT concrete instances of generic fn `fname` INCLUDING transitive ones: besides
+// the direct concrete call sites (`e_collect_call_insts`), any generic fn `G` that forwards its own
+// type param to `fname` contributes ALL of G's instances (recursively). This is what makes a generic
+// fn calling another generic fn — `vec_push<usize>` calling `vec_reserve(T, ..)` — instantiate
+// `vec_reserve_usize`. `depth` bounds recursion so a forwarding cycle terminates.
+fn e_collect_insts_tr(p: *mut Parser, fname: []const u8, out: *mut Vec<u32>, depth: u32) -> void {
+    if depth > 8 {
+        return;
+    }
+    // Direct concrete call sites.
+    e_collect_call_insts(p, fname, &*out);
+    // Transitive: each generic fn template G whose body forwards its type param to `fname`.
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var di: u32 = 0;
+    while di < count {
+        let d: u32 = e_extra(p, run + 1 + di);
+        let dn: Node = e_node(p, d);
+        if dn.kind == .fn_decl {
+            let frec: u32 = dn.lhs;
+            let params_run: u32 = e_extra(p, frec + 1);
+            let generic: bool = e_fn_has_comptime(p, params_run);
+            if generic {
+                let gname: []const u8 = e_tok_text(p, dn.main_token);
+                let is_self: bool = mem_eql(gname, fname);
+                if !is_self {
+                    let tp_tok: u32 = e_gfn_tparam(p, d);
+                    let tplex: []const u8 = e_tok_text(p, tp_tok);
+                    let fwd: bool = e_generic_forwards_to(p, fname, tplex);
+                    if fwd {
+                        var tmp: Vec<u32> = vec_new(u32, p.a);
+                        e_collect_insts_tr(p, gname, &tmp, depth + 1);
+                        e_merge_insts(p, &*out, &tmp);
+                        vec_free(u32, &tmp);
+                    }
+                }
+            }
+        }
+        di = di + 1;
+    }
+}
+
 // Emit ONE monomorphic struct `typedef struct S_<concrete> { ... } S_<concrete>;` for generic
 // template `template_node` at concrete type `concrete_node`, substituting the type param throughout.
 fn e_gstruct_mono(p: *mut Parser, sb: *mut StrBuf, template_node: u32, concrete_node: u32) -> void {
@@ -2643,6 +2790,19 @@ fn e_gfn_mono(p: *mut Parser, sb: *mut StrBuf, fn_node: u32, concrete_node: u32)
 
 // Emit the whole module: the fixed prelude, every enum then struct typedef (so they precede any
 // use), then one C function per `fn` decl.
+// Emit a module-level constant: `static const <ctype> NAME = <value>;`. `e_emit_decl` builds the
+// `<ctype> NAME` declarator (so a `[N]T` const would lower to `T NAME[N]` correctly); the initializer
+// is emitted with the normal expression emitter (a constant expression: literal or simple arithmetic).
+fn e_const_decl(p: *mut Parser, sb: *mut StrBuf, d: u32) -> void {
+    let nd: Node = e_node(p, d);
+    let name: []const u8 = e_tok_text(p, nd.main_token);
+    sb_put_cstr(sb, "static const ");
+    e_emit_decl(p, sb, nd.lhs, name);
+    sb_put_cstr(sb, " = ");
+    e_expr(p, sb, nd.rhs);
+    sb_put_cstr(sb, ";\n");
+}
+
 fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
     sb_put_cstr(sb, "#include <stdint.h>\n#include <stddef.h>\n#include <stdbool.h>\n\n");
     // The `unreachable;` trap (matches src/lower_c_runtime.zig's `mc_trap_Unreachable`): NORETURN so a
@@ -2666,21 +2826,15 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
         }
         ei = ei + 1;
     }
-    var si: u32 = 0;
-    while si < count {
-        let sd: u32 = e_extra(p, run + 1 + si);
-        let sdn: Node = e_node(p, sd);
-        if sdn.kind == .struct_decl {
-            e_struct_decl(p, sb, sd);
-        }
-        si = si + 1;
-    }
-    // Result: `mc_result_<T>_<E>` tagged-struct typedefs. Emitted AFTER enums/structs (a Result payload
-    // may be a named enum/struct — e.g. `Result<Fd, IoError>` — so those typedefs must precede it) and
-    // before generic structs / fn prototypes (a fn signature may return a Result).
-    e_result_typedefs(p, sb);
+    // P5.10 trait typedefs: each trait's `TRAIT__vtable` fn-pointer table + `TRAIT__dyn` fat pointer.
+    // Emitted BEFORE any struct (a struct field may be a `TRAIT__dyn` fat pointer BY VALUE — e.g.
+    // `Vec<T>`'s allocator field — so the trait typedef must precede it). Traits themselves depend on
+    // nothing (their vtable uses `void* self`), so they are safe to emit first.
+    e_trait_typedefs(p, sb);
     // P5.5 monomorphic structs: for each generic struct template, emit one typedef per distinct
-    // concrete type argument used anywhere in the module (deduped). These precede all functions.
+    // concrete type argument used anywhere in the module (deduped). Emitted BEFORE the regular structs
+    // because a regular struct may embed a generic instance BY VALUE (e.g. `TokenList { data: Vec<usize> }`),
+    // and a generic instance's own fields are scalars / trait objects (already emitted above).
     var gsi: u32 = 0;
     while gsi < count {
         let gd: u32 = e_extra(p, run + 1 + gsi);
@@ -2700,9 +2854,32 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
         }
         gsi = gsi + 1;
     }
-    // P5.10 trait typedefs: each trait's `TRAIT__vtable` fn-pointer table + `TRAIT__dyn` fat pointer.
-    // Emitted before the prototypes (a fn signature may take a `TRAIT__dyn` by value).
-    e_trait_typedefs(p, sb);
+    var si: u32 = 0;
+    while si < count {
+        let sd: u32 = e_extra(p, run + 1 + si);
+        let sdn: Node = e_node(p, sd);
+        if sdn.kind == .struct_decl {
+            e_struct_decl(p, sb, sd);
+        }
+        si = si + 1;
+    }
+    // Result: `mc_result_<T>_<E>` tagged-struct typedefs. Emitted AFTER enums/structs (a Result payload
+    // may be a named enum/struct — e.g. `Result<Fd, IoError>` — so those typedefs must precede it) and
+    // before fn prototypes (a fn signature may return a Result).
+    e_result_typedefs(p, sb);
+    // Module-level `const NAME: T = value;` -> file-scope `static const T NAME = value;`. Emitted
+    // after ALL type typedefs (a const's type may name an enum/struct) and before the fn prototypes
+    // (a fn body may reference the const). `static` is correct here: the loader concatenates every
+    // module into ONE translation unit, so a file-scope static const is visible to all uses.
+    var ci: u32 = 0;
+    while ci < count {
+        let cd: u32 = e_extra(p, run + 1 + ci);
+        let cdn: Node = e_node(p, cd);
+        if cdn.kind == .const_decl {
+            e_const_decl(p, sb, cd);
+        }
+        ci = ci + 1;
+    }
     // Forward prototypes for every function, so a call resolves regardless of the order the loader
     // concatenated the modules in (an importer may textually precede the module it depends on). A
     // generic template is skipped here and emitted as monomorphic prototypes below.
@@ -2737,7 +2914,7 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
             if generic2 {
                 let fname: []const u8 = e_tok_text(p, gpdn.main_token);
                 var pinsts: Vec<u32> = vec_new(u32, p.a);
-                e_collect_call_insts(p, fname, &pinsts);
+                e_collect_insts_tr(p, fname, &pinsts, 0);
                 let pn2: usize = vec_len(u32, &pinsts);
                 var pj: usize = 0;
                 while pj < pn2 {
@@ -2781,7 +2958,7 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
             if generic4 {
                 let fname2: []const u8 = e_tok_text(p, gfdn.main_token);
                 var dinsts: Vec<u32> = vec_new(u32, p.a);
-                e_collect_call_insts(p, fname2, &dinsts);
+                e_collect_insts_tr(p, fname2, &dinsts, 0);
                 let dn2: usize = vec_len(u32, &dinsts);
                 var dj: usize = 0;
                 while dj < dn2 {

@@ -188,6 +188,22 @@ open enum NodeKind: u32 {
     if_let_result_stmt, // 75 `if let ok(v) = EXPR { .. } (else ..)?` / `if let err(e) = EXPR { .. }`:
                         //    main_token = the binding NAME token; lhs = the Result EXPR; rhs = a fixed
                         //    3-slot rec [tag_tok, then_block, else(0=none)].
+    // ----- char-literal + module-const additions (appended to keep prior ordinals stable) -----
+    char_literal,       // 76 `'a'` / `'\n'` / `'\\'` etc. primary: main_token = the char-literal token.
+                        //    Types as `u8`; emits the source lexeme verbatim (a valid C char literal —
+                        //    MC's escapes `\n \t \r \0 \\ \' \"` are all valid C escapes too).
+    const_decl,         // 77 module-level `const NAME: T = <const-expr>;` (and `export const`):
+                        //    main_token = the NAME token; lhs = the declared TYPE node; rhs = the
+                        //    initializer expr. Emits a file-scope `static const T NAME = <value>;`
+                        //    (correct in the subset's single-TU concat model). Registered as a global
+                        //    so uses of NAME resolve to type T.
+    uninit_literal,     // 78 the `uninit` primary (an explicitly-uninitialized value). main_token =
+                        //    the `uninit` keyword token. Valid only as a `let`/`var` initializer of a
+                        //    known type; emit drops the initializer (`T name;`), matching C.
+    string_literal,     // 79 a `"..."` byte-string literal. main_token = the string token. Types as
+                        //    `[]const u8` (a byte slice), matching the real backend. Emits the fat-
+                        //    pointer slice value `((mc_slice_const_u8){ .ptr = (const uint8_t*)"..",
+                        //    .len = N })` where N is the decoded byte count (escapes count as 1).
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -599,6 +615,15 @@ fn tok_is_opaque(p: *mut Parser, tok: u32) -> bool {
     return mem_eql(lex, "opaque");
 }
 
+// `move` is a contextual qualifier before `struct` (a linear/move struct), lexed as a plain
+// identifier (not a keyword) — like `opaque`. The subset does NOT enforce move/linearity (a checker
+// concern, not needed to COMPILE), so a `move struct` is parsed/typed/emitted as a regular struct.
+fn tok_is_move(p: *mut Parser, tok: u32) -> bool {
+    let lex: []const u8 = tok_lexeme(p, tok);
+
+    return mem_eql(lex, "move");
+}
+
 // raw_op := `raw` `.` (`ptr`|`load`|`store`) `<` Type `>` `(` Expr (`,` Expr)? `)`  (P5.8). The
 // member ident (`ptr`/`load`/`store`) becomes main_token so emit/sema recover the op by lexeme; the
 // `<T>` reuses `parse_type`; the value args are a fixed 2-slot record [arg0, arg1] (arg1 = 0 for the
@@ -631,6 +656,14 @@ fn parse_primary(p: *mut Parser) -> u32 {
         p_advance(p);
         return add_node(p, .int_literal, it, 0, 0);
     }
+    // `'a'` / `'\n'` / `'\\'` char literal: the lexer emits a single `.char_literal` token whose
+    // lexeme INCLUDES the surrounding quotes (a valid C char literal, escapes and all). main_token
+    // keeps the token so emit can recover the spelling verbatim.
+    if at(p, .char_literal) {
+        let ct: u32 = p.tok as u32;
+        p_advance(p);
+        return add_node(p, .char_literal, ct, 0, 0);
+    }
     // `true` / `false` bool literals: the lexer emits `kw_true`/`kw_false`; main_token keeps the token
     // so emit can recover the spelling ("true"/"false"), which is also valid C (stdbool.h in prelude).
     if at(p, .kw_true) {
@@ -642,6 +675,20 @@ fn parse_primary(p: *mut Parser) -> u32 {
         let bf: u32 = p.tok as u32;
         p_advance(p);
         return add_node(p, .bool_literal, bf, 0, 0);
+    }
+    // `"..."` byte-string literal: the lexeme (quotes + escapes included) is a valid C string literal
+    // and is kept in main_token; emit builds a `[]const u8` fat-pointer slice value from it.
+    if at(p, .string_literal) {
+        let st: u32 = p.tok as u32;
+        p_advance(p);
+        return add_node(p, .string_literal, st, 0, 0);
+    }
+    // `uninit` primary: an explicitly-uninitialized value, valid as a `let`/`var` initializer of a
+    // known type (`var x: T = uninit;`). Emit drops the initializer, matching C's default declaration.
+    if at(p, .kw_uninit) {
+        let ut: u32 = p.tok as u32;
+        p_advance(p);
+        return add_node(p, .uninit_literal, ut, 0, 0);
     }
     // `null` primary (G11 in the subset): the ABSENT value of a value optional. It carries no type of
     // its own — sema/emit resolve it against the expected `?T` target (a typed init/return, or the
@@ -1009,6 +1056,15 @@ fn parse_switch(p: *mut Parser) -> u32 {
                 expect(p, .identifier);
             } else if at(p, .underscore) {
                 pat_tok = p.tok as u32; // the `_` token (recognized by kind at sema/emit)
+                p_advance(p);
+            } else if at(p, .kw_true) || at(p, .kw_false) {
+                // A `switch` over a `bool` (or an integer): the pattern is the literal `true`/`false`
+                // (or an integer literal) itself. main_token keeps the token; emit's `e_case_label`
+                // falls back to the bare lexeme (`case true:` / `case 3:`), which is valid C.
+                pat_tok = p.tok as u32;
+                p_advance(p);
+            } else if at(p, .integer_literal) {
+                pat_tok = p.tok as u32;
                 p_advance(p);
             } else {
                 // Not a valid pattern head: record and leave `pat_tok` at the offending token so the
@@ -1472,6 +1528,21 @@ fn parse_impl(p: *mut Parser) -> u32 {
 }
 
 // decl := `import` STRING `;` | `extern` ... | `trait` ... | `impl` ... | `export`? `open`? (`enum` ... | `fn` ... | `struct` ...)
+// `const NAME: T = <const-expr>;` — a module-level constant. main_token = NAME; lhs = the declared
+// TYPE node (required in the subset — no inference); rhs = the initializer expr (a constant
+// expression: int/char/enum literal or simple arithmetic over such).
+fn parse_const(p: *mut Parser) -> u32 {
+    p_advance(p); // `const`
+    let cname: u32 = p.tok as u32;
+    expect(p, .identifier);
+    expect(p, .colon);
+    let cty: u32 = parse_type(p);
+    expect(p, .equal);
+    let cinit: u32 = parse_expr(p, 0);
+    expect(p, .semicolon);
+    return add_node(p, .const_decl, cname, cty, cinit);
+}
+
 fn parse_decl(p: *mut Parser) -> u32 {
     // A leading `import "..."` is the module directive (an identifier `import`, not a keyword).
     if at(p, .identifier) {
@@ -1495,6 +1566,19 @@ fn parse_decl(p: *mut Parser) -> u32 {
     if eat(p, .kw_export) {
         exported = 1;
     }
+    // A leading `const` is EITHER a `const fn NAME(..)` (a comptime const FUNCTION) or a module-level
+    // `const NAME: T = ..` VALUE. Disambiguate by the token after `const`: a `fn` means the function
+    // form — treated as a plain fn in the subset (const-ness is a comptime property, irrelevant to
+    // emit). Otherwise it is a constant value. The `exported` flag is not stored for a const value:
+    // the loader concatenates all modules into ONE translation unit, so a file-scope `static const`
+    // is visible to every use regardless of export.
+    if at(p, .kw_const) {
+        if at_next(p, 1, .kw_fn) {
+            p_advance(p); // consume `const`; `parse_fn` starts at `fn`
+            return parse_fn(p, exported);
+        }
+        return parse_const(p);
+    }
     // `open` only ever precedes an `enum` in this subset (an open enum permits `.raw()`).
     var is_open: u32 = 0;
     if eat(p, .kw_open) {
@@ -1508,6 +1592,13 @@ fn parse_decl(p: *mut Parser) -> u32 {
     if at(p, .identifier) {
         if tok_is_opaque(p, p.tok as u32) {
             p_advance(p); // `opaque`
+        }
+    }
+    // `move` (optionally after `opaque`): a linear/move struct qualifier. Consumed and ignored (the
+    // subset treats a `move struct` as a regular struct — see `tok_is_move`).
+    if at(p, .identifier) {
+        if tok_is_move(p, p.tok as u32) {
+            p_advance(p); // `move`
         }
     }
     if at(p, .kw_enum) {
