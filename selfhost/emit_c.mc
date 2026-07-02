@@ -78,6 +78,8 @@ fn e_scalar_name(sb: *mut StrBuf, txt: []const u8) -> void {
     if mem_eql(txt, "i32") { sb_put_cstr(sb, "int32_t"); return; }
     if mem_eql(txt, "i64") { sb_put_cstr(sb, "int64_t"); return; }
     if mem_eql(txt, "isize") { sb_put_cstr(sb, "ptrdiff_t"); return; }
+    if mem_eql(txt, "f64") { sb_put_cstr(sb, "double"); return; }
+    if mem_eql(txt, "f32") { sb_put_cstr(sb, "float"); return; }
     // Address classes (subset model): opaque word-backed scalars -> `uintptr_t` (stdint.h is in the
     // prelude). Sema collapses them to `usize`; the emitted C type is `uintptr_t` (matching the real
     // backend's address-word model). `phys()` and `as`-cast minting are plain word round-trips.
@@ -142,6 +144,12 @@ fn e_type(p: *mut Parser, sb: *mut StrBuf, tn: u32) -> void {
     // real backend's `mc_opt_<T>` (src/lower_c_names.zig).
     if nd.kind == .type_optional {
         e_put_opt_name(p, sb, nd.lhs);
+        return;
+    }
+    // A `Result<T,E>` (the real backend's builtin tagged type) is the struct `mc_result_<T>_<E>` (see
+    // `e_result_typedefs`), matching src/lower_c_names.zig's `mc_result_<oksuffix>_<errsuffix>`.
+    if nd.kind == .type_result {
+        e_result_type_name(p, sb, tn);
         return;
     }
     // The `type` keyword annotation (a `comptime T: type` param) has no C spelling; it is dropped
@@ -316,6 +324,115 @@ fn e_opt_typedefs(p: *mut Parser, sb: *mut StrBuf) -> void {
     }
 }
 
+// ----- `Result<T,E>` support (the real backend's builtin tagged type) -----
+//
+// A `Result<T,E>` lowers to the real C backend's tagged struct (src/lower_c_defs.zig `emitResultType`):
+//   typedef struct mc_result_<T>_<E> { bool is_ok; union { <T> ok; <E> err; } payload; } mc_result_<T>_<E>;
+// `ok(x)`  = `(mc_result_..){ .is_ok = true,  .payload.ok  = x }`
+// `err(x)` = `(mc_result_..){ .is_ok = false, .payload.err = x }`
+// `if let`/`switch` test `.is_ok` and read `.payload.ok`/`.payload.err`; `expr?` early-returns on error.
+
+// Emit the `mc_result_<T>_<E>` type NAME for a `type_result` node (its ok/err type-arg lexemes, with
+// generic substitution applied). Matches the real backend's `mc_result_<oksuffix>_<errsuffix>`.
+fn e_result_type_name(p: *mut Parser, sb: *mut StrBuf, result_tn: u32) -> void {
+    let rn: Node = e_node(p, result_tn);
+    sb_put_cstr(sb, "mc_result_");
+    let oklex: []const u8 = e_type_arg_lexeme(p, rn.lhs);
+    sb_put_str(sb, oklex);
+    sb_put_cstr(sb, "_");
+    let errlex: []const u8 = e_type_arg_lexeme(p, rn.rhs);
+    sb_put_str(sb, errlex);
+}
+
+// True when an EARLIER `type_result` node (index < `cur`) has the same (ok, err) lexeme pair — the
+// dedup for `e_result_typedefs` (mirrors `e_opt_dup_before`).
+fn e_result_dup_before(p: *mut Parser, cur: u32, oklex: []const u8, errlex: []const u8) -> bool {
+    var j: u32 = 1;
+    while j < cur {
+        let nd: Node = e_node(p, j);
+        if nd.kind == .type_result {
+            let jok: []const u8 = e_tok_text(p, e_node(p, nd.lhs).main_token);
+            let jerr: []const u8 = e_tok_text(p, e_node(p, nd.rhs).main_token);
+            let a: bool = mem_eql(jok, oklex);
+            let b: bool = mem_eql(jerr, errlex);
+            if a && b {
+                return true;
+            }
+        }
+        j = j + 1;
+    }
+    return false;
+}
+
+// Emit one `typedef struct mc_result_<T>_<E> { bool is_ok; union { <T> ok; <E> err; } payload; } ...;`.
+fn e_emit_one_result_typedef(p: *mut Parser, sb: *mut StrBuf, result_tn: u32) -> void {
+    let rn: Node = e_node(p, result_tn);
+    sb_put_cstr(sb, "typedef struct ");
+    e_result_type_name(p, sb, result_tn);
+    sb_put_cstr(sb, " {\n    bool is_ok;\n    union {\n        ");
+    e_type(p, sb, rn.lhs);
+    sb_put_cstr(sb, " ok;\n        ");
+    e_type(p, sb, rn.rhs);
+    sb_put_cstr(sb, " err;\n    } payload;\n} ");
+    e_result_type_name(p, sb, result_tn);
+    sb_put_cstr(sb, ";\n");
+}
+
+// Emit every `mc_result_<T>_<E>` typedef used in the module, deduped by (ok, err) lexeme pair. Emitted
+// after the value-optional typedefs and before enum/struct typedefs (a fn signature or field may use one).
+fn e_result_typedefs(p: *mut Parser, sb: *mut StrBuf) -> void {
+    let total: u32 = vec_len(Node, &p.nodes) as u32;
+    var emitted: u32 = 0;
+    var i: u32 = 1;
+    while i < total {
+        let nd: Node = e_node(p, i);
+        if nd.kind == .type_result {
+            let oklex: []const u8 = e_tok_text(p, e_node(p, nd.lhs).main_token);
+            let errlex: []const u8 = e_tok_text(p, e_node(p, nd.rhs).main_token);
+            let dup: bool = e_result_dup_before(p, i, oklex, errlex);
+            if !dup {
+                e_emit_one_result_typedef(p, sb, i);
+                emitted = emitted + 1;
+            }
+        }
+        i = i + 1;
+    }
+    if emitted > 0 {
+        sb_put_cstr(sb, "\n");
+    }
+}
+
+// Emit an `ok(x)` / `err(x)` constructor as the real backend's compound literal against the target
+// `Result` type node `result_tn`. A literal arg (`.variant` / `.{..}`) is target-typed against the
+// ok/err payload node; any other arg is emitted as a plain expression.
+fn e_result_ctor(p: *mut Parser, sb: *mut StrBuf, call_node: u32, result_tn: u32, is_ok: bool) -> void {
+    let cn: Node = e_node(p, call_node);
+    let rn: Node = e_node(p, result_tn);
+    var payload_tn: u32 = rn.rhs;
+    if is_ok {
+        payload_tn = rn.lhs;
+    }
+    let arg: u32 = e_extra(p, cn.rhs + 1);
+    let argn: Node = e_node(p, arg);
+    sb_put_cstr(sb, "(");
+    e_result_type_name(p, sb, result_tn);
+    if is_ok {
+        sb_put_cstr(sb, "){ .is_ok = true, .payload.ok = ");
+    } else {
+        sb_put_cstr(sb, "){ .is_ok = false, .payload.err = ");
+    }
+    if argn.kind == .struct_lit {
+        e_struct_lit(p, sb, arg, payload_tn);
+    } else if argn.kind == .array_lit {
+        e_array_lit_body(p, sb, arg);
+    } else if argn.kind == .enum_lit {
+        e_enum_lit(p, sb, arg);
+    } else {
+        e_expr(p, sb, arg);
+    }
+    sb_put_cstr(sb, " }");
+}
+
 // The current function's declared return TYPE node (`p.cur_fn`'s [.,.,ret_ty,.] record), or 0.
 fn e_ret_type_node(p: *mut Parser) -> u32 {
     let fnn: u32 = p.cur_fn;
@@ -454,6 +571,145 @@ fn e_if_let(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
         } else {
             e_block(p, sb, else_b, depth + 1);
         }
+    }
+    sb_put_cstr(sb, "\n");
+    e_indent(sb, depth);
+    sb_put_cstr(sb, "}\n");
+}
+
+// Emit an `if let ok(v) = EXPR { .. } (else ..)?` / `if let err(e) = EXPR { .. }` (Result). EXPR is
+// evaluated ONCE into a temp (its type recovered via `__typeof__`, which does not evaluate its operand),
+// then the matching arm binds the payload:
+//   { __typeof__(EXPR) __mc_iflet_N = EXPR;
+//     if ([!]__mc_iflet_N.is_ok) { __typeof__(__mc_iflet_N.payload.F) NAME = __mc_iflet_N.payload.F; (void)NAME; <then> }
+//     else { <else> } }
+fn e_if_let_result(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
+    let nd: Node = e_node(p, n);
+    let name: []const u8 = e_tok_text(p, nd.main_token);
+    let rexpr: u32 = nd.lhs;
+    let rec: u32 = nd.rhs;
+    let tag_tok: u32 = e_extra(p, rec);
+    let then_b: u32 = e_extra(p, rec + 1);
+    let else_b: u32 = e_extra(p, rec + 2);
+    let tagtext: []const u8 = e_tok_text(p, tag_tok);
+    let is_ok: bool = mem_eql(tagtext, "ok");
+    e_indent(sb, depth);
+    sb_put_cstr(sb, "{\n");
+    e_indent(sb, depth + 1);
+    sb_put_cstr(sb, "__typeof__(");
+    e_expr(p, sb, rexpr);
+    sb_put_cstr(sb, ") __mc_iflet_");
+    sb_put_u32(sb, n);
+    sb_put_cstr(sb, " = ");
+    e_expr(p, sb, rexpr);
+    sb_put_cstr(sb, ";\n");
+    e_indent(sb, depth + 1);
+    if is_ok {
+        sb_put_cstr(sb, "if (__mc_iflet_");
+    } else {
+        sb_put_cstr(sb, "if (!__mc_iflet_");
+    }
+    sb_put_u32(sb, n);
+    sb_put_cstr(sb, ".is_ok) {\n");
+    e_indent(sb, depth + 2);
+    sb_put_cstr(sb, "__typeof__(__mc_iflet_");
+    sb_put_u32(sb, n);
+    if is_ok {
+        sb_put_cstr(sb, ".payload.ok) ");
+    } else {
+        sb_put_cstr(sb, ".payload.err) ");
+    }
+    sb_put_str(sb, name);
+    sb_put_cstr(sb, " = __mc_iflet_");
+    sb_put_u32(sb, n);
+    if is_ok {
+        sb_put_cstr(sb, ".payload.ok;\n");
+    } else {
+        sb_put_cstr(sb, ".payload.err;\n");
+    }
+    e_indent(sb, depth + 2);
+    sb_put_cstr(sb, "(void)");
+    sb_put_str(sb, name);
+    sb_put_cstr(sb, ";\n");
+    e_emit_block_body(p, sb, then_b, depth + 2);
+    e_indent(sb, depth + 1);
+    sb_put_cstr(sb, "}");
+    if else_b != 0 {
+        sb_put_cstr(sb, " else ");
+        let en: Node = e_node(p, else_b);
+        if en.kind == .if_stmt {
+            e_stmt_inline(p, sb, else_b, depth + 1);
+        } else {
+            e_block(p, sb, else_b, depth + 1);
+        }
+    }
+    sb_put_cstr(sb, "\n");
+    e_indent(sb, depth);
+    sb_put_cstr(sb, "}\n");
+}
+
+// Emit a `switch r { ok(v) => {..}, err(e) => {..} }` (Result). The subject is evaluated ONCE into a
+// temp; each arm is an `is_ok`-guarded block that binds its payload (via `__typeof__`). Arms run of
+// TRIPLES [count, (tag_tok, bind_tok, block)*].
+fn e_result_switch(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
+    let nd: Node = e_node(p, n);
+    let subject: u32 = nd.lhs;
+    let run: u32 = nd.rhs;
+    let count: u32 = e_extra(p, run);
+    e_indent(sb, depth);
+    sb_put_cstr(sb, "{\n");
+    e_indent(sb, depth + 1);
+    sb_put_cstr(sb, "__typeof__(");
+    e_expr(p, sb, subject);
+    sb_put_cstr(sb, ") __mc_sw_");
+    sb_put_u32(sb, n);
+    sb_put_cstr(sb, " = ");
+    e_expr(p, sb, subject);
+    sb_put_cstr(sb, ";\n");
+    var ai: u32 = 0;
+    while ai < count {
+        let tag_tok: u32 = e_extra(p, run + 1 + ai * 3);
+        let bind_tok: u32 = e_extra(p, run + 1 + ai * 3 + 1);
+        let blk: u32 = e_extra(p, run + 1 + ai * 3 + 2);
+        let tagtext: []const u8 = e_tok_text(p, tag_tok);
+        let is_ok: bool = mem_eql(tagtext, "ok");
+        let bind: []const u8 = e_tok_text(p, bind_tok);
+        if ai == 0 {
+            e_indent(sb, depth + 1);
+        } else {
+            sb_put_cstr(sb, " else ");
+        }
+        if is_ok {
+            sb_put_cstr(sb, "if (__mc_sw_");
+        } else {
+            sb_put_cstr(sb, "if (!__mc_sw_");
+        }
+        sb_put_u32(sb, n);
+        sb_put_cstr(sb, ".is_ok) {\n");
+        e_indent(sb, depth + 2);
+        sb_put_cstr(sb, "__typeof__(__mc_sw_");
+        sb_put_u32(sb, n);
+        if is_ok {
+            sb_put_cstr(sb, ".payload.ok) ");
+        } else {
+            sb_put_cstr(sb, ".payload.err) ");
+        }
+        sb_put_str(sb, bind);
+        sb_put_cstr(sb, " = __mc_sw_");
+        sb_put_u32(sb, n);
+        if is_ok {
+            sb_put_cstr(sb, ".payload.ok;\n");
+        } else {
+            sb_put_cstr(sb, ".payload.err;\n");
+        }
+        e_indent(sb, depth + 2);
+        sb_put_cstr(sb, "(void)");
+        sb_put_str(sb, bind);
+        sb_put_cstr(sb, ";\n");
+        e_emit_block_body(p, sb, blk, depth + 2);
+        e_indent(sb, depth + 1);
+        sb_put_cstr(sb, "}");
+        ai = ai + 1;
     }
     sb_put_cstr(sb, "\n");
     e_indent(sb, depth);
@@ -1078,6 +1334,25 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         // `enumval.raw()` lowers to the receiver itself: the enum's C type is a transparent typedef
         // of its repr integer, so the value already IS the raw integer (no cast needed).
         let cnode: Node = e_node(p, nd.lhs);
+        // `ok(x)` / `err(x)` Result constructors: emit the tagged compound literal against the target
+        // Result type. The target is the enclosing fn's return type (the dominant/only site is
+        // `return ok(..)` / `return err(..)`, where the return type IS the target Result).
+        if cnode.kind == .ident_expr {
+            let cname0: []const u8 = e_tok_text(p, cnode.main_token);
+            let is_ok0: bool = mem_eql(cname0, "ok");
+            let is_err0: bool = mem_eql(cname0, "err");
+            let cargc0: u32 = e_extra(p, nd.rhs);
+            if (is_ok0 || is_err0) && cargc0 == 1 {
+                let rtn0: u32 = e_ret_type_node(p);
+                if rtn0 != 0 {
+                    let rtnn0: Node = e_node(p, rtn0);
+                    if rtnn0.kind == .type_result {
+                        e_result_ctor(p, sb, n, rtn0, is_ok0);
+                        return;
+                    }
+                }
+            }
+        }
         if cnode.kind == .field {
             let fname: []const u8 = e_tok_text(p, cnode.main_token);
             let argc0: u32 = e_extra(p, nd.rhs);
@@ -1206,6 +1481,28 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
     }
     if nd.kind == .raw_op {
         e_raw_op(p, sb, n);
+        return;
+    }
+    // `expr?` (Result propagation): a statement-expression that evaluates EXPR ONCE (via `__typeof__`,
+    // which does not evaluate its operand), early-returns the enclosing fn's `err(..)` on the error arm,
+    // and yields the ok payload otherwise. RET is the enclosing fn's Result type (recovered from cur_fn).
+    if nd.kind == .try_op {
+        let rtn: u32 = e_ret_type_node(p);
+        sb_put_cstr(sb, "({ __typeof__(");
+        e_expr(p, sb, nd.lhs);
+        sb_put_cstr(sb, ") __mc_try_");
+        sb_put_u32(sb, n);
+        sb_put_cstr(sb, " = ");
+        e_expr(p, sb, nd.lhs);
+        sb_put_cstr(sb, "; if (!__mc_try_");
+        sb_put_u32(sb, n);
+        sb_put_cstr(sb, ".is_ok) { return (");
+        e_result_type_name(p, sb, rtn);
+        sb_put_cstr(sb, "){ .is_ok = false, .payload.err = __mc_try_");
+        sb_put_u32(sb, n);
+        sb_put_cstr(sb, ".payload.err }; } __mc_try_");
+        sb_put_u32(sb, n);
+        sb_put_cstr(sb, ".payload.ok; })");
         return;
     }
     if nd.kind == .deref {
@@ -1501,6 +1798,16 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
     if nd.kind == .if_let_stmt {
         // `if let NAME = EXPR { .. } (else ..)?` (G11): narrow the optional into a temp + payload binding.
         e_if_let(p, sb, n, depth);
+        return;
+    }
+    if nd.kind == .if_let_result_stmt {
+        // `if let ok(v)=EXPR {..}` / `if let err(e)=EXPR {..}` (Result): tag-test + payload binding.
+        e_if_let_result(p, sb, n, depth);
+        return;
+    }
+    if nd.kind == .result_switch_stmt {
+        // `switch r { ok(v) => {..}, err(e) => {..} }` (Result): tag-guarded blocks with payload binding.
+        e_result_switch(p, sb, n, depth);
         return;
     }
     if nd.kind == .break_stmt {
@@ -2368,6 +2675,10 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
         }
         si = si + 1;
     }
+    // Result: `mc_result_<T>_<E>` tagged-struct typedefs. Emitted AFTER enums/structs (a Result payload
+    // may be a named enum/struct — e.g. `Result<Fd, IoError>` — so those typedefs must precede it) and
+    // before generic structs / fn prototypes (a fn signature may return a Result).
+    e_result_typedefs(p, sb);
     // P5.5 monomorphic structs: for each generic struct template, emit one typedef per distinct
     // concrete type argument used anywhere in the module (deduped). These precede all functions.
     var gsi: u32 = 0;

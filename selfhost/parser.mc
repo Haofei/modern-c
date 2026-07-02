@@ -172,6 +172,22 @@ open enum NodeKind: u32 {
                       //    else(0=none)] (like `if_stmt`). Narrows EXPR to its payload, binding NAME.
     break_stmt,       // 70 `break;` loop terminator (no operand). Emits the C `break;`.
     continue_stmt,    // 71 `continue;` loop continuation (no operand). Emits the C `continue;`.
+    // ----- `Result<T,E>` + `?` error-propagation additions (appended to keep prior ordinals stable).
+    // Result is the real backend's builtin two-arm tagged type: a `{ bool is_ok; union { T ok; E err; }
+    // payload; }` struct (src/lower_c_defs.zig `emitResultType`). `ok(x)`/`err(x)` are parsed as plain
+    // `call` nodes (callee ident `ok`/`err`, one arg) and lowered specially by sema/emit against the
+    // target Result type — no dedicated ctor node is needed (like `phys(x)` / `.variant`).
+    type_result,        // 72 `Result<T, E>` TYPE: main_token = the `Result` name; lhs = ok type node;
+                        //    rhs = err type node.
+    try_op,             // 73 postfix `expr?` error propagation: main_token = the `?` token; lhs = the
+                        //    Result-typed operand. Lowers to a statement-expression that returns the
+                        //    enclosing fn's `err(..)` on the error arm, else yields the ok payload.
+    result_switch_stmt, // 74 `switch r { ok(v) => {..}, err(e) => {..} }`: main_token = `switch`; lhs =
+                        //    subject; rhs = arms run of TRIPLES [count, (tag_tok, bind_tok, block)*] where
+                        //    tag_tok is the `ok`/`err` ident and bind_tok is the payload binding.
+    if_let_result_stmt, // 75 `if let ok(v) = EXPR { .. } (else ..)?` / `if let err(e) = EXPR { .. }`:
+                        //    main_token = the binding NAME token; lhs = the Result EXPR; rhs = a fixed
+                        //    3-slot rec [tag_tok, then_block, else(0=none)].
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -436,6 +452,13 @@ fn parse_type(p: *mut Parser) -> u32 {
     if at(p, .less) {
         p_advance(p); // `<`
         let arg: u32 = parse_type(p);
+        // `Result<T, E>` (two type args): a `,` after the first arg is the tagged Result type. Only
+        // `Result` uses two args in the subset; a single arg stays a mono `S<T>` generic instance.
+        if eat(p, .comma) {
+            let arg2: u32 = parse_type(p);
+            expect(p, .greater);
+            return add_node(p, .type_result, name_tok, arg, arg2);
+        }
         expect(p, .greater);
         return add_node(p, .type_generic, name_tok, arg, 0);
     }
@@ -628,6 +651,22 @@ fn parse_primary(p: *mut Parser) -> u32 {
         p_advance(p);
         return add_node(p, .null_literal, nt, 0, 0);
     }
+    // `ok(x)` / `err(x)` Result constructors. `ok`/`err` are lexer KEYWORDS (kw_ok/kw_err), so they are
+    // parsed here into a plain `call` node whose callee is an `ident_expr` on the keyword token — its
+    // recovered lexeme ("ok"/"err") is what sema/emit key off (like `phys`), so no dedicated ctor node
+    // is needed. Exactly one argument in the subset.
+    if at(p, .kw_ok) || at(p, .kw_err) {
+        let ctor_tok: u32 = p.tok as u32;
+        p_advance(p); // `ok` / `err`
+        expect(p, .l_paren);
+        let ctor_arg: u32 = parse_expr(p, 0);
+        expect(p, .r_paren);
+        let callee: u32 = add_node(p, .ident_expr, ctor_tok, 0, 0);
+        let run: u32 = vec_len(u32, &p.extra) as u32;
+        vec_push(u32, &p.extra, 1); // arg count
+        vec_push(u32, &p.extra, ctor_arg);
+        return add_node(p, .call, ctor_tok, callee, run);
+    }
     // `sizeof(TYPE)` / `alignof(TYPE)` (P5.9): both are lexer KEYWORDS (kw_sizeof/kw_alignof) and take
     // a TYPE (not an expr) in the subset — matching MC's builtins. The type node is kept in `lhs`.
     if at(p, .kw_sizeof) {
@@ -751,6 +790,15 @@ fn parse_postfix(p: *mut Parser, input: u32) -> u32 {
             expr = add_node(p, .field, field_tok, expr, 0);
             continue;
         }
+        // Postfix `expr?` error-propagation (Result). `?` in expression position is unambiguous (MC has
+        // no ternary; the `?T` optional TYPE form is parsed only in parse_type). Binds tighter than any
+        // binary/cast op, like the other postfixes.
+        if at(p, .question) {
+            let q_tok: u32 = p.tok as u32;
+            p_advance(p); // `?`
+            expr = add_node(p, .try_op, q_tok, expr, 0);
+            continue;
+        }
         break;
     }
     return expr;
@@ -846,6 +894,33 @@ fn parse_if(p: *mut Parser) -> u32 {
 fn parse_if_let(p: *mut Parser) -> u32 {
     p_advance(p); // `if`
     p_advance(p); // `let`
+    // Result tag form `if let ok(v) = EXPR { .. }` / `if let err(e) = EXPR { .. }`: a binding head of
+    // the `ok`/`err` keyword distinguishes it from the optional form `if let NAME = EXPR` (IDENT head).
+    let is_result: bool = at(p, .kw_ok) || at(p, .kw_err);
+    if is_result {
+        let tag_tok: u32 = p.tok as u32; // `ok` / `err` keyword
+        p_advance(p);
+        expect(p, .l_paren);
+        let bind: u32 = p.tok as u32; // the payload binding name
+        expect(p, .identifier);
+        expect(p, .r_paren);
+        expect(p, .equal);
+        let rexpr: u32 = parse_expr(p, 0);
+        let rthen: u32 = parse_block(p);
+        var relse: u32 = 0;
+        if eat(p, .kw_else) {
+            if at(p, .kw_if) {
+                relse = parse_if(p);
+            } else {
+                relse = parse_block(p);
+            }
+        }
+        let rrec: u32 = vec_len(u32, &p.extra) as u32;
+        vec_push(u32, &p.extra, tag_tok);
+        vec_push(u32, &p.extra, rthen);
+        vec_push(u32, &p.extra, relse);
+        return add_node(p, .if_let_result_stmt, bind, rexpr, rrec);
+    }
     let name: u32 = p.tok as u32;
     expect(p, .identifier);
     expect(p, .equal);
@@ -871,11 +946,59 @@ fn parse_if_let(p: *mut Parser) -> u32 {
 // underscore token for a wildcard arm; sema/emit tell them apart by the token's kind (so no
 // separate marker slot is needed). rhs = the arms run; lhs = the subject expr. (Statement form
 // only: switch-as-expression and payload-binding `variant(x) =>` are deferred — see the ledger.)
+// Parse the arms of a Result tag switch `switch r { ok(v) => {..}, err(e) => {..} }` (the cursor is
+// just past the opening `{`). Each arm is `TAG ( BIND ) => Block`; arms are flushed into `extra` as a
+// run of TRIPLES `[count, (tag_tok, bind_tok, block)*]` (count is the TRIPLE count). Returns a
+// `result_switch_stmt` node. `sema`/`emit` tell ok from err by the tag token's lexeme.
+fn parse_result_switch_arms(p: *mut Parser, sw_tok: u32, subject: u32) -> u32 {
+    var arms: Vec<u32> = vec_new(u32, p.a); // (tag_tok, bind_tok, block) triples
+    if !at(p, .r_brace) {
+        while true {
+            let tag_tok: u32 = p.tok as u32; // `ok` / `err` keyword
+            p_advance(p);
+            expect(p, .l_paren);
+            let bind_tok: u32 = p.tok as u32; // the payload binding
+            expect(p, .identifier);
+            expect(p, .r_paren);
+            expect(p, .fat_arrow);
+            let arm_block: u32 = parse_block(p);
+            vec_push(u32, &arms, tag_tok);
+            vec_push(u32, &arms, bind_tok);
+            vec_push(u32, &arms, arm_block);
+            if !eat(p, .comma) {
+                break;
+            }
+            if at(p, .r_brace) {
+                break; // trailing comma
+            }
+        }
+    }
+    expect(p, .r_brace);
+    // Flush the triples: `extra[start]` = triple count, then that many (tag, bind, block) triples.
+    let start: u32 = vec_len(u32, &p.extra) as u32;
+    let raw: usize = vec_len(u32, &arms);
+    let count: u32 = (raw / 3) as u32;
+    vec_push(u32, &p.extra, count);
+    var i: usize = 0;
+    while i < raw {
+        vec_push(u32, &p.extra, vec_get(u32, &arms, i));
+        i = i + 1;
+    }
+    vec_free(u32, &arms);
+    return add_node(p, .result_switch_stmt, sw_tok, subject, start);
+}
+
 fn parse_switch(p: *mut Parser) -> u32 {
     let sw_tok: u32 = p.tok as u32;
     p_advance(p); // `switch`
     let subject: u32 = parse_expr(p, 0);
     expect(p, .l_brace);
+    // Result tag switch `switch r { ok(v) => {..}, err(e) => {..} }`: arms headed by the `ok`/`err`
+    // keyword route to the Result arm parser. An enum switch's arms are `.variant`/`_`.
+    let is_result: bool = at(p, .kw_ok) || at(p, .kw_err);
+    if is_result {
+        return parse_result_switch_arms(p, sw_tok, subject);
+    }
     var arms: Vec<u32> = vec_new(u32, p.a); // (pattern_tok, block_node) pairs
     if !at(p, .r_brace) {
         while true {

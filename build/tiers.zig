@@ -411,6 +411,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-addr-test"));
     // selfhost-mem-test (VALUE-OPTIONAL milestone): mcc2 compiles a second real std module std/mem.mc (which returns `?usize`) to clang-clean C after adding `?T` value optionals to the subset (G11), plus a behavioral round-trip of `?usize` via if let / == null / != null.
     m0_step.dependOn(ctx.cmd("selfhost-mem-test"));
+    // selfhost-result-test (RESULT milestone): mcc2 gains `Result<T,E>` + `ok/err` construction + Result `switch`/`if let` pattern-matching + the `?` propagation operator (lowered to the real backend's tagged `mc_result_<T>_<E>`), asserted behaviorally, plus a real-module check emitting std/hosted_io.mc's Result machinery to C.
+    m0_step.dependOn(ctx.cmd("selfhost-result-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

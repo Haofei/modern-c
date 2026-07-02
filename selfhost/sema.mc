@@ -66,6 +66,10 @@ open enum SmKind: u32 {
                //    coerces to any `?T` (absent). `if let v = opt` narrows to the payload (kind `elem`).
     null_,     // 19 the `null` literal's type — unifies with any `opt_` (as the absent value) and has
                //    no other use. Never appears as a declared type; only as an expression's type.
+    result_,   // 20 `Result<T,E>` tagged type: `elem` = the OK payload's kind; `nstart`/`nlen` identify
+               //    the OK payload's name (if named); `arr_len` = the ERR payload's kind ORDINAL. `ok(x)`/
+               //    `err(x)` produce a LOOSE `result_` (payloads unknown) that unifies with any concrete
+               //    `result_`; `expr?` yields the OK payload; `if let`/`switch` bind the arm's payload.
 }
 
 // The first-error code surfaced to the gate (an `open enum` so `.raw()` gives the ordinal the C
@@ -217,6 +221,54 @@ fn sm_opt(payload: SmType) -> SmType {
 // `t.kind == opt_`.
 fn sm_opt_payload(t: SmType) -> SmType {
     return .{ .kind = t.elem, .ptr_depth = 0, .nstart = t.nstart, .nlen = t.nlen, .arr_len = 0, .elem = .unknown };
+}
+
+// A `Result<T,E>` type: OK payload T flattened in (its kind in `elem`, its name offsets in
+// `nstart`/`nlen`), and the ERR payload E's kind ORDINAL stashed in `arr_len` (its name is not
+// tracked — sufficient for the subset's err-binding typing; see the SmKind note).
+fn sm_result(ok_ty: SmType, err_ty: SmType) -> SmType {
+    let ek: u32 = err_ty.kind.raw();
+    return .{ .kind = .result_, .ptr_depth = 0, .nstart = ok_ty.nstart, .nlen = ok_ty.nlen, .arr_len = ek as usize, .elem = ok_ty.kind };
+}
+
+// A LOOSE `Result` produced by an `ok(x)`/`err(x)` constructor: both payloads unknown. It unifies with
+// any concrete `result_` (sm_types_match), so `return ok(x);` / `let r: Result<..> = err(y);` accept.
+fn sm_result_loose() -> SmType {
+    return .{ .kind = .result_, .ptr_depth = 0, .nstart = 0, .nlen = 0, .arr_len = 0, .elem = .unknown };
+}
+
+// Reconstruct the OK payload `SmType` of a `Result` (mirrors `sm_opt_payload`). Meaningful when
+// `t.kind == result_`. Used by `expr?` and the `ok(v)` arm binding.
+fn sm_result_ok(t: SmType) -> SmType {
+    return .{ .kind = t.elem, .ptr_depth = 0, .nstart = t.nstart, .nlen = t.nlen, .arr_len = 0, .elem = .unknown };
+}
+
+// Map a kind ORDINAL back to an `SmKind` (no int->enum cast in the subset). Only the kinds an ERR
+// payload realistically takes are mapped; anything else falls back to `unknown`.
+fn sm_kind_from_ord(ord: usize) -> SmKind {
+    if ord == 1 { return .void_; }
+    if ord == 2 { return .bool_; }
+    if ord == 4 { return .int_lit; }
+    if ord == 5 { return .u8_; }
+    if ord == 6 { return .u16_; }
+    if ord == 7 { return .u32_; }
+    if ord == 8 { return .u64_; }
+    if ord == 9 { return .usize_; }
+    if ord == 10 { return .i8_; }
+    if ord == 11 { return .i16_; }
+    if ord == 12 { return .i32_; }
+    if ord == 13 { return .i64_; }
+    if ord == 14 { return .isize_; }
+    if ord == 15 { return .named_; }
+    return .unknown;
+}
+
+// Reconstruct the ERR payload `SmType` of a `Result` (kind from the ordinal in `arr_len`). The err
+// name is not tracked, so a named err binds without its lexeme — enough for the subset (err bindings
+// are either numeric or unused).
+fn sm_result_err(t: SmType) -> SmType {
+    let k: SmKind = sm_kind_from_ord(t.arr_len);
+    return .{ .kind = k, .ptr_depth = 0, .nstart = 0, .nlen = 0, .arr_len = 0, .elem = .unknown };
 }
 
 // Reconstruct the element `SmType` of an `[N]T` array (its kind + named offsets were flattened into
@@ -371,6 +423,12 @@ fn sm_type_from_node(s: *mut SmState, tn: u32) -> SmType {
         let payload: SmType = sm_type_from_node(s, nd.lhs);
         return sm_opt(payload);
     }
+    // A `Result<T, E>` type: resolve both payloads. lhs = ok type node, rhs = err type node.
+    if nd.kind == .type_result {
+        let ok_ty: SmType = sm_type_from_node(s, nd.lhs);
+        let err_ty: SmType = sm_type_from_node(s, nd.rhs);
+        return sm_result(ok_ty, err_ty);
+    }
     // A generic instance `S<T>` (P5.5) resolves to a `named_` type carrying the BASE name's lexeme
     // offsets — enough for struct-literal field-NAME checking (which is all generic instances get in
     // the subset). The concrete type argument is not tracked in the resolved type.
@@ -428,6 +486,13 @@ fn sm_types_match(s: *mut SmState, a: SmType, b: SmType) -> bool {
     }
     let ak: u32 = a.kind.raw();
     let bk: u32 = b.kind.raw();
+    // `Result` unification (kind 20): a LOOSE `result_` from an `ok(x)`/`err(x)` ctor carries unknown
+    // payloads, so two `result_` values are treated as matching without comparing payloads (the subset
+    // does not track both payloads on a value). This is what lets `return ok(x);` / `let r: Result = ..`
+    // type-check. A `result_` never matches a non-result type.
+    if ak == 20 || bk == 20 {
+        return ak == 20 && bk == 20;
+    }
     // Value-optional coercion (G11): `null` (kind 19) unifies with any `?T` (kind 18) as the absent
     // value; a plain `T` coerces to `?T` (present) when it matches the payload; and two `?T` match when
     // their payloads match. Checked before the numeric/named paths so `return idx;`/`return null;` from
@@ -687,6 +752,22 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
     if is_phys && argc == 1 {
         sm_walk_args(s, args_run, argc);
         return sm_ty(.usize_);
+    }
+    // `ok(x)` / `err(x)` Result constructors: builtins (like `phys`), not user fns. They yield a LOOSE
+    // `result_` that unifies with the target Result type (return/let annotation). A plain-expr arg is
+    // walked for its own errors; a literal arg (`.variant` / `.{..}`) needs the ok/err payload as its
+    // target type, which is not threaded to a call here, so it is accepted leniently (target-typed at
+    // emit against the Result payload node).
+    let is_ok_ctor: bool = mem_eql(name, "ok");
+    let is_err_ctor: bool = mem_eql(name, "err");
+    if (is_ok_ctor || is_err_ctor) && argc == 1 {
+        let a0: u32 = sm_extra(s, args_run + 1);
+        let a0n: Node = sm_node(s, a0);
+        let is_lit: bool = a0n.kind == .enum_lit || a0n.kind == .struct_lit || a0n.kind == .array_lit;
+        if !is_lit {
+            sm_type_of_expr(s, a0);
+        }
+        return sm_result_loose();
     }
     let present: bool = strmap_contains(u32, &s.fns, name);
     if !present {
@@ -1041,6 +1122,16 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
             return pt;
         }
         .raw_op => { return sm_raw_op(s, node); }
+        // `expr?` (Result propagation): the operand must be Result-typed; the value yields the OK
+        // payload T (its `err` case early-returns from the enclosing fn). A non-Result operand yields
+        // `unknown` (lenient — no dedicated error code in the subset).
+        .try_op => {
+            let rt: SmType = sm_type_of_expr(s, nd.lhs);
+            if rt.kind == .result_ {
+                return sm_result_ok(rt);
+            }
+            return sm_ty_unknown();
+        }
         .deref => {
             // `p.*` yields the pointee type of `p` (one fewer level of indirection, P5.8).
             var dt: SmType = sm_type_of_expr(s, nd.lhs);
@@ -1163,6 +1254,38 @@ fn sm_switch_covers(s: *mut SmState, run: u32, arm_count: u32, vtext: []const u8
 // (else `duplicate_arm`); a `_` is the default. EXHAUSTIVENESS: a CLOSED enum with no `_` must
 // cover every variant (else `nonexhaustive_switch`); an OPEN enum REQUIRES a `_` (else
 // `nonexhaustive_switch`). Every arm block is checked regardless of pattern validity.
+// Check a Result tag switch `switch r { ok(v) => {..}, err(e) => {..} }`. The subject should be
+// Result-typed; each arm binds its payload (OK for `ok`, ERR for `err`) and its block is checked.
+// The subset does not enforce that BOTH arms are present (ok/err are the only tags; exhaustiveness is
+// trivially the shape). rhs = arms run of TRIPLES [count, (tag_tok, bind_tok, block)*].
+fn sm_check_result_switch(s: *mut SmState, node: u32) -> void {
+    let nd: Node = sm_node(s, node);
+    let rt: SmType = sm_type_of_expr(s, nd.lhs);
+    let is_result: bool = rt.kind == .result_;
+    let run: u32 = nd.rhs;
+    let arm_count: u32 = sm_extra(s, run);
+    var ai: u32 = 0;
+    while ai < arm_count {
+        let tag_tok: u32 = sm_extra(s, run + 1 + ai * 3);
+        let bind_tok: u32 = sm_extra(s, run + 1 + ai * 3 + 1);
+        let blk: u32 = sm_extra(s, run + 1 + ai * 3 + 2);
+        let tagtext: []const u8 = sm_tok_text(s, tag_tok);
+        let is_ok: bool = mem_eql(tagtext, "ok");
+        var payload: SmType = sm_ty_unknown();
+        if is_result {
+            if is_ok {
+                payload = sm_result_ok(rt);
+            } else {
+                payload = sm_result_err(rt);
+            }
+        }
+        let bname: []const u8 = sm_tok_text(s, bind_tok);
+        strmap_put(SmType, &s.locals, bname, payload);
+        sm_check_stmt(s, blk);
+        ai = ai + 1;
+    }
+}
+
 fn sm_check_switch(s: *mut SmState, node: u32) -> void {
     let nd: Node = sm_node(s, node);
     let subj_ty: SmType = sm_type_of_expr(s, nd.lhs);
@@ -1277,6 +1400,35 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
         if else_b != 0 {
             sm_check_stmt(s, else_b);
         }
+        return;
+    }
+    if nd.kind == .if_let_result_stmt {
+        // `if let ok(v) = EXPR { .. }` / `if let err(e) = EXPR { .. }`: EXPR must be Result-typed; the
+        // binding NAME binds to the arm's payload (OK for `ok`, ERR for `err`). rhs = [tag_tok, then, else].
+        let rt: SmType = sm_type_of_expr(s, nd.lhs);
+        let tag_tok: u32 = sm_extra(s, nd.rhs);
+        let tagtext: []const u8 = sm_tok_text(s, tag_tok);
+        let is_ok: bool = mem_eql(tagtext, "ok");
+        var payload: SmType = sm_ty_unknown();
+        if rt.kind == .result_ {
+            if is_ok {
+                payload = sm_result_ok(rt);
+            } else {
+                payload = sm_result_err(rt);
+            }
+        }
+        let name: []const u8 = sm_tok_text(s, nd.main_token);
+        strmap_put(SmType, &s.locals, name, payload);
+        let then_b: u32 = sm_extra(s, nd.rhs + 1);
+        let else_b: u32 = sm_extra(s, nd.rhs + 2);
+        sm_check_stmt(s, then_b);
+        if else_b != 0 {
+            sm_check_stmt(s, else_b);
+        }
+        return;
+    }
+    if nd.kind == .result_switch_stmt {
+        sm_check_result_switch(s, node);
         return;
     }
     if nd.kind == .block {
