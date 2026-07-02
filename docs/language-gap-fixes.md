@@ -66,5 +66,23 @@ cherry-pick → m0.
   - **G30 (`*mut`→`*const` param coercion)** (`46332b4`, completed from a stalled agent's verified WIP) — safe const-narrow at call/assign/return (incl. bare `*T`); const→mut + element-mismatch stay rejected; mirrors G12 slice coercion in sema + MIR verifier.
   - **G14 (escape over-rejection)** (`603be36`) — `&base.field`/`&base[i]` through a POINTER base is no longer flagged as a local-address escape (real gap: local-pointer-copy + array-through-pointer); `return &local` still rejected (25/25 markers).
   - **sweep allowlist** — `pointer_view_conversions.mc` added to the 4 sweeps' OUT_OF_SCOPE (mixed accept/reject sema fixture the chunk-strip can't isolate after G12/G30 turned rejects into accepts; accept-emit covered by c_emit fixtures, rejects by check/spec_tests). This resolved the one m0 hiccup (4 sweeps).
-- **G22 (file-private namespace)** — in flight (hard regression gate). **G16 (Hash/Eq bounds)** + **G29 (AT_FDCWD)** remain.
+- **2026-07-01 — G22 (file-private namespace) landed + m0-green** (`1f8a7417`). New pre-sema pass
+  `src/mangle_private.zig`: a name defined only by renameable file-private value-decls (non-exported `fn`
+  with body / plain `global`) in ≥2 files is scope-aware-renamed to `name__mcpN` per origin file → two
+  private `advance`s become distinct symbols; `pub`/`export`/`extern` keep their exact ABI name. Two `pub`
+  same-name, same-file private dups, and private-vs-pub collisions still `E_DUPLICATE_DECLARATION`.
+  diff-backend 168, 0 skipped. Completes §30 (no call-site qualification / no overloading, per intent).
+- **G16 (Hash/Eq bounds) — NARROWED to a real small gap, fix in flight.** Probing showed `where K: Trait`
+  bounds + UFCS `K.method(x)` calls ALREADY work (traits_tier1); a self-only bounded method works. The ONLY
+  gap: `Self` in a NON-receiver param/return position (`eq(self: *Self, other: *Self)`) → `E_TRAIT_SIGNATURE_MISMATCH`
+  in conformance checking. Fix substitutes `Self` in all positions → unlocks fully-generic `HashMap<K,V>` via
+  `where K: Keyed`+UFCS. (So "no Hash/Eq bounds" was overstated — bounds work; only Self-in-param was broken.)
+- **G29 (AT_FDCWD) — BY DESIGN / documented, not fixed.** `std/hosted_io.mc` explicitly targets Linux libc
+  (`AT_FDCWD=-100` is correct for the actual hosted/CI/Docker target); the macOS-host relative-`openat`
+  failure is local-dev-only and a portable fix needs comptime OS detection MC lacks. Workaround: absolute
+  paths or run in Docker. Recorded as by-design.
+
+**NON-GAPS discovered (overstated in the ledger, no fix needed):** `match` (selfhost uses 0 real `match` —
+`grep` counted prose); `?T`-not-needed-for-selfhost (0 uses); broad "no Hash/Eq bounds" (bounds work via
+`where`+UFCS; only Self-in-param was the real gap = G16).
 _(append per landed fix: gap, commit, what changed, backends, m0)_
