@@ -90,6 +90,12 @@ This is exactly the class of latent codegen bug the stress test exists to surfac
 (`e_fn_sig`), so flattened/concatenated modules are order-independent and support cross-module mutual
 recursion — needed once imports put a caller textually before its callee.
 
+**⚠️ SUPERSEDED SNAPSHOT (this paragraph is a P5.4-era status, kept for history).** As of 2026-07-02
+**MC self-hosts**: all five `mcc2` modules + std deps compile through `mcc2` to a byte-identical fixpoint
+(gate `selfhost-bootstrap-test`). Every "recommended order" item below was subsequently done (generics
+over structs, `impl`/traits, `unsafe`/`raw`, value-optionals; `match`/`?` — some turned out already-present).
+See docs/self-host-plan.md "SELF-HOSTING ACHIEVED" and docs/language-gap-fixes.md.
+
 **HONEST self-compile status (after P5.4):** the subset can compile **~0%** of `mcc2`'s OWN source. Import
 plumbing was necessary but not the bottleneck — mcc2's modules pervasively use features the subset still
 lacks: **generics** (`Vec<T>` ~30 uses), **fixed byte arrays + `mem.as_bytes`** (~77 uses), **`impl`/traits**

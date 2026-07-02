@@ -1,5 +1,12 @@
 # Self-Hosting MC — Plan (stress-test-driven)
 
+> **✅ STATUS (2026-07-02): SELF-HOSTING ACHIEVED — `mcc2` compiles `mcc2` (byte-identical fixpoint),
+> gated by `selfhost-bootstrap-test` in m0.** The sections below are the ORIGINAL PLAN + phase-by-phase
+> EXECUTION LOG (historical). Where an early section says a phase is "remaining/partial", read it as the
+> state *at that point in the log* — the "SELF-HOSTING ACHIEVED" entry near the end (and
+> docs/language-gap-fixes.md) reflects the final state. 13 language/compiler gaps were found+fixed; perf
+> measured (~2 MB/s, faster than clang -O0 on mcc2's output).
+
 **Goal (the "why"):** bootstrap the MC compiler *in MC* to stress-test the language and
 compiler harder than any synthetic benchmark can. The largest MC program written to date is
 ~1.1k lines; a compiler is 12–55k. The point is not primarily to ship `mcc2` — it is to
