@@ -54,6 +54,9 @@ export fn std_host_test() -> u32 {
     if pow_u32(3, 4) != 81 { return 30; }
     if ilog2(1024) != 10 { return 31; }
     if ilog2(1) != 0 { return 32; }
+    if wrapping_mul_u32(6, 7) != 42 { return 90; }               // normal (in-range) product
+    if wrapping_mul_u32(0x1000_0000, 0x10) != 0 { return 91; }   // wraps: 2^28 * 2^4 == 2^32 -> 0
+    if wrapping_mul_u32(0xFFFF_FFFF, 2) != 0xFFFF_FFFE { return 92; } // (2^32-1)*2 mod 2^32
 
     // ----- ascii -----
     if !is_digit('5') { return 33; }

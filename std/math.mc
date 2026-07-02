@@ -58,6 +58,14 @@ export const fn wrapping_sub_u32(a: u32, b: u32) -> u32 {
     return (((a as u64) + 0x0000_0001_0000_0000 - (b as u64)) & 0x0000_0000_FFFF_FFFF) as u32;
 }
 
+// Wrapping (modulo-2^32) 32-bit multiply. FNV-1a and similar hashes need a modulo-2^32
+// multiply, but MC's `*` is checked and would trap on overflow; computing the 32×32 product
+// in 64 bits (which cannot overflow u64) and truncating gives the wrap without leaving the
+// checked domain. Mirrors `fnv1a_mul` in std/collections/hashmap.mc.
+export const fn wrapping_mul_u32(a: u32, b: u32) -> u32 {
+    return (((a as u64) * (b as u64)) & 0x0000_0000_FFFF_FFFF) as u32;
+}
+
 // Wrapping (modulo-2^16) 16-bit add. For 16-bit counters that wrap by protocol — e.g.
 // virtio split-ring `avail.idx` / `used.idx` cursors — where `+ 1` past 65535 must wrap to
 // 0, not trip the checked-overflow trap.
