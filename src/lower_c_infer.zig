@@ -127,9 +127,29 @@ pub fn enumNameForValueExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std
         .ident => |ident| enumNameForIdentValue(ctx, ident.text, locals),
         .call => |node| enumNameForCallValue(ctx, node),
         .cast => |node| enumNameForType(ctx, node.ty.*),
+        .member => |node| enumNameForVariantPath(ctx, node, locals),
         .grouped => |inner| enumNameForValueExpr(ctx, inner.*, locals),
         else => null,
     };
+}
+
+// A variant-path literal `Enum.variant` has the enum's own type; return the enum
+// name so `Enum.variant.raw()` resolves. The base must name an enum TYPE, not a
+// local/global value shadowing it, and the member must be one of its cases.
+fn enumNameForVariantPath(ctx: TypeQueryContext, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+    const base_ident = switch (node.base.*.kind) {
+        .ident => |id| id,
+        else => return null,
+    };
+    if (locals) |local_set| {
+        if (local_set.contains(base_ident.text)) return null;
+    }
+    if (ctx.globals.contains(base_ident.text)) return null;
+    const enum_decl = ctx.enums.get(base_ident.text) orelse return null;
+    for (enum_decl.cases) |case| {
+        if (std.mem.eql(u8, case.name.text, node.name.text)) return base_ident.text;
+    }
+    return null;
 }
 
 pub fn enumNameForType(ctx: TypeQueryContext, ty: ast.TypeExpr) ?[]const u8 {

@@ -3204,11 +3204,9 @@ const FunctionBuilder = struct {
                 return null;
             }
         }
-        if (std.mem.eql(u8, m, "raw")) {
-            if (self.enumSummaryForType(self.exprType(member.base.*))) |info| {
-                if (!info.is_open) return "enum_raw_closed";
-            }
-        }
+        // `.raw()` reads the representation ordinal out; it is safe on both open and
+        // closed enums (reading can never mint an out-of-range enum value), so no
+        // usage-check finding is emitted here for either enum flavor.
         return null;
     }
 

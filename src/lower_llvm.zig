@@ -1144,7 +1144,13 @@ const LlvmEmitter = struct {
             .deref => |inner| try self.emitDeref(inner.*, expected_ty),
             .index => |node| try self.emitIndexLoad(node),
             .slice => |node| try self.emitSlice(node, expr.span),
-            .member => |node| try self.emitMemberLoad(node),
+            .member => |node| if (self.enumVariantPathType(node)) |variant_ty|
+                (if (self.enumDeclForType(variant_ty)) |enum_decl|
+                    try self.enumCaseValueByName(enum_decl, node.name.text)
+                else
+                    error.UnsupportedLlvmEmission)
+            else
+                try self.emitMemberLoad(node),
             .try_expr => |node| try self.emitTryExpr(node.operand.*, expected_ty),
             else => error.UnsupportedLlvmEmission,
         };
@@ -4860,7 +4866,7 @@ const LlvmEmitter = struct {
             .deref => |inner| self.derefPointeeType(inner.*),
             .index => |node| self.indexElementType(node.base.*),
             .slice => |node| if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
-            .member => |node| if (self.exprType(node.base.*)) |base_ty| blk: {
+            .member => |node| if (self.enumVariantPathType(node)) |variant_ty| variant_ty else if (self.exprType(node.base.*)) |base_ty| blk: {
                 const resolved_base_ty = self.resolveAliasType(base_ty);
                 if (resolved_base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");
                 if (self.packedBitsInfoForType(base_ty)) |info| {
@@ -5093,6 +5099,23 @@ const LlvmEmitter = struct {
 
     fn enumDeclForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.EnumDecl {
         return lower_llvm_lookup.enumDeclForType(&self.type_aliases, &self.enum_types, ty);
+    }
+
+    // A variant-path literal `Enum.variant` used as a value has the enum's own type.
+    // The base must name an enum TYPE (not a local/global value shadowing it), and the
+    // member must be one of its cases. Returns the enum type expression, or null.
+    fn enumVariantPathType(self: *LlvmEmitter, node: anytype) ?ast.TypeExpr {
+        const base_ident = switch (node.base.*.kind) {
+            .ident => |id| id,
+            else => return null,
+        };
+        if (self.local_types.contains(base_ident.text)) return null;
+        if (self.global_types.contains(base_ident.text)) return null;
+        const enum_decl = self.enum_types.get(base_ident.text) orelse return null;
+        for (enum_decl.cases) |case| {
+            if (std.mem.eql(u8, case.name.text, node.name.text)) return simpleType(base_ident.span, base_ident.text);
+        }
+        return null;
     }
 
     fn memberBaseStructType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
@@ -5442,8 +5465,8 @@ const LlvmEmitter = struct {
         const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "raw")) return null;
         const enum_ty = self.exprType(member.base.*) orelse return null;
+        // `.raw()` is a transparent-repr read; valid on both open and closed enums.
         const enum_decl = self.enumDeclForType(enum_ty) orelse return null;
-        if (!enum_decl.is_open) return null;
         return .{ .base = member.base.*, .enum_ty = enum_ty, .repr_ty = enumReprType(enum_decl) };
     }
 

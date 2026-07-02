@@ -3469,6 +3469,7 @@ const CEmitter = struct {
     }
 
     fn emitMemberExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
+        if (try self.emitEnumVariantPath(node, locals)) return true;
         if (try self.emitPackedBitsMember(node, locals)) return true;
         if (locals) |local_set| {
             if (try self.emitOverlayMemberReadExpr(node, local_set)) return true;
@@ -3480,6 +3481,29 @@ const CEmitter = struct {
         }
         try self.emitOrdinaryMemberLoadExpr(node, locals);
         return true;
+    }
+
+    // A variant-path literal `Enum.variant` used as a value emits the enum's case
+    // constant (`Enum_variant`), exactly like the `.variant` enum literal does. The
+    // base must name an enum TYPE (not a local/global value shadowing it), and the
+    // member must be one of its cases.
+    fn emitEnumVariantPath(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
+        const base_ident = switch (node.base.*.kind) {
+            .ident => |id| id,
+            else => return false,
+        };
+        if (locals) |local_set| {
+            if (local_set.contains(base_ident.text)) return false;
+        }
+        if (self.globals.contains(base_ident.text)) return false;
+        const enum_decl = self.enums.get(base_ident.text) orelse return false;
+        for (enum_decl.cases) |case| {
+            if (std.mem.eql(u8, case.name.text, node.name.text)) {
+                try self.out.print(self.allocator, "{s}_{s}", .{ base_ident.text, node.name.text });
+                return true;
+            }
+        }
+        return false;
     }
 
     fn emitOrdinaryMemberLoadExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {

@@ -2,7 +2,7 @@
 // SPEC: milestone=enum-declarations
 // SPEC: phase=parse,sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_DUPLICATE_ENUM_CASE,E_ENUM_REPR_NOT_INTEGER,E_ENUM_CASE_VALUE_NOT_INTEGER,E_ENUM_CASE_VALUE_OUT_OF_RANGE,E_DUPLICATE_ENUM_VALUE,E_UNKNOWN_ENUM_CASE,E_ENUM_LITERAL_REQUIRES_TARGET,E_GLOBAL_REQUIRES_TYPE,E_NO_IMPLICIT_CONVERSION,E_RETURN_TYPE_MISMATCH,E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION,E_ENUM_RAW_REQUIRES_OPEN_ENUM,E_CALL_ARG_COUNT,E_CLOSED_ENUM_SWITCH_EXHAUSTIVE,E_DUPLICATE_SWITCH_CASE
+// SPEC: check=E_DUPLICATE_ENUM_CASE,E_ENUM_REPR_NOT_INTEGER,E_ENUM_CASE_VALUE_NOT_INTEGER,E_ENUM_CASE_VALUE_OUT_OF_RANGE,E_DUPLICATE_ENUM_VALUE,E_UNKNOWN_ENUM_CASE,E_ENUM_LITERAL_REQUIRES_TARGET,E_GLOBAL_REQUIRES_TYPE,E_NO_IMPLICIT_CONVERSION,E_RETURN_TYPE_MISMATCH,E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION,E_CALL_ARG_COUNT,E_CLOSED_ENUM_SWITCH_EXHAUSTIVE,E_DUPLICATE_SWITCH_CASE
 
 enum OpenError {
     not_found,
@@ -198,14 +198,26 @@ fn reject_closed_enum_integer_literal_cast() -> Irq {
     return 32 as Irq;
 }
 
-fn reject_closed_enum_raw(irq: Irq) -> u8 {
-    // EXPECT_ERROR: E_ENUM_RAW_REQUIRES_OPEN_ENUM
+// `.raw()` READS the representation ordinal; reading the tag out can never mint an
+// out-of-range enum value, so it is safe on a CLOSED enum too (G25). A closed enum
+// therefore gets BOTH an exhaustive `switch` (below) AND ordinal access.
+fn accept_closed_enum_raw(irq: Irq) -> u8 {
     return irq.raw();
 }
 
-fn reject_enum_cast_to_integer(irq: Irq) -> u8 {
-    // EXPECT_ERROR: E_ENUM_RAW_REQUIRES_OPEN_ENUM
+// The enum -> integer `as` cast is the same READ; likewise valid on a closed enum.
+fn accept_closed_enum_cast_to_integer(irq: Irq) -> u8 {
     return irq as u8;
+}
+
+// A variant-path literal `Enum.variant` has the enum's own type, so `.raw()` on it
+// yields the case's ordinal constant (G27) — for both open and closed enums.
+fn accept_variant_path_raw_open() -> u8 {
+    return DeviceState.busy.raw();
+}
+
+fn accept_variant_path_raw_closed() -> u8 {
+    return Irq.keyboard.raw();
 }
 
 fn accept_closed_enum_exhaustive_switch(irq: Irq) -> void {

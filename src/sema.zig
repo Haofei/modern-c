@@ -2731,6 +2731,13 @@ pub const Checker = struct {
             },
             .member => |node| {
                 if (isBuiltinNamespaceMember(node)) return .unknown;
+                // A variant-path literal `Enum.variant` used as a value: the base names
+                // an enum TYPE, not a runtime value, so it must not be checked as an
+                // identifier (that would raise E_UNKNOWN_IDENTIFIER). Classify it as the
+                // enum type directly so `Enum.variant` and `Enum.variant.raw()` resolve.
+                if (enumVariantPathType(node, ctx)) |variant_ty| {
+                    return classifyTypeCtx(variant_ty, ctx);
+                }
                 const base_class = self.checkExpr(node.base.*, ctx);
                 if (base_class == .c_void_pointer) {
                     self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no fields in MC");
@@ -4665,10 +4672,12 @@ pub const Checker = struct {
             }
         }
 
-        const source_ty = exprResultType(value, ctx) orelse return;
-        if (enumInfoForType(source_ty, ctx) != null and isCheckedInt(target_class)) {
-            self.errorCode(span, "E_ENUM_RAW_REQUIRES_OPEN_ENUM", "use .raw() to extract the representation value of an open enum");
-        }
+        // An enum -> integer `as` cast READS the representation ordinal out, exactly
+        // like `.raw()`. Reading the tag can never mint an out-of-range enum value, so
+        // it can never break the closed invariant and is permitted on BOTH open and
+        // closed enums. (The REVERSE, int -> enum above, still requires an `open` enum.)
+        _ = value;
+        _ = target_class;
     }
 
     // An `as`-cast must not silently STRIP a safety class to a less-safe one — that
@@ -4774,10 +4783,11 @@ pub const Checker = struct {
         if (args.len != 0) {
             self.errorCode(span, "E_CALL_ARG_COUNT", "call argument count does not match function declaration");
         }
-        if (!enum_info.is_open) {
-            self.errorCode(member.name.span, "E_ENUM_RAW_REQUIRES_OPEN_ENUM", "raw enum representation access is valid only on open enums");
-            return .unknown;
-        }
+        // `.raw()` READS the enum's representation integer. Reading the ordinal out
+        // never produces an out-of-range enum value, so it can never break the closed
+        // invariant — it is safe on BOTH open and closed enums. (Only the REVERSE,
+        // int -> enum, still requires an `open` enum; that lives in checkEnumCast.)
+        // This lets a closed enum have BOTH an exhaustive `switch` AND `.raw()`.
         const repr = enum_info.repr orelse return .unknown;
         return classifyTypeCtx(repr, ctx);
     }
@@ -5930,6 +5940,27 @@ fn enumInfoForType(ty: ast.TypeExpr, ctx: Context) ?EnumInfo {
     return enums.get(name);
 }
 
+// A variant-path literal `Enum.variant` used as a VALUE (not a `.field` access on a
+// runtime enum value): the base is a bare identifier that names a known enum type and
+// the member is one of its cases. Yields the enum's own type so `Enum.variant` has the
+// enum type — e.g. `Enum.variant.raw()` reads the case's ordinal constant. Returns null
+// when the base is a value binding (a local/global shadowing the type name), so a real
+// `.field` access is unaffected.
+fn enumVariantPathType(member: anytype, ctx: Context) ?ast.TypeExpr {
+    const base_ident = switch (member.base.*.kind) {
+        .ident => |id| id,
+        else => return null,
+    };
+    if (ctx.scope) |scope| {
+        if (scope.get(base_ident.text) != null) return null;
+    }
+    if (globalType(base_ident.text, ctx) != null) return null;
+    const enums = ctx.enums orelse return null;
+    const info = enums.get(base_ident.text) orelse return null;
+    if (!info.cases.contains(member.name.text)) return null;
+    return ast.TypeExpr{ .span = base_ident.span, .kind = .{ .name = base_ident } };
+}
+
 fn closedEnumInfoForType(ty: ast.TypeExpr, ctx: Context) ?EnumInfo {
     const enum_info = enumInfoForType(ty, ctx) orelse return null;
     return if (enum_info.is_open) null else enum_info;
@@ -6370,7 +6401,7 @@ pub fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .deref => |inner| derefResultType(inner.*, ctx),
         .index => |node| indexResultType(node, ctx),
         .slice => |node| sliceResultType(node, ctx),
-        .member => |node| memberResultFieldType(node, ctx),
+        .member => |node| enumVariantPathType(node, ctx) orelse memberResultFieldType(node, ctx),
         .grouped => |inner| exprResultType(inner.*, ctx),
         // Comparison and logical operators yield `bool`; surfacing that lets a
         // `switch a < b { true => …, false => … }` count as exhaustive.

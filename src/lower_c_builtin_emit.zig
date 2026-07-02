@@ -86,8 +86,9 @@ fn emitEnumRawCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Loca
     if (!std.mem.eql(u8, member.name.text, "raw")) return false;
     if (call.args.len != 0) return error.UnsupportedCEmission;
     const enum_name = ctx.enum_name_for_value_expr(ctx.enum_ctx, member.base.*, locals) orelse return false;
-    const enum_decl = ctx.enums.get(enum_name) orelse return false;
-    if (!enum_decl.is_open) return false;
+    // `.raw()` is a transparent-repr read on both open and closed enums: emit the
+    // enum-typed base directly (its C value already IS the representation integer).
+    _ = ctx.enums.get(enum_name) orelse return false;
     try ctx.emit_expr(ctx.enum_ctx, member.base.*, locals);
     return true;
 }
