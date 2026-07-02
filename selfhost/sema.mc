@@ -169,6 +169,17 @@ struct SmEnum {
                     // enum on an `enum_lit` fact so emit stops re-scanning all enums — see Fact/G28)
 }
 
+// A lexical binding on the scope stack (arch plan Phase 4): a param or `let`/`var`/`if let` name with
+// its resolved type and mutability. `name` is a borrowed slice into the source (stable for the parse).
+// Replaces the fn-wide `locals`/`muts` StrHashMaps + the manual `strmap_del`: bindings live on a stack
+// (`SmState.binds`), a block/`if let` records the stack length on entry and truncates back on exit, and
+// a name resolves by scanning from the TOP (nearest binding wins — correct lexical scoping/shadowing).
+struct Binding {
+    name: []const u8,
+    ty: SmType,
+    is_mut: bool,
+}
+
 // A per-node TYPED FACT (arch plan Phase 1): the shared IR that lets sema publish what it resolved so
 // emit consumes it instead of re-deriving. Indexed 1:1 by AST node id (a `Vec<Fact>` parallel to the
 // parser's node arena). Every field is optional-by-sentinel so a not-yet-populated node is harmless:
@@ -189,9 +200,8 @@ struct SmState {
     fns: StrHashMap<u32>,      // name -> sig_index (absence via strmap_contains)
     sigs: Vec<SmSig>,
     ptypes: Vec<SmType>,       // flattened param types for all sigs
-    locals: StrHashMap<SmType>,// current function's params + lets
+    binds: Vec<Binding>,       // Phase 4: current function's lexical scope stack (params + lets)
     globals: StrHashMap<SmType>,// module-level `const NAME: T` declarations -> type T (persists)
-    muts: StrHashMap<u32>,     // current function's MUTABLE locals (a `var`); value 1 = mutable
     structs: StrHashMap<u32>,  // struct name -> struct_defs index (absence via strmap_contains)
     struct_defs: Vec<SmStruct>,
     fields: Vec<SmField>,      // flattened fields for all structs
@@ -244,6 +254,65 @@ fn sm_fact_set_ty(s: *mut SmState, node: u32, ty: SmType) -> void {
     var f: Fact = vec_get(Fact, &s.facts, node as usize);
     f.ty = ty;
     vec_set(Fact, &s.facts, node as usize, f);
+}
+
+// ----- lexical scope stack (arch plan Phase 4) -----
+
+// The current scope depth (stack length) — record it on entering a block/`if let` and pass to
+// `sm_scope_pop` to drop everything bound since.
+fn sm_scope_mark(s: *mut SmState) -> usize {
+    return vec_len(Binding, &s.binds);
+}
+
+// Truncate the scope stack back to `mark`, dropping every binding pushed since (a block/`if let` end).
+// Bindings are POD, so resetting the length is the whole operation (capacity is retained for reuse).
+fn sm_scope_pop(s: *mut SmState, mark: usize) -> void {
+    s.binds.len = mark;
+}
+
+// Push a binding for `name` (a param or `let`/`var`/`if let`) with its type and mutability.
+fn sm_bind(s: *mut SmState, name: []const u8, ty: SmType, is_mut: bool) -> void {
+    vec_push(Binding, &s.binds, .{ .name = name, .ty = ty, .is_mut = is_mut });
+}
+
+// The stack index (+1; 0 = not found) of the NEAREST binding named `name`, scanning from the top so an
+// inner scope shadows an outer one. The single lookup primitive behind has/ty/mut.
+fn sm_bind_find(s: *mut SmState, name: []const u8) -> u32 {
+    let n: usize = vec_len(Binding, &s.binds);
+    var i: usize = n;
+    while i > 0 {
+        i = i - 1;
+        let b: Binding = vec_get(Binding, &s.binds, i);
+        if mem_eql(b.name, name) {
+            return (i as u32) + 1;
+        }
+    }
+    return 0;
+}
+
+// Whether `name` is bound in any live scope.
+fn sm_local_has(s: *mut SmState, name: []const u8) -> bool {
+    return sm_bind_find(s, name) != 0;
+}
+
+// The type of the nearest binding named `name`, or `unknown` if unbound.
+fn sm_local_ty(s: *mut SmState, name: []const u8) -> SmType {
+    let idx: u32 = sm_bind_find(s, name);
+    if idx == 0 {
+        return sm_ty_unknown();
+    }
+    let b: Binding = vec_get(Binding, &s.binds, (idx - 1) as usize);
+    return b.ty;
+}
+
+// Whether the nearest binding named `name` is mutable (a `var`).
+fn sm_local_mut(s: *mut SmState, name: []const u8) -> bool {
+    let idx: u32 = sm_bind_find(s, name);
+    if idx == 0 {
+        return false;
+    }
+    let b: Binding = vec_get(Binding, &s.binds, (idx - 1) as usize);
+    return b.is_mut;
 }
 
 // A depth-0 type of kind `k`.
@@ -626,9 +695,8 @@ fn sm_concrete(a: SmType, b: SmType) -> SmType {
 // error) but has no value type in the subset (`unknown`); anything else is an unknown-name error.
 fn sm_type_of_ident(s: *mut SmState, tok: u32) -> SmType {
     let name: []const u8 = sm_tok_text(s, tok);
-    let is_local: bool = strmap_contains(SmType, &s.locals, name);
-    if is_local {
-        return strmap_get_or(SmType, &s.locals, name, sm_ty_unknown());
+    if sm_local_has(s, name) {
+        return sm_local_ty(s, name);
     }
     let is_global: bool = strmap_contains(SmType, &s.globals, name);
     if is_global {
@@ -1100,14 +1168,12 @@ fn sm_target_mutable(s: *mut SmState, node: u32) -> bool {
     let nd: Node = sm_node(s, node);
     if nd.kind == .ident_expr {
         let name: []const u8 = sm_tok_text(s, nd.main_token);
-        let is_var: bool = strmap_contains(u32, &s.muts, name);
-        if is_var {
+        if sm_local_mut(s, name) {
             return true;
         }
         // A pointer-typed param/local is a mutable target through the pointer.
-        let is_local: bool = strmap_contains(SmType, &s.locals, name);
-        if is_local {
-            let t: SmType = strmap_get_or(SmType, &s.locals, name, sm_ty_unknown());
+        if sm_local_has(s, name) {
+            let t: SmType = sm_local_ty(s, name);
             if t.ptr_depth > 0 {
                 return true;
             }
@@ -1430,8 +1496,11 @@ fn sm_check_result_switch(s: *mut SmState, node: u32) -> void {
             }
         }
         let bname: []const u8 = sm_tok_text(s, bind_tok);
-        strmap_put(SmType, &s.locals, bname, payload);
+        // Phase 4: the payload binding is scoped to THIS arm's block — bind, check, then pop.
+        let mark: usize = sm_scope_mark(s);
+        sm_bind(s, bname, payload, false);
         sm_check_stmt(s, blk);
+        sm_scope_pop(s, mark);
         ai = ai + 1;
     }
 }
@@ -1604,13 +1673,14 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
             payload = sm_opt_payload(opt_ty);
         }
         let name: []const u8 = sm_tok_text(s, nd.main_token);
-        strmap_put(SmType, &s.locals, name, payload);
+        // Phase 4: the binding is scoped to the then-block only (the emitter declares it inside that C
+        // block); mark/bind/pop so a use after the block is an `unknown_name` error.
+        let mark: usize = sm_scope_mark(s);
+        sm_bind(s, name, payload, false);
         let then_b: u32 = sm_extra(s, nd.rhs);
         let else_b: u32 = sm_extra(s, nd.rhs + 1);
         sm_check_stmt(s, then_b);
-        // The binding is scoped to the then-block only (the emitter declares it inside that C block);
-        // drop it before the else and the rest of the fn so a use outside is an `unknown_name` error.
-        strmap_del(SmType, &s.locals, name);
+        sm_scope_pop(s, mark);
         if else_b != 0 {
             sm_check_stmt(s, else_b);
         }
@@ -1632,12 +1702,13 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
             }
         }
         let name: []const u8 = sm_tok_text(s, nd.main_token);
-        strmap_put(SmType, &s.locals, name, payload);
+        // Phase 4: same as `if let` above — the ok/err binding is scoped to the then-block.
+        let mark: usize = sm_scope_mark(s);
+        sm_bind(s, name, payload, false);
         let then_b: u32 = sm_extra(s, nd.rhs + 1);
         let else_b: u32 = sm_extra(s, nd.rhs + 2);
         sm_check_stmt(s, then_b);
-        // Same as `if let` above: the ok/err binding is scoped to the then-block; drop it afterward.
-        strmap_del(SmType, &s.locals, name);
+        sm_scope_pop(s, mark);
         if else_b != 0 {
             sm_check_stmt(s, else_b);
         }
@@ -1684,10 +1755,8 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
             bind_ty = sm_type_of_expr(s, nd.rhs);
         }
         let name: []const u8 = sm_tok_text(s, nd.main_token);
-        strmap_put(SmType, &s.locals, name, bind_ty);
-        if nd.kind == .var_decl {
-            strmap_put(u32, &s.muts, name, 1);
-        }
+        // Phase 4: bind on the current scope; `var` is mutable, `let` is not.
+        sm_bind(s, name, bind_ty, nd.kind == .var_decl);
         return;
     }
     if nd.kind == .return_stmt {
@@ -1753,15 +1822,14 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
         let lnode: Node = sm_node(s, nd.lhs);
         if lnode.kind == .ident_expr {
             let name: []const u8 = sm_tok_text(s, lnode.main_token);
-            let is_local: bool = strmap_contains(SmType, &s.locals, name);
-            if is_local {
-                let is_mut: bool = strmap_contains(u32, &s.muts, name);
+            if sm_local_has(s, name) {
+                let is_mut: bool = sm_local_mut(s, name);
                 if !is_mut {
                     // A `let` local or a param — immutable (assigning it is an error).
                     sm_err(s, .assign_immutable);
                     return;
                 }
-                let lt: SmType = strmap_get_or(SmType, &s.locals, name, sm_ty_unknown());
+                let lt: SmType = sm_local_ty(s, name);
                 let rhs_nd: Node = sm_node(s, nd.rhs);
                 if rhs_nd.kind == .enum_lit {
                     // `c = .variant`: the literal resolves against the target's enum type.
@@ -1825,12 +1893,17 @@ fn sm_check_block(s: *mut SmState, block: u32) -> void {
     let nd: Node = sm_node(s, block);
     let run: u32 = nd.lhs;
     let count: u32 = sm_extra(s, run);
+    // Phase 4: a block is a scope — its `let`/`var` bindings are dropped at the block's end (correct
+    // lexical scoping, replacing the old fn-wide-locals model). Params live below this mark (seeded
+    // before the fn body block), so they survive; nested blocks nest their own marks.
+    let mark: usize = sm_scope_mark(s);
     var i: u32 = 0;
     while i < count {
         let stmt: u32 = sm_extra(s, run + 1 + i);
         sm_check_stmt(s, stmt);
         i = i + 1;
     }
+    sm_scope_pop(s, mark);
 }
 
 // ----- module driver (two passes) -----
@@ -2092,9 +2165,8 @@ fn sm_check_fns(s: *mut SmState, root: u32) -> void {
                 di = di + 1;
                 continue;
             }
-            // Reset the locals + mutability tables (reusable after free) and seed the params.
-            strmap_free(SmType, &s.locals);
-            strmap_free(u32, &s.muts);
+            // Phase 4: clear the scope stack (reuse its capacity) and seed the params at fn scope.
+            sm_scope_pop(s, 0);
             s.cur_ret = sm_type_from_node(s, ret_node);
             let pcount: u32 = sm_extra(s, params_run);
             var pi: u32 = 0;
@@ -2103,7 +2175,7 @@ fn sm_check_fns(s: *mut SmState, root: u32) -> void {
                 let pn: Node = sm_node(s, pnode);
                 let pty: SmType = sm_type_from_node(s, pn.lhs);
                 let pname: []const u8 = sm_tok_text(s, pn.main_token);
-                strmap_put(SmType, &s.locals, pname, pty);
+                sm_bind(s, pname, pty, false);
                 pi = pi + 1;
             }
             sm_check_block(s, body);
@@ -2123,9 +2195,8 @@ export fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
         .fns = strmap_new(u32, a),
         .sigs = vec_new(SmSig, a),
         .ptypes = vec_new(SmType, a),
-        .locals = strmap_new(SmType, a),
+        .binds = vec_new(Binding, a),
         .globals = strmap_new(SmType, a),
-        .muts = strmap_new(u32, a),
         .structs = strmap_new(u32, a),
         .struct_defs = vec_new(SmStruct, a),
         .fields = vec_new(SmField, a),
@@ -2170,9 +2241,8 @@ export fn sema_parser(s: *mut SmState) -> *mut Parser {
 
 // Release the parser arena and all symbol tables. Call exactly once when done.
 export fn sema_free(s: *mut SmState) -> void {
-    strmap_free(SmType, &s.locals);
+    vec_free(Binding, &s.binds);
     strmap_free(SmType, &s.globals);
-    strmap_free(u32, &s.muts);
     strmap_free(u32, &s.structs);
     strmap_free(u32, &s.enums);
     strmap_free(u32, &s.fns);
