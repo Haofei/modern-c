@@ -152,6 +152,16 @@ The gap and perf ledgers are the primary output. Scaffolds live in
 
 ---
 
+## 🎉 SELF-HOSTING ACHIEVED (2026-07-02)
+**`mcc2` compiles `mcc2`.** All 5 core modules (lexer, parser, sema, emit_c, main) + all std deps compile
+through `mcc2` to clang-clean C; the emitted whole-program TU links into `mcc2′`; `mcc2′` compiles a program
+and its output is **byte-identical to `mcc2`'s (a true fixpoint)**. Permanently gated: `selfhost-bootstrap-test`
+(`605b8cc1`) in m0 — builds mcc2 → mcc2 self-emits mcc2′ (diagnostic-clean, 314 KB TU) → links → fixpoint
+byte-identical → mcc2′ compiles+runs a program. Per-module gates: selfhost-{lexself,parseself,semaself,emitself,
+mainself}-test. The subset self-hosts; the original stress-test goal ("what MC doesn't support, or is slow") is
+fully answered — 13 real language/compiler gaps found+fixed along the way (docs/language-gap-fixes.md), perf
+measured (mcc2 ~2 MB/s, faster than clang -O0 on its output).
+
 ## Execution log (post-gap-fix continuation, 2026-07-01)
 - After the 13-gap compiler fix + selfhost refactor (see docs/language-gap-fixes.md), continued widening
   mcc2 and pushing toward literal self-compile:
