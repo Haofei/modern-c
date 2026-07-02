@@ -749,6 +749,135 @@ pub fn sameTypeSyntax(left: ast.TypeExpr, right: ast.TypeExpr) bool {
     };
 }
 
+// Trait-conformance signature comparison: like `sameTypeSyntax`, but the trait
+// side (`trait_ty`) may write `Self` in ANY position (parameter or return type,
+// at any depth: `Self`, `*Self`, `*mut Self`, `*const Self`, `[]Self`, `?Self`,
+// nested in generics/tuples via the recursive descent). Wherever the trait writes
+// the bare name `Self`, it must match the concrete impl type `self_name` on the
+// impl side. Everything else compares identically to `sameTypeSyntax`, so a
+// GENUINE mismatch (impl writes `*OtherType` where the trait says `*Self`, or a
+// different concrete type on both sides) is still rejected.
+pub fn sameTraitTypeSyntax(trait_ty: ast.TypeExpr, impl_ty: ast.TypeExpr, self_name: []const u8) bool {
+    // A bare `Self` on the trait side stands for the impl type. It matches either
+    // the concrete `self_name` or a literal `Self` on the impl side (the impl may
+    // legitimately keep writing `Self`).
+    switch (trait_ty.kind) {
+        .name => |trait_name| if (std.mem.eql(u8, trait_name.text, "Self")) {
+            return switch (impl_ty.kind) {
+                .name => |impl_name| std.mem.eql(u8, impl_name.text, self_name) or
+                    std.mem.eql(u8, impl_name.text, "Self"),
+                else => false,
+            };
+        },
+        else => {},
+    }
+    if (std.meta.activeTag(trait_ty.kind) != std.meta.activeTag(impl_ty.kind)) return false;
+    return switch (trait_ty.kind) {
+        .name => |trait_name| std.mem.eql(u8, trait_name.text, switch (impl_ty.kind) {
+            .name => |impl_name| impl_name.text,
+            else => unreachable,
+        }),
+        .enum_literal => |trait_name| std.mem.eql(u8, trait_name.text, switch (impl_ty.kind) {
+            .enum_literal => |impl_name| impl_name.text,
+            else => unreachable,
+        }),
+        .member => |left_node| blk: {
+            const right_node = switch (impl_ty.kind) {
+                .member => |node| node,
+                else => unreachable,
+            };
+            break :blk sameTraitTypeSyntax(left_node.base.*, right_node.base.*, self_name) and
+                std.mem.eql(u8, left_node.field.text, right_node.field.text);
+        },
+        .nullable => |left_child| sameTraitTypeSyntax(left_child.*, switch (impl_ty.kind) {
+            .nullable => |right_child| right_child.*,
+            else => unreachable,
+        }, self_name),
+        .qualified => |left_node| blk: {
+            const right_node = switch (impl_ty.kind) {
+                .qualified => |node| node,
+                else => unreachable,
+            };
+            break :blk left_node.mutability == right_node.mutability and
+                sameTraitTypeSyntax(left_node.child.*, right_node.child.*, self_name);
+        },
+        .pointer => |left_node| blk: {
+            const right_node = switch (impl_ty.kind) {
+                .pointer => |node| node,
+                else => unreachable,
+            };
+            break :blk left_node.mutability == right_node.mutability and
+                sameTraitTypeSyntax(left_node.child.*, right_node.child.*, self_name);
+        },
+        .raw_many_pointer => |left_node| blk: {
+            const right_node = switch (impl_ty.kind) {
+                .raw_many_pointer => |node| node,
+                else => unreachable,
+            };
+            break :blk left_node.mutability == right_node.mutability and
+                sameTraitTypeSyntax(left_node.child.*, right_node.child.*, self_name);
+        },
+        .slice => |left_node| blk: {
+            const right_node = switch (impl_ty.kind) {
+                .slice => |node| node,
+                else => unreachable,
+            };
+            break :blk left_node.mutability == right_node.mutability and
+                sameTraitTypeSyntax(left_node.child.*, right_node.child.*, self_name);
+        },
+        .array => |left_node| blk: {
+            const right_node = switch (impl_ty.kind) {
+                .array => |node| node,
+                else => unreachable,
+            };
+            break :blk sameExprSyntax(left_node.len, right_node.len) and
+                sameTraitTypeSyntax(left_node.child.*, right_node.child.*, self_name);
+        },
+        .generic => |left_node| blk: {
+            const right_node = switch (impl_ty.kind) {
+                .generic => |node| node,
+                else => unreachable,
+            };
+            if (!std.mem.eql(u8, left_node.base.text, right_node.base.text)) break :blk false;
+            if (left_node.args.len != right_node.args.len) break :blk false;
+            for (left_node.args, right_node.args) |left_arg, right_arg| {
+                if (!sameTraitTypeSyntax(left_arg, right_arg, self_name)) break :blk false;
+            }
+            break :blk true;
+        },
+        .fn_pointer => |left_node| blk: {
+            const right_node = switch (impl_ty.kind) {
+                .fn_pointer => |node| node,
+                else => unreachable,
+            };
+            if (left_node.params.len != right_node.params.len) break :blk false;
+            for (left_node.params, right_node.params) |left_param, right_param| {
+                if (!sameTraitTypeSyntax(left_param, right_param, self_name)) break :blk false;
+            }
+            break :blk sameTraitTypeSyntax(left_node.ret.*, right_node.ret.*, self_name);
+        },
+        .closure_type => |left_node| blk: {
+            const right_node = switch (impl_ty.kind) {
+                .closure_type => |node| node,
+                else => unreachable,
+            };
+            if (left_node.params.len != right_node.params.len) break :blk false;
+            for (left_node.params, right_node.params) |left_param, right_param| {
+                if (!sameTraitTypeSyntax(left_param, right_param, self_name)) break :blk false;
+            }
+            break :blk sameTraitTypeSyntax(left_node.ret.*, right_node.ret.*, self_name);
+        },
+        .dyn_trait => |left_node| blk: {
+            const right_node = switch (impl_ty.kind) {
+                .dyn_trait => |node| node,
+                else => unreachable,
+            };
+            break :blk left_node.mutability == right_node.mutability and
+                std.mem.eql(u8, left_node.trait_name.text, right_node.trait_name.text);
+        },
+    };
+}
+
 fn sameExprSyntax(left: ast.Expr, right: ast.Expr) bool {
     if (std.meta.activeTag(left.kind) != std.meta.activeTag(right.kind)) return false;
     return switch (left.kind) {

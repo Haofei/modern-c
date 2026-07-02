@@ -5257,7 +5257,7 @@ pub const Checker = struct {
                 // backstop (the cast suppresses the warning). The `self` parameter
                 // is excluded — its form is already covered by the self-mode check
                 // (trait writes `*Self`, impl writes `*ConcreteType`).
-                else self.checkTraitSignatureEquality(provided, tm);
+                else self.checkTraitSignatureEquality(provided, tm, it.type_name.text);
                 // Effect contract: an impl method may not be `#[may_sleep]` unless the
                 // trait signature also declares it (so the effect a caller sees through
                 // the bound matches what conformance verified).
@@ -5279,7 +5279,7 @@ pub const Checker = struct {
     // and the return type. (Self-mode and `#[may_sleep]` effects are checked by the
     // caller.) A `*dyn Trait` vtable slot is *cast* to the trait method signature at
     // dispatch, so a mismatch here would otherwise become a wild/UB indirect call.
-    fn checkTraitSignatureEquality(self: *Checker, provided: ast.ImplTraitMethod, tm: ast.TraitMethodSig) void {
+    fn checkTraitSignatureEquality(self: *Checker, provided: ast.ImplTraitMethod, tm: ast.TraitMethodSig, self_name: []const u8) void {
         // Both param lists carry `self` as params[0] when a self parameter exists
         // (self_mode != .none); skip it (form covered by the self-mode check) and
         // compare the remaining parameters positionally.
@@ -5292,7 +5292,9 @@ pub const Checker = struct {
             return;
         }
         for (trait_rest, impl_rest) |tp, ip| {
-            if (!sameTypeSyntax(tp.ty, ip.ty)) {
+            // The trait may write `Self` in any non-receiver parameter position
+            // (e.g. `other: *Self`); it must match the concrete impl type there.
+            if (!sema_type.sameTraitTypeSyntax(tp.ty, ip.ty, self_name)) {
                 self.errorCode(ip.name.span, "E_TRAIT_SIGNATURE_MISMATCH", "impl method's parameter type does not match the trait signature");
             }
         }
@@ -5301,7 +5303,7 @@ pub const Checker = struct {
         // agree (present-with-equal-type, or both absent).
         const tr = tm.return_type;
         const ir = provided.return_type;
-        const ret_matches = if (tr) |t| (if (ir) |i| sameTypeSyntax(t, i) else false) else (ir == null);
+        const ret_matches = if (tr) |t| (if (ir) |i| sema_type.sameTraitTypeSyntax(t, i, self_name) else false) else (ir == null);
         if (!ret_matches) {
             self.errorCode(provided.name.span, "E_TRAIT_SIGNATURE_MISMATCH", "impl method's return type does not match the trait signature");
         }
