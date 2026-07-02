@@ -403,6 +403,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-trait-test"));
     // selfhost-match-test exercises P5.11 MATCH support (desugars to switch; no payload in the subset) + exhaustiveness.
     m0_step.dependOn(ctx.cmd("selfhost-match-test"));
+    // selfhost-opaque-test exercises `opaque struct` support end to end via the mcc2 CLI (compiled as a regular struct; the subset does not enforce opacity).
+    m0_step.dependOn(ctx.cmd("selfhost-opaque-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

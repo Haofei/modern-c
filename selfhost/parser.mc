@@ -523,6 +523,15 @@ fn tok_is_impl(p: *mut Parser, tok: u32) -> bool {
     return mem_eql(lex, "impl");
 }
 
+// True when token `tok` is the identifier `opaque` (the contextual field-privacy qualifier before
+// `struct` in the real grammar — NOT a lexer keyword; it lexes as a plain identifier, like
+// `import`/`trait`). Bound to a local per G13. (P5.1 opaque-struct)
+fn tok_is_opaque(p: *mut Parser, tok: u32) -> bool {
+    let lex: []const u8 = tok_lexeme(p, tok);
+
+    return mem_eql(lex, "opaque");
+}
+
 // raw_op := `raw` `.` (`ptr`|`load`|`store`) `<` Type `>` `(` Expr (`,` Expr)? `)`  (P5.8). The
 // member ident (`ptr`/`load`/`store`) becomes main_token so emit/sema recover the op by lexeme; the
 // `<T>` reuses `parse_type`; the value args are a fixed 2-slot record [arg0, arg1] (arg1 = 0 for the
@@ -1252,6 +1261,16 @@ fn parse_decl(p: *mut Parser) -> u32 {
     var is_open: u32 = 0;
     if eat(p, .kw_open) {
         is_open = 1;
+    }
+    // `opaque` is a contextual qualifier before `struct` (field privacy in the real grammar). The
+    // subset does NOT enforce opacity — a cross-module access-control concern (§31) that is not
+    // needed to COMPILE the code — so an `opaque struct` is parsed/typed/emitted EXACTLY as a
+    // regular struct. `opaque` is not a lexer keyword (it lexes as a plain identifier, like
+    // `trait`/`impl`), so it is recognized here by lexeme and consumed before the `struct` head.
+    if at(p, .identifier) {
+        if tok_is_opaque(p, p.tok as u32) {
+            p_advance(p); // `opaque`
+        }
     }
     if at(p, .kw_enum) {
         return parse_enum(p, exported, is_open);

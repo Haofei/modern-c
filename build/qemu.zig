@@ -90,6 +90,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "selfhost-match-test", "Build, link, and run the P5.11 self-hosted MATCH gate (selfhost parser+sema+emit_c): match over an enum subject with .variant arms + a _ default + real exhaustiveness (unknown-variant + nonexhaustive rejects), desugared to a plain C switch (no tagged-union payload to bind in the subset) -> clang -> run (ev(0,7,3)==10, ev(1,7,3)==4, ev(2,7,3)==21)", &.{ "bash", "tools/toolchain/selfhost-match-test.sh", "zig-out/bin/mcc" });
 
+    _ = h.addScriptTest(ctx, "selfhost-opaque-test", "Build, link, and run the self-hosted OPAQUE-STRUCT gate via the mcc2 CLI (selfhost parser+sema+emit_c): `opaque struct` parsed/typed/emitted as a regular struct (the subset does not enforce opacity) — opaque struct decl + typed var + struct literal + member read/write + returned field -> clang -> run (mk(2,3)==5, mk(10,5)==15)", &.{ "bash", "tools/toolchain/selfhost-opaque-test.sh", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "pkg-test", "Build a package from its manifest with mcc-pkg, link, and run it", &.{ "bash", "tools/toolchain/pkg-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "llvm-pkg-test", "Build a package from its manifest through LLVM, link, and run it", &.{ "bash", "tools/toolchain/llvm-pkg-test.sh", "zig-out/bin/mcc" });
