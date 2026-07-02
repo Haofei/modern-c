@@ -210,42 +210,54 @@ fn mc_compute_rootdir(argp: usize) -> void {
 }
 
 // Enqueue import path `g_src[src_off .. src_off+len]` (the string-literal text minus its quotes)
-// unless an equal path is already queued (the queue is also the seen-set — dedup). Silently caps
-// at MC_MAX_FILES / MC_PATHBUF_CAP.
-fn mc_queue_path(src_off: usize, len: usize) -> void {
+// unless an equal path is already queued (the queue is also the seen-set — dedup). Returns false
+// (a LOAD ERROR, surfaced by the caller — never a silent drop) when the path is too long to fit the
+// NUL-terminated candidate buffer `g_openpath[MC_PATH_CAP]`, or when the file/pathbuf caps are hit.
+fn mc_queue_path(src_off: usize, len: usize) -> bool {
     if len == 0 {
-        return;
+        return true; // empty import string — nothing to queue, not an error
+    }
+    // Per-path length cap (fixes a g_openpath[MC_PATH_CAP] overflow): the path must fit BOTH the
+    // as-given NUL-terminated form (len + NUL) AND the root-composed form
+    // (rootdir + '/' + rel + NUL) that mc_read_import builds into g_openpath.
+    if len + 1 > MC_PATH_CAP {
+        return false;
+    }
+    if g_rootdir_len + 1 + len + 1 > MC_PATH_CAP {
+        return false;
     }
     let rel: []const u8 = mem.as_bytes(&g_src)[src_off..src_off + len];
     var i: usize = 0;
     while i < g_path_count {
         let stored: []const u8 = mem.as_bytes(&g_path_buf)[g_path_off[i]..g_path_off[i] + g_path_len[i]];
         if mem_eql(rel, stored) {
-            return; // already queued (dedup)
+            return true; // already queued (dedup)
         }
         i = i + 1;
     }
     if g_path_count >= MC_MAX_FILES {
-        return;
+        return false; // too many imports — a load error, not a silent omission
     }
     if g_path_used + len > MC_PATHBUF_CAP {
-        return;
+        return false; // import-path buffer exhausted — a load error, not a silent omission
     }
     mem_copy(pa((&g_path_buf) as usize + g_path_used), pa((&g_src) as usize + src_off), len);
     g_path_off[g_path_count] = g_path_used;
     g_path_len[g_path_count] = len;
     g_path_used = g_path_used + len;
     g_path_count = g_path_count + 1;
+    return true;
 }
 
 // Lex the `nread` bytes currently in g_src and enqueue every top-level `import "path";` directive
 // (identifier `import` + string literal + `;` at brace-depth 0), mirroring src/loader.zig's scan.
-fn mc_scan_imports(nread: usize) -> void {
+fn mc_scan_imports(nread: usize) -> bool {
     var ma: MallocAlloc = .{ .count = 0 };
     var tl: TokenList = token_list_new(&ma);
     let view: []const u8 = mem.as_bytes(&g_src)[0..nread];
     lex(view, &tl);
     let n: usize = token_count(&tl);
+    var okq: bool = true;
     var depth: i32 = 0;
     var i: usize = 0;
     while i < n {
@@ -265,7 +277,9 @@ fn mc_scan_imports(nread: usize) -> void {
                     let sst: usize = token_start_at(&tl, i + 1);
                     let sln: usize = token_len_at(&tl, i + 1);
                     if sln >= 2 {
-                        mc_queue_path(sst + 1, sln - 2); // strip the surrounding quotes
+                        if !mc_queue_path(sst + 1, sln - 2) { // strip the surrounding quotes
+                            okq = false;
+                        }
                     }
                     i = i + 3;
                     continue;
@@ -275,6 +289,7 @@ fn mc_scan_imports(nread: usize) -> void {
         i = i + 1;
     }
     token_list_free(&tl);
+    return okq;
 }
 
 // Append the `nread` bytes now in g_src to the combined buffer, then a newline separator (so a file
@@ -325,7 +340,9 @@ fn mc_load_all(argp: usize) -> bool {
     } else {
         return false;
     }
-    mc_scan_imports(nread);
+    if !mc_scan_imports(nread) {
+        return false; // an import path was too long / too many imports — a load error
+    }
     if !mc_append_concat(nread) {
         return false;
     }
@@ -337,7 +354,9 @@ fn mc_load_all(argp: usize) -> bool {
         } else {
             return false;
         }
-        mc_scan_imports(in_read);
+        if !mc_scan_imports(in_read) {
+            return false; // nested import path too long / too many — a load error
+        }
         if !mc_append_concat(in_read) {
             return false;
         }
@@ -388,8 +407,14 @@ export fn mc_main() -> i32 {
     }
     sb_free(&sb);
 
+    // Emission is best-effort (C is still written above so a perf/inspection caller gets output),
+    // but the EXIT CODE must reflect validity so CI/scripts reject bad input: nonzero on ANY
+    // parse OR semantic error. (Was: only parse errors failed, so invalid MC exited 0.)
     if perr != 0 {
         return 4;
+    }
+    if serr != 0 {
+        return 5;
     }
     return 0;
 }
