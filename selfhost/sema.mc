@@ -234,6 +234,18 @@ fn sm_fact_set_decl(s: *mut SmState, node: u32, decl_node: u32) -> void {
     vec_set(Fact, &s.facts, node as usize, f);
 }
 
+// Record the resolved TYPE of an expression `node` (arch plan Phase 3). Emit reads this to classify a
+// base (slice / pointer / trait-object) instead of re-walking the function's decls. A `.unknown` type
+// is stored as-is and read by emit as "no fact" (fall back to the AST re-derivation).
+fn sm_fact_set_ty(s: *mut SmState, node: u32, ty: SmType) -> void {
+    if node >= vec_len(Fact, &s.facts) as u32 {
+        return;
+    }
+    var f: Fact = vec_get(Fact, &s.facts, node as usize);
+    f.ty = ty;
+    vec_set(Fact, &s.facts, node as usize, f);
+}
+
 // A depth-0 type of kind `k`.
 fn sm_ty(k: SmKind) -> SmType {
     return .{ .kind = k, .ptr_depth = 0, .nstart = 0, .nlen = 0, .arr_len = 0, .elem = .unknown };
@@ -1178,9 +1190,19 @@ fn sm_cast(s: *mut SmState, nd: Node) -> SmType {
     return dst;
 }
 
+// The type of an expression node. Wraps the recursive `sm_type_of_expr_inner` to PUBLISH the resolved
+// type as a per-node fact (arch plan Phase 3), so emit consumes it rather than re-deriving. Every expr
+// sema walks is recorded; nodes it never types (e.g. generic-template bodies) simply have no fact and
+// emit falls back to the AST re-derivation.
+fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
+    let t: SmType = sm_type_of_expr_inner(s, node);
+    sm_fact_set_ty(s, node, t);
+    return t;
+}
+
 // The type of an expression node (recursively). Dispatches over `NodeKind` with a `switch`; the
 // open enum forces a `_` default (there is no exhaustiveness help — see the ledger note).
-fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
+fn sm_type_of_expr_inner(s: *mut SmState, node: u32) -> SmType {
     let nd: Node = sm_node(s, node);
     switch nd.kind {
         .int_literal => { return sm_ty(.int_lit); }
@@ -2189,4 +2211,15 @@ export fn sema_fact_decl(facts: *Vec<Fact>, node: u32) -> u32 {
         return 0;
     }
     return f.decl - 1;
+}
+
+// The resolved TYPE recorded for expression `node` (arch plan Phase 3), or an `unknown` type when no
+// fact was recorded (out of range, or a node sema never typed). Emit reads this to classify a base as
+// slice/pointer/trait-object; an `unknown` result means "fall back to the AST re-derivation".
+export fn sema_fact_ty(facts: *Vec<Fact>, node: u32) -> SmType {
+    if node >= vec_len(Fact, facts) as u32 {
+        return .{ .kind = .unknown, .ptr_depth = 0, .nstart = 0, .nlen = 0, .arr_len = 0, .elem = .unknown };
+    }
+    let f: Fact = vec_get(Fact, facts, node as usize);
+    return f.ty;
 }

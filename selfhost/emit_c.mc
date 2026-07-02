@@ -816,7 +816,27 @@ fn e_find_local_in_stmt(p: *mut Parser, st: u32, name: []const u8) -> u32 {
 // True when `base` is a slice-typed identifier in the current function (its declared type node is a
 // `[]const/mut T`). Only bare identifiers are resolved (a field/index base is treated as non-slice —
 // deferred; see the ledger).
+// The sema-resolved type of expression `node` (arch plan Phase 3), or an `unknown` type when there is
+// no fact table (the self-parsing `emit_c_run` path) or the node was not typed by sema. Lets a base
+// classifier consult sema's result instead of re-walking the current function's decls.
+fn e_fact_ty(p: *mut Parser, node: u32) -> SmType {
+    if p.facts_addr == 0 {
+        return .{ .kind = .unknown, .ptr_depth = 0, .nstart = 0, .nlen = 0, .arr_len = 0, .elem = .unknown };
+    }
+    var facts: *mut Vec<Fact> = raw.ptr<Vec<Fact>>(0);
+    unsafe {
+        facts = raw.ptr<Vec<Fact>>(p.facts_addr);
+    }
+    return sema_fact_ty(facts, node);
+}
+
 fn e_base_is_slice(p: *mut Parser, base: u32) -> bool {
+    // Phase 3: prefer sema's resolved type (slice_ kind == 3). A known non-slice type answers false;
+    // an `unknown` fact (no sema type — e.g. a generic-template body) falls through to re-derivation.
+    let ft: SmType = e_fact_ty(p, base);
+    if ft.kind.raw() != 0 {
+        return ft.kind.raw() == 3;
+    }
     let bn: Node = e_node(p, base);
     // A `mem.as_bytes(&x)` call yields a `[]const u8` slice VALUE, so a chained `as_bytes(&g)[a..b]`
     // / `as_bytes(&g)[i]` (P5.20, used by the mcc2 CLI loader) has a slice base too — its `.ptr`
@@ -841,6 +861,12 @@ fn e_base_is_slice(p: *mut Parser, base: u32) -> bool {
 // e.g. an `impl` method's `self: *mut TYPE`). A trait-object (`type_dyn`) is a by-value fat pointer,
 // NOT a plain pointer, so it stays `.` (its `.data`/`.vtbl` are direct fields). (P5.10)
 fn e_base_is_ptr(p: *mut Parser, base: u32) -> bool {
+    // Phase 3: a plain pointer has ptr_depth > 0 in sema's type; a trait-object (`dyn_`, kind 17) is a
+    // fat-pointer VALUE with ptr_depth 0, so it is correctly excluded. Unknown → re-derive.
+    let ft: SmType = e_fact_ty(p, base);
+    if ft.kind.raw() != 0 {
+        return ft.ptr_depth > 0;
+    }
     let bn: Node = e_node(p, base);
     if bn.kind != .ident_expr {
         return false;
@@ -857,6 +883,11 @@ fn e_base_is_ptr(p: *mut Parser, base: u32) -> bool {
 // True when `base` is a trait-object-typed identifier (`*mut dyn TRAIT`) in the current function — so
 // a method call `base.m(..)` lowers to a vtable dispatch `(base).vtbl->m((base).data, ..)`. (P5.10)
 fn e_base_is_dyn(p: *mut Parser, base: u32) -> bool {
+    // Phase 3: a trait object is sema kind `dyn_` (17). Unknown → re-derive.
+    let ft: SmType = e_fact_ty(p, base);
+    if ft.kind.raw() != 0 {
+        return ft.kind.raw() == 17;
+    }
     let bn: Node = e_node(p, base);
     if bn.kind != .ident_expr {
         return false;
