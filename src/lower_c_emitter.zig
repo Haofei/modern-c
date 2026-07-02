@@ -3433,7 +3433,7 @@ const CEmitter = struct {
         }
         if (globalArrayElementAccess(node, locals, &self.globals)) |access| {
             try lower_c_global.emitGlobalArrayElementLoadExpr(self.globalArrayAccessEmitContext(), access, locals);
-        } else if (sliceAccessForExpr(node.base.*, locals)) |slice| {
+        } else if (self.sliceAccessForBase(node.base.*, locals)) |slice| {
             try self.emitSliceIndexExpr(node, locals, slice);
         } else if (self.arrayTypeForExpr(node.base.*, locals)) |base_arr| {
             try self.emitArrayIndexExpr(node, locals, base_arr);
@@ -3601,7 +3601,7 @@ const CEmitter = struct {
     }
 
     fn emitIndexAddressOperand(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
-        if (sliceAccessForExpr(node.base.*, locals)) |slice| {
+        if (self.sliceAccessForBase(node.base.*, locals)) |slice| {
             try self.emitSliceIndexAddressOperand(node, locals, slice);
         } else if (self.arrayTypeForExpr(node.base.*, locals)) |base_arr| {
             try self.emitArrayIndexAddressOperand(node, locals, base_arr);
@@ -4426,6 +4426,19 @@ const CEmitter = struct {
         return lower_c_infer.operandEmitType(self.inferTypeContext(), expr, locals);
     }
 
+    // Slice ptr/len access for a base expression, covering both a local/param base
+    // (fast path via LocalInfo) and a struct-field base (`sp.s` where `s: []T`),
+    // whose slice-ness is recovered from the field's declared type. The C slice
+    // struct always names its fields `ptr`/`len` (see lower_c_info).
+    fn sliceAccessForBase(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?SliceAccess {
+        if (sliceAccessForExpr(expr, locals)) |slice| return slice;
+        const ty = self.operandEmitType(expr, locals) orelse return null;
+        return switch (self.resolveAliasType(ty).kind) {
+            .slice => .{ .ptr_field = "ptr", .len_field = "len" },
+            else => null,
+        };
+    }
+
     // The array type of `expr`, if it is an array — including the element of an
     // outer array access (`m[i]` over `[N][M]T` yields `[M]T`), which enables
     // nested indexing `m[i][j]`. Returns null for non-array expressions.
@@ -4562,7 +4575,11 @@ const CEmitter = struct {
             },
             .call => |node| self.callSourceTypeForEmission(node, locals),
             .cast => |node| node.ty.*,
-            .index => |node| if (locals) |local_set| localIndexElementType(node.base.*, local_set) else null,
+            // A struct-field base (`sp.s` where `s: []T`) has no LocalInfo, so
+            // recover its declared type from the struct decl via operandEmitType.
+            .member => self.operandEmitType(expr, locals),
+            .index => |node| self.operandEmitType(expr, locals) orelse
+                (if (locals) |local_set| localIndexElementType(node.base.*, local_set) else null),
             .slice => |node| if (self.exprSourceTypeForEmission(node.base.*, locals)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
             .grouped => |inner| self.exprSourceTypeForEmission(inner.*, locals),
             .binary => |node| self.binarySourceTypeForEmission(node, locals),

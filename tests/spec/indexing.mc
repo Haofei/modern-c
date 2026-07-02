@@ -32,6 +32,20 @@ fn accept_direct_call_slice_index() -> u8 {
     return make_u8_slice()[0];
 }
 
+// G13: the index base may be a struct field of slice type (`h.data[i]`), whose
+// slice-ness is recovered from the field's declared type; value and pointer bases.
+struct ByteHolder {
+    data: []const u8,
+}
+
+fn accept_struct_field_slice_index(h: ByteHolder, i: usize) -> u8 {
+    return h.data[i];
+}
+
+fn accept_struct_field_slice_index_ptr(h: *ByteHolder, i: usize) -> u8 {
+    return h.data[i];
+}
+
 fn reject_direct_call_slice_index_return_type() -> *mut u8 {
     // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
     return make_u8_slice()[0];

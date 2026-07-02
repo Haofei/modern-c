@@ -16,6 +16,23 @@ fn accept_slice_range_from_array(n: usize) -> u8 {
     return s[0];
 }
 
+// G13: the sub-slice base may be a struct field of slice type, resolved from the
+// field's declared type rather than a LocalInfo. Both a value struct and a
+// pointer-to-struct (auto-deref) base must lower on both backends.
+struct SliceBox {
+    s: []mut u8,
+}
+
+fn accept_slice_range_from_struct_field(sb: SliceBox, n: usize) -> u8 {
+    let s: []mut u8 = sb.s[0..n];
+    return s[0];
+}
+
+fn accept_slice_range_from_struct_field_ptr(sb: *SliceBox, n: usize) -> u8 {
+    let s: []mut u8 = sb.s[0..n];
+    return s[0];
+}
+
 fn reject_slice_range_non_indexable(n: usize) -> []mut u8 {
     var x: u32 = 1;
     // EXPECT_ERROR: E_INDEX_BASE_NOT_ARRAY_OR_SLICE
