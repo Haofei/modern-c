@@ -152,6 +152,21 @@ The gap and perf ledgers are the primary output. Scaffolds live in
 
 ---
 
+## Execution log (post-gap-fix continuation, 2026-07-01)
+- After the 13-gap compiler fix + selfhost refactor (see docs/language-gap-fixes.md), continued widening
+  mcc2 and pushing toward literal self-compile:
+  - **P5.12 opaque struct** (`6d4fa5ee`) — contextual `opaque` qualifier reusing the struct path.
+  - **P5.13 `unreachable;` + infix bitwise/shift** (`d6e7605`) — `& | ^ << >>` with C precedence; prefix-`&`
+    vs infix-`&` by position; `unreachable`→`mc_trap_Unreachable()`.
+  - **P5.14 bool literals + address-class model** (`627c022`) — `true`/`false`; `PAddr`/`VAddr`/`DmaAddr`→
+    `uintptr_t`, `phys()`, `as`-mint casts, struct-literal return compound-literal. **MILESTONE: `mcc2`
+    compiles a REAL std module `std/addr.mc` end-to-end → clang-clean C** (`selfhost-addr-test`), all 18 prior
+    gates + mcc2-cli green.
+- **State:** mcc2 language-subset coverage ~85–90% of its own source; compiles a real std module. **Next real
+  blocker: `std/mem.mc` needs value optionals `?usize`+`if let` IN mcc2's SUBSET** (note the recursion — the
+  R-std refactor made std/mem USE `?usize`, so mcc2 must now support it to compile mem.mc). Then multi-file std
+  (G29 macOS-only), then feed all selfhost/*.mc + std deps through mcc2 → literal self-compile. Each a vertical.
+
 ## Execution log
 
 - **2026-07-01 — Phase 0 COMPLETE (master @ c3106bb + follow-ups).** Vec<T> (`8b5c22b`),
