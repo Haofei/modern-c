@@ -136,6 +136,12 @@ the real backend (`mc_slice_const_<T>{ const T* ptr; size_t len; }`). Also: adde
 dispatch `d.vtbl->m(d.data, ...)`. Coercion `*mut T`→`*mut dyn Trait` at CALL ARGS only (returns/assigns deferred).
 `Self` is a non-problem (erased to `void*` in the vtable; concrete in impl methods).
 
+**⚠️ SUPERSEDED SNAPSHOT (P5.10-era status, kept for history) — ALL RESOLVED as of 2026-07-02.** Every
+"remaining blocker" below was subsequently closed: value optionals (P5.15), module-qualified calls + opaque
+address classes (P5.14/5.19), the std API incl. `StrHashMap` over struct values (P5.19), G32 impl-body
+mutation (P5.15); `match` was a non-gap. **MC self-hosts** — `mcc2` compiles all of selfhost/*.mc + std deps
+to a byte-identical fixpoint (gate `selfhost-bootstrap-test`). See docs/self-host-plan.md "SELF-HOSTING ACHIEVED".
+
 **REMAINING blockers to LITERAL `mcc2`-compiles-`mcc2`** (after 11 verticals, ~70–75% coverage): `?T`
 optionals (G11 — selfhost mostly avoids), `match` + payload binding, GENERAL module-qualified calls (`mod.fn`
 — only `mem.as_bytes`/`raw.*` special-cased today; `pa()`/`pa_value`/etc. not), the OPAQUE `PAddr` address
