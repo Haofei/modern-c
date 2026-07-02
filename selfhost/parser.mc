@@ -235,6 +235,12 @@ struct Parser {
     sub_name_start: usize,
     sub_name_len: usize,
     sub_concrete: u32,
+    // Generic-close `>>` split state (mirrors src/parser.zig consumeGenericClose): a nested generic
+    // like `Entry<V>>` / `raw.ptr<Entry<V>>` lexes its trailing `>>` as ONE `.shift_right` token. When
+    // an inner generic-close sees that token it consumes only the first `>` and sets `pending_gt`,
+    // leaving a synthetic `>` for the enclosing close (which then advances past the token). Only ever
+    // set/read by `consume_generic_close`, and only between two adjacent closes (no interleaved reads).
+    pending_gt: bool,
     // P5.7 emit-time scratch: the fn decl node currently being emitted, so a slice-aware access
     // (`s.ptr[i]` / sub-slice) can resolve a base identifier's declared type (param or local) by
     // scanning this function. 0 while not emitting a function body. Not used by parse/sema.
@@ -328,6 +334,27 @@ fn expect(p: *mut Parser, k: TokKind) -> bool {
     }
     record_error(p);
     return false;
+}
+
+// Close a generic / type-argument list, splitting a `>>` (`.shift_right`) token into two `>` so a
+// nested generic like `Entry<V>>` / `raw.ptr<Entry<V>>` parses (mirrors src/parser.zig
+// consumeGenericClose). Consumes exactly one `>`. On a `>>` it consumes the first `>` and leaves a
+// synthetic `>` (via `pending_gt`) for the enclosing close to consume.
+fn consume_generic_close(p: *mut Parser) -> void {
+    if p.pending_gt {
+        p.pending_gt = false;
+        p_advance(p); // consume the second `>` of the split `>>`, moving past the shift_right token
+        return;
+    }
+    if at(p, .greater) {
+        p_advance(p);
+        return;
+    }
+    if at(p, .shift_right) {
+        p.pending_gt = true; // consumed the first `>`; leave a synthetic `>` for the outer close
+        return;
+    }
+    record_error(p);
 }
 
 // ----- arena builders -----
@@ -472,10 +499,10 @@ fn parse_type(p: *mut Parser) -> u32 {
         // `Result` uses two args in the subset; a single arg stays a mono `S<T>` generic instance.
         if eat(p, .comma) {
             let arg2: u32 = parse_type(p);
-            expect(p, .greater);
+            consume_generic_close(p);
             return add_node(p, .type_result, name_tok, arg, arg2);
         }
-        expect(p, .greater);
+        consume_generic_close(p);
         return add_node(p, .type_generic, name_tok, arg, 0);
     }
     return add_node(p, .type_name, name_tok, 0, 0);
@@ -635,7 +662,7 @@ fn parse_raw_op(p: *mut Parser) -> u32 {
     expect(p, .identifier);
     expect(p, .less);
     let ty: u32 = parse_type(p);
-    expect(p, .greater);
+    consume_generic_close(p);
     expect(p, .l_paren);
     let arg0: u32 = parse_expr(p, 0);
     var arg1: u32 = 0;
@@ -1001,6 +1028,7 @@ fn parse_result_switch_arms(p: *mut Parser, sw_tok: u32, subject: u32) -> u32 {
     var arms: Vec<u32> = vec_new(u32, p.a); // (tag_tok, bind_tok, block) triples
     if !at(p, .r_brace) {
         while true {
+            let arm_start: usize = p.tok; // no-progress guard
             let tag_tok: u32 = p.tok as u32; // `ok` / `err` keyword
             p_advance(p);
             expect(p, .l_paren);
@@ -1012,11 +1040,13 @@ fn parse_result_switch_arms(p: *mut Parser, sw_tok: u32, subject: u32) -> u32 {
             vec_push(u32, &arms, tag_tok);
             vec_push(u32, &arms, bind_tok);
             vec_push(u32, &arms, arm_block);
-            if !eat(p, .comma) {
+            // Separator optional after a `}`-block arm (see parse_switch); comma still accepted.
+            eat(p, .comma);
+            if at(p, .r_brace) || at(p, .eof) {
                 break;
             }
-            if at(p, .r_brace) {
-                break; // trailing comma
+            if p.tok == arm_start {
+                break; // no forward progress — avoid an infinite loop
             }
         }
     }
@@ -1049,6 +1079,7 @@ fn parse_switch(p: *mut Parser) -> u32 {
     var arms: Vec<u32> = vec_new(u32, p.a); // (pattern_tok, block_node) pairs
     if !at(p, .r_brace) {
         while true {
+            let arm_start: usize = p.tok; // no-progress guard (expect() leaves the cursor put on error)
             var pat_tok: u32 = p.tok as u32;
             if at(p, .dot) {
                 p_advance(p); // `.`
@@ -1075,11 +1106,15 @@ fn parse_switch(p: *mut Parser) -> u32 {
             let arm_block: u32 = parse_block(p);
             vec_push(u32, &arms, pat_tok);
             vec_push(u32, &arms, arm_block);
-            if !eat(p, .comma) {
+            // The arm separator is OPTIONAL: real MC (and mcc2's own source) omits the comma after a
+            // `}`-block-bodied arm (`.a => { .. } .b => { .. }`), but a comma is still accepted
+            // (matching src/parser.zig: `_ = match(.comma)` unconditionally after each arm body).
+            eat(p, .comma);
+            if at(p, .r_brace) || at(p, .eof) {
                 break;
             }
-            if at(p, .r_brace) {
-                break; // trailing comma
+            if p.tok == arm_start {
+                break; // no forward progress (malformed arm) — avoid an infinite loop
             }
         }
     }
@@ -1660,6 +1695,7 @@ export fn parser_run(source: []const u8, a: *mut dyn Allocator) -> Parser {
         .sub_name_len = 0,
         .sub_concrete = 0,
         .cur_fn = 0,
+        .pending_gt = false,
     };
     lex(source, &p.tl);
     // Node index 0 is the reserved `.invalid` sentinel ("none").

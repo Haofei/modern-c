@@ -1893,8 +1893,10 @@ fn sm_check_consts(s: *mut SmState, root: u32) -> void {
         if dn.kind == .const_decl {
             let decl_ty: SmType = sm_type_from_node(s, dn.lhs);
             let init_ty: SmType = sm_type_of_expr(s, dn.rhs);
-            let ok: bool = sm_types_match(s, decl_ty, init_ty);
-            if !ok {
+            // NB: not named `ok` — mcc2's own lexer reserves `ok`/`err` as Result-ctor keywords
+            // (gap G24), so a local named `ok` would not parse when mcc2 compiles this file.
+            let matched: bool = sm_types_match(s, decl_ty, init_ty);
+            if !matched {
                 sm_err(s, .type_mismatch);
             }
         }

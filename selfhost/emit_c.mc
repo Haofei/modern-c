@@ -1284,7 +1284,16 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
     let nd: Node = e_node(p, n);
     if nd.kind == .int_literal {
         let txt: []const u8 = e_tok_text(p, nd.main_token);
-        sb_put_str(sb, txt);
+        // MC integer literals allow `_` digit separators (`0x0000_0000_FFFF_FFFF`, `1_000_000`); C
+        // does not, so strip them on the way out (the numeric value is unchanged).
+        var ii: usize = 0;
+        while ii < txt.len {
+            let b: u8 = txt[ii];
+            if b != 95 { // '_'
+                sb_put_byte(sb, b);
+            }
+            ii = ii + 1;
+        }
         return;
     }
     // A char literal's lexeme (quotes included) is emitted verbatim — it is already a valid C char
@@ -1508,13 +1517,29 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
                 return;
             }
         }
-        e_expr(p, sb, nd.lhs); // callee
+        // A module-qualified free call `mod.fn(args)` — the callee is a `.field` (`mod` . `fn`) that is
+        // NOT a trait-object dynamic dispatch (that returned above) and NOT a special builtin (as_bytes,
+        // handled earlier). MC's flat concatenated namespace (G22) has the function under its bare name,
+        // so drop the module qualifier and emit just the method name (`bytes_equal(args)`).
+        var callee_fn: u32 = 0;
+        if cnode.kind == .field {
+            var mfn: []const u8 = e_tok_text(p, cnode.main_token); // the method/function name
+            // `mem.bytes_equal(a, b)` is a compiler-recognized BUILTIN in real MC (std/mem.mc header),
+            // not a free function — it has the same byte-slice-equality semantics as the real exported
+            // `mem_eql`, so lower it to that concrete function.
+            if mem_eql(mfn, "bytes_equal") {
+                mfn = "mem_eql";
+            }
+            sb_put_str(sb, mfn);
+            callee_fn = e_find_fn(p, mfn);
+        } else {
+            e_expr(p, sb, nd.lhs); // callee
+        }
         sb_put_cstr(sb, "(");
         let arg_run: u32 = nd.rhs;
         let argc: u32 = e_extra(p, arg_run);
         // P5.10: recover the callee's declared params so a `*mut TYPE` arg passed where a
         // `*mut dyn TRAIT` is expected is coerced to a `{data,vtable}` fat pointer at this site.
-        var callee_fn: u32 = 0;
         if cnode.kind == .ident_expr {
             let cnm: []const u8 = e_tok_text(p, cnode.main_token);
             callee_fn = e_find_fn(p, cnm);
@@ -2642,6 +2667,63 @@ fn e_collect_type_insts(p: *mut Parser, base_text: []const u8, out: *mut Vec<u32
         }
         i = i + 1;
     }
+    // Transitive: a generic struct referenced ONLY as `base<X>` where X is a type PARAM (e.g. the
+    // hashmap's `Entry<V>`, written only inside generic fns like `slot_ptr`/`strmap_*` and never as a
+    // concrete `Entry<u32>`) still needs a monomorphic typedef for every concrete type its using
+    // generic fns are instantiated at (so `slot_ptr_u32`'s `Entry_u32*` return has a definition). For
+    // each such type-param spelling, pull in the concrete instances of every generic fn using it as
+    // its own type param.
+    var j: u32 = 1;
+    while j < total {
+        let ndj: Node = e_node(p, j);
+        if ndj.kind == .type_generic {
+            let bj: []const u8 = e_tok_text(p, ndj.main_token);
+            let mj: bool = mem_eql(base_text, bj);
+            if mj {
+                let alex: []const u8 = e_node_lexeme(p, ndj.lhs);
+                let conc: bool = e_is_concrete_type_arg(p, alex);
+                if !conc {
+                    e_collect_insts_for_tparam(p, alex, &*out);
+                }
+            }
+        }
+        j = j + 1;
+    }
+}
+
+// Collect, into `out`, the DISTINCT concrete type-arg nodes at which every generic fn whose OWN type
+// param is spelled `tparam_lex` is instantiated. Used to induce a generic struct's instances from the
+// generic fns that reference it via that type param (see `e_collect_type_insts`).
+fn e_collect_insts_for_tparam(p: *mut Parser, tparam_lex: []const u8, out: *mut Vec<u32>) -> void {
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var di: u32 = 0;
+    while di < count {
+        let d: u32 = e_extra(p, run + 1 + di);
+        let dn: Node = e_node(p, d);
+        if dn.kind == .fn_decl {
+            let frec: u32 = dn.lhs;
+            let params_run: u32 = e_extra(p, frec + 1);
+            let generic: bool = e_fn_has_comptime(p, params_run);
+            if generic {
+                let tp_tok: u32 = e_gfn_tparam(p, d);
+                let tplex: []const u8 = e_tok_text(p, tp_tok);
+                let same: bool = mem_eql(tplex, tparam_lex);
+                if same {
+                    let fname: []const u8 = e_tok_text(p, dn.main_token);
+                    var tmp: Vec<u32> = vec_new(u32, p.a);
+                    var seen: Vec<u32> = vec_new(u32, p.a);
+                    e_collect_insts_tr(p, fname, dn.main_token, &tmp, &seen, 0);
+                    e_merge_insts(p, &*out, &tmp);
+                    vec_free(u32, &seen);
+                    vec_free(u32, &tmp);
+                }
+            }
+        }
+        di = di + 1;
+    }
 }
 
 // Collect the DISTINCT concrete type-arg nodes used at calls to generic fn `fn_text` — the first arg
@@ -2727,15 +2809,37 @@ fn e_merge_insts(p: *mut Parser, out: *mut Vec<u32>, src: *Vec<u32>) -> void {
     }
 }
 
+// True when fn-identity token `tok` is already recorded in the `seen` set (linear scan).
+fn e_tok_seen(seen: *Vec<u32>, tok: u32) -> bool {
+    let n: usize = vec_len(u32, seen);
+    var i: usize = 0;
+    while i < n {
+        if vec_get(u32, seen, i) == tok {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
 // Collect the DISTINCT concrete instances of generic fn `fname` INCLUDING transitive ones: besides
 // the direct concrete call sites (`e_collect_call_insts`), any generic fn `G` that forwards its own
 // type param to `fname` contributes ALL of G's instances (recursively). This is what makes a generic
 // fn calling another generic fn — `vec_push<usize>` calling `vec_reserve(T, ..)` — instantiate
-// `vec_reserve_usize`. `depth` bounds recursion so a forwarding cycle terminates.
-fn e_collect_insts_tr(p: *mut Parser, fname: []const u8, out: *mut Vec<u32>, depth: u32) -> void {
+// `vec_reserve_usize`. `depth` bounds recursion; `seen` (fn identity tokens already expanded) breaks
+// the exponential blow-up that would otherwise arise because `e_generic_forwards_to` matches the
+// forwarded type-param by LEXEME only: when every generic fn names its type param the same (`T`/`V`),
+// the forwarding predicate becomes independent of `G`, so an un-memoized walk would recurse into
+// EVERY generic fn at EVERY level (and, with a call cycle, ~10^depth times). Expanding each fn at
+// most once makes the collection linear while producing the identical union in `out`.
+fn e_collect_insts_tr(p: *mut Parser, fname: []const u8, self_tok: u32, out: *mut Vec<u32>, seen: *mut Vec<u32>, depth: u32) -> void {
     if depth > 8 {
         return;
     }
+    if e_tok_seen(&*seen, self_tok) {
+        return; // already expanded on this collection — its contribution is already in `out`
+    }
+    vec_push(u32, seen, self_tok);
     // Direct concrete call sites.
     e_collect_call_insts(p, fname, &*out);
     // Transitive: each generic fn template G whose body forwards its type param to `fname`.
@@ -2760,7 +2864,7 @@ fn e_collect_insts_tr(p: *mut Parser, fname: []const u8, out: *mut Vec<u32>, dep
                     let fwd: bool = e_generic_forwards_to(p, fname, tplex);
                     if fwd {
                         var tmp: Vec<u32> = vec_new(u32, p.a);
-                        e_collect_insts_tr(p, gname, &tmp, depth + 1);
+                        e_collect_insts_tr(p, gname, dn.main_token, &tmp, &*seen, depth + 1);
                         e_merge_insts(p, &*out, &tmp);
                         vec_free(u32, &tmp);
                     }
@@ -3221,7 +3325,9 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
             if generic2 {
                 let fname: []const u8 = e_tok_text(p, gpdn.main_token);
                 var pinsts: Vec<u32> = vec_new(u32, p.a);
-                e_collect_insts_tr(p, fname, &pinsts, 0);
+                var pseen: Vec<u32> = vec_new(u32, p.a);
+                e_collect_insts_tr(p, fname, gpdn.main_token, &pinsts, &pseen, 0);
+                vec_free(u32, &pseen);
                 let pn2: usize = vec_len(u32, &pinsts);
                 var pj: usize = 0;
                 while pj < pn2 {
@@ -3265,7 +3371,9 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
             if generic4 {
                 let fname2: []const u8 = e_tok_text(p, gfdn.main_token);
                 var dinsts: Vec<u32> = vec_new(u32, p.a);
-                e_collect_insts_tr(p, fname2, &dinsts, 0);
+                var dseen: Vec<u32> = vec_new(u32, p.a);
+                e_collect_insts_tr(p, fname2, gfdn.main_token, &dinsts, &dseen, 0);
+                vec_free(u32, &dseen);
                 let dn2: usize = vec_len(u32, &dinsts);
                 var dj: usize = 0;
                 while dj < dn2 {

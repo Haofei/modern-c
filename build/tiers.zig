@@ -417,6 +417,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-lexself-test"));
     // selfhost-parseself-test (SELF-COMPILE LANDMARK): after adding STRUCT-type-argument monomorphization (a generic container/function instantiated at a NAMED struct type — `Vec<Node>`/`vec_push(Node, ..)` — not just scalars) plus dependency-ordered struct emission (`Parser` embedding `TokenList`/`Vec<Node>` by value emitted after them), mcc2 compiles its OWN parser selfhost/parser.mc to clang-clean C, plus a Vec<Pt> (generic container over a STRUCT element) behavioral round-trip -> clang -Werror -> run.
     m0_step.dependOn(ctx.cmd("selfhost-parseself-test"));
+    // selfhost-semaself-test (SELF-COMPILE LANDMARK, 3rd module): after adding comma-less `}`-block switch arms, a `>>`-splitting generic close (nested `raw.ptr<Entry<V>>`), a visited-set in the transitive generic-instance collector (lexeme-only type-param match otherwise blows up on hashmap's `V`-named generics + call cycle), `Entry<struct>` typedef induction, `mem.bytes_equal` builtin lowering, module-qualified `mod.fn` calls, and `_` digit-separator stripping, mcc2 compiles its OWN sema selfhost/sema.mc (instantiating `Vec`/`StrHashMap` over its own structs) to clang-clean C, plus a comma-less block switch + `StrHashMap<Rec>` (hash map over a STRUCT value) behavioral round-trip -> clang -Werror -> run.
+    m0_step.dependOn(ctx.cmd("selfhost-semaself-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).
