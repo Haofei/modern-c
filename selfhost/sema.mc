@@ -2143,7 +2143,37 @@ fn sm_check_consts(s: *mut SmState, root: u32) -> void {
     }
 }
 
-// PASS 2: check each `fn` body with a fresh per-function locals table seeded with its params.
+// Type-check one `fn_decl` body: reset the scope stack, seed the params (a `self: *mut TYPE` receiver
+// on an impl method is just an ordinary pointer param), set the return type, and check the block.
+// GENERIC templates are skipped (their `T` is abstract; deferred — see Phase 6). Shared by the
+// top-level fn pass and the impl-method pass.
+fn sm_check_one_fn(s: *mut SmState, d: u32) -> void {
+    let dn: Node = sm_node(s, d);
+    let frec: u32 = dn.lhs;
+    let params_run: u32 = sm_extra(s, frec + 1);
+    let ret_node: u32 = sm_extra(s, frec + 2);
+    let body: u32 = sm_extra(s, frec + 3);
+    let generic: bool = sm_fn_is_generic(s, params_run);
+    if generic {
+        return;
+    }
+    // Phase 4: clear the scope stack (reuse its capacity) and seed the params at fn scope.
+    sm_scope_pop(s, 0);
+    s.cur_ret = sm_type_from_node(s, ret_node);
+    let pcount: u32 = sm_extra(s, params_run);
+    var pi: u32 = 0;
+    while pi < pcount {
+        let pnode: u32 = sm_extra(s, params_run + 1 + pi);
+        let pn: Node = sm_node(s, pnode);
+        let pty: SmType = sm_type_from_node(s, pn.lhs);
+        let pname: []const u8 = sm_tok_text(s, pn.main_token);
+        sm_bind(s, pname, pty, false);
+        pi = pi + 1;
+    }
+    sm_check_block(s, body);
+}
+
+// PASS 2: check each top-level `fn` body.
 fn sm_check_fns(s: *mut SmState, root: u32) -> void {
     let rnode: Node = sm_node(s, root);
     let drun: u32 = rnode.lhs;
@@ -2153,32 +2183,34 @@ fn sm_check_fns(s: *mut SmState, root: u32) -> void {
         let d: u32 = sm_extra(s, drun + 1 + di);
         let dn: Node = sm_node(s, d);
         if dn.kind == .fn_decl {
-            let frec: u32 = dn.lhs;
-            let params_run: u32 = sm_extra(s, frec + 1);
-            let ret_node: u32 = sm_extra(s, frec + 2);
-            let body: u32 = sm_extra(s, frec + 3);
-            // P5.5: SKIP generic templates — their bodies reference the abstract type param T (which
-            // has no concrete type here), so checking is deferred to each monomorphic instantiation
-            // (not modeled in the subset). A generic call site is still arity-checked (sm_check_call).
-            let generic: bool = sm_fn_is_generic(s, params_run);
-            if generic {
-                di = di + 1;
-                continue;
+            sm_check_one_fn(s, d);
+        }
+        di = di + 1;
+    }
+}
+
+// PASS 2b (arch plan Phase 5): check the METHOD bodies inside each `impl TRAIT for TYPE` block. Each
+// method is a full `fn_decl` (its `self` is a concrete `*mut TYPE` param), so it checks exactly like a
+// top-level fn — closing the "impl method bodies are emitted but never type-checked" gap. A `self.f = v`
+// write is allowed because `self` is pointer-typed (mutation through a `*mut`, `sm_target_mutable`; G32).
+// The impl rec is [type_name_tok, methods_run] where methods_run is a run of `fn_decl` node ids.
+fn sm_check_impls(s: *mut SmState, root: u32) -> void {
+    let rnode: Node = sm_node(s, root);
+    let drun: u32 = rnode.lhs;
+    let dcount: u32 = sm_extra(s, drun);
+    var di: u32 = 0;
+    while di < dcount {
+        let d: u32 = sm_extra(s, drun + 1 + di);
+        let dn: Node = sm_node(s, d);
+        if dn.kind == .impl_decl {
+            let methods_run: u32 = sm_extra(s, dn.lhs + 1);
+            let mcount: u32 = sm_extra(s, methods_run);
+            var mi: u32 = 0;
+            while mi < mcount {
+                let m: u32 = sm_extra(s, methods_run + 1 + mi);
+                sm_check_one_fn(s, m);
+                mi = mi + 1;
             }
-            // Phase 4: clear the scope stack (reuse its capacity) and seed the params at fn scope.
-            sm_scope_pop(s, 0);
-            s.cur_ret = sm_type_from_node(s, ret_node);
-            let pcount: u32 = sm_extra(s, params_run);
-            var pi: u32 = 0;
-            while pi < pcount {
-                let pnode: u32 = sm_extra(s, params_run + 1 + pi);
-                let pn: Node = sm_node(s, pnode);
-                let pty: SmType = sm_type_from_node(s, pn.lhs);
-                let pname: []const u8 = sm_tok_text(s, pn.main_token);
-                sm_bind(s, pname, pty, false);
-                pi = pi + 1;
-            }
-            sm_check_block(s, body);
         }
         di = di + 1;
     }
@@ -2214,6 +2246,7 @@ export fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
     sm_collect(&s, root);
     sm_check_consts(&s, root);
     sm_check_fns(&s, root);
+    sm_check_impls(&s, root);
     return s;
 }
 
