@@ -816,6 +816,12 @@ fn e_find_local_in_stmt(p: *mut Parser, st: u32, name: []const u8) -> u32 {
 // deferred; see the ledger).
 fn e_base_is_slice(p: *mut Parser, base: u32) -> bool {
     let bn: Node = e_node(p, base);
+    // A `mem.as_bytes(&x)` call yields a `[]const u8` slice VALUE, so a chained `as_bytes(&g)[a..b]`
+    // / `as_bytes(&g)[i]` (P5.20, used by the mcc2 CLI loader) has a slice base too — its `.ptr`
+    // fat-pointer field is read directly off the compound literal.
+    if bn.kind == .call {
+        return e_call_is_as_bytes(p, base);
+    }
     if bn.kind != .ident_expr {
         return false;
     }
@@ -990,6 +996,11 @@ fn e_dyn_coerce(p: *mut Parser, sb: *mut StrBuf, arg: u32, dyn_type_node: u32) -
 // array base it is always a `[]const <elem>`. Precondition: base is a slice- or array-typed ident.
 fn e_emit_base_slice_name(p: *mut Parser, sb: *mut StrBuf, base: u32) -> void {
     let bn: Node = e_node(p, base);
+    // A `mem.as_bytes(&x)` call base is always a `[]const u8` (see `e_as_bytes`).
+    if bn.kind == .call {
+        sb_put_cstr(sb, "mc_slice_const_u8");
+        return;
+    }
     let name: []const u8 = e_tok_text(p, bn.main_token);
     let tn: u32 = e_local_type_node(p, name);
     let tnode: Node = e_node(p, tn);
@@ -3007,6 +3018,21 @@ fn e_const_decl(p: *mut Parser, sb: *mut StrBuf, d: u32) -> void {
     sb_put_cstr(sb, ";\n");
 }
 
+// Emit a module-level MUTABLE global: `static <ctype> NAME [= <init>];` (P5.20). Like `e_const_decl`
+// but without `const` and with an OPTIONAL initializer (rhs == 0 leaves it default/zero-initialized,
+// matching C file-scope statics — the correct shape for an `[N]u8` scratch buffer).
+fn e_global_decl(p: *mut Parser, sb: *mut StrBuf, d: u32) -> void {
+    let nd: Node = e_node(p, d);
+    let name: []const u8 = e_tok_text(p, nd.main_token);
+    sb_put_cstr(sb, "static ");
+    e_emit_decl(p, sb, nd.lhs, name);
+    if nd.rhs != 0 {
+        sb_put_cstr(sb, " = ");
+        e_expr(p, sb, nd.rhs);
+    }
+    sb_put_cstr(sb, ";\n");
+}
+
 // ----- struct emission ordering (dependency topological sort) -----
 //
 // A struct's C typedef must precede every OTHER struct that embeds it BY VALUE (C requires a complete
@@ -3306,6 +3332,12 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
         let cdn: Node = e_node(p, cd);
         if cdn.kind == .const_decl {
             e_const_decl(p, sb, cd);
+        }
+        if cdn.kind == .global_decl {
+            // Module-level `global NAME: T [= init];` -> file-scope `static T NAME [= init];` (P5.20).
+            // Emitted alongside consts: after all type typedefs (a global's type may name a struct/enum)
+            // and before fn bodies (which reference it).
+            e_global_decl(p, sb, cd);
         }
         ci = ci + 1;
     }

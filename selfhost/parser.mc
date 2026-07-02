@@ -204,6 +204,12 @@ open enum NodeKind: u32 {
                         //    `[]const u8` (a byte slice), matching the real backend. Emits the fat-
                         //    pointer slice value `((mc_slice_const_u8){ .ptr = (const uint8_t*)"..",
                         //    .len = N })` where N is the decoded byte count (escapes count as 1).
+    global_decl,        // 80 module-level `global NAME: T [= <init>];` (P5.20, needed by the mcc2 CLI
+                        //    driver selfhost/main.mc): a MUTABLE file-scope variable. main_token = the
+                        //    NAME token; lhs = the declared TYPE node (required — no inference); rhs =
+                        //    the OPTIONAL initializer expr (0 = none). Emits a file-scope `static T NAME
+                        //    [= <init>];` (mutable, unlike `const_decl`'s `static const`). Registered as
+                        //    a global so uses of NAME resolve to type T, and writes to it are allowed.
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -649,6 +655,14 @@ fn tok_is_move(p: *mut Parser, tok: u32) -> bool {
     let lex: []const u8 = tok_lexeme(p, tok);
 
     return mem_eql(lex, "move");
+}
+
+// `global` introduces a module-level MUTABLE variable, lexed as a plain identifier (not a keyword) —
+// like `import`/`trait`/`impl`/`opaque`. Recognized by lexeme at the top of `parse_decl`.
+fn tok_is_global(p: *mut Parser, tok: u32) -> bool {
+    let lex: []const u8 = tok_lexeme(p, tok);
+
+    return mem_eql(lex, "global");
 }
 
 // raw_op := `raw` `.` (`ptr`|`load`|`store`) `<` Type `>` `(` Expr (`,` Expr)? `)`  (P5.8). The
@@ -1586,6 +1600,23 @@ fn parse_const(p: *mut Parser) -> u32 {
     return add_node(p, .const_decl, cname, cty, cinit);
 }
 
+// global := `global` IDENT `:` Type (`=` Expr)? `;` — a module-level MUTABLE variable (P5.20). The
+// declared type is required (no inference in the subset); the initializer is optional (an array
+// global like `[N]u8` is left uninitialized/zero, matching C file-scope statics).
+fn parse_global(p: *mut Parser) -> u32 {
+    p_advance(p); // `global`
+    let gname: u32 = p.tok as u32;
+    expect(p, .identifier);
+    expect(p, .colon);
+    let gty: u32 = parse_type(p);
+    var ginit: u32 = 0;
+    if eat(p, .equal) {
+        ginit = parse_expr(p, 0);
+    }
+    expect(p, .semicolon);
+    return add_node(p, .global_decl, gname, gty, ginit);
+}
+
 fn parse_decl(p: *mut Parser) -> u32 {
     // A leading `import "..."` is the module directive (an identifier `import`, not a keyword).
     if at(p, .identifier) {
@@ -1599,6 +1630,10 @@ fn parse_decl(p: *mut Parser) -> u32 {
         }
         if tok_is_impl(p, p.tok as u32) {
             return parse_impl(p);
+        }
+        // `global NAME: T [= init];` — a module-level mutable variable (P5.20).
+        if tok_is_global(p, p.tok as u32) {
+            return parse_global(p);
         }
     }
     // `extern "C" fn NAME(...) -> RET;` — a bodyless C-symbol prototype (P5.8).

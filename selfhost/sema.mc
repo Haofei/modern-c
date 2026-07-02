@@ -1053,6 +1053,12 @@ fn sm_target_mutable(s: *mut SmState, node: u32) -> bool {
                 return true;
             }
         }
+        // A module-level `global` is mutable state (see parser `global_decl`) — writes through it
+        // (whole-variable, `[i]`, or `.f`) are allowed.
+        let is_global2: bool = strmap_contains(SmType, &s.globals, name);
+        if is_global2 {
+            return true;
+        }
         return false;
     }
     if nd.kind == .deref {
@@ -1757,6 +1763,13 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let cname: []const u8 = sm_tok_text(s, dn.main_token);
             strmap_put(SmType, &s.globals, cname, cty);
         }
+        if dn.kind == .global_decl {
+            // Module-level `global NAME: T [= ..]` — register NAME as a mutable global of the declared
+            // type T so every use resolves and writes are allowed. Init (if any) checked in a later pass.
+            let gty: SmType = sm_type_from_node(s, dn.lhs);
+            let gname: []const u8 = sm_tok_text(s, dn.main_token);
+            strmap_put(SmType, &s.globals, gname, gty);
+        }
         if dn.kind == .struct_gdecl {
             // Generic struct rec [tparam_tok, fields_run, exported]; register the template by name
             // with its fields (field types may reference the abstract type param T).
@@ -1902,6 +1915,18 @@ fn sm_check_consts(s: *mut SmState, root: u32) -> void {
             let matched: bool = sm_types_match(s, decl_ty, init_ty);
             if !matched {
                 sm_err(s, .type_mismatch);
+            }
+        }
+        if dn.kind == .global_decl {
+            // A `global NAME: T = init` initializer (rhs != 0) is a constant expression like a const's;
+            // type-check it against T. An array/uninitialized global (rhs == 0) has nothing to check.
+            if dn.rhs != 0 {
+                let gdecl_ty: SmType = sm_type_from_node(s, dn.lhs);
+                let ginit_ty: SmType = sm_type_of_expr(s, dn.rhs);
+                let gmatched: bool = sm_types_match(s, gdecl_ty, ginit_ty);
+                if !gmatched {
+                    sm_err(s, .type_mismatch);
+                }
             }
         }
         di = di + 1;
