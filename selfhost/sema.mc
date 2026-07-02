@@ -211,6 +211,7 @@ struct SmState {
     tmethods: Vec<SmTraitMethod>, // P5.10: all trait methods (scanned linearly for dyn dispatch)
     facts: Vec<Fact>,          // arch plan Phase 1: per-node typed facts, indexed by AST node id
     cur_ret: SmType,
+    lenient: u32,              // Phase 6: 1 while checking a generic template body (see sm_err)
     err_count: u32,
     first_err: SmErr,
 }
@@ -433,6 +434,19 @@ fn sm_is_num_raw(r: u32) -> bool {
 
 // Record an error, remembering the first code (the parser uses the same first-wins convention).
 fn sm_err(s: *mut SmState, code: SmErr) -> void {
+    // Arch plan Phase 6: while checking a GENERIC template body the type param `T` is abstract, so
+    // type-shaped diagnostics (mismatch / unknown-field / not-a-struct / …) are unreliable and are
+    // SUPPRESSED. Only name resolution (`unknown_name` = 1) and arity (`arg_count` = 2) stay live —
+    // they are decidable without knowing T, and catch the real "undefined call in a generic body"
+    // class. (Concrete per-instantiation type-checking is out of scope; monomorph-at-emit is unchanged.)
+    if s.lenient == 1 {
+        let c: u32 = code.raw();
+        if c != 1 {
+            if c != 2 {
+                return;
+            }
+        }
+    }
     if s.err_count == 0 {
         s.first_err = code;
     }
@@ -841,6 +855,15 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
             sm_walk_args(s, args_run, argc);
             return sm_slice(sm_ty(.u8_), 0);
         }
+        // `mem.bytes_equal(a, b)` is a compiler-recognized builtin (byte-slice equality), lowered to
+        // `mem_eql` by the emitter. Match it syntactically here (callee `.bytes_equal`, 2 args) so a
+        // generic body that uses it — e.g. `strmap_probe` — resolves without treating the `mem` module
+        // qualifier as a value (which would spuriously report an unknown name; arch plan Phase 6).
+        let is_beq: bool = mem_eql(cfname, "bytes_equal");
+        if is_beq && argc == 2 {
+            sm_walk_args(s, args_run, argc);
+            return sm_ty(.bool_);
+        }
     }
     if cnode.kind == .field {
         let fname: []const u8 = sm_tok_text(s, cnode.main_token);
@@ -881,6 +904,15 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
     if is_phys && argc == 1 {
         sm_walk_args(s, args_run, argc);
         return sm_ty(.usize_);
+    }
+    // `forget_unchecked(x)` builtin (move-semantics husk): consumes a linear value without running its
+    // destructor — not a user fn, so it is NOT in `s.fns`. Walk the arg; the result is `void`. Recognized
+    // here so checking a generic body that consumes a handle (e.g. `own_free`) does not spuriously report
+    // an unknown name (arch plan Phase 6). Emit lowers it to a no-op husk.
+    let is_forget: bool = mem_eql(name, "forget_unchecked");
+    if is_forget && argc == 1 {
+        sm_walk_args(s, args_run, argc);
+        return sm_ty(.void_);
     }
     // `ok(x)` / `err(x)` Result constructors: builtins (like `phys`), not user fns. They yield a LOOSE
     // `result_` that unifies with the target Result type (return/let annotation). A plain-expr arg is
@@ -2145,8 +2177,13 @@ fn sm_check_consts(s: *mut SmState, root: u32) -> void {
 
 // Type-check one `fn_decl` body: reset the scope stack, seed the params (a `self: *mut TYPE` receiver
 // on an impl method is just an ordinary pointer param), set the return type, and check the block.
-// GENERIC templates are skipped (their `T` is abstract; deferred — see Phase 6). Shared by the
-// top-level fn pass and the impl-method pass.
+// Shared by the top-level fn pass and the impl-method pass.
+//
+// GENERIC templates (arch plan Phase 6): checked in LENIENT mode. The type param `T` is abstract, so a
+// `comptime T: type` param is bound as `unknown` (its uses as a value — e.g. the leading type-arg of a
+// generic call `vec_get(T, ..)` — then resolve without an unknown-name error) and `sm_err` suppresses
+// type-shaped diagnostics (see it). This still catches undefined calls and arity errors in the body
+// (the reviewer's "generic body emits no_such_fn" class) without concrete per-instantiation checking.
 fn sm_check_one_fn(s: *mut SmState, d: u32) -> void {
     let dn: Node = sm_node(s, d);
     let frec: u32 = dn.lhs;
@@ -2154,9 +2191,6 @@ fn sm_check_one_fn(s: *mut SmState, d: u32) -> void {
     let ret_node: u32 = sm_extra(s, frec + 2);
     let body: u32 = sm_extra(s, frec + 3);
     let generic: bool = sm_fn_is_generic(s, params_run);
-    if generic {
-        return;
-    }
     // Phase 4: clear the scope stack (reuse its capacity) and seed the params at fn scope.
     sm_scope_pop(s, 0);
     s.cur_ret = sm_type_from_node(s, ret_node);
@@ -2165,12 +2199,22 @@ fn sm_check_one_fn(s: *mut SmState, d: u32) -> void {
     while pi < pcount {
         let pnode: u32 = sm_extra(s, params_run + 1 + pi);
         let pn: Node = sm_node(s, pnode);
-        let pty: SmType = sm_type_from_node(s, pn.lhs);
         let pname: []const u8 = sm_tok_text(s, pn.main_token);
-        sm_bind(s, pname, pty, false);
+        // A `comptime T: type` param (rhs == 1) is a TYPE, bound abstractly (`unknown`) so its value
+        // uses resolve; every other param takes its declared type (which may itself mention `T`).
+        if pn.rhs == 1 {
+            sm_bind(s, pname, sm_ty_unknown(), false);
+        } else {
+            let pty: SmType = sm_type_from_node(s, pn.lhs);
+            sm_bind(s, pname, pty, false);
+        }
         pi = pi + 1;
     }
+    if generic {
+        s.lenient = 1;
+    }
     sm_check_block(s, body);
+    s.lenient = 0;
 }
 
 // PASS 2: check each top-level `fn` body.
@@ -2238,6 +2282,7 @@ export fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
         .tmethods = vec_new(SmTraitMethod, a),
         .facts = vec_new(Fact, a),
         .cur_ret = sm_ty_unknown(),
+        .lenient = 0,
         .err_count = 0,
         .first_err = .none,
     };
