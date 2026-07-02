@@ -597,8 +597,8 @@ output of the stress test.
 | G6 | design (NOT a language gap) | Pointer-recursive structs DO work — `struct Node { next: *mut Node, value: u32 }` lowers to a forward-declared `typedef struct Node Node;` + `struct Node *next;` (`src/lower_c_emitter.zig:792`). Design note only: **prefer an index-arena AST** for scale/ownership, not because MC can't express pointer recursion. | verified emit; emitter:792 | note | n/a |
 | G9 | stdlib/API | `Allocator` trait exposes only `alloc`/`free` — **no `realloc`/`try_alloc`** (`std/alloc/alloc.mc:13`). `heap_try_grow_in_place` exists but is not in the trait. | std/alloc/alloc.mc:13 | medium | **decided** — growth is allocate-copy-free (no trait change); capacity doubling gives amortized O(1). |
 | G10 | toolchain | `mcc-cc.sh` compiles emitted C with `-Werror=unused-parameter`, so every trait-impl method must reference all params (an allocator ignoring `align`/`self`). Idiom: a cheap validating `unreachable` guard, as `arena_free_noop` does. | vec spike | low | workaround |
-| G7 | ergonomics | No labeled break/continue | spec §11 | low | open |
-| G8 | ergonomics | `?` needs matching return type (no error-set auto-coerce like Zig `try`) | spec | low (watch) | open |
+| G7 | ergonomics | No labeled break/continue | spec §11 | low | **open — DESIGN-GATED.** Verified 2026-07-02: MC has NO loop labels (the AST `loop.label` is the for-binding variable, not a break target) and the spec does not define `break :label` syntax. Implementing it is a new-language-feature decision (label syntax + scoping), not a mechanical fix — needs a design call before coding. |
+| G8 | ergonomics | `?` needs matching return type (no error-set auto-coerce like Zig `try`) | spec | low (watch) | **open — DESIGN-GATED.** Verified 2026-07-02: MC has NO error sets (single-`E` `Result<T,E>`); coercing `?`'s error `E1`→`E2` across a function boundary needs a conversion mechanism (a `From`/`Into`-style trait or explicit map) that the spec does not define. A design decision, not a bug fix. |
 
 ### Discovered during execution (Phase 0, 2026-07-01)
 
