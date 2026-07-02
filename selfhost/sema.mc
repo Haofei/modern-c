@@ -97,7 +97,8 @@ open enum SmErr: u32 {
     array_length,         // 15 array-literal element count != the target `[N]T`'s N
     array_target,         // 16 array literal `.{...}` used where no `[N]T` target type is known
     // ----- appended (keep prior ordinals stable) -----
-    duplicate_decl,       // 17 two top-level declarations share a name (fn/extern-fn)
+    duplicate_decl,       // 17 two declarations share a name: any two top-level decls (fn/extern-fn/
+                          //    struct/enum/trait/const/global, across kinds) or two methods in one trait
 }
 
 // A resolved type. Copyable (all scalar fields), so it stores freely in `Vec`/`StrHashMap`.
@@ -1948,8 +1949,9 @@ fn sm_check_block(s: *mut SmState, block: u32) -> void {
 // ----- module driver (two passes) -----
 
 // Whether `name` is already claimed by ANY top-level declaration — a fn/extern-fn, a struct, an enum,
-// or a const/global. MC has ONE flat top-level namespace (G22), but sema keeps four tables; checking
-// all of them at each registration catches cross-namespace collisions (e.g. `struct S` + `fn S`), which
+// a trait, or a const/global. MC has ONE flat top-level namespace (G22), but sema keeps five tables;
+// checking all of them at each registration catches cross-namespace collisions (e.g. `struct S` + `fn S`
+// or `trait T` + `fn T`), which
 // otherwise pass sema (per-table) yet emit C that clang rejects ("redefinition as a different kind of
 // symbol"). Collect runs in source order, so this catches a clash in either declaration order.
 fn sm_toplevel_taken(s: *mut SmState, name: []const u8) -> bool {
