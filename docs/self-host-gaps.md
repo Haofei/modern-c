@@ -28,19 +28,24 @@ compiler uses value-optionals and `[]const u8` on nearly every line, so both lik
 proper compiler fix (candidate Phase 0.6) before the P1–P5 port, rather than per-site workarounds.
 
 > **⚠️ STATUS SUPERSEDED (2026-07-01+). The per-row `Status` cells below record DISCOVERY-time state.**
-> The follow-up program ([`language-gap-fixes.md`](language-gap-fixes.md)) **FIXED 13 of these in the real
-> compiler, both backends, m0-green**: **G11, G12, G14, G16, G18, G19, G20, G22, G23, G24, G25, G27, G30**
-> (each row below is annotated). `G29` is **by-design** (Linux hosted target). NON-GAPS (misprofiled, no
-> fix needed): `match`, `?T`-not-needed-for-selfhost, and the broad "no Hash/Eq bounds" (bounds work via
-> `where`+UFCS — only Self-in-param, = G16, was a real gap). Genuinely-still-open real-compiler gaps are
-> only the two low ergonomic ones in the pre-seeded table: **G7** (labeled break/continue) and **G8** (`?`
-> error-set coercion). The `G28`/`G31`–`G35` rows carry their own current status inline.
+> The follow-up program ([`language-gap-fixes.md`](language-gap-fixes.md)) **fixed most of these in the real
+> compiler, both backends, m0-green.** FULLY FIXED: **G11, G12, G14, G16, G18, G19, G20, G22, G24, G25, G27,
+> G30** (each row below is annotated). `G29` is **by-design** (Linux hosted target). NON-GAPS (misprofiled,
+> no fix needed): `match`, `?T`-not-needed-for-selfhost, and the broad "no Hash/Eq bounds" (bounds work via
+> `where`+UFCS — only Self-in-param, = G16, was a real gap).
+>
+> **Genuinely-still-open real-compiler gaps** (verified 2026-07-02): **G7** (labeled break/continue) and
+> **G8** (`?` error-set coercion) — both low ergonomics; plus two PARTIAL codegen residuals: **G23** (a typed
+> `let bool = <closed-enum>.raw() == N` still `UnsupportedCEmission`; the `<call>==<call>` and open-enum
+> cases were fixed) and **G13** (a struct-FIELD base sub-slice `sp.s[a..b]` still fails; re-slice /
+> `mem.as_bytes` base / complex endpoints were fixed). `G13`/`G15`/`G26` also retain usable workarounds. The
+> `G28`/`G31`–`G35` rows carry their own current status inline.
 
 | ID | Phase | Area | Gap | Repro / root cause | Severity | Status |
 |----|-------|------|-----|--------------------|----------|--------|
 | G11 | 0.2/0.5 | language | **Value optionals `?V` are not expressible** — only pointer-shaped optionals work (`?*T`, `?*dyn`, `?c_void*`). `?usize`/`?[]const u8`/`?u32` can be declared & `return null`'d but NO consumer form accepts them: `if let` → `E_IF_LET_OPTIONAL_REQUIRED`; `== null` → `E_NO_IMPLICIT_CONVERSION`; `switch` → `E_SWITCH_RESULT_TAG`. So a value optional is write-only. | `src/sema_type.zig` `isNullableValue()` admits only nullable pointers; `classifyNullableType()` → `.unknown` for value types | **high** | ~~workaround~~ **FIXED (real compiler, language-gap-fixes.md)** — value optionals `?T` implemented with a tagged `{present,value}` repr; `if let` / `== null` / `switch` all accept them. Was: result structs / `?*mut V` / sentinel. |
 | G12 | 0.3/0.4/0.5 | language/codegen | **`[]const u8` slice support is half-implemented.** (a) string literals are `*const u8`, NOT `[]const u8` — `let s: []const u8 = "hi"` type-checks but `emit-c` → `UnsupportedCEmission` (`ast_query.isStringLiteralTarget`). (b) cannot construct a slice from raw ptr+len (no slice-from-parts); struct-literal to a slice type → `E_RETURN_TYPE_MISMATCH`. (c) `[]mut u8` → `[]const u8`: implicit → `E_NO_IMPLICIT_POINTER_CONVERSION`, explicit `as` → emits undeclared `mc_slice_mut_u8` / `E_REPRESENTATION_CHECK_MISSING`. (d) **soundness hole:** `pa_value(p) as []const u8` passes the checker but emits invalid C (casts the scalar, drops the length). | multiple 5-line probes (0.3/0.5 reports) | **high** | ~~workaround~~ **FIXED (real compiler, language-gap-fixes.md)** — string-literal→`[]const u8`, `[]mut`→`[]const` coercion, and the `x as []const u8` SOUNDNESS hole all closed (the illegal scalar-as-slice cast now errors `E_ILLEGAL_SLICE_CAST`). Was: `mem.as_bytes(&arr)` / `ByteReader`. |
-| G13 | 0.5 | codegen | **Sub-slicing `base[a..b]` only lowers when `base` is a plain local/param of slice type.** A struct-field base (`sp.s[a..b]`), a re-slice, or a `mem.as_bytes(...)` result base → `exprSourceTypeForEmission`→null→`UnsupportedCEmission`. Also range endpoints must be simple operands (`hay[start..start+n]` fails; precompute `end`). | 0.5 `sn.mc` probe | medium | workaround (copy base to a local first) |
+| G13 | 0.5 | codegen | **Sub-slicing `base[a..b]` only lowers when `base` is a plain local/param of slice type.** A struct-field base (`sp.s[a..b]`), a re-slice, or a `mem.as_bytes(...)` result base → `exprSourceTypeForEmission`→null→`UnsupportedCEmission`. Also range endpoints must be simple operands (`hay[start..start+n]` fails; precompute `end`). | 0.5 `sn.mc` probe | medium | **PARTIALLY FIXED (verified 2026-07-02).** Re-slice, a `mem.as_bytes(&a)[a..b]` base, and complex endpoints (`s[start..start+1]`) now compile. **STILL OPEN:** a struct-FIELD base `sp.s[a..b]` → `UnsupportedCEmission` (`exprSourceTypeForEmission` returns null). Workaround: copy the field to a local slice first. |
 | G14 | 0.2 | soundness/analysis | **Escape analysis over-rejects returning `&field` reached through a heap pointer** (`return &slot.val` where `slot: *mut Entry`) → `E_LOCAL_ADDRESS_ESCAPE`, even though the storage is heap. | 0.2 report | medium | ~~workaround~~ **FIXED (real compiler, language-gap-fixes.md)** — escape analysis now allows returning a pointer-rooted `&field` (heap-reached), so `return &slot.val` is accepted. |
 | G15 | 0.2 | stdlib | **No `wrapping_mul_u32`** in `std/math.mc` (has wrapping add/sub/shl). FNV-1a needs mod-2³² multiply; `*` is checked and traps. Cross-domain `wrap<u32>`↔checked needs explicit conversions both ways (`E_NO_IMPLICIT_CONVERSION`). | 0.2 report | low | workaround (u64 product + truncate). Candidate: add `wrapping_mul_u32`. |
 | G16 | 0.2 | language | **No `Hash`/`Eq` trait bounds** usable on a comptime-generic value → a fully-generic `HashMap<K,V>` can't hash/compare an arbitrary `K`. String-keyed only for v0. | 0.2 report | medium | ~~open~~ **FIXED (real compiler, language-gap-fixes.md)** — trait bounds on a generic `K` work via `where K: Trait` + UFCS `K.method(x)`; the real gap was `Self` in a non-receiver param position, now supported. (The broad "no bounds" framing was misprofiled.) |
@@ -52,7 +57,7 @@ proper compiler fix (candidate Phase 0.6) before the P1–P5 port, rather than p
 | — | P1 | correction | NOT gaps: `std/ascii.mc` DOES export `is_digit`/`is_alpha`/`is_whitespace`/… (usable directly); char literals `'f'`/`'\n'`/`'\''` work as `u8` incl. in `[N]u8` initializers. | — | — | n/a |
 
 | G22 | P2 | language/modules | **Flat cross-import top-level namespace** — `import` pulls ALL top-level fn names (incl. non-`export`) into one shared flat namespace; no module qualification at use sites, no overloading. `parser.mc`'s private `fn advance(p:*mut Parser)` collided with `lexer.mc`'s private `fn advance(lx:*mut Lexer)` → `E_DUPLICATE_DECLARATION`. Real scaling hazard: lexer+parser+sema+lowering all want `advance`/`peek`/`expect`/`make`. | two imported files each `fn advance(...)` | **medium-high** | ~~workaround~~ **FIXED (real compiler, language-gap-fixes.md)** — file-private names no longer collide across imports (new `src/mangle_private.zig` renames non-`export` names `name__mcpN`). (Use-site module qualification is a separate, still-open production nicety — see the arch verdict.) |
-| G23 | P2 | codegen | **C backend can't emit `return <call> == <call>`** — `sequencedConditionOperandTypes` (`lower_c_flow.zig:391`) can't recover the operand type when BOTH comparison operands are call exprs → `UnsupportedCEmission`. | `fn at(p,k)->bool{ return cur(p)==k.raw(); }` | medium | ~~workaround~~ **FIXED (real compiler, language-gap-fixes.md)** — `<call> == <call>` (and typed-`let bool` compares) emit correctly in value contexts now. |
+| G23 | P2 | codegen | **C backend can't emit `return <call> == <call>`** — `sequencedConditionOperandTypes` (`lower_c_flow.zig:391`) can't recover the operand type when BOTH comparison operands are call exprs → `UnsupportedCEmission`. | `fn at(p,k)->bool{ return cur(p)==k.raw(); }` | medium | **PARTIALLY FIXED (real compiler, language-gap-fixes.md).** `<call> == <call>` in `return`, and `let b: bool = <OPEN-enum>.raw() == N`, now emit. **STILL FAILS:** `let b: bool = <CLOSED-enum>.raw() == N` → `UnsupportedCEmission` (`left_ty orelse …`, `lower_c_flow.zig`) — the operand type can't be recovered for a closed-enum `.raw()` in a typed-`let bool` (the G25 fix made closed-enum `.raw()` legal but exposed this residual). Workaround unchanged: bind the `.raw()` operand to a `u32` local first. |
 
 | G24 | P3 | language | **Reserved keywords steal common local names** — `ok`, `err`, `type`, `use`, `open`, `sat`, `wrap` are keywords (the lexer emits `kw_ok`/`kw_err` for Result sugar etc.), so `let ok: bool = ...` → `expected local name`. A compiler port's own vocabulary overlaps MC keywords. | `let ok: u32 = 1;` → parse error | low-medium | ~~workaround~~ **FIXED (real compiler, language-gap-fixes.md)** — reserved words usable as contextual-keyword identifiers (`ok`/`err`/`type`/`use`/…) where a name is expected. |
 | G25 | P3 | language | **`.raw()` and switch-exhaustiveness are mutually exclusive for enums.** An `open enum` supports `.raw()` (needed for ordinal access / driver assertions, G21) but its `switch` REQUIRES a `_ =>` default → the compiler gives ZERO missing-case diagnostics. A closed enum gives exhaustiveness but rejects `.raw()`/`as`. A compiler AST enum wants BOTH. | `switch openEnumVal {...}` forces `_` | **medium** | ~~open~~ **FIXED (real compiler, language-gap-fixes.md)** — a closed enum now supports `.raw()` (+`as`), so exhaustiveness and ordinal access are no longer mutually exclusive. |
@@ -71,6 +76,11 @@ Big string-building is still ~2–3× the Zig emitter (no `writer.print`/format 
 fragment). **G25 is AVOIDABLE**: the emitter used `if/else` chains on `nd.kind == .variant` (works on
 imported `open enum`) + a contiguous-ordinal range check for the 13 bin-ops, sidestepping the
 exhaustiveness/`.raw()` tension entirely.
+
+**⚠️ SUPERSEDED SNAPSHOT (P5.0-era; kept for history). ALL of this list was subsequently implemented** —
+mcc2 self-hosts (gate `selfhost-bootstrap-test`); its parser handles keyword scalar types, `var`, structs/
+enums/generics/slices/`switch`/`unsafe`/`raw`/imports, etc. Read the paragraph below as a P5-start to-do, not
+current state.
 
 **P5 self-compile gap list (what the subset compiler CANNOT yet handle — the remaining front-end work):**
 `bool`/`void` as parseable type annotations (they're keywords; `parse_type` takes only identifiers);
@@ -152,7 +162,7 @@ then fully closed G28 (switch-arm case labels + assign now resolve via facts —
 (all decl kinds + cross-namespace + traits). Residual: the subset can't put a regular fn call in a generic
 body (monomorphizer limit), so Phase 6's catch is undefined idents/arity, not undefined calls.
 | G33 | post-P5 | selfhost-sema | **Duplicate top-level declaration accepted** — `sm_collect` overwrote the symbol-table entry, so a repeated top-level name type-checked (exit 0) and the emitter output duplicate C definitions. Found across four review passes (fn-only → same-kind struct/const/global/enum → cross-namespace → traits). | `fn f`×2 / `struct S`+`fn S` / `const X`+`fn X` / `enum Y`+`struct Y` / `trait T`×2 / `trait T`+`fn T` → dup C; `trait T { fn m; fn m; }` → dup vtable field | ~~medium~~ **FIXED (all kinds + cross-namespace + traits)** | every top-level registration in collect calls `sm_toplevel_taken(name)`, which checks ALL FIVE tables (`fns`/`structs`/`enums`/`traits`/`globals`); trait names now register in `s.traits`; a clash in either declaration order emits `duplicate_decl` (SmErr 17). Method names are also deduped WITHIN each trait. MC has one flat top-level namespace (G22), so this matches the language. |
-| G34 | post-P5 | selfhost-sema | **`if let` binding leaked past its block** — the payload binding was added to the fn-wide locals table and never removed, so a use *after* the `if`/`else` type-checked (exit 0) and emitted C referencing a variable out of its C block scope (invalid C). Found by review. Same for `if let ok(v)/err(e)`. | `if let y=o {} return y;` | ~~high~~ **FIXED** | new `strmap_del` (backward-shift deletion, `std/collections/hashmap.mc`) drops the binding when the then-block ends |
+| G34 | post-P5 | selfhost-sema | **`if let` binding leaked past its block** — the payload binding was added to the fn-wide locals table and never removed, so a use *after* the `if`/`else` type-checked (exit 0) and emitted C referencing a variable out of its C block scope (invalid C). Found by review. Same for `if let ok(v)/err(e)`. | `if let y=o {} return y;` | ~~high~~ **FIXED** | Originally: a new `strmap_del` dropped the binding at the then-block's end. SUPERSEDED by arch Phase 4 — sema now uses a lexical SCOPE STACK (`sm_scope_mark`/`sm_scope_pop` around the then-block, `selfhost/sema.mc`), so the `if let` binding (and any block-local `let`) is out of scope after the block. `strmap_del` is no longer used by sema. |
 | G35 | post-P5 | selfhost-sema | **`ok(x)`/`err(x)` payload type unchecked** — the ctor yielded a LOOSE `result_` that unified with any target `Result<T,E>` without comparing the payload, so `return ok(true)` into `-> Result<u32,u32>` type-checked (exit 0). Found by review. | `ok(true)` into `Result<u32,u32>` | ~~medium~~ **FIXED** | `sm_check_result_ctor` checks a non-literal `ok`/`err` arg against the target's OK/ERR payload at `return` and typed `let`/`var` sites |
 
 **P5.10 traits:** representation matches the real backend — rodata `static const NAME__vtable`, fat pointer
@@ -185,9 +195,10 @@ boundary). Files > the fixed buffer are rejected, not truncated. G22 also bit as
 **discard a must-handle `Result` via `if let err(e) = expr {}`** (no `let _ = expr;` statement discard,
 G26-exempt); Result has no `is_ok`/`unwrap` — use `if let ok(v) = ...` or `?` propagation.
 
-**P3 subset-grammar gaps to widen before P4/P5:** the P2 parser's `parse_type` accepts only `.identifier`
-(so keyword-types `bool`/`void`/`u32`… as annotations don't parse — they arise only internally), and there
-is no `var` (only immutable `let`). Both must be added for the parser to accept real mcc2 source at P5.
+**P3 subset-grammar gaps to widen before P4/P5 (⚠️ SUPERSEDED — both since DONE):** the P2 parser's
+`parse_type` accepted only `.identifier` (keyword-types `bool`/`void`/`u32`… didn't parse) and there was no
+`var`. Both were subsequently added — the parser now accepts keyword scalar types (`selfhost/parser.mc`
+`parse_type`) and `var` decls (`selfhost/parser.mc`), as required for real mcc2 source at P5.
 
 **G20 refined (P2):** *nested* if/else branches CAN reuse a `let` name, but *sequential* sibling blocks
 at the same fn level cannot (`E_DUPLICATE_LOCAL`). Safe rule: **every `let`/`var` unique per function.**
