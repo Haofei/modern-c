@@ -3567,10 +3567,22 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
 // Lex + parse + emit: run the full front end over `source` and return a `StrBuf` owning the
 // emitted C bytes. The caller reads the bytes back (sb_len/sb_byte) and frees the buffer with
 // sb_free. `a` backs both the (internally freed) parser arena and the returned buffer.
+// Emit C for an ALREADY-PARSED module (arch plan Phase 0): the caller owns `p` (parse once, share it
+// across sema+emit) and frees it. Does NOT parse and does NOT free `p` — that is the whole point, so
+// `mcc2` parses the input a SINGLE time instead of once for sema and again for emit. `a` backs the
+// returned StrBuf only. Reads the AST arena read-only (aside from the scratch monomorph/`cur_fn`
+// fields on `p`, which are the emitter's own transient state).
+export fn emit_c_on(p: *mut Parser, a: *mut dyn Allocator) -> StrBuf {
+    var sb: StrBuf = sb_new(a);
+    e_module(p, &sb);
+    return sb;
+}
+
+// Convenience entry that parses `source` itself, emits, and frees the parse — kept for the standalone
+// emit gates (tests/toolchain/selfhost_emit_user.mc). The unified `mcc2` pipeline uses `emit_c_on`.
 export fn emit_c_run(source: []const u8, a: *mut dyn Allocator) -> StrBuf {
     var p: Parser = parser_run(source, a);
-    var sb: StrBuf = sb_new(a);
-    e_module(&p, &sb);
+    var sb: StrBuf = emit_c_on(&p, a);
     parser_free(&p);
     return sb;
 }

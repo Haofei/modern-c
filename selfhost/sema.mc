@@ -2092,6 +2092,13 @@ export fn sema_parse_err_count(s: *SmState) -> u32 {
     return parser_err_count(&s.p);
 }
 
+// Borrow the parser (and its AST arena) that sema already built (arch plan Phase 0). Lets the caller
+// hand sema's SINGLE parse straight to `emit_c_on` instead of re-parsing the source. Valid until
+// `sema_free`; do not free through it.
+export fn sema_parser(s: *mut SmState) -> *mut Parser {
+    return &s.p;
+}
+
 // Release the parser arena and all symbol tables. Call exactly once when done.
 export fn sema_free(s: *mut SmState) -> void {
     strmap_free(SmType, &s.locals);

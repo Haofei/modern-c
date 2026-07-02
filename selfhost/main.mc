@@ -386,11 +386,12 @@ export fn mc_main() -> i32 {
 
     // Sema pass first: report (but do not hard-fail on) type errors, then still emit — a subset
     // "best effort" so the perf harness always produces C to measure. Parse errors are surfaced too.
+    // Arch plan Phase 0: parse the input a SINGLE time — `sema_check` owns that parse, and emit reuses
+    // it via `sema_parser`/`emit_c_on` instead of re-parsing. `st` (and its parse) is freed after emit.
     var ma: MallocAlloc = .{ .count = 0 };
     var st: SmState = sema_check(src, &ma);
     let perr: u32 = sema_parse_err_count(&st);
     let serr: u32 = sema_err_count(&st);
-    sema_free(&st);
     if perr != 0 {
         mc_emsg(stderr_fd(), "mcc2: parse errors in input\n");
     }
@@ -398,14 +399,15 @@ export fn mc_main() -> i32 {
         mc_emsg(stderr_fd(), "mcc2: semantic errors in input\n");
     }
 
-    // Emit: run lex -> parse -> emit and flush the whole StrBuf to stdout in one write.
+    // Emit from the SAME parsed AST sema built, then flush the whole StrBuf to stdout in one write.
     var mb: MallocAlloc = .{ .count = 0 };
-    var sb: StrBuf = emit_c_run(src, &mb);
+    var sb: StrBuf = emit_c_on(sema_parser(&st), &mb);
     let len: usize = sb_len(&sb);
     if len != 0 {
         if let err(e) = io_write(stdout_fd(), sb_ptr(&sb), len) {}
     }
     sb_free(&sb);
+    sema_free(&st);
 
     // Emission is best-effort (C is still written above so a perf/inspection caller gets output),
     // but the EXIT CODE must reflect validity so CI/scripts reject bad input: nonzero on ANY
