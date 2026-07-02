@@ -1,6 +1,13 @@
 # mcc2 architecture hardening — from a 3-pass re-walker to a typed pipeline
 
-**Status:** PLAN (2026-07-02). Not started. Prerequisite for making `mcc2` a trustworthy full
+**Status: ✅ IMPLEMENTED (2026-07-02) — all 7 phases (0–6) landed, each byte-identical + m0-green.**
+Commits: Phase 0 `bd98665b` (parse once), Phase 1+2 `200b222d` (fact table + enum resolution),
+Phase 3 `412fadd4` (expr types → facts), Phase 4 `d107cd1c` (scope stack), Phase 5 `55c15ee7` (impl
+bodies), Phase 6 `0e48e728` (generic bodies, lenient). Every phase kept `selfhost-bootstrap-test`
+byte-identical and passed full Docker m0 on both backends. Perf: mcc2-cli-test ~0.070s → ~0.049s
+(~1.4×) from Phase 0's single parse. The section below is the original plan, preserved for the record.
+
+**(original plan)** Prerequisite for making `mcc2` a trustworthy full
 replacement for the Zig `mcc`, and the precondition for the two structural gaps that are still fully
 open (semantic checking of generic instantiations + impl-method bodies).
 
@@ -184,3 +191,40 @@ cherry-pick to master → one Docker `tools/m0-parallel.sh` (`real_failures=0`).
 - G28/G34/G35 become structural guarantees rather than site-by-site patches; G32 falls out.
 - Generic + impl bodies get real semantic checking — the last blocker between "proves MC can
   self-host a subset" and "mcc2 is a trustworthy compiler architecture."
+
+---
+
+## 7. Execution log (what actually landed)
+
+All phases held the invariant: `selfhost-bootstrap-test` byte-identical fixpoint + full Docker m0
+`real_failures=0` on both backends, per commit.
+
+- **Phase 0** (`bd98665b`): `main.mc` parses once; emit reuses sema's parse via `emit_c_on(*Parser)` +
+  `sema_parser`. Banked ~1.4× (mcc2-cli-test 0.070→0.049s). Realisation that this UNLOCKS everything
+  else — before it, sema and emit had separate parses so no fact could cross.
+- **Phase 1+2** (`200b222d`): `Vec<Fact>{ty,decl,flags}` indexed by node id; sema records each
+  `enum_lit`'s resolved `enum_decl`; emit reads it via a `Parser.facts_addr` stash (mcc2's subset
+  doesn't distinguish `*const`/`*mut`, and real-mcc's G30 is fixed, so the address round-trip is
+  clean). Deleted the emit-side G28 re-resolution (`e_expr_targeted` et al).
+- **Phase 3** (`412fadd4`): sema records every expression's `SmType`; `e_base_is_slice/is_ptr/is_dyn`
+  read the fact (slice_=3, ptr_depth>0, dyn_=17), falling back to `e_local_type_node` only where sema
+  didn't type a node. `e_local_type_node` stays as that fallback (retire once all consumers migrate).
+- **Phase 4** (`d107cd1c`): a real lexical scope stack (`Vec<Binding>` + mark/pop) replaced the
+  fn-wide `locals`/`muts` maps and `strmap_del`. Now catches block-local `let` used after its block.
+- **Phase 5** (`55c15ee7`): `sm_check_impls` runs the shared per-fn checker over `impl` method bodies
+  (their `self: *mut TYPE` is an ordinary pointer param). Closes "impl bodies unchecked"; `self.f = v`
+  is allowed via the pointer-mutability path (G32 falls out).
+- **Phase 6** (`0e48e728`): generic template bodies checked in a LENIENT mode (type param bound
+  `unknown`; `sm_err` keeps only `unknown_name`/`arg_count`). Surfaced + fixed two latent builtins
+  sema never had to know while generic bodies were skipped: `forget_unchecked` (move husk) and
+  `mem.bytes_equal` (module-qualified builtin).
+
+**Findings / residuals:**
+- The mcc2 SUBSET does not support a regular (non-generic, non-intrinsic) function call inside a
+  generic body — the monomorphizer emits the template as garbage. Pre-existing, orthogonal to this
+  refactor; it limits what generic bodies can express (they use intrinsics + generic calls). So
+  Phase 6's practical catch is undefined **identifiers** / arity, not undefined regular calls.
+- `.variant` in `switch`-arm case labels and `assign` lvalues still use the emit name-scan (no
+  expr-node fact for those positions) — documented G28 residual, unchanged by this refactor.
+- Not yet done (future cleanup, not blocking): fully retire `e_local_type_node` once generic/impl
+  facts cover its remaining consumers; migrate the `facts_addr` stash to a threaded emit context.
