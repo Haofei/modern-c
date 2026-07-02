@@ -144,6 +144,19 @@ open enum NodeKind: u32 {
                       //    the trait NAME token; rhs = 1 if `*mut` else 0. The leading `*`/`*mut` is
                       //    consumed into this node (the fat pointer struct `NAME__dyn` IS the value),
                       //    so it carries no separate pointer wrapper.
+    // ----- infix bitwise/shift + `unreachable` additions (appended to keep prior ordinals stable) -----
+    // These are NOT contiguous with the 22..34 binary tower (bin_lor..bin_mod); emit's `e_is_binop`
+    // special-cases this second range (60..64). Precedence mirrors src/parser.zig's `infix` table
+    // (bit-or 9/10, xor 11/12, bit-and 13/14, shifts 15/16 — all between comparison 7/8 and add 17/18).
+    bin_bor,          // 60 `|`  bitwise OR
+    bin_bxor,         // 61 `^`  bitwise XOR
+    bin_band,         // 62 `&`  bitwise AND (INFIX only; PREFIX `&x` is `un_addr`, disambiguated by
+                      //    parse position — the unary form is handled in parse_prefix before the
+                      //    binary loop ever consults the infix table).
+    bin_shl,          // 63 `<<` left shift
+    bin_shr,          // 64 `>>` right shift
+    unreachable_stmt, // 65 `unreachable;` — a diverging terminator statement (no fall-through). Emits
+                      //    the real backend's `mc_trap_Unreachable();` (a NORETURN `__builtin_trap`).
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -304,6 +317,15 @@ fn infix_op(p: *mut Parser) -> OpInfo {
     if at(p, .less_equal)    { return .{ .present = true, .lbp = 7,  .rbp = 8,  .kind = .bin_le }; }
     if at(p, .greater)       { return .{ .present = true, .lbp = 7,  .rbp = 8,  .kind = .bin_gt }; }
     if at(p, .greater_equal) { return .{ .present = true, .lbp = 7,  .rbp = 8,  .kind = .bin_ge }; }
+    // Bitwise + shift (mirroring src/parser.zig): all bind LOOSER than add/mul but the shifts bind
+    // TIGHTER than the bitwise ops, and every one of these binds tighter than comparison (7/8). The
+    // INFIX `&` here is bitwise-and; the PREFIX address-of `&x` is handled in parse_prefix, so this
+    // table (consulted only after an lhs is parsed) never sees a unary `&`.
+    if at(p, .pipe)          { return .{ .present = true, .lbp = 9,  .rbp = 10, .kind = .bin_bor }; }
+    if at(p, .caret)         { return .{ .present = true, .lbp = 11, .rbp = 12, .kind = .bin_bxor }; }
+    if at(p, .amp)           { return .{ .present = true, .lbp = 13, .rbp = 14, .kind = .bin_band }; }
+    if at(p, .shift_left)    { return .{ .present = true, .lbp = 15, .rbp = 16, .kind = .bin_shl }; }
+    if at(p, .shift_right)   { return .{ .present = true, .lbp = 15, .rbp = 16, .kind = .bin_shr }; }
     if at(p, .plus)          { return .{ .present = true, .lbp = 17, .rbp = 18, .kind = .bin_add }; }
     if at(p, .minus)         { return .{ .present = true, .lbp = 17, .rbp = 18, .kind = .bin_sub }; }
     if at(p, .star)          { return .{ .present = true, .lbp = 19, .rbp = 20, .kind = .bin_mul }; }
@@ -892,6 +914,14 @@ fn parse_stmt(p: *mut Parser) -> u32 {
         p_advance(p); // `unsafe`
         let ubody: u32 = parse_block(p);
         return add_node(p, .unsafe_block, u_tok, ubody, 0);
+    }
+    // `unreachable;` — a diverging terminator statement (like `return`, no fall-through). `unreachable`
+    // IS a lexer keyword (kw_unreachable). Lowers to the real backend's `mc_trap_Unreachable();`.
+    if at(p, .kw_unreachable) {
+        let ur_tok: u32 = p.tok as u32;
+        p_advance(p); // `unreachable`
+        expect(p, .semicolon);
+        return add_node(p, .unreachable_stmt, ur_tok, 0, 0);
     }
     // Expression statement or assignment.
     let head: u32 = parse_expr(p, 0);

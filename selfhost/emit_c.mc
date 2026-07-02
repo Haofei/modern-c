@@ -738,13 +738,23 @@ fn e_binop(sb: *mut StrBuf, k: NodeKind) -> void {
     if k == .bin_ge  { sb_put_cstr(sb, " >= "); return; }
     if k == .bin_land { sb_put_cstr(sb, " && "); return; }
     if k == .bin_lor  { sb_put_cstr(sb, " || "); return; }
+    if k == .bin_bor  { sb_put_cstr(sb, " | "); return; }
+    if k == .bin_bxor { sb_put_cstr(sb, " ^ "); return; }
+    if k == .bin_band { sb_put_cstr(sb, " & "); return; }
+    if k == .bin_shl  { sb_put_cstr(sb, " << "); return; }
+    if k == .bin_shr  { sb_put_cstr(sb, " >> "); return; }
     // Not a binary operator; emit nothing.
 }
 
-// True for the binary NodeKind tags (bin_lor .. bin_mod are contiguous ordinals 22..34).
+// True for the binary NodeKind tags. Two ranges: the original tower (bin_lor..bin_mod, 22..34) and
+// the appended bitwise/shift ops (bin_bor..bin_shr, 60..64) — kept as a second range so the earlier
+// ordinals stay stable (the gate reads them via `.raw()`).
 fn e_is_binop(k: NodeKind) -> bool {
     let o: u32 = k.raw();
-    return o >= 22 && o <= 34;
+    if o >= 22 && o <= 34 {
+        return true;
+    }
+    return o >= 60 && o <= 64;
 }
 
 // Emit an expression node. Binary exprs are FULLY PARENTHESIZED so C precedence is preserved.
@@ -1160,6 +1170,14 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
         e_indent(sb, depth);
         e_expr(p, sb, nd.lhs);
         sb_put_cstr(sb, ";\n");
+        return;
+    }
+    if nd.kind == .unreachable_stmt {
+        // `unreachable;` -> the real backend's trap (src/lower_c_emitter.zig:3263). `mc_trap_Unreachable`
+        // is a NORETURN `__builtin_trap` defined in the emitted prelude, so a fn ending here needs no
+        // trailing return (the C compiler sees the path as dead).
+        e_indent(sb, depth);
+        sb_put_cstr(sb, "mc_trap_Unreachable();\n");
         return;
     }
     if nd.kind == .switch_stmt {
@@ -1987,6 +2005,10 @@ fn e_gfn_mono(p: *mut Parser, sb: *mut StrBuf, fn_node: u32, concrete_node: u32)
 // use), then one C function per `fn` decl.
 fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
     sb_put_cstr(sb, "#include <stdint.h>\n#include <stddef.h>\n#include <stdbool.h>\n\n");
+    // The `unreachable;` trap (matches src/lower_c_runtime.zig's `mc_trap_Unreachable`): NORETURN so a
+    // fn ending in `unreachable;` needs no trailing return, and __attribute__((unused)) so it does not
+    // warn under -Werror when a module has no `unreachable`.
+    sb_put_cstr(sb, "__attribute__((noreturn, unused)) static inline void mc_trap_Unreachable(void) { __builtin_trap(); }\n\n");
     // P5.7: fat-pointer slice typedefs first (a struct field or fn signature may reference one).
     e_slice_typedefs(p, sb);
     let root: u32 = p.root;

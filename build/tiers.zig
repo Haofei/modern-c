@@ -405,6 +405,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-match-test"));
     // selfhost-opaque-test exercises `opaque struct` support end to end via the mcc2 CLI (compiled as a regular struct; the subset does not enforce opacity).
     m0_step.dependOn(ctx.cmd("selfhost-opaque-test"));
+    // selfhost-bitwise-test exercises infix bitwise (& | ^) + shift (<< >>) with C precedence, prefix vs infix `&`, and the `unreachable;` terminator end to end via the mcc2 CLI.
+    m0_step.dependOn(ctx.cmd("selfhost-bitwise-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

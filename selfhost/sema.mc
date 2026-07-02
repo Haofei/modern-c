@@ -473,6 +473,21 @@ fn sm_arith(s: *mut SmState, nd: Node) -> SmType {
     return sm_ty_unknown();
 }
 
+// Shift (`<< >>`): both operands numeric -> the LEFT operand's type (the shift amount need not match
+// the shiftee's width, so unlike sm_arith this does NOT require sm_types_match). `lt` is bound before
+// the numeric check so the returned type is the shiftee's.
+fn sm_shift(s: *mut SmState, nd: Node) -> SmType {
+    let lt: SmType = sm_type_of_expr(s, nd.lhs);
+    let rt: SmType = sm_type_of_expr(s, nd.rhs);
+    let lnum: bool = sm_is_num_raw(lt.kind.raw());
+    let rnum: bool = sm_is_num_raw(rt.kind.raw());
+    if lnum && rnum {
+        return lt;
+    }
+    sm_err(s, .type_mismatch);
+    return sm_ty_unknown();
+}
+
 // Comparison (`== != < > <= >=`): operands comparable (same type) -> `bool`. A bare `.variant`
 // literal has no standalone type, so when one side is an `enum_lit` it is resolved against the
 // OTHER operand's (enum) type — this is where `x == .green` gets its enum.
@@ -991,6 +1006,13 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
         .bin_ge => { return sm_cmp(s, nd); }
         .bin_lor => { return sm_logic(s, nd); }
         .bin_land => { return sm_logic(s, nd); }
+        // Bitwise `& | ^`: integer operands of the SAME type -> that integer type (as arith).
+        .bin_bor => { return sm_arith(s, nd); }
+        .bin_bxor => { return sm_arith(s, nd); }
+        .bin_band => { return sm_arith(s, nd); }
+        // Shifts `<< >>`: numeric operands -> the LEFT operand's type (amount width may differ).
+        .bin_shl => { return sm_shift(s, nd); }
+        .bin_shr => { return sm_shift(s, nd); }
         .cast => { return sm_cast(s, nd); }
         // `sizeof(T)` / `alignof(T)` (P5.9) are `usize`. The type node is not resolved here (it needs
         // no checking in the subset); a generic type param T is substituted only at emit (P5.5).
@@ -1140,6 +1162,11 @@ fn sm_check_switch(s: *mut SmState, node: u32) -> void {
 // `else` block, which arrive here as `.block`; an `else if` chain arrives as `.if_stmt`).
 fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
     let nd: Node = sm_node(s, node);
+    if nd.kind == .unreachable_stmt {
+        // A diverging terminator: no operands, nothing to type-check. The subset does not enforce
+        // definite-return, so its only role here is to be ACCEPTED (not fall into "unknown stmt").
+        return;
+    }
     if nd.kind == .block {
         sm_check_block(s, node);
         return;
