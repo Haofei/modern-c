@@ -277,8 +277,8 @@ fn e_opt_dup_before(p: *mut Parser, cur: u32, lex: []const u8) -> bool {
     while j < cur {
         let nd: Node = e_node(p, j);
         if nd.kind == .type_optional {
-            let ok: bool = e_opt_payload_ok(p, nd.lhs);
-            if ok {
+            let payload_ok: bool = e_opt_payload_ok(p, nd.lhs);
+            if payload_ok {
                 let jlex: []const u8 = e_tok_text(p, e_node(p, nd.lhs).main_token);
                 let same: bool = mem_eql(jlex, lex);
                 if same {
@@ -312,8 +312,8 @@ fn e_opt_typedefs(p: *mut Parser, sb: *mut StrBuf) -> void {
     while i < total {
         let nd: Node = e_node(p, i);
         if nd.kind == .type_optional {
-            let ok: bool = e_opt_payload_ok(p, nd.lhs);
-            if ok {
+            let payload_ok: bool = e_opt_payload_ok(p, nd.lhs);
+            if payload_ok {
                 let lex: []const u8 = e_tok_text(p, e_node(p, nd.lhs).main_token);
                 let dup: bool = e_opt_dup_before(p, i, lex);
                 if !dup {
@@ -1555,12 +1555,30 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
                 ptn = e_fn_param_type_node(p, callee_fn, k);
             }
             var is_dyn_param: bool = false;
+            var is_cu8_param: bool = false;
             if ptn != 0 {
                 let ptnode: Node = e_node(p, ptn);
                 is_dyn_param = ptnode.kind == .type_dyn;
+                // A `*const u8` / `*mut u8` param: pointer-to-a-`u8`-type_name. A string-literal arg to
+                // such a param must emit as a bare C string (`"..."`), not the `[]const u8` fat-pointer
+                // slice value — string literals coerce to BOTH forms in MC (G12).
+                if ptnode.kind == .type_ptr {
+                    let pointee: Node = e_node(p, ptnode.lhs);
+                    if pointee.kind == .type_name {
+                        let pnm: []const u8 = e_tok_text(p, pointee.main_token);
+                        is_cu8_param = mem_eql(pnm, "u8");
+                    }
+                }
             }
+            let argnode: Node = e_node(p, arg);
             if is_dyn_param {
                 e_dyn_coerce(p, sb, arg, ptn);
+            } else if is_cu8_param && argnode.kind == .string_literal {
+                let slex: []const u8 = e_tok_text(p, argnode.main_token);
+                // Cast to the emitted param C type (`uint8_t*` — the subset drops the `const`), which
+                // silences the string-literal `const char[]` -> `uint8_t*` conversion.
+                sb_put_cstr(sb, "(uint8_t*)");
+                sb_put_str(sb, slex);
             } else {
                 e_expr(p, sb, arg);
             }

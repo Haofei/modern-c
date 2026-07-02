@@ -900,6 +900,14 @@ fn parse_prefix(p: *mut Parser) -> u32 {
         let addr_operand: u32 = parse_expr(p, PREFIX_OPERAND_BP);
         return add_node(p, .un_addr, amp_tok, addr_operand, 0);
     }
+    // Prefix pointer deref `*expr` (C-style, distinct from the postfix `p.*` form). Reuses the same
+    // `.deref` node so sema/emit need no new case. Binds like the other prefix operators.
+    if at(p, .star) {
+        let star_tok: u32 = p.tok as u32;
+        p_advance(p);
+        let deref_operand: u32 = parse_expr(p, PREFIX_OPERAND_BP);
+        return add_node(p, .deref, star_tok, deref_operand, 0);
+    }
     let prim: u32 = parse_primary(p);
     return prim;
 }

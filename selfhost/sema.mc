@@ -838,6 +838,10 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
                 sm_check_struct_lit(s, an, pty);
             } else if anode.kind == .array_lit {
                 sm_check_array_lit(s, an, pty);
+            } else if anode.kind == .string_literal {
+                // A string literal coerces to BOTH `[]const u8` and `*const u8` in MC (G12), so it is
+                // accepted against either a slice-of-u8 or a pointer-to-u8 param without a type check.
+                sm_type_of_expr(s, an);
             } else {
                 let at: SmType = sm_type_of_expr(s, an);
                 // P5.10: a `*mut dyn TRAIT` param accepts any `*mut TYPE` that impls the trait — the
