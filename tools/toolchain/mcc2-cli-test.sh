@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # mcc2-cli-test: build the standalone `mcc2` CLI (selfhost/main.mc + tools/toolchain/mcc2_rt.c),
-# the step after Phase 4 of docs/self-host-plan.md, then (1) prove the CLI round-trip functionally
+# the step after Phase 4 of docs/self-host.md (§1), then (1) prove the CLI round-trip functionally
 # and (2) MEASURE its throughput at scale (the "or slow" deliverable that fills the perf ledger).
 #
 #   Stage BUILD:      mcc-cc.sh selfhost/main.mc -> main.o ; clang link with mcc2_rt.c -> mcc2

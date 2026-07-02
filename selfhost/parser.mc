@@ -1,5 +1,5 @@
 // selfhost/parser — mcc2's PARSER + AST, ported from the Zig reference (src/parser.zig +
-// src/ast.zig) as Phase 2 of the self-hosting plan (docs/self-host-plan.md). It builds on
+// src/ast.zig) as Phase 2 of the self-hosting plan (docs/self-host.md (§1)). It builds on
 // the Phase-1 lexer (selfhost/lexer.mc) and parses a bounded SUBSET of MC good enough to
 // later self-compile a subset: `fn` decls with params + a body of `let`/`return`/`if`-`else`/
 // `while`/expr statements, and full-precedence expressions (call/index/field postfix, unary

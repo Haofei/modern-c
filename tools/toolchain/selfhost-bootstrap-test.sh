@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# selfhost-bootstrap-test: the CAPSTONE self-hosting gate (docs/self-host-plan.md). Where the five
+# selfhost-bootstrap-test: the CAPSTONE self-hosting gate (docs/self-host.md (§1)). Where the five
 # selfhost-*self-test gates each prove ONE mcc2 module self-compiles to clang-clean C, this gate
 # proves the WHOLE thing closes the loop: mcc2 literally compiles mcc2, the mcc2-built mcc2' is a
 # working compiler, and the two produce byte-identical output — a fixpoint. This is the definitive

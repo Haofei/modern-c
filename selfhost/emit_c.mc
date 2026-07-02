@@ -1,5 +1,5 @@
 // selfhost/emit_c — mcc2's C-CODE EMITTER, Phase 4 of the self-hosting plan
-// (docs/self-host-plan.md). It walks the Phase-2 flat index-arena AST (selfhost/parser.mc) over
+// (docs/self-host.md (§1)). It walks the Phase-2 flat index-arena AST (selfhost/parser.mc) over
 // the Phase-1 token stream (selfhost/lexer.mc) and emits SUBSET C source into a `StrBuf`
 // (std/strbuf.mc). The pipeline entry `emit_c_run` runs lex -> parse -> emit and returns the
 // emitted C bytes; the selfhost-emit-test gate clang-compiles those bytes with a C driver that

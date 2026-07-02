@@ -1,5 +1,5 @@
 // selfhost/lexer — mcc2's LEXER, ported from the Zig reference (src/lexer.zig +
-// src/token.zig) as Phase 1 of the self-hosting plan (docs/self-host-plan.md).
+// src/token.zig) as Phase 1 of the self-hosting plan (docs/self-host.md (§1)).
 //
 // It reproduces the Zig lexer's token stream semantics exactly: the same `TokKind`
 // set (in the same declaration order, so ordinals match), the same 47-keyword table,

@@ -19,7 +19,7 @@
 // GROWTH MODEL: the `Allocator` trait (std/alloc) exposes only `alloc`/`free` — no `realloc` —
 // so growth is allocate-new + rehash + free-old. The table doubles (start 8, then ×2) whenever
 // inserting would push the load factor past ~0.75, keeping probe chains short and lookups O(1)
-// amortized. See docs/self-host-plan.md §3 step 0.2.
+// amortized. See docs/self-host.md (§1) §3 step 0.2.
 //
 // LOOKUP RETURN: `strmap_get` returns `?*mut V` — a pointer into the entry's value slot, or
 // `null` when absent. This is deliberately the pointer form, not a by-value `?V`: the pointer
@@ -276,7 +276,7 @@ export fn strmap_free(comptime V: type, m: *mut StrHashMap<V>) -> void {
 }
 
 // ---------------------------------------------------------------------------------------------
-// GAP (docs/self-host-gaps.md): a fully generic `HashMap<K, V>` is blocked twice over —
+// GAP (docs/self-host.md (§3)): a fully generic `HashMap<K, V>` is blocked twice over —
 //   1. Key comparison/hashing needs `where K: Hash + Eq` trait bounds and a way to invoke a
 //      trait method on a comptime-generic value; string keys sidestep this with the built-in
 //      `mem.bytes_equal` + a hand-written FNV.

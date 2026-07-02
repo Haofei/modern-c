@@ -1,4 +1,4 @@
-// selfhost/main — the standalone `mcc2` CLI driver (docs/self-host-plan.md, the step after P4).
+// selfhost/main — the standalone `mcc2` CLI driver (docs/self-host.md (§1), the step after P4).
 //
 // This packages the subset self-hosted front end (lexer -> parser -> sema -> emit_c) as a real
 // command-line program: `mcc2 input.mc` reads the file, runs the whole pipeline, and prints the
@@ -8,7 +8,7 @@
 // HOSTED ENTRY: this program does NOT define `fn main`. It exports `mc_main` (std/hosted_args
 // contract) and links `tools/toolchain/mcc2_rt.c`, whose C `main` stashes argv and calls back.
 //
-// FILE-INPUT FRICTION (gap ledger G12/G13, recorded in docs/self-host-gaps.md): the pipeline
+// FILE-INPUT FRICTION (gap ledger G12/G13, recorded in docs/self-host.md (§3)): the pipeline
 // consumes `source: []const u8`, but MC cannot build a `[]const u8` from a malloc'd `PAddr`+len
 // (G12 — slices are not constructible from a raw pointer+length). The working path is a real,
 // typed, fixed-size local/global `[N]u8`: read the file INTO it, take `mem.as_bytes(&buf)` for the
@@ -59,7 +59,7 @@ impl Allocator for MallocAlloc {
 const MC_SRC_CAP: usize = 1048576;
 global g_src: [1048576]u8;
 
-// ----- P5.4 multi-module loader state (docs/self-host-plan.md) --------------------------------
+// ----- P5.4 multi-module loader state (docs/self-host.md (§1)) --------------------------------
 //
 // MC has no separate module/object model: an `import "path";` is resolved by TEXTUAL INCLUSION.
 // The loader reads the root file, finds its (transitive) imports, and CONCATENATES every distinct

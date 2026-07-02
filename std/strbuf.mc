@@ -15,7 +15,7 @@
 // reclaims everything at once and `sb_free` is a no-op you may skip.
 //
 // The allocator is stored in the backing Vec (its provenance); it is borrowed and must
-// outlive the StrBuf. See docs/self-host-plan.md §3 step 0.3.
+// outlive the StrBuf. See docs/self-host.md (§1) §3 step 0.3.
 //
 // READING BACK: use `sb_byte(sb, i)` (bounds-checked) or iterate `0..sb_len(sb)`.
 // There is deliberately no `sb_as_slice` returning `[]const u8`: MC has no way to

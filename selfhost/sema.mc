@@ -1,6 +1,6 @@
 // selfhost/sema — mcc2's SEMANTIC ANALYZER (name resolution + type checking), ported from the
 // Zig reference (src/sema.zig `checkModule`) as Phase 3 of the self-hosting plan
-// (docs/self-host-plan.md). It consumes the Phase-2 flat index-arena AST (selfhost/parser.mc)
+// (docs/self-host.md (§1)). It consumes the Phase-2 flat index-arena AST (selfhost/parser.mc)
 // over the Phase-1 token stream (selfhost/lexer.mc) and reports a SUBSET of the reference's
 // checks (not its 207 error codes): unknown names, call arg-count/type mismatches, non-bool
 // `if`/`while` conditions, `let`-annotation mismatches, return-type mismatches, and

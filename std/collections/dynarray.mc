@@ -15,7 +15,7 @@
 //
 // GROWTH MODEL: the `Allocator` trait (std/alloc) exposes only `alloc`/`free` — no
 // `realloc` — so growth is allocate-new + copy + free-old. Amortized O(1) push via
-// capacity doubling (start 4, then ×2). See docs/self-host-plan.md §3 step 0.0.
+// capacity doubling (start 4, then ×2). See docs/self-host.md (§1) §3 step 0.0.
 //
 // ELEMENT ACCESS: every get/set/grow-copy mints a typed `*mut T` with `raw.ptr<T>` and
 // dereferences it (`p.* = x` / `out = p.*`). This is deliberate: `raw.load<T>`/`raw.store<T>`
