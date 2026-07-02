@@ -82,6 +82,20 @@ cherry-pick → m0.
   failure is local-dev-only and a portable fix needs comptime OS detection MC lacks. Workaround: absolute
   paths or run in Docker. Recorded as by-design.
 
+- **2026-07-01 — G16 (Self-in-param trait signature) landed** (`d8909ed`). `sameTraitTypeSyntax` substitutes
+  `Self` (bare/`*`/`*mut`/`*const`/`[]`/`?`/nested) in ALL param + return positions during conformance;
+  genuine mismatches still reject. Unlocks fully-generic `HashMap<K,V>` via `where K: Keyed` + UFCS
+  (demo runs both backends). diff-backend 169. **m0 verifying (final gap-fix).**
+
+## PROGRAM COMPLETE (pending final m0)
+**13 real gaps fixed on both backends, each m0-green:** G11 (value optionals), G12 (slices + soundness hole),
+G14 (escape), G18 (generic unions), G19 (aggregate raw.*), G20 (block-scoped let), G22 (file-private names),
+G23 (call-compare codegen), G24 (reserved-word idents), G25 (closed-enum .raw() + exhaustiveness), G27
+(variant-path .raw()), G30 (*mut→*const coercion), G16 (Self-in-param). Plus 2 real codegen bugs found+fixed
+(double-paren `if`, and G19). G29 = by-design (Linux hosted target). NEXT: **refactor selfhost to drop the
+workarounds** (value optionals, `[]const u8` literals, block-scoped let, closed-enum switches, de-prefix
+file-private helpers, generic unions), keeping all 15 selfhost gates green; then continue the self-host work.
+
 **NON-GAPS discovered (overstated in the ledger, no fix needed):** `match` (selfhost uses 0 real `match` —
 `grep` counted prose); `?T`-not-needed-for-selfhost (0 uses); broad "no Hash/Eq bounds" (bounds work via
 `where`+UFCS; only Self-in-param was the real gap = G16).
