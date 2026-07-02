@@ -324,6 +324,9 @@ pub fn register(ctx: *h.Ctx) void {
     // cc-test exercises the mcc-cc toolchain driver (needs clang); self-skips
     // when clang is absent.
     m0_step.dependOn(ctx.cmd("cc-test"));
+    // enum-raw-cmp-run-test compiles+runs a value-context `enum.raw() == N` compare on
+    // both backends (G23; needs cc + clang).
+    m0_step.dependOn(ctx.cmd("enum-raw-cmp-run-test"));
     // std-test compiles and runs std/core through the toolchain (needs clang).
     m0_step.dependOn(ctx.cmd("std-test"));
     // import-test exercises the module system end-to-end (needs clang).
