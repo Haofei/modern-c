@@ -42,12 +42,23 @@ cherry-pick → m0.
 | G30 | `*mut T`→`*const T` param coercion | `sema_type.zig` | pending |
 | G29 | `hosted_io` `AT_FDCWD` Linux-hardcoded (macOS relative imports) | `std/hosted_io.mc` | pending |
 
-## Then
-- **Refactor `selfhost/*.mc`** to drop the workarounds (value optionals instead of `{present}`
-  structs / `?*V`; `[]const u8` string literals instead of byte-array keyword tables; block-scoped
-  `let`; module-qualified calls; `match`/`switch` with `.raw()` exhaustiveness; etc.).
-- **Continue self-host** integration long-tail (opaque structs, `Result`/`if let`, arithmetic
-  domains, const globals) → literal `mcc2`-compiles-`mcc2`.
+## Selfhost refactor (2026-07-01) — flagship de-workarounds DONE + m0-green
+- **R1** (`5bed952`) — byte-array keyword/scalar tables → string-literal `mem_eql(s,"fn")` across
+  selfhost lexer/sema/emit/parser/main (**−98 LOC**); block-scoped-let cleanup (dropped `cf`/`ce`
+  dodges). Proves G12 in real code.
+- **R-std** (`b99c5aed`, −11 LOC) — `mem_index_of → ?usize`, dropped `MemFound` + the hashmap `+1`
+  sentinel. Proves G11 (scalar value optionals) in real code. **Residual:** value optionals cover
+  scalar/address/bool/struct but NOT slices (`?[]const u8` still fails — G11 payload scope excludes
+  slices; `split_next` kept its struct); `.?` unwrap syntax not parse-supported (`if let`/`==null` only).
+  Both minor follow-ups (extend G11 to slice payloads).
+- **De-prefix (G22) + closed-enum-switches (G25): SKIPPED as low-value/high-churn** — the `lex_/p_/sm_/e_`
+  prefixes aren't ugly workarounds (G22 already proven by g22-priv-name-test), and the if/else-on-kind
+  form works fine; converting to closed enums is churn with regression risk. Available as future polish.
+
+## Continue self-host (integration long-tail → literal mcc2-compiles-mcc2)
+- **P5.12 opaque struct** — in flight (unblocks `std/addr.mc`, whose `PAddr`/`VAddr` are `opaque struct`).
+- Then per real dep: `Result`/`if let` (hosted_io), `wrap`/`sat` arithmetic domains, `bitcast`, const
+  globals, `#[attr]`s → feed all `selfhost/*.mc` + `std` deps through `mcc2` and fix residual errors.
 
 ## Execution log
 - **2026-07-01 — Batch 1 landed** (G19 `6ef4534`, G23 `a3f5305`, G24 `5dbef9e`; fixture fix `<pending>`).
