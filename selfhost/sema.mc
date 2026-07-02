@@ -209,6 +209,7 @@ struct SmState {
     struct_defs: Vec<SmStruct>,
     fields: Vec<SmField>,      // flattened fields for all structs
     enums: StrHashMap<u32>,    // enum name -> enum_defs index (absence via strmap_contains)
+    traits: StrHashMap<u32>,   // trait name -> 1 (presence only; for top-level name uniqueness)
     enum_defs: Vec<SmEnum>,
     evariants: Vec<SmEVar>,    // flattened variants for all enums
     tmethods: Vec<SmTraitMethod>, // P5.10: all trait methods (scanned linearly for dyn dispatch)
@@ -1961,6 +1962,9 @@ fn sm_toplevel_taken(s: *mut SmState, name: []const u8) -> bool {
     if strmap_contains(u32, &s.enums, name) {
         return true;
     }
+    if strmap_contains(u32, &s.traits, name) {
+        return true;
+    }
     if strmap_contains(SmType, &s.globals, name) {
         return true;
     }
@@ -2085,12 +2089,32 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let tpar: *mut Parser = &s.p;
             let tr_st: usize = token_start_at(&tpar.tl, dn.main_token as usize);
             let tr_ln: usize = token_len_at(&tpar.tl, dn.main_token as usize);
+            // The trait NAME is a top-level name too: reject a duplicate trait or a clash with any
+            // fn/struct/enum/global (else two `trait T` emit duplicate `T__vtable`/`T__dyn` typedefs).
+            let tname: []const u8 = sm_tok_text(s, dn.main_token);
+            if sm_toplevel_taken(s, tname) {
+                sm_err(s, .duplicate_decl);
+            }
+            strmap_put(u32, &s.traits, tname, 1);
             let mrun: u32 = dn.lhs;
             let mcount: u32 = sm_extra(s, mrun);
             var mi: u32 = 0;
             while mi < mcount {
                 let mnode_idx: u32 = sm_extra(s, mrun + 1 + mi);
                 let mnode: Node = sm_node(s, mnode_idx);
+                // A method name must be unique WITHIN its trait (else duplicate vtable fields are
+                // emitted). Scan the earlier methods of this same trait for the same name lexeme.
+                let mname: []const u8 = sm_tok_text(s, mnode.main_token);
+                var mj: u32 = 0;
+                while mj < mi {
+                    let pnode_idx: u32 = sm_extra(s, mrun + 1 + mj);
+                    let pnode: Node = sm_node(s, pnode_idx);
+                    let pname: []const u8 = sm_tok_text(s, pnode.main_token);
+                    if mem_eql(mname, pname) {
+                        sm_err(s, .duplicate_decl);
+                    }
+                    mj = mj + 1;
+                }
                 let m_st: usize = token_start_at(&tpar.tl, mnode.main_token as usize);
                 let m_ln: usize = token_len_at(&tpar.tl, mnode.main_token as usize);
                 let mret: SmType = sm_type_from_node(s, mnode.rhs);
@@ -2316,6 +2340,7 @@ export fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
         .struct_defs = vec_new(SmStruct, a),
         .fields = vec_new(SmField, a),
         .enums = strmap_new(u32, a),
+        .traits = strmap_new(u32, a),
         .enum_defs = vec_new(SmEnum, a),
         .evariants = vec_new(SmEVar, a),
         .tmethods = vec_new(SmTraitMethod, a),
@@ -2362,6 +2387,7 @@ export fn sema_free(s: *mut SmState) -> void {
     strmap_free(SmType, &s.globals);
     strmap_free(u32, &s.structs);
     strmap_free(u32, &s.enums);
+    strmap_free(u32, &s.traits);
     strmap_free(u32, &s.fns);
     vec_free(SmStruct, &s.struct_defs);
     vec_free(SmField, &s.fields);
