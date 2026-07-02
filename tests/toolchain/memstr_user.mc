@@ -5,9 +5,10 @@
 // (a pointer, NOT a `[]const u8`), so they cannot seed a slice. Every wrapper is
 // nullary and deterministic; the memstr-test driver asserts the exact return values.
 //
-// Results that would be an optional (`?usize` / `?[]const u8`) are carried by the
-// explicit `MemFound`/`SplitField` structs: MC optionals are pointer-only, so a value
-// optional cannot be consumed by any caller (see the GAP note in std/mem.mc).
+// The byte searches return a value optional `?usize`, consumed here with `if let`
+// (absent -> 0). The cursor splitter still yields a `SplitField` struct because a
+// slice value optional (`?[]const u8`) is not yet an accepted consumer form (only
+// scalar/address/bool payloads are — see the note in std/mem.mc).
 import "std/mem.mc";
 
 // ----- mem_eql -----
@@ -74,16 +75,14 @@ export fn mstr_starts_too_long() -> u32 {
 export fn mstr_index_byte_present() -> u32 {
     var buf: [3]u8 = .{ 97, 44, 98 }; // "a,b"
     let s: []const u8 = mem.as_bytes(&buf);
-    let r: MemFound = mem_index_of_byte(s, 44); // ','
-    if r.present { return 1000 + (r.index as u32); }
+    if let idx = mem_index_of_byte(s, 44) { return 1000 + (idx as u32); } // ','
     return 0;
 }
 
 export fn mstr_index_byte_absent() -> u32 {
     var buf: [3]u8 = .{ 97, 44, 98 }; // "a,b"
     let s: []const u8 = mem.as_bytes(&buf);
-    let r: MemFound = mem_index_of_byte(s, 122); // 'z'
-    if r.present { return 1000 + (r.index as u32); }
+    if let idx = mem_index_of_byte(s, 122) { return 1000 + (idx as u32); } // 'z'
     return 0;
 }
 
@@ -94,8 +93,7 @@ export fn mstr_index_of_present() -> u32 {
     var nd: [2]u8 = .{ 98, 99 };              // "bc"
     let s: []const u8 = mem.as_bytes(&buf);
     let n: []const u8 = mem.as_bytes(&nd);
-    let r: MemFound = mem_index_of(s, n);
-    if r.present { return 1000 + (r.index as u32); }
+    if let idx = mem_index_of(s, n) { return 1000 + (idx as u32); }
     return 0;
 }
 
@@ -104,8 +102,7 @@ export fn mstr_index_of_absent() -> u32 {
     var nd: [2]u8 = .{ 120, 121 };            // "xy"
     let s: []const u8 = mem.as_bytes(&buf);
     let n: []const u8 = mem.as_bytes(&nd);
-    let r: MemFound = mem_index_of(s, n);
-    if r.present { return 1000 + (r.index as u32); }
+    if let idx = mem_index_of(s, n) { return 1000 + (idx as u32); }
     return 0;
 }
 
@@ -122,8 +119,7 @@ export fn mstr_index_of_empty() -> u32 {
     var nd: [3]u8 = .{ 0, 0, 0 };
     let s: []const u8 = mem.as_bytes(&buf);
     let empty: []const u8 = empty_view(mem.as_bytes(&nd));
-    let r: MemFound = mem_index_of(s, empty);
-    if r.present { return 1000 + (r.index as u32); }
+    if let idx = mem_index_of(s, empty) { return 1000 + (idx as u32); }
     return 0;
 }
 

@@ -8,9 +8,9 @@
 //
 // DESIGN (two-pass, mirroring the reference):
 //   * PASS 1 collects every `fn` signature (param types + return type) into `SmSig` records held
-//     in a `Vec<SmSig>`, with a name -> (sig_index + 1) `StrHashMap<u32>` (the +1 keeps 0 as the
-//     "absent" sentinel, since MC has no by-value `?u32` — gap G11). Param types are flattened
-//     into one `Vec<SmType>` addressed by `(start, count)` per sig.
+//     in a `Vec<SmSig>`, with a name -> sig_index `StrHashMap<u32>`; absence is detected by
+//     `strmap_contains` before each lookup, so the raw index is stored directly (no sentinel
+//     offset). Param types are flattened into one `Vec<SmType>` addressed by `(start, count)` per sig.
 //   * PASS 2 checks each `fn` body against a per-function locals table `StrHashMap<SmType>`
 //     (params seeded first; `let` adds bindings — names are unique per fn, gap G20).
 //
@@ -161,15 +161,15 @@ struct SmEnum {
 // `locals` is rebuilt per function in pass 2; `cur_ret` is the function currently being checked.
 struct SmState {
     p: Parser,
-    fns: StrHashMap<u32>,      // name -> sig_index + 1 (0 = absent)
+    fns: StrHashMap<u32>,      // name -> sig_index (absence via strmap_contains)
     sigs: Vec<SmSig>,
     ptypes: Vec<SmType>,       // flattened param types for all sigs
     locals: StrHashMap<SmType>,// current function's params + lets
     muts: StrHashMap<u32>,     // current function's MUTABLE locals (a `var`); value 1 = mutable
-    structs: StrHashMap<u32>,  // struct name -> struct_defs index + 1 (0 = absent)
+    structs: StrHashMap<u32>,  // struct name -> struct_defs index (absence via strmap_contains)
     struct_defs: Vec<SmStruct>,
     fields: Vec<SmField>,      // flattened fields for all structs
-    enums: StrHashMap<u32>,    // enum name -> enum_defs index + 1 (0 = absent)
+    enums: StrHashMap<u32>,    // enum name -> enum_defs index (absence via strmap_contains)
     enum_defs: Vec<SmEnum>,
     evariants: Vec<SmEVar>,    // flattened variants for all enums
     tmethods: Vec<SmTraitMethod>, // P5.10: all trait methods (scanned linearly for dyn dispatch)
@@ -584,7 +584,7 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
             if sm_is_enum_type(s, recv) {
                 let rname: []const u8 = sm_name_text(s, recv);
                 let eref: u32 = strmap_get_or(u32, &s.enums, rname, 0);
-                let ed: SmEnum = vec_get(SmEnum, &s.enum_defs, (eref - 1) as usize);
+                let ed: SmEnum = vec_get(SmEnum, &s.enum_defs, eref as usize);
                 return sm_ty(ed.repr);
             }
             // `.raw()` on a non-enum is outside the subset; yield unknown without a spurious error.
@@ -614,8 +614,7 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
         sm_walk_args(s, args_run, argc);
         return sm_ty_unknown();
     }
-    let sig_ref: u32 = strmap_get_or(u32, &s.fns, name, 0);
-    let sig_idx: u32 = sig_ref - 1;
+    let sig_idx: u32 = strmap_get_or(u32, &s.fns, name, 0);
     let sig: SmSig = vec_get(SmSig, &s.sigs, sig_idx as usize);
     // P5.5: a GENERIC call `f(u32, ...)` — the first arg is the type argument. Only ARITY is
     // checked (against the declared param count, comptime param included); the abstract-typed value
@@ -678,8 +677,7 @@ fn sm_field_type(s: *mut SmState, obj: SmType, field_tok: u32) -> SmType {
         sm_err(s, .unknown_field);
         return sm_ty_unknown();
     }
-    let sref: u32 = strmap_get_or(u32, &s.structs, sname, 0);
-    let sidx: u32 = sref - 1;
+    let sidx: u32 = strmap_get_or(u32, &s.structs, sname, 0);
     let sd: SmStruct = vec_get(SmStruct, &s.struct_defs, sidx as usize);
     let ftext: []const u8 = sm_tok_text(s, field_tok);
     var fi: u32 = 0;
@@ -714,7 +712,7 @@ fn sm_check_struct_lit(s: *mut SmState, node: u32, expected: SmType) -> void {
             // A GENERIC target struct (P5.5): only field NAMES are checked below — field-TYPE
             // matching is skipped because the field type may be the abstract type param T.
             let sref: u32 = strmap_get_or(u32, &s.structs, sname, 0);
-            let sd: SmStruct = vec_get(SmStruct, &s.struct_defs, (sref - 1) as usize);
+            let sd: SmStruct = vec_get(SmStruct, &s.struct_defs, sref as usize);
             if sd.is_generic == 1 {
                 gen = true;
             }
@@ -791,7 +789,7 @@ fn sm_check_enum_lit(s: *mut SmState, node: u32, expected: SmType) -> void {
     }
     let ename: []const u8 = sm_name_text(s, expected);
     let eref: u32 = strmap_get_or(u32, &s.enums, ename, 0);
-    let ed: SmEnum = vec_get(SmEnum, &s.enum_defs, (eref - 1) as usize);
+    let ed: SmEnum = vec_get(SmEnum, &s.enum_defs, eref as usize);
     var found: bool = false;
     var vi: u32 = 0;
     while vi < ed.variant_count {
@@ -1074,7 +1072,7 @@ fn sm_check_switch(s: *mut SmState, node: u32) -> void {
     }
     let ename: []const u8 = sm_name_text(s, subj_ty);
     let eref: u32 = strmap_get_or(u32, &s.enums, ename, 0);
-    let ed: SmEnum = vec_get(SmEnum, &s.enum_defs, (eref - 1) as usize);
+    let ed: SmEnum = vec_get(SmEnum, &s.enum_defs, eref as usize);
     var has_default: bool = false;
     var ai: u32 = 0;
     while ai < arm_count {
@@ -1342,7 +1340,7 @@ fn sm_collect_struct(s: *mut SmState, name_tok: u32, srun: u32, is_generic: u32)
     let sidx: u32 = vec_len(SmStruct, &s.struct_defs) as u32;
     vec_push(SmStruct, &s.struct_defs, .{ .field_start = fstart, .field_count = fcount, .is_generic = is_generic });
     let sname: []const u8 = sm_tok_text(s, name_tok);
-    strmap_put(u32, &s.structs, sname, sidx + 1);
+    strmap_put(u32, &s.structs, sname, sidx);
 }
 
 // True when a fn's param run contains a `comptime` param (`param_decl.rhs == 1`) — i.e. the fn is
@@ -1362,7 +1360,7 @@ fn sm_fn_is_generic(s: *mut SmState, params_run: u32) -> bool {
     return false;
 }
 
-// PASS 1: collect one `SmSig` per `fn` decl and register its name -> (index + 1).
+// PASS 1: collect one `SmSig` per `fn` decl and register its name -> index.
 fn sm_collect(s: *mut SmState, root: u32) -> void {
     let rnode: Node = sm_node(s, root);
     let drun: u32 = rnode.lhs;
@@ -1405,7 +1403,7 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let eidx: u32 = vec_len(SmEnum, &s.enum_defs) as u32;
             vec_push(SmEnum, &s.enum_defs, .{ .variant_start = vstart, .variant_count = vcount, .repr = repr_kind, .is_open = is_open });
             let ename: []const u8 = sm_tok_text(s, dn.main_token);
-            strmap_put(u32, &s.enums, ename, eidx + 1);
+            strmap_put(u32, &s.enums, ename, eidx);
         }
         if dn.kind == .trait_decl {
             // P5.10: record each trait method's (trait, method, return type) for dyn-dispatch typing.
@@ -1448,7 +1446,7 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let ex_sig_idx: u32 = vec_len(SmSig, &s.sigs) as u32;
             vec_push(SmSig, &s.sigs, .{ .ret = ex_ret_ty, .param_start = ex_pstart, .param_count = ex_pcount, .is_generic = 0, .tparam_start = 0, .tparam_len = 0, .ret_is_tparam = 0 });
             let ex_name: []const u8 = sm_tok_text(s, dn.main_token);
-            strmap_put(u32, &s.fns, ex_name, ex_sig_idx + 1);
+            strmap_put(u32, &s.fns, ex_name, ex_sig_idx);
         }
         if dn.kind == .fn_decl {
             let frec: u32 = dn.lhs;
@@ -1494,7 +1492,7 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let sig_idx: u32 = vec_len(SmSig, &s.sigs) as u32;
             vec_push(SmSig, &s.sigs, .{ .ret = ret_ty, .param_start = pstart, .param_count = pcount, .is_generic = is_generic, .tparam_start = tp_start, .tparam_len = tp_len, .ret_is_tparam = ret_is_tp });
             let name: []const u8 = sm_tok_text(s, dn.main_token);
-            strmap_put(u32, &s.fns, name, sig_idx + 1);
+            strmap_put(u32, &s.fns, name, sig_idx);
         }
         di = di + 1;
     }

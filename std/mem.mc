@@ -152,21 +152,13 @@ export fn mem_set(dst: PAddr, value: u8, len: usize) -> void {
 // (`s[a..b]`) are the only accesses, so none can ever run off the buffer. No Vec, no
 // allocator, no hidden heap: results are plain values, and sub-slices *borrow* the input.
 //
-// GAP (recorded for the self-host ledger): MC optionals are a pointer-only niche —
-// `?usize` / `?[]const u8` can be declared and `return null`ed, but NO consumer form
-// accepts them (`if let`, `== null`, and `switch` all reject a non-pointer optional:
-// E_IF_LET_OPTIONAL_REQUIRED / "null comparisons require a pointer or view operand" /
-// E_SWITCH_RESULT_TAG). A value optional is therefore write-only and unusable as an
-// API. So "not found" / "no more fields" is carried by a small explicit result struct
-// (`MemFound.present`, `SplitField.valid`) — the sanctioned workaround, and clearer at
-// the call site than a bare sentinel index.
-
-// The result of a search: `present` false means "not found" and `index` is unspecified
-// (0). When `present` is true, `index` is the first matching offset into the haystack.
-struct MemFound {
-    present: bool,
-    index: usize,
-}
+// The byte searches return a VALUE optional `?usize`: `null` for "not found", the
+// offset for a hit. These consume cleanly with `if let` / `== null` — a scalar value
+// optional (`?usize`) lowers to a tagged `{present, value}` and is a first-class result.
+// The cursor splitter still yields a small `SplitField` struct rather than a value
+// optional, because `?[]const u8` (a SLICE optional) is not yet an accepted consumer
+// form (only scalar/address/bool payloads are — see isValueOptionalPayloadClass); a
+// slice value optional is write-only today, so the explicit `valid` flag stands in.
 
 // True when two byte slices have the same length and the same bytes.
 export fn mem_eql(a: []const u8, b: []const u8) -> bool {
@@ -198,26 +190,26 @@ export fn mem_starts_with(hay: []const u8, prefix: []const u8) -> bool {
     return true;
 }
 
-// First index of byte `b` in `hay`, or `.present = false` when absent.
-export fn mem_index_of_byte(hay: []const u8, b: u8) -> MemFound {
+// First index of byte `b` in `hay`, or `null` when absent.
+export fn mem_index_of_byte(hay: []const u8, b: u8) -> ?usize {
     var i: usize = 0;
     while i < hay.len {
         if hay[i] == b {
-            return .{ .present = true, .index = i };
+            return i;
         }
         i = i + 1;
     }
-    return .{ .present = false, .index = 0 };
+    return null;
 }
 
-// First index of substring `needle` in `hay` (naive O(n*m) scan), or `.present = false`
-// when absent. An empty needle matches at 0; a needle longer than `hay` never matches.
-export fn mem_index_of(hay: []const u8, needle: []const u8) -> MemFound {
+// First index of substring `needle` in `hay` (naive O(n*m) scan), or `null` when absent.
+// An empty needle matches at 0; a needle longer than `hay` never matches.
+export fn mem_index_of(hay: []const u8, needle: []const u8) -> ?usize {
     if needle.len == 0 {
-        return .{ .present = true, .index = 0 };
+        return 0;
     }
     if needle.len > hay.len {
-        return .{ .present = false, .index = 0 };
+        return null;
     }
     // Highest start offset a full needle can still fit at. `start + needle.len` below
     // is then <= hay.len, so the sub-slice bound never overflows or over-reads.
@@ -228,11 +220,11 @@ export fn mem_index_of(hay: []const u8, needle: []const u8) -> MemFound {
         let end: usize = start + needle.len;
         let window: []const u8 = hay[start..end];
         if mem_eql(window, needle) {
-            return .{ .present = true, .index = start };
+            return start;
         }
         start = start + 1;
     }
-    return .{ .present = false, .index = 0 };
+    return null;
 }
 
 // ----- cursor-based splitter (allocation-free iterator) -----

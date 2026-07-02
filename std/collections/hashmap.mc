@@ -22,10 +22,11 @@
 // amortized. See docs/self-host-plan.md §3 step 0.2.
 //
 // LOOKUP RETURN: `strmap_get` returns `?*mut V` — a pointer into the entry's value slot, or
-// `null` when absent — NOT `?V`. MC optionals are pointer-shaped only (a nullable value type
-// like `?u32` is `E_IF_LET_OPTIONAL_REQUIRED`; see the GAP note), so the by-value `?V` the plan
-// sketches cannot be expressed. The pointer form is strictly more capable (in-place update) and
-// is the expressible analog; `strmap_get_or` gives a by-value read with a fallback.
+// `null` when absent. This is deliberately the pointer form, not a by-value `?V`: the pointer
+// enables in-place update of the stored value (the by-value `?V` cannot), and for an arbitrary
+// generic `V` the by-value optional is not always expressible anyway — value optionals cover
+// scalar/address/bool payloads but not aggregates like slices (see the GAP note). `strmap_get_or`
+// gives a by-value read with a fallback for the read-only case.
 //
 // The pointer returned by `strmap_get` is valid until the next insert that triggers a grow
 // (which reallocates and rehashes the slot array); do not hold it across a `strmap_put`.
@@ -171,8 +172,8 @@ export fn strmap_put(comptime V: type, m: *mut StrHashMap<V>, key: []const u8, v
 }
 
 // A pointer to the value bound to `key`, or `null` if absent. The pointer is into the map's
-// storage: valid until the next grow-triggering `strmap_put`. (MC has no by-value `?V`; see the
-// module header and the GAP note.)
+// storage: valid until the next grow-triggering `strmap_put`. The pointer form (not a by-value
+// `?V`) is intentional — it allows in-place update; see the module header and the GAP note.
 export fn strmap_get(comptime V: type, m: *StrHashMap<V>, key: []const u8) -> ?*mut V {
     if m.cap == 0 {
         return null;
@@ -191,8 +192,8 @@ export fn strmap_get(comptime V: type, m: *StrHashMap<V>, key: []const u8) -> ?*
     return vp;
 }
 
-// The value bound to `key`, or `fallback` if absent — the by-value read the pointer-only `?V`
-// cannot provide. `V` is copied out, so the result is independent of later map mutation.
+// The value bound to `key`, or `fallback` if absent — a by-value read that complements the
+// pointer-returning `strmap_get`. `V` is copied out, so the result is independent of later mutation.
 export fn strmap_get_or(comptime V: type, m: *StrHashMap<V>, key: []const u8, fallback: V) -> V {
     if m.cap == 0 {
         return fallback;
@@ -232,6 +233,8 @@ export fn strmap_free(comptime V: type, m: *mut StrHashMap<V>) -> void {
 //   1. Key comparison/hashing needs `where K: Hash + Eq` trait bounds and a way to invoke a
 //      trait method on a comptime-generic value; string keys sidestep this with the built-in
 //      `mem.bytes_equal` + a hand-written FNV.
-//   2. Lookups want `?V` (by-value optional), but MC optionals are pointer-shaped only, so we
-//      return `?*mut V`. A by-value optional over an arbitrary `V` is not expressible today.
+//   2. Lookups return `?*mut V` (a pointer optional) rather than a by-value `?V`. Value
+//      optionals now exist for scalar/address/bool payloads, but not for aggregate `V`
+//      (e.g. a slice), so a by-value optional over an arbitrary `V` is not expressible today —
+//      and the pointer form is wanted anyway (in-place update).
 // ---------------------------------------------------------------------------------------------
