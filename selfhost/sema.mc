@@ -61,6 +61,11 @@ open enum SmKind: u32 {
     dyn_,      // 17 `*mut dyn TRAIT` / `*dyn TRAIT` trait-object fat pointer (P5.10): `nstart`/`nlen`
                //    identify the TRAIT name's lexeme (like `named_`). A method call `d.m(..)` resolves
                //    its result via the trait's collected method signatures.
+    opt_,      // 18 value optional `?T` (G11): `elem` = the payload's kind; `nstart`/`nlen` identify
+               //    the payload's name if it is a `named_` type. A `T` coerces to `?T` (present); `null`
+               //    coerces to any `?T` (absent). `if let v = opt` narrows to the payload (kind `elem`).
+    null_,     // 19 the `null` literal's type — unifies with any `opt_` (as the absent value) and has
+               //    no other use. Never appears as a declared type; only as an expression's type.
 }
 
 // The first-error code surfaced to the gate (an `open enum` so `.raw()` gives the ordinal the C
@@ -199,6 +204,18 @@ fn sm_slice(elem_ty: SmType, is_mut: usize) -> SmType {
 
 // Reconstruct the element `SmType` of a slice (mirrors `sm_arr_elem`). Meaningful when `t.kind == slice_`.
 fn sm_slice_elem(t: SmType) -> SmType {
+    return .{ .kind = t.elem, .ptr_depth = 0, .nstart = t.nstart, .nlen = t.nlen, .arr_len = 0, .elem = .unknown };
+}
+
+// A value optional `?T` (G11): the payload `T` is flattened in like `sm_arr`/`sm_slice` (its kind in
+// `elem`, its name offsets in `nstart`/`nlen`).
+fn sm_opt(payload: SmType) -> SmType {
+    return .{ .kind = .opt_, .ptr_depth = 0, .nstart = payload.nstart, .nlen = payload.nlen, .arr_len = 0, .elem = payload.kind };
+}
+
+// Reconstruct the payload `SmType` of a value optional (mirrors `sm_slice_elem`). Meaningful when
+// `t.kind == opt_`.
+fn sm_opt_payload(t: SmType) -> SmType {
     return .{ .kind = t.elem, .ptr_depth = 0, .nstart = t.nstart, .nlen = t.nlen, .arr_len = 0, .elem = .unknown };
 }
 
@@ -349,6 +366,11 @@ fn sm_type_from_node(s: *mut SmState, tn: u32) -> SmType {
         let elem_m: SmType = sm_type_from_node(s, nd.lhs);
         return sm_slice(elem_m, 1);
     }
+    // A value optional `?T` (G11): resolve the payload and wrap it. Scalar payloads only in the subset.
+    if nd.kind == .type_optional {
+        let payload: SmType = sm_type_from_node(s, nd.lhs);
+        return sm_opt(payload);
+    }
     // A generic instance `S<T>` (P5.5) resolves to a `named_` type carrying the BASE name's lexeme
     // offsets — enough for struct-literal field-NAME checking (which is all generic instances get in
     // the subset). The concrete type argument is not tracked in the resolved type.
@@ -406,6 +428,32 @@ fn sm_types_match(s: *mut SmState, a: SmType, b: SmType) -> bool {
     }
     let ak: u32 = a.kind.raw();
     let bk: u32 = b.kind.raw();
+    // Value-optional coercion (G11): `null` (kind 19) unifies with any `?T` (kind 18) as the absent
+    // value; a plain `T` coerces to `?T` (present) when it matches the payload; and two `?T` match when
+    // their payloads match. Checked before the numeric/named paths so `return idx;`/`return null;` from
+    // a `-> ?usize` fn and `opt == null` all type-check.
+    if ak == 19 && bk == 19 {
+        return true;
+    }
+    if ak == 19 && bk == 18 {
+        return true;
+    }
+    if bk == 19 && ak == 18 {
+        return true;
+    }
+    if ak == 18 && bk == 18 {
+        let pa: SmType = sm_opt_payload(a);
+        let pb: SmType = sm_opt_payload(b);
+        return sm_types_match(s, pa, pb);
+    }
+    if ak == 18 {
+        let pa2: SmType = sm_opt_payload(a);
+        return sm_types_match(s, pa2, b);
+    }
+    if bk == 18 {
+        let pb2: SmType = sm_opt_payload(b);
+        return sm_types_match(s, a, pb2);
+    }
     let a_num: bool = sm_is_num_raw(ak);
     let b_num: bool = sm_is_num_raw(bk);
     if ak == 4 && b_num {
@@ -838,13 +886,32 @@ fn sm_check_enum_lit(s: *mut SmState, node: u32, expected: SmType) -> void {
     }
 }
 
-// True when an assignment target's root binding is a mutable local (`var`). Walks through member
-// (`.f`) and index (`[i]`) chains to the root identifier; anything else is not assignable.
+// True when an assignment target's root binding is a mutable local (`var`) OR a pointer-typed binding
+// (writing THROUGH a pointer is allowed regardless of the pointer variable's own mutability — e.g.
+// `sp.pos = i` where `sp: *mut Split`). Walks member (`.f`) and index (`[i]`) chains to the root
+// identifier; anything else is not assignable. (The subset does not distinguish `*const`/`*mut` in a
+// resolved SmType — both are `ptr_depth > 0` — so this is lenient; gap G32 in the ledger.)
 fn sm_target_mutable(s: *mut SmState, node: u32) -> bool {
     let nd: Node = sm_node(s, node);
     if nd.kind == .ident_expr {
         let name: []const u8 = sm_tok_text(s, nd.main_token);
-        return strmap_contains(u32, &s.muts, name);
+        let is_var: bool = strmap_contains(u32, &s.muts, name);
+        if is_var {
+            return true;
+        }
+        // A pointer-typed param/local is a mutable target through the pointer.
+        let is_local: bool = strmap_contains(SmType, &s.locals, name);
+        if is_local {
+            let t: SmType = strmap_get_or(SmType, &s.locals, name, sm_ty_unknown());
+            if t.ptr_depth > 0 {
+                return true;
+            }
+        }
+        return false;
+    }
+    if nd.kind == .deref {
+        // `p.* = v` writes through the pointer `p` — assignable.
+        return true;
     }
     if nd.kind == .field {
         return sm_target_mutable(s, nd.lhs);
@@ -919,6 +986,9 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
     switch nd.kind {
         .int_literal => { return sm_ty(.int_lit); }
         .bool_literal => { return sm_ty(.bool_); }
+        // `null` (G11): the absent value of a value optional. Its type unifies with any `?T` (see
+        // sm_types_match), so `opt == null` compares and `return null;`/`let x: ?T = null;` coerce.
+        .null_literal => { return sm_ty(.null_); }
         .ident_expr => { return sm_type_of_ident(s, nd.main_token); }
         .call => { return sm_check_call(s, node); }
         .un_neg => {
@@ -1183,6 +1253,30 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
     if nd.kind == .unreachable_stmt {
         // A diverging terminator: no operands, nothing to type-check. The subset does not enforce
         // definite-return, so its only role here is to be ACCEPTED (not fall into "unknown stmt").
+        return;
+    }
+    if nd.kind == .break_stmt || nd.kind == .continue_stmt {
+        // Loop control: no operands. The subset does not verify they occur inside a loop (deferred).
+        return;
+    }
+    if nd.kind == .if_let_stmt {
+        // `if let NAME = EXPR { .. } (else ..)?` (G11): EXPR must be optional-typed; NAME binds to its
+        // payload in the then-branch. Binding is added to the fn-wide locals table (names are unique per
+        // fn — G20), so it is visible in the then-block. A non-optional EXPR binds NAME as `unknown`
+        // (lenient — no dedicated error code in the subset).
+        let opt_ty: SmType = sm_type_of_expr(s, nd.lhs);
+        var payload: SmType = sm_ty_unknown();
+        if opt_ty.kind == .opt_ {
+            payload = sm_opt_payload(opt_ty);
+        }
+        let name: []const u8 = sm_tok_text(s, nd.main_token);
+        strmap_put(SmType, &s.locals, name, payload);
+        let then_b: u32 = sm_extra(s, nd.rhs);
+        let else_b: u32 = sm_extra(s, nd.rhs + 1);
+        sm_check_stmt(s, then_b);
+        if else_b != 0 {
+            sm_check_stmt(s, else_b);
+        }
         return;
     }
     if nd.kind == .block {

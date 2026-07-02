@@ -160,6 +160,18 @@ open enum NodeKind: u32 {
     // ----- bool-literal addition (appended to keep prior ordinals stable) -----
     bool_literal,     // 66 `true` / `false` primary: main_token = the `kw_true`/`kw_false` token. Types
                       //    as `bool`; emits the C `true`/`false` (stdbool.h is in the prelude).
+    // ----- value-optional `?T` additions (G11 mirrored inside mcc2's subset) — appended to keep
+    // prior ordinals stable. A `?T` for a scalar payload T lowers to a tagged `{present, value}`
+    // struct `mc_opt_<T>` (matching the real backend's mc_opt_<T> / isValueOptionalPayloadClass).
+    type_optional,    // 67 `?T` value-optional TYPE: lhs = the payload type node. Scalar payloads only
+                      //    in the subset (aggregate/slice payloads deferred — see the ledger).
+    null_literal,     // 68 `null` primary: main_token = the `null` keyword token. No operand. Coerces
+                      //    to any `?T` as the ABSENT value; only valid where an optional target is known.
+    if_let_stmt,      // 69 `if let NAME = EXPR { .. } (else ..)?`: main_token = the binding NAME token;
+                      //    lhs = the optional-typed EXPR; rhs = a fixed 2-slot rec [then_block,
+                      //    else(0=none)] (like `if_stmt`). Narrows EXPR to its payload, binding NAME.
+    break_stmt,       // 70 `break;` loop terminator (no operand). Emits the C `break;`.
+    continue_stmt,    // 71 `continue;` loop continuation (no operand). Emits the C `continue;`.
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -340,6 +352,13 @@ fn infix_op(p: *mut Parser) -> OpInfo {
 // ----- type grammar: IDENT | `*` Type | `*mut` Type | `[]const` Type | `[]mut` Type -----
 
 fn parse_type(p: *mut Parser) -> u32 {
+    // `?T` value optional (G11 in the subset): a leading `?` wraps the payload type. The payload is
+    // parsed recursively (a scalar in the subset), and the whole thing becomes a `type_optional` node
+    // that emit lowers to the tagged `mc_opt_<T>` aggregate.
+    if eat(p, .question) {
+        let payload: u32 = parse_type(p);
+        return add_node(p, .type_optional, 0, payload, 0);
+    }
     if eat(p, .star) {
         var is_mut: u32 = 0;
         if eat(p, .kw_mut) {
@@ -601,6 +620,14 @@ fn parse_primary(p: *mut Parser) -> u32 {
         p_advance(p);
         return add_node(p, .bool_literal, bf, 0, 0);
     }
+    // `null` primary (G11 in the subset): the ABSENT value of a value optional. It carries no type of
+    // its own — sema/emit resolve it against the expected `?T` target (a typed init/return, or the
+    // other side of `== null`). main_token keeps the `null` keyword token for diagnostics.
+    if at(p, .kw_null) {
+        let nt: u32 = p.tok as u32;
+        p_advance(p);
+        return add_node(p, .null_literal, nt, 0, 0);
+    }
     // `sizeof(TYPE)` / `alignof(TYPE)` (P5.9): both are lexer KEYWORDS (kw_sizeof/kw_alignof) and take
     // a TYPE (not an expr) in the subset — matching MC's builtins. The type node is kept in `lhs`.
     if at(p, .kw_sizeof) {
@@ -812,6 +839,32 @@ fn parse_if(p: *mut Parser) -> u32 {
     return add_node(p, .if_stmt, if_tok, cond, if_rec);
 }
 
+// if-let := `if` `let` IDENT `=` Expr Block (`else` (Block | if))?  (G11 in the subset). Narrows an
+// optional-typed EXPR to its payload, binding IDENT in the then-branch. main_token = the binding
+// IDENT; lhs = EXPR (the `?T` value); rhs = a fixed 2-slot rec [then_block, else(0=none)] (same shape
+// as `if_stmt`, so emit can share the else/else-if handling). The cursor is at `if`.
+fn parse_if_let(p: *mut Parser) -> u32 {
+    p_advance(p); // `if`
+    p_advance(p); // `let`
+    let name: u32 = p.tok as u32;
+    expect(p, .identifier);
+    expect(p, .equal);
+    let opt_expr: u32 = parse_expr(p, 0);
+    let then_block: u32 = parse_block(p);
+    var else_node: u32 = 0;
+    if eat(p, .kw_else) {
+        if at(p, .kw_if) {
+            else_node = parse_if(p); // `else if` chain
+        } else {
+            else_node = parse_block(p);
+        }
+    }
+    let rec: u32 = vec_len(u32, &p.extra) as u32;
+    vec_push(u32, &p.extra, then_block);
+    vec_push(u32, &p.extra, else_node);
+    return add_node(p, .if_let_stmt, name, opt_expr, rec);
+}
+
 // switch := `switch` Expr `{` (Pat `=>` Block (`,`)?)* `}`  where Pat is `.` IDENT | `_`.
 // (trailing comma allowed, per MC). Each arm is a (pattern-token, block-node) PAIR flushed via
 // `emit_pair_list`: the pattern token is the variant IDENT for a `.variant` arm and the `_`
@@ -907,7 +960,24 @@ fn parse_stmt(p: *mut Parser) -> u32 {
         return add_node(p, .return_stmt, ret_tok, ret_val, 0);
     }
     if at(p, .kw_if) {
+        // `if let NAME = EXPR { .. }` (G11): a `let` right after `if` opens the optional-narrowing form.
+        if at_next(p, 1, .kw_let) {
+            return parse_if_let(p);
+        }
         return parse_if(p);
+    }
+    // `break;` / `continue;` loop control statements.
+    if at(p, .kw_break) {
+        let bt: u32 = p.tok as u32;
+        p_advance(p);
+        expect(p, .semicolon);
+        return add_node(p, .break_stmt, bt, 0, 0);
+    }
+    if at(p, .kw_continue) {
+        let ct: u32 = p.tok as u32;
+        p_advance(p);
+        expect(p, .semicolon);
+        return add_node(p, .continue_stmt, ct, 0, 0);
     }
     if at(p, .kw_while) {
         let while_tok: u32 = p.tok as u32;

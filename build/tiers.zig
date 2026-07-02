@@ -409,6 +409,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-bitwise-test"));
     // selfhost-addr-test (CAPSTONE): mcc2 compiles the real std module std/addr.mc to clang-clean C, plus a behavioral round-trip of bool literals + the address-class model (PAddr/VAddr/phys/as-mint) via the mcc2 CLI.
     m0_step.dependOn(ctx.cmd("selfhost-addr-test"));
+    // selfhost-mem-test (VALUE-OPTIONAL milestone): mcc2 compiles a second real std module std/mem.mc (which returns `?usize`) to clang-clean C after adding `?T` value optionals to the subset (G11), plus a behavioral round-trip of `?usize` via if let / == null / != null.
+    m0_step.dependOn(ctx.cmd("selfhost-mem-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

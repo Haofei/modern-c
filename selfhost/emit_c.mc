@@ -137,6 +137,13 @@ fn e_type(p: *mut Parser, sb: *mut StrBuf, tn: u32) -> void {
         sb_put_cstr(sb, "__dyn");
         return;
     }
+    // A value optional `?T` (G11) is the tagged aggregate `mc_opt_<T>` (see `e_opt_typedefs`). The
+    // payload's lexeme (with the active generic type param substituted) names the struct, matching the
+    // real backend's `mc_opt_<T>` (src/lower_c_names.zig).
+    if nd.kind == .type_optional {
+        e_put_opt_name(p, sb, nd.lhs);
+        return;
+    }
     // The `type` keyword annotation (a `comptime T: type` param) has no C spelling; it is dropped
     // from emitted signatures (see `e_gfn_sig_mono`), so nothing is emitted here.
     if nd.kind == .type_kw {
@@ -226,6 +233,231 @@ fn e_set_sub(p: *mut Parser, tparam_tok: u32, concrete_node: u32) -> void {
 
 fn e_clear_sub(p: *mut Parser) -> void {
     p.sub_concrete = 0;
+}
+
+// ----- value-optional `?T` support (G11 in the subset) -----
+//
+// A `?T` for a scalar payload T lowers to the real backend's tagged aggregate
+//   typedef struct mc_opt_<T> { bool present; <T> value; } mc_opt_<T>;
+// Present = `(mc_opt_<T>){ .present = true, .value = v }`; absent (`null`) = `{ .present = false }`;
+// `if let v = opt` -> `if (opt.present) { T v = opt.value; .. }`; `opt == null` -> `(!opt.present)`.
+// The payload SUFFIX uses the MC type name (e.g. `usize`), matching src/lower_c_names.zig's mc_opt_<T>.
+
+// Emit the `mc_opt_<T>` type NAME for a payload type node (T's lexeme, with substitution applied).
+fn e_put_opt_name(p: *mut Parser, sb: *mut StrBuf, payload_tn: u32) -> void {
+    sb_put_cstr(sb, "mc_opt_");
+    let lex: []const u8 = e_type_arg_lexeme(p, payload_tn);
+    sb_put_str(sb, lex);
+}
+
+// True when a `?T` payload node uses the tagged value repr (a `type_name`: scalar/address/struct). A
+// pointer/slice/dyn payload keeps a sentinel repr (deferred in the subset), so it is skipped.
+fn e_opt_payload_ok(p: *mut Parser, payload_tn: u32) -> bool {
+    let nd: Node = e_node(p, payload_tn);
+    return nd.kind == .type_name;
+}
+
+// True when an EARLIER `type_optional` node (index < `cur`) has the same payload lexeme — the dedup
+// for `e_opt_typedefs` (mirrors `e_slice_dup_before`).
+fn e_opt_dup_before(p: *mut Parser, cur: u32, lex: []const u8) -> bool {
+    var j: u32 = 1;
+    while j < cur {
+        let nd: Node = e_node(p, j);
+        if nd.kind == .type_optional {
+            let ok: bool = e_opt_payload_ok(p, nd.lhs);
+            if ok {
+                let jlex: []const u8 = e_tok_text(p, e_node(p, nd.lhs).main_token);
+                let same: bool = mem_eql(jlex, lex);
+                if same {
+                    return true;
+                }
+            }
+        }
+        j = j + 1;
+    }
+    return false;
+}
+
+// Emit one `typedef struct mc_opt_<T> { bool present; <T> value; } mc_opt_<T>;`.
+fn e_emit_one_opt_typedef(p: *mut Parser, sb: *mut StrBuf, payload_tn: u32) -> void {
+    let lex: []const u8 = e_tok_text(p, e_node(p, payload_tn).main_token);
+    sb_put_cstr(sb, "typedef struct mc_opt_");
+    sb_put_str(sb, lex);
+    sb_put_cstr(sb, " {\n    bool present;\n    ");
+    e_type(p, sb, payload_tn);
+    sb_put_cstr(sb, " value;\n} mc_opt_");
+    sb_put_str(sb, lex);
+    sb_put_cstr(sb, ";\n");
+}
+
+// Emit every `mc_opt_<T>` typedef used in the module, deduped by payload lexeme. Emitted after the
+// slice typedefs and before enum/struct typedefs (a struct field or fn signature may reference one).
+fn e_opt_typedefs(p: *mut Parser, sb: *mut StrBuf) -> void {
+    let total: u32 = vec_len(Node, &p.nodes) as u32;
+    var emitted: u32 = 0;
+    var i: u32 = 1;
+    while i < total {
+        let nd: Node = e_node(p, i);
+        if nd.kind == .type_optional {
+            let ok: bool = e_opt_payload_ok(p, nd.lhs);
+            if ok {
+                let lex: []const u8 = e_tok_text(p, e_node(p, nd.lhs).main_token);
+                let dup: bool = e_opt_dup_before(p, i, lex);
+                if !dup {
+                    e_emit_one_opt_typedef(p, sb, nd.lhs);
+                    emitted = emitted + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    if emitted > 0 {
+        sb_put_cstr(sb, "\n");
+    }
+}
+
+// The current function's declared return TYPE node (`p.cur_fn`'s [.,.,ret_ty,.] record), or 0.
+fn e_ret_type_node(p: *mut Parser) -> u32 {
+    let fnn: u32 = p.cur_fn;
+    if fnn == 0 {
+        return 0;
+    }
+    let nd: Node = e_node(p, fnn);
+    return e_extra(p, nd.lhs + 2);
+}
+
+// The PAYLOAD type node of an optional-typed expression (an ident bound to a `?T` local, or a call to
+// a fn returning `?T`), or 0 when the expression is not resolvably optional. Used to type the `if let`
+// binding and its temp.
+fn e_opt_payload_type_node(p: *mut Parser, expr: u32) -> u32 {
+    let nd: Node = e_node(p, expr);
+    if nd.kind == .ident_expr {
+        let name: []const u8 = e_tok_text(p, nd.main_token);
+        let tn: u32 = e_local_type_node(p, name);
+        if tn == 0 {
+            return 0;
+        }
+        let tnode: Node = e_node(p, tn);
+        if tnode.kind == .type_optional {
+            return tnode.lhs;
+        }
+        return 0;
+    }
+    if nd.kind == .call {
+        let cnode: Node = e_node(p, nd.lhs);
+        if cnode.kind == .ident_expr {
+            let cname: []const u8 = e_tok_text(p, cnode.main_token);
+            let fnn: u32 = e_find_fn(p, cname);
+            if fnn != 0 {
+                let fnnode: Node = e_node(p, fnn);
+                let rtn: u32 = e_extra(p, fnnode.lhs + 2);
+                if rtn != 0 {
+                    let rnode: Node = e_node(p, rtn);
+                    if rnode.kind == .type_optional {
+                        return rnode.lhs; // the payload type node
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+    return 0;
+}
+
+// True when an expression ALREADY yields a `?T` aggregate (so it should pass through a coercion site
+// unchanged, not be re-wrapped as present). `null` is NOT optional-typed here (it is handled as the
+// explicit absent case by the caller).
+fn e_expr_is_optional(p: *mut Parser, expr: u32) -> bool {
+    let tn: u32 = e_opt_payload_type_node(p, expr);
+    return tn != 0;
+}
+
+// Coerce `val_node` into the value optional whose TYPE node is `opt_tn` (a `type_optional`): `null` ->
+// `(mc_opt_<T>){ .present = false }`; an already-optional source -> pass-through; any other value ->
+// `(mc_opt_<T>){ .present = true, .value = <val> }`. Mirrors the real backend's emitValueOptionalCoercion.
+fn e_emit_opt_value(p: *mut Parser, sb: *mut StrBuf, val_node: u32, opt_tn: u32) -> void {
+    let opt_node: Node = e_node(p, opt_tn);
+    let payload_tn: u32 = opt_node.lhs;
+    let vnd: Node = e_node(p, val_node);
+    if vnd.kind == .null_literal {
+        sb_put_cstr(sb, "(");
+        e_put_opt_name(p, sb, payload_tn);
+        sb_put_cstr(sb, "){ .present = false }");
+        return;
+    }
+    let passthrough: bool = e_expr_is_optional(p, val_node);
+    if passthrough {
+        e_expr(p, sb, val_node);
+        return;
+    }
+    sb_put_cstr(sb, "(");
+    e_put_opt_name(p, sb, payload_tn);
+    sb_put_cstr(sb, "){ .present = true, .value = ");
+    e_expr(p, sb, val_node);
+    sb_put_cstr(sb, " }");
+}
+
+// Emit just the STATEMENTS of a block (no surrounding braces) at `depth` — used to inline an `if let`
+// then-branch after its narrowed binding is declared.
+fn e_emit_block_body(p: *mut Parser, sb: *mut StrBuf, block_node: u32, depth: u32) -> void {
+    let nd: Node = e_node(p, block_node);
+    let run: u32 = nd.lhs;
+    let count: u32 = e_extra(p, run);
+    var i: u32 = 0;
+    while i < count {
+        let s: u32 = e_extra(p, run + 1 + i);
+        e_stmt(p, sb, s, depth);
+        i = i + 1;
+    }
+}
+
+// Emit an `if let NAME = EXPR { .. } (else ..)?` (G11). EXPR is stashed in a per-statement temp (named
+// by the node index, unique) so a call subject is evaluated exactly once, then narrowed:
+//   { mc_opt_<T> __mc_iflet_N = <EXPR>;
+//     if (__mc_iflet_N.present) { <T> NAME = __mc_iflet_N.value; <then> } else { <else> } }
+fn e_if_let(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
+    let nd: Node = e_node(p, n);
+    let name: []const u8 = e_tok_text(p, nd.main_token);
+    let opt_expr: u32 = nd.lhs;
+    let rec: u32 = nd.rhs;
+    let then_b: u32 = e_extra(p, rec);
+    let else_b: u32 = e_extra(p, rec + 1);
+    let payload_tn: u32 = e_opt_payload_type_node(p, opt_expr);
+    e_indent(sb, depth);
+    sb_put_cstr(sb, "{\n");
+    // temp: mc_opt_<T> __mc_iflet_N = <EXPR>;
+    e_indent(sb, depth + 1);
+    e_put_opt_name(p, sb, payload_tn);
+    sb_put_cstr(sb, " __mc_iflet_");
+    sb_put_u32(sb, n);
+    sb_put_cstr(sb, " = ");
+    e_expr(p, sb, opt_expr);
+    sb_put_cstr(sb, ";\n");
+    // if (__mc_iflet_N.present) { <T> NAME = __mc_iflet_N.value; <then stmts> }
+    e_indent(sb, depth + 1);
+    sb_put_cstr(sb, "if (__mc_iflet_");
+    sb_put_u32(sb, n);
+    sb_put_cstr(sb, ".present) {\n");
+    e_indent(sb, depth + 2);
+    e_emit_decl(p, sb, payload_tn, name);
+    sb_put_cstr(sb, " = __mc_iflet_");
+    sb_put_u32(sb, n);
+    sb_put_cstr(sb, ".value;\n");
+    e_emit_block_body(p, sb, then_b, depth + 2);
+    e_indent(sb, depth + 1);
+    sb_put_cstr(sb, "}");
+    if else_b != 0 {
+        sb_put_cstr(sb, " else ");
+        let en: Node = e_node(p, else_b);
+        if en.kind == .if_stmt {
+            e_stmt_inline(p, sb, else_b, depth + 1);
+        } else {
+            e_block(p, sb, else_b, depth + 1);
+        }
+    }
+    sb_put_cstr(sb, "\n");
+    e_indent(sb, depth);
+    sb_put_cstr(sb, "}\n");
 }
 
 // ----- P5.7 slice (fat-pointer) support -----
@@ -788,6 +1020,32 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         return;
     }
     if e_is_binop(nd.kind) {
+        // `opt == null` / `opt != null` (G11): a value optional cannot be compared to a bare literal in
+        // C, so lower to a `.present` test — `== null` -> `(!(opt).present)`, `!= null` -> `((opt).present)`.
+        let is_eq: bool = nd.kind == .bin_eq;
+        let is_ne: bool = nd.kind == .bin_ne;
+        if is_eq || is_ne {
+            // Bind each operand Node to a local before the `.kind ==` test: a `<call>.kind == <lit>`
+            // sequenced comparison cannot recover its operand type in the C backend (gap G23).
+            let lnode: Node = e_node(p, nd.lhs);
+            let rnode: Node = e_node(p, nd.rhs);
+            let lnull: bool = lnode.kind == .null_literal;
+            let rnull: bool = rnode.kind == .null_literal;
+            if lnull || rnull {
+                var other: u32 = nd.lhs;
+                if lnull {
+                    other = nd.rhs;
+                }
+                if is_eq {
+                    sb_put_cstr(sb, "(!(");
+                } else {
+                    sb_put_cstr(sb, "((");
+                }
+                e_expr(p, sb, other);
+                sb_put_cstr(sb, ").present)");
+                return;
+            }
+        }
         sb_put_cstr(sb, "(");
         e_expr(p, sb, nd.lhs);
         e_binop(sb, nd.kind);
@@ -1134,7 +1392,17 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
         e_emit_decl(p, sb, nd.lhs, name);
         sb_put_cstr(sb, " = ");
         let init_nd: Node = e_node(p, nd.rhs);
-        if init_nd.kind == .struct_lit {
+        // `let x: ?T = <init>;` (G11): coerce the init into the tagged optional (`null` -> absent, an
+        // optional-typed source -> pass-through, any other value -> present). The declared type node
+        // is `nd.lhs`; `e_emit_decl` already emitted `mc_opt_<T> x`.
+        var ann_is_opt: bool = false;
+        if nd.lhs != 0 {
+            let annode: Node = e_node(p, nd.lhs);
+            ann_is_opt = annode.kind == .type_optional;
+        }
+        if ann_is_opt {
+            e_emit_opt_value(p, sb, nd.rhs, nd.lhs);
+        } else if init_nd.kind == .struct_lit {
             // Emit a target-typed compound literal using the annotation's type.
             e_struct_lit(p, sb, nd.rhs, nd.lhs);
         } else if init_nd.kind == .array_lit {
@@ -1156,7 +1424,17 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
             // `(RET){...}` (a bare `{...}` is not a valid C expression). The target type is the current
             // function's declared return type (recovered from `p.cur_fn`'s [.,.,ret_ty,.] record).
             let rv_nd: Node = e_node(p, nd.lhs);
-            if rv_nd.kind == .struct_lit {
+            // `return <v>;` from a `-> ?T` fn (G11): coerce into the tagged optional (`null` -> absent,
+            // an optional-typed source -> pass-through, any other value -> present).
+            let ret_tn: u32 = e_ret_type_node(p);
+            var ret_is_opt: bool = false;
+            if ret_tn != 0 {
+                let retnode: Node = e_node(p, ret_tn);
+                ret_is_opt = retnode.kind == .type_optional;
+            }
+            if ret_is_opt {
+                e_emit_opt_value(p, sb, nd.lhs, ret_tn);
+            } else if rv_nd.kind == .struct_lit {
                 let fn_nd: Node = e_node(p, p.cur_fn);
                 let ret_ty: u32 = e_extra(p, fn_nd.lhs + 2);
                 e_struct_lit(p, sb, nd.lhs, ret_ty);
@@ -1218,6 +1496,21 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
         // trailing return (the C compiler sees the path as dead).
         e_indent(sb, depth);
         sb_put_cstr(sb, "mc_trap_Unreachable();\n");
+        return;
+    }
+    if nd.kind == .if_let_stmt {
+        // `if let NAME = EXPR { .. } (else ..)?` (G11): narrow the optional into a temp + payload binding.
+        e_if_let(p, sb, n, depth);
+        return;
+    }
+    if nd.kind == .break_stmt {
+        e_indent(sb, depth);
+        sb_put_cstr(sb, "break;\n");
+        return;
+    }
+    if nd.kind == .continue_stmt {
+        e_indent(sb, depth);
+        sb_put_cstr(sb, "continue;\n");
         return;
     }
     if nd.kind == .switch_stmt {
@@ -2051,6 +2344,8 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
     sb_put_cstr(sb, "__attribute__((noreturn, unused)) static inline void mc_trap_Unreachable(void) { __builtin_trap(); }\n\n");
     // P5.7: fat-pointer slice typedefs first (a struct field or fn signature may reference one).
     e_slice_typedefs(p, sb);
+    // G11: value-optional `mc_opt_<T>` typedefs (a struct field, fn signature, or local may use one).
+    e_opt_typedefs(p, sb);
     let root: u32 = p.root;
     let rnode: Node = e_node(p, root);
     let run: u32 = rnode.lhs;
