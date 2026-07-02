@@ -27,6 +27,7 @@ const mir_tests = @import("mir_tests.zig");
 const monomorphize = @import("monomorphize.zig");
 const monomorphize_tests = @import("monomorphize_tests.zig");
 const async_lower = @import("async_lower.zig");
+const mangle_private = @import("mangle_private.zig");
 const parser = @import("parser.zig");
 const parser_tests = @import("parser_tests.zig");
 const sema = @import("sema.zig");
@@ -761,7 +762,14 @@ fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *
     // Specialize comptime-parameter type-generic functions (section 22). This is
     // a no-op for modules without any such function, so non-generic code is
     // passed through untouched.
-    return monomorphize.transformReport(allocator, lowered, diag) catch |err| {
+    const specialized = monomorphize.transformReport(allocator, lowered, diag) catch |err| {
+        diag.render();
+        return err;
+    };
+    // G22: uniquify file-private top-level names that collide across imported files (§30).
+    // No-op unless two strict files each define a file-private value of the same name; keeps
+    // the flat namespace for every non-colliding `pub`/`export` name.
+    return mangle_private.transform(allocator, specialized, combined_boundaries) catch |err| {
         diag.render();
         return err;
     };
