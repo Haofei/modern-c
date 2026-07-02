@@ -1946,6 +1946,27 @@ fn sm_check_block(s: *mut SmState, block: u32) -> void {
 
 // ----- module driver (two passes) -----
 
+// Whether `name` is already claimed by ANY top-level declaration — a fn/extern-fn, a struct, an enum,
+// or a const/global. MC has ONE flat top-level namespace (G22), but sema keeps four tables; checking
+// all of them at each registration catches cross-namespace collisions (e.g. `struct S` + `fn S`), which
+// otherwise pass sema (per-table) yet emit C that clang rejects ("redefinition as a different kind of
+// symbol"). Collect runs in source order, so this catches a clash in either declaration order.
+fn sm_toplevel_taken(s: *mut SmState, name: []const u8) -> bool {
+    if strmap_contains(u32, &s.fns, name) {
+        return true;
+    }
+    if strmap_contains(u32, &s.structs, name) {
+        return true;
+    }
+    if strmap_contains(u32, &s.enums, name) {
+        return true;
+    }
+    if strmap_contains(SmType, &s.globals, name) {
+        return true;
+    }
+    return false;
+}
+
 // Collect one struct definition (name -> fields window) from a field run `[count, (name,type)*]`.
 // Shared by the concrete `struct_decl` and generic `struct_gdecl` paths (P5.5); `is_generic` marks
 // the latter so a targeting struct literal only has its field NAMES checked (see sm_check_struct_lit).
@@ -1966,7 +1987,7 @@ fn sm_collect_struct(s: *mut SmState, name_tok: u32, srun: u32, is_generic: u32)
     let sidx: u32 = vec_len(SmStruct, &s.struct_defs) as u32;
     vec_push(SmStruct, &s.struct_defs, .{ .field_start = fstart, .field_count = fcount, .is_generic = is_generic });
     let sname: []const u8 = sm_tok_text(s, name_tok);
-    if strmap_contains(u32, &s.structs, sname) {
+    if sm_toplevel_taken(s, sname) {
         sm_err(s, .duplicate_decl);
     }
     strmap_put(u32, &s.structs, sname, sidx);
@@ -2006,9 +2027,7 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             // every use resolves (like a fn/local). The initializer is type-checked in a later pass.
             let cty: SmType = sm_type_from_node(s, dn.lhs);
             let cname: []const u8 = sm_tok_text(s, dn.main_token);
-            // Consts and globals share `s.globals`, so this rejects duplicate const/global names in
-            // either direction (a repeated `const`, a repeated `global`, or a const shadowing a global).
-            if strmap_contains(SmType, &s.globals, cname) {
+            if sm_toplevel_taken(s, cname) {
                 sm_err(s, .duplicate_decl);
             }
             strmap_put(SmType, &s.globals, cname, cty);
@@ -2018,7 +2037,7 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             // type T so every use resolves and writes are allowed. Init (if any) checked in a later pass.
             let gty: SmType = sm_type_from_node(s, dn.lhs);
             let gname: []const u8 = sm_tok_text(s, dn.main_token);
-            if strmap_contains(SmType, &s.globals, gname) {
+            if sm_toplevel_taken(s, gname) {
                 sm_err(s, .duplicate_decl);
             }
             strmap_put(SmType, &s.globals, gname, gty);
@@ -2054,7 +2073,7 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let eidx: u32 = vec_len(SmEnum, &s.enum_defs) as u32;
             vec_push(SmEnum, &s.enum_defs, .{ .variant_start = vstart, .variant_count = vcount, .repr = repr_kind, .is_open = is_open, .decl_node = d });
             let ename: []const u8 = sm_tok_text(s, dn.main_token);
-            if strmap_contains(u32, &s.enums, ename) {
+            if sm_toplevel_taken(s, ename) {
                 sm_err(s, .duplicate_decl);
             }
             strmap_put(u32, &s.enums, ename, eidx);
@@ -2100,7 +2119,7 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let ex_sig_idx: u32 = vec_len(SmSig, &s.sigs) as u32;
             vec_push(SmSig, &s.sigs, .{ .ret = ex_ret_ty, .param_start = ex_pstart, .param_count = ex_pcount, .is_generic = 0, .tparam_start = 0, .tparam_len = 0, .ret_is_tparam = 0 });
             let ex_name: []const u8 = sm_tok_text(s, dn.main_token);
-            if strmap_contains(u32, &s.fns, ex_name) {
+            if sm_toplevel_taken(s, ex_name) {
                 sm_err(s, .duplicate_decl);
             }
             strmap_put(u32, &s.fns, ex_name, ex_sig_idx);
@@ -2149,7 +2168,7 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let sig_idx: u32 = vec_len(SmSig, &s.sigs) as u32;
             vec_push(SmSig, &s.sigs, .{ .ret = ret_ty, .param_start = pstart, .param_count = pcount, .is_generic = is_generic, .tparam_start = tp_start, .tparam_len = tp_len, .ret_is_tparam = ret_is_tp });
             let name: []const u8 = sm_tok_text(s, dn.main_token);
-            if strmap_contains(u32, &s.fns, name) {
+            if sm_toplevel_taken(s, name) {
                 sm_err(s, .duplicate_decl);
             }
             strmap_put(u32, &s.fns, name, sig_idx);
