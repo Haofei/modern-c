@@ -2,7 +2,7 @@
 // SPEC: milestone=try-propagation
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_TRY_REQUIRES_RESULT_OR_NULLABLE,E_RETURN_TYPE_MISMATCH,E_CALL_ARG_COUNT,E_NO_IMPLICIT_POINTER_CONVERSION,E_UNHANDLED_RESULT
+// SPEC: check=E_TRY_REQUIRES_RESULT_OR_NULLABLE,E_RETURN_TYPE_MISMATCH,E_CALL_ARG_COUNT,E_UNHANDLED_RESULT
 
 extern fn make_result_u32() -> Result<u32, Error>;
 extern fn make_result_pointer(p: *mut u8) -> Result<*mut u8, Error>;
@@ -200,13 +200,13 @@ fn reject_direct_call_nullable_try_return_type() -> u32 {
     return make_nullable_pointer()?;
 }
 
-fn reject_direct_call_result_pointer_try_return_conversion(p: *mut u8) -> *const u8 {
-    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+// The `?` try-unwrap yields a `*mut u8` ok/some payload that const-narrows to the `*const u8`
+// return type — an allowed G30 coercion (identical plain-pointer repr).
+fn accept_direct_call_result_pointer_try_return_conversion(p: *mut u8) -> *const u8 {
     return make_result_pointer(p)?;
 }
 
-fn reject_direct_call_nullable_pointer_try_return_conversion() -> *const u8 {
-    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+fn accept_direct_call_nullable_pointer_try_return_conversion() -> *const u8 {
     return make_nullable_mut_pointer()?;
 }
 

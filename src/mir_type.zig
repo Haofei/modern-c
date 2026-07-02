@@ -191,7 +191,7 @@ pub fn typesAreCompatible(target: ValueType, source: ValueType) bool {
                 else => unreachable,
             };
             if (samePointerShape(target_shape, source_shape)) break :blk true;
-            break :blk sliceConstNarrowing(target_shape, source_shape);
+            break :blk viewConstNarrowing(target_shape, source_shape);
         },
         .nullable_pointer => |target_shape| samePointerShape(target_shape, switch (source) {
             .nullable_pointer => |source_shape| source_shape,
@@ -273,19 +273,22 @@ pub fn isPointerLikeType(ty: ValueType) bool {
     return ty == .pointer or ty == .nullable_pointer;
 }
 
-// A `[]mut T` source is compatible with a `[]const T` target (safe const-narrowing): both
-// are slices of the same element type and only the pointee's constness differs. The fat
-// pointer layout is identical, so this is a no-op coercion (see sema
-// constNarrowingSliceConversionCtx). Scoped to slices to match the language-gap fix.
-pub fn sliceConstNarrowing(target: PointerShape, source: PointerShape) bool {
-    return target.kind == .slice and source.kind == .slice and
-        target.mutability == .@"const" and source.mutability == .mut and
+// A `[]mut T` / `*mut T` source is compatible with a `[]const T` / `*const T` target (safe
+// const-narrowing): both sides are the SAME pointer kind over the same element type and only
+// the pointee's constness differs. Representation is identical (a plain pointer for a single
+// object, a `{ptr,len}` fat pointer for a slice), so this is a no-op coercion (see sema
+// constNarrowingViewConversionCtx). Scoped to single pointers (G30) + slices (G12); raw-many
+// (`[*]mut`) const-narrows stay explicit.
+pub fn viewConstNarrowing(target: PointerShape, source: PointerShape) bool {
+    return target.kind == source.kind and
+        (target.kind == .slice or target.kind == .single) and
+        source.mutability == .mut and target.mutability != .mut and
         std.mem.eql(u8, target.child, source.child);
 }
 
-// True when `target`/`source` are the `[]const T`/`[]mut T` value types of a safe slice
-// const-narrowing (used by the MIR builder to treat an explicit `as` cast as transparent).
-pub fn isSliceConstNarrowCast(target: ValueType, source: ValueType) bool {
+// True when `target`/`source` are the value types of a safe view const-narrowing (used by
+// the MIR builder to treat an explicit `as` cast as transparent).
+pub fn isViewConstNarrowCast(target: ValueType, source: ValueType) bool {
     const target_shape = switch (target) {
         .pointer => |shape| shape,
         else => return false,
@@ -294,7 +297,7 @@ pub fn isSliceConstNarrowCast(target: ValueType, source: ValueType) bool {
         .pointer => |shape| shape,
         else => return false,
     };
-    return sliceConstNarrowing(target_shape, source_shape);
+    return viewConstNarrowing(target_shape, source_shape);
 }
 
 pub fn samePointerShape(left: PointerShape, right: PointerShape) bool {

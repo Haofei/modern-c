@@ -2318,7 +2318,7 @@ test "MIR verifier reports general return local and assignment conversions" {
         \\    return p;
         \\}
         \\
-        \\fn reject_return_pointer_conversion(p: *mut u8) -> *const u8 {
+        \\fn accept_return_pointer_const_narrow(p: *mut u8) -> *const u8 {
         \\    return p;
         \\}
         \\
@@ -2330,7 +2330,7 @@ test "MIR verifier reports general return local and assignment conversions" {
         \\    return p;
         \\}
         \\
-        \\fn reject_initializer_pointer_conversion(p: *mut u8) -> void {
+        \\fn accept_initializer_pointer_const_narrow(p: *mut u8) -> void {
         \\    let q: *const u8 = p;
         \\}
         \\
@@ -2442,10 +2442,11 @@ test "MIR verifier reports general return local and assignment conversions" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_return_type pass=conversion finding=return_type_mismatch source_type=u32") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_local_initializer pass=conversion finding=initializer_type_mismatch source_type=u32") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assignment pass=conversion finding=assignment_type_mismatch source_type=u32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_return_pointer_conversion pass=conversion finding=return_pointer_conversion source_type=*mut") != null);
+    // G30: a `*mut T` -> `*const T` const-narrow is a safe no-op coercion, NOT a reported conversion.
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_return_pointer_const_narrow pass=conversion") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_return_pointer_element_conversion pass=conversion finding=return_pointer_conversion source_type=*mut") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_return_c_void_conversion pass=conversion finding=return_c_void_conversion source_type=*mut c_void") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_initializer_pointer_conversion pass=conversion finding=initializer_pointer_conversion source_type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_initializer_pointer_const_narrow pass=conversion") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_initializer_pointer_element_conversion pass=conversion finding=initializer_pointer_conversion source_type=*mut") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_initializer_c_void_conversion pass=conversion finding=initializer_c_void_conversion source_type=*mut") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_nullable_initializer_pointer_conversion pass=conversion finding=initializer_pointer_conversion source_type=*mut") != null);
@@ -3642,7 +3643,7 @@ test "MIR verifier reports Result try payload return mismatches" {
         \\    return make_result_pointer()?;
         \\}
         \\
-        \\fn reject_result_pointer_payload_conversion() -> *const u8 {
+        \\fn accept_result_pointer_payload_const_narrow() -> *const u8 {
         \\    return make_result_pointer()?;
         \\}
         \\
@@ -3658,7 +3659,7 @@ test "MIR verifier reports Result try payload return mismatches" {
         \\    return make_result_pointer()?;
         \\}
         \\
-        \\fn reject_nullable_pointer_payload_conversion() -> *const u8 {
+        \\fn accept_nullable_pointer_payload_const_narrow() -> *const u8 {
         \\    return make_nullable_mut_pointer()?;
         \\}
         \\
@@ -3666,41 +3667,41 @@ test "MIR verifier reports Result try payload return mismatches" {
         \\    return make_nullable_c_void_pointer()?;
         \\}
         \\
-        \\fn reject_result_try_local_initializer() -> void {
+        \\fn accept_result_try_local_initializer_const_narrow() -> void {
         \\    let ptr: *const u8 = make_result_pointer()?;
         \\}
         \\
-        \\fn reject_result_try_assignment(fallback: *const u8) -> void {
+        \\fn accept_result_try_assignment_const_narrow(fallback: *const u8) -> void {
         \\    var ptr: *const u8 = fallback;
         \\    ptr = make_result_pointer()?;
         \\}
         \\
-        \\fn reject_result_try_call_arg() -> void {
+        \\fn accept_result_try_call_arg_const_narrow() -> void {
         \\    takes_const_pointer(make_result_pointer()?);
         \\}
         \\
-        \\fn reject_result_try_aggregate_field() -> PointerBox {
+        \\fn accept_result_try_aggregate_field_const_narrow() -> PointerBox {
         \\    return .{ .ptr = make_result_pointer()? };
         \\}
         \\
-        \\fn reject_cast_result_try_payload() -> *const u8 {
+        \\fn accept_cast_result_try_payload_const_narrow() -> *const u8 {
         \\    return (make_result_pointer()? as *const u8);
         \\}
         \\
-        \\fn reject_cast_result_try_local_initializer() -> void {
+        \\fn accept_cast_result_try_local_initializer_const_narrow() -> void {
         \\    let ptr: *const u8 = (make_result_pointer()? as *const u8);
         \\}
         \\
-        \\fn reject_cast_result_try_assignment(fallback: *const u8) -> void {
+        \\fn accept_cast_result_try_assignment_const_narrow(fallback: *const u8) -> void {
         \\    var ptr: *const u8 = fallback;
         \\    ptr = (make_result_pointer()? as *const u8);
         \\}
         \\
-        \\fn reject_cast_result_try_call_arg() -> void {
+        \\fn accept_cast_result_try_call_arg_const_narrow() -> void {
         \\    takes_const_pointer(make_result_pointer()? as *const u8);
         \\}
         \\
-        \\fn reject_cast_result_try_aggregate_field() -> PointerBox {
+        \\fn accept_cast_result_try_aggregate_field_const_narrow() -> PointerBox {
         \\    return .{ .ptr = make_result_pointer()? as *const u8 };
         \\}
         \\
@@ -3750,21 +3751,25 @@ test "MIR verifier reports Result try payload return mismatches" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_nullable_pointer_try_payload pass=representation finding=representation_use detail=try_unwrap type=*mut") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_try_payload pass=result finding=try_payload_type_mismatch") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_pointer_payload_to_integer pass=result finding=try_payload_type_mismatch") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_pointer_payload_conversion pass=result finding=try_payload_pointer_conversion") != null);
+    // G30: a `*mut T` try-payload const-narrows to `*const T` at every position (return, let,
+    // assignment, call arg, aggregate field, and through an explicit `as`) — a safe no-op
+    // coercion, so NO try_payload conversion finding is emitted for these.
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_result_pointer_payload_const_narrow pass=result finding=try_payload_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_nullable_pointer_payload_const_narrow pass=result finding=try_payload_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_result_try_local_initializer_const_narrow pass=result finding=try_payload_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_result_try_assignment_const_narrow pass=result finding=try_payload_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_result_try_call_arg_const_narrow pass=result finding=try_payload_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_result_try_aggregate_field_const_narrow pass=result finding=try_payload_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_cast_result_try_payload_const_narrow pass=result finding=try_payload_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_cast_result_try_local_initializer_const_narrow pass=result finding=try_payload_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_cast_result_try_assignment_const_narrow pass=result finding=try_payload_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_cast_result_try_call_arg_const_narrow pass=result finding=try_payload_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_cast_result_try_aggregate_field_const_narrow pass=result finding=try_payload_") == null);
+    // Element mismatch + c_void payloads stay rejected (genuine incompatibilities).
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_pointer_payload_element_conversion pass=result finding=try_payload_pointer_conversion") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_c_void_payload_conversion pass=result finding=try_payload_c_void_conversion") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_typed_to_c_void_payload_conversion pass=result finding=try_payload_c_void_conversion") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_nullable_pointer_payload_conversion pass=result finding=try_payload_pointer_conversion") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_nullable_c_void_payload_conversion pass=result finding=try_payload_c_void_conversion") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_try_local_initializer pass=result finding=try_payload_pointer_conversion") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_try_assignment pass=result finding=try_payload_pointer_conversion") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_try_call_arg pass=result finding=try_payload_pointer_conversion") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_try_aggregate_field pass=result finding=try_payload_pointer_conversion") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_result_try_payload pass=result finding=try_payload_pointer_conversion") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_result_try_local_initializer pass=result finding=try_payload_pointer_conversion") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_result_try_assignment pass=result finding=try_payload_pointer_conversion") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_result_try_call_arg pass=result finding=try_payload_pointer_conversion") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_result_try_aggregate_field pass=result finding=try_payload_pointer_conversion") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_inferred_result_array_try_index pass=conversion finding=return_type_mismatch source_type=u8") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_if_let_result_array_binding pass=conversion finding=return_type_mismatch source_type=u8") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_switch_result_array_binding pass=conversion finding=return_type_mismatch source_type=u8") != null);
@@ -3781,6 +3786,8 @@ test "MIR verifier reports Result try payload return mismatches" {
         if (std.mem.indexOf(u8, diag.message, "E_C_VOID_CONVERSION") != null) c_void_conversion_count += 1;
     }
     try std.testing.expectEqual(@as(usize, 5), mismatch_count);
-    try std.testing.expectEqual(@as(usize, 12), pointer_conversion_count);
+    // G30: the mut->const try-payload narrows are now allowed; only the genuine element
+    // mismatch (`*mut u8` -> `*mut u16`) remains a pointer-conversion diagnostic.
+    try std.testing.expectEqual(@as(usize, 1), pointer_conversion_count);
     try std.testing.expectEqual(@as(usize, 3), c_void_conversion_count);
 }

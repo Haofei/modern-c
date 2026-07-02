@@ -63,8 +63,8 @@ fn reject_direct_call_member_read_return_type() -> *mut u8 {
     return make_packet().value;
 }
 
-fn reject_direct_call_member_pointer_return_conversion() -> *const u8 {
-    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+// The `*mut u8` member const-narrows to the `*const u8` return type (language gap G30).
+fn accept_direct_call_member_pointer_return_conversion() -> *const u8 {
     return make_packet().ptr;
 }
 

@@ -157,9 +157,11 @@ fn reject_const_to_mut_pointer_assignment(p: *const u32, q: *mut u32) -> *mut u3
     return out;
 }
 
-fn reject_mut_to_const_pointer_assignment(p: *mut u32, q: *const u32) -> *const u32 {
+// mut -> const at an assignment: an allowed const-narrow (language gap G30; a `*mut T` and a
+// `*const T` share the identical plain-pointer repr). The reverse assignment stays rejected
+// (see reject_const_to_mut_pointer_assignment above).
+fn accept_mut_to_const_pointer_assignment(p: *mut u32, q: *const u32) -> *const u32 {
     var out: *const u32 = q;
-    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
     out = p;
     return out;
 }

@@ -117,7 +117,7 @@ const integerLiteralRangeFinding = mir_type.integerLiteralRangeFinding;
 const integerLiteralFitsTarget = mir_type.integerLiteralFitsTarget;
 const checkedIntBoundsByName = mir_type.checkedIntBoundsByName;
 const isDynTraitMirType = mir_type.isDynTraitMirType;
-const isSliceConstNarrowCast = mir_type.isSliceConstNarrowCast;
+const isViewConstNarrowCast = mir_type.isViewConstNarrowCast;
 const valueTypeFromExpr = mir_type.valueTypeFromExpr;
 const valueTypeFromType = mir_type.valueTypeFromType;
 const valueTypeFromTypeAlias = mir_type.valueTypeFromTypeAlias;
@@ -2124,12 +2124,13 @@ const FunctionBuilder = struct {
                 if (cast_target == .closed_enum and isMirIntegerType(self.exprType(node.value.*))) {
                     try self.addInstr(.usage_check, "closed_enum_conversion", .unknown, expr.span);
                 }
-                // A `[]mut T as []const T` const-narrowing cast is a statically-safe reinterpret
-                // (the source slice is already a valid fat pointer). Emit its own dominating
-                // representation check keyed on the cast's own text so the enclosing
-                // representation_use (initializer/call_arg, keyed on the cast text) is discharged
-                // — the same way `.ident`/`address_of` self-discharge their nonnull obligation.
-                if (isSliceConstNarrowCast(cast_target, self.exprType(node.value.*)) and representationCheckKind(cast_target) != null) {
+                // A `[]mut T as []const T` (G12) or `*mut T as *const T` (G30) const-narrowing
+                // cast is a statically-safe reinterpret (the source pointer/slice is already a
+                // valid representation). Emit its own dominating representation check keyed on the
+                // cast's own text so the enclosing representation_use (initializer/call_arg, keyed
+                // on the cast text) is discharged — the same way `.ident`/`address_of`
+                // self-discharge their nonnull obligation.
+                if (isViewConstNarrowCast(cast_target, self.exprType(node.value.*)) and representationCheckKind(cast_target) != null) {
                     try self.addInstr(.typed_load, exprText(expr), cast_target, expr.span);
                     try self.addRuntimeRepresentationCheck(cast_target, expr.span, exprText(expr));
                 }

@@ -60,9 +60,19 @@ fn reject_const_to_mut_pointer(p: *const u32) -> *mut u32 {
     return q;
 }
 
-fn reject_mut_to_const_pointer(p: *mut u32) -> *const u32 {
-    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+// A `*mut T` -> `*const T` single-pointer const-narrowing IS allowed implicitly (language
+// gap G30): a `*mut T` and a `*const T` have the IDENTICAL representation (a plain pointer),
+// so removing mutability is a safe no-op coercion. Mirrors the G12 slice case below. This is
+// scoped to single pointers + slices — the `[*]mut` raw-many reject case still holds, and the
+// REVERSE (`*const` -> `*mut`) widening stays rejected (see reject_const_to_mut_pointer).
+fn accept_mut_to_const_pointer(p: *mut u32) -> *const u32 {
     let q: *const u32 = p;
+    return q;
+}
+
+// The bare immutable `*T` (mutability `.none`) is also a valid const-narrow target.
+fn accept_mut_to_immutable_pointer(p: *mut u32) -> *u32 {
+    let q: *u32 = p;
     return q;
 }
 
@@ -110,8 +120,8 @@ fn reject_nullable_to_nonnull_pointer(maybe: ?*mut u32) -> *mut u32 {
     return q;
 }
 
-fn reject_direct_return_mut_to_const_pointer(p: *mut u32) -> *const u32 {
-    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+// mut -> const at a direct return: an allowed const-narrow (G30).
+fn accept_direct_return_mut_to_const_pointer(p: *mut u32) -> *const u32 {
     return p;
 }
 
@@ -148,8 +158,9 @@ fn reject_direct_call_argument_element_mismatch() -> void {
     takes_mut_u16_pointer(make_mut_u8_pointer());
 }
 
-fn reject_cast_result_return_mut_to_const_pointer(p: *mut u8) -> *const u8 {
-    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+// The `p as *mut u8` cast result (a `*mut u8`) const-narrows to the `*const u8` return
+// type — an allowed G30 coercion (identical plain-pointer repr).
+fn accept_cast_result_return_mut_to_const_pointer(p: *mut u8) -> *const u8 {
     return p as *mut u8;
 }
 

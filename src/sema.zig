@@ -6966,26 +6966,34 @@ fn implicitPointerViewConversionCtx(target: ast.TypeExpr, source: ast.TypeExpr, 
     _ = viewType(resolved_target) orelse return false;
     _ = viewType(resolved_source) orelse return false;
     if (nullablePointerWideningCtx(resolved_target, resolved_source, ctx)) return false;
-    // A `[]mut T` -> `[]const T` slice const-narrowing is safe (the fat pointer is
-    // layout-identical; only the pointee's constness differs) and is allowed implicitly.
-    if (constNarrowingSliceConversionCtx(resolved_target, resolved_source, ctx)) return false;
+    // A `[]mut T` -> `[]const T` slice (G12) or `*mut T` -> `*const T` single-pointer (G30)
+    // const-narrowing is safe (representation is layout-identical; only the pointee's
+    // constness differs) and is allowed implicitly.
+    if (constNarrowingViewConversionCtx(resolved_target, resolved_source, ctx)) return false;
     const target_is_c_void = isCVoidPointerClass(classifyTypeCtx(resolved_target, ctx));
     const source_is_c_void = isCVoidPointerClass(classifyTypeCtx(resolved_source, ctx));
     if (target_is_c_void != source_is_c_void) return false;
     return !sameTypeSyntaxCtx(resolved_target, resolved_source, ctx);
 }
 
-// True for a safe `[]mut T` -> `[]const T` slice conversion: both are slices of the same
-// element type and nullability, and the ONLY difference is the pointer's constness
-// (mut source -> const target). The fat pointer layout is identical, so this is a no-op
-// coercion the backends emit as a struct copy. Scoped to slices (not general pointers) to
-// match the language-gap fix; other view-const changes stay explicit.
-fn constNarrowingSliceConversionCtx(target: ast.TypeExpr, source: ast.TypeExpr, ctx: Context) bool {
+// True for a safe const-narrowing view conversion: `[]mut T` -> `[]const T` (G12 slices) or
+// `*mut T` -> `*const T` (G30 single pointers). Both sides are the SAME view kind over the
+// same element type and nullability, and the ONLY difference is the pointee's constness
+// (mut source -> const target). Representation is identical (a plain pointer for a single
+// object, a `{ptr,len}` fat pointer for a slice), so this is a no-op coercion the backends
+// emit as a plain assignment / struct copy. Scoped to single pointers + slices; raw-many
+// (`[*]mut`) const-narrows stay explicit, and the REVERSE (const -> mut) widening is never
+// allowed (source must be `.mut`, target `.const`).
+fn constNarrowingViewConversionCtx(target: ast.TypeExpr, source: ast.TypeExpr, ctx: Context) bool {
     const target_view = viewType(target) orelse return false;
     const source_view = viewType(source) orelse return false;
-    if (target_view.kind != .slice or source_view.kind != .slice) return false;
+    if (target_view.kind != source_view.kind) return false;
+    if (!(target_view.kind == .slice or target_view.kind == .pointer)) return false;
     if (target_view.nullable != source_view.nullable) return false;
-    if (!(source_view.mutability == .mut and target_view.mutability == .@"const")) return false;
+    // mut source -> immutable target only. The target may be spelled `*const T` (`.const`)
+    // or the bare immutable `*T` (`.none`); both are read-only. The REVERSE (immutable -> mut
+    // widening) is never narrowing, so it stays rejected (source must be `.mut`).
+    if (source_view.mutability != .mut or target_view.mutability == .mut) return false;
     const target_elem = viewElementType(target) orelse return false;
     const source_elem = viewElementType(source) orelse return false;
     return sameTypeSyntaxCtx(target_elem, source_elem, ctx);
