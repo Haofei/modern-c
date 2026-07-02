@@ -11,8 +11,10 @@
 //     in a `Vec<SmSig>`, with a name -> sig_index `StrHashMap<u32>`; absence is detected by
 //     `strmap_contains` before each lookup, so the raw index is stored directly (no sentinel
 //     offset). Param types are flattened into one `Vec<SmType>` addressed by `(start, count)` per sig.
-//   * PASS 2 checks each `fn` body against a per-function locals table `StrHashMap<SmType>`
-//     (params seeded first; `let` adds bindings — names are unique per fn, gap G20).
+//   * PASS 2 checks each `fn` body against a lexical SCOPE STACK (`Vec<Binding>`, arch Phase 4):
+//     params seeded at fn scope; each block/`if let` records the stack length and truncates back on
+//     exit; a name resolves to the nearest binding (correct block scoping/shadowing). PASS 2b checks
+//     impl method bodies (Phase 5); generic templates are checked leniently (Phase 6).
 //
 // TYPES are a small COPYABLE `SmType { kind, ptr_depth, nstart, nlen }`: `kind` is an `open enum`
 // ordinal, `ptr_depth` counts leading `*`/`*mut` (so `*u32` is `{u32, 1}`), and `nstart`/`nlen`
@@ -113,7 +115,8 @@ struct SmType {
 // records its type-param lexeme offsets; `ret_is_tparam = 1` when the declared return type is
 // exactly that type param (so a call substitutes the concrete type-arg's kind for the result).
 // `param_count` is the DECLARED arity (comptime param included), which the call's arg count must
-// match. Generic-fn bodies are not type-checked in the subset (the type param is abstract).
+// match. Generic-fn bodies ARE checked leniently (arch Phase 6): the type param is abstract, so only
+// name-resolution + arity are enforced (type-shaped diagnostics suppressed — see sm_err lenient mode).
 struct SmSig {
     ret: SmType,
     param_start: u32,
@@ -142,8 +145,8 @@ struct SmStruct {
 
 // One collected trait method (P5.10): the owning trait's name lexeme + the method name lexeme + its
 // return type. Enough to type a dynamic-dispatch call `d.m(..)` (whose result is this return type).
-// Trait method BODIES do not exist (they are bodyless signatures); impl method bodies are not checked
-// in the subset (see the ledger note on the mutable-through-pointer gap).
+// Trait method BODIES do not exist (they are bodyless signatures); impl method bodies ARE checked
+// (arch Phase 5, `sm_check_impls`) — the `self: *mut TYPE` receiver is an ordinary pointer param.
 struct SmTraitMethod {
     tr_nstart: usize,
     tr_nlen: usize,
@@ -194,7 +197,7 @@ struct Fact {
 
 // The analyzer state + owned inputs. `p` OWNS the parser arena (see selfhost/parser.mc); free the
 // whole thing exactly once with `sema_free`. `fns`/`sigs`/`ptypes` are the pass-1 symbol table;
-// `locals` is rebuilt per function in pass 2; `cur_ret` is the function currently being checked.
+// `binds` is the per-function lexical scope stack (arch Phase 4); `cur_ret` is the fn being checked.
 struct SmState {
     p: Parser,
     fns: StrHashMap<u32>,      // name -> sig_index (absence via strmap_contains)
@@ -1567,6 +1570,9 @@ fn sm_check_switch(s: *mut SmState, node: u32) -> void {
     let ename: []const u8 = sm_name_text(s, subj_ty);
     let eref: u32 = strmap_get_or(u32, &s.enums, ename, 0);
     let ed: SmEnum = vec_get(SmEnum, &s.enum_defs, eref as usize);
+    // Publish the subject's enum on the switch node so emit resolves `.variant` case labels against
+    // THIS enum instead of a first-match name scan (the G28 residual for switch arms).
+    sm_fact_set_decl(s, node, ed.decl_node);
     var has_default: bool = false;
     var ai: u32 = 0;
     while ai < arm_count {
@@ -1960,6 +1966,9 @@ fn sm_collect_struct(s: *mut SmState, name_tok: u32, srun: u32, is_generic: u32)
     let sidx: u32 = vec_len(SmStruct, &s.struct_defs) as u32;
     vec_push(SmStruct, &s.struct_defs, .{ .field_start = fstart, .field_count = fcount, .is_generic = is_generic });
     let sname: []const u8 = sm_tok_text(s, name_tok);
+    if strmap_contains(u32, &s.structs, sname) {
+        sm_err(s, .duplicate_decl);
+    }
     strmap_put(u32, &s.structs, sname, sidx);
 }
 
@@ -1997,6 +2006,11 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             // every use resolves (like a fn/local). The initializer is type-checked in a later pass.
             let cty: SmType = sm_type_from_node(s, dn.lhs);
             let cname: []const u8 = sm_tok_text(s, dn.main_token);
+            // Consts and globals share `s.globals`, so this rejects duplicate const/global names in
+            // either direction (a repeated `const`, a repeated `global`, or a const shadowing a global).
+            if strmap_contains(SmType, &s.globals, cname) {
+                sm_err(s, .duplicate_decl);
+            }
             strmap_put(SmType, &s.globals, cname, cty);
         }
         if dn.kind == .global_decl {
@@ -2004,6 +2018,9 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             // type T so every use resolves and writes are allowed. Init (if any) checked in a later pass.
             let gty: SmType = sm_type_from_node(s, dn.lhs);
             let gname: []const u8 = sm_tok_text(s, dn.main_token);
+            if strmap_contains(SmType, &s.globals, gname) {
+                sm_err(s, .duplicate_decl);
+            }
             strmap_put(SmType, &s.globals, gname, gty);
         }
         if dn.kind == .struct_gdecl {
@@ -2037,6 +2054,9 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let eidx: u32 = vec_len(SmEnum, &s.enum_defs) as u32;
             vec_push(SmEnum, &s.enum_defs, .{ .variant_start = vstart, .variant_count = vcount, .repr = repr_kind, .is_open = is_open, .decl_node = d });
             let ename: []const u8 = sm_tok_text(s, dn.main_token);
+            if strmap_contains(u32, &s.enums, ename) {
+                sm_err(s, .duplicate_decl);
+            }
             strmap_put(u32, &s.enums, ename, eidx);
         }
         if dn.kind == .trait_decl {

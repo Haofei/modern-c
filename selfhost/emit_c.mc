@@ -830,6 +830,19 @@ fn e_fact_ty(p: *mut Parser, node: u32) -> SmType {
     return sema_fact_ty(facts, node);
 }
 
+// The resolution-target AST node id sema recorded for `node` (0 = none). Used for the `enum_lit`
+// target enum (Phase 2) and the `switch` subject's enum (case-label resolution).
+fn e_fact_decl(p: *mut Parser, node: u32) -> u32 {
+    if p.facts_addr == 0 {
+        return 0;
+    }
+    var facts: *mut Vec<Fact> = raw.ptr<Vec<Fact>>(0);
+    unsafe {
+        facts = raw.ptr<Vec<Fact>>(p.facts_addr);
+    }
+    return sema_fact_decl(facts, node);
+}
+
 fn e_base_is_slice(p: *mut Parser, base: u32) -> bool {
     // Phase 3: prefer sema's resolved type (slice_ kind == 3). A known non-slice type answers false;
     // an `unknown` fact (no sema type — e.g. a generic-template body) falls through to re-derivation.
@@ -2058,12 +2071,20 @@ fn e_is_underscore(p: *mut Parser, tok: u32) -> bool {
     return k == want;
 }
 
-// Emit the C `case` constant `<EnumName>_<variant>` for a `.variant` arm whose variant ident is
-// token `vtok`. Like `e_enum_lit`, the AST does not carry which enum the bare `.variant` belongs to,
-// so the module's enum decls are scanned for the one declaring this variant (gap G28: variant names
-// are assumed unique across enums — first match wins).
-fn e_case_label(p: *mut Parser, sb: *mut StrBuf, vtok: u32) -> void {
+// Emit the C `case` constant `<EnumName>_<variant>` for a `.variant` arm whose variant ident is token
+// `vtok`. `edecl` is the switch subject's resolved `enum_decl` (from the sema fact on the switch node);
+// when nonzero it names the RIGHT enum directly — fixing the G28 residual where two enums share a
+// variant name. Falls back to the module name-scan (first match) when there is no fact.
+fn e_case_label(p: *mut Parser, sb: *mut StrBuf, vtok: u32, edecl: u32) -> void {
     let vtext: []const u8 = e_tok_text(p, vtok);
+    if edecl != 0 {
+        let edn: Node = e_node(p, edecl);
+        let ten: []const u8 = e_tok_text(p, edn.main_token);
+        sb_put_str(sb, ten);
+        sb_put_cstr(sb, "_");
+        sb_put_str(sb, vtext);
+        return;
+    }
     let root: u32 = p.root;
     let rnode: Node = e_node(p, root);
     let run: u32 = rnode.lhs;
@@ -2109,6 +2130,8 @@ fn e_switch(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
     sb_put_cstr(sb, ") {\n");
     let run: u32 = nd.rhs;
     let arm_count: u32 = e_extra(p, run);
+    // The subject's enum decl (sema fact), so `.variant` case labels resolve to THIS enum (G28).
+    let edecl: u32 = e_fact_decl(p, n);
     var ai: u32 = 0;
     while ai < arm_count {
         let pat_tok: u32 = e_extra(p, run + 1 + ai * 2);
@@ -2119,7 +2142,7 @@ fn e_switch(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
             sb_put_cstr(sb, "default: ");
         } else {
             sb_put_cstr(sb, "case ");
-            e_case_label(p, sb, pat_tok);
+            e_case_label(p, sb, pat_tok, edecl);
             sb_put_cstr(sb, ": ");
         }
         e_block(p, sb, blk, depth + 1);
