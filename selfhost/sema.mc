@@ -94,6 +94,8 @@ open enum SmErr: u32 {
     // ----- P5.6 fixed-size array additions (appended to keep prior ordinals stable) -----
     array_length,         // 15 array-literal element count != the target `[N]T`'s N
     array_target,         // 16 array literal `.{...}` used where no `[N]T` target type is known
+    // ----- appended (keep prior ordinals stable) -----
+    duplicate_decl,       // 17 two top-level declarations share a name (fn/extern-fn)
 }
 
 // A resolved type. Copyable (all scalar fields), so it stores freely in `Vec`/`StrHashMap`.
@@ -1458,6 +1460,57 @@ fn sm_check_switch(s: *mut SmState, node: u32) -> void {
     }
 }
 
+// If `val_node` is an `ok(x)`/`err(x)` constructor call and `target` is a concrete `Result<T,E>`,
+// type-check the single payload arg against the target's OK payload (for `ok`) or ERR payload (for
+// `err`), walking the arg for its own errors. Returns true when it recognized and handled the ctor,
+// so the caller SKIPS its generic value-typing path (which would accept a LOOSE result unchecked —
+// the leniency finding #4 fixed here). A LITERAL payload (`.variant` / `.{..}` / `[..]`) has no
+// standalone type and is target-typed at emit, so it is accepted leniently (still "handled"). A
+// non-ctor value, a non-Result target, or an arity anomaly returns false (fall back to the caller).
+fn sm_check_result_ctor(s: *mut SmState, val_node: u32, target: SmType) -> bool {
+    if target.kind != .result_ {
+        return false;
+    }
+    let vn: Node = sm_node(s, val_node);
+    if vn.kind != .call {
+        return false;
+    }
+    let cn: Node = sm_node(s, vn.lhs);
+    if cn.kind != .ident_expr {
+        return false;
+    }
+    let nm: []const u8 = sm_tok_text(s, cn.main_token);
+    let is_ok: bool = mem_eql(nm, "ok");
+    let is_err: bool = mem_eql(nm, "err");
+    if !is_ok && !is_err {
+        return false;
+    }
+    let args_run: u32 = vn.rhs;
+    let argc: u32 = sm_extra(s, args_run);
+    if argc != 1 {
+        return false; // arity anomaly: let the generic call path report it
+    }
+    let a0: u32 = sm_extra(s, args_run + 1);
+    let a0n: Node = sm_node(s, a0);
+    let is_lit: bool = a0n.kind == .enum_lit || a0n.kind == .struct_lit || a0n.kind == .array_lit;
+    if is_lit {
+        return true; // literal payload is target-typed at emit; accept leniently
+    }
+    let argt: SmType = sm_type_of_expr(s, a0);
+    var want: SmType = sm_result_ok(target);
+    if is_err {
+        want = sm_result_err(target);
+    }
+    // Only enforce when the target payload kind is concrete; a `.unknown` payload can't judge.
+    if want.kind != .unknown {
+        let matched: bool = sm_types_match(s, want, argt);
+        if !matched {
+            sm_err(s, .type_mismatch);
+        }
+    }
+    return true;
+}
+
 // ----- statement + block checking -----
 
 // Type-check one statement (also dispatches nested blocks, e.g. an `if`/`while` body or an
@@ -1488,6 +1541,9 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
         let then_b: u32 = sm_extra(s, nd.rhs);
         let else_b: u32 = sm_extra(s, nd.rhs + 1);
         sm_check_stmt(s, then_b);
+        // The binding is scoped to the then-block only (the emitter declares it inside that C block);
+        // drop it before the else and the rest of the fn so a use outside is an `unknown_name` error.
+        strmap_del(SmType, &s.locals, name);
         if else_b != 0 {
             sm_check_stmt(s, else_b);
         }
@@ -1513,6 +1569,8 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
         let then_b: u32 = sm_extra(s, nd.rhs + 1);
         let else_b: u32 = sm_extra(s, nd.rhs + 2);
         sm_check_stmt(s, then_b);
+        // Same as `if let` above: the ok/err binding is scoped to the then-block; drop it afterward.
+        strmap_del(SmType, &s.locals, name);
         if else_b != 0 {
             sm_check_stmt(s, else_b);
         }
@@ -1544,6 +1602,8 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
                 sm_check_enum_lit(s, nd.rhs, ann);
             } else if init_nd.kind == .uninit_literal {
                 // `var x: T = uninit;` — no value to check; the binding takes the annotated type T.
+            } else if sm_check_result_ctor(s, nd.rhs, ann) {
+                // `let r: Result<T,E> = ok(x)/err(x);` — payload checked against T/E by the helper.
             } else {
                 let it: SmType = sm_type_of_expr(s, nd.rhs);
                 let matched: bool = sm_types_match(s, ann, it);
@@ -1584,6 +1644,10 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
         if rv_nd.kind == .array_lit {
             // `return .{...}` in an `-> [N]T` fn: the return type is the array target.
             sm_check_array_lit(s, nd.lhs, s.cur_ret);
+            return;
+        }
+        // `return ok(x)` / `return err(x)` in a `-> Result<T,E>` fn: check the payload against T/E.
+        if sm_check_result_ctor(s, nd.lhs, s.cur_ret) {
             return;
         }
         let vt: SmType = sm_type_of_expr(s, nd.lhs);
@@ -1844,6 +1908,9 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let ex_sig_idx: u32 = vec_len(SmSig, &s.sigs) as u32;
             vec_push(SmSig, &s.sigs, .{ .ret = ex_ret_ty, .param_start = ex_pstart, .param_count = ex_pcount, .is_generic = 0, .tparam_start = 0, .tparam_len = 0, .ret_is_tparam = 0 });
             let ex_name: []const u8 = sm_tok_text(s, dn.main_token);
+            if strmap_contains(u32, &s.fns, ex_name) {
+                sm_err(s, .duplicate_decl);
+            }
             strmap_put(u32, &s.fns, ex_name, ex_sig_idx);
         }
         if dn.kind == .fn_decl {
@@ -1890,6 +1957,9 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let sig_idx: u32 = vec_len(SmSig, &s.sigs) as u32;
             vec_push(SmSig, &s.sigs, .{ .ret = ret_ty, .param_start = pstart, .param_count = pcount, .is_generic = is_generic, .tparam_start = tp_start, .tparam_len = tp_len, .ret_is_tparam = ret_is_tp });
             let name: []const u8 = sm_tok_text(s, dn.main_token);
+            if strmap_contains(u32, &s.fns, name) {
+                sm_err(s, .duplicate_decl);
+            }
             strmap_put(u32, &s.fns, name, sig_idx);
         }
         di = di + 1;

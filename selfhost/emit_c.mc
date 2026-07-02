@@ -431,7 +431,8 @@ fn e_result_ctor(p: *mut Parser, sb: *mut StrBuf, call_node: u32, result_tn: u32
     } else if argn.kind == .array_lit {
         e_array_lit_body(p, sb, arg);
     } else if argn.kind == .enum_lit {
-        e_enum_lit(p, sb, arg);
+        // Target-type the `.variant` payload to the ok/err payload type (finding #5).
+        e_expr_targeted(p, sb, arg, payload_tn);
     } else {
         e_expr(p, sb, arg);
     }
@@ -1520,7 +1521,8 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
                         // exactly as at a non-generic call site.
                         e_dyn_coerce(p, sb, garg, gptn);
                     } else {
-                        e_expr(p, sb, garg);
+                        // A bare `.variant` arg is target-typed to the (concrete) param type (finding #5).
+                        e_expr_targeted(p, sb, garg, gptn);
                     }
                     gk = gk + 1;
                 }
@@ -1591,7 +1593,8 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
                 sb_put_cstr(sb, "(uint8_t*)");
                 sb_put_str(sb, slex);
             } else {
-                e_expr(p, sb, arg);
+                // A bare `.variant` arg is target-typed to the param type (finding #5).
+                e_expr_targeted(p, sb, arg, ptn);
             }
             k = k + 1;
         }
@@ -1676,8 +1679,9 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
     }
     if nd.kind == .struct_lit {
         // Cast-less designated initializer (a target-typed compound literal is emitted by
-        // `e_struct_lit` where the annotation type is known — see `e_stmt`).
-        e_struct_lit_body(p, sb, n);
+        // `e_struct_lit` where the annotation type is known — see `e_stmt`). No struct type in hand
+        // here, so enum-valued fields fall back to the name-scan (0 = unknown struct type).
+        e_struct_lit_body(p, sb, n, 0);
         return;
     }
     if nd.kind == .enum_lit {
@@ -1758,9 +1762,126 @@ fn e_enum_lit(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
     sb_put_str(sb, vtext);
 }
 
+// Resolve a TYPE node to the `enum_decl` it names, or 0 if it is not a (known) enum. Only a plain
+// `type_name` resolves; wrapped types (optional/slice/pointer/array) are never the target of a bare
+// `.variant`. This is the type-directed disambiguation that fixes finding #5: without a target, a
+// bare `.variant` is resolved by scanning all enums first-match (`e_enum_lit`), which emits the WRONG
+// enum's constant when two enums share a variant name.
+fn e_enum_decl_for_type(p: *mut Parser, type_node: u32) -> u32 {
+    if type_node == 0 {
+        return 0;
+    }
+    let tn: Node = e_node(p, type_node);
+    if tn.kind != .type_name {
+        return 0;
+    }
+    let tname: []const u8 = e_tok_text(p, tn.main_token);
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var i: u32 = 0;
+    while i < count {
+        let d: u32 = e_extra(p, run + 1 + i);
+        let dn: Node = e_node(p, d);
+        if dn.kind == .enum_decl {
+            let dname: []const u8 = e_tok_text(p, dn.main_token);
+            if mem_eql(tname, dname) {
+                return d;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Emit `.variant` as `<EnumName>_<variant>` using the KNOWN target enum decl `edecl` (resolved from
+// the literal's target type). If `edecl` does not actually declare this variant, fall back to the
+// name-scan `e_enum_lit` (preserves prior behavior; sema flags a genuine mismatch). This is what
+// makes a variant name shared by multiple enums resolve to the RIGHT one (finding #5 / gap G28).
+fn e_enum_lit_in(p: *mut Parser, sb: *mut StrBuf, node: u32, edecl: u32) -> void {
+    let nd: Node = e_node(p, node);
+    let vtext: []const u8 = e_tok_text(p, nd.main_token);
+    let dn: Node = e_node(p, edecl);
+    let vrun: u32 = e_extra(p, dn.lhs + 3);
+    let vc: u32 = e_extra(p, vrun);
+    var j: u32 = 0;
+    while j < vc {
+        let etok: u32 = e_extra(p, vrun + 1 + j);
+        let vn: []const u8 = e_tok_text(p, etok);
+        if mem_eql(vtext, vn) {
+            let ename: []const u8 = e_tok_text(p, dn.main_token);
+            sb_put_str(sb, ename);
+            sb_put_cstr(sb, "_");
+            sb_put_str(sb, vtext);
+            return;
+        }
+        j = j + 1;
+    }
+    e_enum_lit(p, sb, node); // variant not in the target enum: defer to the scan
+}
+
+// Emit expression `n`, but if it is a bare `.variant` whose target type `ttype` names an enum,
+// target-type it to that enum (finding #5). Every other expression (or a non-enum target) emits
+// exactly as `e_expr` — so for a variant name unique across enums the output is byte-identical.
+fn e_expr_targeted(p: *mut Parser, sb: *mut StrBuf, n: u32, ttype: u32) -> void {
+    let nd: Node = e_node(p, n);
+    if nd.kind == .enum_lit {
+        let edecl: u32 = e_enum_decl_for_type(p, ttype);
+        if edecl != 0 {
+            e_enum_lit_in(p, sb, n, edecl);
+            return;
+        }
+    }
+    e_expr(p, sb, n);
+}
+
+// The declared TYPE node of field `fname` in the struct named by `stype_node` (a `type_name`), or 0
+// when the struct or field is not resolvable. Lets a struct literal target-type an enum-valued field.
+fn e_field_type_node(p: *mut Parser, stype_node: u32, fname: []const u8) -> u32 {
+    if stype_node == 0 {
+        return 0;
+    }
+    let tn: Node = e_node(p, stype_node);
+    if tn.kind != .type_name {
+        return 0;
+    }
+    let sname: []const u8 = e_tok_text(p, tn.main_token);
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var i: u32 = 0;
+    while i < count {
+        let d: u32 = e_extra(p, run + 1 + i);
+        let dn: Node = e_node(p, d);
+        if dn.kind == .struct_decl {
+            let dname: []const u8 = e_tok_text(p, dn.main_token);
+            if mem_eql(sname, dname) {
+                let frun: u32 = dn.lhs;
+                let fcount: u32 = e_extra(p, frun);
+                var fi: u32 = 0;
+                while fi < fcount {
+                    let ntok: u32 = e_extra(p, frun + 1 + fi * 2);
+                    let ftype: u32 = e_extra(p, frun + 1 + fi * 2 + 1);
+                    let fn2: []const u8 = e_tok_text(p, ntok);
+                    if mem_eql(fn2, fname) {
+                        return ftype;
+                    }
+                    fi = fi + 1;
+                }
+                return 0;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
 // Emit the `{ .f0 = e0, ... }` body of a struct literal (no leading cast). The field run is
-// `[count, (name_tok, val_node)*]` (see parser `struct_lit`).
-fn e_struct_lit_body(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
+// `[count, (name_tok, val_node)*]` (see parser `struct_lit`). `stype_node` is the struct's TYPE node
+// when known (a typed literal), or 0 (a bare aggregate); it target-types enum-valued fields (#5).
+fn e_struct_lit_body(p: *mut Parser, sb: *mut StrBuf, node: u32, stype_node: u32) -> void {
     let nd: Node = e_node(p, node);
     let run: u32 = nd.lhs;
     let fcount: u32 = e_extra(p, run);
@@ -1776,7 +1897,8 @@ fn e_struct_lit_body(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
         let fname: []const u8 = e_tok_text(p, name_tok);
         sb_put_str(sb, fname);
         sb_put_cstr(sb, " = ");
-        e_expr(p, sb, val_node);
+        let ftype: u32 = e_field_type_node(p, stype_node, fname);
+        e_expr_targeted(p, sb, val_node, ftype);
         fi = fi + 1;
     }
     sb_put_cstr(sb, " }");
@@ -1788,7 +1910,7 @@ fn e_struct_lit(p: *mut Parser, sb: *mut StrBuf, node: u32, type_node: u32) -> v
     sb_put_cstr(sb, "(");
     e_type(p, sb, type_node);
     sb_put_cstr(sb, ")");
-    e_struct_lit_body(p, sb, node);
+    e_struct_lit_body(p, sb, node, type_node);
 }
 
 // Emit the `{ e0, e1, ... }` body of an array literal (P5.6). Directly usable as a C aggregate
@@ -1860,7 +1982,8 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
             // Aggregate initializer `{ .. }` (a C array cannot use a compound-literal cast here).
             e_array_lit_body(p, sb, nd.rhs);
         } else {
-            e_expr(p, sb, nd.rhs);
+            // `let x: EnumT = .variant;` — target-type the bare variant to the annotation (finding #5).
+            e_expr_targeted(p, sb, nd.rhs, nd.lhs);
         }
         sb_put_cstr(sb, ";\n");
         return;
@@ -1890,7 +2013,8 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
                 let ret_ty: u32 = e_extra(p, fn_nd.lhs + 2);
                 e_struct_lit(p, sb, nd.lhs, ret_ty);
             } else {
-                e_expr(p, sb, nd.lhs);
+                // `return .variant;` from a `-> EnumT` fn: target-type it to EnumT (finding #5).
+                e_expr_targeted(p, sb, nd.lhs, ret_tn);
             }
             sb_put_cstr(sb, ";\n");
         }

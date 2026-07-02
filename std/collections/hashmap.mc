@@ -216,6 +216,53 @@ export fn strmap_contains(comptime V: type, m: *StrHashMap<V>, key: []const u8) 
     return slot.used;
 }
 
+// Remove the entry bound to `key`, if present (a no-op when absent). Uses backward-shift deletion:
+// after emptying the found slot, any following entry in the same probe cluster that would become
+// unreachable through the new hole is shifted back to fill it. This keeps probe chains gap-free, so
+// `strmap_probe`/`get`/`contains` need no tombstone handling. Borrowed key bytes are not freed (the
+// map never owned them). O(cluster length). `V` must be COPYABLE (entries are moved by raw copy).
+export fn strmap_del(comptime V: type, m: *mut StrHashMap<V>, key: []const u8) -> void {
+    if m.cap == 0 {
+        return;
+    }
+    let start: usize = strmap_probe(V, m.slots, m.cap, key);
+    let found: *mut Entry<V> = slot_ptr(V, m.slots, start);
+    if !found.used {
+        return; // absent: probe landed on an empty slot
+    }
+    if !mem.bytes_equal(found.key, key) {
+        return; // absent: distinct key (only reachable if the table were full — defensive)
+    }
+    found.used = false;
+    m.len = m.len - 1;
+    // Backward-shift the remainder of the cluster into the hole.
+    var hole: usize = start;
+    var j: usize = start;
+    while true {
+        j = j + 1;
+        if j >= m.cap {
+            j = 0;
+        }
+        let sj: *mut Entry<V> = slot_ptr(V, m.slots, j);
+        if !sj.used {
+            break; // end of the cluster: nothing more to shift
+        }
+        // `home` is where sj ideally hashes; move it back to `hole` iff the hole lies on sj's probe
+        // path (cyclically closer to home than sj's current slot), else leave it in place.
+        let home: usize = (fnv1a(sj.key) as usize) % m.cap;
+        let dist_hole: usize = (hole + m.cap - home) % m.cap;
+        let dist_j: usize = (j + m.cap - home) % m.cap;
+        if dist_hole < dist_j {
+            let hp: *mut Entry<V> = slot_ptr(V, m.slots, hole);
+            hp.key = sj.key;
+            hp.val = sj.val;
+            hp.used = true;
+            sj.used = false;
+            hole = j;
+        }
+    }
+}
+
 // Release the backing slot array. Call exactly once; the map becomes empty (len == cap == 0)
 // and may be reused (a subsequent put re-allocates). A no-op when nothing is allocated. Borrowed
 // key bytes are the caller's to free (this map never owned them).
