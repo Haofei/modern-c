@@ -3267,10 +3267,23 @@ const FunctionBuilder = struct {
     fn escapeStorageRoot(self: *FunctionBuilder, expr: ast.Expr) bool {
         return switch (expr.kind) {
             .ident => |id| self.let_local_names.contains(id.text),
-            .member => |node| self.escapeStorageRoot(node.base.*),
+            // Member access whose base is a POINTER auto-derefs (`p.f` == `p->f`), so the
+            // address points into the POINTED-TO storage, not this frame — not a local
+            // escape (G14). Mirrors sema's placeGoesThroughPointer.
+            .member => |node| if (self.baseGoesThroughPointer(node.base.*)) false else self.escapeStorageRoot(node.base.*),
             .index => |node| self.indexedArrayStorageRoot(node.base.*),
             .slice => |node| self.indexedArrayStorageRoot(node.base.*),
             .grouped => |inner| self.escapeStorageRoot(inner.*),
+            else => false,
+        };
+    }
+
+    // Whether reaching a place through `expr` dereferences a POINTER (`.field`/`[i]` on a
+    // pointer-typed base auto-derefs). Taking such an address points into pointed-to
+    // storage that outlives this frame, so it is never a local-storage-escape root.
+    fn baseGoesThroughPointer(self: *FunctionBuilder, expr: ast.Expr) bool {
+        return switch (self.exprType(expr)) {
+            .pointer, .nullable_pointer => true,
             else => false,
         };
     }

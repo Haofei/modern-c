@@ -6884,11 +6884,25 @@ fn localStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
             }
             return null;
         },
-        .member => |node| localStorageRoot(node.base.*, ctx),
+        // Member access whose base is a POINTER auto-derefs (`p.f` == `p->f`), so the
+        // address `&p.f` points into the POINTED-TO storage (caller-owned / heap), not
+        // this frame's stack slot — it is NOT a local-storage root, and returning it does
+        // not dangle (G14). Only a base that is a by-value aggregate keeps recursing; there
+        // the field lives inside a stack local, which is the genuine dangling case.
+        .member => |node| if (placeGoesThroughPointer(node.base.*, ctx)) null else localStorageRoot(node.base.*, ctx),
         .index => |node| indexedLocalArrayStorageRoot(node.base.*, ctx),
         .grouped => |inner| localStorageRoot(inner.*, ctx),
         else => null,
     };
+}
+
+// True when reaching a place through `expr` dereferences a POINTER — i.e. `expr` is a
+// pointer-typed base of a `.field` / `[i]` access (auto-deref, `p.f` == `p->f`). Taking
+// the address of such a place yields a pointer into the pointed-to storage, which
+// outlives this frame, so it is never a local-storage-escape root.
+fn placeGoesThroughPointer(base: ast.Expr, ctx: Context) bool {
+    const ty = exprResultType(base, ctx) orelse return false;
+    return isPointerLikeClass(classifyTypeCtx(ty, ctx));
 }
 
 // T1.1 lexical region/scope borrows: does an assignment *target* write to storage

@@ -17,6 +17,10 @@ struct Holder {
     slot: *mut u32,
 }
 
+struct Row {
+    cells: [4]u32,
+}
+
 fn sink(p: *mut u32) -> void {
     *p = 0;
 }
@@ -54,6 +58,30 @@ fn accept_return_global_address_alias() -> *mut u32 {
 
 fn accept_return_slice_element_address(xs: []mut u32, i: usize) -> *mut u32 {
     return &xs[i];
+}
+
+// (G14) Taking the address of a field/element reached THROUGH a pointer — `&e.field`,
+// `&e.arr[i]` — points into the POINTED-TO storage (caller-owned / heap), NOT this frame's
+// stack slot, so returning it does not dangle. The lvalue root goes through a `*`, not a
+// local variable; only a plain local (or a by-value local aggregate's field/element) is a
+// genuine escape. This holds whether the pointer is a PARAMETER or a LOCAL holding a copy.
+
+fn accept_return_pointer_param_field_address(e: *mut Packet) -> *mut u32 {
+    return &e.value;
+}
+
+fn accept_return_pointer_param_array_element_address(r: *mut Row, i: usize) -> *mut u32 {
+    return &r.cells[i];
+}
+
+fn accept_return_local_pointer_field_address(e: *mut Packet) -> *mut u32 {
+    let p: *mut Packet = e;
+    return &p.value;
+}
+
+fn accept_return_local_pointer_array_element_address(r: *mut Row, i: usize) -> *mut u32 {
+    let p: *mut Row = r;
+    return &p.cells[i];
 }
 
 fn accept_cleared_local_pointer_alias(p: *mut u32) -> *mut u32 {
