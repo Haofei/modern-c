@@ -31,6 +31,7 @@ from spec_sweep_lib import valid_program  # shared comment-aware negative-fixtur
 # their EXPECT_ERROR ("reject") twins that the chunk-level strip cannot separate. A
 # fixture carrying a real `lower-*` check must NEVER be added here.
 OUT_OF_SCOPE = {
+    "pointer_view_conversions.mc": "accept/reject pointer+view const-narrow cases share types the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_NO_IMPLICIT_POINTER_CONVERSION owned by spec_tests.zig; accept emit covered by tests/c_emit/pointer_views.mc + pointer_const_narrow.mc)",
     "soundness_address_class_cast.mc": "checker-only address-class cast has no IR lowering (phase=sema; E_ADDRESS_CLASS_* owned by spec_tests.zig)",
     "soundness_use_after_move.mc": "accept/reject cases share move-typed defs the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_USE_AFTER_MOVE owned by spec_tests.zig)",
     "soundness_conservative_overrejection.mc": "shared move-typed defs across accept/reject (phase=sema; E_USE_AFTER_MOVE owned by spec_tests.zig)",

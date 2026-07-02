@@ -51,6 +51,7 @@ OBJ_TRIPLE = "x86_64-unknown-none"
 # src/spec_tests.zig, not by codegen. A fixture with a real lower-* check may never be
 # added here. (Only spec fixtures match these names; c_emit fixtures are never keyed.)
 OUT_OF_SCOPE = {
+    "pointer_view_conversions.mc": "accept/reject pointer+view const-narrow cases share types the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_NO_IMPLICIT_POINTER_CONVERSION owned by spec_tests.zig; accept emit covered by tests/c_emit/pointer_views.mc + pointer_const_narrow.mc)",
     "soundness_address_class_cast.mc": "checker-only address-class cast has no IR lowering (phase=sema; owned by spec_tests.zig)",
     "soundness_use_after_move.mc": "accept/reject cases share move-typed defs the strip cannot isolate (phase=sema; owned by spec_tests.zig)",
     "soundness_conservative_overrejection.mc": "shared move-typed defs across accept/reject (phase=sema; owned by spec_tests.zig)",
