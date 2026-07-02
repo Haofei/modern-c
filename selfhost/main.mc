@@ -399,9 +399,10 @@ export fn mc_main() -> i32 {
         mc_emsg(stderr_fd(), "mcc2: semantic errors in input\n");
     }
 
-    // Emit from the SAME parsed AST sema built, then flush the whole StrBuf to stdout in one write.
+    // Emit from the SAME parsed AST sema built (Phase 0), reading sema's typed facts (Phase 2), then
+    // flush the whole StrBuf to stdout in one write.
     var mb: MallocAlloc = .{ .count = 0 };
-    var sb: StrBuf = emit_c_on(sema_parser(&st), &mb);
+    var sb: StrBuf = emit_c_on(sema_parser(&st), sema_facts_addr(&st), &mb);
     let len: usize = sb_len(&sb);
     if len != 0 {
         if let err(e) = io_write(stdout_fd(), sb_ptr(&sb), len) {}

@@ -251,6 +251,10 @@ struct Parser {
     // (`s.ptr[i]` / sub-slice) can resolve a base identifier's declared type (param or local) by
     // scanning this function. 0 while not emitting a function body. Not used by parse/sema.
     cur_fn: u32,
+    // Arch plan Phase 2 emit-time scratch: the raw address (usize) of the sema `Vec<Fact>` typed-fact
+    // table, so the emitter can read per-node resolutions (e.g. an `enum_lit`'s target enum) without
+    // re-deriving them. 0 = no fact table (the self-parsing `emit_c_run` path). Not used by parse/sema.
+    facts_addr: usize,
 }
 
 // Prefix-operator operand binding power: above every binary `left_bp` (max 19, `* / %`) so a
@@ -1739,6 +1743,7 @@ export fn parser_run(source: []const u8, a: *mut dyn Allocator) -> Parser {
         .sub_concrete = 0,
         .cur_fn = 0,
         .pending_gt = false,
+        .facts_addr = 0,
     };
     lex(source, &p.tl);
     // Node index 0 is the reserved `.invalid` sentinel ("none").

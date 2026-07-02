@@ -165,6 +165,20 @@ struct SmEnum {
     variant_count: u32,
     repr: SmKind,
     is_open: u32, // 1 when declared `open` (a switch then REQUIRES a `_` arm — see sm_check_switch)
+    decl_node: u32, // the `enum_decl` AST node id (arch plan Phase 1: lets sema record the resolved
+                    // enum on an `enum_lit` fact so emit stops re-scanning all enums — see Fact/G28)
+}
+
+// A per-node TYPED FACT (arch plan Phase 1): the shared IR that lets sema publish what it resolved so
+// emit consumes it instead of re-deriving. Indexed 1:1 by AST node id (a `Vec<Fact>` parallel to the
+// parser's node arena). Every field is optional-by-sentinel so a not-yet-populated node is harmless:
+//   ty   — resolved type of an EXPRESSION node (kind `.unknown` until Phase 3 fills it)
+//   decl — a resolution target as (node_id + 1), 0 = none. Phase 2: an `enum_lit`'s target `enum_decl`.
+//   flags— small bitset reserved for Phase 3 (is_slice_base / is_ptr_base / needs_dyn_coerce).
+struct Fact {
+    ty: SmType,
+    decl: u32,
+    flags: u32,
 }
 
 // The analyzer state + owned inputs. `p` OWNS the parser arena (see selfhost/parser.mc); free the
@@ -185,12 +199,40 @@ struct SmState {
     enum_defs: Vec<SmEnum>,
     evariants: Vec<SmEVar>,    // flattened variants for all enums
     tmethods: Vec<SmTraitMethod>, // P5.10: all trait methods (scanned linearly for dyn dispatch)
+    facts: Vec<Fact>,          // arch plan Phase 1: per-node typed facts, indexed by AST node id
     cur_ret: SmType,
     err_count: u32,
     first_err: SmErr,
 }
 
 // ----- small constructors + predicates -----
+
+// An empty fact (all sentinels): unknown type, no resolution, no flags.
+fn sm_fact_empty() -> Fact {
+    return .{ .ty = .{ .kind = .unknown, .ptr_depth = 0, .nstart = 0, .nlen = 0, .arr_len = 0, .elem = .unknown }, .decl = 0, .flags = 0 };
+}
+
+// Allocate the per-node fact table sized to the parsed node count, one empty fact per node, so
+// `sm_fact_*` can index any node id directly (vec_get/vec_set are bounds-checked). Call once, after
+// the parse and before checking.
+fn sm_facts_init(s: *mut SmState) -> void {
+    let n: u32 = parser_node_count(&s.p);
+    var i: u32 = 0;
+    while i < n {
+        vec_push(Fact, &s.facts, sm_fact_empty());
+        i = i + 1;
+    }
+}
+
+// Record the resolution target of `node` as an AST node id (stored +1; 0 means "none").
+fn sm_fact_set_decl(s: *mut SmState, node: u32, decl_node: u32) -> void {
+    if node >= vec_len(Fact, &s.facts) as u32 {
+        return;
+    }
+    var f: Fact = vec_get(Fact, &s.facts, node as usize);
+    f.decl = decl_node + 1;
+    vec_set(Fact, &s.facts, node as usize, f);
+}
 
 // A depth-0 type of kind `k`.
 fn sm_ty(k: SmKind) -> SmType {
@@ -1018,6 +1060,9 @@ fn sm_check_enum_lit(s: *mut SmState, node: u32, expected: SmType) -> void {
     let ename: []const u8 = sm_name_text(s, expected);
     let eref: u32 = strmap_get_or(u32, &s.enums, ename, 0);
     let ed: SmEnum = vec_get(SmEnum, &s.enum_defs, eref as usize);
+    // Arch plan Phase 1: publish which enum this bare `.variant` resolved to, so emit reads the fact
+    // (Phase 2) instead of re-scanning every enum by variant name (the G28 first-match hazard).
+    sm_fact_set_decl(s, node, ed.decl_node);
     var found: bool = false;
     var vi: u32 = 0;
     while vi < ed.variant_count {
@@ -1863,7 +1908,7 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
                 repr_kind = rt.kind;
             }
             let eidx: u32 = vec_len(SmEnum, &s.enum_defs) as u32;
-            vec_push(SmEnum, &s.enum_defs, .{ .variant_start = vstart, .variant_count = vcount, .repr = repr_kind, .is_open = is_open });
+            vec_push(SmEnum, &s.enum_defs, .{ .variant_start = vstart, .variant_count = vcount, .repr = repr_kind, .is_open = is_open, .decl_node = d });
             let ename: []const u8 = sm_tok_text(s, dn.main_token);
             strmap_put(u32, &s.enums, ename, eidx);
         }
@@ -2066,10 +2111,12 @@ export fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
         .enum_defs = vec_new(SmEnum, a),
         .evariants = vec_new(SmEVar, a),
         .tmethods = vec_new(SmTraitMethod, a),
+        .facts = vec_new(Fact, a),
         .cur_ret = sm_ty_unknown(),
         .err_count = 0,
         .first_err = .none,
     };
+    sm_facts_init(&s);
     let root: u32 = parser_root(&s.p);
     sm_collect(&s, root);
     sm_check_consts(&s, root);
@@ -2112,7 +2159,34 @@ export fn sema_free(s: *mut SmState) -> void {
     vec_free(SmEnum, &s.enum_defs);
     vec_free(SmEVar, &s.evariants);
     vec_free(SmTraitMethod, &s.tmethods);
+    vec_free(Fact, &s.facts);
     vec_free(SmSig, &s.sigs);
     vec_free(SmType, &s.ptypes);
     parser_free(&s.p);
+}
+
+// Borrow the per-node fact table sema built (arch plan Phase 1). Handed to `emit_c_on` so emit reads
+// resolved facts (enum targets, expr types) rather than re-deriving them. Valid until `sema_free`.
+export fn sema_facts(s: *mut SmState) -> *mut Vec<Fact> {
+    return &s.facts;
+}
+
+// The raw address (usize) of the fact table — the address-of-field form (like main.mc's
+// `(&global) as usize`) so emit can stash it on the Parser and reconstruct a `*mut Vec<Fact>` with
+// `raw.ptr` without threading the table through every emit function. Valid until `sema_free`.
+export fn sema_facts_addr(s: *mut SmState) -> usize {
+    return (&s.facts) as usize;
+}
+
+// The resolution target recorded for `node` as an AST node id, or 0 if none (arch plan Phase 1/2).
+// A caller (emit) uses this to resolve e.g. an `enum_lit` to its `enum_decl` without a name scan.
+export fn sema_fact_decl(facts: *Vec<Fact>, node: u32) -> u32 {
+    if node >= vec_len(Fact, facts) as u32 {
+        return 0;
+    }
+    let f: Fact = vec_get(Fact, facts, node as usize);
+    if f.decl == 0 {
+        return 0;
+    }
+    return f.decl - 1;
 }
