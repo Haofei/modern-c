@@ -24,6 +24,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "naked-run-test", "Compile + RUN a #[naked] function (no prologue/epilogue) as native binaries on both backends (needs cc + clang)", &.{ "bash", "tools/exec/naked-run.sh", "zig-out/bin/mcc" });
 
+    _ = h.addScriptTest(ctx, "enum-raw-cmp-run-test", "Compile + RUN a value-producing `enum.raw() == N` comparison (typed `let bool` and `return`) as native binaries on both backends (G23; needs cc + clang)", &.{ "bash", "tools/exec/enum-raw-cmp-run.sh", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "cc-test", "Compile an MC module to an object with mcc-cc, link, and run it", &.{ "bash", "tools/toolchain/mcc-cc-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "llvm-cc-test", "Compile an MC module to an object with mcc-llvm-cc, link, and run it", &.{ "bash", "tools/toolchain/mcc-llvm-cc-test.sh", "zig-out/bin/mcc" });

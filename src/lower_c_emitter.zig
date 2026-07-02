@@ -4517,6 +4517,7 @@ const CEmitter = struct {
         if (byteViewCallReturnTypeForCall(call)) |ty| return ty;
         if (self.atomicLoadReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawMethodReturnTypeForCall(call, locals)) |ty| return ty;
+        if (self.enumRawReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.dynDispatchReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.closureCalleeType(call.callee.*, locals)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
@@ -4564,6 +4565,21 @@ const CEmitter = struct {
         return lower_c_infer.assumeNoaliasReturnTypeForCall(self.inferTypeContext(), call, locals);
     }
 
+    // `<enum expr>.raw()` extracts the enum's representation integer (emitted as the enum value
+    // itself, whose C typedef IS that repr). Recovering this type lets a value-producing compare
+    // over a raw operand — `k.raw() == 1` in a typed `let bool` or `return` — type its operands
+    // instead of failing UnsupportedCEmission the way an `if`-condition path already avoids.
+    fn enumRawReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (call.type_args.len != 0 or call.args.len != 0) return null;
+        const member = memberCallee(call.callee.*) orelse return null;
+        if (!std.mem.eql(u8, member.name.text, "raw")) return null;
+        const enum_name = self.enumNameForValueExpr(member.base.*, locals) orelse return null;
+        const enum_decl = self.enums.get(enum_name) orelse return null;
+        // `.raw()` yields the declared repr integer (`: T`), defaulting to the enum's own
+        // storage typedef when unannotated — both are integer C storage.
+        return enum_decl.repr orelse simpleNameType(enum_name, member.name.span);
+    }
+
     fn exprSourceTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         return switch (expr.kind) {
             .ident => |ident| {
@@ -4595,6 +4611,7 @@ const CEmitter = struct {
         if (byteViewCallReturnTypeForCall(call)) |ty| return ty;
         if (self.atomicLoadReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawMethodReturnTypeForCall(call, locals)) |ty| return ty;
+        if (self.enumRawReturnTypeForCall(call, locals)) |ty| return ty;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
         return info.return_type;
