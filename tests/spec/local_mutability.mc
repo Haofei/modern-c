@@ -62,6 +62,40 @@ fn reject_duplicate_local() -> u32 {
     return x;
 }
 
+// G20: `let`/`var` are BLOCK-scoped, so a name declared in one block may be reused by a
+// DISJOINT sibling block (the first binding is dead once its block closes). This compiles.
+fn accept_sibling_block_reuse(n: u32) -> u32 {
+    var acc: u32 = 0;
+    while acc < n {
+        let t: u32 = acc;
+        acc = acc + t + 1;
+    }
+    while acc > 10 {
+        let t: u32 = acc;   // sibling reuse of `t` — the first `t` is out of scope here
+        acc = acc - t + 5;
+    }
+    {
+        let t: u32 = acc;   // another disjoint sibling block reusing `t`
+        acc = t;
+    }
+    return acc;
+}
+
+// G20 boundary: reusing a name STILL LIVE in an ENCLOSING block is a live-shadow — rejected.
+fn reject_nested_block_shadows_live_enclosing() -> u32 {
+    var out: u32 = 0;
+    {
+        let t: u32 = 1;
+        {
+            // EXPECT_ERROR: E_DUPLICATE_LOCAL
+            let t: u32 = 2;   // the enclosing block's `t` is still live here
+            out = out + t;
+        }
+        out = out + t;
+    }
+    return out;
+}
+
 fn reject_for_binding_shadows_local(xs: []const u32) -> u32 {
     let x: u32 = 1;
     // EXPECT_ERROR: E_DUPLICATE_LOCAL

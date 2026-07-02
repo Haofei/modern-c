@@ -277,6 +277,15 @@ pub const Checker = struct {
     // its state to track a `move` field that has been moved out of its aggregate. Freed at
     // the end of each function's analysis.
     move_place_keys: std.ArrayListUnmanaged([]const u8) = .empty,
+    // Block-scoping (G20): the innermost-last stack of local names that are CURRENTLY LIVE
+    // across all open lexical scopes (params + every enclosing block's locals). A `let`/`var`
+    // may reuse a name that belongs to an already-exited SIBLING block (popped from here), but
+    // re-declaring a name still live in an enclosing scope stays E_DUPLICATE_LOCAL (MC forbids
+    // live-shadowing). This mirrors the async path's `DupScope.liveInAnyFrame` frame stack so
+    // both paths agree. The backing `scope` map is NEVER popped (keep-all), so post-body passes
+    // (fall-through / switch-exhaustiveness) still resolve a block-local subject's type; only the
+    // liveness set here is scoped. Reset per function; markers via `enterScope`/`leaveScope`.
+    live_locals: std.ArrayListUnmanaged([]const u8) = .empty,
     // (bug #3) Definite-init: defer bodies do NOT run at their lexical position — they
     // run at scope EXIT, after later assignments. Reading them eagerly mid-block produced
     // a false E_USE_BEFORE_INIT (`var x=uninit; defer sink(x); x=5;`). Instead we COLLECT
@@ -319,6 +328,7 @@ pub const Checker = struct {
     }
 
     pub fn checkModule(self: *Checker, module: ast.Module) void {
+        defer self.live_locals.deinit(self.reporter.allocator); // free the block-scoping liveness stack
         var mmio_structs = std.StringHashMap(MmioStruct).init(self.reporter.allocator);
         defer deinitMmioStructs(&mmio_structs);
         var structs = std.StringHashMap(StructInfo).init(self.reporter.allocator);
@@ -1177,6 +1187,11 @@ pub const Checker = struct {
         defer self.current_fn_name = null;
         var scope = Scope.init(self.reporter.allocator);
         defer scope.deinit();
+        // G20 block-scoping: params + the fn-body's top-level locals live in the base scope for
+        // the whole function. Reset the liveness stack per function (nested blocks push/pop their
+        // own markers); it is emptied again when the function returns.
+        self.live_locals.clearRetainingCapacity();
+        defer self.live_locals.clearRetainingCapacity();
         var mmio_params = std.StringHashMap([]const u8).init(self.reporter.allocator);
         defer mmio_params.deinit();
 
@@ -1203,6 +1218,8 @@ pub const Checker = struct {
                 scope.put(param.name.text, .{ .class = classifyTypeCtx(param.ty, sig_ctx), .mutable = false, .ty = param.ty, .origin = .param }) catch {
                     self.oom = true;
                 };
+                // Params are live for the whole body, so a local may not shadow one (G20).
+                self.pushLiveLocal(param.name.text);
                 if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {
                     self.oom = true;
                 };
@@ -1648,6 +1665,16 @@ pub const Checker = struct {
         self.checkUnhandledResultLocals(block, ctx);
     }
 
+    // A nested `{ ... }` block: its `let`/`var` locals are scoped to the block, so a disjoint
+    // sibling block may reuse their names (G20). The fn's TOP-LEVEL body is checked via plain
+    // `checkBlock` (its locals stay live for the whole body — there is no sibling at that level,
+    // and post-body fall-through analysis still needs them live).
+    fn checkBlockScoped(self: *Checker, block: ast.Block, ctx: Context) void {
+        const mark = self.enterScope();
+        self.checkBlock(block, ctx);
+        self.leaveScope(mark);
+    }
+
     // Section 22: const-fold the scalar subset of a comptime block. Binds
     // comptime `let`/`var` constants and evaluates `assert(...)` conditions,
     // reporting E_COMPTIME_TRAP when an assertion is provably false or the
@@ -1840,10 +1867,10 @@ pub const Checker = struct {
                     if (ctx.scope) |scope| {
                         self.checkForBody(loop, next, scope);
                     } else {
-                        self.checkBlock(loop.body, next);
+                        self.checkBlockScoped(loop.body, next);
                     }
                 } else {
-                    self.checkBlock(loop.body, next);
+                    self.checkBlockScoped(loop.body, next);
                 }
             },
             .if_let => |node| {
@@ -1854,6 +1881,9 @@ pub const Checker = struct {
                 var then_scope = Scope.init(self.reporter.allocator);
                 defer then_scope.deinit();
                 var then_ctx = ctx;
+                // The pattern binding + the then-block's locals form one lexical scope; mark
+                // before binding so both are popped from the liveness stack on exit (G20).
+                const then_mark = self.enterScope();
                 if (ctx.scope) |scope| {
                     copyScope(scope, &then_scope) catch {
                         self.oom = true;
@@ -1862,7 +1892,8 @@ pub const Checker = struct {
                     then_ctx.scope = &then_scope;
                 }
                 if (pattern_is_valid) self.checkBlock(node.then_block, then_ctx);
-                if (node.else_block) |else_block| self.checkBlock(else_block, ctx);
+                self.leaveScope(then_mark);
+                if (node.else_block) |else_block| self.checkBlockScoped(else_block, ctx);
             },
             .@"switch" => |node| {
                 self.checkSwitch(node, ctx);
@@ -1870,12 +1901,12 @@ pub const Checker = struct {
             .unsafe_block => |block| {
                 var next = ctx;
                 next.in_unsafe = true;
-                self.checkBlock(block, next);
+                self.checkBlockScoped(block, next);
             },
             .comptime_block => |block| {
                 var next = ctx;
                 next.in_comptime = true;
-                self.checkBlock(block, next);
+                self.checkBlockScoped(block, next);
                 // Fold the constant subset of the block: bind comptime `let`
                 // constants and evaluate `assert(...)` conditions, reporting
                 // E_COMPTIME_TRAP for a provably-false assertion or a const-eval
@@ -1888,7 +1919,7 @@ pub const Checker = struct {
                 self.seedComptimeScope(&scope);
                 self.foldComptimeBlock(block, &scope);
             },
-            .block => |block| self.checkBlock(block, ctx),
+            .block => |block| self.checkBlockScoped(block, ctx),
             .asm_stmt => |asm_stmt| {
                 if (!ctx.in_unsafe) {
                     self.errorCode(stmt.span, "E_UNSAFE_REQUIRED", "operation requires unsafe context");
@@ -1928,7 +1959,7 @@ pub const Checker = struct {
             .contract_block => |contract| {
                 var next = ctx;
                 next.unsafe_contracts = next.unsafe_contracts.with(contract.attr);
-                self.checkBlock(contract.block, next);
+                self.checkBlockScoped(contract.block, next);
             },
             .@"return" => |maybe| {
                 if (ctx.in_comptime) {
@@ -2077,18 +2108,51 @@ pub const Checker = struct {
         }
     }
 
+    // Block-scoping (G20) liveness helpers. `live_locals` is a flat innermost-last stack of
+    // names live across all open scopes; a lexical scope is delimited by a marker (its length
+    // on entry) and torn down by truncating back to that marker.
+    fn isLiveLocal(self: *Checker, name: []const u8) bool {
+        for (self.live_locals.items) |n| {
+            if (std.mem.eql(u8, n, name)) return true;
+        }
+        return false;
+    }
+
+    fn pushLiveLocal(self: *Checker, name: []const u8) void {
+        self.live_locals.append(self.reporter.allocator, name) catch {
+            self.oom = true;
+        };
+    }
+
+    // Enter a lexical scope: remember the current liveness marker to restore on exit.
+    fn enterScope(self: *Checker) usize {
+        return self.live_locals.items.len;
+    }
+
+    // Leave a lexical scope: names declared since `mark` are no longer live, so a later
+    // SIBLING scope may reuse them. The backing `scope` type map is intentionally left
+    // intact (keep-all) so post-body passes can still resolve those locals' types.
+    fn leaveScope(self: *Checker, mark: usize) void {
+        if (self.live_locals.items.len > mark) self.live_locals.shrinkRetainingCapacity(mark);
+    }
+
     fn addLocalBinding(self: *Checker, scope: *Scope, name: ast.Ident, info: LocalInfo) void {
         if (self.isQualifiedOwner(name.text)) {
             self.errorCode(name.span, "E_RESERVED_QUALIFIED_NAME", "a local binding may not shadow a module/impl name");
             return;
         }
-        if (scope.contains(name.text)) {
+        // A name still live in THIS or an enclosing scope is a forbidden live-shadow. A name
+        // that only lingers in `scope` from an already-exited sibling block is NOT live, so it
+        // may be reused — we overwrite its stale type entry below.
+        if (self.isLiveLocal(name.text)) {
             self.errorCode(name.span, "E_DUPLICATE_LOCAL", "local bindings must have unique names in the current scope");
             return;
         }
         scope.put(name.text, info) catch {
             self.oom = true;
+            return;
         };
+        self.pushLiveLocal(name.text);
     }
 
     fn isQualifiedOwner(self: *Checker, name: []const u8) bool {
@@ -2212,7 +2276,7 @@ pub const Checker = struct {
                 return tryResultType(operand);
             },
             .block => |block| {
-                self.checkBlock(block, ctx);
+                self.checkBlockScoped(block, ctx);
                 return .unknown;
             },
             .unary => |node| {
@@ -5306,12 +5370,16 @@ pub const Checker = struct {
 
     fn checkForBody(self: *Checker, loop: ast.Loop, ctx: Context, scope: *Scope) void {
         const label = loop.label orelse {
-            self.checkBlock(loop.body, ctx);
+            self.checkBlockScoped(loop.body, ctx);
             return;
         };
+        // The element binding + the body's locals form one lexical scope (G20): mark before
+        // binding the element so both are popped on exit and a sibling loop may reuse the name.
+        const mark = self.enterScope();
         const previous = scope.get(label.text);
         self.addForBinding(loop, ctx, scope);
         self.checkBlock(loop.body, ctx);
+        self.leaveScope(mark);
         if (previous) |entry| {
             scope.put(label.text, entry) catch {
                 self.oom = true;
@@ -5368,6 +5436,9 @@ pub const Checker = struct {
             var arm_scope = Scope.init(self.reporter.allocator);
             defer arm_scope.deinit();
             var arm_ctx = ctx;
+            // The arm's pattern binding + its body form one lexical scope (G20): mark before
+            // binding so both are popped on exit and a sibling arm may reuse the name.
+            const arm_mark = self.enterScope();
             if (ctx.scope) |scope| {
                 copyScope(scope, &arm_scope) catch {
                     self.oom = true;
@@ -5379,6 +5450,7 @@ pub const Checker = struct {
                 .block => |block| self.checkBlock(block, arm_ctx),
                 .expr => |expr| _ = self.checkExpr(expr, arm_ctx),
             }
+            self.leaveScope(arm_mark);
         }
         if (subject_ty) |ty| {
             if (closedEnumInfoForType(ty, ctx)) |enum_info| {
