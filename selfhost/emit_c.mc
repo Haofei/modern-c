@@ -1448,13 +1448,60 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
                 sb_put_cstr(sb, "_");
                 sb_put_str(sb, a0lex);
                 sb_put_cstr(sb, "(");
+                // The generic template + the effective concrete type node: an argument that is itself a
+                // struct literal `.{...}` (e.g. `vec_push(Node, v, .{ .kind = k, .. })`) has no C
+                // spelling on its own — it must be emitted as a TARGET-TYPED compound literal
+                // `(Node){...}`, substituting the callee's type param with the concrete type arg. `a0`
+                // is the type arg; if it is itself the enclosing template's param `T`, resolve it
+                // through the active substitution to the true concrete node.
+                let gfn_node: u32 = e_find_fn(p, cname);
+                let gfn_tparam: u32 = e_gfn_tparam(p, gfn_node);
+                var eff_conc: u32 = a0;
+                if p.sub_concrete != 0 {
+                    let a0n: Node = e_node(p, a0);
+                    let a0_is_tn: bool = a0n.kind == .type_name;
+                    let a0_is_id: bool = a0n.kind == .ident_expr;
+                    if a0_is_tn || a0_is_id {
+                        let a0t: []const u8 = e_tok_text(p, a0n.main_token);
+                        let subn: []const u8 = e_sub_name(p);
+                        if mem_eql(a0t, subn) {
+                            eff_conc = p.sub_concrete;
+                        }
+                    }
+                }
                 var gk: u32 = 1; // skip the type arg at index 0
                 while gk < gargc {
                     if gk > 1 {
                         sb_put_cstr(sb, ", ");
                     }
                     let garg: u32 = e_extra(p, grun + 1 + gk);
-                    e_expr(p, sb, garg);
+                    let gargn: Node = e_node(p, garg);
+                    let gptn: u32 = e_fn_param_type_node(p, gfn_node, gk);
+                    var gp_is_dyn: bool = false;
+                    if gptn != 0 {
+                        let gptnode: Node = e_node(p, gptn);
+                        gp_is_dyn = gptnode.kind == .type_dyn;
+                    }
+                    if gargn.kind == .struct_lit {
+                        // Emit `(<param C type>){ body }`, with the callee's type param substituted to
+                        // the concrete type arg. Save/restore the substitution context so a call nested
+                        // inside a monomorphic body is unaffected.
+                        let sv_start: usize = p.sub_name_start;
+                        let sv_len: usize = p.sub_name_len;
+                        let sv_conc: u32 = p.sub_concrete;
+                        e_set_sub(p, gfn_tparam, eff_conc);
+                        e_struct_lit(p, sb, garg, gptn);
+                        p.sub_name_start = sv_start;
+                        p.sub_name_len = sv_len;
+                        p.sub_concrete = sv_conc;
+                    } else if gp_is_dyn {
+                        // A concrete `*mut TYPE` passed where the generic fn expects a `*mut dyn TRAIT`
+                        // (e.g. `vec_new(Pt, &alloc)`) is coerced to the `{data,vtable}` fat pointer,
+                        // exactly as at a non-generic call site.
+                        e_dyn_coerce(p, sb, garg, gptn);
+                    } else {
+                        e_expr(p, sb, garg);
+                    }
                     gk = gk + 1;
                 }
                 sb_put_cstr(sb, ")");
@@ -2518,6 +2565,41 @@ fn e_is_scalar_lexeme(txt: []const u8) -> bool {
     return false;
 }
 
+// True when `txt` names a declared STRUCT or ENUM in this module (a `struct_decl` — which also covers
+// `opaque struct` — or an `enum_decl`). Used to widen the instantiation filter beyond scalars so a
+// NAMED type argument (`Vec<Node>`, `vec_push(Node, ..)`) is monomorphized. The abstract type param
+// (e.g. `T`) names no declaration, so it is still excluded — avoiding the `T -> T` self-recursion trap.
+fn e_is_known_type(p: *mut Parser, txt: []const u8) -> bool {
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var i: u32 = 0;
+    while i < count {
+        let d: u32 = e_extra(p, run + 1 + i);
+        let dn: Node = e_node(p, d);
+        if dn.kind == .struct_decl || dn.kind == .enum_decl {
+            let nm: []const u8 = e_tok_text(p, dn.main_token);
+            if mem_eql(txt, nm) {
+                return true;
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// True when `txt` is a CONCRETE type argument worth monomorphizing: a supported scalar OR a declared
+// struct/enum name. This is the widened instantiation filter (P5-struct): {scalars} ∪ {known structs
+// /enums}, still EXCLUDING the abstract type param (which matches neither), so the self-recursion trap
+// the scalar-only filter guarded against is still avoided.
+fn e_is_concrete_type_arg(p: *mut Parser, txt: []const u8) -> bool {
+    if e_is_scalar_lexeme(txt) {
+        return true;
+    }
+    return e_is_known_type(p, txt);
+}
+
 // True when a concrete type/ident node whose lexeme equals `arg`'s is already in `out` (dedup by
 // lexeme — the subset has no set type, so instantiations are deduped with a linear scan; gap-noted).
 fn e_arg_present(p: *mut Parser, out: *Vec<u32>, arg: u32) -> bool {
@@ -2549,7 +2631,7 @@ fn e_collect_type_insts(p: *mut Parser, base_text: []const u8, out: *mut Vec<u32
             let m: bool = mem_eql(base_text, b);
             if m {
                 let arg_lex: []const u8 = e_node_lexeme(p, nd.lhs);
-                let concrete: bool = e_is_scalar_lexeme(arg_lex);
+                let concrete: bool = e_is_concrete_type_arg(p, arg_lex);
                 if concrete {
                     let present: bool = e_arg_present(p, &*out, nd.lhs);
                     if !present {
@@ -2580,7 +2662,7 @@ fn e_collect_call_insts(p: *mut Parser, fn_text: []const u8, out: *mut Vec<u32>)
                     if argc >= 1 {
                         let a0: u32 = e_extra(p, arg_run + 1);
                         let a0lex: []const u8 = e_node_lexeme(p, a0);
-                        let concrete: bool = e_is_scalar_lexeme(a0lex);
+                        let concrete: bool = e_is_concrete_type_arg(p, a0lex);
                         if concrete {
                             let present: bool = e_arg_present(p, &*out, a0);
                             if !present {
@@ -2803,6 +2885,256 @@ fn e_const_decl(p: *mut Parser, sb: *mut StrBuf, d: u32) -> void {
     sb_put_cstr(sb, ";\n");
 }
 
+// ----- struct emission ordering (dependency topological sort) -----
+//
+// A struct's C typedef must precede every OTHER struct that embeds it BY VALUE (C requires a complete
+// type for a by-value member). With generic instances (`Vec_Node`) plus regular structs spread across
+// concatenated modules, declaration order is NOT a valid emission order (e.g. `Parser` embeds
+// `TokenList`/`Vec<Node>` yet may be declared first). So all struct "units" — one per regular struct
+// plus one per distinct generic instance — are emitted in dependency order below.
+
+// Byte-wise equality of two StrBuf contents (the subset has no string compare on built buffers).
+fn e_sb_eq(a: *StrBuf, b: *StrBuf) -> bool {
+    let la: usize = sb_len(a);
+    let lb: usize = sb_len(b);
+    if la != lb {
+        return false;
+    }
+    var i: usize = 0;
+    while i < la {
+        let ba: u8 = sb_byte(a, i);
+        let bb: u8 = sb_byte(b, i);
+        if ba != bb {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Write the C typedef name of a struct unit into `sb_out`: `NAME` for a regular struct (`concrete`
+// == 0), or the mangled `BASE_<concrete>` for a generic instance.
+fn e_unit_name(p: *mut Parser, sb_out: *mut StrBuf, decl: u32, concrete: u32) -> void {
+    let nd: Node = e_node(p, decl);
+    let base: []const u8 = e_tok_text(p, nd.main_token);
+    sb_put_str(sb_out, base);
+    if concrete != 0 {
+        sb_put_cstr(sb_out, "_");
+        let clex: []const u8 = e_node_lexeme(p, concrete);
+        sb_put_str(sb_out, clex);
+    }
+}
+
+// Write the by-value struct DEPENDENCY name of a field's `type_node` into `sb_out`, or nothing when
+// the field imposes no ordering constraint (a pointer/slice/trait-object breaks the dependency since
+// C allows an incomplete member type behind indirection). Honors the active monomorphization
+// substitution so a generic instance's `T`-typed field resolves to its concrete dependency.
+fn e_field_dep_name(p: *mut Parser, sb_out: *mut StrBuf, type_node: u32) -> void {
+    if type_node == 0 {
+        return;
+    }
+    let nd: Node = e_node(p, type_node);
+    if nd.kind == .type_ptr {
+        return;
+    }
+    if nd.kind == .type_slice_const {
+        return;
+    }
+    if nd.kind == .type_slice_mut {
+        return;
+    }
+    if nd.kind == .type_dyn {
+        return;
+    }
+    // `?T` / `Result<..>` aggregates embed their payload by value, but their typedefs are emitted at
+    // the top of the module (before structs); struct-payload ordering for them is deferred (not needed
+    // by the current selfhost source — see the ledger).
+    if nd.kind == .type_optional {
+        return;
+    }
+    if nd.kind == .type_result {
+        return;
+    }
+    if nd.kind == .type_array {
+        e_field_dep_name(p, sb_out, nd.lhs); // dependency is the (possibly substituted) element type
+        return;
+    }
+    if nd.kind == .type_generic {
+        let base: []const u8 = e_tok_text(p, nd.main_token);
+        let arg_lex: []const u8 = e_type_arg_lexeme(p, nd.lhs);
+        sb_put_str(sb_out, base);
+        sb_put_cstr(sb_out, "_");
+        sb_put_str(sb_out, arg_lex);
+        return;
+    }
+    if nd.kind == .type_name {
+        let txt: []const u8 = e_tok_text(p, nd.main_token);
+        if p.sub_concrete != 0 {
+            let subn: []const u8 = e_sub_name(p);
+            let hit: bool = mem_eql(txt, subn);
+            if hit {
+                let clex: []const u8 = e_node_lexeme(p, p.sub_concrete);
+                sb_put_str(sb_out, clex);
+                return;
+            }
+        }
+        sb_put_str(sb_out, txt);
+        return;
+    }
+}
+
+// True when every by-value struct dependency of unit `(decl, concrete)` has already been emitted (its
+// `done` flag set). A dependency that names no unit (a scalar/enum/address type, or a struct from a
+// non-unit source) is treated as satisfied.
+fn e_unit_ready(p: *mut Parser, decl: u32, concrete: u32, decls: *Vec<u32>, concretes: *Vec<u32>, done: *Vec<u32>) -> bool {
+    let nd: Node = e_node(p, decl);
+    var fields_run: u32 = 0;
+    if concrete == 0 {
+        fields_run = nd.lhs;
+    } else {
+        let grec: u32 = nd.lhs;
+        let tparam_tok: u32 = e_extra(p, grec);
+        fields_run = e_extra(p, grec + 1);
+        e_set_sub(p, tparam_tok, concrete);
+    }
+    let fcount: u32 = e_extra(p, fields_run);
+    var ready: bool = true;
+    let nunits: usize = vec_len(u32, decls);
+    var fi: u32 = 0;
+    while fi < fcount {
+        let type_node: u32 = e_extra(p, fields_run + 1 + fi * 2 + 1);
+        var depsb: StrBuf = sb_new(p.a);
+        e_field_dep_name(p, &depsb, type_node);
+        let deplen: usize = sb_len(&depsb);
+        if deplen != 0 {
+            var k: usize = 0;
+            while k < nunits {
+                let kdecl: u32 = vec_get(u32, decls, k);
+                let kconc: u32 = vec_get(u32, concretes, k);
+                var namesb: StrBuf = sb_new(p.a);
+                e_unit_name(p, &namesb, kdecl, kconc);
+                let same: bool = e_sb_eq(&depsb, &namesb);
+                sb_free(&namesb);
+                if same {
+                    let dk: u32 = vec_get(u32, done, k);
+                    if dk == 0 {
+                        ready = false;
+                    }
+                }
+                k = k + 1;
+            }
+        }
+        sb_free(&depsb);
+        fi = fi + 1;
+    }
+    if concrete != 0 {
+        e_clear_sub(p);
+    }
+    return ready;
+}
+
+// Emit one struct unit: a regular struct typedef, or a monomorphic generic-instance typedef.
+fn e_unit_emit(p: *mut Parser, sb: *mut StrBuf, decl: u32, concrete: u32) -> void {
+    if concrete == 0 {
+        e_struct_decl(p, sb, decl);
+    } else {
+        e_gstruct_mono(p, sb, decl, concrete);
+    }
+}
+
+// Emit ALL struct typedefs (regular + generic instances) in dependency order: repeatedly emit every
+// unit whose by-value dependencies are already emitted, until none remain. Any leftover (a cycle —
+// impossible for well-formed by-value C structs) is emitted in list order as a fallback.
+fn e_emit_structs_ordered(p: *mut Parser, sb: *mut StrBuf) -> void {
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var decls: Vec<u32> = vec_new(u32, p.a);
+    var concretes: Vec<u32> = vec_new(u32, p.a);
+    var done: Vec<u32> = vec_new(u32, p.a);
+    // Units: each generic struct template's distinct concrete instances...
+    var gsi: u32 = 0;
+    while gsi < count {
+        let gd: u32 = e_extra(p, run + 1 + gsi);
+        let gdn: Node = e_node(p, gd);
+        if gdn.kind == .struct_gdecl {
+            let base: []const u8 = e_tok_text(p, gdn.main_token);
+            var insts: Vec<u32> = vec_new(u32, p.a);
+            e_collect_type_insts(p, base, &insts);
+            let ni: usize = vec_len(u32, &insts);
+            var ii: usize = 0;
+            while ii < ni {
+                let concrete: u32 = vec_get(u32, &insts, ii);
+                vec_push(u32, &decls, gd);
+                vec_push(u32, &concretes, concrete);
+                vec_push(u32, &done, 0);
+                ii = ii + 1;
+            }
+            vec_free(u32, &insts);
+        }
+        gsi = gsi + 1;
+    }
+    // ...then each regular struct.
+    var si: u32 = 0;
+    while si < count {
+        let sd: u32 = e_extra(p, run + 1 + si);
+        let sdn: Node = e_node(p, sd);
+        if sdn.kind == .struct_decl {
+            vec_push(u32, &decls, sd);
+            vec_push(u32, &concretes, 0);
+            vec_push(u32, &done, 0);
+        }
+        si = si + 1;
+    }
+    let nunits: usize = vec_len(u32, &decls);
+    var emitted: usize = 0;
+    var guard: usize = 0;
+    while emitted < nunits {
+        if guard > nunits {
+            emitted = nunits; // no progress possible; drop to the fallback below
+        } else {
+            var progress: bool = false;
+            var u: usize = 0;
+            while u < nunits {
+                let d: u32 = vec_get(u32, &done, u);
+                if d == 0 {
+                    let decl: u32 = vec_get(u32, &decls, u);
+                    let conc: u32 = vec_get(u32, &concretes, u);
+                    let ready: bool = e_unit_ready(p, decl, conc, &decls, &concretes, &done);
+                    if ready {
+                        e_unit_emit(p, sb, decl, conc);
+                        vec_set(u32, &done, u, 1);
+                        emitted = emitted + 1;
+                        progress = true;
+                    }
+                }
+                u = u + 1;
+            }
+            if progress {
+                guard = guard + 1;
+            } else {
+                guard = nunits + 1; // stall -> exit to fallback
+            }
+        }
+    }
+    // Fallback: emit anything still pending (would only happen on a by-value cycle).
+    var uu: usize = 0;
+    while uu < nunits {
+        let d2: u32 = vec_get(u32, &done, uu);
+        if d2 == 0 {
+            let dcl: u32 = vec_get(u32, &decls, uu);
+            let cnc: u32 = vec_get(u32, &concretes, uu);
+            e_unit_emit(p, sb, dcl, cnc);
+            vec_set(u32, &done, uu, 1);
+        }
+        uu = uu + 1;
+    }
+    vec_free(u32, &decls);
+    vec_free(u32, &concretes);
+    vec_free(u32, &done);
+}
+
 fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
     sb_put_cstr(sb, "#include <stdint.h>\n#include <stddef.h>\n#include <stdbool.h>\n\n");
     // The `unreachable;` trap (matches src/lower_c_runtime.zig's `mc_trap_Unreachable`): NORETURN so a
@@ -2831,38 +3163,13 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
     // `Vec<T>`'s allocator field — so the trait typedef must precede it). Traits themselves depend on
     // nothing (their vtable uses `void* self`), so they are safe to emit first.
     e_trait_typedefs(p, sb);
-    // P5.5 monomorphic structs: for each generic struct template, emit one typedef per distinct
-    // concrete type argument used anywhere in the module (deduped). Emitted BEFORE the regular structs
-    // because a regular struct may embed a generic instance BY VALUE (e.g. `TokenList { data: Vec<usize> }`),
-    // and a generic instance's own fields are scalars / trait objects (already emitted above).
-    var gsi: u32 = 0;
-    while gsi < count {
-        let gd: u32 = e_extra(p, run + 1 + gsi);
-        let gdn: Node = e_node(p, gd);
-        if gdn.kind == .struct_gdecl {
-            let base: []const u8 = e_tok_text(p, gdn.main_token);
-            var insts: Vec<u32> = vec_new(u32, p.a);
-            e_collect_type_insts(p, base, &insts);
-            let ni: usize = vec_len(u32, &insts);
-            var ii: usize = 0;
-            while ii < ni {
-                let concrete: u32 = vec_get(u32, &insts, ii);
-                e_gstruct_mono(p, sb, gd, concrete);
-                ii = ii + 1;
-            }
-            vec_free(u32, &insts);
-        }
-        gsi = gsi + 1;
-    }
-    var si: u32 = 0;
-    while si < count {
-        let sd: u32 = e_extra(p, run + 1 + si);
-        let sdn: Node = e_node(p, sd);
-        if sdn.kind == .struct_decl {
-            e_struct_decl(p, sb, sd);
-        }
-        si = si + 1;
-    }
+    // Struct typedefs (regular + monomorphic generic instances) in DEPENDENCY ORDER: a struct that
+    // embeds another BY VALUE (e.g. `TokenList { data: Vec<usize> }`, `Parser { nodes: Vec<Node>, tl:
+    // TokenList }`) must follow the embedded struct's typedef, and a generic instance `Vec<Node>` that
+    // stored `Node` by value must follow `Node`. Declaration/concat order does NOT guarantee this
+    // (P5-struct: struct type-arg monomorphization + cross-module embedding), so it is topologically
+    // sorted here. (See `e_emit_structs_ordered`.)
+    e_emit_structs_ordered(p, sb);
     // Result: `mc_result_<T>_<E>` tagged-struct typedefs. Emitted AFTER enums/structs (a Result payload
     // may be a named enum/struct — e.g. `Result<Fd, IoError>` — so those typedefs must precede it) and
     // before fn prototypes (a fn signature may return a Result).

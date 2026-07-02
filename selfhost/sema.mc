@@ -796,6 +796,25 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
             if a0n.kind == .ident_expr {
                 let a0text: []const u8 = sm_tok_text(s, a0n.main_token);
                 let ak: SmKind = sm_scalar_kind(a0text);
+                let ak_raw: u32 = ak.raw();
+                if ak_raw != 0 {
+                    return sm_ty(ak);
+                }
+                // A generic fn returning its type param at a STRUCT/ENUM type arg (e.g.
+                // `vec_get(Node, ..)` -> `Node`): the concrete type arg names a declared struct/enum,
+                // so resolve to a `named_` type carrying that name's lexeme offsets (so a
+                // `let n: Node = vec_get(Node, ..)` annotation matches). Scalars were handled above.
+                let is_known: bool = strmap_contains(u32, &s.structs, a0text);
+                var is_known_ty: bool = is_known;
+                if !is_known_ty {
+                    is_known_ty = strmap_contains(u32, &s.enums, a0text);
+                }
+                if is_known_ty {
+                    let par: *mut Parser = &s.p;
+                    let nst: usize = token_start_at(&par.tl, a0n.main_token as usize);
+                    let nln: usize = token_len_at(&par.tl, a0n.main_token as usize);
+                    return .{ .kind = .named_, .ptr_depth = 0, .nstart = nst, .nlen = nln, .arr_len = 0, .elem = .unknown };
+                }
                 return sm_ty(ak);
             }
         }
@@ -905,14 +924,37 @@ fn sm_check_struct_lit(s: *mut SmState, node: u32, expected: SmType) -> void {
     while fi < fcount {
         let fname_tok: u32 = sm_extra(s, run + 1 + fi * 2);
         let val_node: u32 = sm_extra(s, run + 1 + fi * 2 + 1);
-        let vt: SmType = sm_type_of_expr(s, val_node);
-        if known {
-            let ft: SmType = sm_field_type(s, expected, fname_tok);
-            let fk: u32 = ft.kind.raw();
-            if fk != 0 && !gen {
-                let m: bool = sm_types_match(s, ft, vt);
-                if !m {
-                    sm_err(s, .type_mismatch);
+        let vnode: Node = sm_node(s, val_node);
+        // A field value that is itself a target-typed literal (`.variant` / `.{...}`) has no
+        // standalone type — it must be checked against the FIELD's type (the target), exactly as a
+        // call argument or a typed init threads its annotation. Evaluating it context-free would
+        // spuriously report `enum_target`/`struct_target`/`array_target`. (Generic-target structs
+        // skip field-TYPE checking: the field type may be the abstract type param T.)
+        let is_enum_lit: bool = vnode.kind == .enum_lit;
+        let is_struct_lit: bool = vnode.kind == .struct_lit;
+        let is_array_lit: bool = vnode.kind == .array_lit;
+        let is_lit_target: bool = is_enum_lit || is_struct_lit || is_array_lit;
+        if is_lit_target {
+            if known && !gen {
+                let ft: SmType = sm_field_type(s, expected, fname_tok);
+                if is_enum_lit {
+                    sm_check_enum_lit(s, val_node, ft);
+                } else if is_struct_lit {
+                    sm_check_struct_lit(s, val_node, ft);
+                } else {
+                    sm_check_array_lit(s, val_node, ft);
+                }
+            }
+        } else {
+            let vt: SmType = sm_type_of_expr(s, val_node);
+            if known {
+                let ft: SmType = sm_field_type(s, expected, fname_tok);
+                let fk: u32 = ft.kind.raw();
+                if fk != 0 && !gen {
+                    let m: bool = sm_types_match(s, ft, vt);
+                    if !m {
+                        sm_err(s, .type_mismatch);
+                    }
                 }
             }
         }

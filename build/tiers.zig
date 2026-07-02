@@ -415,6 +415,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-result-test"));
     // selfhost-lexself-test (SELF-COMPILE LANDMARK): after adding CHARACTER LITERALS and MODULE-LEVEL `const` to the subset (plus the std-dep-driven `const fn`/`move struct`/bool `switch`/`uninit`/string-literal/transitive-monomorphization fixes), mcc2 compiles its OWN lexer selfhost/lexer.mc to clang-clean C, plus a char-literal + module-const behavioral round-trip -> clang -Werror -> run.
     m0_step.dependOn(ctx.cmd("selfhost-lexself-test"));
+    // selfhost-parseself-test (SELF-COMPILE LANDMARK): after adding STRUCT-type-argument monomorphization (a generic container/function instantiated at a NAMED struct type — `Vec<Node>`/`vec_push(Node, ..)` — not just scalars) plus dependency-ordered struct emission (`Parser` embedding `TokenList`/`Vec<Node>` by value emitted after them), mcc2 compiles its OWN parser selfhost/parser.mc to clang-clean C, plus a Vec<Pt> (generic container over a STRUCT element) behavioral round-trip -> clang -Werror -> run.
+    m0_step.dependOn(ctx.cmd("selfhost-parseself-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).
