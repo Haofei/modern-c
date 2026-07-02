@@ -78,6 +78,13 @@ fn e_scalar_name(sb: *mut StrBuf, txt: []const u8) -> void {
     if mem_eql(txt, "i32") { sb_put_cstr(sb, "int32_t"); return; }
     if mem_eql(txt, "i64") { sb_put_cstr(sb, "int64_t"); return; }
     if mem_eql(txt, "isize") { sb_put_cstr(sb, "ptrdiff_t"); return; }
+    // Address classes (subset model): opaque word-backed scalars -> `uintptr_t` (stdint.h is in the
+    // prelude). Sema collapses them to `usize`; the emitted C type is `uintptr_t` (matching the real
+    // backend's address-word model). `phys()` and `as`-cast minting are plain word round-trips.
+    if mem_eql(txt, "PAddr") { sb_put_cstr(sb, "uintptr_t"); return; }
+    if mem_eql(txt, "VAddr") { sb_put_cstr(sb, "uintptr_t"); return; }
+    if mem_eql(txt, "DmaAddr") { sb_put_cstr(sb, "uintptr_t"); return; }
+    if mem_eql(txt, "UserAddr") { sb_put_cstr(sb, "uintptr_t"); return; }
     // Unknown named type (a struct in the fuller language): emit its lexeme verbatim.
     sb_put_str(sb, txt);
 }
@@ -768,6 +775,13 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         sb_put_str(sb, txt);
         return;
     }
+    if nd.kind == .bool_literal {
+        // The lexeme is literally "true"/"false" (from the kw_true/kw_false token), which is valid C
+        // once <stdbool.h> is included (it is, in the prelude).
+        let btxt: []const u8 = e_tok_text(p, nd.main_token);
+        sb_put_str(sb, btxt);
+        return;
+    }
     if nd.kind == .ident_expr {
         let txt2: []const u8 = e_tok_text(p, nd.main_token);
         sb_put_str(sb, txt2);
@@ -821,6 +835,22 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
             let recv_dyn: bool = e_base_is_dyn(p, cnode.lhs);
             if recv_dyn {
                 e_dyn_dispatch(p, sb, n);
+                return;
+            }
+        }
+        // `phys(x)` builtin (address-class model): mint a PAddr from an integer word. Since the
+        // address class is a word-backed `uintptr_t` in the subset, this is a plain cast (effectively
+        // identity) `((uintptr_t)(x))`.
+        if cnode.kind == .ident_expr {
+            let pcname: []const u8 = e_tok_text(p, cnode.main_token);
+            let is_phys: bool = mem_eql(pcname, "phys");
+            let prun: u32 = nd.rhs;
+            let pargc: u32 = e_extra(p, prun);
+            if is_phys && pargc == 1 {
+                sb_put_cstr(sb, "((uintptr_t)(");
+                let parg: u32 = e_extra(p, prun + 1);
+                e_expr(p, sb, parg);
+                sb_put_cstr(sb, "))");
                 return;
             }
         }
@@ -1122,7 +1152,17 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
             sb_put_cstr(sb, "return;\n");
         } else {
             sb_put_cstr(sb, "return ");
-            e_expr(p, sb, nd.lhs);
+            // `return .{ ... };` returns a struct value directly: emit a target-typed compound literal
+            // `(RET){...}` (a bare `{...}` is not a valid C expression). The target type is the current
+            // function's declared return type (recovered from `p.cur_fn`'s [.,.,ret_ty,.] record).
+            let rv_nd: Node = e_node(p, nd.lhs);
+            if rv_nd.kind == .struct_lit {
+                let fn_nd: Node = e_node(p, p.cur_fn);
+                let ret_ty: u32 = e_extra(p, fn_nd.lhs + 2);
+                e_struct_lit(p, sb, nd.lhs, ret_ty);
+            } else {
+                e_expr(p, sb, nd.lhs);
+            }
             sb_put_cstr(sb, ";\n");
         }
         return;

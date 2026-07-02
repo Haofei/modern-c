@@ -407,6 +407,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-opaque-test"));
     // selfhost-bitwise-test exercises infix bitwise (& | ^) + shift (<< >>) with C precedence, prefix vs infix `&`, and the `unreachable;` terminator end to end via the mcc2 CLI.
     m0_step.dependOn(ctx.cmd("selfhost-bitwise-test"));
+    // selfhost-addr-test (CAPSTONE): mcc2 compiles the real std module std/addr.mc to clang-clean C, plus a behavioral round-trip of bool literals + the address-class model (PAddr/VAddr/phys/as-mint) via the mcc2 CLI.
+    m0_step.dependOn(ctx.cmd("selfhost-addr-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

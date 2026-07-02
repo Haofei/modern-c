@@ -157,6 +157,9 @@ open enum NodeKind: u32 {
     bin_shr,          // 64 `>>` right shift
     unreachable_stmt, // 65 `unreachable;` — a diverging terminator statement (no fall-through). Emits
                       //    the real backend's `mc_trap_Unreachable();` (a NORETURN `__builtin_trap`).
+    // ----- bool-literal addition (appended to keep prior ordinals stable) -----
+    bool_literal,     // 66 `true` / `false` primary: main_token = the `kw_true`/`kw_false` token. Types
+                      //    as `bool`; emits the C `true`/`false` (stdbool.h is in the prelude).
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -585,6 +588,18 @@ fn parse_primary(p: *mut Parser) -> u32 {
         let it: u32 = p.tok as u32;
         p_advance(p);
         return add_node(p, .int_literal, it, 0, 0);
+    }
+    // `true` / `false` bool literals: the lexer emits `kw_true`/`kw_false`; main_token keeps the token
+    // so emit can recover the spelling ("true"/"false"), which is also valid C (stdbool.h in prelude).
+    if at(p, .kw_true) {
+        let bt: u32 = p.tok as u32;
+        p_advance(p);
+        return add_node(p, .bool_literal, bt, 0, 0);
+    }
+    if at(p, .kw_false) {
+        let bf: u32 = p.tok as u32;
+        p_advance(p);
+        return add_node(p, .bool_literal, bf, 0, 0);
     }
     // `sizeof(TYPE)` / `alignof(TYPE)` (P5.9): both are lexer KEYWORDS (kw_sizeof/kw_alignof) and take
     // a TYPE (not an expr) in the subset — matching MC's builtins. The type node is kept in `lhs`.

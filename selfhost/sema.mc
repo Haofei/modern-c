@@ -317,6 +317,15 @@ fn sm_scalar_kind(txt: []const u8) -> SmKind {
     if mem_eql(txt, "i32") { return .i32_; }
     if mem_eql(txt, "i64") { return .i64_; }
     if mem_eql(txt, "isize") { return .isize_; }
+    // Address classes (subset model): `PAddr`/`VAddr`/`DmaAddr`/`UserAddr` are BUILTIN opaque scalar
+    // types backed by an unsigned machine word. In the subset they collapse to `usize` for typing —
+    // the `phys` builtin and `as`-cast minting between an address class and `usize` are then plain
+    // word round-trips (the full compiler keeps them distinct for address-class-confusion safety;
+    // that distinction is deferred here). Emit maps the NAMES to `uintptr_t` (see e_scalar_name).
+    if mem_eql(txt, "PAddr") { return .usize_; }
+    if mem_eql(txt, "VAddr") { return .usize_; }
+    if mem_eql(txt, "DmaAddr") { return .usize_; }
+    if mem_eql(txt, "UserAddr") { return .usize_; }
     return .unknown;
 }
 
@@ -623,6 +632,14 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
         return sm_ty_unknown();
     }
     let name: []const u8 = sm_tok_text(s, cnode.main_token);
+    // `phys(x)` builtin (address-class model): mint a physical address from an integer word. The
+    // arg is walked for its own errors; the result is a `PAddr` (a `usize`-backed address class in
+    // the subset). Emit lowers it to a `(uintptr_t)(x)` cast (see e_expr's phys special-case).
+    let is_phys: bool = mem_eql(name, "phys");
+    if is_phys && argc == 1 {
+        sm_walk_args(s, args_run, argc);
+        return sm_ty(.usize_);
+    }
     let present: bool = strmap_contains(u32, &s.fns, name);
     if !present {
         sm_err(s, .unknown_name);
@@ -901,6 +918,7 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
     let nd: Node = sm_node(s, node);
     switch nd.kind {
         .int_literal => { return sm_ty(.int_lit); }
+        .bool_literal => { return sm_ty(.bool_); }
         .ident_expr => { return sm_type_of_ident(s, nd.main_token); }
         .call => { return sm_check_call(s, node); }
         .un_neg => {
