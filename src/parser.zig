@@ -36,6 +36,7 @@ pub const Parser = struct {
     // reserve them against local bindings (prevents a local from shadowing a qualified owner).
     qualified_owners: std.StringHashMap(void) = undefined,
     parse_depth: usize = 0,
+    had_parse_error: bool = false,
 
     pub fn init(source: []const u8, reporter: *diagnostics.Reporter) Parser {
         var lx = lexer.Lexer.init(source, reporter);
@@ -60,21 +61,59 @@ pub const Parser = struct {
         errdefer decls.deinit(allocator);
 
         while (self.current.kind != .eof) {
-            const attrs = try self.parseAttrs();
+            const start_offset = self.current.span.offset;
+            const attrs = self.parseAttrs() catch |err| switch (err) {
+                error.ParseFailed => {
+                    self.had_parse_error = true;
+                    self.synchronizeTopLevel(start_offset);
+                    continue;
+                },
+                else => return err,
+            };
             if (self.matchIdentifierText("trait")) {
-                try decls.append(allocator, try self.parseTraitDecl(attrs));
+                decls.append(allocator, self.parseTraitDecl(attrs) catch |err| switch (err) {
+                    error.ParseFailed => {
+                        self.had_parse_error = true;
+                        self.synchronizeTopLevel(start_offset);
+                        continue;
+                    },
+                    else => return err,
+                }) catch |err| return err;
                 continue;
             }
             if (self.matchIdentifierText("impl")) {
-                try self.parseImplBlock(&decls, allocator);
+                self.parseImplBlock(&decls, allocator) catch |err| switch (err) {
+                    error.ParseFailed => {
+                        self.had_parse_error = true;
+                        self.synchronizeTopLevel(start_offset);
+                        continue;
+                    },
+                    else => return err,
+                };
                 continue;
             }
             if (self.matchIdentifierText("module")) {
-                try self.parseModuleBlock(&decls, allocator);
+                self.parseModuleBlock(&decls, allocator) catch |err| switch (err) {
+                    error.ParseFailed => {
+                        self.had_parse_error = true;
+                        self.synchronizeTopLevel(start_offset);
+                        continue;
+                    },
+                    else => return err,
+                };
                 continue;
             }
-            try decls.append(allocator, try self.parseDecl(attrs));
+            decls.append(allocator, self.parseDecl(attrs) catch |err| switch (err) {
+                error.ParseFailed => {
+                    self.had_parse_error = true;
+                    self.synchronizeTopLevel(start_offset);
+                    continue;
+                },
+                else => return err,
+            }) catch |err| return err;
         }
+
+        if (self.had_parse_error) return error.ParseFailed;
 
         // Prepend synthesized tuple structs so they precede any use.
         const owners = try self.collectOwnerNames(allocator);
@@ -793,7 +832,17 @@ pub const Parser = struct {
         var items: std.ArrayList(ast.Stmt) = .empty;
         errdefer items.deinit(self.allocator);
         while (self.current.kind != .r_brace and self.current.kind != .eof) {
-            try items.append(self.allocator, try self.parseStmt());
+            const start_offset = self.current.span.offset;
+            const stmt = self.parseStmt() catch |err| switch (err) {
+                error.ParseFailed => {
+                    self.had_parse_error = true;
+                    self.pending_stmts.clearRetainingCapacity();
+                    self.synchronizeStatement(start_offset);
+                    continue;
+                },
+                else => return err,
+            };
+            try items.append(self.allocator, stmt);
             // Drain statements synthesized by tuple destructuring into this block.
             if (self.pending_stmts.items.len > 0) {
                 try items.appendSlice(self.allocator, self.pending_stmts.items);
@@ -1809,6 +1858,107 @@ pub const Parser = struct {
     fn advance(self: *Parser) void {
         self.previous = self.current;
         self.current = self.lx.next();
+    }
+
+    fn synchronizeTopLevel(self: *Parser, start_offset: usize) void {
+        if (self.current.kind != .eof and self.current.span.offset == start_offset) self.advance();
+        var depth: usize = 0;
+        while (self.current.kind != .eof) {
+            if (depth == 0) {
+                if (self.isTopLevelStart()) return;
+                if (self.current.kind == .semicolon or self.current.kind == .r_brace) {
+                    self.advance();
+                    return;
+                }
+            }
+            self.updateSyncDepth(&depth);
+            self.advance();
+        }
+    }
+
+    fn synchronizeStatement(self: *Parser, start_offset: usize) void {
+        if (self.current.kind != .eof and self.current.kind != .r_brace and self.current.span.offset == start_offset) self.advance();
+        var depth: usize = 0;
+        while (self.current.kind != .eof and self.current.kind != .r_brace) {
+            if (depth == 0) {
+                if (self.current.kind == .semicolon) {
+                    self.advance();
+                    return;
+                }
+                if (self.isStatementStart()) return;
+            }
+            self.updateSyncDepth(&depth);
+            self.advance();
+        }
+    }
+
+    fn updateSyncDepth(self: *Parser, depth: *usize) void {
+        switch (self.current.kind) {
+            .l_paren, .l_brace, .l_bracket => depth.* += 1,
+            .r_paren, .r_brace, .r_bracket => {
+                if (depth.* > 0) depth.* -= 1;
+            },
+            else => {},
+        }
+    }
+
+    fn isTopLevelStart(self: *Parser) bool {
+        return switch (self.current.kind) {
+            .hash,
+            .kw_pub,
+            .kw_export,
+            .kw_extern,
+            .kw_open,
+            .kw_const,
+            .kw_fn,
+            .kw_type,
+            .kw_packed,
+            .kw_overlay,
+            .kw_struct,
+            .kw_union,
+            .kw_enum,
+            => true,
+            .identifier => std.mem.eql(u8, self.current.lexeme, "trait") or
+                std.mem.eql(u8, self.current.lexeme, "impl") or
+                std.mem.eql(u8, self.current.lexeme, "module") or
+                std.mem.eql(u8, self.current.lexeme, "global") or
+                std.mem.eql(u8, self.current.lexeme, "async") or
+                std.mem.eql(u8, self.current.lexeme, "opaque") or
+                std.mem.eql(u8, self.current.lexeme, "move"),
+            else => false,
+        };
+    }
+
+    fn isStatementStart(self: *Parser) bool {
+        return switch (self.current.kind) {
+            .hash,
+            .kw_let,
+            .kw_var,
+            .kw_for,
+            .kw_while,
+            .kw_if,
+            .kw_switch,
+            .kw_unsafe,
+            .kw_comptime,
+            .kw_asm,
+            .l_brace,
+            .kw_return,
+            .kw_break,
+            .kw_continue,
+            .kw_defer,
+            .kw_assert,
+            => true,
+            .identifier => self.isLabeledLoopStart(),
+            else => false,
+        };
+    }
+
+    fn isLabeledLoopStart(self: *Parser) bool {
+        if (self.current.kind != .identifier) return false;
+        var lx = self.lx;
+        if (lx.next().kind != .colon) return false;
+        const after = lx.next().kind;
+        return after == .kw_for or after == .kw_while;
     }
 
     fn startsStructLiteralField(self: *Parser) bool {

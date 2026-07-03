@@ -138,7 +138,7 @@ Total codes: **217**.
 | `E_MOVE_LOOP_RESOURCE` | cannot consume or reserve an outer linear \`move\` value inside a loop; the loop may run zero or multiple times | `src/sema_move.zig:118` |
 | `E_NAKED_BODY` | a #[naked] function body must be exactly one \`asm\` block (optionally wrapped in one \`unsafe {}\`); there is no frame for locals, statements, or expressions | `src/sema.zig:1377` |
 | `E_NAKED_RETURN` | a #[naked] function must return \`never\` or \`void\`; it cannot synthesize a value return (the asm body owns the calling convention) | `src/sema.zig:1372` |
-| `E_NESTING_TOO_DEEP` | nesting too deep | `src/parser.zig:1836` |
+| `E_NESTING_TOO_DEEP` | nesting too deep | `src/parser.zig:1986` |
 | `E_NEVER_FALLTHROUGH` | function declared -&gt; never can fall off the end | `src/hir.zig:177`<br>`src/mir.zig:560`<br>`src/sema.zig:1417` |
 | `E_NEVER_RETURNS` | function declared -&gt; never cannot return normally | `src/sema.zig:2160`<br>`src/sema.zig:2167` |
 | `E_NEVER_STORAGE` | never is a control-flow type and cannot be used for storage | `src/sema.zig:3102`<br>`src/sema.zig:3268` |

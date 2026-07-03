@@ -156,6 +156,68 @@ test "parser requires in after for binding" {
     try std.testing.expectEqualStrings("expected 'in' after for binding", bad_reporter.diagnostics.items[0].message);
 }
 
+test "parser recovers across top-level declarations" {
+    const source =
+        \\const A: u32 = ;
+        \\const B: u32 = ;
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "top_recovery.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = Parser.init(source, &reporter);
+    try std.testing.expectError(error.ParseFailed, p.parseModule(arena.allocator()));
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 2), reporter.diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 1), reporter.diagnostics.items[0].span.line);
+    try std.testing.expectEqual(@as(usize, 2), reporter.diagnostics.items[1].span.line);
+}
+
+test "parser recovers across block statements" {
+    const source =
+        \\fn broken() -> void {
+        \\    let a: u32 = ;
+        \\    return;
+        \\    let b: u32 = ;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "stmt_recovery.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = Parser.init(source, &reporter);
+    try std.testing.expectError(error.ParseFailed, p.parseModule(arena.allocator()));
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 2), reporter.diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 2), reporter.diagnostics.items[0].span.line);
+    try std.testing.expectEqual(@as(usize, 4), reporter.diagnostics.items[1].span.line);
+}
+
+test "parser recovers after malformed impl body" {
+    const source =
+        \\impl Foo {
+        \\    fn bad() -> void { let x: u32 = ; }
+        \\}
+        \\fn next() -> void { let y: u32 = ; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "impl_recovery.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = Parser.init(source, &reporter);
+    try std.testing.expectError(error.ParseFailed, p.parseModule(arena.allocator()));
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 2), reporter.diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 2), reporter.diagnostics.items[0].span.line);
+    try std.testing.expectEqual(@as(usize, 4), reporter.diagnostics.items[1].span.line);
+}
+
 test "parser rejects excessive nesting with diagnostic" {
     var source: std.ArrayList(u8) = .empty;
     defer source.deinit(std.testing.allocator);
