@@ -13,10 +13,12 @@ compiler in `src/`.** That has not happened and is a large, largely-unstarted ef
 hardening of the real (Zig) compiler:**
 
 - `mcc2` (the MC-compiler-in-MC under `selfhost/`, **~8,900 lines of MC**) compiles **a SUBSET of MC** —
-  namely *itself + its std dependencies* — to a byte-identical fixpoint (gate `selfhost-bootstrap-test`,
-  both backends m0-green). This **proves the language can host a real compiler subset**. It does NOT
-  compile the full MC language, the kernel, the full std, or with the full checker, and it is **not a
-  replacement for `src/`**.
+  namely *itself + its std dependencies* — to a byte-identical fixpoint (gate `selfhost-bootstrap-test`).
+  That gate is **C-backend only**: `mcc2` emits C, so the fixpoint is proven through the C backend +
+  clang (`tools/toolchain/selfhost-bootstrap-test.sh`). The broader C/LLVM m0 suite also stayed green,
+  but LLVM there gates the *Zig* compiler's other features — **not** the mcc2 fixpoint (mcc2 has no LLVM
+  backend). This **proves the language can host a real compiler subset**. It does NOT compile the full MC
+  language, the kernel, the full std, or with the full checker, and it is **not a replacement for `src/`**.
 - The self-host attempt was used as a **stress test** to surface everything MC can't express or does
   slowly (the §3 gap ledger); the gaps it found were then **fixed in the real Zig compiler** (§4 —
   those are `src/*.zig` edits, e.g. G7/G8/G11–G30).
@@ -993,7 +995,7 @@ The Zig compiler's surface, by subsystem, and mcc2's coverage:
 
 | Subsystem (Zig `src/`) | mcc2 today | Gap to replace `src/` |
 |---|---|---|
-| Lexer / parser | subset (its own grammar) | full grammar: all attrs, `async`/`await`, `asm`, comptime, MMIO/overlay/packed decls, unions, opaque, effects syntax |
+| Lexer / parser | subset (own grammar; incl. module `const`/`global` and opaque-struct parsing — `selfhost/parser.mc`) | full attrs, `async`/`await`, inline `asm`, full comptime blocks/const-eval, MMIO/overlay/packed decls, full unions, full opaque privacy semantics, effects syntax |
 | Sema / type-checker | subset name-res + a few checks | the FULL checker: move/borrow, definite-init, effects (irq/bounded/sleep), traits+bounds+coherence, hardening passes (UserPtr/Cap/Rights/Secret), exhaustiveness, const-eval |
 | Monomorphization | emit-time, scalar/1-param | a real pre-sema mono pass over nested/multi-param generics + trait bounds |
 | C backend | subset emit | full feature coverage (async state machines, atomics, u128, SIMD, inline asm, MMIO, every intrinsic) |
