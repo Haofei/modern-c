@@ -82,3 +82,39 @@ jobs:
               MC_REQUIRE_TOOLS=1 zig build "$name"
             done
           '
+
+  macos:
+    # Native macOS coverage for the host/compiler surface README claims works outside Docker.
+    # macos-15 currently carries Homebrew llvm@18, matching the Linux LLVM qualification major
+    # while avoiding the deprecated macos-14 image and the moving latest-label alias.
+    runs-on: macos-15
+    env:
+      MC_LLVM_MAJOR: "18"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Configure Homebrew LLVM 18
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! brew --prefix llvm@18 >/dev/null 2>&1; then
+            brew install llvm@18
+          fi
+          LLVM18_PREFIX="$(brew --prefix llvm@18)"
+          echo "$LLVM18_PREFIX/bin" >> "$GITHUB_PATH"
+          echo "LLVM18_PREFIX=$LLVM18_PREFIX" >> "$GITHUB_ENV"
+          echo "MC_HOST_JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+      - name: Print tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          zig version
+          "$LLVM18_PREFIX/bin/clang" --version
+          "$LLVM18_PREFIX/bin/llvm-as" --version
+          "$LLVM18_PREFIX/bin/llc" --version
+          "$LLVM18_PREFIX/bin/opt" --version
+      - name: Run native macOS host gate
+        shell: bash
+        run: zig build fast -j"$MC_HOST_JOBS"

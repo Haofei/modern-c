@@ -69,6 +69,20 @@ def main() -> None:
     require_contains(".github/workflows/ci.yml", f"/usr/lib/llvm-{EXPECTED_LLVM_MAJOR}/bin")
     if "ubuntu-latest" in ci:
         fail(".github/workflows/ci.yml must not use ubuntu-latest for compiler qualification")
+    for needle in (
+        "runs-on: macos-15",
+        f'MC_LLVM_MAJOR: "{EXPECTED_LLVM_MAJOR}"',
+        f"brew --prefix llvm@{EXPECTED_LLVM_MAJOR}",
+        f"brew install llvm@{EXPECTED_LLVM_MAJOR}",
+        '"$LLVM18_PREFIX/bin/clang" --version',
+        '"$LLVM18_PREFIX/bin/llvm-as" --version',
+        '"$LLVM18_PREFIX/bin/llc" --version',
+        '"$LLVM18_PREFIX/bin/opt" --version',
+        'zig build fast -j"$MC_HOST_JOBS"',
+    ):
+        require_contains(".github/workflows/ci.yml", needle)
+    if re.search(r"runs-on:\s*macos-latest\b", ci):
+        fail(".github/workflows/ci.yml must not use macos-latest for native macOS qualification")
 
     nightly_fuzz_path = ".github/workflows/nightly-fuzz.yml"
     nightly_fuzz = read(nightly_fuzz_path)
