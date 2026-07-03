@@ -42,6 +42,22 @@ EXPECTED_NIGHTLY_BENCH_METRICS = (
     "HEAPFREE-CYCLES",
     "IPC-CYCLES",
 )
+EXPECTED_RELEASE_TARGETS = (
+    "x86_64-linux-musl",
+    "aarch64-linux-musl",
+)
+EXPECTED_RELEASE_PATHS = (
+    "bin/mcc",
+    "std/",
+    "tools/toolchain/mcc-cc.sh",
+    "tools/toolchain/mcc-llvm-cc.sh",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "STABILITY.md",
+    "CHANGELOG.md",
+    "THIRD-PARTY-LICENSES.md",
+)
 PINNED_ACTION_REF_RE = re.compile(r"^[0-9a-f]{40}$")
 WORKFLOW_USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?([^'\"\s#]+)")
 
@@ -196,6 +212,86 @@ def require_nightly_bench_metadata() -> None:
         fail(f"{baseline_path} rows do not match {runner_path} EXPECTED_BENCHES")
 
 
+def require_release_artifact_metadata() -> None:
+    workflow_path = ".github/workflows/release.yml"
+    package_path = "tools/ci/package-release.py"
+    workflow = read(workflow_path)
+    packager = read(package_path)
+
+    for needle in (
+        "push:",
+        "tags:",
+        '"v*"',
+        "workflow_dispatch:",
+        "dry_run:",
+        "runs-on: ubuntu-24.04",
+        "actions/checkout@v4",
+        "mlugg/setup-zig@v2",
+        f"version: {EXPECTED_ZIG_VERSION}",
+        "tools/ci/package-release.py release",
+        "--version",
+        "--commit \"$GITHUB_SHA\"",
+        "sha256sum -c SHA256SUMS",
+        "actions/upload-artifact@v4",
+        "zig-out/release/*.tar.gz",
+        "zig-out/release/SHA256SUMS",
+        "zig-out/release/*inventory*.json",
+        "zig-out/release/*sbom*.json",
+        "startsWith(github.ref, 'refs/tags/v')",
+        "gh release upload",
+    ):
+        require_contains(workflow_path, needle)
+    if "ubuntu-latest" in workflow:
+        fail(f"{workflow_path} must not use ubuntu-latest for release artifacts")
+    if "softprops/action-gh-release" in workflow or "ncipollo/release-action" in workflow:
+        fail(f"{workflow_path} must use gh release upload instead of a release action")
+
+    for target in EXPECTED_RELEASE_TARGETS:
+        require_contains(workflow_path, target)
+        require_contains(package_path, target)
+    for needle in (
+        "zig",
+        "build",
+        "install",
+        "-Doptimize=ReleaseSafe",
+        "-Dversion=",
+        "SHA256SUMS",
+        "release-inventory.json",
+        "mcc-release-inventory-v1",
+        "sbom.cdx.json",
+        "CycloneDX",
+        "bomFormat",
+        "sha256",
+        "included_paths",
+        "third_party_manifest",
+        "source_date_epoch",
+        "tarfile",
+        "gzip.GzipFile",
+    ):
+        require_contains(package_path, needle)
+    for path in EXPECTED_RELEASE_PATHS:
+        require_contains(package_path, path)
+    if "mcc build" in workflow or "mcc build" in packager:
+        fail("release artifact workflow must not implement or invoke `mcc build`")
+
+    docs = read("docs/release-process.md")
+    for needle in (
+        workflow_path,
+        package_path,
+        "x86_64-linux-musl",
+        "aarch64-linux-musl",
+        "ReleaseSafe",
+        "SHA256SUMS",
+        "release inventory",
+        "CycloneDX SBOM",
+        "THIRD-PARTY-LICENSES.md",
+        "gh release upload",
+        "minisign/cosign",
+    ):
+        if needle not in docs:
+            fail(f"docs/release-process.md does not document release artifact requirement {needle!r}")
+
+
 def main() -> None:
     require_workflow_actions_pinned()
 
@@ -284,6 +380,7 @@ def main() -> None:
         fail(f"{nightly_fuzz_path} must not use ubuntu-latest for compiler qualification")
 
     require_nightly_bench_metadata()
+    require_release_artifact_metadata()
 
     dockerfile = read("Dockerfile")
     require_contains("Dockerfile", f"FROM {EXPECTED_DOCKER_BASE_IMAGE}")
@@ -307,7 +404,7 @@ def main() -> None:
     if "sort -V | tail -n1" in dockerfile or "llvm-*" in dockerfile:
         fail("Dockerfile must select the pinned LLVM major, not the highest installed one")
 
-    print("PASS: release-metadata-test - version, Docker/Zig/LLVM/action pins, nightly fuzz/bench, and process docs are in sync")
+    print("PASS: release-metadata-test - version, Docker/Zig/LLVM/action pins, nightly fuzz/bench, release artifacts, and process docs are in sync")
 
 
 if __name__ == "__main__":

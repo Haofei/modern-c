@@ -1,0 +1,103 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without a leading v"
+        required: true
+        default: "0.7.0-dev"
+      dry_run:
+        description: "Build artifacts without creating or updating a GitHub Release"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release-artifacts:
+    runs-on: ubuntu-24.04
+    env:
+      MC_LLVM_MAJOR: "18"
+    steps:
+      # actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+        with:
+          version: 0.16.0
+
+      - name: Derive release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            TAG="$GITHUB_REF_NAME"
+            DRY_RUN=false
+          else
+            VERSION="${{ inputs.version }}"
+            TAG="v$VERSION"
+            DRY_RUN="${{ inputs.dry_run }}"
+          fi
+          if [[ "$VERSION" == v* ]]; then
+            echo "version must not include a leading v" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"
+
+      - name: Build ReleaseSafe release tarballs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/ci/package-release.py release \
+            --version "${{ steps.meta.outputs.version }}" \
+            --commit "$GITHUB_SHA" \
+            --out-dir zig-out/release \
+            --targets x86_64-linux-musl aarch64-linux-musl
+
+      - name: Verify release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd zig-out/release
+          sha256sum -c SHA256SUMS
+
+      - name: Upload release artifacts
+        # actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mcc-release-${{ steps.meta.outputs.version }}
+          path: |
+            zig-out/release/*.tar.gz
+            zig-out/release/SHA256SUMS
+            zig-out/release/*inventory*.json
+            zig-out/release/*sbom*.json
+          if-no-files-found: error
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v') && steps.meta.outputs.dry_run != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.tag }}"
+          version="${{ steps.meta.outputs.version }}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --notes "mcc $version"
+          fi
+          gh release upload "$tag" \
+            zig-out/release/*.tar.gz \
+            zig-out/release/SHA256SUMS \
+            zig-out/release/*inventory*.json \
+            zig-out/release/*sbom*.json \
+            --clobber

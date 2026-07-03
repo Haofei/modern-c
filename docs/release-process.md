@@ -1,7 +1,9 @@
 # Release Process
 
-Status: draft process for future `mcc` releases. No release artifacts are currently
-published.
+Status: draft release process with an implemented Linux artifact workflow. Release
+publication is still conservative: the workflow builds Linux tarballs, checksums,
+a release inventory, and a CycloneDX SBOM. No public stable release has been cut
+yet.
 
 ## Version Identity
 
@@ -11,6 +13,8 @@ The development version is `0.7.0-dev`.
 - `.zigversion` pins the local/CI Zig toolchain.
 - `zig build -Dversion=<version>` controls the string reported by `mcc --version`.
 - Without `-Dversion`, local builds report `mcc 0.7.0-dev`.
+- Release tags use the `v<version>` form. The release workflow strips the leading
+  `v` and passes `-Dversion=<version>` to Zig.
 
 ## Release Checklist
 
@@ -28,14 +32,54 @@ Before tagging a release:
    the TSV only when a deliberate performance change is measured on the pinned
    Ubuntu 24.04 / Zig 0.16.0 / LLVM 18 toolchain.
 6. Run `zig build fast` on every supported host tier.
-7. Generate Linux and macOS tarballs containing `bin/mcc`, `std/`, driver scripts,
-   `README.md`, `LICENSE`, `SECURITY.md`, `STABILITY.md`, and `CHANGELOG.md`.
-8. Publish SHA256 checksums for every artifact.
-9. Tag the exact commit and record the tag in `CHANGELOG.md`.
+7. Run a manual dry run of `.github/workflows/release.yml` for the candidate
+   version. The workflow builds with Zig 0.16.0, `-Doptimize=ReleaseSafe`, and
+   `-Dversion=<version>` via `tools/ci/package-release.py`.
+8. Confirm the dry-run workflow artifact contains tarballs for
+   `x86_64-linux-musl` and `aarch64-linux-musl`.
+   Each tarball must contain `bin/mcc`, `std/`, `tools/toolchain/mcc-cc.sh`,
+   `tools/toolchain/mcc-llvm-cc.sh`, `README.md`, `LICENSE`, `SECURITY.md`,
+   `STABILITY.md`, `CHANGELOG.md`, and `THIRD-PARTY-LICENSES.md`.
+9. Confirm `SHA256SUMS`, `mcc-<version>-release-inventory.json`, and
+   `mcc-<version>-sbom.cdx.json` are present and that
+   `sha256sum -c SHA256SUMS` passes.
+10. Sign the release artifact set before publishing. The current workflow emits
+   checksums, inventory, and SBOM metadata; external minisign/cosign signing is
+   still a manual release-manager step until signing keys and identity policy are
+   documented.
+11. Tag the exact commit and record the tag in `CHANGELOG.md`. Pushing `v*`
+   creates or updates the GitHub Release assets with `gh release upload`.
+
+## Release Artifacts
+
+`.github/workflows/release.yml` runs on `v*` tags and manual dispatch. Manual
+dispatch defaults to a dry run, which uploads workflow artifacts without creating
+a GitHub Release. A tag run publishes the same artifact set to the GitHub Release
+for that tag.
+
+The packaging helper is intentionally local-testable:
+
+```sh
+python3 tools/ci/package-release.py release --version 0.7.0 \
+  --targets x86_64-linux-musl aarch64-linux-musl
+```
+
+The helper builds `mcc` with `zig build -Dtarget=<target> -Doptimize=ReleaseSafe
+-Dversion=<version> install`, stages the required runtime files, writes a
+deterministic tarball, emits release inventory and CycloneDX SBOM JSON files, and
+writes `SHA256SUMS`.
+
+The current target set is deliberately limited to:
+
+- `x86_64-linux-musl`
+- `aarch64-linux-musl`
+
+macOS release tarballs are not part of the release workflow yet. Native macOS CI
+remains a qualification gate, but publishing macOS artifacts needs a proven packaging
+lane before the release matrix claims support.
 
 ## Not Yet Implemented
 
-- Cross-platform release workflow.
-- Signed/checksummed artifact publication.
-- Install-prefix stdlib lookup.
 - Private security advisory intake.
+- Automated minisign/cosign signing in the release workflow.
+- macOS release tarball publication.
