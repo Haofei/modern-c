@@ -26,6 +26,8 @@ const scalarLayout = type_layout.scalarLayout;
 const typeName = ast_query.typeName;
 const typeNameEql = lower_llvm_type.typeNameEql;
 const comptimeArraySize = type_layout.comptimeArraySize;
+const comptimeBitOffsetFromBytes = type_layout.comptimeBitOffset;
+const comptimeLayoutAdd = type_layout.comptimeLayoutAdd;
 
 pub const ReflectEnv = struct {
     type_aliases: *const std.StringHashMap(ast.TypeExpr),
@@ -104,7 +106,7 @@ pub fn comptimeBitOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []cons
         return @intCast(index);
     }
     const byte_offset = comptimeFieldOffset(env, ty, field, 0) orelse return null;
-    return byte_offset * 8;
+    return comptimeBitOffsetFromBytes(byte_offset);
 }
 
 pub fn comptimeReprOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
@@ -151,9 +153,9 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i
                 const max_align = @max(@max(ok_align, err_align), 1);
                 var offset: i128 = 1;
                 offset = alignForward(offset, ok_align) orelse return null;
-                offset += ok_size;
+                offset = comptimeLayoutAdd(offset, ok_size) orelse return null;
                 offset = alignForward(offset, err_align) orelse return null;
-                offset += err_size;
+                offset = comptimeLayoutAdd(offset, err_size) orelse return null;
                 return alignForward(offset, max_align);
             }
             if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
@@ -264,7 +266,7 @@ pub fn taggedUnionLayout(env: *const ReflectEnv, union_decl: ast.UnionDecl, dept
     payload_offset = alignForward(payload_offset, @intCast(payload_align)) orelse return null;
     const payload_offset_u64: u64 = @intCast(payload_offset);
     const aligned_payload_size = alignForward(@intCast(payload_size), @intCast(payload_align)) orelse return null;
-    const size = alignForward(payload_offset + aligned_payload_size, @intCast(@max(@as(u64, 4), payload_align))) orelse return null;
+    const size = alignForward(comptimeLayoutAdd(payload_offset, aligned_payload_size) orelse return null, @intCast(@max(@as(u64, 4), payload_align))) orelse return null;
     const storage_count = @as(u64, @intCast(aligned_payload_size)) / payload_align;
     return .{
         .size = @intCast(size),
@@ -283,7 +285,7 @@ fn taggedUnionPayloadSize(env: *const ReflectEnv, union_decl: ast.UnionDecl, dep
     for (union_decl.cases) |case| {
         const ty = case.ty orelse continue;
         const payload_size = comptimeSizeOf(env, ty, depth + 1) orelse return null;
-        size = @max(size, @as(u64, @intCast(payload_size)));
+        size = @max(size, std.math.cast(u64, payload_size) orelse return null);
     }
     return size;
 }
@@ -294,7 +296,7 @@ fn taggedUnionPayloadAlignment(env: *const ReflectEnv, union_decl: ast.UnionDecl
     for (union_decl.cases) |case| {
         const ty = case.ty orelse continue;
         const payload_alignment = comptimeAlignOf(env, ty, depth + 1) orelse return null;
-        alignment = @max(alignment, @as(u64, @intCast(payload_alignment)));
+        alignment = @max(alignment, std.math.cast(u64, payload_alignment) orelse return null);
     }
     return alignment;
 }

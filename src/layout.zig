@@ -27,7 +27,19 @@ pub const ComptimeStructLayout = struct {
 pub fn comptimeArraySize(len: anytype, elem_size: i128) ?i128 {
     if (elem_size < 0) return null;
     const len_i128 = std.math.cast(i128, len) orelse return null;
+    if (len_i128 < 0) return null;
     return std.math.mul(i128, len_i128, elem_size) catch null;
+}
+
+/// Add two non-negative comptime layout quantities, or null on overflow/invalid input.
+pub fn comptimeLayoutAdd(lhs: i128, rhs: i128) ?i128 {
+    if (lhs < 0 or rhs < 0) return null;
+    return std.math.add(i128, lhs, rhs) catch null;
+}
+
+/// Convert a byte offset to a bit offset, or null on overflow/invalid input.
+pub fn comptimeBitOffset(byte_offset: i128) ?i128 {
+    return comptimeArraySize(@as(i128, 8), byte_offset);
 }
 
 /// Compute the comptime layout of `struct_decl`, returning total size/alignment and (when
@@ -65,6 +77,7 @@ pub fn comptimeStructLayout(
         for (struct_decl.fields) |field| {
             const size = sizeOf(ctx, field.ty, depth + 1) orelse return null;
             const alignment = alignOf(ctx, field.ty, depth + 1) orelse return null;
+            if (size < 0) return null;
             if (alignment <= 0) return null;
             if (alignment > union_align) union_align = alignment;
             if (size > max_size) max_size = size;
@@ -84,6 +97,7 @@ pub fn comptimeStructLayout(
     for (struct_decl.fields) |field| {
         const size = sizeOf(ctx, field.ty, depth + 1) orelse return null;
         const alignment = alignOf(ctx, field.ty, depth + 1) orelse return null;
+        if (size < 0) return null;
         if (alignment <= 0) return null;
         if (alignment > max_align) max_align = alignment;
         if (field.offset) |explicit| {
@@ -96,7 +110,7 @@ pub fn comptimeStructLayout(
         if (wanted_field) |wanted| {
             if (std.mem.eql(u8, field.name.text, wanted)) found = offset;
         }
-        offset += size;
+        offset = comptimeLayoutAdd(offset, size) orelse return null;
     }
     return .{
         .size = alignForward(offset, max_align) orelse return null,
@@ -120,4 +134,53 @@ pub fn scalarLayout(name: []const u8) ?ScalarLayout {
         if (std.mem.eql(u8, name, entry.n)) return .{ .size = entry.s, .alignment = entry.s };
     }
     return null;
+}
+
+const test_zero_span = ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
+
+fn testIdent(name: []const u8) ast.Ident {
+    return .{ .text = name, .span = test_zero_span };
+}
+
+fn testType(name: []const u8) ast.TypeExpr {
+    return .{ .span = test_zero_span, .kind = .{ .name = testIdent(name) } };
+}
+
+fn testSizeOf(_: void, ty: ast.TypeExpr, _: usize) ?i128 {
+    const name = switch (ty.kind) {
+        .name => |n| n.text,
+        else => return null,
+    };
+    if (std.mem.eql(u8, name, "huge")) return std.math.maxInt(i128);
+    if (std.mem.eql(u8, name, "neg")) return -1;
+    return 1;
+}
+
+fn testAlignOf(_: void, _: ast.TypeExpr, _: usize) ?i128 {
+    return 1;
+}
+
+test "comptimeArraySize and comptimeBitOffset fail closed on i128 overflow" {
+    try std.testing.expectEqual(@as(?i128, 32), comptimeArraySize(@as(usize, 4), 8));
+    try std.testing.expectEqual(@as(?i128, null), comptimeArraySize(@as(usize, 2), std.math.maxInt(i128)));
+    try std.testing.expectEqual(@as(?i128, null), comptimeArraySize(@as(i128, -1), 8));
+    try std.testing.expectEqual(@as(?i128, 16), comptimeBitOffset(2));
+    try std.testing.expectEqual(@as(?i128, null), comptimeBitOffset(std.math.maxInt(i128)));
+}
+
+test "comptimeStructLayout fails closed on field size overflow" {
+    var fields = [_]ast.Field{
+        .{ .name = testIdent("a"), .ty = testType("huge") },
+        .{ .name = testIdent("b"), .ty = testType("u8") },
+    };
+    const decl = ast.StructDecl{ .name = testIdent("S"), .abi = null, .fields = &fields };
+    try std.testing.expectEqual(@as(?ComptimeStructLayout, null), comptimeStructLayout(void, {}, decl, null, 0, testSizeOf, testAlignOf));
+}
+
+test "comptimeStructLayout rejects negative field sizes" {
+    var fields = [_]ast.Field{
+        .{ .name = testIdent("a"), .ty = testType("neg") },
+    };
+    const decl = ast.StructDecl{ .name = testIdent("S"), .abi = null, .fields = &fields };
+    try std.testing.expectEqual(@as(?ComptimeStructLayout, null), comptimeStructLayout(void, {}, decl, null, 0, testSizeOf, testAlignOf));
 }

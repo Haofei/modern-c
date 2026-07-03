@@ -1821,3 +1821,49 @@ fn readIdentLike(input: []const u8) []const u8 {
     }
     return input[0..end];
 }
+
+const test_zero_span = ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
+
+fn testIdentExpr(allocator: std.mem.Allocator, name: []const u8) !*ast.Expr {
+    return ast.makePtr(allocator, ast.Expr{ .span = test_zero_span, .kind = .{ .ident = .{ .text = name, .span = test_zero_span } } });
+}
+
+fn testIntExpr(allocator: std.mem.Allocator, text: []const u8) !*ast.Expr {
+    return ast.makePtr(allocator, ast.Expr{ .span = test_zero_span, .kind = .{ .int_literal = text } });
+}
+
+fn testNamedType(name: []const u8) ast.TypeExpr {
+    return .{ .span = test_zero_span, .kind = .{ .name = .{ .text = name, .span = test_zero_span } } };
+}
+
+fn testBitcastExpr(allocator: std.mem.Allocator, target_name: []const u8, arg: ast.Expr) !ast.Expr {
+    return .{ .span = test_zero_span, .kind = .{ .call = .{
+        .callee = try testIdentExpr(allocator, "bitcast"),
+        .type_args = try allocator.dupe(ast.TypeExpr, &.{testNamedType(target_name)}),
+        .args = try allocator.dupe(ast.Expr, &.{arg}),
+    } } };
+}
+
+test "foldComptimeBitcast handles 128-bit signed and unrepresentable unsigned values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var scope = ComptimeScope.init(allocator);
+    defer scope.deinit();
+
+    const minus_one = ast.Expr{ .span = test_zero_span, .kind = .{ .unary = .{
+        .op = .neg,
+        .expr = try testIntExpr(allocator, "1"),
+    } } };
+
+    const signed_128 = try testBitcastExpr(allocator, "i128", minus_one);
+    try std.testing.expectEqual(@as(i128, -1), foldComptimeExpr(&scope, signed_128).value.int);
+
+    const unsigned_128 = try testBitcastExpr(allocator, "u128", minus_one);
+    try std.testing.expectEqual(@as(std.meta.Tag(ComptimeFold), .unknown), std.meta.activeTag(foldComptimeExpr(&scope, unsigned_128)));
+
+    const min_i128_bits = ast.Expr{ .span = test_zero_span, .kind = .{ .int_literal = "-170141183460469231731687303715884105728" } };
+    const high_unsigned = try testBitcastExpr(allocator, "u128", min_i128_bits);
+    try std.testing.expectEqual(@as(std.meta.Tag(ComptimeFold), .unknown), std.meta.activeTag(foldComptimeExpr(&scope, high_unsigned)));
+}

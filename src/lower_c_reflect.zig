@@ -16,6 +16,7 @@ const ComptimeStructLayout = type_layout.ComptimeStructLayout;
 const cTaggedUnionTagSize = lower_c_type.cTaggedUnionTagSize;
 const constArrayLenValue = lower_c_const.constArrayLenValue;
 const comptimeArraySize = type_layout.comptimeArraySize;
+const comptimeBitOffsetFromBytes = type_layout.comptimeBitOffset;
 const isArithmeticLayoutGeneric = ast_query.isArithmeticLayoutGeneric;
 const isPointerLikeGeneric = ast_query.isPointerLikeGeneric;
 const reflectionCallKind = lower_c_builtin.reflectionCallKind;
@@ -243,7 +244,7 @@ pub fn comptimeBitOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []cons
         return @intCast(packed_field.bit_index);
     }
     const byte_offset = comptimeFieldOffset(env, ty, field, depth + 1) orelse return null;
-    return byte_offset * 8;
+    return comptimeBitOffsetFromBytes(byte_offset);
 }
 
 pub fn comptimeReprOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
