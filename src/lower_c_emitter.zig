@@ -3820,7 +3820,7 @@ const CEmitter = struct {
             .grouped => |inner| inner.*,
             else => expr,
         };
-        const source_ty = self.operandEmitType(value_expr, locals) orelse return false;
+        const source_ty = self.exprSourceTypeForEmission(value_expr, locals) orelse return false;
         const resolved_source = self.resolveAliasType(source_ty);
         const source_node = switch (resolved_source.kind) {
             .slice => |node| node,

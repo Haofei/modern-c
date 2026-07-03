@@ -29,7 +29,10 @@ Instead this is **function-level coverage by source instrumentation**:
    `lower_cov.hit("<file>:<fn>:<line>")` probe as the first statement of every
    function in every production backend file (currently 40 C backend files and
    12 LLVM backend files).
-2. `lowering-coverage.sh` builds that instrumented `mcc`.
+2. `lowering-coverage.sh` copies the checkout to a temporary work directory,
+   instruments that copy, and builds the instrumented `mcc` there. The main
+   checkout is not rewritten, so the gate is safe inside aggregate/parallel
+   runs such as `m0` and `tools/m0-parallel.sh`.
 3. It runs the instrumented `mcc` — `emit-c` (kernel **and** hosted profiles) and
    `emit-llvm` — over **(a)** every diff-backend host fixture
    (`tools/lib/host-tests.tsv`) and **(b)** a batch of `tools/fuzz/mcfuzz.py`
@@ -43,19 +46,19 @@ than branch coverage — it cannot tell you an *if-branch inside a covered funct
 went untaken — but it is precisely the granularity that surfaces "this whole
 lowering family is never exercised," which is the V3.2 target. The instrumentation
 is gated on `MC_LOWER_COV`; a normally-built `mcc` pays nothing (a single dead
-branch). The backend source files are restored from backup on script exit, so the
-tree stays clean.
+branch). The script instruments a temporary checkout by default, so the main tree
+stays clean and aggregate gates can run it safely.
 
 The checked build step also ratchets the source set, probe universe, and uncovered
 counts via `tools/toolchain/lowering-coverage-baseline.tsv`; a shrinking source set
 or a growing uncovered count fails `zig build lowering-coverage`.
 
-## Current headline (169 host fixtures + 60 mcfuzz programs)
+## Current headline (170 host fixtures + 60 mcfuzz programs)
 
 | file | covered | uncovered | % |
 | --- | --- | --- | --- |
-| `src/lower_c*.zig` | 1037 / 1305 | **268** | 79.5% |
-| `src/lower_llvm*.zig` | 352 / 409 | **57** | 86.1% |
+| `src/lower_c*.zig` | 1038 / 1306 | **268** | 79.5% |
+| `src/lower_llvm*.zig` | 353 / 409 | **56** | 86.3% |
 
 > **Caveat on the LLVM number.** The diff-backend harness *skips* any fixture the
 > LLVM backend cannot yet lower, and the fuzzer's LLVM path is narrower than its C

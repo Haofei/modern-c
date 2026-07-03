@@ -22,24 +22,69 @@
 # branch coverage but is precisely the granularity that surfaces "this whole lowering
 # family is never exercised" — the class V3.2 targets.
 #
-# The backend files are restored from backup on exit (trap), so this script leaves the
-# tree clean. Output: a human report on stdout; the raw uncovered lists in $OUTDIR.
+# The backend files are instrumented in an isolated temporary checkout by default,
+# so this script is safe to run from aggregate/parallel gates. Output: a human
+# report on stdout; the raw uncovered lists in $OUTDIR.
 set -euo pipefail
 
-HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
-cd "$HERE"
+SRC_ROOT="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 
 FUZZ_N="${FUZZ_N:-60}"          # number of mcfuzz programs to fold into the corpus
-OUTDIR="${OUTDIR:-zig-out/lowering-cov}"
-BASELINE="${LOWERING_COV_BASELINE:-tools/toolchain/lowering-coverage-baseline.tsv}"
+OUTDIR="${OUTDIR:-$SRC_ROOT/zig-out/lowering-cov}"
+BASELINE="${LOWERING_COV_BASELINE:-$SRC_ROOT/tools/toolchain/lowering-coverage-baseline.tsv}"
 MCC="zig-out/bin/mcc"
+
+case "$OUTDIR" in
+    /*) ;;
+    *) OUTDIR="$SRC_ROOT/$OUTDIR" ;;
+esac
+case "$BASELINE" in
+    /*) ;;
+    *) BASELINE="$SRC_ROOT/$BASELINE" ;;
+esac
 
 check_mode=0
 if [ "${1:-}" = "--check" ]; then
     check_mode=1
 fi
 
+WORKROOT=""
+cleanup_workroot() {
+    if [ -n "$WORKROOT" ] && [ "${LOWERING_COV_IN_PLACE:-0}" != "1" ]; then
+        rm -rf "$WORKROOT"
+    fi
+}
+
+prepare_workroot() {
+    if [ "${LOWERING_COV_IN_PLACE:-0}" = "1" ]; then
+        cd "$SRC_ROOT"
+        return
+    fi
+
+    WORKROOT="$(mktemp -d "${TMPDIR:-/tmp}/mc-lowering-cov.XXXXXX")"
+    if command -v rsync >/dev/null 2>&1; then
+        rsync -a --delete \
+            --exclude '.git' \
+            --exclude '.zig-cache' \
+            --exclude 'zig-cache' \
+            --exclude 'zig-out' \
+            --exclude '.wamr-cache' \
+            "$SRC_ROOT"/ "$WORKROOT"/
+    else
+        (
+            cd "$SRC_ROOT"
+            git ls-files --cached --others --exclude-standard -z \
+                | tar --null -T - -cf -
+        ) | (
+            cd "$WORKROOT"
+            tar -xf -
+        )
+    fi
+    cd "$WORKROOT"
+}
+
 rm -rf "$OUTDIR"; mkdir -p "$OUTDIR/cov" "$OUTDIR/progs"
+prepare_workroot
 
 collect_backend_files() {
     local prefix="$1"
@@ -69,7 +114,7 @@ restore() {
 }
 
 # --- 1. instrument (with restore-on-exit) ------------------------------------------------
-trap restore EXIT
+trap 'status=$?; restore; cleanup_workroot; exit "$status"' EXIT
 
 : > "$OUTDIR/universe_lower_c.txt"
 : > "$OUTDIR/universe_lower_llvm.txt"

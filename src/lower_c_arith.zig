@@ -166,7 +166,7 @@ pub fn emitReduceSumCheckedCall(ctx: Context, call: anytype, locals: ?*std.Strin
     }
     if (!std.mem.eql(u8, member.name.text, "sum_checked")) return error.UnsupportedCEmission;
 
-    const t_ty = call.type_args[0];
+    var t_ty = call.type_args[0];
     const t_cty = try ctx.c_type(ctx.emit_ctx, t_ty);
     const int_name = ctx.underlying_int_type_name(ctx.emit_ctx, t_ty) orelse return error.UnsupportedCEmission;
     const range = intTypeRange(int_name) orelse return error.UnsupportedCEmission;
@@ -174,9 +174,10 @@ pub fn emitReduceSumCheckedCall(ctx: Context, call: anytype, locals: ?*std.Strin
 
     const n = ctx.temp_index.*;
     ctx.temp_index.* += 1;
+    const slice_ty: ast.TypeExpr = .{ .span = call.args[0].span, .kind = .{ .slice = .{ .mutability = .@"const", .child = &t_ty } } };
 
     try ctx.out.print(ctx.allocator, "({{ __auto_type mc_xs{d} = (", .{n});
-    try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+    try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, slice_ty);
     try ctx.out.print(ctx.allocator, "); __int128 mc_acc{d} = 0; for (uintptr_t mc_i{d} = 0; mc_i{d} < mc_xs{d}.len; mc_i{d}++) mc_acc{d} += (__int128)mc_xs{d}.ptr[mc_i{d}]; ", .{ n, n, n, n, n, n, n, n });
     try ctx.out.print(ctx.allocator, "(mc_acc{d} < (__int128)({s}) || mc_acc{d} > (__int128)({s})) ? (({s}){{ .is_ok = false, .payload.err = 0 }}) : (({s}){{ .is_ok = true, .payload.ok = ({s})mc_acc{d} }}); }})", .{ n, range.c_min, n, range.c_max, struct_name, struct_name, t_cty, n });
     return true;
@@ -360,13 +361,14 @@ fn checkedSequencedBinaryPlan(ctx: Context, node: anytype, op: ast.BinaryOp, tar
 }
 
 fn emitFloatReduceCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo), fast: bool) !bool {
-    const t_ty = call.type_args[0];
+    var t_ty = call.type_args[0];
     const t_cty = floatCTypeName(t_ty) orelse return error.UnsupportedCEmission;
     const n = ctx.temp_index.*;
     ctx.temp_index.* += 1;
+    const slice_ty: ast.TypeExpr = .{ .span = call.args[0].span, .kind = .{ .slice = .{ .mutability = .@"const", .child = &t_ty } } };
 
     try ctx.out.print(ctx.allocator, "({{ __auto_type mc_xs{d} = (", .{n});
-    try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+    try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, slice_ty);
     try ctx.out.print(ctx.allocator, "); {s} mc_acc{d} = ({s})0; ", .{ t_cty, n, t_cty });
     if (fast) {
         try ctx.out.print(ctx.allocator,

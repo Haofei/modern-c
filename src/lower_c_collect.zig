@@ -19,6 +19,7 @@ const ResultInfo = lower_c_model.ResultInfo;
 const SliceInfo = lower_c_model.SliceInfo;
 const byteViewCallReturnTypeForCall = lower_c_builtin.byteViewCallReturnTypeForCall;
 const calleeIdentName = ast_query.calleeIdentName;
+const memberCallee = ast_query.memberCallee;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
 const typeName = ast_query.typeName;
 
@@ -144,6 +145,11 @@ fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast.Expr) anyerror!v
     switch (expr.kind) {
         .call => |node| {
             if (byteViewCallReturnTypeForCall(node)) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
+            if (reduceCallUsesConstSliceOperand(node)) {
+                var child_ty = node.type_args[0];
+                const slice_ty: ast.TypeExpr = .{ .span = node.args[0].span, .kind = .{ .slice = .{ .mutability = .@"const", .child = &child_ty } } };
+                try ctx.collect_type_artifacts(ctx.emit_ctx, slice_ty);
+            }
             for (node.type_args) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
             try collectExprTypeArtifacts(ctx, node.callee.*);
             for (node.args) |arg| try collectExprTypeArtifacts(ctx, arg);
@@ -168,6 +174,19 @@ fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast.Expr) anyerror!v
         .struct_literal => |fields| for (fields) |field| try collectExprTypeArtifacts(ctx, field.value),
         else => {},
     }
+}
+
+fn reduceCallUsesConstSliceOperand(call: anytype) bool {
+    if (call.type_args.len != 1 or call.args.len != 1) return false;
+    const member = memberCallee(call.callee.*) orelse return false;
+    const base = switch (member.base.kind) {
+        .ident => |ident| ident.text,
+        else => return false,
+    };
+    if (!std.mem.eql(u8, base, "reduce")) return false;
+    return std.mem.eql(u8, member.name.text, "sum_checked") or
+        std.mem.eql(u8, member.name.text, "sum_left") or
+        std.mem.eql(u8, member.name.text, "sum_fast");
 }
 
 pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast.TypeExpr) anyerror!void {
@@ -250,6 +269,11 @@ pub fn collectSliceType(ctx: SliceArtifactContext, ty: ast.TypeExpr) anyerror!vo
         .slice => |node| {
             try collectSliceType(ctx, node.child.*);
             try putSliceType(ctx, node.child.*, node.mutability);
+            // A source `[]mut T` can appear implicitly even when the declared
+            // surface type is only `[]const T`, e.g. `let s: []const T = a[0..n]`.
+            // The emitter const-narrows that mutable slice value through a
+            // temporary, so the mutable companion typedef must exist.
+            if (node.mutability == .@"const") try putSliceType(ctx, node.child.*, .mut);
         },
         .pointer => |node| try collectSliceType(ctx, node.child.*),
         .raw_many_pointer => |node| try collectSliceType(ctx, node.child.*),

@@ -1649,6 +1649,13 @@ test "lower-c emits slice typedefs and indexing" {
         \\    let x: u32 = make_u32_slice()[i];
         \\    return x;
         \\}
+        \\
+        \\fn const_slice_from_array_range(n: usize) -> u8 {
+        \\    var buf: [4]u8 = uninit;
+        \\    buf[0] = 7;
+        \\    let xs: []const u8 = buf[0..n];
+        \\    return xs[0];
+        \\}
     ;
 
     var output: std.ArrayList(u8) = .empty;
@@ -1657,6 +1664,8 @@ test "lower-c emits slice typedefs and indexing" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_slice_const_u8 {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * ptr;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_slice_mut_u8 {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * ptr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_slice_const_u32 {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t const * ptr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_slice_mut_u32 {") != null);
@@ -1687,6 +1696,7 @@ test "lower-c emits slice typedefs and indexing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t mc_tmp10 = i;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp11 = mc_tmp9.ptr[mc_check_index_usize(mc_tmp10, mc_tmp9.len)];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp11;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 xs = ({ mc_slice_mut_u8 mc_scv") != null);
 }
 
 test "lower-c emits checked u32 arithmetic helpers" {
