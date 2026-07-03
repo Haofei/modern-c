@@ -1,0 +1,129 @@
+name: nightly-fuzz
+
+on:
+  schedule:
+    - cron: "37 9 * * *"
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "Generated programs per oracle"
+        required: false
+        default: "600"
+
+permissions:
+  contents: read
+
+jobs:
+  rotating-mcfuzz:
+    name: mcfuzz-${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      MC_LLVM_MAJOR: "18"
+      MCFUZZ_COUNT: ${{ github.event.inputs.count || '600' }}
+      MCFUZZ_ORACLE: ${{ matrix.oracle }}
+      MCFUZZ_EXTRA_ARGS: ${{ matrix.extra_args }}
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - name: differential
+            oracle: differential
+            extra_args: ""
+          - name: trap
+            oracle: differential
+            extra_args: "--trapping"
+          - name: robust
+            oracle: robust
+            extra_args: ""
+          - name: failclosed
+            oracle: failclosed
+            extra_args: ""
+          - name: determinism
+            oracle: determinism
+            extra_args: ""
+          - name: pipeline
+            oracle: pipeline
+            extra_args: ""
+          - name: metamorphic
+            oracle: metamorphic
+            extra_args: ""
+          - name: optlevel
+            oracle: optlevel
+            extra_args: ""
+          - name: floatbits
+            oracle: floatbits
+            extra_args: ""
+          - name: reference
+            oracle: reference
+            extra_args: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install LLVM qualification toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18 llvm-18
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+      - name: Preflight pinned tools
+        run: zig build preflight
+      - name: Build mcc
+        run: zig build install
+      - name: Derive rotating seed range
+        id: seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          DAY="$(date -u +%Y%j)"
+          COUNT="${MCFUZZ_COUNT:-600}"
+          SEED_START=$((10#$DAY * COUNT + 1))
+          echo "seed_start=$SEED_START" >> "$GITHUB_OUTPUT"
+          echo "Nightly seed start: $SEED_START"
+      - name: Run rotating mcfuzz oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          COUNT="${MCFUZZ_COUNT:-600}"
+          SEED_START="${{ steps.seed.outputs.seed_start }}"
+          python3 tools/fuzz/mcfuzz.py run \
+            --oracle "$MCFUZZ_ORACLE" \
+            $MCFUZZ_EXTRA_ARGS \
+            --count "$COUNT" \
+            --start "$SEED_START" \
+            --jobs "$(nproc)" \
+            --mcc zig-out/bin/mcc
+      - name: Record shrink instructions
+        if: failure()
+        run: |
+          {
+            echo "### mcfuzz failure triage"
+            echo
+            echo "Re-run the reported seed locally, shrink it with tools/fuzz/mcfuzz.py shrink,"
+            echo "and commit the minimized repro under tools/fuzz/corpus/ before release."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  corpus:
+    name: mcfuzz-corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      MC_LLVM_MAJOR: "18"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install LLVM qualification toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18 llvm-18
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+      - name: Preflight pinned tools
+        run: zig build preflight
+      - name: Build mcc
+        run: zig build install
+      - name: Replay persisted fuzz corpus
+        run: python3 tools/fuzz/mcfuzz.py corpus --mcc zig-out/bin/mcc

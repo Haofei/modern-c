@@ -19,11 +19,15 @@ Before tagging a release:
 1. Choose the release version and build with `zig build -Dversion=<version> install`.
 2. Run `zig build m0` on Ubuntu 24.04 with LLVM 18 (`MC_LLVM_MAJOR=18`) and no skips.
 3. Run `zig build m0` in the pinned Linux container with no skips.
-4. Run `zig build fast` on every supported host tier.
-5. Generate Linux and macOS tarballs containing `bin/mcc`, `std/`, driver scripts,
+4. Confirm the nightly rotating-seed mcfuzz workflow is green for the release
+   candidate commit. Shrink any reported failing seed with `tools/fuzz/mcfuzz.py
+   shrink` and commit the minimized repro under `tools/fuzz/corpus/` before
+   tagging.
+5. Run `zig build fast` on every supported host tier.
+6. Generate Linux and macOS tarballs containing `bin/mcc`, `std/`, driver scripts,
    `README.md`, `LICENSE`, `SECURITY.md`, `STABILITY.md`, and `CHANGELOG.md`.
-6. Publish SHA256 checksums for every artifact.
-7. Tag the exact commit and record the tag in `CHANGELOG.md`.
+7. Publish SHA256 checksums for every artifact.
+8. Tag the exact commit and record the tag in `CHANGELOG.md`.
 
 ## Not Yet Implemented
 

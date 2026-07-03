@@ -70,6 +70,43 @@ def main() -> None:
     if "ubuntu-latest" in ci:
         fail(".github/workflows/ci.yml must not use ubuntu-latest for compiler qualification")
 
+    nightly_fuzz_path = ".github/workflows/nightly-fuzz.yml"
+    nightly_fuzz = read(nightly_fuzz_path)
+    for needle in (
+        "schedule:",
+        "workflow_dispatch:",
+        "runs-on: ubuntu-24.04",
+        f'MC_LLVM_MAJOR: "{EXPECTED_LLVM_MAJOR}"',
+        f"clang-{EXPECTED_LLVM_MAJOR} lld-{EXPECTED_LLVM_MAJOR} llvm-{EXPECTED_LLVM_MAJOR}",
+        f"/usr/lib/llvm-{EXPECTED_LLVM_MAJOR}/bin",
+        "zig build preflight",
+        "zig build install",
+        "SEED_START",
+        "date -u +%Y%j",
+        "python3 tools/fuzz/mcfuzz.py run",
+        '--start "$SEED_START"',
+        "--trapping",
+        "python3 tools/fuzz/mcfuzz.py corpus",
+        "tools/fuzz/mcfuzz.py shrink",
+        "tools/fuzz/corpus/",
+    ):
+        require_contains(nightly_fuzz_path, needle)
+    for oracle in (
+        "differential",
+        "robust",
+        "failclosed",
+        "determinism",
+        "pipeline",
+        "metamorphic",
+        "optlevel",
+        "floatbits",
+        "reference",
+    ):
+        if f"oracle: {oracle}" not in nightly_fuzz:
+            fail(f"{nightly_fuzz_path} missing mcfuzz oracle {oracle!r}")
+    if "ubuntu-latest" in nightly_fuzz:
+        fail(f"{nightly_fuzz_path} must not use ubuntu-latest for compiler qualification")
+
     dockerfile = read("Dockerfile")
     require_contains("Dockerfile", f"ARG LLVM_MAJOR={EXPECTED_LLVM_MAJOR}")
     require_contains("Dockerfile", "ENV MC_LLVM_MAJOR=${LLVM_MAJOR}")
@@ -77,7 +114,7 @@ def main() -> None:
     if "sort -V | tail -n1" in dockerfile or "llvm-*" in dockerfile:
         fail("Dockerfile must select the pinned LLVM major, not the highest installed one")
 
-    print("PASS: release-metadata-test - version, Zig/LLVM pins, and process docs are in sync")
+    print("PASS: release-metadata-test - version, Zig/LLVM pins, nightly fuzz, and process docs are in sync")
 
 
 if __name__ == "__main__":
