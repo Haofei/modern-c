@@ -29,10 +29,18 @@ pub const LoadError = error{ImportNotFound} || std.mem.Allocator.Error;
 
 const ImportRef = struct {
     path: []const u8, // resolved path, owned by the arena
+    display_path: []const u8,
     requested: []const u8,
     span: diagnostics.Span,
     start: usize,
     end: usize,
+    outside_sandbox: bool = false,
+};
+
+const ResolvedImport = struct {
+    path: []const u8,
+    display_path: []const u8,
+    outside_sandbox: bool = false,
 };
 
 // One entry per file that contributes to the import-flattened source, in append order.
@@ -105,9 +113,11 @@ pub fn loadCombinedSourceWithBoundariesReport(
     }
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
-    const canon_root = std.fs.path.resolve(allocator, &.{root_path}) catch try allocator.dupe(u8, root_path);
+    const canon_root = (try realPathFileDupe(allocator, io, root_path)) orelse try canonicalize(allocator, root_path, ".");
     defer allocator.free(canon_root);
-    try expand(allocator, io, canon_root, root_source, &visited, &out, boundaries, arch orelse default_arch, platform orelse default_platform, reporter);
+    const sandbox_root = try defaultSandboxRoot(allocator, io, canon_root);
+    defer allocator.free(sandbox_root);
+    try expand(allocator, io, canon_root, root_path, root_source, &visited, &out, boundaries, arch orelse default_arch, platform orelse default_platform, sandbox_root, reporter);
     return out.toOwnedSlice(allocator);
 }
 
@@ -115,12 +125,14 @@ fn expand(
     allocator: std.mem.Allocator,
     io: std.Io,
     path: []const u8,
+    display_path: []const u8,
     source: []const u8,
     visited: *std.StringHashMap(void),
     out: *std.ArrayList(u8),
     boundaries: ?*std.ArrayList(FileBoundary),
     arch: []const u8,
     platform: []const u8,
+    sandbox_root: []const u8,
     reporter: ?*diagnostics.Reporter,
 ) LoadError!void {
     if (visited.contains(path)) return;
@@ -128,13 +140,13 @@ fn expand(
 
     // Record where this file's text starts in the combined source (before appending it).
     const file_start = out.items.len;
-    if (boundaries) |b| try b.append(allocator, .{ .start = file_start, .path = try allocator.dupe(u8, path) });
+    if (boundaries) |b| try b.append(allocator, .{ .start = file_start, .path = try allocator.dupe(u8, display_path) });
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
-    const imports = try scanImports(a, io, path, source, arch, platform);
+    const imports = try scanImports(a, io, path, source, arch, platform, sandbox_root);
 
     // Append this file's source with its import statements blanked out.
     const blanked = try allocator.dupe(u8, source);
@@ -150,6 +162,18 @@ fn expand(
 
     // Then expand each imported file once.
     for (imports) |imp| {
+        if (imp.outside_sandbox) {
+            if (reporter) |r| {
+                r.err(.{
+                    .offset = file_start + imp.span.offset,
+                    .len = imp.span.len,
+                    .line = imp.span.line,
+                    .column = imp.span.column,
+                }, "E_IMPORT_OUTSIDE_SANDBOX: import \"{s}\" resolves to {s}, outside the import sandbox rooted at {s}", .{ imp.requested, imp.path, sandbox_root });
+                continue;
+            }
+            return error.ImportNotFound;
+        }
         if (visited.contains(imp.path)) continue;
         const imp_source = std.Io.Dir.cwd().readFileAlloc(io, imp.path, allocator, .limited(64 * 1024 * 1024)) catch {
             if (reporter) |r| {
@@ -164,13 +188,13 @@ fn expand(
             return error.ImportNotFound;
         };
         defer allocator.free(imp_source);
-        try expand(allocator, io, imp.path, imp_source, visited, out, boundaries, arch, platform, reporter);
+        try expand(allocator, io, imp.path, imp.display_path, imp_source, visited, out, boundaries, arch, platform, sandbox_root, reporter);
     }
 }
 
 // Find top-level `import "path";` statements by lexing. Returns the resolved
 // path and the byte range (start of `import` .. end of `;`) for each.
-fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: []const u8, arch: []const u8, platform: []const u8) LoadError![]ImportRef {
+fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: []const u8, arch: []const u8, platform: []const u8, sandbox_root: []const u8) LoadError![]ImportRef {
     var refs: std.ArrayList(ImportRef) = .empty;
     var reporter = diagnostics.Reporter.init(arena, path, source);
     var lx = lexer.Lexer.init(source, &reporter);
@@ -198,13 +222,15 @@ fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: [
                     // Platform-selection seam: rewrite `kernel/platform/active/<x>` to the board.
                     rel = try std.fmt.allocPrint(arena, "kernel/platform/{s}/{s}", .{ platform, rel[platform_active_prefix.len..] });
                 }
-                const resolved = try resolveImportPath(arena, io, path, rel);
+                const resolved = try resolveImportPath(arena, io, path, rel, sandbox_root);
                 try refs.append(arena, .{
-                    .path = resolved,
+                    .path = resolved.path,
+                    .display_path = resolved.display_path,
                     .requested = rel,
                     .span = t.span,
                     .start = t.span.offset,
                     .end = semi.span.offset + semi.span.len,
+                    .outside_sandbox = resolved.outside_sandbox,
                 });
             }
         }
@@ -223,7 +249,7 @@ fn fileExists(io: std.Io, path: []const u8) bool {
     return true;
 }
 
-fn resolveImportPath(arena: std.mem.Allocator, io: std.Io, importer: []const u8, rel: []const u8) LoadError![]const u8 {
+fn resolveImportPath(arena: std.mem.Allocator, io: std.Io, importer: []const u8, rel: []const u8, sandbox_root: []const u8) LoadError!ResolvedImport {
     // Explicitly-relative or absolute: resolve against the importing file's
     // directory and canonicalize (so diamond imports dedup to one copy).
     if (std.fs.path.isAbsolute(rel) or isExplicitlyRelative(rel)) {
@@ -231,29 +257,71 @@ fn resolveImportPath(arena: std.mem.Allocator, io: std.Io, importer: []const u8,
             try arena.dupe(u8, rel)
         else
             try std.fs.path.join(arena, &.{ std.fs.path.dirname(importer) orelse ".", rel });
-        return canonicalize(arena, joined);
+        const resolved = try canonicalize(arena, joined, sandbox_root);
+        return .{ .path = resolved, .display_path = try displayPath(arena, sandbox_root, resolved), .outside_sandbox = !pathWithin(sandbox_root, resolved) };
     }
 
     // Rooted (e.g. `std/sync.mc`): walk up the importer's ancestor directories,
     // then the current working directory, taking the first existing match.
     var first: ?[]const u8 = null;
+    var first_outside: ?[]const u8 = null;
     var dir: ?[]const u8 = std.fs.path.dirname(importer);
     while (dir) |d| {
-        const cand = try canonicalize(arena, try std.fs.path.join(arena, &.{ d, rel }));
+        const cand = try canonicalize(arena, try std.fs.path.join(arena, &.{ d, rel }), sandbox_root);
+        if (!pathWithin(sandbox_root, cand)) {
+            if (first_outside == null) first_outside = cand;
+            const parent_outside = std.fs.path.dirname(d);
+            dir = if (parent_outside != null and !std.mem.eql(u8, parent_outside.?, d)) parent_outside else null;
+            continue;
+        }
         if (first == null) first = cand;
-        if (fileExists(io, cand)) return cand;
+        if (fileExists(io, cand)) return .{ .path = cand, .display_path = try displayPath(arena, sandbox_root, cand) };
         const parent = std.fs.path.dirname(d);
         dir = if (parent != null and !std.mem.eql(u8, parent.?, d)) parent else null;
     }
     // Cwd-relative (the project root when mcc is run from there).
-    const bare = try canonicalize(arena, rel);
-    if (fileExists(io, bare)) return bare;
+    const bare = try canonicalize(arena, rel, sandbox_root);
+    if (!pathWithin(sandbox_root, bare)) {
+        if (first_outside == null) first_outside = bare;
+    } else if (fileExists(io, bare)) {
+        return .{ .path = bare, .display_path = try displayPath(arena, sandbox_root, bare) };
+    }
     // None found: return a sensible candidate for the error message.
-    return first orelse bare;
+    if (first) |candidate| return .{ .path = candidate, .display_path = try displayPath(arena, sandbox_root, candidate) };
+    if (first_outside) |candidate| return .{ .path = candidate, .display_path = candidate, .outside_sandbox = true };
+    return .{ .path = bare, .display_path = try displayPath(arena, sandbox_root, bare) };
 }
 
-fn canonicalize(arena: std.mem.Allocator, path: []const u8) LoadError![]const u8 {
+fn canonicalize(arena: std.mem.Allocator, path: []const u8, relative_root: []const u8) LoadError![]const u8 {
     // Normalize lexically (no filesystem access needed; works for not-yet-read
     // paths) into an absolute, `..`-collapsed form.
-    return std.fs.path.resolve(arena, &.{path});
+    if (std.fs.path.isAbsolute(path)) return std.fs.path.resolve(arena, &.{path});
+    return std.fs.path.resolve(arena, &.{ relative_root, path });
+}
+
+fn realPathFileDupe(allocator: std.mem.Allocator, io: std.Io, path: []const u8) std.mem.Allocator.Error!?[]u8 {
+    var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = std.Io.Dir.cwd().realPathFile(io, path, &buffer) catch return null;
+    return try allocator.dupe(u8, buffer[0..len]);
+}
+
+fn displayPath(arena: std.mem.Allocator, sandbox_root: []const u8, path: []const u8) ![]const u8 {
+    if (!pathWithin(sandbox_root, path)) return arena.dupe(u8, path);
+    return std.fs.path.relative(arena, sandbox_root, null, sandbox_root, path) catch arena.dupe(u8, path);
+}
+
+fn defaultSandboxRoot(allocator: std.mem.Allocator, io: std.Io, canon_root: []const u8) std.mem.Allocator.Error![]const u8 {
+    const cwd = (try realPathFileDupe(allocator, io, ".")) orelse try allocator.dupe(u8, ".");
+    if (pathWithin(cwd, canon_root)) return cwd;
+    allocator.free(cwd);
+    const root_dir = std.fs.path.dirname(canon_root) orelse canon_root;
+    return allocator.dupe(u8, root_dir);
+}
+
+fn pathWithin(root: []const u8, path: []const u8) bool {
+    if (std.mem.eql(u8, root, path)) return true;
+    if (root.len == 0) return false;
+    if (!std.mem.startsWith(u8, path, root)) return false;
+    if (root[root.len - 1] == '/') return true;
+    return path.len > root.len and path[root.len] == '/';
 }

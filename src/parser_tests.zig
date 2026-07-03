@@ -177,3 +177,23 @@ test "parser rejects excessive nesting with diagnostic" {
     try std.testing.expect(reporter.has_errors);
     try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_NESTING_TOO_DEEP") != null);
 }
+
+test "parser rejects excessive else-if nesting with diagnostic" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+
+    try source.appendSlice(std.testing.allocator, "fn too_deep_if() -> void { if true { }");
+    for (0..300) |_| try source.appendSlice(std.testing.allocator, " else if true { }");
+    try source.appendSlice(std.testing.allocator, " else { } }\n");
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "too_deep_if.mc", source.items);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = Parser.init(source.items, &reporter);
+    try std.testing.expectError(error.ParseFailed, p.parseModule(arena.allocator()));
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_NESTING_TOO_DEEP") != null);
+}

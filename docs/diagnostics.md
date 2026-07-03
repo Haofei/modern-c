@@ -7,7 +7,7 @@ Regenerate it with:
 python3 tools/toolchain/diagnostics-reference.py --write
 ```
 
-Total codes: **215**.
+Total codes: **216**.
 
 | Code | Message examples | Source references |
 |---|---|---|
@@ -106,7 +106,8 @@ Total codes: **215**.
 | `E_IF_LET_RESULT_REQUIRED` | if let ok(...) or err(...) requires a Result value | `src/mir_verify_util.zig:116`<br>`src/sema.zig:5480` |
 | `E_IF_LET_RESULT_TAG` | if let result narrowing supports only ok(...) or err(...) | `src/mir_verify_util.zig:117`<br>`src/sema.zig:5475` |
 | `E_ILLEGAL_SLICE_CAST` | cannot cast a non-slice value to a slice: a slice is a fat pointer (ptr+len) and the length has no source. Build one with a slicing expression \`a[i..j]\`, a byte view (\`mem.as_bytes\`), or a string literal | `src/sema.zig:2528` |
-| `E_IMPORT_NOT_FOUND` | cannot find import "{s}" (resolved candidate: {s}) | `src/loader.zig:161` |
+| `E_IMPORT_NOT_FOUND` | cannot find import "{s}" (resolved candidate: {s}) | `src/loader.zig:185` |
+| `E_IMPORT_OUTSIDE_SANDBOX` | import "{s}" resolves to {s}, outside the import sandbox rooted at {s} | `src/loader.zig:172` |
 | `E_INDEX_BASE_NOT_ARRAY_OR_SLICE` | indexing is defined only for arrays and slices<br>slicing is defined only for arrays and slices | `src/mir_verify_util.zig:85`<br>`src/sema.zig:2802`<br>`src/sema.zig:2824` |
 | `E_INDEX_NOT_USIZE` | array and slice indices must be checked usize<br>slice range bounds must be checked usize | `src/mir_verify_util.zig:86`<br>`src/sema.zig:2811`<br>`src/sema.zig:2828`<br>`src/sema.zig:2832`<br>`src/sema.zig:4959` |
 | `E_INTEGER_LITERAL_OUT_OF_RANGE` | integer literal is not representable in the annotated type | `src/mir_verify_util.zig:83`<br>`src/sema.zig:4171`<br>`src/sema.zig:4179`<br>`src/sema.zig:4192`<br>`src/sema.zig:4195`<br>`src/sema.zig:4202`<br>_+3 more_ |
@@ -137,7 +138,7 @@ Total codes: **215**.
 | `E_MOVE_LOOP_RESOURCE` | cannot consume or reserve an outer linear \`move\` value inside a loop; the loop may run zero or multiple times | `src/sema_move.zig:118` |
 | `E_NAKED_BODY` | a #[naked] function body must be exactly one \`asm\` block (optionally wrapped in one \`unsafe {}\`); there is no frame for locals, statements, or expressions | `src/sema.zig:1253` |
 | `E_NAKED_RETURN` | a #[naked] function must return \`never\` or \`void\`; it cannot synthesize a value return (the asm body owns the calling convention) | `src/sema.zig:1248` |
-| `E_NESTING_TOO_DEEP` | nesting too deep | `src/parser.zig:1834` |
+| `E_NESTING_TOO_DEEP` | nesting too deep | `src/parser.zig:1836` |
 | `E_NEVER_FALLTHROUGH` | function declared -&gt; never can fall off the end | `src/hir.zig:177`<br>`src/mir.zig:560`<br>`src/sema.zig:1292` |
 | `E_NEVER_RETURNS` | function declared -&gt; never cannot return normally | `src/sema.zig:2001`<br>`src/sema.zig:2008` |
 | `E_NEVER_STORAGE` | never is a control-flow type and cannot be used for storage | `src/sema.zig:2939`<br>`src/sema.zig:3078` |

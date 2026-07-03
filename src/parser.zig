@@ -1081,6 +1081,8 @@ pub const Parser = struct {
     }
 
     fn parseIfLet(self: *Parser) anyerror!ast.Stmt {
+        try self.enterParseDepth();
+        defer self.leaveParseDepth();
         const start = try self.expectTok(.kw_if, "expected if");
         if (self.match(.kw_let)) {
             const pattern = try self.parsePattern();

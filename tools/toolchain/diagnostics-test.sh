@@ -53,6 +53,31 @@ assert_contains "$missing_output" 'cannot find import "missing/nope.mc"' "missin
 assert_not_contains "$missing_output" "error: ImportNotFound" "raw Zig ImportNotFound error"
 assert_not_contains "$missing_output" "src/main.zig" "Zig stack trace"
 
+OUTSIDE="$(mktemp -t mcc-outside-import.XXXXXX.mc)"
+trap 'rm -rf "$WORK"; rm -f "$OUTSIDE"' EXIT
+cat >"$OUTSIDE" <<'MC'
+export fn outside_value() -> u32 {
+    return 7;
+}
+MC
+
+cat >"$WORK/root_abs_import.mc" <<MC
+import "$OUTSIDE";
+
+export fn main() -> u32 {
+    return outside_value();
+}
+MC
+
+sandbox_output=""
+if sandbox_output=$("$MCC" check "$WORK/root_abs_import.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — absolute import outside sandbox unexpectedly succeeded"
+    exit 1
+fi
+assert_contains "$sandbox_output" "root_abs_import.mc:1:1: error: E_IMPORT_OUTSIDE_SANDBOX" "outside-sandbox import diagnostic location"
+assert_contains "$sandbox_output" "outside the import sandbox rooted at" "outside-sandbox import diagnostic text"
+assert_not_contains "$sandbox_output" "parsed 2 top-level declarations" "outside-sandbox import acceptance"
+
 cat >"$WORK/root_import.mc" <<'MC'
 import "lib.mc";
 
