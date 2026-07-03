@@ -2,7 +2,7 @@
 // SPEC: milestone=return-type-checking
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_RETURN_TYPE_MISMATCH,E_RETURN_REQUIRES_VALUE,E_RETURN_MISSING,E_INTEGER_LITERAL_OUT_OF_RANGE,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY,E_CLOSED_ENUM_SWITCH_EXHAUSTIVE
+// SPEC: check=E_RETURN_TYPE_MISMATCH,E_RETURN_REQUIRES_VALUE,E_RETURN_MISSING,E_INTEGER_LITERAL_OUT_OF_RANGE,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY,E_USE_BEFORE_INIT,E_CLOSED_ENUM_SWITCH_EXHAUSTIVE
 
 extern fn get_count() -> u32;
 global shared_count: u32 = 0;
@@ -167,6 +167,7 @@ fn reject_null_non_null_pointer_return() -> *mut u8 {
 
 fn reject_array_pointer_decay_return() -> *mut u8 {
     var buf: [4]u8 = uninit;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
     // EXPECT_ERROR: E_ARRAY_TO_POINTER_DECAY
     return buf;
 }

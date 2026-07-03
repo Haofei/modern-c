@@ -608,6 +608,8 @@ pub const Checker = struct {
                 .globals = &globals,
                 .type_aliases = &type_aliases,
                 .structs = &structs,
+                .packed_bits = &packed_bits,
+                .overlay_unions = &overlay_unions,
                 .enums = &enums,
                 .tagged_unions = &tagged_unions,
             };
@@ -1439,12 +1441,12 @@ pub const Checker = struct {
 
     // ----- Definite-initialization pass (S0.1) ---------------------------------
     //
-    // A scalar `var x: T = uninit;` declares storage whose bytes are unspecified;
+    // A typed `var x: T = uninit;` declares storage whose bytes are unspecified;
     // reading it before it is definitely assigned on every control-flow path is a
     // compile error (E_USE_BEFORE_INIT), not a runtime hazard. This is the flow-
     // sensitive "definite assignment" check.
     //
-    // State is the set of *pending* names: scalar `uninit` vars declared but not yet
+    // State is the set of *pending* names: `uninit` vars declared but not yet
     // proven assigned on the current path. A pending name is:
     //   - removed when it is the whole target of an assignment `x = …` (now assigned),
     //   - removed when its address is taken (`&x`) or it is used through a member /
@@ -1453,18 +1455,28 @@ pub const Checker = struct {
     //     `var x: T = uninit; init(&x); use(x)` idiom accepted),
     //   - reported (E_USE_BEFORE_INIT) when it is read as a plain value.
     //
-    // Only SCALAR vars are tracked. Aggregates (arrays, structs, unions, slices,
-    // results, …) are initialized field/element-at-a-time through index/member
-    // assignment, which this whole-variable analysis cannot prove — so they are never
-    // made pending (no false positives on `var buf: [N]u8 = uninit; buf[i] = …`).
+    // Aggregates are tracked at the root-storage level only. A member/index assignment
+    // or address-taking operation clears the root as intentional storage use; direct
+    // member/index/value reads before any such use are rejected.
     //
     // Branches (if/else, switch — `if` desugars to a switch on the bool) intersect:
     // a name is assigned after the branch only if assigned on every arm that falls
     // through to the join. A diverging arm (ends in return/break/continue/unreachable)
     // contributes nothing to the join. Loops are conservative: a body assignment is
-    // not guaranteed (the loop may run zero times), so the outer pending set is
-    // restored after the loop — but reads inside the body are still checked.
-    const DefInitState = std.StringHashMap(diagnostics.Span);
+    // not guaranteed (the loop may run zero times), so scalar pending state is
+    // restored after the loop — but aggregate storage use inside the body is kept,
+    // and reads inside the body are still checked.
+    const DefInitPendingKind = enum {
+        scalar,
+        aggregate,
+    };
+
+    const DefInitPending = struct {
+        span: diagnostics.Span,
+        kind: DefInitPendingKind,
+    };
+
+    const DefInitState = std.StringHashMap(DefInitPending);
 
     // A collected `defer EXPR`. `live_before` is the number of defers already collected when
     // this one was declared — equivalently, this defer's own index — used to scope it to the
@@ -1569,12 +1581,12 @@ pub const Checker = struct {
             .var_decl => |decl| {
                 if (decl.init) |init_expr| {
                     if (isUninitLiteral(init_expr)) {
-                        // A scalar `var x: T = uninit;` becomes pending until definitely
-                        // assigned. Aggregates and untyped/unknown storage are not tracked.
+                        // A typed `var x: T = uninit;` becomes pending until definitely
+                        // assigned or used as storage.
                         if (decl.ty) |ty| {
-                            if (diIsScalarType(ty, ctx)) {
+                            if (diPendingKindForType(ty, ctx)) |kind| {
                                 for (decl.names) |name| {
-                                    state.put(name.text, name.span) catch {
+                                    state.put(name.text, .{ .span = name.span, .kind = kind }) catch {
                                         self.oom = true;
                                     };
                                 }
@@ -1653,6 +1665,7 @@ pub const Checker = struct {
                 var body_state = self.diCloneState(state);
                 defer body_state.deinit();
                 _ = self.diBlock(l.body, &body_state, ctx);
+                self.diPreserveLoopAggregateStorageUses(state, &body_state);
                 // The loop may run zero times, so control always falls through.
                 return false;
             },
@@ -1735,13 +1748,32 @@ pub const Checker = struct {
         }
     }
 
+    fn diPreserveLoopAggregateStorageUses(self: *Checker, outer: *DefInitState, body: *const DefInitState) void {
+        var cleared: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer cleared.deinit(self.reporter.allocator);
+
+        var it = outer.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.kind != .aggregate) continue;
+            if (body.contains(entry.key_ptr.*)) continue;
+            cleared.append(self.reporter.allocator, entry.key_ptr.*) catch {
+                self.oom = true;
+            };
+        }
+
+        for (cleared.items) |name| {
+            _ = outer.remove(name);
+        }
+    }
+
     // Walk an expression evaluated for its value, reporting a read of any pending var
     // and clearing vars whose address is taken (an address-of use may initialize them).
     fn diRead(self: *Checker, expr: ast.Expr, state: *DefInitState, ctx: Context) void {
         switch (expr.kind) {
             .ident => |id| {
-                if (state.contains(id.text)) {
-                    self.errorCode(expr.span, "E_USE_BEFORE_INIT", "scalar variable initialized with `uninit` is read before it is assigned on all paths");
+                if (state.get(id.text)) |pending| {
+                    _ = pending;
+                    self.errorCode(expr.span, "E_USE_BEFORE_INIT", "variable initialized with `uninit` is read before it is assigned or used as storage on all paths");
                 }
             },
             .address_of => |inner| self.diUseTarget(inner.*, state, ctx),
@@ -1753,7 +1785,11 @@ pub const Checker = struct {
             },
             .cast => |c| self.diRead(c.value.*, state, ctx),
             .call => |c| {
-                self.diRead(c.callee.*, state, ctx);
+                if (diStorageMethodBase(c.callee.*)) |base| {
+                    self.diUseTarget(base, state, ctx);
+                } else {
+                    self.diRead(c.callee.*, state, ctx);
+                }
                 for (c.args) |arg| self.diRead(arg, state, ctx);
             },
             .index => |n| {
@@ -6129,18 +6165,53 @@ fn opacityStructNameOf(ty: ast.TypeExpr) ?[]const u8 {
     };
 }
 
-// Definite-init (S0.1) tracks only single-storage SCALAR vars: a whole-variable
-// assignment definitely initializes them, and a plain read is a use of the whole
-// value. Aggregates (arrays, structs, unions, slices, results, …) are filled
-// element/field-at-a-time and are not whole-variable trackable here, so they are
-// never made pending (avoids false positives on the `buf[i] = …` / `s.f = …` idiom).
+// Definite-init (S0.1) tracks typed `uninit` locals whose whole value can later be
+// read. Scalars are reported on any value read. Aggregates are tracked at the root:
+// whole assignment clears them, and address/member/index storage use clears them so
+// field-fill and out-param idioms remain accepted.
+fn diPendingKindForType(ty: ast.TypeExpr, ctx: Context) ?Checker.DefInitPendingKind {
+    const resolved = resolveAliasType(ty, ctx);
+    if (maybeUninitPayloadType(resolved) != null) return null;
+    if (diIsScalarType(resolved, ctx)) return .scalar;
+    if (diIsAggregateType(resolved, ctx)) return .aggregate;
+    return null;
+}
+
 fn diIsScalarType(ty: ast.TypeExpr, ctx: Context) bool {
     return switch (classifyTypeCtx(ty, ctx)) {
         .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_u128, .checked_usize, .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_i128, .checked_isize, .wrap, .sat, .serial, .counter, .pointer, .raw_many_pointer, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer, .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr, .secret, .fn_pointer, .bool, .f32, .f64, .duration, .order => true,
-        // Not tracked: array, slice, atomic, dma_buf, result, void, never, the
-        // literal/unknown classes (structs/enums/unions/generics resolve to .unknown).
         else => false,
     };
+}
+
+fn diIsAggregateType(ty: ast.TypeExpr, ctx: Context) bool {
+    return switch (classifyTypeCtx(ty, ctx)) {
+        .array, .slice, .nullable_dyn_trait, .nullable_value, .result, .atomic, .dma_buf => true,
+        else => diNamedAggregateTypeIsKnown(ty, ctx),
+    };
+}
+
+fn diNamedAggregateTypeIsKnown(ty: ast.TypeExpr, ctx: Context) bool {
+    const resolved = resolveAliasType(ty, ctx);
+    const name = switch (resolved.kind) {
+        .name => |n| n.text,
+        .generic => |g| g.base.text,
+        .qualified => |q| return diNamedAggregateTypeIsKnown(q.child.*, ctx),
+        else => return false,
+    };
+    if (ctx.type_params) |type_params| {
+        if (type_params.contains(name)) return false;
+    }
+    if (ctx.structs) |structs| if (structs.contains(name)) return true;
+    if (ctx.packed_bits) |packed_bits| if (packed_bits.contains(name)) return true;
+    if (ctx.tagged_unions) |tagged_unions| if (tagged_unions.contains(name)) return true;
+    return false;
+}
+
+fn diStorageMethodBase(callee: ast.Expr) ?ast.Expr {
+    const member = memberExpr(callee) orelse return null;
+    if (!std.mem.eql(u8, member.name.text, "store")) return null;
+    return member.base.*;
 }
 
 fn atomicPayloadTypeForValue(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {

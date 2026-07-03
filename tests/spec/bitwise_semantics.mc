@@ -2,7 +2,7 @@
 // SPEC: milestone=bitwise-semantics
 // SPEC: phase=sema,mir
 // SPEC: expect=pass,compile_error,inspect
-// SPEC: check=E_BITWISE_SIGNED_OPERAND,E_BITWISE_BOOL_OPERAND,E_BITWISE_POINTER_OPERAND,E_BITWISE_ARITH_DOMAIN_OPERAND,E_OPERATOR_OPERAND,bitwise-no-trap
+// SPEC: check=E_BITWISE_SIGNED_OPERAND,E_BITWISE_BOOL_OPERAND,E_BITWISE_POINTER_OPERAND,E_BITWISE_ARITH_DOMAIN_OPERAND,E_OPERATOR_OPERAND,E_USE_BEFORE_INIT,bitwise-no-trap
 
 fn accept_unsigned_and(a: u32, b: u32) -> u32 {
     return a & b;
@@ -101,6 +101,7 @@ fn reject_null_and() -> void {
 fn reject_array_and() -> void {
     var a: [2]u8 = uninit;
     var b: [2]u8 = uninit;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
     // EXPECT_ERROR: E_OPERATOR_OPERAND
     let x = a & b;
 }
@@ -117,6 +118,7 @@ fn reject_null_not() -> void {
 
 fn reject_array_not() -> void {
     var a: [2]u8 = uninit;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
     // EXPECT_ERROR: E_OPERATOR_OPERAND
     let x = ~a;
 }

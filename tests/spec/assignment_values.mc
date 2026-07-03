@@ -137,6 +137,7 @@ fn reject_array_to_single_pointer_assignment() -> *mut u8 {
 fn reject_array_to_raw_many_pointer_assignment() -> [*]mut u8 {
     var buf: [4]u8 = uninit;
     var p: [*]mut u8 = uninit;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
     // EXPECT_ERROR: E_ARRAY_TO_POINTER_DECAY
     p = buf;
     return p;
@@ -145,6 +146,7 @@ fn reject_array_to_raw_many_pointer_assignment() -> [*]mut u8 {
 fn reject_array_to_slice_assignment() -> []mut u8 {
     var buf: [4]u8 = uninit;
     var xs: []mut u8 = uninit;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
     // EXPECT_ERROR: E_ARRAY_TO_POINTER_DECAY
     xs = buf;
     return xs;

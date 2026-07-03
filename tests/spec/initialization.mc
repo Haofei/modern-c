@@ -12,6 +12,10 @@ extern struct Node {
     value: u32,
 }
 
+struct Header {
+    len: u32,
+}
+
 fn accept_initialized_local() -> u32 {
     var x: u32 = 1;
     return x;
@@ -116,11 +120,42 @@ fn accept_defer_reads_var_assigned_on_every_exit_edge() -> u32 {
     return x;
 }
 
-// Aggregates are filled element/field-at-a-time, which whole-variable definite-init
-// does not track; reading them after `uninit` stays accepted (unspecified, not UB).
-fn accept_read_materialized_uninit_byte() -> u8 {
+// Aggregates initialized with `uninit` are pending until whole assignment or
+// intentional storage use. Direct element/member/value reads before that are rejected.
+fn reject_read_uninit_array_element() -> u8 {
     var buf: [4]u8 = uninit;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
     return buf[0];
+}
+
+fn reject_read_uninit_struct_member() -> u32 {
+    var h: Header = uninit;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
+    return h.len;
+}
+
+fn reject_read_uninit_struct_value() -> Header {
+    var h: Header = uninit;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
+    return h;
+}
+
+fn accept_uninit_array_storage_use_then_read() -> u8 {
+    var buf: [4]u8 = uninit;
+    buf[0] = 7;
+    return buf[0];
+}
+
+fn accept_uninit_struct_storage_use_then_read() -> u32 {
+    var h: Header = uninit;
+    h.len = 9;
+    return h.len;
+}
+
+fn accept_uninit_struct_whole_assignment_then_read() -> u32 {
+    var h: Header = uninit;
+    h = .{ .len = 11 };
+    return h.len;
 }
 
 fn reject_uninitialized_var() -> u32 {

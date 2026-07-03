@@ -2,7 +2,7 @@
 // SPEC: milestone=no-implicit-conversion
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_NO_IMPLICIT_CONVERSION,E_INTEGER_LITERAL_OUT_OF_RANGE,E_SIGNED_UNSIGNED_MIX,E_NO_IMPLICIT_INTEGER_PROMOTION,E_ARITH_DOMAIN_UNSIGNED,E_OPERATOR_OPERAND
+// SPEC: check=E_NO_IMPLICIT_CONVERSION,E_INTEGER_LITERAL_OUT_OF_RANGE,E_SIGNED_UNSIGNED_MIX,E_NO_IMPLICIT_INTEGER_PROMOTION,E_ARITH_DOMAIN_UNSIGNED,E_OPERATOR_OPERAND,E_USE_BEFORE_INIT
 
 fn accept_context_typed_integer_literal() -> u32 {
     let x: u32 = 10;
@@ -190,6 +190,7 @@ fn reject_pointer_negation(p: *mut u8) -> void {
 
 fn reject_array_negation() -> void {
     var a: [2]u8 = uninit;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
     // EXPECT_ERROR: E_OPERATOR_OPERAND
     let x = -a;
 }

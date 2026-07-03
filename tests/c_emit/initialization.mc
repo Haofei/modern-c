@@ -28,11 +28,12 @@ fn explicit_uninit_array() -> u8 {
 // NOTE: the scalar read-before-assign negative case (`var x: u32 = uninit; return x;`) is a
 // compile error (E_USE_BEFORE_INIT), so it lives in the reject corpus, not here:
 //   tests/c_emit/bad/use_before_init_scalar.mc
-// Reading an uninit *array element* below is NOT flagged — aggregates are the programmer's
-// obligation (c-ub-matrix row 7) — so it stays a valid must-compile fixture.
+// Aggregate uninit reads are rejected too; accepted fixtures must either assign the whole value
+// or use the aggregate as storage before reading.
 
-fn read_materialized_uninit_byte() -> u8 {
+fn explicit_uninit_array_storage_then_read() -> u8 {
     var buf: [4]u8 = uninit;
+    buf[0] = 9;
     return buf[0];
 }
 
