@@ -69,6 +69,7 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i
             if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
             if (env.aliases.get(name.text)) |aliased| return comptimeSizeOf(env, aliased, depth + 1);
             if (env.structs.get(name.text)) |info| return comptimeStructSize(env, info, depth);
+            if (env.overlay_unions.get(name.text)) |info| return comptimeOverlayUnionSize(env, info, depth);
             if (env.tagged_unions.get(name.text)) |info| return comptimeTaggedUnionSize(env, info, depth);
             if (env.enums.get(name.text)) |info| {
                 const repr = info.repr orelse simpleNameType("isize", ty.span);
@@ -103,6 +104,7 @@ pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?
             if (scalarLayout(name.text)) |layout| return @intCast(layout.alignment);
             if (env.aliases.get(name.text)) |aliased| return comptimeAlignOf(env, aliased, depth + 1);
             if (env.structs.get(name.text)) |info| return comptimeStructAlign(env, info, depth);
+            if (env.overlay_unions.get(name.text)) |info| return comptimeOverlayUnionAlign(env, info, depth);
             if (env.tagged_unions.get(name.text)) |info| return comptimeTaggedUnionAlign(env, info, depth);
             if (env.enums.get(name.text)) |info| {
                 const repr = info.repr orelse simpleNameType("isize", ty.span);
@@ -197,6 +199,31 @@ fn comptimeStructAlign(env: *const ReflectEnv, info: StructInfo, depth: usize) ?
     var it = info.fields.valueIterator();
     while (it.next()) |field_ty| {
         const alignment = comptimeAlignOf(env, field_ty.*, depth + 1) orelse return null;
+        if (alignment > max_align) max_align = alignment;
+    }
+    return max_align;
+}
+
+fn comptimeOverlayUnionSize(env: *const ReflectEnv, info: LayoutFieldInfo, depth: usize) ?i128 {
+    if (depth > 32) return null;
+    var max_size: i128 = 0;
+    var max_align: i128 = 1;
+    for (info.ordered) |field| {
+        const size = comptimeSizeOf(env, field.ty, depth + 1) orelse return null;
+        const alignment = comptimeAlignOf(env, field.ty, depth + 1) orelse return null;
+        if (size < 0 or alignment <= 0) return null;
+        if (size > max_size) max_size = size;
+        if (alignment > max_align) max_align = alignment;
+    }
+    return alignForward(max_size, max_align);
+}
+
+fn comptimeOverlayUnionAlign(env: *const ReflectEnv, info: LayoutFieldInfo, depth: usize) ?i128 {
+    if (depth > 32) return null;
+    var max_align: i128 = 1;
+    for (info.ordered) |field| {
+        const alignment = comptimeAlignOf(env, field.ty, depth + 1) orelse return null;
+        if (alignment <= 0) return null;
         if (alignment > max_align) max_align = alignment;
     }
     return max_align;
