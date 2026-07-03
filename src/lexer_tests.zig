@@ -20,6 +20,18 @@ test "lexer recognizes checked arithmetic snippet" {
     try std.testing.expectEqual(token.Kind.eof, lx.next().kind);
 }
 
+test "lexer skips UTF-8 BOM at start of file" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bom.mc", "\xEF\xBB\xBFlet z = 1;");
+    defer reporter.deinit();
+    var lx = Lexer.init(reporter.source, &reporter);
+
+    const first = lx.next();
+    try std.testing.expectEqual(token.Kind.kw_let, first.kind);
+    try std.testing.expectEqual(@as(usize, 1), first.span.line);
+    try std.testing.expectEqual(@as(usize, 1), first.span.column);
+    try std.testing.expect(!reporter.has_errors);
+}
+
 test "lexer recognizes MC literal and operator forms" {
     const source =
         \\#[unsafe_contract(no_overflow)]

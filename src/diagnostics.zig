@@ -18,10 +18,22 @@ pub const Diagnostic = struct {
     message: []const u8,
 };
 
+pub const FileBoundary = struct {
+    start: usize,
+    path: []const u8,
+};
+
+pub const Location = struct {
+    path: []const u8,
+    line: usize,
+    column: usize,
+};
+
 pub const Reporter = struct {
     allocator: std.mem.Allocator,
     path: []const u8,
     source: []const u8,
+    file_boundaries: ?[]const FileBoundary = null,
     diagnostics: std.ArrayList(Diagnostic),
     has_errors: bool = false,
 
@@ -68,14 +80,42 @@ pub const Reporter = struct {
                 .error_ => "error",
                 .warning => "warning",
             };
+            const loc = self.location(diag.span);
             std.debug.print("{s}:{d}:{d}: {s}: {s}\n", .{
-                self.path,
-                diag.span.line,
-                diag.span.column,
+                loc.path,
+                loc.line,
+                loc.column,
                 severity,
                 diag.message,
             });
         }
+    }
+
+    pub fn location(self: *const Reporter, span: Span) Location {
+        const boundaries = self.file_boundaries orelse return .{ .path = self.path, .line = span.line, .column = span.column };
+        if (boundaries.len == 0) return .{ .path = self.path, .line = span.line, .column = span.column };
+
+        var boundary = boundaries[0];
+        for (boundaries[1..]) |candidate| {
+            if (candidate.start > span.offset) break;
+            boundary = candidate;
+        }
+        if (span.offset < boundary.start or boundary.start > self.source.len) {
+            return .{ .path = self.path, .line = span.line, .column = span.column };
+        }
+
+        var line: usize = 1;
+        var column: usize = 1;
+        const end = @min(span.offset, self.source.len);
+        for (self.source[boundary.start..end]) |byte| {
+            if (byte == '\n') {
+                line += 1;
+                column = 1;
+            } else {
+                column += 1;
+            }
+        }
+        return .{ .path = boundary.path, .line = line, .column = column };
     }
 };
 
@@ -88,4 +128,23 @@ test "Reporter errors fail closed when diagnostic allocation fails" {
 
     try std.testing.expect(reporter.has_errors);
     try std.testing.expectEqual(@as(usize, 0), reporter.diagnostics.items.len);
+}
+
+test "Reporter maps flattened import offsets back to source file locations" {
+    const root_source = "fn root() -> void {}\n";
+    const imported_source = "fn imported() -> void {\n    missing;\n}\n";
+    const source = root_source ++ imported_source;
+    var reporter = Reporter.init(std.testing.allocator, "root.mc", source);
+    defer reporter.deinit();
+    const boundaries = [_]FileBoundary{
+        .{ .start = 0, .path = "root.mc" },
+        .{ .start = root_source.len, .path = "lib.mc" },
+    };
+    reporter.file_boundaries = &boundaries;
+
+    const offset = std.mem.indexOf(u8, source, "missing").?;
+    const loc = reporter.location(.{ .offset = offset, .len = "missing".len, .line = 3, .column = 5 });
+    try std.testing.expectEqualStrings("lib.mc", loc.path);
+    try std.testing.expectEqual(@as(usize, 2), loc.line);
+    try std.testing.expectEqual(@as(usize, 5), loc.column);
 }

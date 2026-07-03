@@ -337,6 +337,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("std-test"));
     // import-test exercises the module system end-to-end (needs clang).
     m0_step.dependOn(ctx.cmd("import-test"));
+    // diagnostics-test locks down import-aware file/line rendering and clean CLI failures.
+    m0_step.dependOn(ctx.cmd("diagnostics-test"));
     // mono-test exercises comptime-parameter monomorphization (needs clang).
     m0_step.dependOn(ctx.cmd("mono-test"));
     // reflect-test validates the comptime layout model against the C ABI.

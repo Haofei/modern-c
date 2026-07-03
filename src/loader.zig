@@ -29,6 +29,8 @@ pub const LoadError = error{ImportNotFound} || std.mem.Allocator.Error;
 
 const ImportRef = struct {
     path: []const u8, // resolved path, owned by the arena
+    requested: []const u8,
+    span: diagnostics.Span,
     start: usize,
     end: usize,
 };
@@ -39,10 +41,7 @@ const ImportRef = struct {
 // origin file by taking the last boundary whose `start <= span.offset`. The orphan rule in
 // sema uses this to compare the defining file of an `opaque struct` against the file of a
 // peer `impl` accessor, so a cross-file `impl` can no longer forge access to private fields.
-pub const FileBoundary = struct {
-    start: usize,
-    path: []const u8, // owned by the caller's allocator
-};
+pub const FileBoundary = diagnostics.FileBoundary;
 
 // The virtual arch directory: an `import "kernel/arch/active/<x>"` is rewritten to
 // `import "kernel/arch/<arch>/<x>"` where <arch> is the `--arch` selection (default
@@ -85,6 +84,19 @@ pub fn loadCombinedSourceWithBoundaries(
     arch: ?[]const u8,
     platform: ?[]const u8,
 ) LoadError![]u8 {
+    return loadCombinedSourceWithBoundariesReport(allocator, io, root_path, root_source, boundaries, arch, platform, null);
+}
+
+pub fn loadCombinedSourceWithBoundariesReport(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    root_path: []const u8,
+    root_source: []const u8,
+    boundaries: ?*std.ArrayList(FileBoundary),
+    arch: ?[]const u8,
+    platform: ?[]const u8,
+    reporter: ?*diagnostics.Reporter,
+) LoadError![]u8 {
     var visited = std.StringHashMap(void).init(allocator);
     defer {
         var it = visited.keyIterator();
@@ -95,7 +107,7 @@ pub fn loadCombinedSourceWithBoundaries(
     errdefer out.deinit(allocator);
     const canon_root = std.fs.path.resolve(allocator, &.{root_path}) catch try allocator.dupe(u8, root_path);
     defer allocator.free(canon_root);
-    try expand(allocator, io, canon_root, root_source, &visited, &out, boundaries, arch orelse default_arch, platform orelse default_platform);
+    try expand(allocator, io, canon_root, root_source, &visited, &out, boundaries, arch orelse default_arch, platform orelse default_platform, reporter);
     return out.toOwnedSlice(allocator);
 }
 
@@ -109,12 +121,14 @@ fn expand(
     boundaries: ?*std.ArrayList(FileBoundary),
     arch: []const u8,
     platform: []const u8,
+    reporter: ?*diagnostics.Reporter,
 ) LoadError!void {
     if (visited.contains(path)) return;
     try visited.put(try allocator.dupe(u8, path), {});
 
     // Record where this file's text starts in the combined source (before appending it).
-    if (boundaries) |b| try b.append(allocator, .{ .start = out.items.len, .path = try allocator.dupe(u8, path) });
+    const file_start = out.items.len;
+    if (boundaries) |b| try b.append(allocator, .{ .start = file_start, .path = try allocator.dupe(u8, path) });
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -138,10 +152,19 @@ fn expand(
     for (imports) |imp| {
         if (visited.contains(imp.path)) continue;
         const imp_source = std.Io.Dir.cwd().readFileAlloc(io, imp.path, allocator, .limited(64 * 1024 * 1024)) catch {
+            if (reporter) |r| {
+                r.err(.{
+                    .offset = file_start + imp.span.offset,
+                    .len = imp.span.len,
+                    .line = imp.span.line,
+                    .column = imp.span.column,
+                }, "E_IMPORT_NOT_FOUND: cannot find import \"{s}\" (resolved candidate: {s})", .{ imp.requested, imp.path });
+                continue;
+            }
             return error.ImportNotFound;
         };
         defer allocator.free(imp_source);
-        try expand(allocator, io, imp.path, imp_source, visited, out, boundaries, arch, platform);
+        try expand(allocator, io, imp.path, imp_source, visited, out, boundaries, arch, platform, reporter);
     }
 }
 
@@ -178,6 +201,8 @@ fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: [
                 const resolved = try resolveImportPath(arena, io, path, rel);
                 try refs.append(arena, .{
                     .path = resolved,
+                    .requested = rel,
+                    .span = t.span,
                     .start = t.span.offset,
                     .end = semi.span.offset + semi.span.len,
                 });

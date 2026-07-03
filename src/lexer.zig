@@ -11,7 +11,9 @@ pub const Lexer = struct {
     reporter: *diagnostics.Reporter,
 
     pub fn init(source: []const u8, reporter: *diagnostics.Reporter) Lexer {
-        return .{ .source = source, .reporter = reporter };
+        var lexer = Lexer{ .source = source, .reporter = reporter };
+        if (std.mem.startsWith(u8, source, "\xEF\xBB\xBF")) lexer.index = 3;
+        return lexer;
     }
 
     pub fn next(self: *Lexer) token.Token {

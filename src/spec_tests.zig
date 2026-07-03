@@ -344,6 +344,7 @@ test "tests/spec fixtures produce declared semantic error codes" {
         defer spec.deinit(allocator, imported);
 
         var reporter = diagnostics.Reporter.init(allocator, path, spec.source);
+        reporter.file_boundaries = spec.boundaries;
         defer reporter.deinit();
 
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -409,6 +410,7 @@ test "tests/spec inline EXPECT_ERROR comments match diagnostic lines" {
         defer spec.deinit(allocator, imported);
 
         var reporter = diagnostics.Reporter.init(allocator, path, spec.source);
+        reporter.file_boundaries = spec.boundaries;
         defer reporter.deinit();
 
         var arena = std.heap.ArenaAllocator.init(allocator);

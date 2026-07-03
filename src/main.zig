@@ -142,8 +142,16 @@ fn runMain(init: std.process.Init) !void {
         for (boundaries.items) |b| allocator.free(b.path);
         boundaries.deinit(allocator);
     }
-    const source = try loader.loadCombinedSourceWithBoundaries(allocator, init.io, path, root_source, &boundaries, options.arch_flag, options.platform_flag);
+    var load_diag = diagnostics.Reporter.init(allocator, path, root_source);
+    defer load_diag.deinit();
+    const source = try loader.loadCombinedSourceWithBoundariesReport(allocator, init.io, path, root_source, &boundaries, options.arch_flag, options.platform_flag, &load_diag);
     defer allocator.free(source);
+    load_diag.source = source;
+    load_diag.file_boundaries = boundaries.items;
+    if (load_diag.has_errors) {
+        load_diag.render();
+        return error.ImportNotFound;
+    }
     combined_boundaries = boundaries.items;
     defer combined_boundaries = null;
 
@@ -189,6 +197,7 @@ fn runMain(init: std.process.Init) !void {
 fn isExpectedCliFailure(err: anyerror) bool {
     return switch (err) {
         error.InvalidArgs,
+        error.ImportNotFound,
         error.FmtCheckFailed,
         error.LexFailed,
         error.ParseFailed,
@@ -212,7 +221,7 @@ fn isExpectedCliFailure(err: anyerror) bool {
 }
 
 fn runLowerHir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -234,7 +243,7 @@ fn runLowerHir(allocator: std.mem.Allocator, path: []const u8, source: []const u
 }
 
 fn runVerifyHir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -256,7 +265,7 @@ fn runVerifyHir(allocator: std.mem.Allocator, path: []const u8, source: []const 
 }
 
 fn runLowerMir(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -278,7 +287,7 @@ fn runLowerMir(allocator: std.mem.Allocator, path: []const u8, source: []const u
 }
 
 fn runVerify(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -314,6 +323,12 @@ fn failUsage() !void {
     return error.InvalidArgs;
 }
 
+fn initReporter(allocator: std.mem.Allocator, path: []const u8, source: []const u8) diagnostics.Reporter {
+    var reporter = diagnostics.Reporter.init(allocator, path, source);
+    reporter.file_boundaries = combined_boundaries;
+    return reporter;
+}
+
 // `mcc fmt <file>` prints the canonically-formatted source to stdout. `mcc fmt --check <file>`
 // prints nothing and exits nonzero if the file is not already formatted (for CI / editors).
 fn runFmt(allocator: std.mem.Allocator, path: []const u8, source: []const u8, check: bool) !void {
@@ -333,7 +348,7 @@ fn runFmt(allocator: std.mem.Allocator, path: []const u8, source: []const u8, ch
 // server. Best-effort: it needs only a parse (not sema), and on a hard parse failure it still
 // prints a valid empty index so the client always gets parseable JSON.
 fn runSymbols(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -353,7 +368,7 @@ fn runSymbols(allocator: std.mem.Allocator, path: []const u8, source: []const u8
 }
 
 fn runLex(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var lx = lexer.Lexer.init(source, &diag);
@@ -379,7 +394,7 @@ fn runLex(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !v
 }
 
 fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -412,7 +427,7 @@ fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
 // language-side discovery hook — no codegen change, so a `#[test]` function lowers like
 // any other on both backends.
 fn runListTests(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -451,7 +466,7 @@ fn runListTests(allocator: std.mem.Allocator, path: []const u8, source: []const 
 }
 
 fn runFacts(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -473,7 +488,7 @@ fn runFacts(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
 }
 
 fn runLowerIr(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -495,7 +510,7 @@ fn runLowerIr(allocator: std.mem.Allocator, path: []const u8, source: []const u8
 }
 
 fn runTrap(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -534,7 +549,7 @@ fn runTrap(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !
 }
 
 fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -557,7 +572,7 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
 
 fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool) !void {
     const optimize = checks.optimize;
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -595,7 +610,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
 }
 
 fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -633,7 +648,7 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
 
 fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch) !void {
     const optimize = checks.optimize;
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -674,7 +689,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
 // field offset) for the comma-separated structs in `--structs=`. A C runtime that hand-mirrors
 // one of these structs includes the header, so any MC↔C layout drift becomes a compile error.
 fn runEmitLayout(allocator: std.mem.Allocator, path: []const u8, source: []const u8, structs_csv: []const u8) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -730,7 +745,7 @@ fn runEmitLayout(allocator: std.mem.Allocator, path: []const u8, source: []const
 // mirror, so the MC struct becomes the single source of truth and MC↔C drift is impossible (there
 // is no second declaration to diverge).
 fn runEmitCStruct(allocator: std.mem.Allocator, path: []const u8, source: []const u8, structs_csv: []const u8) !void {
-    var diag = diagnostics.Reporter.init(allocator, path, source);
+    var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);

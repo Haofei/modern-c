@@ -42,6 +42,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "import-test", "Compile an import-merged module (sibling + std), link, and run it", &.{ "bash", "tools/toolchain/import-test.sh", "zig-out/bin/mcc" });
 
+    _ = h.addScriptTest(ctx, "diagnostics-test", "Validate import-aware diagnostic locations, missing-import errors, and UTF-8 BOM handling", &.{ "bash", "tools/toolchain/diagnostics-test.sh", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "mono-test", "Compile a comptime-param type-generic module, link, and run the specialization", &.{ "bash", "tools/toolchain/mono-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "reflect-test", "Validate comptime sizeof/alignof folding against clang's C ABI", &.{ "bash", "tools/toolchain/reflect-test.sh", "zig-out/bin/mcc" });
