@@ -1,12 +1,12 @@
 //! Lowering-coverage instrumentation (hardening item V3.2).
 //!
-//! This module provides a *function-level* coverage tracker for the two backends
-//! (`lower_c.zig`, `lower_llvm.zig`). The Zig toolchain in the dev image ships
+//! This module provides a *function-level* coverage tracker for the split C and LLVM
+//! backend modules (`lower_c*.zig`, `lower_llvm*.zig`). The Zig toolchain in the dev image ships
 //! `llvm-cov`/`llvm-profdata` but Zig 0.16's self-hosted compiler exposes no
 //! `-fprofile-instr-generate`/source-coverage flag for *its own* output, and `kcov`
 //! is not installed — so true line/branch coverage of the `mcc` binary is not
 //! available. Instead, `tools/toolchain/lowering-coverage.sh` injects a
-//! `lower_cov.hit("<fn>")` probe at the top of every method in the two backend
+//! `lower_cov.hit("<fn>")` probe at the top of every function in those backend
 //! files, builds that instrumented `mcc`, and runs it over the differential corpus.
 //! The set of probed-but-never-fired functions is the list of UNCOVERED lowering
 //! branches.

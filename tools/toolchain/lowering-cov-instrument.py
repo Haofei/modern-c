@@ -17,10 +17,9 @@ import re
 import sys
 import os
 
-# A function-definition line: optional indentation, optional `pub `, `fn name(`,
-# and ending in `{` (whole signature on one line — verified true for both backend
-# files). `inline fn` / `export fn` are also handled via the optional qualifier.
-FN_RE = re.compile(r'^(?P<indent>\s*)(?:pub\s+)?(?:inline\s+|export\s+)?fn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(.*\{\s*$')
+# A function-definition start: optional indentation, optional `pub `, `fn name(`.
+# The opening `{` may be on the same line or a later signature line.
+FN_START_RE = re.compile(r'^(?P<indent>\s*)(?:pub\s+)?(?:inline\s+|export\s+)?fn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(')
 
 def main():
     path = sys.argv[1]
@@ -34,23 +33,31 @@ def main():
 
     out = []
     labels = []
-    # Prepend the import. Putting it on its own first line keeps line numbers of the
-    # ORIGINAL body shifted by exactly 1, which we account for in the label.
+    start = 0
+    while start < len(lines) and lines[start].startswith('//!'):
+        out.append(lines[start])
+        start += 1
+    if start > 0 and start < len(lines) and lines[start].strip() == '':
+        out.append(lines[start])
+        start += 1
+    # Insert after any leading container-doc block; `//!` comments must remain at
+    # the top of the file in Zig.
     out.append('const lower_cov = @import("lower_cov.zig");\n')
-    for idx, ln in enumerate(lines):
+    pending = None
+    for idx, ln in enumerate(lines[start:], start):
         out.append(ln)
-        m = FN_RE.match(ln)
-        if not m:
+        if pending is None:
+            m = FN_START_RE.match(ln)
+            if not m:
+                continue
+            pending = (m.group('name'), m.group('indent'), idx + 1)
+        name, indent, lineno = pending
+        if not re.search(r'\{\s*$', ln):
             continue
-        # Skip degenerate one-liners like `fn f() void {}` (open+close same line):
-        # a probe after `{` would land before `}` which is fine, but these are rare
-        # and we still handle them — the insertion is valid Zig either way.
-        name = m.group('name')
-        indent = m.group('indent')
-        lineno = idx + 1  # 1-based line number in the ORIGINAL file
         label = f"{base}:{name}:{lineno}"
         labels.append(label)
         out.append(f'{indent}    lower_cov.hit("{label}");\n')
+        pending = None
 
     with open(path, 'w') as f:
         f.writelines(out)

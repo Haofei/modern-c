@@ -7,10 +7,10 @@ const h = @import("helpers.zig");
 pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "sanitize", "Run the host-driver corpus under ASan + UBSan over the emitted C", &.{ "bash", "tools/toolchain/sanitize-test.sh", "zig-out/bin/mcc" });
 
-    // V3.2: function-level lowering-coverage report. The script instruments the two
+    // V3.2: function-level lowering-coverage report. The script instruments the split
     // backend files, builds an instrumented mcc itself, and restores the sources on
     // exit — so it deliberately does NOT depend on the normal install step.
-    _ = h.addScriptTestOpts(ctx, "lowering-coverage", "Report which lower_c.zig/lower_llvm.zig functions the differential corpus never exercises (V3.2)", &.{ "bash", "tools/toolchain/lowering-coverage.sh" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "lowering-coverage", "Report and ratchet which split lower_c*/lower_llvm* functions the differential corpus never exercises (V3.2)", &.{ "bash", "tools/toolchain/lowering-coverage.sh", "--check" }, .{ .install = false });
 
     // The three source-level security audits (unsafe boundary / double-fetch / taint) are
     // now one parameterized tool, tools/toolchain/mc-audit.sh, invoked with `--mode`. Pure

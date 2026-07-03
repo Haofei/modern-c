@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Lowering-coverage report (hardening item V3.2).
 #
-# Measures which functions of the two backends — src/lower_c.zig and src/lower_llvm.zig —
-# the differential corpus actually exercises, and reports the UNCOVERED ones. Divergence-
+# Measures which functions of the split C/LLVM backend modules (`src/lower_c*.zig`
+# and `src/lower_llvm*.zig`, excluding tests/instrumentation) the differential
+# corpus actually exercises, and reports the UNCOVERED ones. Divergence-
 # prone lowering paths that no fixture or fuzz program ever hits are exactly where
 # miscompiles hide (the overlay-read miscompile lived in such an uncovered branch).
 #
@@ -11,7 +12,7 @@
 # own output, so true llvm-cov line/branch coverage of the `mcc` binary is unavailable.
 # Instead this script does FUNCTION-LEVEL coverage by source instrumentation:
 #   1. inject a `lower_cov.hit("<file>:<fn>:<line>")` probe at the top of every function
-#      in the two backend files (tools/toolchain/lowering-cov-instrument.py),
+#      in each production backend module (tools/toolchain/lowering-cov-instrument.py),
 #   2. build that instrumented `mcc`,
 #   3. run it (emit-c AND emit-llvm) over (a) every diff-backend host fixture and
 #      (b) a batch of mcfuzz-generated programs, each writing its fired-function set to a
@@ -21,7 +22,7 @@
 # branch coverage but is precisely the granularity that surfaces "this whole lowering
 # family is never exercised" — the class V3.2 targets.
 #
-# The two backend files are restored from backup on exit (trap), so this script leaves the
+# The backend files are restored from backup on exit (trap), so this script leaves the
 # tree clean. Output: a human report on stdout; the raw uncovered lists in $OUTDIR.
 set -euo pipefail
 
@@ -30,25 +31,69 @@ cd "$HERE"
 
 FUZZ_N="${FUZZ_N:-60}"          # number of mcfuzz programs to fold into the corpus
 OUTDIR="${OUTDIR:-zig-out/lowering-cov}"
+BASELINE="${LOWERING_COV_BASELINE:-tools/toolchain/lowering-coverage-baseline.tsv}"
 MCC="zig-out/bin/mcc"
-LC="src/lower_c.zig"
-LL="src/lower_llvm.zig"
+
+check_mode=0
+if [ "${1:-}" = "--check" ]; then
+    check_mode=1
+fi
 
 rm -rf "$OUTDIR"; mkdir -p "$OUTDIR/cov" "$OUTDIR/progs"
 
+collect_backend_files() {
+    local prefix="$1"
+    find src -maxdepth 1 -type f -name "${prefix}*.zig" \
+        ! -name "${prefix}_tests.zig" \
+        ! -name "lower_cov.zig" \
+        | sort
+}
+
+backend_kind() {
+    case "$1" in
+        src/lower_c*) echo "lower_c" ;;
+        src/lower_llvm*) echo "lower_llvm" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+backup_files=""
+restore() {
+    if [ -n "$backup_files" ]; then
+        printf '%s\n' "$backup_files" | while IFS='	' read -r src bak; do
+            [ -n "$src" ] || continue
+            cp "$bak" "$src"
+            rm -f "$bak"
+        done
+    fi
+}
+
 # --- 1. instrument (with restore-on-exit) ------------------------------------------------
-LC_BAK="$(mktemp)"; LL_BAK="$(mktemp)"
-cp "$LC" "$LC_BAK"; cp "$LL" "$LL_BAK"
-restore() { cp "$LC_BAK" "$LC"; cp "$LL_BAK" "$LL"; rm -f "$LC_BAK" "$LL_BAK"; }
 trap restore EXIT
 
-python3 tools/toolchain/lowering-cov-instrument.py "$LC" > "$OUTDIR/universe_lower_c.txt"
-python3 tools/toolchain/lowering-cov-instrument.py "$LL" > "$OUTDIR/universe_lower_llvm.txt"
-echo "instrumented: $(wc -l < "$OUTDIR/universe_lower_c.txt") fns in lower_c.zig, $(wc -l < "$OUTDIR/universe_lower_llvm.txt") in lower_llvm.zig"
+: > "$OUTDIR/universe_lower_c.txt"
+: > "$OUTDIR/universe_lower_llvm.txt"
+instrumented_files=0
+lower_c_file_count="$(collect_backend_files "lower_c" | wc -l | tr -d ' ')"
+lower_llvm_file_count="$(collect_backend_files "lower_llvm" | wc -l | tr -d ' ')"
+for src in $(collect_backend_files "lower_c") $(collect_backend_files "lower_llvm"); do
+    bak="$(mktemp)"
+    cp "$src" "$bak"
+    backup_files="${backup_files}${src}	${bak}
+"
+    kind="$(backend_kind "$src")"
+    python3 tools/toolchain/lowering-cov-instrument.py "$src" >> "$OUTDIR/universe_${kind}.txt"
+    instrumented_files=$((instrumented_files + 1))
+done
+echo "instrumented: $(wc -l < "$OUTDIR/universe_lower_c.txt") fns across $lower_c_file_count C backend files, $(wc -l < "$OUTDIR/universe_lower_llvm.txt") across $lower_llvm_file_count LLVM backend files"
 
 # --- 2. build the instrumented mcc -------------------------------------------------------
 echo "building instrumented mcc..."
-zig build >/dev/null 2>&1 || { echo "FAIL: instrumented build failed"; exit 1; }
+if ! zig build > "$OUTDIR/build.log" 2>&1; then
+    echo "FAIL: instrumented build failed"
+    tail -80 "$OUTDIR/build.log"
+    exit 1
+fi
 
 # --- helper: run both backends over one .mc, accumulating coverage -----------------------
 i=0
@@ -108,16 +153,50 @@ echo
 echo "================= LOWERING-COVERAGE REPORT (function-level) ================="
 echo "corpus: $nfix host fixtures + $nfuzz mcfuzz programs, each through emit-c (kernel+hosted) and emit-llvm"
 echo
-printf "  lower_c.zig    : %d/%d functions covered (%s)  — %d UNCOVERED\n" "$cov_c" "$uni_c" "$(pct "$cov_c" "$uni_c")" "$unc_c"
-printf "  lower_llvm.zig : %d/%d functions covered (%s)  — %d UNCOVERED\n" "$cov_l" "$uni_l" "$(pct "$cov_l" "$uni_l")" "$unc_l"
+printf "  lower_c*.zig    : %d/%d functions covered (%s)  — %d UNCOVERED\n" "$cov_c" "$uni_c" "$(pct "$cov_c" "$uni_c")" "$unc_c"
+printf "  lower_llvm*.zig : %d/%d functions covered (%s)  — %d UNCOVERED\n" "$cov_l" "$uni_l" "$(pct "$cov_l" "$uni_l")" "$unc_l"
 echo
 
 # Notable uncovered: group by function base-name (strip :line) and show families.
-echo "--- NOTABLE UNCOVERED lower_c.zig branches (function : line) ---"
-sed 's/^lower_c.zig://' "$OUTDIR/uncovered_lower_c.txt" | sort | head -40
+echo "--- NOTABLE UNCOVERED lower_c*.zig branches (file:function:line) ---"
+sort "$OUTDIR/uncovered_lower_c.txt" > "$OUTDIR/uncovered_lower_c.sorted"
+sed -n '1,40p' "$OUTDIR/uncovered_lower_c.sorted"
 echo "... ($unc_c total; full list: $OUTDIR/uncovered_lower_c.txt)"
 echo
-echo "--- NOTABLE UNCOVERED lower_llvm.zig branches (function : line) ---"
-sed 's/^lower_llvm.zig://' "$OUTDIR/uncovered_lower_llvm.txt" | sort | head -40
+echo "--- NOTABLE UNCOVERED lower_llvm*.zig branches (file:function:line) ---"
+sort "$OUTDIR/uncovered_lower_llvm.txt" > "$OUTDIR/uncovered_lower_llvm.sorted"
+sed -n '1,40p' "$OUTDIR/uncovered_lower_llvm.sorted"
 echo "... ($unc_l total; full list: $OUTDIR/uncovered_lower_llvm.txt)"
 echo "============================================================================"
+
+if [ "$check_mode" -eq 1 ]; then
+    if [ ! -f "$BASELINE" ]; then
+        echo "FAIL: lowering-coverage baseline not found: $BASELINE"
+        exit 1
+    fi
+    row_c="$(awk -F'\t' '$1 == "lower_c" { print $0 }' "$BASELINE")"
+    row_l="$(awk -F'\t' '$1 == "lower_llvm" { print $0 }' "$BASELINE")"
+    if [ -z "$row_c" ] || [ -z "$row_l" ]; then
+        echo "FAIL: lowering-coverage baseline must contain lower_c and lower_llvm rows"
+        exit 1
+    fi
+    base_c_files="$(printf '%s\n' "$row_c" | awk -F'\t' '{ print $2 }')"
+    base_c_universe="$(printf '%s\n' "$row_c" | awk -F'\t' '{ print $3 }')"
+    max_unc_c="$(printf '%s\n' "$row_c" | awk -F'\t' '{ print $4 }')"
+    base_l_files="$(printf '%s\n' "$row_l" | awk -F'\t' '{ print $2 }')"
+    base_l_universe="$(printf '%s\n' "$row_l" | awk -F'\t' '{ print $3 }')"
+    max_unc_l="$(printf '%s\n' "$row_l" | awk -F'\t' '{ print $4 }')"
+    if [ "$lower_c_file_count" -lt "$base_c_files" ] || [ "$lower_llvm_file_count" -lt "$base_l_files" ]; then
+        echo "FAIL: lowering-coverage source set shrank (lower_c files=$lower_c_file_count min=$base_c_files; lower_llvm files=$lower_llvm_file_count min=$base_l_files)"
+        exit 1
+    fi
+    if [ "$uni_c" -lt "$base_c_universe" ] || [ "$uni_l" -lt "$base_l_universe" ]; then
+        echo "FAIL: lowering-coverage universe shrank (lower_c labels=$uni_c min=$base_c_universe; lower_llvm labels=$uni_l min=$base_l_universe)"
+        exit 1
+    fi
+    if [ "$unc_c" -gt "$max_unc_c" ] || [ "$unc_l" -gt "$max_unc_l" ]; then
+        echo "FAIL: lowering coverage regressed (lower_c uncovered=$unc_c max=$max_unc_c; lower_llvm uncovered=$unc_l max=$max_unc_l)"
+        exit 1
+    fi
+    echo "PASS: lowering-coverage ratchet — uncovered counts did not grow"
+fi
