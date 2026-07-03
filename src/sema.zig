@@ -22,6 +22,7 @@ const sema_type = @import("sema_type.zig");
 pub const Context = sema_model.Context;
 pub const MoveSlot = sema_model.MoveSlot;
 pub const TypeClass = sema_model.TypeClass;
+const LoopLabelNode = sema_model.LoopLabelNode;
 const MmioStruct = sema_model.MmioStruct;
 const MmioFieldInfo = sema_model.MmioFieldInfo;
 const StructInfo = sema_model.StructInfo;
@@ -1863,6 +1864,14 @@ pub const Checker = struct {
                 }
                 var next = ctx;
                 next.loop_depth += 1;
+                // G7: push this loop's label (if any) so labeled break/continue
+                // inside the body can resolve it. `node` lives on this frame for
+                // the duration of the body check below.
+                var node: LoopLabelNode = undefined;
+                if (loop.loop_label) |lbl| {
+                    node = .{ .label = lbl.text, .parent = ctx.loop_labels };
+                    next.loop_labels = &node;
+                }
                 if (loop.kind == .@"for") {
                     if (ctx.scope) |scope| {
                         self.checkForBody(loop, next, scope);
@@ -1981,20 +1990,28 @@ pub const Checker = struct {
                     self.errorCode(stmt.span, "E_RETURN_REQUIRES_VALUE", "function return type requires a value");
                 }
             },
-            .@"break" => {
+            .@"break" => |target| {
                 if (ctx.in_comptime) {
                     self.errorCode(stmt.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot alter runtime control flow");
                 }
                 if (ctx.loop_depth == 0) {
                     self.errorCode(stmt.span, "E_BREAK_OUTSIDE_LOOP", "break is valid only inside a loop");
+                } else if (target) |lbl| {
+                    if (!LoopLabelNode.contains(ctx.loop_labels, lbl.text)) {
+                        self.errorCode(lbl.span, "E_UNKNOWN_LOOP_LABEL", "break targets a loop label that is not in scope");
+                    }
                 }
             },
-            .@"continue" => {
+            .@"continue" => |target| {
                 if (ctx.in_comptime) {
                     self.errorCode(stmt.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot alter runtime control flow");
                 }
                 if (ctx.loop_depth == 0) {
                     self.errorCode(stmt.span, "E_CONTINUE_OUTSIDE_LOOP", "continue is valid only inside a loop");
+                } else if (target) |lbl| {
+                    if (!LoopLabelNode.contains(ctx.loop_labels, lbl.text)) {
+                        self.errorCode(lbl.span, "E_UNKNOWN_LOOP_LABEL", "continue targets a loop label that is not in scope");
+                    }
                 }
             },
             .@"defer" => |expr| {

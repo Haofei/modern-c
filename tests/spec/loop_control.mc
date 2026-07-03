@@ -2,7 +2,7 @@
 // SPEC: milestone=loop-control-flow
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_BREAK_OUTSIDE_LOOP,E_CONTINUE_OUTSIDE_LOOP,E_RETURN_TYPE_MISMATCH,E_FOR_BASE_NOT_ARRAY_OR_SLICE
+// SPEC: check=E_BREAK_OUTSIDE_LOOP,E_CONTINUE_OUTSIDE_LOOP,E_RETURN_TYPE_MISMATCH,E_FOR_BASE_NOT_ARRAY_OR_SLICE,E_UNKNOWN_LOOP_LABEL
 
 extern fn make_u32_slice() -> []const u32;
 
@@ -80,4 +80,34 @@ fn reject_break_outside_loop() -> void {
 fn reject_continue_outside_loop() -> void {
     // EXPECT_ERROR: E_CONTINUE_OUTSIDE_LOOP
     continue;
+}
+
+// G7: a named enclosing loop is a valid `break :L` / `continue :L` target.
+fn accept_labeled_break_continue(flag: bool) -> void {
+    outer: while flag {
+        while flag {
+            break :outer;
+        }
+        while flag {
+            continue :outer;
+        }
+    }
+}
+
+// G7: a labeled break to a loop that is not in scope is rejected.
+fn reject_unknown_break_label(flag: bool) -> void {
+    while flag {
+        // EXPECT_ERROR: E_UNKNOWN_LOOP_LABEL
+        break :nope;
+    }
+}
+
+// G7: likewise for a labeled continue naming an unknown loop.
+fn reject_unknown_continue_label(flag: bool) -> void {
+    outer2: while flag {
+        while flag {
+            // EXPECT_ERROR: E_UNKNOWN_LOOP_LABEL
+            continue :missing;
+        }
+    }
 }

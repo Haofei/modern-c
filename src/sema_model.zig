@@ -24,6 +24,10 @@ pub const Context = struct {
     return_ty: ?ast.TypeExpr = null,
     return_kind: TypeClass = .void,
     loop_depth: usize = 0,
+    // G7: stack of in-scope loop labels (`outer:`), innermost first, threaded on
+    // the checker's call stack (no allocation). A labeled `break :outer` /
+    // `continue :outer` resolves its target against this chain.
+    loop_labels: ?*const LoopLabelNode = null,
     unsafe_contracts: UnsafeContracts = .{},
     scope: ?*Scope = null,
     allow_mmio_register_type: bool = false,
@@ -50,6 +54,20 @@ pub const Context = struct {
     // Names of the current function's `comptime T: type` type parameters
     // (user-defined generics, section 22); valid as type names in its body.
     type_params: ?*const std.StringHashMap(void) = null,
+};
+
+// G7: one entry in the in-scope loop-label chain (see Context.loop_labels).
+pub const LoopLabelNode = struct {
+    label: []const u8,
+    parent: ?*const LoopLabelNode,
+
+    pub fn contains(self: ?*const LoopLabelNode, name: []const u8) bool {
+        var cur = self;
+        while (cur) |node| : (cur = node.parent) {
+            if (std.mem.eql(u8, node.label, name)) return true;
+        }
+        return false;
+    }
 };
 
 pub const MmioStruct = struct {

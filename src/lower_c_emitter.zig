@@ -279,6 +279,9 @@ const CEmitter = struct {
     // as labeled `goto`s so they target the loop even through an intervening
     // `switch` (a C `break` inside a `switch` would otherwise break the switch).
     loop_ids: std.ArrayList(u32) = .empty,
+    // G7: parallel to `loop_ids`; source label naming each enclosing loop (or
+    // null), used to resolve labeled `break :outer` / `continue :outer`.
+    loop_labels: std.ArrayList(?[]const u8) = .empty,
     next_loop_id: u32 = 0,
     // Active `defer` expressions for the function currently being emitted, in source
     // order (a function-scoped stack). Every exit edge — `return`, `break`, `continue`,
@@ -376,6 +379,7 @@ const CEmitter = struct {
 
     fn deinitControlFlowState(self: *CEmitter) void {
         self.loop_ids.deinit(self.allocator);
+        self.loop_labels.deinit(self.allocator);
         self.defer_stack.deinit(self.allocator);
         self.loop_defer_marks.deinit(self.allocator);
     }
@@ -1643,6 +1647,7 @@ const CEmitter = struct {
             .temp_index = &self.temp_index,
             .next_loop_id = &self.next_loop_id,
             .loop_ids = &self.loop_ids,
+            .loop_labels = &self.loop_labels,
             .loop_defer_marks = &self.loop_defer_marks,
             .emit_ctx = self,
             .emit_expr = emitExprForCall,
@@ -2640,11 +2645,11 @@ const CEmitter = struct {
             .@"return" => |maybe| {
                 try self.emitReturnStmt(maybe, locals, return_ty);
             },
-            .@"break" => {
-                try self.emitBreakStmt();
+            .@"break" => |target| {
+                try self.emitBreakStmt(target);
             },
-            .@"continue" => {
-                try self.emitContinueStmt();
+            .@"continue" => |target| {
+                try self.emitContinueStmt(target);
             },
             .expr => |expr| {
                 try self.emitExpressionStmt(expr, locals, return_ty);
@@ -2956,12 +2961,12 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
     }
 
-    fn emitBreakStmt(self: *CEmitter) anyerror!void {
-        try lower_c_flow.emitBreakStmt(self.flowEmitContext());
+    fn emitBreakStmt(self: *CEmitter, target: ?ast.Ident) anyerror!void {
+        try lower_c_flow.emitBreakStmt(self.flowEmitContext(), target);
     }
 
-    fn emitContinueStmt(self: *CEmitter) anyerror!void {
-        try lower_c_flow.emitContinueStmt(self.flowEmitContext());
+    fn emitContinueStmt(self: *CEmitter, target: ?ast.Ident) anyerror!void {
+        try lower_c_flow.emitContinueStmt(self.flowEmitContext(), target);
     }
 
     fn emitScopedBlockStmt(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {

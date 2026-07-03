@@ -1736,7 +1736,7 @@ const GenCtx = struct {
     // Append `self.state = n; continue;` (the edge terminator) to the current block.
     fn gotoState(self: *GenCtx, n: usize) Error!void {
         try setState(self.low, &self.cur, n);
-        try self.cur.append(self.arena(), .{ .span = zspan, .kind = .@"continue" });
+        try self.cur.append(self.arena(), .{ .span = zspan, .kind = .{ .@"continue" = null } });
     }
     // Finalize the current block under its state number.
     fn finishCur(self: *GenCtx) Error!void {
@@ -2005,10 +2005,10 @@ fn lowerStmtsGen(ctx: *GenCtx, items: []const ast.Stmt, succ: ?usize, brk: ?usiz
             const rcond = try rewriteParamRefs(low, bi.cond, ctx.names);
             var tb: std.ArrayList(ast.Stmt) = .empty;
             try setState(low, &tb, t_entry);
-            try tb.append(arena, .{ .span = zspan, .kind = .@"continue" });
+            try tb.append(arena, .{ .span = zspan, .kind = .{ .@"continue" = null } });
             var eb: std.ArrayList(ast.Stmt) = .empty;
             try setState(low, &eb, f_entry);
-            try eb.append(arena, .{ .span = zspan, .kind = .@"continue" });
+            try eb.append(arena, .{ .span = zspan, .kind = .{ .@"continue" = null } });
             try ctx.cur.append(arena, try ifElseBlock(arena, rcond, try tb.toOwnedSlice(arena), try eb.toOwnedSlice(arena)));
             try ctx.finishCur();
             // then arm
@@ -2040,10 +2040,10 @@ fn lowerStmtsGen(ctx: *GenCtx, items: []const ast.Stmt, succ: ?usize, brk: ?usiz
                 const rcond = try rewriteParamRefs(low, lcond, ctx.names);
                 var tb: std.ArrayList(ast.Stmt) = .empty;
                 try setState(low, &tb, body_entry);
-                try tb.append(arena, .{ .span = zspan, .kind = .@"continue" });
+                try tb.append(arena, .{ .span = zspan, .kind = .{ .@"continue" = null } });
                 var eb: std.ArrayList(ast.Stmt) = .empty;
                 try setState(low, &eb, exit);
-                try eb.append(arena, .{ .span = zspan, .kind = .@"continue" });
+                try eb.append(arena, .{ .span = zspan, .kind = .{ .@"continue" = null } });
                 try ctx.cur.append(arena, try ifElseBlock(arena, rcond, try tb.toOwnedSlice(arena), try eb.toOwnedSlice(arena)));
                 try ctx.finishCur();
             }
@@ -2097,18 +2097,20 @@ fn genRewriteStraight(ctx: *GenCtx, s: ast.Stmt, brk: ?usize, cont: ?usize) Erro
             return rewriteStmtParamRefs(low, s, ctx.names);
         },
         .@"return" => return rewriteRegionStmt(low, s, ctx.names, ctx.done_str),
-        .@"break" => {
+        .@"break" => |target| {
+            if (target != null) return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: labeled `break` in an await-bearing loop is not supported yet", .{});
             const b = brk orelse return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: `break` outside an await-bearing loop in async E3c", .{});
             var bb: std.ArrayList(ast.Stmt) = .empty;
             try setState(low, &bb, b);
-            try bb.append(arena, .{ .span = s.span, .kind = .@"continue" });
+            try bb.append(arena, .{ .span = s.span, .kind = .{ .@"continue" = null } });
             return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try bb.toOwnedSlice(arena) } } };
         },
-        .@"continue" => {
+        .@"continue" => |target| {
+            if (target != null) return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: labeled `continue` in an await-bearing loop is not supported yet", .{});
             const c = cont orelse return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: `continue` outside an await-bearing loop in async E3c", .{});
             var cb: std.ArrayList(ast.Stmt) = .empty;
             try setState(low, &cb, c);
-            try cb.append(arena, .{ .span = s.span, .kind = .@"continue" });
+            try cb.append(arena, .{ .span = s.span, .kind = .{ .@"continue" = null } });
             return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try cb.toOwnedSlice(arena) } } };
         },
         .block => |b| return .{ .span = s.span, .kind = .{ .block = try genRewriteStraightBlock(ctx, b, brk, cont) } },
@@ -2795,18 +2797,20 @@ fn rewriteLoopBodyStmtIn(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(v
     const arena = low.arena;
     switch (s.kind) {
         .@"return" => return rewriteRegionStmt(low, s, names, done_str),
-        .@"break" => {
+        .@"break" => |target| {
+            if (target != null) return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: labeled `break` in an await-bearing loop is not supported yet", .{});
             if (in_inner_loop) return s; // belongs to the inner loop
             var bb: std.ArrayList(ast.Stmt) = .empty;
             try setState(low, &bb, cont_state);
-            try bb.append(arena, .{ .span = s.span, .kind = .@"continue" });
+            try bb.append(arena, .{ .span = s.span, .kind = .{ .@"continue" = null } });
             return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try bb.toOwnedSlice(arena) } } };
         },
-        .@"continue" => {
+        .@"continue" => |target| {
+            if (target != null) return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: labeled `continue` in an await-bearing loop is not supported yet", .{});
             if (in_inner_loop) return s; // belongs to the inner loop
             var cb: std.ArrayList(ast.Stmt) = .empty;
             try setState(low, &cb, 0);
-            try cb.append(arena, .{ .span = s.span, .kind = .@"continue" });
+            try cb.append(arena, .{ .span = s.span, .kind = .{ .@"continue" = null } });
             return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try cb.toOwnedSlice(arena) } } };
         },
         .block => |b| return .{ .span = s.span, .kind = .{ .block = try rewriteLoopBodyBlock(low, b, names, done_str, cont_state, in_inner_loop) } },

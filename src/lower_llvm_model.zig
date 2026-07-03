@@ -116,6 +116,9 @@ pub const LoopLabels = struct {
     break_label: []const u8,
     continue_label: []const u8,
     cleanup_start: usize,
+    // G7: source loop label naming this loop (`outer:`), or null when unlabeled.
+    // A labeled `break :outer` / `continue :outer` resolves against this.
+    label: ?[]const u8 = null,
 };
 
 pub const RawManyOffsetInfo = struct {

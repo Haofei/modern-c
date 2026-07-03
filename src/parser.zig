@@ -811,8 +811,25 @@ pub const Parser = struct {
 
         if (self.match(.kw_let)) return self.parseLocal(true);
         if (self.match(.kw_var)) return self.parseLocal(false);
-        if (self.match(.kw_for)) return self.parseFor();
-        if (self.match(.kw_while)) return self.parseWhile();
+        // G7: labeled loop `outer: while ...` / `outer: for ...`. Only an
+        // `IDENT :` immediately followed by a loop keyword is a loop label; any
+        // other `ident :` is left for its existing meaning.
+        if (self.current.kind == .identifier) {
+            var lx = self.lx;
+            if (lx.next().kind == .colon) {
+                const after = lx.next().kind;
+                if (after == .kw_for or after == .kw_while) {
+                    const loop_label = ident(self.current);
+                    self.advance(); // label ident
+                    self.advance(); // ':'
+                    if (self.match(.kw_for)) return self.parseFor(loop_label);
+                    _ = self.match(.kw_while);
+                    return self.parseWhile(loop_label);
+                }
+            }
+        }
+        if (self.match(.kw_for)) return self.parseFor(null);
+        if (self.match(.kw_while)) return self.parseWhile(null);
         if (self.current.kind == .kw_if) return self.parseIfLet();
         if (self.current.kind == .kw_switch) return self.parseSwitch();
         if (self.match(.kw_unsafe)) {
@@ -842,13 +859,15 @@ pub const Parser = struct {
         }
         if (self.match(.kw_break)) {
             const start = self.lxTokenBeforeCurrent();
+            const target = try self.parseOptionalLoopLabel();
             const end = try self.expectTok(.semicolon, "expected ';' after break");
-            return .{ .span = joinSpan(start, end.span), .kind = .@"break" };
+            return .{ .span = joinSpan(start, end.span), .kind = .{ .@"break" = target } };
         }
         if (self.match(.kw_continue)) {
             const start = self.lxTokenBeforeCurrent();
+            const target = try self.parseOptionalLoopLabel();
             const end = try self.expectTok(.semicolon, "expected ';' after continue");
-            return .{ .span = joinSpan(start, end.span), .kind = .@"continue" };
+            return .{ .span = joinSpan(start, end.span), .kind = .{ .@"continue" = target } };
         }
         if (self.match(.kw_defer)) {
             const expr = try self.parseExpr(0);
@@ -949,7 +968,13 @@ pub const Parser = struct {
         } } };
     }
 
-    fn parseFor(self: *Parser) anyerror!ast.Stmt {
+    // G7: parse an optional `:IDENT` loop-label target after `break`/`continue`.
+    fn parseOptionalLoopLabel(self: *Parser) anyerror!?ast.Ident {
+        if (!self.match(.colon)) return null;
+        return try self.expectName("expected loop label name after ':'");
+    }
+
+    fn parseFor(self: *Parser, loop_label: ?ast.Ident) anyerror!ast.Stmt {
         const start = self.lxTokenBeforeCurrent();
         const label = try self.expectName("expected loop binding after for");
         try self.expectIdentifierText("in", "expected 'in' after for binding");
@@ -960,13 +985,14 @@ pub const Parser = struct {
             .kind = .{ .loop = .{
                 .kind = .@"for",
                 .label = label,
+                .loop_label = loop_label,
                 .iterable = iterable,
                 .body = body,
             } },
         };
     }
 
-    fn parseWhile(self: *Parser) anyerror!ast.Stmt {
+    fn parseWhile(self: *Parser, loop_label: ?ast.Ident) anyerror!ast.Stmt {
         const start = self.lxTokenBeforeCurrent();
         const condition = try self.parseExpr(0);
         const body = try self.parseBlock();
@@ -975,6 +1001,7 @@ pub const Parser = struct {
             .kind = .{ .loop = .{
                 .kind = .@"while",
                 .label = null,
+                .loop_label = loop_label,
                 .iterable = condition,
                 .body = body,
             } },

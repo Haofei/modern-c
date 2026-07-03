@@ -327,6 +327,9 @@ pub fn register(ctx: *h.Ctx) void {
     // enum-raw-cmp-run-test compiles+runs a value-context `enum.raw() == N` compare on
     // both backends (G23; needs cc + clang).
     m0_step.dependOn(ctx.cmd("enum-raw-cmp-run-test"));
+    // labeled-break-run-test compiles+runs labeled `break :L` / `continue :L`
+    // targeting a named outer loop on both backends (G7; needs cc + clang).
+    m0_step.dependOn(ctx.cmd("labeled-break-run-test"));
     // std-test compiles and runs std/core through the toolchain (needs clang).
     m0_step.dependOn(ctx.cmd("std-test"));
     // import-test exercises the module system end-to-end (needs clang).

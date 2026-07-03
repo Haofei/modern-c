@@ -53,6 +53,10 @@ pub const EmitContext = struct {
     temp_index: *usize,
     next_loop_id: *u32,
     loop_ids: *std.ArrayList(u32),
+    // G7: parallel to `loop_ids`; the source loop label (`outer:`) naming each
+    // enclosing loop, or null for an unlabeled loop. Used to resolve a labeled
+    // `break :outer` / `continue :outer` to the right loop id.
+    loop_labels: *std.ArrayList(?[]const u8),
     loop_defer_marks: *std.ArrayList(usize),
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
@@ -97,19 +101,39 @@ pub const ForLoopElementPlan = struct {
     element_c_type: []const u8,
 };
 
-pub fn emitBreakStmt(ctx: EmitContext) anyerror!void {
+// Resolve a break/continue target to an index into the loop stack. A labeled
+// target (`break :outer`) searches outward for the matching loop label; a bare
+// target picks the innermost loop. Returns null only when there is no loop
+// (sema rejects labeled jumps to unknown labels, so a labeled target always
+// resolves here when the program type-checked).
+fn resolveLoopIndex(ctx: EmitContext, target: ?ast.Ident) ?usize {
+    if (ctx.loop_ids.items.len == 0) return null;
+    if (target) |t| {
+        var i = ctx.loop_labels.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (ctx.loop_labels.items[i]) |lbl| {
+                if (std.mem.eql(u8, lbl, t.text)) return i;
+            }
+        }
+        return null;
+    }
+    return ctx.loop_ids.items.len - 1;
+}
+
+pub fn emitBreakStmt(ctx: EmitContext, target: ?ast.Ident) anyerror!void {
     try writeIndent(ctx);
-    if (ctx.loop_ids.items.len > 0) {
-        try ctx.out.print(ctx.allocator, "goto mc_break_{d};\n", .{ctx.loop_ids.items[ctx.loop_ids.items.len - 1]});
+    if (resolveLoopIndex(ctx, target)) |idx| {
+        try ctx.out.print(ctx.allocator, "goto mc_break_{d};\n", .{ctx.loop_ids.items[idx]});
     } else {
         try ctx.out.appendSlice(ctx.allocator, "break;\n");
     }
 }
 
-pub fn emitContinueStmt(ctx: EmitContext) anyerror!void {
+pub fn emitContinueStmt(ctx: EmitContext, target: ?ast.Ident) anyerror!void {
     try writeIndent(ctx);
-    if (ctx.loop_ids.items.len > 0) {
-        try ctx.out.print(ctx.allocator, "goto mc_continue_{d};\n", .{ctx.loop_ids.items[ctx.loop_ids.items.len - 1]});
+    if (resolveLoopIndex(ctx, target)) |idx| {
+        try ctx.out.print(ctx.allocator, "goto mc_continue_{d};\n", .{ctx.loop_ids.items[idx]});
     } else {
         try ctx.out.appendSlice(ctx.allocator, "continue;\n");
     }
@@ -118,9 +142,12 @@ pub fn emitContinueStmt(ctx: EmitContext) anyerror!void {
 pub fn emitPlainWhileLoop(ctx: EmitContext, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, defer_stack_len: usize) anyerror!void {
     const id = ctx.next_loop_id.*;
     ctx.next_loop_id.* += 1;
-    const jumps = loopBodyHasOwnBreakContinue(loop.body);
+    const label: ?[]const u8 = if (loop.loop_label) |l| l.text else null;
+    const jumps = loopBodyJumps(loop.body, label);
     try ctx.loop_ids.append(ctx.allocator, id);
     defer _ = ctx.loop_ids.pop();
+    try ctx.loop_labels.append(ctx.allocator, label);
+    defer _ = ctx.loop_labels.pop();
     try ctx.loop_defer_marks.append(ctx.allocator, defer_stack_len);
     defer _ = ctx.loop_defer_marks.pop();
     try emitPlainWhileHeader(ctx, loop, locals);
@@ -311,9 +338,12 @@ pub fn emitForLoopCore(ctx: EmitContext, spec: ForLoopCore) anyerror!void {
 
     const id = ctx.next_loop_id.*;
     ctx.next_loop_id.* += 1;
-    const jumps = loopBodyHasOwnBreakContinue(spec.loop.body);
+    const label: ?[]const u8 = if (spec.loop.loop_label) |l| l.text else null;
+    const jumps = loopBodyJumps(spec.loop.body, label);
     try ctx.loop_ids.append(ctx.allocator, id);
     defer _ = ctx.loop_ids.pop();
+    try ctx.loop_labels.append(ctx.allocator, label);
+    defer _ = ctx.loop_labels.pop();
     try ctx.loop_defer_marks.append(ctx.allocator, spec.defer_stack_len);
     defer _ = ctx.loop_defer_marks.pop();
 
@@ -421,9 +451,18 @@ fn emitPlainWhileFooter(ctx: EmitContext, id: u32, has_break: bool) !void {
 }
 
 pub fn loopBodyHasOwnBreakContinue(block: ast.Block) LoopJumps {
+    return loopBodyJumps(block, null);
+}
+
+// Whether a loop needs `mc_break_N` / `mc_continue_N` labels. `label` is the
+// loop's own source label (or null). A jump counts toward this loop when it is
+// a bare jump at this loop's own level (innermost target) OR a labeled jump
+// naming `label`, wherever it appears — including inside nested loops, since a
+// `break :outer` deep inside still targets this loop.
+pub fn loopBodyJumps(block: ast.Block, label: ?[]const u8) LoopJumps {
     var out = LoopJumps{};
     for (block.items) |stmt| {
-        const j = stmtOwnBreakContinue(stmt);
+        const j = stmtJumps(stmt, label, true);
         out.brk = out.brk or j.brk;
         out.cont = out.cont or j.cont;
     }
@@ -434,16 +473,26 @@ fn writeIndent(ctx: EmitContext) !void {
     for (0..ctx.indent.*) |_| try ctx.out.appendSlice(ctx.allocator, "    ");
 }
 
-fn stmtOwnBreakContinue(stmt: ast.Stmt) LoopJumps {
+fn labelHits(target: ?ast.Ident, label: ?[]const u8) bool {
+    const t = target orelse return false;
+    const l = label orelse return false;
+    return std.mem.eql(u8, t.text, l);
+}
+
+// `own` is true while walking statements that live directly in the target
+// loop's body (bare jumps target it). Descending into a nested loop clears
+// `own`, so bare jumps there belong to the nested loop and only labeled jumps
+// matching `label` still count.
+fn stmtJumps(stmt: ast.Stmt, label: ?[]const u8, own: bool) LoopJumps {
     return switch (stmt.kind) {
-        .@"break" => .{ .brk = true },
-        .@"continue" => .{ .cont = true },
-        .block, .unsafe_block, .comptime_block => |b| loopBodyHasOwnBreakContinue(b),
-        .contract_block => |n| loopBodyHasOwnBreakContinue(n.block),
+        .@"break" => |target| .{ .brk = (own and target == null) or labelHits(target, label) },
+        .@"continue" => |target| .{ .cont = (own and target == null) or labelHits(target, label) },
+        .block, .unsafe_block, .comptime_block => |b| blockJumps(b, label, own),
+        .contract_block => |n| blockJumps(n.block, label, own),
         .if_let => |n| blk: {
-            var j = loopBodyHasOwnBreakContinue(n.then_block);
+            var j = blockJumps(n.then_block, label, own);
             if (n.else_block) |e| {
-                const ej = loopBodyHasOwnBreakContinue(e);
+                const ej = blockJumps(e, label, own);
                 j.brk = j.brk or ej.brk;
                 j.cont = j.cont or ej.cont;
             }
@@ -454,7 +503,7 @@ fn stmtOwnBreakContinue(stmt: ast.Stmt) LoopJumps {
             for (n.arms) |arm| {
                 switch (arm.body) {
                     .block => |b| {
-                        const aj = loopBodyHasOwnBreakContinue(b);
+                        const aj = blockJumps(b, label, own);
                         j.brk = j.brk or aj.brk;
                         j.cont = j.cont or aj.cont;
                     },
@@ -463,8 +512,19 @@ fn stmtOwnBreakContinue(stmt: ast.Stmt) LoopJumps {
             }
             break :blk j;
         },
-        // A nested loop captures its own break/continue.
-        .loop => .{},
+        // A nested loop captures its own bare break/continue; only labeled jumps
+        // naming an outer loop still propagate, so recurse with `own = false`.
+        .loop => |nested| blockJumps(nested.body, label, false),
         else => .{},
     };
+}
+
+fn blockJumps(block: ast.Block, label: ?[]const u8, own: bool) LoopJumps {
+    var out = LoopJumps{};
+    for (block.items) |stmt| {
+        const j = stmtJumps(stmt, label, own);
+        out.brk = out.brk or j.brk;
+        out.cont = out.cont or j.cont;
+    }
+    return out;
 }

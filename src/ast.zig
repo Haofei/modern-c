@@ -367,8 +367,10 @@ pub const Stmt = struct {
         asm_stmt: AsmStmt,
         block: Block,
         @"return": ?Expr,
-        @"break",
-        @"continue",
+        // Optional loop label targets a named enclosing loop (G7 labeled
+        // break/continue). Null means the innermost loop (unchanged behavior).
+        @"break": ?Ident,
+        @"continue": ?Ident,
         @"defer": Expr,
         assert: Expr,
         assignment: struct {
@@ -421,6 +423,9 @@ pub const LocalDecl = struct {
 pub const Loop = struct {
     kind: Kind,
     label: ?Ident,
+    // G7: optional loop label naming this loop as a break/continue target
+    // (`outer: while ...`). Distinct from `label`, which is the for-binding.
+    loop_label: ?Ident = null,
     iterable: ?Expr,
     body: Block,
 

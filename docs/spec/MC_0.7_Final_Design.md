@@ -1042,6 +1042,47 @@ sanctioned escape hatch.
 
 ---
 
+## 8.5 Labeled Loops and Labeled `break` / `continue`
+
+A `while` or `for` loop may be given a **label** — an identifier followed by `:`
+immediately before the loop keyword. A labeled `break :name` / `continue :name`
+then targets the named enclosing loop instead of the innermost one. Bare
+`break;` / `continue;` are unchanged: they always target the innermost loop.
+
+```mc
+fn first_pair(rows: []const []const u32, target: u32) -> bool {
+    outer: for row in rows {
+        for x in row {
+            if x == target {
+                break :outer;   // leaves BOTH loops
+            }
+            if x == 0 {
+                continue :outer; // next `row`, skipping the rest of this row
+            }
+        }
+    }
+    return false;
+}
+```
+
+Rules:
+
+```txt
+`label:` binds the loop it prefixes; the label is in scope only within that loop's body.
+`break :L` transfers control to just after loop L; `continue :L` starts L's next iteration.
+A bare `break` / `continue` targets the innermost enclosing loop (unchanged).
+A `break :L` / `continue :L` whose label L names no enclosing loop is a compile error (E_UNKNOWN_LOOP_LABEL).
+The loop label lives in its own namespace and does not collide with the `for` binding.
+```
+
+Labeled jumps compile to the same structured control flow as bare ones (a
+labeled `goto` to the target loop's exit/next edge in the C backend, a branch to
+the target loop's break/continue block in the LLVM backend); they carry no
+runtime cost. Labeled `break` / `continue` inside an `await`-bearing loop of an
+`async fn` is not yet supported.
+
+---
+
 # 9. Pointers and Memory Views
 
 MC separates pointer concepts that C conflates.

@@ -1416,15 +1416,15 @@ const LlvmEmitter = struct {
                     if (try self.emitResultIfLet(node, ret_ty)) return true;
                     if (try self.emitNullableIfLet(node, ret_ty)) return true;
                 },
-                .@"break" => {
-                    const labels = self.loop_stack.getLastOrNull() orelse return error.UnsupportedLlvmEmission;
+                .@"break" => |target| {
+                    const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
                     try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
                     self.defer_stack.items.len = labels.cleanup_start;
                     try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.break_label, try self.debugCallSuffix() });
                     return true;
                 },
-                .@"continue" => {
-                    const labels = self.loop_stack.getLastOrNull() orelse return error.UnsupportedLlvmEmission;
+                .@"continue" => |target| {
+                    const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
                     try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
                     self.defer_stack.items.len = labels.cleanup_start;
                     try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.continue_label, try self.debugCallSuffix() });
@@ -1443,6 +1443,24 @@ const LlvmEmitter = struct {
         try self.emitDeferredCleanupsFrom(defer_start, ret_ty);
         self.defer_stack.items.len = defer_start;
         return false;
+    }
+
+    // G7: resolve a break/continue target to the loop-stack record. A labeled
+    // target searches outward for the matching source label; a bare target picks
+    // the innermost loop. Sema rejects labels not in scope, so a labeled target
+    // resolves whenever the program type-checked.
+    fn resolveLoopLabels(self: *LlvmEmitter, target: ?ast.Ident) ?LoopLabels {
+        if (target) |t| {
+            var i = self.loop_stack.items.len;
+            while (i > 0) {
+                i -= 1;
+                if (self.loop_stack.items[i].label) |lbl| {
+                    if (std.mem.eql(u8, lbl, t.text)) return self.loop_stack.items[i];
+                }
+            }
+            return null;
+        }
+        return self.loop_stack.getLastOrNull();
     }
 
     fn emitDeferredCleanupsFrom(self: *LlvmEmitter, start: usize, ret_ty: ast.TypeExpr) !void {
@@ -2164,7 +2182,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ cond_label, try self.debugCallSuffix(), cond_label });
         const condition = try self.emitExpr(condition_expr, condition_ty);
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, body_label, end_label, try self.debugCallSuffix(), body_label });
-        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = cond_label, .cleanup_start = self.defer_stack.items.len });
+        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = cond_label, .cleanup_start = self.defer_stack.items.len, .label = if (loop.loop_label) |l| l.text else null });
         defer _ = self.loop_stack.pop();
         const body_terminated = try self.emitBlock(loop.body, ret_ty);
         if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ cond_label, try self.debugCallSuffix() });
@@ -2227,7 +2245,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ element_value, element_llvm, element_ptr });
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ element_llvm, element_value, binding_ptr, try self.debugCallSuffix() });
 
-        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = step_label, .cleanup_start = self.defer_stack.items.len });
+        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = step_label, .cleanup_start = self.defer_stack.items.len, .label = if (loop.loop_label) |l| l.text else null });
         defer _ = self.loop_stack.pop();
         const body_terminated = try self.emitBlock(loop.body, ret_ty);
         if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ step_label, try self.debugCallSuffix() });
