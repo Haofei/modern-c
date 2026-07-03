@@ -101,6 +101,24 @@ assert_contains "$boundary_output" "lib.mc:2:12: error: E_UNKNOWN_IDENTIFIER" "i
 assert_contains "$boundary_output" "  |     return nope;" "source-line snippet"
 assert_contains "$boundary_output" "  |            ^~~~" "caret underline"
 
+cat >"$WORK/root_import_bom.mc" <<'MC'
+import "lib_bom.mc";
+
+export fn main() -> u32 {
+    return helper_bom();
+}
+MC
+
+printf '\xEF\xBB\xBFfn helper_bom() -> u32 {\n    return nope;\n}\n' >"$WORK/lib_bom.mc"
+
+imported_bom_output=""
+if imported_bom_output=$("$MCC" check "$WORK/root_import_bom.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — imported-file BOM semantic error unexpectedly succeeded"
+    exit 1
+fi
+assert_contains "$imported_bom_output" "lib_bom.mc:2:12: error: E_UNKNOWN_IDENTIFIER" "imported-file BOM diagnostic location"
+assert_contains "$imported_bom_output" "  |     return nope;" "imported-file BOM source-line snippet"
+
 printf '\xEF\xBB\xBFexport fn main() -> u32 {\n    return 0;\n}\n' >"$WORK/bom.mc"
 if ! "$MCC" check "$WORK/bom.mc" >/dev/null 2>&1; then
     echo "FAIL: diagnostics-test — UTF-8 BOM input did not parse"

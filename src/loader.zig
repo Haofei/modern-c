@@ -137,6 +137,7 @@ fn expand(
 ) LoadError!void {
     if (visited.contains(path)) return;
     try visited.put(try allocator.dupe(u8, path), {});
+    const file_source = stripUtf8Bom(source);
 
     // Record where this file's text starts in the combined source (before appending it).
     const file_start = out.items.len;
@@ -146,10 +147,10 @@ fn expand(
     defer arena.deinit();
     const a = arena.allocator();
 
-    const imports = try scanImports(a, io, path, source, arch, platform, sandbox_root);
+    const imports = try scanImports(a, io, path, file_source, arch, platform, sandbox_root);
 
     // Append this file's source with its import statements blanked out.
-    const blanked = try allocator.dupe(u8, source);
+    const blanked = try allocator.dupe(u8, file_source);
     defer allocator.free(blanked);
     for (imports) |imp| {
         var i = imp.start;
@@ -236,6 +237,11 @@ fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: [
         }
     }
     return refs.toOwnedSlice(arena);
+}
+
+fn stripUtf8Bom(source: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, source, "\xEF\xBB\xBF")) return source[3..];
+    return source;
 }
 
 fn isExplicitlyRelative(rel: []const u8) bool {
