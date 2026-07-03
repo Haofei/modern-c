@@ -50,6 +50,7 @@ pub fn register(ctx: *h.Ctx) void {
     // OUT_OF_SCOPE soundness, host-tests.tsv well-formedness). It belongs in every
     // conformance tier, not only `fast`, so a contract regression can't slip into m0/c0/c1.
     m0_step.dependOn(ctx.cmd("test-lint"));
+    m0_step.dependOn(ctx.cmd("bad-diagnostics-test"));
     m0_step.dependOn(ctx.cmd("abi-consistency-test"));
     m0_step.dependOn(ctx.cmd("arch-emit-test"));
     m0_step.dependOn(ctx.cmd("test"));
@@ -832,6 +833,7 @@ pub fn register(ctx: *h.Ctx) void {
     const fast_step = b.step("fast", "Inner-loop gate: host-only unit + spec-coverage tests, emit-C sweep, C/LLVM differential, and the fuzz family — no QEMU");
     fast_step.dependOn(ctx.cmd("test"));
     fast_step.dependOn(ctx.cmd("test-lint"));
+    fast_step.dependOn(ctx.cmd("bad-diagnostics-test"));
     fast_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     fast_step.dependOn(ctx.cmd("c-test"));
     fast_step.dependOn(ctx.cmd("sweep"));
@@ -857,6 +859,7 @@ pub fn register(ctx: *h.Ctx) void {
     // not gated here.)
     const c0_step = b.step("c0", "Spec §L.1 MC-C0 baseline-language gates: fixtures + spec coverage, emit-C sweep, demo lowering");
     c0_step.dependOn(ctx.cmd("test-lint")); // contract lint guards the corpus; c1 inherits it
+    c0_step.dependOn(ctx.cmd("bad-diagnostics-test")); // golden wording for reject diagnostics
     c0_step.dependOn(ctx.cmd("diagnostics-reference-test")); // generated diagnostic-code reference stays current
     c0_step.dependOn(ctx.cmd("test"));
     c0_step.dependOn(ctx.cmd("c-test"));

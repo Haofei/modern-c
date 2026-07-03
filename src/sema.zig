@@ -5731,6 +5731,10 @@ pub const Checker = struct {
         var binding_pattern_count: usize = 0;
         const subject_enum = if (subject_ty) |ty| enumInfoForType(ty, ctx) else null;
         const subject_union = if (subject_ty) |ty| unionInfoForType(ty, ctx) else null;
+        // If the subject type is already unknown, the real diagnostic is upstream
+        // (for example, a failed generic instantiation). Reporting pattern/subject
+        // mismatches here only buries that root cause under cascaded noise.
+        if (subject_class == .unknown and subject_ty == null) return;
         for (patterns) |pattern| {
             switch (pattern.kind) {
                 .tag => |tag| {

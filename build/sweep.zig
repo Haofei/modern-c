@@ -19,6 +19,8 @@ pub fn register(ctx: *h.Ctx) void {
     // invariant from rotting back in. No mcc/clang/QEMU, so it joins the inner loop.
     _ = h.addScriptTestOpts(ctx, "test-lint", "Lint fixture contracts (reject EXPECT lines, sweep OUT_OF_SCOPE, host-tests.tsv)", &.{ "python3", "tools/test/contract-lint.py", "." }, .{ .install = false });
 
+    _ = h.addScriptTest(ctx, "bad-diagnostics-test", "Check golden first-line diagnostics for bad/ reject fixtures", &.{ "python3", "tools/toolchain/bad-diagnostics-test.py", "--check", "--mcc", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "diff-backend", "Run each host fixture through both backends and assert C and LLVM agree", &.{ "bash", "tools/toolchain/diff-backend.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "diff-fuzz", "Generate random MC programs and assert the C and LLVM backends agree on each", &.{ "bash", "tools/toolchain/diff-fuzz.sh", "zig-out/bin/mcc" });
