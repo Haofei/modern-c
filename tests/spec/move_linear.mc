@@ -102,6 +102,24 @@ fn reject_loop_outer_move(flag: bool) -> u32 {
     return 0;
 }
 
+fn reject_while_condition_consumes() -> u32 {
+    let t: Token = make(); // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while consume(t) != 0 {
+    }
+    return 0;
+}
+
+fn accept_while_condition_borrows(flag: bool) -> u32 {
+    let t: Token = make();
+    while peek(&t) != 0 {
+        if flag {
+            break;
+        }
+        break;
+    }
+    return consume(t);
+}
+
 // A loop-body-local move value that is live when `break` exits the iteration leaks
 // on that edge — the iteration ends without consuming it.
 fn reject_loop_break_leak(flag: bool) -> u32 {

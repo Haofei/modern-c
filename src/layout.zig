@@ -21,6 +21,15 @@ pub const ComptimeStructLayout = struct {
     field_offset: ?i128,
 };
 
+/// Size of a fixed array in bytes, or null when the comptime layout would overflow the
+/// i128 layout domain. Reflection callers use null as "unknown" so hostile array lengths
+/// fail closed instead of trapping the compiler.
+pub fn comptimeArraySize(len: anytype, elem_size: i128) ?i128 {
+    if (elem_size < 0) return null;
+    const len_i128 = std.math.cast(i128, len) orelse return null;
+    return std.math.mul(i128, len_i128, elem_size) catch null;
+}
+
 /// Compute the comptime layout of `struct_decl`, returning total size/alignment and (when
 /// `wanted_field` is non-null) the byte offset of that field. This is the single shared
 /// implementation used by BOTH backends (`lower_c.zig` and `lower_llvm.zig`) so they can never
@@ -100,11 +109,11 @@ pub fn comptimeStructLayout(
 /// address classes (`PAddr`/`VAddr`/`DmaAddr`) lower to pointer-width integers.
 pub fn scalarLayout(name: []const u8) ?ScalarLayout {
     const table = [_]struct { n: []const u8, s: u32 }{
-        .{ .n = "u8", .s = 1 },    .{ .n = "i8", .s = 1 },    .{ .n = "bool", .s = 1 },
-        .{ .n = "u16", .s = 2 },   .{ .n = "i16", .s = 2 },   .{ .n = "u32", .s = 4 },
-        .{ .n = "i32", .s = 4 },   .{ .n = "f32", .s = 4 },   .{ .n = "u64", .s = 8 },
-        .{ .n = "i64", .s = 8 },   .{ .n = "f64", .s = 8 },   .{ .n = "usize", .s = 8 },
-        .{ .n = "isize", .s = 8 }, .{ .n = "PAddr", .s = 8 }, .{ .n = "VAddr", .s = 8 },
+        .{ .n = "u8", .s = 1 },      .{ .n = "i8", .s = 1 },    .{ .n = "bool", .s = 1 },
+        .{ .n = "u16", .s = 2 },     .{ .n = "i16", .s = 2 },   .{ .n = "u32", .s = 4 },
+        .{ .n = "i32", .s = 4 },     .{ .n = "f32", .s = 4 },   .{ .n = "u64", .s = 8 },
+        .{ .n = "i64", .s = 8 },     .{ .n = "f64", .s = 8 },   .{ .n = "usize", .s = 8 },
+        .{ .n = "isize", .s = 8 },   .{ .n = "PAddr", .s = 8 }, .{ .n = "VAddr", .s = 8 },
         .{ .n = "DmaAddr", .s = 8 },
     };
     for (table) |entry| {

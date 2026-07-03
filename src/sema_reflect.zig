@@ -21,6 +21,7 @@ const isPointerLikeGeneric = ast_query.isPointerLikeGeneric;
 const parseArrayLen = array_len.parseArrayLen;
 const reflectionKind = sema_builtin.reflectionKind;
 const reflectionTypeExprFromArg = sema_builtin.reflectionTypeExprFromArg;
+const comptimeArraySize = type_layout.comptimeArraySize;
 const scalarLayout = type_layout.scalarLayout;
 const simpleNameType = ast_query.simpleNameType;
 const typeName = ast_query.typeName;
@@ -88,7 +89,7 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i
         .array => |node| {
             const len = parseArrayLen(node.len, env.const_fns, env.const_globals) orelse return null;
             const elem = comptimeSizeOf(env, node.child.*, depth + 1) orelse return null;
-            return @as(i128, @intCast(len)) * elem;
+            return comptimeArraySize(len, elem);
         },
         .qualified => |node| return comptimeSizeOf(env, node.child.*, depth + 1),
         else => return null,

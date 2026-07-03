@@ -92,6 +92,12 @@ fn reject_hex_u8_out_of_range_literal() -> u8 {
     return y;
 }
 
+fn reject_literal_larger_than_u128() -> u32 {
+    // EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE
+    let y: u32 = 340282366920938463463374607431768211456;
+    return y;
+}
+
 fn reject_wrap_literal_requires_explicit_modulo() -> wrap<u8> {
     // EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE
     let z: wrap<u8> = 300;

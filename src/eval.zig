@@ -450,6 +450,38 @@ pub const ComptimeScope = struct {
 // const folder (checked → trap, wrap → mask mod 2^N, sat → clamp).
 pub const ComptimeDomain = enum { checked, wrap, sat };
 pub const DomainWidth = struct { domain: ComptimeDomain, bits: u16, signed: bool };
+const ComptimeIntType = struct { bits: u16, signed: bool };
+
+fn comptimeIntType(ty: ast.TypeExpr) ?ComptimeIntType {
+    const name = switch (ty.kind) {
+        .name => |n| n.text,
+        else => return null,
+    };
+    if (std.mem.eql(u8, name, "usize")) return .{ .bits = 64, .signed = false };
+    if (std.mem.eql(u8, name, "isize")) return .{ .bits = 64, .signed = true };
+    if (name.len < 2) return null;
+    const signed = switch (name[0]) {
+        'i' => true,
+        'u' => false,
+        else => return null,
+    };
+    const bits = std.fmt.parseInt(u16, name[1..], 10) catch return null;
+    return switch (bits) {
+        8, 16, 32, 64, 128 => .{ .bits = bits, .signed = signed },
+        else => null,
+    };
+}
+
+fn comptimeIntFromBits(raw: u128, info: ComptimeIntType) ?i128 {
+    if (info.bits == 0 or info.bits > 128) return null;
+    const mask: u128 = if (info.bits == 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(info.bits)) - 1;
+    const value = raw & mask;
+    if (info.signed and ((value >> @intCast(info.bits - 1)) & 1) == 1) {
+        if (info.bits == 128) return @bitCast(value);
+        return @bitCast(value | ~mask);
+    }
+    return std.math.cast(i128, value);
+}
 
 pub fn comptimeTypeDomainWidth(ty: ast.TypeExpr) ?DomainWidth {
     switch (ty.kind) {
@@ -496,18 +528,7 @@ fn applyDomain(dw: DomainWidth, raw: i128) ComptimeFold {
 }
 
 pub fn comptimeTypeBitWidth(ty: ast.TypeExpr) ?u16 {
-    const name = switch (ty.kind) {
-        .name => |n| n.text,
-        else => return null,
-    };
-    if (name.len < 2) return null;
-    if (std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return 64;
-    if (name[0] != 'u' and name[0] != 'i') return null;
-    const bits = std.fmt.parseInt(u16, name[1..], 10) catch return null;
-    return switch (bits) {
-        8, 16, 32, 64 => bits,
-        else => null,
-    };
+    return if (comptimeIntType(ty)) |info| info.bits else null;
 }
 
 pub fn parseCharLiteral(literal: []const u8) ?u128 {
@@ -543,18 +564,8 @@ fn comptimeCastValue(value: ComptimeValue, ty: ast.TypeExpr) ?ComptimeValue {
         },
         else => return null,
     };
-    const bits = comptimeTypeBitWidth(ty) orelse return null;
-    if (bits >= 128) return .{ .int = v };
-    const mask: u128 = (@as(u128, 1) << @intCast(bits)) - 1;
-    const raw: u128 = @as(u128, @bitCast(v)) & mask;
-    const signed = switch (ty.kind) {
-        .name => |n| n.text.len > 0 and (n.text[0] == 'i'),
-        else => false,
-    };
-    if (signed and (raw >> @intCast(bits - 1)) & 1 == 1) {
-        return .{ .int = @bitCast(raw | ~mask) };
-    }
-    return .{ .int = @intCast(raw) };
+    const int_info = comptimeIntType(ty) orelse return null;
+    return if (comptimeIntFromBits(@bitCast(v), int_info)) |n| .{ .int = n } else null;
 }
 
 // The declared integer width of a comptime expression, resolved through bound
@@ -916,17 +927,20 @@ fn foldComptimeBitcast(scope: *const ComptimeScope, call: anytype) ComptimeFold 
             else => return .unknown,
         }
     }
-    const bits = comptimeTypeBitWidth(target) orelse return .unknown;
+    const int_info = comptimeIntType(target) orelse return .unknown;
     switch (operand) {
         .int => |n| {
-            const mask: u128 = if (bits >= 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(bits)) - 1;
-            return .{ .value = .{ .int = @intCast(@as(u128, @bitCast(n)) & mask) } };
+            return if (comptimeIntFromBits(@bitCast(n), int_info)) |v| .{ .value = .{ .int = v } } else .unknown;
         },
         .float => |f| {
-            if (bits == 64) return .{ .value = .{ .int = @as(i128, @as(u64, @bitCast(f))) } };
-            if (bits == 32) {
+            if (int_info.bits == 64) {
+                const raw: u128 = @as(u64, @bitCast(f));
+                return if (comptimeIntFromBits(raw, int_info)) |v| .{ .value = .{ .int = v } } else .unknown;
+            }
+            if (int_info.bits == 32) {
                 const f32v: f32 = @floatCast(f);
-                return .{ .value = .{ .int = @as(i128, @as(u32, @bitCast(f32v))) } };
+                const raw: u128 = @as(u32, @bitCast(f32v));
+                return if (comptimeIntFromBits(raw, int_info)) |v| .{ .value = .{ .int = v } } else .unknown;
             }
             return .unknown;
         },
@@ -1506,7 +1520,7 @@ fn foldComptimeUnary(scope: *const ComptimeScope, op: ast.UnaryOp, operand_expr:
             .int => |v| if (comptimeExprWidth(scope, operand_expr)) |bits| blk: {
                 const mask: u128 = if (bits >= 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(bits)) - 1;
                 const masked: u128 = (~@as(u128, @bitCast(v))) & mask;
-                break :blk .{ .value = .{ .int = @intCast(masked) } };
+                break :blk if (std.math.cast(i128, masked)) |n| .{ .value = .{ .int = n } } else .unknown;
             } else .unknown,
             .void, .float, .boolean, .tag, .bytes, .array, .@"struct" => .unknown,
         },

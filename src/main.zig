@@ -98,6 +98,13 @@ fn writeStdout(bytes: []const u8) !void {
 }
 
 pub fn main(init: std.process.Init) !void {
+    runMain(init) catch |err| {
+        if (isExpectedCliFailure(err)) std.process.exit(1);
+        return err;
+    };
+}
+
+fn runMain(init: std.process.Init) !void {
     const allocator = init.gpa;
     stdout_io = init.io;
     // Flush the lowering-coverage trace on every exit path (no-op unless armed via
@@ -177,6 +184,31 @@ pub fn main(init: std.process.Init) !void {
     } else {
         return failUsage();
     }
+}
+
+fn isExpectedCliFailure(err: anyerror) bool {
+    return switch (err) {
+        error.InvalidArgs,
+        error.FmtCheckFailed,
+        error.LexFailed,
+        error.ParseFailed,
+        error.AsyncLowerFailed,
+        error.CheckFailed,
+        error.FactsFailed,
+        error.LowerHirFailed,
+        error.VerifyHirFailed,
+        error.LowerMirFailed,
+        error.VerifyFailed,
+        error.LowerIrFailed,
+        error.RunTrapFailed,
+        error.LowerCFailed,
+        error.EmitCFailed,
+        error.EmitLlvmFailed,
+        error.EmitLayoutFailed,
+        error.EmitCStructFailed,
+        => true,
+        else => false,
+    };
 }
 
 fn runLowerHir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {

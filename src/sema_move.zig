@@ -109,6 +109,19 @@ pub fn reportMoveLocalsLeavingScope(self: *Checker, inner: *const std.StringHash
     }
 }
 
+pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *std.StringHashMap(MoveSlot), iteration_state: *const std.StringHashMap(MoveSlot)) void {
+    var it = entry_state.iterator();
+    while (it.next()) |entry| {
+        const after = iteration_state.get(entry.key_ptr.*) orelse continue;
+        const before = entry.value_ptr.*;
+        if (before.live != after.live or before.deferred != after.deferred) {
+            self.errorCode(before.span, "E_MOVE_LOOP_RESOURCE", "cannot consume or reserve an outer linear `move` value inside a loop; the loop may run zero or multiple times");
+            entry.value_ptr.live = false;
+            entry.value_ptr.deferred = false;
+        }
+    }
+}
+
 pub fn addIfLetMoveBinding(self: *Checker, pattern: ast.Pattern, value: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
     const ctx = self.move_ctx orelse return null;
     const value_ty = spine.exprResultType(value, ctx.*) orelse return null;
@@ -339,7 +352,17 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
         .block, .unsafe_block, .comptime_block => |b| return moveScopedBlock(self, b, state, aliases),
         .contract_block => |c| return moveScopedBlock(self, c.block, state, aliases),
         .loop => |l| {
-            if (l.iterable) |iter| moveBorrow(self, iter, state);
+            if (l.iterable) |iter| {
+                switch (l.kind) {
+                    .@"for" => moveBorrow(self, iter, state),
+                    .@"while" => {
+                        var condition_state = cloneMoveState(self, state);
+                        defer condition_state.deinit();
+                        moveConsume(self, iter, &condition_state, aliases);
+                        reportLoopOuterResourceChanges(self, state, &condition_state);
+                    },
+                }
+            }
             // Snapshot the names live at loop entry so a `break`/`continue` inside
             // the body can tell loop-body locals (which leak on an early exit) from
             // outer resources (handled by the E_MOVE_LOOP_RESOURCE check below).
@@ -361,16 +384,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                 p.deinit();
             }
             reportMoveLocalsLeavingScope(self, &body_state, state, "linear `move` value declared in a loop body is never consumed (must be moved, returned, or freed before the iteration ends)");
-            var it = state.iterator();
-            while (it.next()) |entry| {
-                const after = body_state.get(entry.key_ptr.*) orelse continue;
-                const before = entry.value_ptr.*;
-                if (before.live != after.live or before.deferred != after.deferred) {
-                    self.errorCode(before.span, "E_MOVE_LOOP_RESOURCE", "cannot consume or reserve an outer linear `move` value inside a loop; the loop may run zero or multiple times");
-                    entry.value_ptr.live = false;
-                    entry.value_ptr.deferred = false;
-                }
-            }
+            reportLoopOuterResourceChanges(self, state, &body_state);
             // A loop may run zero times, so control can always fall through past it.
             return false;
         },

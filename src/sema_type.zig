@@ -430,6 +430,7 @@ pub fn classifyType(ty: ast.TypeExpr) TypeClass {
         .qualified => |node| classifyType(node.child.*),
         .generic => |node| classifyGenericTypeName(node.base.text),
         .fn_pointer => .fn_pointer,
+        .closure_type => .closure,
         else => .unknown,
     };
 }

@@ -15,6 +15,7 @@ const MmioStruct = lower_c_model.MmioStruct;
 const ComptimeStructLayout = type_layout.ComptimeStructLayout;
 const cTaggedUnionTagSize = lower_c_type.cTaggedUnionTagSize;
 const constArrayLenValue = lower_c_const.constArrayLenValue;
+const comptimeArraySize = type_layout.comptimeArraySize;
 const isArithmeticLayoutGeneric = ast_query.isArithmeticLayoutGeneric;
 const isPointerLikeGeneric = ast_query.isPointerLikeGeneric;
 const reflectionCallKind = lower_c_builtin.reflectionCallKind;
@@ -170,7 +171,7 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i
         .array => |node| {
             const len = constArrayLenValue(node.len, env.const_fns, env.const_globals, comptimeReflectThunk, @constCast(env)) orelse return null;
             const elem = comptimeSizeOf(env, node.child.*, depth + 1) orelse return null;
-            return @as(i128, @intCast(len)) * elem;
+            return comptimeArraySize(len, elem);
         },
         .qualified => |node| return comptimeSizeOf(env, node.child.*, depth + 1),
         else => return null,

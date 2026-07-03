@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const eval = @import("eval.zig");
+const layout = @import("layout.zig");
 
 const ComptimeScope = eval.ComptimeScope;
 const ComptimeValue = eval.ComptimeValue;
@@ -24,6 +25,18 @@ fn testIdent(a: std.mem.Allocator, name: []const u8) !*ast.Expr {
 
 fn testBinary(a: std.mem.Allocator, op: ast.BinaryOp, left: *ast.Expr, right: *ast.Expr) !*ast.Expr {
     return ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .binary = .{ .op = op, .left = left, .right = right } } });
+}
+
+fn testType(name: []const u8) ast.TypeExpr {
+    return .{ .span = zero_span, .kind = .{ .name = .{ .text = name, .span = zero_span } } };
+}
+
+fn testBitcastCall(a: std.mem.Allocator, target_name: []const u8, arg: ast.Expr) !ast.Expr {
+    return .{ .span = zero_span, .kind = .{ .call = .{
+        .callee = try testIdent(a, "bitcast"),
+        .type_args = try a.dupe(ast.TypeExpr, &.{testType(target_name)}),
+        .args = try a.dupe(ast.Expr, &.{arg}),
+    } } };
 }
 
 test "foldComptimeExpr folds the comptime scalar subset" {
@@ -63,6 +76,31 @@ test "foldComptimeExpr folds the comptime scalar subset" {
     // short-circuit: true || <unknown> -> true
     const sc_or = try testBinary(a, .logical_or, try testBool(a, true), try testIdent(a, "runtime"));
     try std.testing.expect(foldComptimeExpr(&scope, sc_or.*).value.boolean);
+}
+
+test "foldComptimeExpr guards full-width integer bitcasts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var scope = ComptimeScope.init(a);
+    defer scope.deinit();
+
+    const minus_one = ast.Expr{ .span = zero_span, .kind = .{ .unary = .{
+        .op = .neg,
+        .expr = try testInt(a, "1"),
+    } } };
+
+    const signed_128 = try testBitcastCall(a, "i128", minus_one);
+    try std.testing.expectEqual(@as(i128, -1), foldComptimeExpr(&scope, signed_128).value.int);
+
+    const unsigned_128 = try testBitcastCall(a, "u128", minus_one);
+    try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, unsigned_128)) == .unknown);
+}
+
+test "comptime array size helper returns unknown on i128 overflow" {
+    try std.testing.expectEqual(@as(?i128, 32), layout.comptimeArraySize(@as(usize, 4), 8));
+    try std.testing.expect(layout.comptimeArraySize(@as(usize, 2), std.math.maxInt(i128)) == null);
 }
 
 test "foldComptimeExpr evaluates const fn calls" {

@@ -402,6 +402,7 @@ const LlvmEmitter = struct {
     current_debug_scope: ?usize = null,
     current_debug_span: ?ast.Span = null,
     current_return_ty: ?ast.TypeExpr = null,
+    current_function: ?[]const u8 = null,
     source_path: []const u8,
     target_arch: backend_mod.TargetArch,
     // KASAN profile (D2.1): when true, each raw.load/raw.store emits a
@@ -950,13 +951,16 @@ const LlvmEmitter = struct {
         const old_scope = self.current_debug_scope;
         const old_span = self.current_debug_span;
         const old_return_ty = self.current_return_ty;
+        const old_function = self.current_function;
         self.current_debug_scope = if (self.fn_sigs.get(fn_decl.name.text)) |sig| sig.debug_id else null;
         self.current_debug_span = fn_decl.name.span;
         self.current_return_ty = ret_ty;
+        self.current_function = fn_decl.name.text;
         defer {
             self.current_debug_scope = old_scope;
             self.current_debug_span = old_span;
             self.current_return_ty = old_return_ty;
+            self.current_function = old_function;
         }
         // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
         // epilogue. The body is a single inline-asm statement that performs the
@@ -3034,10 +3038,14 @@ const LlvmEmitter = struct {
     // OPT (annex E): true when the optimizer recorded this operand's source point in
     // `elided_bounds` (only under `--optimize`) — a proven-in-range constant index's Bounds
     // check, or an unsigned div-by-literal's DivideByZero check. Source points are unique per
-    // location, so a module-wide match is unambiguous. Without the flag the list is empty and
-    // the check is emitted — the backend consumes the optimized MIR, not re-derived proof.
+    // location within a function; the same file-local line/column can appear in another
+    // function when sources are combined from multiple files. Without the flag the list is
+    // empty and the check is emitted — the backend consumes the optimized MIR, not re-derived
+    // proof.
     fn mirCheckElided(self: *LlvmEmitter, span: ast.Span) bool {
+        const function_name = self.current_function orelse return false;
         for (self.mir_module.functions) |function| {
+            if (!std.mem.eql(u8, function.name, function_name)) continue;
             for (function.elided_bounds) |pt| {
                 if (pt.line == span.line and pt.column == span.column) return true;
             }

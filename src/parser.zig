@@ -6,6 +6,8 @@ const lexer = @import("lexer.zig");
 const token = @import("token.zig");
 const layout = @import("layout.zig");
 
+const max_parse_depth: usize = 256;
+
 pub const Parser = struct {
     lx: lexer.Lexer,
     previous: token.Token,
@@ -33,6 +35,7 @@ pub const Parser = struct {
     // Names that own a qualified namespace (module/impl), exported on the Module so sema can
     // reserve them against local bindings (prevents a local from shadowing a qualified owner).
     qualified_owners: std.StringHashMap(void) = undefined,
+    parse_depth: usize = 0,
 
     pub fn init(source: []const u8, reporter: *diagnostics.Reporter) Parser {
         var lx = lexer.Lexer.init(source, reporter);
@@ -784,6 +787,8 @@ pub const Parser = struct {
     }
 
     fn parseBlock(self: *Parser) anyerror!ast.Block {
+        try self.enterParseDepth();
+        defer self.leaveParseDepth();
         const start = try self.expectTok(.l_brace, "expected block");
         var items: std.ArrayList(ast.Stmt) = .empty;
         errdefer items.deinit(self.allocator);
@@ -1224,6 +1229,8 @@ pub const Parser = struct {
     }
 
     fn parseType(self: *Parser) anyerror!ast.TypeExpr {
+        try self.enterParseDepth();
+        defer self.leaveParseDepth();
         const start = self.current.span;
         if (self.match(.dot)) {
             const dot = self.lxTokenBeforeCurrent();
@@ -1368,6 +1375,8 @@ pub const Parser = struct {
     }
 
     fn parseExpr(self: *Parser, min_bp: u8) anyerror!ast.Expr {
+        try self.enterParseDepth();
+        defer self.leaveParseDepth();
         var lhs = try self.parsePrefix();
         while (true) {
             lhs = try self.parsePostfix(lhs);
@@ -1818,6 +1827,18 @@ pub const Parser = struct {
     fn fail(self: *Parser, message: []const u8) anyerror {
         self.reporter.err(self.current.span, "{s}", .{message});
         return error.ParseFailed;
+    }
+
+    fn enterParseDepth(self: *Parser) anyerror!void {
+        if (self.parse_depth >= max_parse_depth) {
+            self.reporter.err(self.current.span, "E_NESTING_TOO_DEEP: nesting too deep", .{});
+            return error.ParseFailed;
+        }
+        self.parse_depth += 1;
+    }
+
+    fn leaveParseDepth(self: *Parser) void {
+        self.parse_depth -= 1;
     }
 
     fn previousSpan(self: *Parser, fallback: diagnostics.Span) diagnostics.Span {

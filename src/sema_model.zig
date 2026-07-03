@@ -81,6 +81,7 @@ pub const MmioFieldInfo = struct {
 pub const StructInfo = struct {
     fields: std.StringHashMap(ast.TypeExpr),
     ordered: []const ast.Field,
+    abi: ?[]const u8 = null,
     // `opaque struct` - fields are private to the struct's associated functions.
     is_opaque: bool = false,
     // `#[c_union]` - compiler-internal addressable union (union layout; see ast.StructDecl).
@@ -264,6 +265,7 @@ pub const TypeClass = enum {
     dma_buf,
     result,
     fn_pointer,
+    closure,
     never,
     void,
     bool,

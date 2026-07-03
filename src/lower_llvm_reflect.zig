@@ -25,6 +25,7 @@ const reflectionFieldName = ast_query.reflectionFieldName;
 const scalarLayout = type_layout.scalarLayout;
 const typeName = ast_query.typeName;
 const typeNameEql = lower_llvm_type.typeNameEql;
+const comptimeArraySize = type_layout.comptimeArraySize;
 
 pub const ReflectEnv = struct {
     type_aliases: *const std.StringHashMap(ast.TypeExpr),
@@ -166,7 +167,7 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i
         .array => |node| {
             const len = arrayLenValue(env, node.len) orelse return null;
             const elem = comptimeSizeOf(env, node.child.*, depth + 1) orelse return null;
-            return @as(i128, @intCast(len)) * elem;
+            return comptimeArraySize(len, elem);
         },
         .qualified => |node| comptimeSizeOf(env, node.child.*, depth + 1),
         else => null,

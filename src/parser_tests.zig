@@ -155,3 +155,25 @@ test "parser requires in after for binding" {
     try std.testing.expect(bad_reporter.has_errors);
     try std.testing.expectEqualStrings("expected 'in' after for binding", bad_reporter.diagnostics.items[0].message);
 }
+
+test "parser rejects excessive nesting with diagnostic" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+
+    try source.appendSlice(std.testing.allocator, "fn too_deep() -> u32 { return ");
+    for (0..300) |_| try source.append(std.testing.allocator, '(');
+    try source.append(std.testing.allocator, '1');
+    for (0..300) |_| try source.append(std.testing.allocator, ')');
+    try source.appendSlice(std.testing.allocator, "; }\n");
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "too_deep.mc", source.items);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = Parser.init(source.items, &reporter);
+    try std.testing.expectError(error.ParseFailed, p.parseModule(arena.allocator()));
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_NESTING_TOO_DEEP") != null);
+}

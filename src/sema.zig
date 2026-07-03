@@ -674,7 +674,7 @@ pub const Checker = struct {
                 self.oom = true;
             };
         }
-        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields, .is_opaque = struct_decl.is_opaque, .is_c_union = struct_decl.is_c_union }) catch {
+        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields, .abi = struct_decl.abi, .is_opaque = struct_decl.is_opaque, .is_c_union = struct_decl.is_c_union }) catch {
             fields.deinit();
         };
     }
@@ -837,7 +837,8 @@ pub const Checker = struct {
         const type_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases };
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
-                self.checkFn(fn_decl, no_lang_trap, irq_context, bounded, is_naked, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases);
+                const abi_boundary = decl.kind == .extern_fn or fn_decl.exported;
+                self.checkFn(fn_decl, abi_boundary, no_lang_trap, irq_context, bounded, is_naked, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases);
                 // T(term)1: bounded-loop / no-unbounded-recursion check for IRQ/atomic
                 // and `#[bounded]` functions (opt-in; existing code is unaffected).
                 if (hasBoundedContext(decl.attrs)) {
@@ -1139,12 +1140,13 @@ pub const Checker = struct {
         const c_void_conversion_checked = self.checkCVoidPointerConversion(ty, initializer, ctx);
         const address_checked = self.checkAddressOfInitializer(target, ty, initializer, ctx);
         const fn_pointer_checked = self.checkFunctionPointerInitializer(ty, initializer, ctx);
+        const closure_checked = self.checkClosureInitializer(ty, initializer, ctx);
         const address_class_checked = checkAddressClassConversion(self, initializer.span, target, source);
         const enum_checked = self.checkEnumValueCompatibility(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion") else false;
         const secret_checked = target == .secret and self.checkSecretWrapInitializer(ty, initializer, ctx);
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, source)) {
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, source)) {
             self.errorCode(initializer.span, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         }
         // A typed global initializer is static when it is either a C static
@@ -1186,7 +1188,7 @@ pub const Checker = struct {
         }
     }
 
-    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, irq_context: bool, bounded: bool, is_naked: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, abi_boundary: bool, no_lang_trap: bool, irq_context: bool, bounded: bool, is_naked: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         self.current_fn_name = fn_decl.name.text;
         defer self.current_fn_name = null;
         var scope = Scope.init(self.reporter.allocator);
@@ -1211,6 +1213,7 @@ pub const Checker = struct {
             }
         }
         const sig_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases, .type_params = &type_params };
+        if (abi_boundary) self.checkExternExportStructAbi(fn_decl, sig_ctx);
 
         for (fn_decl.params) |param| {
             self.checkType(param.ty, .storage, sig_ctx);
@@ -1291,6 +1294,20 @@ pub const Checker = struct {
                         self.errorCode(span, "E_RETURN_MISSING", "function return type requires all paths to return a value");
                     }
                 }
+            }
+        }
+    }
+
+    fn checkExternExportStructAbi(self: *Checker, fn_decl: ast.FnDecl, ctx: Context) void {
+        const include_plain_structs = fn_decl.abi != null;
+        for (fn_decl.params) |param| {
+            if (isByValueStructAbiType(param.ty, ctx, include_plain_structs)) {
+                self.errorCode(param.ty.span, "E_EXTERN_STRUCT_BY_VALUE", "extern/export functions cannot pass structs by value until C ABI classification is implemented; pass a pointer instead");
+            }
+        }
+        if (fn_decl.return_type) |ret_ty| {
+            if (isByValueStructAbiType(ret_ty, ctx, include_plain_structs)) {
+                self.errorCode(ret_ty.span, "E_EXTERN_STRUCT_BY_VALUE", "extern/export functions cannot return structs by value until C ABI classification is implemented; return through an out pointer instead");
             }
         }
     }
@@ -2106,6 +2123,7 @@ pub const Checker = struct {
                 const c_void_conversion_checked = if (local.ty) |ty| self.checkCVoidPointerConversion(ty, expr, ctx) else false;
                 const address_checked = if (local.ty) |ty| self.checkAddressOfInitializer(kind, ty, expr, ctx) else false;
                 const fn_pointer_checked = if (local.ty) |ty| self.checkFunctionPointerInitializer(ty, expr, ctx) else false;
+                const closure_checked = if (local.ty) |ty| self.checkClosureInitializer(ty, expr, ctx) else false;
                 const dyn_checked = if (local.ty) |ty| self.checkDynCoercionInitializer(ty, expr, ctx) else false;
                 const address_class_checked = if (local.ty != null) checkAddressClassConversion(self, expr.span, kind, initializer) else false;
                 const enum_checked = if (local.ty) |ty| self.checkEnumValueCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
@@ -2114,7 +2132,7 @@ pub const Checker = struct {
                 const secret_checked = if (local.ty) |ty| (kind == .secret and self.checkSecretWrapInitializer(ty, expr, ctx)) else false;
                 if (local.ty == null and untargeted_union_checked) {
                     // The diagnostic was emitted above; constructor calls need an explicit union target.
-                } else if (local.ty != null and !literal_checked and !null_checked and !null_target_checked and !targetless_literal_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(kind, initializer)) {
+                } else if (local.ty != null and !literal_checked and !null_checked and !null_target_checked and !targetless_literal_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(kind, initializer)) {
                     self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                 }
             }
@@ -2235,6 +2253,7 @@ pub const Checker = struct {
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, value, ctx);
         const address_checked = self.checkAddressOfInitializer(target_class, target_ty, value, ctx);
         const fn_pointer_checked = self.checkFunctionPointerInitializer(target_ty, value, ctx);
+        const closure_checked = self.checkClosureInitializer(target_ty, value, ctx);
         // The uniform `*T -> *dyn Trait` coercion on an assignment RHS (same as let/return/arg/field).
         const dyn_checked = self.checkDynCoercionInitializer(target_ty, value, ctx);
         const address_class_checked = checkAddressClassConversion(self, value.span, target_class, value_class);
@@ -2250,7 +2269,7 @@ pub const Checker = struct {
         {
             self.errorCode(value.span, "E_BORROW_ESCAPES_SCOPE", "cannot store the address of local storage where it outlives the local's scope (the borrow would dangle)");
         }
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target_class, value_class)) {
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
     }
@@ -2573,6 +2592,7 @@ pub const Checker = struct {
                 // Calling a value of function-pointer type (callback, vtable
                 // field, local): check the call against the pointer's signature.
                 const fnptr_ty: ?ast.TypeExpr = if (!trap_call and direct_function == null) calleeFnPointerType(node.callee.*, ctx) else null;
+                const closure_ty: ?ast.TypeExpr = if (!trap_call and direct_function == null and fnptr_ty == null) calleeClosureType(node.callee.*, ctx) else null;
                 if (fnptr_ty) |fpty| {
                     const sig = fpty.kind.fn_pointer;
                     if (node.args.len != sig.params.len) {
@@ -2593,6 +2613,18 @@ pub const Checker = struct {
                     // cannot see through the pointer to bound the callee.
                     if (ctx.bounded and !ctx.irq_context) {
                         self.errorCode(expr.span, "E_UNBOUNDED_INDIRECT_CALL", "a `#[bounded]` function may not make an indirect/fn-pointer call (the callee's termination cannot be checked through the pointer)");
+                    }
+                }
+                if (closure_ty) |cty| {
+                    const sig = cty.kind.closure_type;
+                    if (node.args.len != sig.params.len) {
+                        self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match closure signature");
+                    }
+                    if (ctx.irq_context) {
+                        self.errorCode(expr.span, "E_IRQ_CONTEXT_CALL", "an #[irq_context] function may not make an indirect/closure call (the target may sleep or block)");
+                    }
+                    if (ctx.bounded and !ctx.irq_context) {
+                        self.errorCode(expr.span, "E_UNBOUNDED_INDIRECT_CALL", "a `#[bounded]` function may not make an indirect/closure call (the callee's termination cannot be checked through the closure)");
                     }
                 }
                 // A method dispatch on a NULLABLE trait object (`?*dyn Trait`) must narrow
@@ -2700,6 +2732,10 @@ pub const Checker = struct {
                         const sig = fpty.kind.fn_pointer;
                         if (index < sig.params.len) self.checkCallArgument(sig.params[index], arg, source, ctx);
                     }
+                    if (closure_ty) |cty| {
+                        const sig = cty.kind.closure_type;
+                        if (index < sig.params.len) self.checkCallArgument(sig.params[index], arg, source, ctx);
+                    }
                 }
                 if (trap_call) return .never;
                 // `drop(x)` consumes a linear `move` value (or is a no-op for a
@@ -2751,6 +2787,7 @@ pub const Checker = struct {
                 if (directCallReturnClass(node.callee.*, ctx)) |class| return class;
                 if (mathBuiltinCallReturnClass(node.callee.*)) |class| return class;
                 if (fnptr_ty) |fpty| return classifyTypeCtx(fpty.kind.fn_pointer.ret.*, ctx);
+                if (closure_ty) |cty| return classifyTypeCtx(cty.kind.closure_type.ret.*, ctx);
                 return .unknown;
             },
             .index => |node| {
@@ -2872,7 +2909,8 @@ pub const Checker = struct {
                 if (ctx.functions != null and ctx.functions.?.contains(ident.text)) return;
                 if (ctx.scope != null and ctx.scope.?.contains(ident.text)) return;
                 if (globalType(ident.text, ctx)) |ty| {
-                    if (classifyTypeCtx(ty, ctx) == .fn_pointer) return;
+                    const class = classifyTypeCtx(ty, ctx);
+                    if (class == .fn_pointer or class == .closure) return;
                 }
                 self.errorCode(ident.span, "E_UNKNOWN_FUNCTION", "unknown function");
             },
@@ -4128,7 +4166,13 @@ pub const Checker = struct {
     }
 
     fn checkIntegerLiteralInitializer(self: *Checker, target: TypeClass, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
-        const value = integerLiteralValue(expr) orelse return false;
+        const value = integerLiteralValue(expr) orelse {
+            if (integerLiteralSyntaxOverflow(expr)) {
+                self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
+                return true;
+            }
+            return false;
+        };
         if (target == .wrap or target == .sat) {
             const bounds = arithmeticDomainInnerBounds(resolveAliasType(target_ty, ctx), if (target == .wrap) "wrap" else "sat", ctx) orelse return false;
             if (value.negative or value.magnitude > bounds.max) {
@@ -4239,12 +4283,13 @@ pub const Checker = struct {
             const c_void_conversion_checked = self.checkCVoidPointerConversion(element_ty, item, ctx);
             const address_checked = self.checkAddressOfInitializer(element_class, element_ty, item, ctx);
             const fn_pointer_checked = self.checkFunctionPointerInitializer(element_ty, item, ctx);
+            const closure_checked = self.checkClosureInitializer(element_ty, item, ctx);
             const dyn_checked = self.checkDynCoercionInitializer(element_ty, item, ctx);
             const address_class_checked = checkAddressClassConversion(self, item.span, element_class, item_class);
             const enum_checked = self.checkEnumValueCompatibility(element_ty, item, ctx, code, message);
             const union_checked = self.checkTaggedUnionConstructorCompatibility(element_ty, item, ctx, code, message);
             const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(item, ctx, code, message) else false;
-            if (!literal_checked and !null_checked and !array_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(element_class, item_class)) {
+            if (!literal_checked and !null_checked and !array_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(element_class, item_class)) {
                 self.errorCode(item.span, code, message);
             }
         }
@@ -4307,13 +4352,14 @@ pub const Checker = struct {
             const c_void_conversion_checked = self.checkCVoidPointerConversion(field_ty, field.value, ctx);
             const address_checked = self.checkAddressOfInitializer(field_class, field_ty, field.value, ctx);
             const fn_pointer_checked = self.checkFunctionPointerInitializer(field_ty, field.value, ctx);
+            const closure_checked = self.checkClosureInitializer(field_ty, field.value, ctx);
             // The uniform `*T -> *dyn Trait` coercion at a struct-field init.
             const dyn_checked = self.checkDynCoercionInitializer(field_ty, field.value, ctx);
             const address_class_checked = checkAddressClassConversion(self, field.value.span, field_class, value_class);
             const enum_checked = self.checkEnumValueCompatibility(field_ty, field.value, ctx, code, message);
             const union_checked = self.checkTaggedUnionConstructorCompatibility(field_ty, field.value, ctx, code, message);
             const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(field.value, ctx, code, message) else false;
-            if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(field_class, value_class)) {
+            if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(field_class, value_class)) {
                 self.errorCode(field.value.span, code, message);
             }
         }
@@ -4390,6 +4436,22 @@ pub const Checker = struct {
         if (classifyTypeCtx(source_ty, ctx) != .fn_pointer) return false;
         if (!sameTypeSyntaxCtx(source_ty, target_ty, ctx)) {
             self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "function-pointer signature does not match the expected type");
+        }
+        return true;
+    }
+
+    fn checkClosureInitializer(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
+        if (classifyTypeCtx(target_ty, ctx) != .closure) return false;
+        if (bindMatchesClosureExpr(expr, target_ty, ctx)) |matches| {
+            if (!matches) {
+                self.errorCode(expr.span, "E_CLOSURE_SIGNATURE_MISMATCH", "bind target does not match the expected closure type");
+            }
+            return true;
+        }
+        const source_ty = exprDeclaredType(expr, ctx) orelse return false;
+        if (classifyTypeCtx(source_ty, ctx) != .closure) return false;
+        if (!sameTypeSyntaxCtx(source_ty, target_ty, ctx)) {
+            self.errorCode(expr.span, "E_CLOSURE_SIGNATURE_MISMATCH", "closure signature does not match the expected type");
         }
         return true;
     }
@@ -4555,6 +4617,7 @@ pub const Checker = struct {
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, expr, ctx);
         const address_checked = self.checkAddressOfInitializer(target, target_ty, expr, ctx);
         const fn_pointer_checked = self.checkFunctionPointerInitializer(target_ty, expr, ctx);
+        const closure_checked = self.checkClosureInitializer(target_ty, expr, ctx);
         // The uniform `*T -> *dyn Trait` coercion (conformance + forge-safety), applied
         // at `return` exactly as at a `let` — so `return p;` (p: *Square) coerces and the
         // backend synthesizes the vtable here; a forged `{data,vtable}` is E_DYN_FORGE.
@@ -4571,7 +4634,7 @@ pub const Checker = struct {
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type") else false;
         const secret_checked = target == .secret and self.checkSecretWrapInitializer(target_ty, expr, ctx);
         const value_optional_checked = checkValueOptionalInitializer(target_ty, target, expr, returned, ctx);
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !dyn_checked and !address_class_checked and !local_escape_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !value_optional_checked and !canInitialize(target, returned)) {
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !local_escape_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !value_optional_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
     }
@@ -4631,6 +4694,7 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, arg, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, arg, ctx);
         const address_checked = self.checkAddressOfInitializer(target, target_ty, arg, ctx);
+        const closure_checked = self.checkClosureInitializer(target_ty, arg, ctx);
         // The uniform `*T -> *dyn Trait` coercion at a call argument (same as let/return).
         const dyn_checked = self.checkDynCoercionInitializer(target_ty, arg, ctx);
         const address_class_checked = checkAddressClassConversion(self, arg.span, target, source);
@@ -4643,7 +4707,7 @@ pub const Checker = struct {
         // same. (Struct literals are target-typed and handled above.)
         if (self.checkNamedStructMismatch(target_ty, arg, ctx)) return;
         const secret_checked = target == .secret and self.checkSecretWrapInitializer(target_ty, arg, ctx);
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, source)) {
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, source)) {
             self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         }
     }
@@ -6119,6 +6183,28 @@ fn canInitialize(target: TypeClass, initializer: TypeClass) bool {
     return false;
 }
 
+fn isByValueStructAbiType(ty: ast.TypeExpr, ctx: Context, include_plain_structs: bool) bool {
+    const resolved = resolveAliasType(ty, ctx);
+    return switch (resolved.kind) {
+        .name => |name| blk: {
+            const structs = ctx.structs orelse break :blk false;
+            const info = structs.get(name.text) orelse break :blk false;
+            break :blk include_plain_structs or info.abi != null;
+        },
+        .qualified => |node| isByValueStructAbiType(node.child.*, ctx, include_plain_structs),
+        else => false,
+    };
+}
+
+fn integerLiteralSyntaxOverflow(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .int_literal => |literal| numeric.parseIntegerLiteral(literal) == null,
+        .grouped => |inner| integerLiteralSyntaxOverflow(inner.*),
+        .unary => |node| node.op == .neg and integerLiteralSyntaxOverflow(node.expr.*),
+        else => false,
+    };
+}
+
 fn checkedIntBounds(kind: TypeClass) ?IntBounds {
     return switch (kind) {
         .checked_u8 => .{ .signed = false, .max = maxUnsigned(8) },
@@ -6482,7 +6568,7 @@ fn qualifiedUnionConstructorReturnType(node: anytype, ctx: Context) ?ast.TypeExp
 
 pub fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse byteViewCallReturnType(node) orelse vaCallReturnType(node) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse mathBuiltinReturnType(node.callee.*) orelse unwrapCallReturnType(node, ctx) orelse dynDispatchReturnType(node, ctx) orelse qualifiedUnionConstructorReturnType(node, ctx) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
+        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse byteViewCallReturnType(node) orelse vaCallReturnType(node) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse mathBuiltinReturnType(node.callee.*) orelse unwrapCallReturnType(node, ctx) orelse dynDispatchReturnType(node, ctx) orelse closureCallReturnType(node.callee.*, ctx) orelse fnPointerCallReturnType(node.callee.*, ctx) orelse qualifiedUnionConstructorReturnType(node, ctx) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
         .try_expr => |inner| tryPayloadType(inner.operand.*, ctx),
         .cast => |node| node.ty.*,
         .deref => |inner| derefResultType(inner.*, ctx),
@@ -6639,6 +6725,16 @@ pub fn directCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return function.return_ty;
 }
 
+fn fnPointerCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const ty = calleeFnPointerType(callee, ctx) orelse return null;
+    return ty.kind.fn_pointer.ret.*;
+}
+
+fn closureCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const ty = calleeClosureType(callee, ctx) orelse return null;
+    return ty.kind.closure_type.ret.*;
+}
+
 fn directCallFunction(callee: ast.Expr, ctx: Context) ?FunctionInfo {
     const name = calleeIdentName(callee) orelse return null;
     const functions = ctx.functions orelse return null;
@@ -6737,6 +6833,27 @@ fn calleeFnPointerType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
     };
 }
 
+fn calleeClosureType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const ty = exprDeclaredType(callee, ctx) orelse return null;
+    const resolved = resolveAliasType(ty, ctx);
+    return switch (resolved.kind) {
+        .closure_type => resolved,
+        else => null,
+    };
+}
+
+fn isBindCallNode(call: anytype) bool {
+    return call.type_args.len == 0 and call.args.len == 2 and isIdentNamed(call.callee.*, "bind");
+}
+
+fn bindMatchesClosureExpr(expr: ast.Expr, expected: ast.TypeExpr, ctx: Context) ?bool {
+    return switch (expr.kind) {
+        .call => |node| if (isBindCallNode(node)) bindMatchesClosure(node, expected, ctx) else null,
+        .grouped => |inner| bindMatchesClosureExpr(inner.*, expected, ctx),
+        else => null,
+    };
+}
+
 // Does the named top-level function's signature match an expected `fn(...) -> R`
 // type? Compared structurally, without allocating an intermediate type.
 fn functionMatchesFnPointer(fn_name: []const u8, expected: ast.TypeExpr, ctx: Context) bool {
@@ -6753,6 +6870,36 @@ fn functionMatchesFnPointer(fn_name: []const u8, expected: ast.TypeExpr, ctx: Co
     const void_ty = ast.TypeExpr{ .span = expected.span, .kind = .{ .name = .{ .text = "void", .span = expected.span } } };
     const ret_ty = info.return_ty orelse void_ty;
     return sameTypeSyntaxCtx(ret_ty, node.ret.*, ctx);
+}
+
+fn bindMatchesClosure(call: anytype, expected: ast.TypeExpr, ctx: Context) bool {
+    const node = switch (resolveAliasType(expected, ctx).kind) {
+        .closure_type => |n| n,
+        else => return false,
+    };
+    const fname = calleeIdentName(call.args[1]) orelse return false;
+    const fns = ctx.functions orelse return false;
+    const info = fns.get(fname) orelse return false;
+    if (info.params.len == 0) return false;
+    if (!exprCanInitializeType(info.params[0].ty, call.args[0], ctx)) return false;
+    if (info.params.len - 1 != node.params.len) return false;
+    for (info.params[1..], node.params) |param, expected_param| {
+        if (!sameTypeSyntaxCtx(param.ty, expected_param, ctx)) return false;
+    }
+    const void_ty = ast.TypeExpr{ .span = expected.span, .kind = .{ .name = .{ .text = "void", .span = expected.span } } };
+    const ret_ty = info.return_ty orelse void_ty;
+    return sameTypeSyntaxCtx(ret_ty, node.ret.*, ctx);
+}
+
+fn exprCanInitializeType(target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
+    const target = classifyTypeCtx(target_ty, ctx);
+    if (addressOfOperand(expr)) |operand| {
+        const source_ty = addressableStorageType(operand.*, ctx) orelse return false;
+        return addressOfMatchesPointerTarget(target_ty, source_ty, operand.*, ctx);
+    }
+    const source_ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse exprDeclaredType(expr, ctx) orelse return false;
+    if (sameTypeSyntaxCtx(source_ty, target_ty, ctx)) return true;
+    return canInitialize(target, classifyTypeCtx(source_ty, ctx));
 }
 
 fn directCallName(callee: ast.Expr) ?[]const u8 {

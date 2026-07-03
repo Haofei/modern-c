@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const ast = @import("ast.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const test_support = @import("test_support.zig");
 
@@ -42,4 +43,36 @@ test "LLVM backend emits checked integer add from MIR-gated source" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "call void @mc_trap_IntegerOverflow()") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, " nsw ") == null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, " nuw ") == null);
+}
+
+test "LLVM check elision is scoped to the current function" {
+    const proven_source =
+        \\fn proven(xs: [4]u32) -> u32 {
+        \\    return xs[1];
+        \\}
+    ;
+    const checked_source =
+        \\fn checked(xs: [4]u32, i: usize) -> u32 {
+        \\    return xs[i];
+        \\}
+    ;
+
+    var proven = try test_support.parseModule("proven.mc", proven_source);
+    defer proven.deinit();
+    var checked = try test_support.parseModule("checked.mc", checked_source);
+    defer checked.deinit();
+
+    const total_decls = proven.module.decls.len + checked.module.decls.len;
+    const decls = try std.testing.allocator.alloc(ast.Decl, total_decls);
+    defer std.testing.allocator.free(decls);
+    @memcpy(decls[0..proven.module.decls.len], proven.module.decls);
+    @memcpy(decls[proven.module.decls.len..], checked.module.decls);
+    const module = ast.Module{ .decls = decls };
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmWithSourcePath(std.testing.allocator, module, &output, "combined.mc", true);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "define internal i32 @checked") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "call void @mc_trap_Bounds()") != null);
 }

@@ -7,6 +7,7 @@ const mir_summary = @import("mir_summary.zig");
 const ReflectEnv = mir_summary.ReflectEnv;
 const StructSummary = mir_summary.StructSummary;
 
+const comptimeArraySize = type_layout.comptimeArraySize;
 const scalarLayout = type_layout.scalarLayout;
 const parseUsizeLiteral = numeric.parseUsizeLiteral;
 
@@ -87,7 +88,7 @@ fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 
         .array => |node| {
             const len = staticArrayLen(node.len) orelse return null;
             const elem = comptimeSizeOf(env, node.child.*, depth + 1) orelse return null;
-            return @as(i128, @intCast(len)) * elem;
+            return comptimeArraySize(len, elem);
         },
         .qualified => |node| comptimeSizeOf(env, node.child.*, depth + 1),
         else => null,

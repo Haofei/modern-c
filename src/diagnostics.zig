@@ -50,6 +50,7 @@ pub const Reporter = struct {
     }
 
     fn add(self: *Reporter, severity: Severity, span: Span, comptime fmt: []const u8, args: anytype) void {
+        if (severity == .error_) self.has_errors = true;
         const msg = std.fmt.allocPrint(self.allocator, fmt, args) catch return;
         self.diagnostics.append(self.allocator, .{
             .severity = severity,
@@ -59,7 +60,6 @@ pub const Reporter = struct {
             self.allocator.free(msg);
             return;
         };
-        if (severity == .error_) self.has_errors = true;
     }
 
     pub fn render(self: *Reporter) void {
@@ -78,3 +78,14 @@ pub const Reporter = struct {
         }
     }
 };
+
+test "Reporter errors fail closed when diagnostic allocation fails" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var reporter = Reporter.init(failing.allocator(), "oom.mc", "");
+    defer reporter.deinit();
+
+    reporter.err(.{ .offset = 0, .len = 0, .line = 1, .column = 1 }, "E_TEST: {s}", .{"boom"});
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 0), reporter.diagnostics.items.len);
+}
