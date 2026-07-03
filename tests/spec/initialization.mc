@@ -2,7 +2,7 @@
 // SPEC: milestone=local-initialization
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_LOCAL_REQUIRES_INITIALIZER,E_UNINIT_REQUIRES_STORAGE,E_LITERAL_REQUIRES_TARGET,E_NO_IMPLICIT_CONVERSION,E_CALL_ARG_COUNT,E_USE_BEFORE_INIT
+// SPEC: check=E_LOCAL_REQUIRES_INITIALIZER,E_UNINIT_REQUIRES_STORAGE,E_LITERAL_REQUIRES_TARGET,E_INTEGER_LITERAL_OUT_OF_RANGE,E_NO_IMPLICIT_CONVERSION,E_CALL_ARG_COUNT,E_USE_BEFORE_INIT
 
 fn takes_u32(value: u32) -> u32 {
     return value;
@@ -194,4 +194,9 @@ fn reject_targetless_char_literal() -> void {
 fn reject_grouped_targetless_char_literal() -> void {
     // EXPECT_ERROR: E_LITERAL_REQUIRES_TARGET
     var ch = ('x');
+}
+
+fn reject_targetless_integer_larger_than_u128() -> void {
+    // EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE
+    let y = 340282366920938463463374607431768211456;
 }

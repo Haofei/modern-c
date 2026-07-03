@@ -5112,6 +5112,11 @@ pub const Checker = struct {
     }
 
     fn checkTargetlessLiteralInitializer(self: *Checker, expr: ast.Expr) bool {
+        if (integerLiteralSyntaxOverflow(expr)) {
+            self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
+            return true;
+        }
+
         switch (expr.kind) {
             .enum_literal => {
                 self.errorCode(expr.span, "E_ENUM_LITERAL_REQUIRES_TARGET", "enum literal requires an explicit enum target type");
