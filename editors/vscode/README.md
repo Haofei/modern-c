@@ -15,8 +15,14 @@ Syntax highlighting (the TextMate grammar in `syntaxes/`) works with no server.
 
 1. Build the compiler from the repo root: `zig build` (produces `zig-out/bin/mcc`).
 2. Make sure Python 3 is available.
-3. Install the extension (for local development, symlink or copy this folder into
-   `~/.vscode/extensions/`, then run `npm install` here to fetch `vscode-languageclient`).
+3. Install extension dependencies: `npm install`.
+4. Package the extension: `npm run package` (writes a `.vsix` in this directory).
+5. Install the `.vsix` with VS Code's "Install from VSIX..." command or:
+   `code --install-extension mc-*.vsix`.
+
+For local development without packaging, symlink or copy this folder into
+`~/.vscode/extensions/`, then run `npm install` here to fetch
+`vscode-languageclient`.
 
 ## Settings
 
@@ -29,3 +35,6 @@ Syntax highlighting (the TextMate grammar in `syntaxes/`) works with no server.
 
 The server is started as `python3 mc-lsp.py` with `MCC` set to the compiler path, so it
 always uses the same diagnostics and formatting as the CLI.
+
+Generic non-VS-Code LSP client setup is documented in
+[`../../docs/lsp.md`](../../docs/lsp.md).

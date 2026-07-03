@@ -5,6 +5,11 @@
   "version": "0.1.0",
   "publisher": "modern-c",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Haofei/modern-c.git",
+    "directory": "editors/vscode"
+  },
   "engines": {
     "vscode": "^1.70.0"
   },
@@ -12,6 +17,11 @@
     "Programming Languages"
   ],
   "main": "./extension.js",
+  "scripts": {
+    "check": "node --check extension.js",
+    "package": "vsce package",
+    "package:check": "vsce ls"
+  },
   "activationEvents": [
     "onLanguage:mc"
   ],
@@ -65,7 +75,11 @@
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
   },
+  "overrides": {
+    "cheerio": "1.0.0-rc.12"
+  },
   "devDependencies": {
+    "@vscode/vsce": "2.15.0",
     "@types/vscode": "^1.70.0"
   }
 }

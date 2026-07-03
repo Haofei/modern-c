@@ -31,6 +31,12 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:
           version: 0.16.0
+      # actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
 
       - name: Derive release metadata
         id: meta
@@ -71,6 +77,14 @@ jobs:
           cd zig-out/release
           sha256sum -c SHA256SUMS
 
+      - name: Package VS Code extension
+        shell: bash
+        working-directory: editors/vscode
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run package
+
       - name: Upload release artifacts
         # actions/upload-artifact@v4
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -81,6 +95,7 @@ jobs:
             zig-out/release/SHA256SUMS
             zig-out/release/*inventory*.json
             zig-out/release/*sbom*.json
+            editors/vscode/*.vsix
           if-no-files-found: error
 
       - name: Publish GitHub Release assets
@@ -100,4 +115,5 @@ jobs:
             zig-out/release/SHA256SUMS \
             zig-out/release/*inventory*.json \
             zig-out/release/*sbom*.json \
+            editors/vscode/*.vsix \
             --clobber

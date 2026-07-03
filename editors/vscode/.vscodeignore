@@ -1,0 +1,15 @@
+.git/**
+.github/**
+**/.github/**
+.vscode/**
+**/.vscode/**
+.gitignore
+.vscodeignore
+*.vsix
+node_modules/.cache/**
+**/test/**
+**/tests/**
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+package-lock.json
