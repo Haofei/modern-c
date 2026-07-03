@@ -32,23 +32,27 @@ Before tagging a release:
    the TSV only when a deliberate performance change is measured on the pinned
    Ubuntu 24.04 / Zig 0.16.0 / LLVM 18 toolchain.
 6. Run `zig build fast` on every supported host tier.
-7. Run a manual dry run of `.github/workflows/release.yml` for the candidate
+7. For generated C or `.mcmap` artifacts kept for release audit, invoke `mcc
+   emit-c` / `mcc emit-map` with `--remap-prefix=<build-root>=<logical-root>`
+   so `#line` directives and source-map `source_path` metadata do not record
+   host-specific temporary paths.
+8. Run a manual dry run of `.github/workflows/release.yml` for the candidate
    version. The workflow builds with Zig 0.16.0, `-Doptimize=ReleaseSafe`, and
    `-Dversion=<version>` via `tools/ci/package-release.py`.
-8. Confirm the dry-run workflow artifact contains tarballs for
+9. Confirm the dry-run workflow artifact contains tarballs for
    `x86_64-linux-musl` and `aarch64-linux-musl`.
    Each tarball must contain `bin/mcc`, `bin/mcc-real`, `std/`,
    `tools/toolchain/mcc-build.sh`, `tools/toolchain/mcc-cc.sh`,
    `tools/toolchain/mcc-llvm-cc.sh`, `README.md`, `LICENSE`, `SECURITY.md`,
    `STABILITY.md`, `CHANGELOG.md`, and `THIRD-PARTY-LICENSES.md`.
-9. Confirm `SHA256SUMS`, `mcc-<version>-release-inventory.json`, and
+10. Confirm `SHA256SUMS`, `mcc-<version>-release-inventory.json`, and
    `mcc-<version>-sbom.cdx.json` are present and that
    `sha256sum -c SHA256SUMS` passes.
-10. Sign the release artifact set before publishing. The current workflow emits
+11. Sign the release artifact set before publishing. The current workflow emits
    checksums, inventory, and SBOM metadata; external minisign/cosign signing is
    still a manual release-manager step until signing keys and identity policy are
    documented.
-11. Tag the exact commit and record the tag in `CHANGELOG.md`. Pushing `v*`
+12. Tag the exact commit and record the tag in `CHANGELOG.md`. Pushing `v*`
    creates or updates the GitHub Release assets with `gh release upload`.
 
 ## Release Artifacts

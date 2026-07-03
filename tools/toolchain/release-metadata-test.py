@@ -318,6 +318,7 @@ def main() -> None:
     require_contains("docs/release-process.md", f"LLVM {EXPECTED_LLVM_MAJOR}")
     require_contains("docs/release-process.md", "tools/bench/nightly-baseline.tsv")
     require_contains("docs/release-process.md", "nightly QEMU benchmark workflow")
+    require_contains("docs/release-process.md", "--remap-prefix=<build-root>=<logical-root>")
 
     if "root_module.addOptions(\"build_options\"" not in compiler_build:
         fail("build/compiler.zig does not expose build_options to src/main.zig")

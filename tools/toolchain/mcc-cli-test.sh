@@ -77,6 +77,7 @@ run_case --help
 assert_rc 0 "--help"
 assert_stdout_contains "usage:" "--help usage header"
 assert_stdout_contains "mcc list-tests <file.mc>" "--help list-tests command"
+assert_stdout_contains "--remap-prefix=FROM=TO" "--help remap-prefix option"
 assert_stdout_contains "--std-dir=<dir>" "--help installed std-dir option"
 assert_stdout_contains "MC_PATH=dir[:dir...]" "--help MC_PATH fallback"
 assert_stdout_contains "exit codes:" "--help exit-code section"
@@ -123,5 +124,10 @@ run_case fmt "$WORK/ok.mc" --std-dir="$WORK/std"
 assert_rc 1 "invalid std-dir for fmt"
 assert_stdout_empty "invalid std-dir for fmt"
 assert_stderr_contains "usage:" "invalid std-dir for fmt usage"
+
+run_case check "$WORK/ok.mc" --remap-prefix="$WORK=/src"
+assert_rc 1 "invalid remap-prefix for check"
+assert_stdout_empty "invalid remap-prefix for check"
+assert_stderr_contains "usage:" "invalid remap-prefix usage"
 
 echo "PASS: mcc-cli-test — help/version/usage transcripts are stable"

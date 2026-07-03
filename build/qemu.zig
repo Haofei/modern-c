@@ -54,6 +54,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "mcc-cli-test", "Validate mcc help/version/usage exit behavior and stdout/stderr channels", &.{ "bash", "tools/toolchain/mcc-cli-test.sh", "zig-out/bin/mcc" });
 
+    _ = h.addScriptTest(ctx, "path-remap-test", "Validate emit-c/emit-map source path remapping for reproducible artifacts", &.{ "bash", "tools/toolchain/path-remap-test.sh", "zig-out/bin/mcc" });
+
     _ = h.addScriptTestOpts(ctx, "release-metadata-test", "Check release/version/security/stability metadata stays in sync", &.{ "python3", "tools/toolchain/release-metadata-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "ci-pass-gates-test", "Check CI PASS assertions are derived from tier definitions", &.{ "python3", "tools/ci/pass-gates.py", "check" }, .{ .install = false });
 

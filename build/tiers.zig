@@ -397,6 +397,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("third-party-licenses-test"));
     // mcc-cli-test pins documented top-level help/version/usage behavior.
     m0_step.dependOn(ctx.cmd("mcc-cli-test"));
+    // path-remap-test keeps generated C/source-map paths reproducible under temp build roots.
+    m0_step.dependOn(ctx.cmd("path-remap-test"));
     // release-metadata-test keeps version/process metadata present and consistent.
     m0_step.dependOn(ctx.cmd("release-metadata-test"));
     // ci-pass-gates-test prevents CI's positive PASS assertions from drifting away from tiers.zig.
@@ -902,6 +904,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("vendoring-test"));
     fast_step.dependOn(ctx.cmd("third-party-licenses-test"));
     fast_step.dependOn(ctx.cmd("mcc-cli-test"));
+    fast_step.dependOn(ctx.cmd("path-remap-test"));
     fast_step.dependOn(ctx.cmd("release-metadata-test"));
     fast_step.dependOn(ctx.cmd("ci-pass-gates-test"));
     fast_step.dependOn(ctx.cmd("c-test"));
@@ -940,6 +943,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("vendoring-test")); // third_party provenance and CVE/advisory process stay documented
     c0_step.dependOn(ctx.cmd("third-party-licenses-test")); // aggregated third-party license manifest stays complete
     c0_step.dependOn(ctx.cmd("mcc-cli-test")); // top-level CLI help/version/usage behavior stays documented
+    c0_step.dependOn(ctx.cmd("path-remap-test")); // generated C/source-map source paths can be remapped for reproducibility
     c0_step.dependOn(ctx.cmd("release-metadata-test")); // release/version/process metadata remains present
     c0_step.dependOn(ctx.cmd("ci-pass-gates-test")); // CI anti-vacuity assertions stay derived from tier definitions
     c0_step.dependOn(ctx.cmd("test"));

@@ -12,6 +12,12 @@ pub const Options = struct {
     platform_flag: ?[]const u8 = null,
     std_dir: ?[]const u8 = null,
     stub_asm: bool = false,
+    remap_prefix: ?PathRemap = null,
+
+    pub const PathRemap = struct {
+        from: []const u8,
+        to: []const u8,
+    };
 
     pub fn parse(command: []const u8, args: *std.process.Args.Iterator) !Options {
         var opts: Options = .{};
@@ -21,6 +27,7 @@ pub const Options = struct {
         var saw_platform_flag = false;
         var saw_stub_asm_flag = false;
         var saw_std_dir_flag = false;
+        var saw_remap_prefix_flag = false;
 
         while (args.next()) |flag| {
             if (std.mem.startsWith(u8, flag, "--arch=")) {
@@ -70,6 +77,10 @@ pub const Options = struct {
             } else if (std.mem.eql(u8, flag, "--stub-asm")) {
                 saw_stub_asm_flag = true;
                 opts.stub_asm = true;
+            } else if (std.mem.startsWith(u8, flag, "--remap-prefix=")) {
+                saw_remap_prefix_flag = true;
+                if (opts.remap_prefix != null) return error.InvalidArgs;
+                opts.remap_prefix = try parsePathRemap(flag["--remap-prefix=".len..]);
             } else {
                 return error.InvalidArgs;
             }
@@ -82,8 +93,17 @@ pub const Options = struct {
             .saw_platform_flag = saw_platform_flag,
             .saw_stub_asm_flag = saw_stub_asm_flag,
             .saw_std_dir_flag = saw_std_dir_flag,
+            .saw_remap_prefix_flag = saw_remap_prefix_flag,
         });
         return opts;
+    }
+
+    pub fn remappedSourcePath(self: Options, allocator: std.mem.Allocator, path: []const u8) !?[]const u8 {
+        const remap = self.remap_prefix orelse return null;
+        if (!std.mem.startsWith(u8, path, remap.from)) return null;
+        if (path.len > remap.from.len and path[remap.from.len] != std.fs.path.sep) return null;
+        const remapped = try std.fmt.allocPrint(allocator, "{s}{s}", .{ remap.to, path[remap.from.len..] });
+        return remapped;
     }
 
     pub fn targetArch(self: Options) backend.TargetArch {
@@ -139,6 +159,15 @@ pub const Options = struct {
         }
     }
 
+    fn parsePathRemap(value: []const u8) !PathRemap {
+        const sep = std.mem.indexOfScalar(u8, value, '=') orelse return error.InvalidArgs;
+        if (sep == 0 or sep + 1 >= value.len) return error.InvalidArgs;
+        return .{
+            .from = value[0..sep],
+            .to = value[sep + 1 ..],
+        };
+    }
+
     const SeenFlags = struct {
         saw_profile_flag: bool,
         saw_checks_flag: bool,
@@ -146,6 +175,7 @@ pub const Options = struct {
         saw_platform_flag: bool,
         saw_stub_asm_flag: bool,
         saw_std_dir_flag: bool,
+        saw_remap_prefix_flag: bool,
     };
 
     fn validate(self: Options, command: []const u8, seen: SeenFlags) !void {
@@ -161,6 +191,7 @@ pub const Options = struct {
         if (seen.saw_arch_flag and !accepts_checks) return error.InvalidArgs;
         if (seen.saw_platform_flag and !accepts_checks) return error.InvalidArgs;
         if (seen.saw_std_dir_flag and !isSourceLoadingCommand(command)) return error.InvalidArgs;
+        if (seen.saw_remap_prefix_flag and !is_c_artifact_command) return error.InvalidArgs;
         if (self.checks.csan and (self.checks.ksan or self.checks.msan)) {
             std.debug.print("error: --checks=csan cannot be combined with ksan/msan (a single raw access wraps one shadow protocol)\n", .{});
             return error.InvalidArgs;

@@ -58,8 +58,8 @@ const usage =
     \\  mcc verify <file.mc> [--checks=all|elide-proven]
     \\  mcc lower-ir <file.mc>
     \\  mcc lower-c <file.mc>
-    \\  mcc emit-c <file.mc> [--profile=kernel|hosted] [--checks=all|elide-proven] [--stub-asm]
-    \\  mcc emit-map <file.mc> [--profile=kernel|hosted]
+    \\  mcc emit-c <file.mc> [--profile=kernel|hosted] [--checks=all|elide-proven] [--stub-asm] [--remap-prefix=FROM=TO]
+    \\  mcc emit-map <file.mc> [--profile=kernel|hosted] [--remap-prefix=FROM=TO]
     \\  mcc emit-llvm <file.mc> [--checks=all|elide-proven] [--stub-asm]
     \\  mcc emit-layout <file.mc> --structs=A,B,C
     \\  mcc emit-c-struct <file.mc> --structs=A,B,C
@@ -73,6 +73,10 @@ const usage =
     \\  MC_PATH=dir[:dir...]  after --std-dir misses, search entries left-to-right as
     \\                         import roots. For import "std/x.mc", an entry named std
     \\                         maps to <entry>/x.mc; otherwise to <entry>/std/x.mc.
+    \\
+    \\source artifact reproducibility (emit-c and emit-map only):
+    \\  --remap-prefix=FROM=TO replace a matching source path prefix in emitted C
+    \\                         #line directives and emit-map source_path metadata.
     \\
     \\build-safety profile (orthogonal to the --profile target axis):
     \\  --checks=all           SAFE build (DEFAULT): keep every runtime trap check.
@@ -219,9 +223,13 @@ fn runMain(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(allocator, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
-        try runEmitC(allocator, path, source, options.profile, options.checks, options.stub_asm);
+        const remapped_source_path = try options.remappedSourcePath(allocator, path);
+        defer if (remapped_source_path) |p| allocator.free(p);
+        try runEmitC(allocator, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm);
     } else if (std.mem.eql(u8, command, "emit-map")) {
-        try runEmitMap(allocator, path, source, options.profile);
+        const remapped_source_path = try options.remappedSourcePath(allocator, path);
+        defer if (remapped_source_path) |p| allocator.free(p);
+        try runEmitMap(allocator, path, remapped_source_path orelse path, source, options.profile);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
         try runEmitLlvm(allocator, path, source, options.checks, options.stub_asm, options.targetArch());
     } else if (std.mem.eql(u8, command, "list-tests")) {
@@ -611,7 +619,7 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     try writeStdout(output.items);
 }
 
-fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool) !void {
+fn runEmitC(allocator: std.mem.Allocator, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool) !void {
     const optimize = checks.optimize;
     var diag = initReporter(allocator, path, source);
     defer diag.deinit();
@@ -646,11 +654,11 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
     const be = backend.byName("c").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = profile, .source_path = path, .checks = checks, .stub_asm = stub_asm });
+    try be.lower(allocator, module, &output, .{ .profile = profile, .source_path = artifact_source_path, .checks = checks, .stub_asm = stub_asm });
     try writeStdout(output.items);
 }
 
-fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile) !void {
+fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile) !void {
     var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
@@ -683,7 +691,7 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     const be = backend.byName("c").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.emitMap(allocator, module, &output, profile, path);
+    try be.emitMap(allocator, module, &output, profile, artifact_source_path);
     try writeStdout(output.items);
 }
 
