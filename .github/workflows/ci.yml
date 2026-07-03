@@ -42,19 +42,10 @@ jobs:
             echo "m0 skipped at least one gate in CI" >&2
             exit 1
           fi
-          # Positively assert the async QEMU gates RAN on both backends — a no-SKIP check alone
-          # would not catch a gate silently dropped from the m0 aggregate. Each prints "PASS: <name>".
-          for g in async-test async-irq-test async-cancel-test async-pollmany-test \
-                   async-future-test async-select-test async-agent-test async-blk-test \
-                   async-net-test agent-async-api-test qjs-cancel-test qjs-agent-smoke-test \
-                   qjs-cancel-edges-test; do
-            for name in "$g" "llvm-$g"; do
-              if ! grep -q "^PASS: $name " m0.log; then
-                echo "expected gate '$name' to run and pass in m0, but no 'PASS: $name' line was found" >&2
-                exit 1
-              fi
-            done
-          done
+          # Positively assert the async QEMU gates RAN on both backends. The list is
+          # read from build/tiers.zig, and the verifier also proves each name is an
+          # m0 dependency, so CI cannot silently drift away from the tier.
+          python3 tools/ci/pass-gates.py assert --tier ci-m0-pass --log m0.log
 
   docker:
     # Keeps the cross-platform dev image (Dockerfile / docker-compose.yml) honest: the image
@@ -81,37 +72,13 @@ jobs:
               echo "riscv-qemu-validation skipped at least one gate in CI" >&2
               exit 1
             fi
-            for name in \
-              smode-timer-test llvm-smode-timer-test \
-              smode-plic-test llvm-smode-plic-test \
-              smode-plic-multishot-test llvm-smode-plic-multishot-test \
-              blk-smode-test llvm-blk-smode-test \
-              net-smode-test llvm-net-smode-test \
-              blk-smode-irq-test llvm-blk-smode-irq-test \
-              net-smode-irq-test llvm-net-smode-irq-test \
-              net-smode-rx-irq-test llvm-net-smode-rx-irq-test \
-              qjs-smode-confined-test llvm-qjs-smode-confined-test \
-              qjs-smode-agent-test llvm-qjs-smode-agent-test \
-              qjs-realtool-test llvm-qjs-realtool-test \
-              qjs-nettool-test llvm-qjs-nettool-test \
-              qjs-net-realtool-test llvm-qjs-net-realtool-test \
-              qjs-smode-net-irq-tool-test llvm-qjs-smode-net-irq-tool-test \
-              qjs-smode-blk-irq-tool-test llvm-qjs-smode-blk-irq-tool-test; do
-              if ! grep -q "^PASS: $name " riscv-qemu-validation.log; then
-                echo "expected gate $name to run and pass in riscv-qemu-validation" >&2
-                exit 1
-              fi
-            done
+            python3 tools/ci/pass-gates.py assert --tier riscv-qemu-validation --log riscv-qemu-validation.log
           '
       - name: Run the async C+LLVM QEMU gates in the container (no skips)
         run: |
           docker compose run --rm dev bash -lc '
             set -euo pipefail
-            for g in async-test async-irq-test async-cancel-test async-pollmany-test \
-                     async-future-test async-select-test async-agent-test async-blk-test \
-                     async-net-test agent-async-api-test qjs-cancel-test qjs-agent-smoke-test \
-                     qjs-cancel-edges-test; do
-              MC_REQUIRE_TOOLS=1 zig build "$g"
-              MC_REQUIRE_TOOLS=1 zig build "llvm-$g"
+            for name in $(python3 tools/ci/pass-gates.py names --tier ci-m0-pass); do
+              MC_REQUIRE_TOOLS=1 zig build "$name"
             done
           '

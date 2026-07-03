@@ -40,6 +40,43 @@ pub fn register(ctx: *h.Ctx) void {
         "llvm-visionfive2-readiness-test",
     };
 
+    // Positive CI anti-vacuity assertions for m0. These gates are especially
+    // easy to lose accidentally because a no-SKIP check would still pass if a
+    // dependency disappeared from m0. tools/ci/pass-gates.py verifies every name
+    // listed here is still an m0 dependency, and CI uses this list directly when
+    // grepping the m0 log and when re-running the async QEMU gates in the Docker job.
+    const ci_m0_pass_assertions = [_][]const u8{
+        "async-test",
+        "llvm-async-test",
+        "async-irq-test",
+        "llvm-async-irq-test",
+        "async-cancel-test",
+        "llvm-async-cancel-test",
+        "async-pollmany-test",
+        "llvm-async-pollmany-test",
+        "async-future-test",
+        "llvm-async-future-test",
+        "async-multi-test",
+        "llvm-async-multi-test",
+        "async-select-test",
+        "llvm-async-select-test",
+        "async-agent-test",
+        "llvm-async-agent-test",
+        "async-blk-test",
+        "llvm-async-blk-test",
+        "async-net-test",
+        "llvm-async-net-test",
+        "agent-async-api-test",
+        "llvm-agent-async-api-test",
+        "qjs-cancel-test",
+        "llvm-qjs-cancel-test",
+        "qjs-agent-smoke-test",
+        "llvm-qjs-agent-smoke-test",
+        "qjs-cancel-edges-test",
+        "llvm-qjs-cancel-edges-test",
+    };
+    _ = ci_m0_pass_assertions;
+
     const riscv_qemu_validation_step = b.step("riscv-qemu-validation", "Run the RISC-V QEMU/OpenSBI validation surrogate for the selected real-board path");
     for (riscv_qemu_validation) |name| {
         riscv_qemu_validation_step.dependOn(ctx.cmd(name));
@@ -352,6 +389,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("mcc-cli-test"));
     // release-metadata-test keeps version/process metadata present and consistent.
     m0_step.dependOn(ctx.cmd("release-metadata-test"));
+    // ci-pass-gates-test prevents CI's positive PASS assertions from drifting away from tiers.zig.
+    m0_step.dependOn(ctx.cmd("ci-pass-gates-test"));
     // mono-test exercises comptime-parameter monomorphization (needs clang).
     m0_step.dependOn(ctx.cmd("mono-test"));
     // reflect-test validates the comptime layout model against the C ABI.
@@ -849,6 +888,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     fast_step.dependOn(ctx.cmd("mcc-cli-test"));
     fast_step.dependOn(ctx.cmd("release-metadata-test"));
+    fast_step.dependOn(ctx.cmd("ci-pass-gates-test"));
     fast_step.dependOn(ctx.cmd("c-test"));
     fast_step.dependOn(ctx.cmd("sweep"));
     fast_step.dependOn(ctx.cmd("diff-backend"));
@@ -882,6 +922,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("diagnostics-reference-test")); // generated diagnostic-code reference stays current
     c0_step.dependOn(ctx.cmd("mcc-cli-test")); // top-level CLI help/version/usage behavior stays documented
     c0_step.dependOn(ctx.cmd("release-metadata-test")); // release/version/process metadata remains present
+    c0_step.dependOn(ctx.cmd("ci-pass-gates-test")); // CI anti-vacuity assertions stay derived from tier definitions
     c0_step.dependOn(ctx.cmd("test"));
     c0_step.dependOn(ctx.cmd("c-test"));
     c0_step.dependOn(ctx.cmd("sweep"));
