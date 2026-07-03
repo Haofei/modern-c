@@ -1,0 +1,19 @@
+# Full self-host P0 oracle corpus.
+#
+# TSV columns:
+#   name    mode        path                                      probe_or_expect       expected_stdout  flags
+#
+# Modes:
+#   c-run       Positive fixture. Compare `emit-c` text, then clang-link a driver that
+#               calls probe_or_expect as `uint32_t fn(void)` and compare runtime output.
+#   diag        Negative fixture. `emit-c` must fail; compare exit status and normalized
+#               diagnostics. probe_or_expect is the required diagnostic code.
+#   llvm-object Positive fixture. Compare `emit-llvm` text, then, when `llc` and `clang`
+#               are available, lower to an object, link a driver, and run it.
+# Use `-` for an unused expected_stdout or flags field.
+#
+# The manifest is intentionally tiny for P0. Grow it by adding checked-in rows instead
+# of discovering files ad hoc.
+hosted-add	c-run	tests/selfhost/full/hosted_add.mc	full_selfhost_run	42	--profile=hosted
+use-before-init	diag	tests/selfhost/full/use_before_init.mc	E_USE_BEFORE_INIT	-	--profile=hosted
+llvm-add	llvm-object	tests/selfhost/full/hosted_add.mc	full_selfhost_run	42	-

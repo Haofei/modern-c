@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# selfhost-bootstrap-test: the CAPSTONE self-hosting gate (docs/self-host.md (§1)). Where the five
-# selfhost-*self-test gates each prove ONE mcc2 module self-compiles to clang-clean C, this gate
-# proves the WHOLE thing closes the loop: mcc2 literally compiles mcc2, the mcc2-built mcc2' is a
-# working compiler, and the two produce byte-identical output — a fixpoint. This is the definitive
-# proof of self-hosting.
+# selfhost-bootstrap-test: the subset bootstrap/fixpoint gate (docs/self-host.md (§1)). Where the
+# five selfhost-*self-test gates each prove ONE mcc2 module self-compiles to clang-clean C, this
+# gate proves the current selfhost subset closes a bootstrap loop: the selected compiler builds
+# mcc2, mcc2 emits mcc2', and the two produce byte-identical output — a fixpoint. This is a subset
+# bootstrap/fixpoint check, not a full compiler-replacement proof.
 #
 #   Stage-1 BUILD:   mcc-cc.sh selfhost/main.mc -> main.o ; clang link with mcc2_rt.c -> mcc2
-#                    (the Zig `mcc` builds the first-generation mcc2, exactly as mcc2-cli-test does).
+#                    (the selected `mcc` builds the first-generation mcc2, exactly as mcc2-cli-test
+#                    does).
 #   Stage-2 EMIT:    `mcc2 <root> > mcc2prime.c` — mcc2's textual-concatenation import loader flattens
 #                    the ENTIRE import graph (main + emit_c + sema + parser + lexer + all std deps)
 #                    into one C translation unit. Asserts mcc2 exits 0 with EMPTY stderr (mcc2 emits
@@ -22,11 +23,11 @@
 #                    BYTE-IDENTICAL (the fixpoint: gen-1 and gen-2 agree), AND clang-compile+run
 #                    mcc2''s output to prove mcc2' produces working code (add(2,3) == 5).
 #
-# A green run is the closed self-hosting loop: mcc2 compiled mcc2 (mcc2'), the fixpoint is exact, and
+# A green run is the subset bootstrap loop: mcc2 compiled mcc2 (mcc2'), the fixpoint is exact, and
 # mcc2' compiles+runs a program.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-${MCC:-zig-out/bin/mcc}}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/selfhost/main.mc"
 RT="$HERE/tools/toolchain/mcc2_rt.c"
@@ -41,8 +42,8 @@ MROOT="$HERE/.selfhost_bootstrap_root_$$.mc"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK" "$MROOT"' EXIT
 
-# ----- Stage-1 BUILD: the Zig `mcc` builds the first-generation mcc2 (as mcc2-cli-test does) -----
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/main.o" --profile=hosted >/dev/null
+# ----- Stage-1 BUILD: the selected `mcc` builds the first-generation mcc2 (as mcc2-cli-test does) -----
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/main.o" --profile=hosted >/dev/null
 "$CLANG" "$WORK/main.o" "$RT" -lm -o "$WORK/mcc2"
 
 # ----- Stage-2 EMIT: mcc2 compiles its OWN full source to one C TU, diagnostic-clean -----
@@ -100,5 +101,5 @@ if ! "$WORK/prog"; then
     exit 1
 fi
 
-echo "PASS: selfhost-bootstrap-test — mcc2 compiled mcc2 (mcc2'); fixpoint byte-identical; mcc2' compiles+runs a program"
+echo "PASS: selfhost-bootstrap-test — subset bootstrap fixpoint byte-identical; mcc2' compiles+runs a program"
 exit 0

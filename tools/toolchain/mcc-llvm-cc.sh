@@ -7,7 +7,7 @@ set -euo pipefail
 # Defaults the object name to the input stem + ".o". Additional arguments are
 # passed through to llc, so callers can provide target/relocation options.
 
-MCC="${MCC:-mcc}"
+MCC="${MCC_UNDER_TEST:-${MCC:-mcc}}"
 LLC="${LLC:-llc}"
 
 if [ "$#" -lt 1 ]; then

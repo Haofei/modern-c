@@ -17,7 +17,7 @@
 #       -mabi=lp64 -ffreestanding -nostdlib -mcmodel=medany
 set -euo pipefail
 
-MCC="${MCC:-zig-out/bin/mcc}"
+MCC="${MCC_UNDER_TEST:-${MCC:-zig-out/bin/mcc}}"
 CLANG="${CLANG:-clang}"
 
 if [ "$#" -lt 1 ]; then
