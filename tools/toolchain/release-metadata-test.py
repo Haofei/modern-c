@@ -45,6 +45,8 @@ EXPECTED_NIGHTLY_BENCH_METRICS = (
 EXPECTED_RELEASE_TARGETS = (
     "x86_64-linux-musl",
     "aarch64-linux-musl",
+    "x86_64-macos",
+    "aarch64-macos",
 )
 EXPECTED_RELEASE_PATHS = (
     "bin/mcc",
@@ -280,8 +282,6 @@ def require_release_artifact_metadata() -> None:
     for needle in (
         workflow_path,
         package_path,
-        "x86_64-linux-musl",
-        "aarch64-linux-musl",
         "ReleaseSafe",
         "SHA256SUMS",
         "release inventory",
@@ -292,6 +292,9 @@ def require_release_artifact_metadata() -> None:
     ):
         if needle not in docs:
             fail(f"docs/release-process.md does not document release artifact requirement {needle!r}")
+    for target in EXPECTED_RELEASE_TARGETS:
+        if target not in docs:
+            fail(f"docs/release-process.md does not document release target {target!r}")
 
 
 def main() -> None:

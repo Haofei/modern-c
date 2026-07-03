@@ -1,9 +1,9 @@
 # Release Process
 
-Status: draft release process with an implemented Linux artifact workflow. Release
-publication is still conservative: the workflow builds Linux tarballs, checksums,
-a release inventory, and a CycloneDX SBOM. No public stable release has been cut
-yet.
+Status: draft release process with an implemented Linux and macOS artifact
+workflow. Release publication is still conservative: the workflow builds
+tarballs, checksums, a release inventory, and a CycloneDX SBOM. No public stable
+release has been cut yet.
 
 ## Version Identity
 
@@ -40,7 +40,8 @@ Before tagging a release:
    version. The workflow builds with Zig 0.16.0, `-Doptimize=ReleaseSafe`, and
    `-Dversion=<version>` via `tools/ci/package-release.py`.
 9. Confirm the dry-run workflow artifact contains tarballs for
-   `x86_64-linux-musl` and `aarch64-linux-musl`.
+   `x86_64-linux-musl`, `aarch64-linux-musl`, `x86_64-macos`, and
+   `aarch64-macos`.
    Each tarball must contain `bin/mcc`, `bin/mcc-real`, `std/`,
    `tools/toolchain/mcc-build.sh`, `tools/toolchain/mcc-cc.sh`,
    `tools/toolchain/mcc-llvm-cc.sh`, `README.md`, `LICENSE`, `SECURITY.md`,
@@ -66,7 +67,7 @@ The packaging helper is intentionally local-testable:
 
 ```sh
 python3 tools/ci/package-release.py release --version 0.7.0 \
-  --targets x86_64-linux-musl aarch64-linux-musl
+  --targets x86_64-linux-musl aarch64-linux-musl x86_64-macos aarch64-macos
 ```
 
 The helper builds `mcc` with `zig build -Dtarget=<target> -Doptimize=ReleaseSafe
@@ -74,17 +75,14 @@ The helper builds `mcc` with `zig build -Dtarget=<target> -Doptimize=ReleaseSafe
 deterministic tarball, emits release inventory and CycloneDX SBOM JSON files, and
 writes `SHA256SUMS`.
 
-The current target set is deliberately limited to:
+The current target set is:
 
 - `x86_64-linux-musl`
 - `aarch64-linux-musl`
-
-macOS release tarballs are not part of the release workflow yet. Native macOS CI
-remains a qualification gate, but publishing macOS artifacts needs a proven packaging
-lane before the release matrix claims support.
+- `x86_64-macos`
+- `aarch64-macos`
 
 ## Not Yet Implemented
 
 - Private security advisory intake.
 - Automated minisign/cosign signing in the release workflow.
-- macOS release tarball publication.

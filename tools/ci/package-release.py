@@ -20,7 +20,12 @@ from dataclasses import dataclass
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-DEFAULT_TARGETS = ("x86_64-linux-musl", "aarch64-linux-musl")
+DEFAULT_TARGETS = (
+    "x86_64-linux-musl",
+    "aarch64-linux-musl",
+    "x86_64-macos",
+    "aarch64-macos",
+)
 REQUIRED_DOCS = (
     "README.md",
     "LICENSE",
@@ -239,6 +244,13 @@ def write_checksums(out_dir: pathlib.Path, packages: list[PackageResult], metada
     return path
 
 
+def display_path(path: pathlib.Path) -> str:
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def write_inventory(
     *,
     out_dir: pathlib.Path,
@@ -342,11 +354,11 @@ def release(args: argparse.Namespace) -> None:
     inventory = write_inventory(out_dir=out_dir, version=args.version, commit=commit, epoch=epoch, packages=packages)
     sbom = write_sbom(out_dir=out_dir, version=args.version, commit=commit, epoch=epoch, packages=packages)
     checksums = write_checksums(out_dir, packages, [inventory, sbom])
-    print(f"wrote {checksums.relative_to(ROOT)}")
-    print(f"wrote {inventory.relative_to(ROOT)}")
-    print(f"wrote {sbom.relative_to(ROOT)}")
+    print(f"wrote {display_path(checksums)}")
+    print(f"wrote {display_path(inventory)}")
+    print(f"wrote {display_path(sbom)}")
     for package in packages:
-        print(f"wrote {package.artifact_path.relative_to(ROOT)}")
+        print(f"wrote {display_path(package.artifact_path)}")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
