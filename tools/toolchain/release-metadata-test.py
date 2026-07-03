@@ -14,6 +14,11 @@ EXPECTED_VERSION = "0.7.0-dev"
 EXPECTED_UBUNTU_RUNNER = "ubuntu-24.04"
 EXPECTED_LLVM_MAJOR = "18"
 EXPECTED_ZIG_VERSION = "0.16.0"
+EXPECTED_DOCKER_BASE_IMAGE = "ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90"
+EXPECTED_ZIG_LINUX_SHA256 = (
+    "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00",
+    "ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17",
+)
 EXPECTED_NIGHTLY_BENCH_TARGETS = (
     "mem-bench",
     "llvm-mem-bench",
@@ -257,13 +262,28 @@ def main() -> None:
     require_nightly_bench_metadata()
 
     dockerfile = read("Dockerfile")
+    require_contains("Dockerfile", f"FROM {EXPECTED_DOCKER_BASE_IMAGE}")
     require_contains("Dockerfile", f"ARG LLVM_MAJOR={EXPECTED_LLVM_MAJOR}")
     require_contains("Dockerfile", "ENV MC_LLVM_MAJOR=${LLVM_MAJOR}")
     require_contains("Dockerfile", "clang-${LLVM_MAJOR} lld-${LLVM_MAJOR} llvm-${LLVM_MAJOR}")
+    if not re.search(r"(?m)^FROM\s+ubuntu:24\.04@sha256:[0-9a-f]{64}\s*$", dockerfile):
+        fail("Dockerfile base image must be pinned to the Ubuntu 24.04 manifest-list digest")
+    if re.search(r"(?m)^FROM\s+ubuntu:24\.04\s*$", dockerfile):
+        fail("Dockerfile base image must not float by tag alone")
+    for zig_sha256 in EXPECTED_ZIG_LINUX_SHA256:
+        require_contains("Dockerfile", zig_sha256)
+    for needle in (
+        "zig_sha256=",
+        "sha256sum -c -",
+        "https://ziglang.org/download/${ZIG_VERSION}/zig-${zarch}-linux-${ZIG_VERSION}.tar.xz",
+    ):
+        require_contains("Dockerfile", needle)
+    if "urllib.request.urlopen" in dockerfile:
+        fail("Dockerfile must not trust Zig download integrity from a build-time index fetch")
     if "sort -V | tail -n1" in dockerfile or "llvm-*" in dockerfile:
         fail("Dockerfile must select the pinned LLVM major, not the highest installed one")
 
-    print("PASS: release-metadata-test - version, Zig/LLVM pins, nightly fuzz/bench, and process docs are in sync")
+    print("PASS: release-metadata-test - version, Docker/Zig/LLVM pins, nightly fuzz/bench, and process docs are in sync")
 
 
 if __name__ == "__main__":

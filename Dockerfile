@@ -3,7 +3,11 @@
 # builds natively on linux/amd64 and linux/arm64 (Apple Silicon), selecting the matching
 # Zig release at build time. The repo itself is NOT copied in — mount it at /work (see
 # docker-compose.yml) so host edits are live; the image is just the toolchain.
-FROM ubuntu:24.04
+#
+# Multi-arch manifest-list digest from:
+#   docker buildx imagetools inspect ubuntu:24.04
+# Recorded 2026-07-03; keeps Docker's linux/amd64 and linux/arm64 selection.
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
 
 # Pinned to the version setup-zig fetches in CI.
 ARG ZIG_VERSION=0.16.0
@@ -47,16 +51,22 @@ RUN set -eux; \
     llc --version | grep -E "version ${LLVM_MAJOR}\\."; \
     opt --version | grep -E "version ${LLVM_MAJOR}\\."
 
-# Zig: fetch the exact release tarball for this build's architecture from ziglang.org's
-# index.json (naming-scheme- and arch-agnostic), so the same Dockerfile works on amd64/arm64.
+# Zig: fetch the exact release tarball for this build's architecture and verify it against
+# committed SHA-256 values from Zig's official https://ziglang.org/download/index.json
+# for 0.16.0, recorded 2026-07-03.
 RUN set -eux; \
     case "$(uname -m)" in \
-        x86_64) zarch=x86_64 ;; \
-        aarch64|arm64) zarch=aarch64 ;; \
+        x86_64) \
+            zarch=x86_64; \
+            zig_sha256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00 ;; \
+        aarch64|arm64) \
+            zarch=aarch64; \
+            zig_sha256=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17 ;; \
         *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    url="$(python3 -c "import json,urllib.request; d=json.load(urllib.request.urlopen('https://ziglang.org/download/index.json')); print(d['${ZIG_VERSION}']['${zarch}-linux']['tarball'])")"; \
+    url="https://ziglang.org/download/${ZIG_VERSION}/zig-${zarch}-linux-${ZIG_VERSION}.tar.xz"; \
     wget -qO /tmp/zig.tar.xz "$url"; \
+    echo "${zig_sha256}  /tmp/zig.tar.xz" | sha256sum -c -; \
     mkdir -p /opt/zig; \
     tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
     ln -sf /opt/zig/zig /usr/local/bin/zig; \
