@@ -37,7 +37,8 @@ Before tagging a release:
    `-Dversion=<version>` via `tools/ci/package-release.py`.
 8. Confirm the dry-run workflow artifact contains tarballs for
    `x86_64-linux-musl` and `aarch64-linux-musl`.
-   Each tarball must contain `bin/mcc`, `std/`, `tools/toolchain/mcc-cc.sh`,
+   Each tarball must contain `bin/mcc`, `bin/mcc-real`, `std/`,
+   `tools/toolchain/mcc-build.sh`, `tools/toolchain/mcc-cc.sh`,
    `tools/toolchain/mcc-llvm-cc.sh`, `README.md`, `LICENSE`, `SECURITY.md`,
    `STABILITY.md`, `CHANGELOG.md`, and `THIRD-PARTY-LICENSES.md`.
 9. Confirm `SHA256SUMS`, `mcc-<version>-release-inventory.json`, and

@@ -31,7 +31,9 @@ REQUIRED_DOCS = (
 )
 REQUIRED_PACKAGE_PATHS = (
     "bin/mcc",
+    "bin/mcc-real",
     "std/",
+    "tools/toolchain/mcc-build.sh",
     "tools/toolchain/mcc-cc.sh",
     "tools/toolchain/mcc-llvm-cc.sh",
     *REQUIRED_DOCS,
@@ -103,7 +105,7 @@ def require_tree() -> None:
             missing.append(path)
     if not (ROOT / "std").is_dir():
         missing.append("std/")
-    for path in ("tools/toolchain/mcc-cc.sh", "tools/toolchain/mcc-llvm-cc.sh"):
+    for path in ("tools/toolchain/mcc-build.sh", "tools/toolchain/mcc-cc.sh", "tools/toolchain/mcc-llvm-cc.sh"):
         if not (ROOT / path).is_file():
             missing.append(path)
     if missing:
@@ -139,13 +141,20 @@ def package_files(prefix: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
     if not mcc.is_file():
         fail(f"missing built compiler at {mcc}")
     files.append((mcc, "bin/mcc"))
+    mcc_real = prefix / "bin" / "mcc-real"
+    if not mcc_real.is_file():
+        fail(f"missing private compiler at {mcc_real}")
+    files.append((mcc_real, "bin/mcc-real"))
 
     for source in sorted((ROOT / "std").rglob("*")):
         if source.is_file():
             files.append((source, source.relative_to(ROOT).as_posix()))
 
-    for path in ("tools/toolchain/mcc-cc.sh", "tools/toolchain/mcc-llvm-cc.sh"):
-        files.append((ROOT / path, path))
+    for path in ("tools/toolchain/mcc-build.sh", "tools/toolchain/mcc-cc.sh", "tools/toolchain/mcc-llvm-cc.sh"):
+        source = prefix / path
+        if not source.is_file():
+            fail(f"missing installed toolchain helper at {source}")
+        files.append((source, path))
     for path in REQUIRED_DOCS:
         files.append((ROOT / path, path))
     return sorted(files, key=lambda item: item[1])

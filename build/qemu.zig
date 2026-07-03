@@ -32,6 +32,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "cc-test", "Compile an MC module to an object with mcc-cc, link, and run it", &.{ "bash", "tools/toolchain/mcc-cc-test.sh", "zig-out/bin/mcc" });
 
+    _ = h.addScriptTest(ctx, "mcc-build-test", "Compile and run a hosted executable through installed `mcc build`", &.{ "bash", "tools/toolchain/mcc-build-test.sh", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "llvm-cc-test", "Compile an MC module to an object with mcc-llvm-cc, link, and run it", &.{ "bash", "tools/toolchain/mcc-llvm-cc-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "std-test", "Compile std/core, link it against a C driver, and run the checks", &.{ "bash", "tools/toolchain/std-test.sh", "zig-out/bin/mcc" });

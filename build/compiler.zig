@@ -1,7 +1,8 @@
 const std = @import("std");
 const h = @import("helpers.zig");
 
-/// Builds the `mcc` compiler executable, installs it, wires the `run` and `test`
+/// Builds the private compiler executable, installs the public `mcc` launcher,
+/// wires the `run` and `test`
 /// (in-process unit tests) steps, and returns a Ctx whose install step the other
 /// modules hang their per-fixture commands off of. The `test` command step is
 /// registered into the Ctx so the tier aggregations can depend on it by name.
@@ -20,10 +21,14 @@ pub fn build(b: *std.Build) h.Ctx {
     root_module.addOptions("build_options", options);
 
     const exe = b.addExecutable(.{
-        .name = "mcc",
+        .name = "mcc-real",
         .root_module = root_module,
     });
     b.installArtifact(exe);
+    b.installBinFile("tools/toolchain/mcc-launcher.sh", "mcc");
+    b.installFile("tools/toolchain/mcc-build.sh", "tools/toolchain/mcc-build.sh");
+    b.installFile("tools/toolchain/mcc-cc.sh", "tools/toolchain/mcc-cc.sh");
+    b.installFile("tools/toolchain/mcc-llvm-cc.sh", "tools/toolchain/mcc-llvm-cc.sh");
 
     var ctx = h.Ctx.init(b, b.getInstallStep());
 

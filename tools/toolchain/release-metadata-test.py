@@ -48,7 +48,9 @@ EXPECTED_RELEASE_TARGETS = (
 )
 EXPECTED_RELEASE_PATHS = (
     "bin/mcc",
+    "bin/mcc-real",
     "std/",
+    "tools/toolchain/mcc-build.sh",
     "tools/toolchain/mcc-cc.sh",
     "tools/toolchain/mcc-llvm-cc.sh",
     "README.md",
