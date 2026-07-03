@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const diagnostics = @import("diagnostics.zig");
 const lower_c = @import("lower_c.zig");
 const lower_llvm = @import("lower_llvm.zig");
 
@@ -77,6 +78,9 @@ pub const LowerOptions = struct {
     /// mnemonics) without the arch asm. OFF by default, so kernel/bare-metal builds
     /// are byte-for-byte unchanged; only host-native logic tests pass it.
     stub_asm: bool = false,
+    /// Optional reporter used by backends to turn expected unsupported lowering
+    /// bailouts into source-spanned diagnostics instead of raw backend errors.
+    reporter: ?*diagnostics.Reporter = null,
 };
 
 /// A code-generation backend: the seam at which `main.zig` selects a target and

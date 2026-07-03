@@ -17,6 +17,7 @@ these codes, remove the row; the gate fails on redundant or stale entries.
 | `E_ASYNC_AWAIT_UNRESOLVED` | Async lowering fail-closed path for await shapes that cannot be resolved before semantic analysis. Existing async bad fixtures cover user-facing unsupported constructs; this path needs a targeted future fixture when dynamic-future await work resumes. |
 | `E_ASYNC_BRANCH_UNSUPPORTED` | Async v0 structural limitation for await-bearing branch shapes. Current async bad coverage exercises the general unsupported path; individual branch-shape fixtures are deferred until the async subset is expanded. |
 | `E_ASYNC_LOOP_UNSUPPORTED` | Async v0 structural limitation for await-bearing loop shapes. Current async bad coverage exercises the general unsupported path; individual loop-shape fixtures are deferred until the async subset is expanded. |
+| `E_BACKEND_UNSUPPORTED` | CLI backend integration path is covered by `diagnostics-test`, which creates temporary C and LLVM backend unsupported fixtures and asserts source-spanned diagnostics instead of raw backend errors. |
 | `E_CONST_GET_BASE` | `const_get` intrinsic misuse for non-array bases. This is a narrow compile-time intrinsic edge without a dedicated negative fixture yet. |
 | `E_CONST_GET_BOUNDS` | `const_get` intrinsic compile-time bounds misuse. This is a narrow intrinsic edge without a dedicated negative fixture yet. |
 | `E_CONST_GET_INDEX` | `const_get` intrinsic arity/index misuse. This is a narrow intrinsic edge without a dedicated negative fixture yet. |

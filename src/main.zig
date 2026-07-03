@@ -686,7 +686,14 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, artifact_source_path
     const be = backend.byName("c").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = profile, .source_path = artifact_source_path, .checks = checks, .stub_asm = stub_asm });
+    be.lower(allocator, module, &output, .{ .profile = profile, .source_path = artifact_source_path, .checks = checks, .stub_asm = stub_asm, .reporter = &diag }) catch |err| switch (err) {
+        error.UnsupportedCEmission => {
+            if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
+            diag.render();
+            return error.EmitCFailed;
+        },
+        else => return err,
+    };
     try writeStdout(output.items);
 }
 
@@ -762,8 +769,36 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
     const be = backend.byName("llvm").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = .kernel, .source_path = path, .target_arch = target_arch, .checks = checks, .stub_asm = stub_asm });
+    be.lower(allocator, module, &output, .{ .profile = .kernel, .source_path = path, .target_arch = target_arch, .checks = checks, .stub_asm = stub_asm, .reporter = &diag }) catch |err| switch (err) {
+        error.UnsupportedLlvmEmission => {
+            if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "LLVM");
+            diag.render();
+            return error.EmitLlvmFailed;
+        },
+        else => return err,
+    };
     try writeStdout(output.items);
+}
+
+fn reportBackendUnsupportedFallback(diag: *diagnostics.Reporter, module: ast.Module, backend_name: []const u8) void {
+    diag.err(backendUnsupportedFallbackSpan(module), "E_BACKEND_UNSUPPORTED: {s} backend does not yet support this construct", .{backend_name});
+}
+
+fn backendUnsupportedFallbackSpan(module: ast.Module) ast.Span {
+    for (module.decls) |decl| {
+        switch (decl.kind) {
+            .fn_decl => |fn_decl| {
+                if (fn_decl.body) |body| {
+                    if (body.items.len > 0) return body.items[0].span;
+                    return fn_decl.name.span;
+                }
+            },
+            .global_decl => |global| if (global.init) |init| return init.span else return global.name.span,
+            else => {},
+        }
+    }
+    if (module.decls.len > 0) return module.decls[0].span;
+    return .{ .offset = 0, .len = 1, .line = 1, .column = 1 };
 }
 
 // `emit-layout`: emit a generated C header asserting MC's authoritative layout (sizeof + each

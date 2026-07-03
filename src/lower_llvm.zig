@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const switch_lower = @import("switch_lower.zig");
@@ -191,7 +192,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    try appendLlvmChecked(allocator, module, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch);
+    try appendLlvmCheckedReport(allocator, module, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch, opts.reporter);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
@@ -203,6 +204,10 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
 }
 
 pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch) !void {
+    try appendLlvmCheckedReport(allocator, module, out, source_path, checks, stub_asm, target_arch, null);
+}
+
+fn appendLlvmCheckedReport(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, reporter: ?*diagnostics.Reporter) !void {
     const optimize = checks.optimize;
     const ksan = checks.ksan;
     const msan = checks.msan;
@@ -256,6 +261,7 @@ pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: 
         .debug_locations = std.ArrayList(DebugLocation).empty,
         .source_path = source_path,
         .target_arch = target_arch,
+        .reporter = reporter,
         .ksan = ksan,
         .msan = msan,
         .csan = csan,
@@ -405,6 +411,7 @@ const LlvmEmitter = struct {
     current_function: ?[]const u8 = null,
     source_path: []const u8,
     target_arch: backend_mod.TargetArch,
+    reporter: ?*diagnostics.Reporter = null,
     // KASAN profile (D2.1): when true, each raw.load/raw.store emits a
     // `call void @mc_ksan_check(i64 addr, i64 size)` before the volatile access, so a
     // poisoned (freed/redzone) access traps at access time. Default false = no hook call.
@@ -1107,6 +1114,17 @@ const LlvmEmitter = struct {
         try self.out.appendSlice(self.allocator, ")\n\n");
     }
 
+    fn reportUnsupported(self: *LlvmEmitter, span: ast.Span, construct: []const u8) void {
+        if (self.reporter) |reporter| {
+            reporter.err(span, "E_BACKEND_UNSUPPORTED: LLVM backend does not yet support {s}", .{construct});
+        }
+    }
+
+    fn unsupportedExprValue(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+        self.reportUnsupported(expr.span, @tagName(expr.kind));
+        return error.UnsupportedLlvmEmission;
+    }
+
     fn emitExpr(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) anyerror![]const u8 {
         // Tier 2 coercion: a `*T` value -> `*dyn Trait` builds the fat pointer
         // { data = <ptr>, vtable = @__vt_T_Trait } (the only safe path to a `*dyn`).
@@ -1157,7 +1175,7 @@ const LlvmEmitter = struct {
             else
                 try self.emitMemberLoad(node),
             .try_expr => |node| try self.emitTryExpr(node.operand.*, expected_ty),
-            else => error.UnsupportedLlvmEmission,
+            else => self.unsupportedExprValue(expr),
         };
         return try self.coerceExprValue(value, expr, expected_ty);
     }
@@ -1415,6 +1433,7 @@ const LlvmEmitter = struct {
                         if (terminated) return true;
                         continue;
                     }
+                    self.reportUnsupported(stmt.span, "switch statement");
                     return error.UnsupportedLlvmEmission;
                 },
                 .if_let => |node| {
@@ -1627,11 +1646,15 @@ const LlvmEmitter = struct {
                     _ = try self.emitCall(call, ret_ty);
                     return;
                 }
+                self.reportUnsupported(expr.span, "call statement");
                 return error.UnsupportedLlvmEmission;
             },
             .grouped => |inner| try self.emitExprStatement(inner.*),
             else => {
-                const ty = self.exprType(expr) orelse return error.UnsupportedLlvmEmission;
+                const ty = self.exprType(expr) orelse {
+                    self.reportUnsupported(expr.span, @tagName(expr.kind));
+                    return error.UnsupportedLlvmEmission;
+                };
                 _ = try self.emitExpr(expr, ty);
             },
         }

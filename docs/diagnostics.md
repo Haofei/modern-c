@@ -7,7 +7,7 @@ Regenerate it with:
 python3 tools/toolchain/diagnostics-reference.py --write
 ```
 
-Total codes: **217**.
+Total codes: **218**.
 
 | Code | Message examples | Source references |
 |---|---|---|
@@ -38,6 +38,7 @@ Total codes: **217**.
 | `E_ATOMIC_OPERATION` | atomic fetch_add/fetch_sub requires an integer payload type<br>unknown atomic operation | `src/mir_verify_util.zig:189`<br>`src/sema.zig:3407`<br>`src/sema.zig:3414` |
 | `E_ATOMIC_ORDERING` | atomic load ordering must be .relaxed, .acquire, or .seq_cst<br>atomic read-modify-write ordering must be a valid atomic memory order<br>atomic store ordering must be .relaxed, .release, or .seq_cst | `src/mir_verify_util.zig:192`<br>`src/sema.zig:3454`<br>`src/sema.zig:3458`<br>`src/sema.zig:3464`<br>`src/sema.zig:3468`<br>`src/sema.zig:3474`<br>_+1 more_ |
 | `E_AWAIT_OUTSIDE_ASYNC` | \`await\` is only valid inside an \`async fn\` (in '{s}') | `src/async_lower.zig:255` |
+| `E_BACKEND_UNSUPPORTED` | C backend does not yet support {s}<br>LLVM backend does not yet support {s}<br>{s} backend does not yet support this construct | `src/lower_c_emitter.zig:3150`<br>`src/lower_llvm.zig:1119`<br>`src/main.zig:784` |
 | `E_BITCAST_TYPE` | bitcast pointer-reinterpret may not cross into or out of an opaque/secret/userptr class<br>bitcast source must have a fixed scalar, pointer, or address-class layout<br>bitcast source type must be known<br>_+1 more_ | `src/mir_verify_util.zig:195`<br>`src/sema.zig:3739`<br>`src/sema.zig:3749`<br>`src/sema.zig:3752`<br>`src/sema.zig:3767` |
 | `E_BITWISE_ARITH_DOMAIN_OPERAND` | bitwise operations are not defined on this arithmetic domain | `src/mir_verify_util.zig:144`<br>`src/sema.zig:2609`<br>`src/sema.zig:2690` |
 | `E_BITWISE_BOOL_OPERAND` | bitwise operations are not defined on bool operands | `src/mir_verify_util.zig:155`<br>`src/sema.zig:2600`<br>`src/sema.zig:2684` |

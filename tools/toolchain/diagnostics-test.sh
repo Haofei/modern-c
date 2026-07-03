@@ -164,6 +164,35 @@ fi
 assert_contains "$imported_bom_output" "lib_bom.mc:2:12: error: E_UNKNOWN_IDENTIFIER" "imported-file BOM diagnostic location"
 assert_contains "$imported_bom_output" "  |     return nope;" "imported-file BOM source-line snippet"
 
+cat >"$WORK/backend_unsupported.mc" <<'MC'
+export fn main() -> u32 {
+    .{ 1, 2 };
+    return 0;
+}
+MC
+
+c_backend_output=""
+if c_backend_output=$("$MCC" emit-c "$WORK/backend_unsupported.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — unsupported C backend construct unexpectedly succeeded"
+    exit 1
+fi
+assert_contains "$c_backend_output" "backend_unsupported.mc:2:5: error: E_BACKEND_UNSUPPORTED" "C backend unsupported diagnostic location"
+assert_contains "$c_backend_output" "  |     .{ 1, 2 };" "C backend unsupported source-line snippet"
+assert_contains "$c_backend_output" "  |     ^~~~~~~~~" "C backend unsupported caret underline"
+assert_not_contains "$c_backend_output" "UnsupportedCEmission" "raw C backend unsupported error"
+assert_not_contains "$c_backend_output" "src/main.zig" "C backend Zig stack trace"
+
+llvm_backend_output=""
+if llvm_backend_output=$("$MCC" emit-llvm "$WORK/backend_unsupported.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — unsupported LLVM backend construct unexpectedly succeeded"
+    exit 1
+fi
+assert_contains "$llvm_backend_output" "backend_unsupported.mc:2:5: error: E_BACKEND_UNSUPPORTED" "LLVM backend unsupported diagnostic location"
+assert_contains "$llvm_backend_output" "  |     .{ 1, 2 };" "LLVM backend unsupported source-line snippet"
+assert_contains "$llvm_backend_output" "  |     ^~~~~~~~~" "LLVM backend unsupported caret underline"
+assert_not_contains "$llvm_backend_output" "UnsupportedLlvmEmission" "raw LLVM backend unsupported error"
+assert_not_contains "$llvm_backend_output" "src/main.zig" "LLVM backend Zig stack trace"
+
 printf '\xEF\xBB\xBFexport fn main() -> u32 {\n    return 0;\n}\n' >"$WORK/bom.mc"
 if ! "$MCC" check "$WORK/bom.mc" >/dev/null 2>&1; then
     echo "FAIL: diagnostics-test — UTF-8 BOM input did not parse"

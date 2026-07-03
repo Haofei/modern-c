@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const backend_mod = @import("backend.zig");
+const diagnostics = @import("diagnostics.zig");
 const mir = @import("mir.zig");
 const lower_c_emitter = @import("lower_c_emitter.zig");
 const lower_c_inspect = @import("lower_c_inspect.zig");
@@ -41,7 +42,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    return appendCProfileWithSourcePath(allocator, module, out, opts.profile, opts.source_path, opts.checks, opts.stub_asm);
+    return appendCProfileWithOptions(allocator, module, out, opts.profile, opts.source_path, opts.checks, opts.stub_asm, opts.reporter);
 }
 
 fn backendEmitMap(
@@ -75,6 +76,10 @@ pub fn appendCProfile(allocator: std.mem.Allocator, module: ast.Module, out: *st
 }
 
 pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool) anyerror!void {
+    return appendCProfileWithOptions(allocator, module, out, profile, source_path, checks, stub_asm, null);
+}
+
+fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
     const profile_marker = switch (profile) {
         .kernel => "/* mc-profile: kernel (freestanding) */\n",
         .hosted => "/* mc-profile: hosted (links libc + -lm) */\n",
@@ -93,6 +98,7 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
         checks.msan,
         checks.csan,
         stub_asm,
+        reporter,
     );
 }
 

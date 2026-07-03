@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const mir = @import("mir.zig");
@@ -138,7 +139,7 @@ pub fn appendLayoutAsserts(allocator: std.mem.Allocator, module: ast.Module, out
     var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = false });
     defer typed_mir.deinit();
 
-    var emitter = CEmitter.init(allocator, out, &typed_mir, null);
+    var emitter = CEmitter.init(allocator, out, &typed_mir, null, null);
     defer emitter.deinit();
     try emitter.collectModule(module);
 
@@ -157,7 +158,7 @@ pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast.Module, out: 
     var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = false });
     defer typed_mir.deinit();
 
-    var emitter = CEmitter.init(allocator, out, &typed_mir, null);
+    var emitter = CEmitter.init(allocator, out, &typed_mir, null, null);
     defer emitter.deinit();
     try emitter.collectModule(module);
 
@@ -194,11 +195,12 @@ pub fn appendModule(
     msan: bool,
     csan: bool,
     stub_asm: bool,
+    reporter: ?*diagnostics.Reporter,
 ) anyerror!void {
     var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
     defer typed_mir.deinit();
 
-    var emitter = CEmitter.init(allocator, out, &typed_mir, source_path);
+    var emitter = CEmitter.init(allocator, out, &typed_mir, source_path, reporter);
     emitter.ksan = ksan;
     emitter.msan = msan;
     emitter.csan = csan;
@@ -255,6 +257,7 @@ const CEmitter = struct {
     impl_methods: std.StringHashMap([]const ast.ImplTraitMethod),
     mir_module: *const mir.Module,
     source_path: ?[]const u8,
+    reporter: ?*diagnostics.Reporter = null,
     // Sanitizer profile (D2.1/2.2/2.3). When set, ordinary (non-raw, non-global) scalar LOADS
     // through a struct field / array element are wrapped with the shadow hook via a comma
     // expression, so a UAF/OOB reached through a field or element is caught — matching the LLVM
@@ -293,7 +296,7 @@ const CEmitter = struct {
     defer_stack: std.ArrayList(ast.Expr) = .empty,
     loop_defer_marks: std.ArrayList(usize) = .empty,
 
-    fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8), mir_module: *const mir.Module, source_path: ?[]const u8) CEmitter {
+    fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8), mir_module: *const mir.Module, source_path: ?[]const u8, reporter: ?*diagnostics.Reporter) CEmitter {
         return .{
             .allocator = allocator,
             .out = out,
@@ -323,6 +326,7 @@ const CEmitter = struct {
             .impl_methods = std.StringHashMap([]const ast.ImplTraitMethod).init(allocator),
             .mir_module = mir_module,
             .source_path = source_path,
+            .reporter = reporter,
             .temp_index = 0,
             .indent = 0,
         };
@@ -3141,7 +3145,14 @@ const CEmitter = struct {
         try appendLineDirective(self.allocator, self.out, self.source_path, span);
     }
 
+    fn reportUnsupported(self: *CEmitter, span: ast.Span, construct: []const u8) void {
+        if (self.reporter) |reporter| {
+            reporter.err(span, "E_BACKEND_UNSUPPORTED: C backend does not yet support {s}", .{construct});
+        }
+    }
+
     fn writeUnsupportedStmt(self: *CEmitter, stmt: ast.Stmt) !void {
+        self.reportUnsupported(stmt.span, @tagName(stmt.kind));
         try self.writeIndent();
         try self.out.print(
             self.allocator,
@@ -3376,8 +3387,8 @@ const CEmitter = struct {
         switch (expr.kind) {
             .ident => |ident| try self.emitIdentExpr(ident, locals),
             .int_literal, .float_literal, .char_literal, .bool_literal, .null_literal, .void_literal => try self.emitScalarLiteralExpr(expr),
-            .array_literal => try self.emitUnsupportedTargetlessAggregateExpr("array"),
-            .struct_literal => try self.emitUnsupportedTargetlessAggregateExpr("struct"),
+            .array_literal => try self.emitUnsupportedTargetlessAggregateExpr(expr, "array"),
+            .struct_literal => try self.emitUnsupportedTargetlessAggregateExpr(expr, "struct"),
             .grouped => |inner| try self.emitGroupedExpr(inner.*, locals),
             .unreachable_expr => try self.out.appendSlice(self.allocator, "mc_trap_Unreachable()"),
             .unary => try lower_c_expr.emitUnaryExpr(self.exprEmitContext(), expr, locals),
@@ -3393,7 +3404,8 @@ const CEmitter = struct {
         }
     }
 
-    fn emitUnsupportedTargetlessAggregateExpr(self: *CEmitter, kind: []const u8) !void {
+    fn emitUnsupportedTargetlessAggregateExpr(self: *CEmitter, expr: ast.Expr, kind: []const u8) !void {
+        self.reportUnsupported(expr.span, kind);
         try self.out.print(self.allocator, "/* unsupported targetless {s} literal */0", .{kind});
         return error.UnsupportedCEmission;
     }
@@ -3408,6 +3420,7 @@ const CEmitter = struct {
     }
 
     fn emitUnsupportedExpr(self: *CEmitter, expr: ast.Expr) !void {
+        self.reportUnsupported(expr.span, @tagName(expr.kind));
         try self.out.print(self.allocator, "/* unsupported expr: {s} */0", .{@tagName(expr.kind)});
         return error.UnsupportedCEmission;
     }
