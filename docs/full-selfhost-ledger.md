@@ -17,7 +17,7 @@ implementation and can be rerun from the recorded command.
 
 | Phase | Status | Corpus | Required evidence | Latest evidence |
 |---|---|---|---|---|
-| P0. Contract and harness | Green | Tiny full-selfhost manifest: hosted C run, negative diagnostic, LLVM object run; subset Stage0/Stage1/Stage2 scaffold | `zig build full-selfhost-p0` | PASS on 2026-07-03; true full self-hosting still NOT achieved. |
+| P0. Contract and harness | In progress | Tiny full-selfhost manifest: hosted C run, negative diagnostic, LLVM object run; subset Stage0/Stage1/Stage2 scaffold | `zig build full-selfhost-p0`; broader selector audit still required before full P0 is green | Initial harness slice PASS on 2026-07-03; true full self-hosting still NOT achieved. |
 | P1. Production architecture in MC | Not started | Initial multi-file corpus | Parser/sema oracle diff | None. |
 | P2. Full parser parity | Not started | `tests/spec/`, `std/`, selected `kernel/` | Parse oracle diff | None. |
 | P3. Full sema/checker parity | Not started | Positive and negative spec/hardening corpus | Sema oracle diff and hardening gates | None. |
