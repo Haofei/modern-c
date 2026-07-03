@@ -4624,6 +4624,10 @@ pub const Checker = struct {
         const dyn_checked = self.checkDynCoercionInitializer(target_ty, expr, ctx);
         const address_class_checked = checkAddressClassConversion(self, expr.span, target, returned);
         const local_escape_checked = self.checkLocalAddressReturn(target, expr, ctx);
+        const closure_local_escape = if (target == .closure) closureLocalAddressRoot(expr, ctx) else null;
+        if (closure_local_escape) |span| {
+            self.errorCode(span, "E_LOCAL_ADDRESS_ESCAPE", "cannot return a closure that captures local storage (the environment would dangle)");
+        }
         // (bug #3) Returning an aggregate literal that embeds `&local` makes the borrow dangle
         // once the frame is gone — even though the return TYPE is a struct/array, not a pointer.
         if (aggregateLocalAddressRoot(expr, ctx)) |span| {
@@ -6901,9 +6905,42 @@ fn exprCanInitializeType(target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) 
         const source_ty = addressableStorageType(operand.*, ctx) orelse return false;
         return addressOfMatchesPointerTarget(target_ty, source_ty, operand.*, ctx);
     }
+    if (literalCanInitializeType(target_ty, target, expr, ctx)) return true;
     const source_ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse exprDeclaredType(expr, ctx) orelse return false;
     if (sameTypeSyntaxCtx(source_ty, target_ty, ctx)) return true;
     return canInitialize(target, classifyTypeCtx(source_ty, ctx));
+}
+
+fn literalCanInitializeType(target_ty: ast.TypeExpr, target: TypeClass, expr: ast.Expr, ctx: Context) bool {
+    if (integerLiteralValue(expr)) |value| return integerLiteralFitsType(target_ty, target, value, ctx);
+    if (integerLiteralSyntaxOverflow(expr)) return false;
+    return switch (expr.kind) {
+        .grouped => |inner| literalCanInitializeType(target_ty, target, inner.*, ctx),
+        .float_literal => canInitialize(target, .float_literal),
+        .bool_literal => canInitialize(target, .bool),
+        .null_literal => canInitialize(target, .null_literal),
+        .void_literal => canInitialize(target, .void),
+        else => false,
+    };
+}
+
+fn integerLiteralFitsType(target_ty: ast.TypeExpr, target: TypeClass, value: LiteralValue, ctx: Context) bool {
+    if (target == .wrap or target == .sat) {
+        const bounds = arithmeticDomainInnerBounds(resolveAliasType(target_ty, ctx), if (target == .wrap) "wrap" else "sat", ctx) orelse return false;
+        return integerLiteralFitsBounds(value, bounds);
+    }
+    if (target == .secret) {
+        const inner = secretPayloadType(resolveAliasType(target_ty, ctx)) orelse return false;
+        const bounds = checkedIntBounds(classifyTypeCtx(inner, ctx)) orelse return false;
+        return integerLiteralFitsBounds(value, bounds);
+    }
+    const bounds = checkedIntBounds(target) orelse return canInitialize(target, .int_literal);
+    return integerLiteralFitsBounds(value, bounds);
+}
+
+fn integerLiteralFitsBounds(value: LiteralValue, bounds: IntBounds) bool {
+    if (value.negative) return bounds.signed and value.magnitude <= bounds.min_abs;
+    return value.magnitude <= bounds.max;
 }
 
 fn directCallName(callee: ast.Expr) ?[]const u8 {
@@ -6996,6 +7033,7 @@ fn aggregateLocalAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
         .struct_literal => |fields| {
             for (fields) |f| {
                 if (localAddressRoot(f.value, ctx)) |span| return span;
+                if (closureLocalAddressRoot(f.value, ctx)) |span| return span;
                 if (aggregateLocalAddressRoot(f.value, ctx)) |span| return span;
             }
             return null;
@@ -7003,6 +7041,7 @@ fn aggregateLocalAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
         .array_literal => |items| {
             for (items) |item| {
                 if (localAddressRoot(item, ctx)) |span| return span;
+                if (closureLocalAddressRoot(item, ctx)) |span| return span;
                 if (aggregateLocalAddressRoot(item, ctx)) |span| return span;
             }
             return null;
@@ -7011,9 +7050,25 @@ fn aggregateLocalAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
     };
 }
 
+fn closureLocalAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
+    return switch (expr.kind) {
+        .call => |node| if (isBindCallNode(node)) localAddressRoot(node.args[0], ctx) else null,
+        .ident => |ident| {
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            if (binding) |entry| {
+                if (entry.address_origin == .local) return expr.span;
+            }
+            return null;
+        },
+        .grouped => |inner| closureLocalAddressRoot(inner.*, ctx),
+        else => null,
+    };
+}
+
 fn addressOrigin(expr: ast.Expr, ctx: Context) AddressOrigin {
     return switch (expr.kind) {
         .address_of => |inner| if (localStorageRoot(inner.*, ctx) != null) .local else .none,
+        .call => if (closureLocalAddressRoot(expr, ctx) != null) .local else .none,
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| return entry.address_origin;

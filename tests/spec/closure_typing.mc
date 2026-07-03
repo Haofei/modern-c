@@ -2,7 +2,7 @@
 // SPEC: milestone=closures
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_CALL_ARG_COUNT,E_CLOSURE_SIGNATURE_MISMATCH,E_NO_IMPLICIT_CONVERSION
+// SPEC: check=E_CALL_ARG_COUNT,E_CLOSURE_SIGNATURE_MISMATCH,E_LOCAL_ADDRESS_ESCAPE,E_NO_IMPLICIT_CONVERSION
 
 struct Env {
     base: u32,
@@ -24,14 +24,27 @@ fn no_env(x: u32) -> u32 {
     return x;
 }
 
+fn add_scalar(env: u32, x: u32) -> u32 {
+    return env + x;
+}
+
 fn accept_bind_and_call() -> u32 {
     var env: Env = .{ .base = 3 };
     let cb: closure(u32) -> u32 = bind(&env, add_env);
     return cb(4);
 }
 
+fn accept_scalar_env_bind() -> u32 {
+    let cb: closure(u32) -> u32 = bind(3, add_scalar);
+    return cb(4);
+}
+
 fn accept_closure_param(cb: closure(u32) -> u32) -> u32 {
     return cb(5);
+}
+
+fn accept_return_closure_bound_to_param(env: *Env) -> closure(u32) -> u32 {
+    return bind(env, add_env);
 }
 
 fn reject_closure_call_arity(cb: closure(u32) -> u32) -> u32 {
@@ -60,4 +73,17 @@ fn reject_bind_missing_env_param() -> void {
     var env: Env = .{ .base = 1 };
     // EXPECT_ERROR: E_CLOSURE_SIGNATURE_MISMATCH
     let cb: closure() -> u32 = bind(&env, no_env);
+}
+
+fn reject_return_bind_local_env() -> closure(u32) -> u32 {
+    var env: Env = .{ .base = 1 };
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return bind(&env, add_env);
+}
+
+fn reject_return_bound_local_env() -> closure(u32) -> u32 {
+    var env: Env = .{ .base = 1 };
+    let cb: closure(u32) -> u32 = bind(&env, add_env);
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return cb;
 }
