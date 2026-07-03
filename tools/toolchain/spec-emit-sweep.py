@@ -29,6 +29,8 @@ from spec_sweep_lib import strip_expect_error  # shared comment-aware negative-f
 # already validates each one). A fixture carrying a real `lower-c` check must NEVER
 # be added here — that would hide a genuine emit regression.
 OUT_OF_SCOPE = {
+    "error_from_ambiguous.mc": "pure compile_error fixture; module-level ambiguity check the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_AMBIGUOUS_ERROR_CONVERSION owned by spec_tests.zig)",
+    "error_from_malformed.mc": "pure compile_error fixture; malformed-decl check the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_INVALID_ERROR_FROM owned by spec_tests.zig)",
     "secret.mc": "checker-only Secret<T> hardening type has no C lowering (phase=sema; E_SECRET_* owned by spec_tests.zig)",
     "rights_monotonic.mc": "opaque-rights hardening type has no C lowering (phase=sema; E_PRIVATE_FIELD owned by spec_tests.zig)",
     "soundness_use_after_move.mc": "accept/reject cases share move-typed defs the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_USE_AFTER_MOVE owned by spec_tests.zig)",

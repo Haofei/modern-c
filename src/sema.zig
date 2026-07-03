@@ -375,6 +375,7 @@ pub const Checker = struct {
         self.collectTaggedUnions(module, &tagged_unions);
         self.collectEnums(module, &enums);
         self.collectFunctions(module, &functions);
+        self.checkErrorFromDecls(module);
         self.collectGlobals(module, &globals);
 
         // Orphan rule: an `impl` of an `opaque struct` must live in the type's defining file,
@@ -2259,6 +2260,51 @@ pub const Checker = struct {
     // `E1 != E2`. `?` invokes it on the error path (see src/error_from.zig). When no
     // conversion is declared, reject rather than silently reinterpret the error
     // bits. The `? else MAPPED` form supplies its own error and is left untouched.
+    // Validate every `#[error_from]` conversion declaration (G8). Each must be shaped `fn(E1) -> E2`
+    // with exactly one NAMED source-error parameter and a NAMED target-error return type (a malformed
+    // one was previously ignored, then surfaced misleadingly as E_NO_ERROR_CONVERSION at the `?` site).
+    // And each (E1 -> E2) pair must be UNIQUE: two conversions for the same error types are ambiguous
+    // (the resolver would silently pick one by iteration order), so reject them here.
+    fn checkErrorFromDecls(self: *Checker, module: ast.Module) void {
+        var seen = std.StringHashMap(void).init(self.reporter.allocator);
+        defer {
+            var it = seen.keyIterator();
+            while (it.next()) |k| self.reporter.allocator.free(k.*);
+            seen.deinit();
+        }
+        for (module.decls) |decl| {
+            const fn_decl = switch (decl.kind) {
+                .fn_decl, .extern_fn => |fd| fd,
+                else => continue,
+            };
+            if (!error_from.hasAttr(decl.attrs)) continue;
+            const span = fn_decl.name.span;
+            if (fn_decl.params.len != 1) {
+                self.errorCode(span, "E_INVALID_ERROR_FROM", "#[error_from] fn must take exactly one parameter (the source error type)");
+                continue;
+            }
+            const from = ast_query.typeName(fn_decl.params[0].ty);
+            const to = if (fn_decl.return_type) |r| ast_query.typeName(r) else null;
+            if (from == null or to == null) {
+                self.errorCode(span, "E_INVALID_ERROR_FROM", "#[error_from] fn must convert one named error type to another (fn(E1) -> E2)");
+                continue;
+            }
+            const key = std.fmt.allocPrint(self.reporter.allocator, "{s}\x00{s}", .{ from.?, to.? }) catch {
+                self.oom = true;
+                continue;
+            };
+            if (seen.contains(key)) {
+                self.reporter.allocator.free(key);
+                self.errorCode(span, "E_AMBIGUOUS_ERROR_CONVERSION", "multiple #[error_from] conversions for the same source and target error types; keep exactly one");
+            } else {
+                seen.put(key, {}) catch {
+                    self.reporter.allocator.free(key);
+                    self.oom = true;
+                };
+            }
+        }
+    }
+
     fn checkTryErrorConversion(self: *Checker, span: ast.Span, inner: anytype, ctx: Context) void {
         if (inner.mapped != null) return; // explicit `? else` remap owns the error
         const return_ty = ctx.return_ty orelse return; // no return type: `?` traps, not propagate
