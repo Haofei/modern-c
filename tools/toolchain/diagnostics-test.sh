@@ -73,6 +73,8 @@ if boundary_output=$("$MCC" check "$WORK/root_import.mc" 2>&1); then
     exit 1
 fi
 assert_contains "$boundary_output" "lib.mc:2:12: error: E_UNKNOWN_IDENTIFIER" "imported-file diagnostic location"
+assert_contains "$boundary_output" "  |     return nope;" "source-line snippet"
+assert_contains "$boundary_output" "  |            ^~~~" "caret underline"
 
 printf '\xEF\xBB\xBFexport fn main() -> u32 {\n    return 0;\n}\n' >"$WORK/bom.mc"
 if ! "$MCC" check "$WORK/bom.mc" >/dev/null 2>&1; then

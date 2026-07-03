@@ -29,6 +29,12 @@ pub const Location = struct {
     column: usize,
 };
 
+pub const SourceLine = struct {
+    text: []const u8,
+    column: usize,
+    highlight_len: usize,
+};
+
 pub const Reporter = struct {
     allocator: std.mem.Allocator,
     path: []const u8,
@@ -88,6 +94,15 @@ pub const Reporter = struct {
                 severity,
                 diag.message,
             });
+            if (self.sourceLine(diag.span)) |line| {
+                std.debug.print("  | {s}\n  | ", .{line.text});
+                var pad: usize = 1;
+                while (pad < line.column) : (pad += 1) std.debug.print(" ", .{});
+                std.debug.print("^", .{});
+                var tail: usize = 1;
+                while (tail < line.highlight_len) : (tail += 1) std.debug.print("~", .{});
+                std.debug.print("\n", .{});
+            }
         }
     }
 
@@ -116,6 +131,23 @@ pub const Reporter = struct {
             }
         }
         return .{ .path = boundary.path, .line = line, .column = column };
+    }
+
+    pub fn sourceLine(self: *const Reporter, span: Span) ?SourceLine {
+        if (self.source.len == 0) return null;
+        const bounded_offset = @min(span.offset, self.source.len - 1);
+        var start = bounded_offset;
+        while (start > 0 and self.source[start - 1] != '\n') : (start -= 1) {}
+        var end = bounded_offset;
+        while (end < self.source.len and self.source[end] != '\n' and self.source[end] != '\r') : (end += 1) {}
+        const line = self.source[start..end];
+        if (std.mem.trim(u8, line, " \t\r").len == 0) return null;
+
+        const column = if (span.offset >= start) span.offset - start + 1 else span.column;
+        const offset_in_line = if (column > 0) column - 1 else 0;
+        const remaining = if (offset_in_line < line.len) line.len - offset_in_line else 0;
+        const highlight_len = @max(@as(usize, 1), @min(span.len, remaining));
+        return .{ .text = line, .column = column, .highlight_len = highlight_len };
     }
 };
 
@@ -147,4 +179,24 @@ test "Reporter maps flattened import offsets back to source file locations" {
     try std.testing.expectEqualStrings("lib.mc", loc.path);
     try std.testing.expectEqual(@as(usize, 2), loc.line);
     try std.testing.expectEqual(@as(usize, 5), loc.column);
+}
+
+test "Reporter extracts source line and caret width for a diagnostic span" {
+    const source = "fn f() -> u32 {\n    return missing;\n}\n";
+    var reporter = Reporter.init(std.testing.allocator, "line.mc", source);
+    defer reporter.deinit();
+
+    const offset = std.mem.indexOf(u8, source, "missing").?;
+    const line = reporter.sourceLine(.{ .offset = offset, .len = "missing".len, .line = 2, .column = 12 }).?;
+    try std.testing.expectEqualStrings("    return missing;", line.text);
+    try std.testing.expectEqual(@as(usize, 12), line.column);
+    try std.testing.expectEqual(@as(usize, "missing".len), line.highlight_len);
+}
+
+test "Reporter omits snippets for blanked import lines" {
+    const source = "                         \nfn f() -> void {}\n";
+    var reporter = Reporter.init(std.testing.allocator, "blank.mc", source);
+    defer reporter.deinit();
+
+    try std.testing.expectEqual(@as(?SourceLine, null), reporter.sourceLine(.{ .offset = 0, .len = 6, .line = 1, .column = 1 }));
 }
