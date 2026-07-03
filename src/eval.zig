@@ -403,6 +403,7 @@ pub const ComptimeScope = struct {
     // Arithmetic domain + width per binding (section 5), so the folder can wrap/saturate/
     // trap a `wrap<uN>`/`sat<uN>`/checked `uN` operation as the runtime would.
     domains: std.StringHashMap(DomainWidth),
+    oom: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) ComptimeScope {
         return .{
@@ -420,25 +421,41 @@ pub const ComptimeScope = struct {
         self.domains.deinit();
     }
 
+    pub fn hasOom(self: *const ComptimeScope) bool {
+        return self.oom;
+    }
+
     pub fn bind(self: *ComptimeScope, name: []const u8, value: ComptimeValue) !void {
-        try self.bindings.put(name, value);
+        self.bindings.put(name, value) catch |err| {
+            self.oom = true;
+            return err;
+        };
     }
 
     pub fn bindType(self: *ComptimeScope, name: []const u8, ty: ast.TypeExpr) !void {
-        try self.type_bindings.put(name, ty);
+        self.type_bindings.put(name, ty) catch |err| {
+            self.oom = true;
+            return err;
+        };
     }
 
-    pub fn bindWidth(self: *ComptimeScope, name: []const u8, bits: u16) void {
-        self.widths.put(name, bits) catch {};
+    pub fn bindWidth(self: *ComptimeScope, name: []const u8, bits: u16) std.mem.Allocator.Error!void {
+        self.widths.put(name, bits) catch {
+            self.oom = true;
+            return error.OutOfMemory;
+        };
     }
 
     // Bind a name's full domain+width from its declared type (covers `wrap`/`sat`/checked);
     // also records the bit width so width-sensitive bitwise ops keep working.
-    pub fn bindTypeInfo(self: *ComptimeScope, name: []const u8, ty: ast.TypeExpr) void {
-        if (comptimeTypeBitWidth(ty)) |bits| self.widths.put(name, bits) catch {};
+    pub fn bindTypeInfo(self: *ComptimeScope, name: []const u8, ty: ast.TypeExpr) std.mem.Allocator.Error!void {
+        if (comptimeTypeBitWidth(ty)) |bits| try self.bindWidth(name, bits);
         if (comptimeTypeDomainWidth(ty)) |dw| {
-            self.domains.put(name, dw) catch {};
-            self.widths.put(name, dw.bits) catch {};
+            self.domains.put(name, dw) catch {
+                self.oom = true;
+                return error.OutOfMemory;
+            };
+            try self.bindWidth(name, dw.bits);
         }
     }
 };
@@ -641,10 +658,11 @@ pub fn collectConstGlobalsWithOptions(
                 const cloned = try cloneComptimeValue(allocator, v);
                 errdefer freeComptimeValue(allocator, cloned);
                 try out.put(global.name.text, cloned);
-                if (global.ty) |ty| scope.bindTypeInfo(global.name.text, ty);
+                if (global.ty) |ty| try scope.bindTypeInfo(global.name.text, ty);
             },
             else => {},
         }
+        if (scope.hasOom()) return error.OutOfMemory;
     }
 }
 
@@ -1062,7 +1080,10 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
     for (fn_decl.params, call.args) |param, arg| {
         if (isComptimeTypeParam(param)) {
             const ty = comptimeTypeArg(scope, arg) orelse return .unknown;
-            callee_scope.bindType(param.name.text, ty) catch return .unknown;
+            callee_scope.bindType(param.name.text, ty) catch {
+                @constCast(scope).oom = true;
+                return .unknown;
+            };
             continue;
         }
         const value = switch (foldComptimeExpr(scope, arg)) {
@@ -1070,10 +1091,18 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
             .trap => return .trap,
             .unknown => return .unknown,
         };
-        callee_scope.bind(param.name.text, value) catch return .unknown;
-        callee_scope.bindTypeInfo(param.name.text, param.ty);
+        callee_scope.bind(param.name.text, value) catch {
+            @constCast(scope).oom = true;
+            return .unknown;
+        };
+        callee_scope.bindTypeInfo(param.name.text, param.ty) catch {
+            @constCast(scope).oom = true;
+            return .unknown;
+        };
     }
-    return foldComptimeFnBody(&callee_scope, body);
+    const folded = foldComptimeFnBody(&callee_scope, body);
+    if (callee_scope.hasOom()) @constCast(scope).oom = true;
+    return folded;
 }
 
 // Iteration fuel for a comptime `while` loop (section 22: "loops with a
@@ -1122,13 +1151,13 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                 // folds to .unknown, which is conservative.
                 if (init_expr.kind == .uninit_literal) {
                     scope.bind(local.names[0].text, .void) catch return .unknown;
-                    if (local.ty) |lty| scope.bindTypeInfo(local.names[0].text, lty);
+                    if (local.ty) |lty| scope.bindTypeInfo(local.names[0].text, lty) catch return .unknown;
                     continue;
                 }
                 switch (foldComptimeExpr(scope, init_expr)) {
                     .value => |value| {
                         scope.bind(local.names[0].text, value) catch return .unknown;
-                        if (local.ty) |lty| scope.bindTypeInfo(local.names[0].text, lty);
+                        if (local.ty) |lty| scope.bindTypeInfo(local.names[0].text, lty) catch return .unknown;
                     },
                     .trap => return .trap,
                     .unknown => return .unknown,

@@ -98,6 +98,83 @@ test "foldComptimeExpr guards full-width integer bitcasts" {
     try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, unsigned_128)) == .unknown);
 }
 
+test "ComptimeScope records width metadata allocation failure" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var scope = ComptimeScope.init(failing.allocator());
+    defer scope.deinit();
+
+    scope.bindWidth("x", 32) catch {};
+    try std.testing.expect(scope.hasOom());
+}
+
+test "ComptimeScope records domain metadata allocation failure" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var scope = ComptimeScope.init(failing.allocator());
+    defer scope.deinit();
+
+    var args = [_]ast.TypeExpr{testType("u32")};
+    scope.bindTypeInfo("x", .{ .span = zero_span, .kind = .{ .generic = .{
+        .base = .{ .text = "wrap", .span = zero_span },
+        .args = &args,
+    } } }) catch {};
+    try std.testing.expect(scope.hasOom());
+}
+
+test "const fn parameter metadata OOM does not silently use untyped arithmetic" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const lhs = ast.Param{ .name = .{ .text = "lhs", .span = zero_span }, .ty = testType("u8") };
+    const rhs = ast.Param{ .name = .{ .text = "rhs", .span = zero_span }, .ty = testType("u8") };
+    const sum = try testBinary(a, .add, try testIdent(a, "lhs"), try testIdent(a, "rhs"));
+    const ret_stmt = ast.Stmt{ .span = zero_span, .kind = .{ .@"return" = sum.* } };
+    const fn_decl = ast.FnDecl{
+        .name = .{ .text = "checked_add", .span = zero_span },
+        .params = try a.dupe(ast.Param, &.{ lhs, rhs }),
+        .return_type = testType("u8"),
+        .body = .{ .span = zero_span, .items = try a.dupe(ast.Stmt, &.{ret_stmt}) },
+        .is_const = true,
+        .abi = null,
+        .exported = false,
+    };
+
+    var funcs = std.StringHashMap(ast.FnDecl).init(std.testing.allocator);
+    defer funcs.deinit();
+    try funcs.put("checked_add", fn_decl);
+
+    const call = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .call = .{
+        .callee = try testIdent(a, "checked_add"),
+        .type_args = &.{},
+        .args = try a.dupe(ast.Expr, &.{ (try testInt(a, "200")).*, (try testInt(a, "100")).* }),
+    } } });
+
+    var ok_scope = ComptimeScope.init(std.testing.allocator);
+    defer ok_scope.deinit();
+    ok_scope.funcs = &funcs;
+    try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&ok_scope, call.*)) == .trap);
+
+    var saw_oom = false;
+    for (0..16) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+        var fail_scope = ComptimeScope.init(failing.allocator());
+        defer fail_scope.deinit();
+        fail_scope.funcs = &funcs;
+        const folded = foldComptimeExpr(&fail_scope, call.*);
+        if (!fail_scope.hasOom()) continue;
+        saw_oom = true;
+        switch (folded) {
+            .value => |value| switch (value) {
+                .int => |n| try std.testing.expect(n != 300),
+                else => {},
+            },
+            else => {},
+        }
+        break;
+    }
+    try std.testing.expect(saw_oom);
+}
+
 test "comptime array size helper returns unknown on i128 overflow" {
     try std.testing.expectEqual(@as(?i128, 32), layout.comptimeArraySize(@as(usize, 4), 8));
     try std.testing.expect(layout.comptimeArraySize(@as(usize, 2), std.math.maxInt(i128)) == null);

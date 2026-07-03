@@ -646,20 +646,21 @@ const CEmitter = struct {
         var scope = eval.ComptimeScope.init(fold_alloc);
         defer scope.deinit();
         var reflect_env = self.reflectEnv();
-        self.seedConstFoldScope(&scope, &reflect_env);
+        if (!self.seedConstFoldScope(&scope, &reflect_env)) return null;
         return switch (eval.foldComptimeExpr(&scope, expr)) {
             .value => |v| eval.cloneComptimeValue(self.scratch.allocator(), v) catch null,
             else => null,
         };
     }
 
-    fn seedConstFoldScope(self: *CEmitter, scope: *eval.ComptimeScope, reflect_env: *ReflectEnv) void {
+    fn seedConstFoldScope(self: *CEmitter, scope: *eval.ComptimeScope, reflect_env: *ReflectEnv) bool {
         scope.funcs = &self.const_fns;
         scope.globals = &self.const_globals;
         scope.reflect = lower_c_reflect.comptimeReflectThunk;
         scope.reflect_ctx = reflect_env;
         var widths = self.const_global_widths.iterator();
-        while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
+        while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*) catch return false;
+        return true;
     }
 
     fn reflectEnv(self: *CEmitter) ReflectEnv {

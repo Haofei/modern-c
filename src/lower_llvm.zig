@@ -802,16 +802,16 @@ const LlvmEmitter = struct {
         var scope = eval.ComptimeScope.init(fold_alloc);
         defer scope.deinit();
         var reflect_env = self.reflectEnv();
-        self.seedConstFoldScope(&scope, &reflect_env);
+        if (!self.seedConstFoldScope(&scope, &reflect_env)) return null;
         return switch (eval.foldComptimeExpr(&scope, expr)) {
             .value => |v| eval.cloneComptimeValue(self.scratch.allocator(), v) catch null,
             else => null,
         };
     }
 
-    fn seedConstFoldScope(self: *LlvmEmitter, scope: *eval.ComptimeScope, reflect_env: *LlvmReflectEnv) void {
+    fn seedConstFoldScope(self: *LlvmEmitter, scope: *eval.ComptimeScope, reflect_env: *LlvmReflectEnv) bool {
         _ = self;
-        lower_llvm_reflect.seedConstFoldScope(reflect_env, scope);
+        return lower_llvm_reflect.seedConstFoldScope(reflect_env, scope);
     }
 
     fn reflectEnv(self: *LlvmEmitter) LlvmReflectEnv {

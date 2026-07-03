@@ -1270,10 +1270,16 @@ pub const Checker = struct {
         defer if (fb_arena == null) eval.releaseFoldScratch();
         var scope = eval.ComptimeScope.init(fold_alloc);
         self.seedComptimeScope(&scope);
-        return switch (eval.foldComptimeExpr(&scope, expr)) {
+        if (scope.hasOom()) {
+            self.noteComptimeOom(&scope);
+            return false;
+        }
+        const folds = switch (eval.foldComptimeExpr(&scope, expr)) {
             .value => true,
             else => false,
         };
+        self.noteComptimeOom(&scope);
+        return folds;
     }
 
     fn seedComptimeScope(self: *Checker, scope: *eval.ComptimeScope) void {
@@ -1285,8 +1291,17 @@ pub const Checker = struct {
         }
         if (self.const_global_widths) |widths| {
             var it = widths.iterator();
-            while (it.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
+            while (it.next()) |entry| {
+                scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*) catch {
+                    self.oom = true;
+                    return;
+                };
+            }
         }
+    }
+
+    fn noteComptimeOom(self: *Checker, scope: *const eval.ComptimeScope) void {
+        if (scope.hasOom()) self.oom = true;
     }
 
     fn checkFn(self: *Checker, fn_decl: ast.FnDecl, abi_boundary: bool, no_lang_trap: bool, irq_context: bool, bounded: bool, is_naked: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
@@ -1829,14 +1844,26 @@ pub const Checker = struct {
                     // `var x: T = uninit;` (e.g. an expression-`switch` desugar temp): bind a
                     // void placeholder so a following assignment can fill it.
                     if (init_expr.kind == .uninit_literal) {
-                        scope.bind(local.names[0].text, .void) catch {};
-                        if (local.ty) |lty| if (eval.comptimeTypeBitWidth(lty)) |bits| scope.bindWidth(local.names[0].text, bits);
+                        scope.bind(local.names[0].text, .void) catch {
+                            self.noteComptimeOom(scope);
+                            return;
+                        };
+                        if (local.ty) |lty| scope.bindTypeInfo(local.names[0].text, lty) catch {
+                            self.noteComptimeOom(scope);
+                            return;
+                        };
                         continue;
                     }
                     switch (eval.foldComptimeExpr(scope, init_expr)) {
                         .value => |value| {
-                            scope.bind(local.names[0].text, value) catch {};
-                            if (local.ty) |lty| if (eval.comptimeTypeBitWidth(lty)) |bits| scope.bindWidth(local.names[0].text, bits);
+                            scope.bind(local.names[0].text, value) catch {
+                                self.noteComptimeOom(scope);
+                                return;
+                            };
+                            if (local.ty) |lty| scope.bindTypeInfo(local.names[0].text, lty) catch {
+                                self.noteComptimeOom(scope);
+                                return;
+                            };
                         },
                         .trap => self.errorCode(span, "E_COMPTIME_TRAP", "trap during const eval is a compile error"),
                         .unknown => {},
@@ -1880,6 +1907,7 @@ pub const Checker = struct {
                 else => {},
             }
         }
+        self.noteComptimeOom(scope);
     }
 
     // Returns the folded comptime value of `expr`, or null if it is not a
@@ -1896,10 +1924,16 @@ pub const Checker = struct {
         var fba = std.heap.FixedBufferAllocator.init(&buf);
         var scope = eval.ComptimeScope.init(fba.allocator());
         self.seedComptimeScope(&scope);
-        return switch (eval.foldComptimeExpr(&scope, expr)) {
+        if (scope.hasOom()) {
+            self.noteComptimeOom(&scope);
+            return null;
+        }
+        const folded = switch (eval.foldComptimeExpr(&scope, expr)) {
             .value => |v| v,
             else => null,
         };
+        self.noteComptimeOom(&scope);
+        return folded;
     }
 
     // Re-check a called function's comptime assertions with its `comptime`
@@ -1912,16 +1946,27 @@ pub const Checker = struct {
         defer arena.deinit();
         var scope = eval.ComptimeScope.init(arena.allocator());
         self.seedComptimeScope(&scope);
+        if (scope.hasOom()) {
+            self.noteComptimeOom(&scope);
+            return;
+        }
         for (fn_decl.params, args) |param, arg| {
             if (!param.is_comptime) continue;
             if (isTypeName(param.ty, "type")) {
                 const ty = eval.comptimeTypeArg(&scope, arg) orelse return;
-                scope.bindType(param.name.text, ty) catch return;
+                scope.bindType(param.name.text, ty) catch {
+                    self.noteComptimeOom(&scope);
+                    return;
+                };
                 continue;
             }
             const value = self.comptimeFoldValue(arg) orelse return; // non-const arg already diagnosed
-            scope.bind(param.name.text, value) catch return;
+            scope.bind(param.name.text, value) catch {
+                self.noteComptimeOom(&scope);
+                return;
+            };
         }
+        self.noteComptimeOom(&scope);
         self.foldComptimeCallBody(body, &scope, call_span);
     }
 
@@ -2056,6 +2101,10 @@ pub const Checker = struct {
                 defer arena.deinit();
                 var scope = eval.ComptimeScope.init(arena.allocator());
                 self.seedComptimeScope(&scope);
+                if (scope.hasOom()) {
+                    self.noteComptimeOom(&scope);
+                    return;
+                }
                 self.foldComptimeBlock(block, &scope);
             },
             .block => |block| self.checkBlockScoped(block, ctx),

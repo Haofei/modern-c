@@ -78,7 +78,7 @@ pub fn arrayLenValue(env: *const ReflectEnv, expr: ast.Expr) ?u64 {
     defer if (fb_arena == null) eval.releaseFoldScratch();
     var scope = eval.ComptimeScope.init(fold_alloc);
     defer scope.deinit();
-    seedConstFoldScope(env, &scope);
+    if (!seedConstFoldScope(env, &scope)) return null;
     return switch (eval.foldComptimeExpr(&scope, expr)) {
         .value => |value| switch (value) {
             .int => |n| if (n >= 0 and n <= std.math.maxInt(u64)) @intCast(n) else null,
@@ -88,13 +88,14 @@ pub fn arrayLenValue(env: *const ReflectEnv, expr: ast.Expr) ?u64 {
     };
 }
 
-pub fn seedConstFoldScope(env: *const ReflectEnv, scope: *eval.ComptimeScope) void {
+pub fn seedConstFoldScope(env: *const ReflectEnv, scope: *eval.ComptimeScope) bool {
     scope.funcs = env.const_fns;
     scope.globals = env.const_globals;
     scope.reflect = comptimeReflectThunk;
     scope.reflect_ctx = @constCast(env);
     var widths = env.const_global_widths.iterator();
-    while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
+    while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*) catch return false;
+    return true;
 }
 
 pub fn comptimeBitOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []const u8) ?i128 {
