@@ -11,12 +11,16 @@ from pathlib import Path
 
 
 EXPECT_RE = re.compile(r"EXPECT(?:_ERROR)?:\s+(E_[A-Z0-9_]+)")
+UNIT_MARKER_RE = re.compile(r"//\s*DIAGNOSTIC_UNIT:\s+(E_[A-Z0-9_]+)\b")
 ALLOWLIST_ROW_RE = re.compile(r"^\|\s*`?(E_[A-Z0-9_]+)`?\s*\|\s*(.*?)\s*\|")
 FIXTURE_GLOBS = (
     "tests/spec/*.mc",
     "tests/c_emit/bad/*.mc",
     "kernel/bad/*.mc",
     "demo/bad/*.mc",
+)
+UNIT_TEST_GLOBS = (
+    "src/*_tests.zig",
 )
 
 
@@ -39,6 +43,18 @@ def collect_fixture_codes(root: Path) -> dict[str, list[str]]:
             text = path.read_text(encoding="utf-8")
             for match in EXPECT_RE.finditer(text):
                 codes.setdefault(match.group(1), []).append(rel)
+    return codes
+
+
+def collect_unit_codes(root: Path) -> dict[str, list[str]]:
+    codes: dict[str, list[str]] = {}
+    for pattern in UNIT_TEST_GLOBS:
+        for path in sorted(root.glob(pattern)):
+            rel = path.relative_to(root).as_posix()
+            for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                match = UNIT_MARKER_RE.search(line)
+                if match:
+                    codes.setdefault(match.group(1), []).append(f"{rel}:{line_no}")
     return codes
 
 
@@ -72,34 +88,43 @@ def main() -> int:
     source_codes = set(source_info)
     fixture_codes = collect_fixture_codes(root)
     fixture_owned = set(fixture_codes)
+    unit_codes = collect_unit_codes(root)
+    unit_owned = set(unit_codes)
     allowlist = collect_allowlist(root)
     allowlisted = set(allowlist)
 
-    missing = sorted(source_codes - fixture_owned - allowlisted)
+    owned = fixture_owned | unit_owned
+    missing = sorted(source_codes - owned - allowlisted)
     stale_allowlist = sorted(allowlisted - source_codes)
-    redundant_allowlist = sorted(allowlisted & fixture_owned)
+    redundant_allowlist = sorted(allowlisted & owned)
     stale_fixtures = sorted(fixture_owned - source_codes)
+    stale_units = sorted(unit_owned - source_codes)
 
-    if missing or stale_allowlist or redundant_allowlist or stale_fixtures:
+    if missing or stale_allowlist or redundant_allowlist or stale_fixtures or stale_units:
         for code in missing:
             refs = ", ".join(source_info[code].refs[:4])
             print(
-                f"FAIL: diagnostic-code-inventory - {code} has no negative fixture or allowlist entry ({refs})",
+                f"FAIL: diagnostic-code-inventory - {code} has no negative fixture, unit-test marker, "
+                f"or allowlist entry ({refs})",
                 file=sys.stderr,
             )
         for code in stale_allowlist:
             print(f"FAIL: diagnostic-code-inventory - allowlist entry for non-emitted code {code}", file=sys.stderr)
         for code in redundant_allowlist:
-            examples = ", ".join(fixture_codes[code][:3])
+            examples = ", ".join((fixture_codes.get(code) or unit_codes[code])[:3])
             print(
-                f"FAIL: diagnostic-code-inventory - {code} has fixture coverage; remove the allowlist entry ({examples})",
+                f"FAIL: diagnostic-code-inventory - {code} has test ownership; remove the allowlist entry ({examples})",
                 file=sys.stderr,
             )
         for code in stale_fixtures:
             examples = ", ".join(fixture_codes[code][:3])
             print(f"FAIL: diagnostic-code-inventory - fixture expects non-emitted code {code} ({examples})", file=sys.stderr)
+        for code in stale_units:
+            examples = ", ".join(unit_codes[code][:3])
+            print(f"FAIL: diagnostic-code-inventory - unit marker owns non-emitted code {code} ({examples})", file=sys.stderr)
         print(
             "FAIL: diagnostic-code-inventory - update tests/spec or bad/ EXPECT fixtures, "
+            "add an explicit DIAGNOSTIC_UNIT marker near a unit assertion, "
             "or document an intentional allowlist entry in docs/diagnostic-code-inventory.md",
             file=sys.stderr,
         )
@@ -107,7 +132,8 @@ def main() -> int:
 
     print(
         "PASS: diagnostic-code-inventory - "
-        f"{len(source_codes)} emitted codes, {len(fixture_owned)} fixture-owned, {len(allowlisted)} allowlisted"
+        f"{len(source_codes)} emitted codes, {len(fixture_owned)} fixture-owned, "
+        f"{len(unit_owned)} unit-owned, {len(allowlisted)} allowlisted"
     )
     return 0
 

@@ -974,6 +974,7 @@ test "MIR verifier rejects malformed CFG structure" {
     try mir.verifyBuiltMir(module, &reporter);
 
     try std.testing.expect(reporter.has_errors);
+    // DIAGNOSTIC_UNIT: E_MIR_CFG
     try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_MIR_CFG") != null);
 }
 
@@ -1800,6 +1801,7 @@ test "MIR verifier rejects missing representation check" {
     defer reporter.deinit();
     try mir.verifyBuiltMir(module, &reporter);
     try std.testing.expect(reporter.has_errors);
+    // DIAGNOSTIC_UNIT: E_REPRESENTATION_CHECK_MISSING
     try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_REPRESENTATION_CHECK_MISSING") != null);
 }
 
