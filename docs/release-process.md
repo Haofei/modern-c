@@ -23,11 +23,15 @@ Before tagging a release:
    candidate commit. Shrink any reported failing seed with `tools/fuzz/mcfuzz.py
    shrink` and commit the minimized repro under `tools/fuzz/corpus/` before
    tagging.
-5. Run `zig build fast` on every supported host tier.
-6. Generate Linux and macOS tarballs containing `bin/mcc`, `std/`, driver scripts,
+5. Confirm the nightly QEMU benchmark workflow is green for the release candidate
+   commit. Its committed baseline lives in `tools/bench/nightly-baseline.tsv`; update
+   the TSV only when a deliberate performance change is measured on the pinned
+   Ubuntu 24.04 / Zig 0.16.0 / LLVM 18 toolchain.
+6. Run `zig build fast` on every supported host tier.
+7. Generate Linux and macOS tarballs containing `bin/mcc`, `std/`, driver scripts,
    `README.md`, `LICENSE`, `SECURITY.md`, `STABILITY.md`, and `CHANGELOG.md`.
-7. Publish SHA256 checksums for every artifact.
-8. Tag the exact commit and record the tag in `CHANGELOG.md`.
+8. Publish SHA256 checksums for every artifact.
+9. Tag the exact commit and record the tag in `CHANGELOG.md`.
 
 ## Not Yet Implemented
 

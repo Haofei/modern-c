@@ -1,0 +1,52 @@
+name: nightly-bench
+
+on:
+  schedule:
+    - cron: "17 10 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qemu-benches:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      MC_LLVM_MAJOR: "18"
+      MC_REQUIRE_TOOLS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install benchmark toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18 llvm-18 qemu-system-arm qemu-system-misc qemu-system-x86
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+      - name: Print tool versions
+        run: |
+          zig version
+          clang --version
+          llvm-as --version
+          llc --version
+          opt --version
+          qemu-system-riscv64 --version
+      - name: Preflight pinned tools
+        run: zig build preflight
+      - name: Run nightly QEMU benchmarks
+        run: |
+          python3 tools/ci/nightly-bench.py run \
+            --baseline tools/bench/nightly-baseline.tsv \
+            --output zig-out/nightly-bench-results.tsv \
+            --log-dir zig-out/nightly-bench-logs
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-bench-results
+          path: |
+            zig-out/nightly-bench-results.tsv
+            zig-out/nightly-bench-logs/
+          if-no-files-found: warn

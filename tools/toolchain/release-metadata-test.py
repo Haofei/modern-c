@@ -6,12 +6,37 @@ from __future__ import annotations
 import pathlib
 import re
 import sys
+import importlib.util
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 EXPECTED_VERSION = "0.7.0-dev"
 EXPECTED_UBUNTU_RUNNER = "ubuntu-24.04"
 EXPECTED_LLVM_MAJOR = "18"
+EXPECTED_ZIG_VERSION = "0.16.0"
+EXPECTED_NIGHTLY_BENCH_TARGETS = (
+    "mem-bench",
+    "llvm-mem-bench",
+    "uaccess-bench",
+    "llvm-uaccess-bench",
+    "sched-bench",
+    "llvm-sched-bench",
+    "heap-bench",
+    "llvm-heap-bench",
+    "ipc-bench",
+    "llvm-ipc-bench",
+)
+EXPECTED_NIGHTLY_BENCH_METRICS = (
+    "MEMCPY-CYCLES",
+    "MEMSET-CYCLES",
+    "UACCESS-TO-CYCLES",
+    "UACCESS-FROM-CYCLES",
+    "UACCESS-SMALL-CYCLES",
+    "UACCESS-CYCLES",
+    "SCHED-CYCLES",
+    "HEAPFREE-CYCLES",
+    "IPC-CYCLES",
+)
 
 
 def fail(message: str) -> None:
@@ -31,11 +56,117 @@ def require_contains(path: str, needle: str) -> None:
         fail(f"{path} does not contain {needle!r}")
 
 
+def load_python_module(path: str):
+    full = ROOT / path
+    if not full.is_file():
+        fail(f"missing {path}")
+    spec = importlib.util.spec_from_file_location("nightly_bench_static", full)
+    if spec is None or spec.loader is None:
+        fail(f"could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def zon_field(text: str, name: str) -> str:
     match = re.search(rf"\.{re.escape(name)}\s*=\s*\"([^\"]+)\"", text)
     if not match:
         fail(f"build.zig.zon missing .{name}")
     return match.group(1)
+
+
+def nightly_bench_expected_keys(module) -> set[tuple[str, str, str, str]]:
+    keys: set[tuple[str, str, str, str]] = set()
+    for bench in module.EXPECTED_BENCHES:
+        for metric in bench.metrics:
+            keys.add((bench.benchmark, bench.backend, bench.target, metric))
+    return keys
+
+
+def require_nightly_bench_metadata() -> None:
+    workflow_path = ".github/workflows/nightly-bench.yml"
+    runner_path = "tools/ci/nightly-bench.py"
+    baseline_path = "tools/bench/nightly-baseline.tsv"
+
+    workflow = read(workflow_path)
+    for needle in (
+        "schedule:",
+        "workflow_dispatch:",
+        f"runs-on: {EXPECTED_UBUNTU_RUNNER}",
+        f'MC_LLVM_MAJOR: "{EXPECTED_LLVM_MAJOR}"',
+        'MC_REQUIRE_TOOLS: "1"',
+        "mlugg/setup-zig@v2",
+        f"version: {EXPECTED_ZIG_VERSION}",
+        f"clang-{EXPECTED_LLVM_MAJOR} lld-{EXPECTED_LLVM_MAJOR} llvm-{EXPECTED_LLVM_MAJOR}",
+        "qemu-system-arm qemu-system-misc qemu-system-x86",
+        f"/usr/lib/llvm-{EXPECTED_LLVM_MAJOR}/bin",
+        "qemu-system-riscv64 --version",
+        "zig build preflight",
+        "python3 tools/ci/nightly-bench.py run",
+        baseline_path,
+        "zig-out/nightly-bench-results.tsv",
+        "zig-out/nightly-bench-logs",
+        "actions/upload-artifact@v4",
+        "nightly-bench-results",
+    ):
+        require_contains(workflow_path, needle)
+    if "ubuntu-latest" in workflow:
+        fail(f"{workflow_path} must not use ubuntu-latest for compiler qualification")
+
+    runner = read(runner_path)
+    for needle in (
+        "EXPECTED_BENCHES",
+        "BASELINE_COLUMNS",
+        "zig",
+        "build",
+        "install",
+        "check-baseline",
+        "tolerance_pct",
+        "tolerance_abs",
+        "max_allowed",
+        "UACCESS-TO-CYCLES",
+        "UACCESS-FROM-CYCLES",
+        "UACCESS-CYCLES",
+        "^SKIP:",
+    ):
+        require_contains(runner_path, needle)
+
+    module = load_python_module(runner_path)
+    targets = tuple(bench.target for bench in module.EXPECTED_BENCHES)
+    for target in EXPECTED_NIGHTLY_BENCH_TARGETS:
+        if target not in targets:
+            fail(f"{runner_path} missing nightly benchmark target {target!r}")
+    metrics = {metric for bench in module.EXPECTED_BENCHES for metric in bench.metrics}
+    for metric in EXPECTED_NIGHTLY_BENCH_METRICS:
+        if metric not in metrics:
+            fail(f"{runner_path} missing nightly benchmark metric {metric!r}")
+
+    baseline = read(baseline_path)
+    expected_header = "benchmark\tbackend\ttarget\tmetric\tbaseline\ttolerance_pct\ttolerance_abs\n"
+    if not baseline.startswith(expected_header):
+        fail(f"{baseline_path} has the wrong TSV header")
+    seen: set[tuple[str, str, str, str]] = set()
+    for line in baseline.splitlines()[1:]:
+        parts = line.split("\t")
+        if len(parts) != 7:
+            fail(f"{baseline_path} row has {len(parts)} fields, want 7: {line!r}")
+        key = tuple(parts[:4])
+        if key in seen:
+            fail(f"{baseline_path} has duplicate row {key}")
+        seen.add(key)
+        for raw in parts[4:]:
+            try:
+                value = float(raw)
+            except ValueError:
+                fail(f"{baseline_path} has non-numeric tolerance/baseline value {raw!r}")
+            if value < 0:
+                fail(f"{baseline_path} has negative tolerance/baseline value {raw!r}")
+        if float(parts[4]) <= 0:
+            fail(f"{baseline_path} baseline must be > 0 for {key}")
+    expected = nightly_bench_expected_keys(module)
+    if seen != expected:
+        fail(f"{baseline_path} rows do not match {runner_path} EXPECTED_BENCHES")
 
 
 def main() -> None:
@@ -58,6 +189,8 @@ def main() -> None:
     for path in ("SECURITY.md", "STABILITY.md", "CHANGELOG.md", "docs/release-process.md"):
         require_contains(path, EXPECTED_VERSION)
     require_contains("docs/release-process.md", f"LLVM {EXPECTED_LLVM_MAJOR}")
+    require_contains("docs/release-process.md", "tools/bench/nightly-baseline.tsv")
+    require_contains("docs/release-process.md", "nightly QEMU benchmark workflow")
 
     if "root_module.addOptions(\"build_options\"" not in compiler_build:
         fail("build/compiler.zig does not expose build_options to src/main.zig")
@@ -121,6 +254,8 @@ def main() -> None:
     if "ubuntu-latest" in nightly_fuzz:
         fail(f"{nightly_fuzz_path} must not use ubuntu-latest for compiler qualification")
 
+    require_nightly_bench_metadata()
+
     dockerfile = read("Dockerfile")
     require_contains("Dockerfile", f"ARG LLVM_MAJOR={EXPECTED_LLVM_MAJOR}")
     require_contains("Dockerfile", "ENV MC_LLVM_MAJOR=${LLVM_MAJOR}")
@@ -128,7 +263,7 @@ def main() -> None:
     if "sort -V | tail -n1" in dockerfile or "llvm-*" in dockerfile:
         fail("Dockerfile must select the pinned LLVM major, not the highest installed one")
 
-    print("PASS: release-metadata-test - version, Zig/LLVM pins, nightly fuzz, and process docs are in sync")
+    print("PASS: release-metadata-test - version, Zig/LLVM pins, nightly fuzz/bench, and process docs are in sync")
 
 
 if __name__ == "__main__":
