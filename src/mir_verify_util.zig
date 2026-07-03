@@ -188,7 +188,6 @@ pub fn ffiFindingDiagnostic(finding: []const u8) []const u8 {
 pub fn usageFindingDiagnostic(finding: []const u8) []const u8 {
     if (std.mem.eql(u8, finding, "atomic_operation")) return "E_ATOMIC_OPERATION";
     if (std.mem.eql(u8, finding, "dma_operation")) return "E_DMA_OPERATION";
-    if (std.mem.eql(u8, finding, "enum_raw_closed")) return "E_ENUM_RAW_REQUIRES_OPEN_ENUM";
     if (std.mem.eql(u8, finding, "atomic_ordering")) return "E_ATOMIC_ORDERING";
     if (std.mem.eql(u8, finding, "mmio_ordering")) return "E_MMIO_ORDERING";
     if (std.mem.eql(u8, finding, "closed_enum_conversion")) return "E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION";

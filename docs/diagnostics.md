@@ -7,7 +7,7 @@ Regenerate it with:
 python3 tools/toolchain/diagnostics-reference.py --write
 ```
 
-Total codes: **218**.
+Total codes: **217**.
 
 | Code | Message examples | Source references |
 |---|---|---|
@@ -36,10 +36,10 @@ Total codes: **218**.
 | `E_ASYNC_GENERAL_UNSUPPORTED` | \`break\` outside an await-bearing loop in async E3c<br>\`continue\` outside an await-bearing loop in async E3c<br>a \`let\`/\`var\` live across the await regions must bind exactly one name in async E3c<br>_+5 more_ | `src/async_lower.zig:1697`<br>`src/async_lower.zig:1822`<br>`src/async_lower.zig:2030`<br>`src/async_lower.zig:2061`<br>`src/async_lower.zig:2101`<br>`src/async_lower.zig:2102`<br>_+4 more_ |
 | `E_ASYNC_LOOP_UNSUPPORTED` | a \`while\` loop must have a condition in async v0<br>a pre-loop \`let\`/\`var\` live across the loop needs an explicit type annotation in async v0<br>a pre-loop \`let\`/\`var\` must bind exactly one name in async v0<br>_+5 more_ | `src/async_lower.zig:960`<br>`src/async_lower.zig:962`<br>`src/async_lower.zig:963`<br>`src/async_lower.zig:966`<br>`src/async_lower.zig:971`<br>`src/async_lower.zig:993`<br>_+2 more_ |
 | `E_ATOMIC_OPERATION` | atomic fetch_add/fetch_sub requires an integer payload type<br>unknown atomic operation | `src/mir_verify_util.zig:189`<br>`src/sema.zig:3407`<br>`src/sema.zig:3414` |
-| `E_ATOMIC_ORDERING` | atomic load ordering must be .relaxed, .acquire, or .seq_cst<br>atomic read-modify-write ordering must be a valid atomic memory order<br>atomic store ordering must be .relaxed, .release, or .seq_cst | `src/mir_verify_util.zig:192`<br>`src/sema.zig:3454`<br>`src/sema.zig:3458`<br>`src/sema.zig:3464`<br>`src/sema.zig:3468`<br>`src/sema.zig:3474`<br>_+1 more_ |
+| `E_ATOMIC_ORDERING` | atomic load ordering must be .relaxed, .acquire, or .seq_cst<br>atomic read-modify-write ordering must be a valid atomic memory order<br>atomic store ordering must be .relaxed, .release, or .seq_cst | `src/mir_verify_util.zig:191`<br>`src/sema.zig:3454`<br>`src/sema.zig:3458`<br>`src/sema.zig:3464`<br>`src/sema.zig:3468`<br>`src/sema.zig:3474`<br>_+1 more_ |
 | `E_AWAIT_OUTSIDE_ASYNC` | \`await\` is only valid inside an \`async fn\` (in '{s}') | `src/async_lower.zig:255` |
 | `E_BACKEND_UNSUPPORTED` | C backend does not yet support {s}<br>LLVM backend does not yet support {s}<br>{s} backend does not yet support this construct | `src/lower_c_emitter.zig:3150`<br>`src/lower_llvm.zig:1119`<br>`src/main.zig:784` |
-| `E_BITCAST_TYPE` | bitcast pointer-reinterpret may not cross into or out of an opaque/secret/userptr class<br>bitcast source must have a fixed scalar, pointer, or address-class layout<br>bitcast source type must be known<br>_+1 more_ | `src/mir_verify_util.zig:195`<br>`src/sema.zig:3739`<br>`src/sema.zig:3749`<br>`src/sema.zig:3752`<br>`src/sema.zig:3767` |
+| `E_BITCAST_TYPE` | bitcast pointer-reinterpret may not cross into or out of an opaque/secret/userptr class<br>bitcast source must have a fixed scalar, pointer, or address-class layout<br>bitcast source type must be known<br>_+1 more_ | `src/mir_verify_util.zig:194`<br>`src/sema.zig:3739`<br>`src/sema.zig:3749`<br>`src/sema.zig:3752`<br>`src/sema.zig:3767` |
 | `E_BITWISE_ARITH_DOMAIN_OPERAND` | bitwise operations are not defined on this arithmetic domain | `src/mir_verify_util.zig:144`<br>`src/sema.zig:2609`<br>`src/sema.zig:2690` |
 | `E_BITWISE_BOOL_OPERAND` | bitwise operations are not defined on bool operands | `src/mir_verify_util.zig:155`<br>`src/sema.zig:2600`<br>`src/sema.zig:2684` |
 | `E_BITWISE_POINTER_OPERAND` | bitwise operations are not defined on pointer operands | `src/mir_verify_util.zig:156`<br>`src/sema.zig:2603`<br>`src/sema.zig:2687` |
@@ -50,7 +50,7 @@ Total codes: **218**.
 | `E_BYTE_VIEW_ADDRESS` | mem.as_bytes requires an address expression<br>mem.as_bytes requires an addressable value with known storage type<br>mem.as_bytes requires byte-addressable storage | `src/sema.zig:3646`<br>`src/sema.zig:3651`<br>`src/sema.zig:3656`<br>`src/sema.zig:3661` |
 | `E_BYTE_VIEW_SLICE` | mem.bytes_equal expects []const u8 byte slices | `src/sema.zig:3672` |
 | `E_CALL_ARG_COUNT` | DmaBuf operation does not take arguments<br>MMIO read expects exactly one ordering argument<br>MMIO write expects a value and one ordering argument<br>_+29 more_ | `src/sema.zig:2798`<br>`src/sema.zig:2820`<br>`src/sema.zig:2850`<br>`src/sema.zig:2892`<br>`src/sema.zig:2945`<br>`src/sema.zig:2956`<br>_+31 more_ |
-| `E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION` | integer-to-closed-enum conversion must use a checked conversion path | `src/mir_verify_util.zig:194`<br>`src/sema.zig:5074` |
+| `E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION` | integer-to-closed-enum conversion must use a checked conversion path | `src/mir_verify_util.zig:193`<br>`src/sema.zig:5074` |
 | `E_CLOSED_ENUM_SWITCH_EXHAUSTIVE` | switch over closed enum must cover every case or use '_' | `src/mir_verify_util.zig:128`<br>`src/sema.zig:5880` |
 | `E_CLOSURE_SIGNATURE_MISMATCH` | bind target does not match the expected closure type<br>closure signature does not match the expected type | `src/sema.zig:4699`<br>`src/sema.zig:4706` |
 | `E_COMPTIME_ARG_REQUIRED` | comptime parameter requires a compile-time constant argument | `src/sema.zig:2906` |
@@ -73,7 +73,7 @@ Total codes: **218**.
 | `E_DMA_ADDR_NOT_PADDR` | _see source_ | `src/mir_verify_util.zig:178`<br>`src/sema.zig:6754` |
 | `E_DMA_ADDR_NOT_VADDR` | _see source_ | `src/mir_verify_util.zig:179`<br>`src/sema.zig:6755` |
 | `E_DMA_BUF_MODE` | DmaBuf mode must be .coherent or .noncoherent | `src/sema.zig:3317`<br>`src/sema.zig:3322` |
-| `E_DMA_CACHE_MODE` | cache clean/invalidate are required only for noncoherent DmaBuf values | `src/mir_verify_util.zig:196`<br>`src/sema.zig:3497` |
+| `E_DMA_CACHE_MODE` | cache clean/invalidate are required only for noncoherent DmaBuf values | `src/mir_verify_util.zig:195`<br>`src/sema.zig:3497` |
 | `E_DMA_OPERATION` | cache DMA operation requires a DmaBuf argument<br>dma_addr/as_slice are defined only on DmaBuf values<br>unknown DmaBuf operation | `src/mir_verify_util.zig:190`<br>`src/sema.zig:3492`<br>`src/sema.zig:3506`<br>`src/sema.zig:3522` |
 | `E_DROP_LINEAR_RESOURCE` | a linear \`move\` value cannot be \`drop\`ped (it frees nothing); release it with its free function, \`forget_unchecked\` it in an unsafe block once its contents have been transferred, or mark the type \`#[trivial_drop]\` if completing it needs no release | `src/sema_move.zig:770` |
 | `E_DUPLICATE_BACKEND_NAME` | backend symbol "{s}" is assigned to both \`{s}\` and \`{s}\` | `src/sema.zig:4253` |
@@ -94,7 +94,6 @@ Total codes: **218**.
 | `E_ENUM_CASE_VALUE_NOT_INTEGER` | enum representation values must be integer literals | `src/sema.zig:1003` |
 | `E_ENUM_CASE_VALUE_OUT_OF_RANGE` | enum case value is outside the representation type range | `src/sema.zig:1009` |
 | `E_ENUM_LITERAL_REQUIRES_TARGET` | enum literal requires an explicit enum target type | `src/sema.zig:5233` |
-| `E_ENUM_RAW_REQUIRES_OPEN_ENUM` | _see source_ | `src/mir_verify_util.zig:191` |
 | `E_ENUM_REPR_NOT_INTEGER` | enum representation type must be an integer type | `src/sema.zig:979` |
 | `E_EXTERN_STRUCT_BY_VALUE` | extern/export functions cannot pass structs by value until C ABI classification is implemented; pass a pointer instead<br>extern/export functions cannot return structs by value until C ABI classification is implemented; return through an out pointer instead | `src/sema.zig:1432`<br>`src/sema.zig:1437` |
 | `E_FN_POINTER_SIGNATURE_MISMATCH` | function signature does not match the expected function-pointer type<br>function-pointer signature does not match the expected type | `src/sema.zig:4682`<br>`src/sema.zig:4690`<br>`src/sema.zig:4929`<br>`src/sema.zig:4937` |
@@ -119,14 +118,14 @@ Total codes: **218**.
 | `E_IRQ_CONTEXT_BLOCKING` | _see source_ | `src/mir_verify_util.zig:47` |
 | `E_IRQ_CONTEXT_CALL` | an #[irq_context] function may not dispatch through \`*dyn Trait\` (a virtual call is an indirect call whose target may sleep or block)<br>an #[irq_context] function may not make an indirect/closure call (the target may sleep or block)<br>an #[irq_context] function may not make an indirect/fn-pointer call (the target may sleep or block)<br>_+1 more_ | `src/mir_verify_util.zig:46`<br>`src/sema.zig:2808`<br>`src/sema.zig:2823`<br>`src/sema.zig:2853`<br>`src/sema.zig:2888` |
 | `E_LITERAL_REQUIRES_TARGET` | literal requires an explicit target type | `src/sema.zig:5237` |
-| `E_LOCAL_ADDRESS_ESCAPE` | cannot return a closure that captures local storage (the environment would dangle)<br>cannot return the address of local storage<br>cannot return the address of local storage inside an aggregate (the borrow would dangle) | `src/mir_verify_util.zig:197`<br>`src/sema.zig:4881`<br>`src/sema.zig:4886`<br>`src/sema.zig:5219` |
+| `E_LOCAL_ADDRESS_ESCAPE` | cannot return a closure that captures local storage (the environment would dangle)<br>cannot return the address of local storage<br>cannot return the address of local storage inside an aggregate (the borrow would dangle) | `src/mir_verify_util.zig:196`<br>`src/sema.zig:4881`<br>`src/sema.zig:4886`<br>`src/sema.zig:5219` |
 | `E_LOCAL_REQUIRES_INITIALIZER` | ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage | `src/sema.zig:2335` |
 | `E_MC_VOID_POINTER_FFI` | use c_void for C opaque object pointers, not MC void | `src/sema.zig:3132` |
 | `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:3536` |
 | `E_MMIO_ACCESS_FORBIDDEN` | MIR verifier found MMIO register access disallowed by Reg/RegBits mode<br>MMIO register access mode does not allow read<br>MMIO register access mode does not allow write | `src/mir.zig:642`<br>`src/sema.zig:3356`<br>`src/sema.zig:3366` |
 | `E_MMIO_ACCESS_MODE` | MMIO register access mode must be .read, .write, or .read_write | `src/sema.zig:3336`<br>`src/sema.zig:3341` |
 | `E_MMIO_DIRECT_ASSIGN` | MIR verifier found direct assignment to an MMIO register<br>MMIO registers must be accessed through typed read/write methods | `src/mir.zig:636`<br>`src/sema.zig:2266` |
-| `E_MMIO_ORDERING` | MMIO read ordering must be .relaxed or .acquire<br>MMIO write ordering must be .relaxed or .release | `src/mir_verify_util.zig:193`<br>`src/sema.zig:3822`<br>`src/sema.zig:3826`<br>`src/sema.zig:3832`<br>`src/sema.zig:3836` |
+| `E_MMIO_ORDERING` | MMIO read ordering must be .relaxed or .acquire<br>MMIO write ordering must be .relaxed or .release | `src/mir_verify_util.zig:192`<br>`src/sema.zig:3822`<br>`src/sema.zig:3826`<br>`src/sema.zig:3832`<br>`src/sema.zig:3836` |
 | `E_MMIO_PTR_DEREF` | _see source_ | `src/mir_verify_util.zig:172`<br>`src/sema.zig:6771` |
 | `E_MMIO_PTR_TARGET` | MmioPtr target must be an extern mmio struct type | `src/sema.zig:3289`<br>`src/sema.zig:3294` |
 | `E_MMIO_REGBITS_TYPE` | RegBits value type must be a known packed bits type | `src/sema.zig:3261` |
@@ -153,7 +152,7 @@ Total codes: **218**.
 | `E_NULL_NON_NULL_POINTER` | null cannot initialize a non-null pointer | `src/mir_verify_util.zig:77`<br>`src/sema.zig:4487` |
 | `E_NULL_REQUIRES_TARGET` | null requires an explicit nullable pointer target type | `src/sema.zig:1226`<br>`src/sema.zig:2297` |
 | `E_OPAQUE_DECLASSIFY` | casting an \`opaque struct\` value to another type declassifies its private fields; use an accessor in its \`impl\`, or \`unsafe\` | `src/sema.zig:5180` |
-| `E_OPERATOR_OPERAND` | arithmetic operators require integer or arithmetic-domain operands<br>bitwise operators require unsigned integer or wrapping operands<br>equality operators require comparable operands<br>_+3 more_ | `src/mir_verify_util.zig:163`<br>`src/mir_verify_util.zig:198`<br>`src/sema.zig:2638`<br>`src/sema.zig:5283`<br>`src/sema.zig:5290`<br>`src/sema.zig:5309`<br>_+3 more_ |
+| `E_OPERATOR_OPERAND` | arithmetic operators require integer or arithmetic-domain operands<br>bitwise operators require unsigned integer or wrapping operands<br>equality operators require comparable operands<br>_+3 more_ | `src/mir_verify_util.zig:163`<br>`src/mir_verify_util.zig:197`<br>`src/sema.zig:2638`<br>`src/sema.zig:5283`<br>`src/sema.zig:5290`<br>`src/sema.zig:5309`<br>_+3 more_ |
 | `E_ORDERED_ARITH_DOMAIN_OPERAND` | ordered comparisons are not defined on wrap, serial, or counter arithmetic domains | `src/mir_verify_util.zig:145`<br>`src/sema.zig:5337` |
 | `E_ORPHAN_IMPL` | impl of an opaque type must be in its defining module (file); a peer impl in another file cannot reach its private fields | `src/sema.zig:5563` |
 | `E_PACKED_BITS_FIELD_NOT_BOOL` | packed bits fields must be bool | `src/sema.zig:1194` |
