@@ -6,7 +6,7 @@
 # real emulated hardware via `zig build virtio-test`.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"
 

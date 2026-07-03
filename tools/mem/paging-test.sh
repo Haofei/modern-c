@@ -5,7 +5,7 @@
 # so MC_STUB_ASM=1 lowers it to a host-neutral stub (a TLB fence is a no-op for this
 # single-threaded host test). See tools/lib/host-mc-logic-test.sh and docs/test-architecture.md.
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 exec env MC_STUB_ASM=1 "$HERE/tools/lib/host-mc-logic-test.sh" "$MCC" "$BACKEND" \

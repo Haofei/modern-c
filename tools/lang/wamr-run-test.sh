@@ -9,7 +9,7 @@
 # Usage: tools/lang/wamr-run-test.sh <mcc> [c|llvm]
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 GUEST_REL="${3:-examples/apps/wamr/compute.c}"   # a no-WASI wasm guest (built by zig)
 HOST_REL="${4:-examples/apps/wamr_host.c}"       # the confined WAMR host front-end

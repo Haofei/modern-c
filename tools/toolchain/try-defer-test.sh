@@ -5,7 +5,7 @@
 # program propagated the error (returns 7) and ran the deferred cleanup exactly once.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/tests/toolchain/try_defer_cleanup.mc"
 CLANG="${CLANG:-clang}"
@@ -29,7 +29,7 @@ CEOF
 
 run_backend() {
     local label="$1" cc_script="$2"
-    MCC="$MCC" "$HERE/tools/toolchain/$cc_script" "$SRC" -o "$WORK/try.o" >/dev/null
+    MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/$cc_script" "$SRC" -o "$WORK/try.o" >/dev/null
     "$CLANG" -std=c11 -Wall -Wextra -Werror "$WORK/driver.c" "$WORK/try.o" -o "$WORK/prog"
     if "$WORK/prog"; then
         echo "PASS: try-defer-test ($label) — defer ran on the ? error branch"

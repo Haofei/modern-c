@@ -17,7 +17,7 @@
 # All three device classes live under /soc (depth 3), whose #address-cells /
 # #size-cells are 2/2 — read via the depth-indexed cell stack in fdt.mc.
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; LLC="${LLC:-llc}"; QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"

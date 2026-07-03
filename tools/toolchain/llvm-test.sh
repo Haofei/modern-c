@@ -1,7 +1,18 @@
 #!/usr/bin/env sh
 set -eu
 
-MCC="${1:?usage: llvm-test.sh path/to/mcc}"
+if [ "$#" -gt 0 ]; then
+    if [ -z "$1" ]; then
+        echo "usage: llvm-test.sh path/to/mcc" >&2
+        exit 1
+    fi
+    MCC="$1"
+elif [ -n "${MCC_UNDER_TEST:-}" ]; then
+    MCC="$MCC_UNDER_TEST"
+else
+    echo "usage: llvm-test.sh path/to/mcc" >&2
+    exit 1
+fi
 OUT_DIR="${2:-zig-out/llvm-test}"
 
 mkdir -p "$OUT_DIR"

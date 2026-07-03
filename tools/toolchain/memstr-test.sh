@@ -4,7 +4,7 @@
 # over `[]const u8` inputs, is compiled to an object, linked with a C driver, and run.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/tests/toolchain/memstr_user.mc"
 CLANG="${CLANG:-clang}"
@@ -13,7 +13,7 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: memstr-test (clang not foun
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/memstr.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/memstr.o" >/dev/null
 
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>

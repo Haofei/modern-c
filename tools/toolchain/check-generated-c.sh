@@ -11,7 +11,7 @@
 # never fed to the must-compile phase.
 set -eu
 
-exe="${1:-zig-out/bin/mcc}"
+exe="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 fixture_glob="${2:-tests/c_emit/*.mc}"
 out_dir="${3:-zig-out/c-test}"
 reject_glob="${4:-tests/c_emit/bad/*.mc}"

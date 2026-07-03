@@ -7,7 +7,7 @@
 # RAX<0, then SYS_EXIT. Boots under qemu-system-x86_64; reports over COM1; the harness asserts
 # HELLO-FROM-RING3 AND EFAULT-OK AND USER-EXIT.
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; LLC="${LLC:-llc}"; OBJCOPY="${OBJCOPY:-llvm-objcopy}"; QEMU="${QEMU:-qemu-system-x86_64}"
@@ -36,11 +36,11 @@ case "$BACKEND" in
     $CLANG $CF -Wno-switch-bool -c "$WORK/runtime.c" -o "$WORK/user_runtime.o"
     ;;
   llvm)
-    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/user_x86_demo.mc" -o "$WORK/user.o" \
+    MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/user_x86_demo.mc" -o "$WORK/user.o" \
       -mtriple=x86_64-unknown-elf \
       -relocation-model=static \
       -code-model=kernel
-    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/user_x86_runtime.mc" -o "$WORK/user_runtime.o" \
+    MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/user_x86_runtime.mc" -o "$WORK/user_runtime.o" \
       -mtriple=x86_64-unknown-elf \
       -relocation-model=static \
       -code-model=kernel

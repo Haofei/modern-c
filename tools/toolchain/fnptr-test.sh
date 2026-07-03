@@ -4,7 +4,7 @@
 # indirect calls compute correctly at runtime.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: fnptr-test (clang not found)"; exit 0; }
@@ -12,7 +12,7 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: fnptr-test (clang not found
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/tests/c_emit/fn_pointer.mc" -o "$WORK/fnptr.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/tests/c_emit/fn_pointer.mc" -o "$WORK/fnptr.o" >/dev/null
 
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>

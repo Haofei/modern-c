@@ -10,7 +10,7 @@ the backend's emitted IR, not the optimizer's rewritten IR.
 Usage:
     tools/toolchain/llvm-opt-sweep.py [<mcc-binary> [<spec-dir> [<c-emit-glob>]]]
 
-Defaults: zig-out/bin/mcc, tests/spec, tests/c_emit/*.mc.
+Defaults: MCC_UNDER_TEST when set, otherwise zig-out/bin/mcc, tests/spec, tests/c_emit/*.mc.
 """
 import concurrent.futures
 import glob
@@ -170,7 +170,7 @@ def sweep_one(mcc, path, is_spec):
 
 
 def main():
-    mcc = sys.argv[1] if len(sys.argv) > 1 else "zig-out/bin/mcc"
+    mcc = sys.argv[1] if len(sys.argv) > 1 else (os.environ.get("MCC_UNDER_TEST") or "zig-out/bin/mcc")
     spec_dir = sys.argv[2] if len(sys.argv) > 2 else "tests/spec"
     c_emit_glob = sys.argv[3] if len(sys.argv) > 3 else "tests/c_emit/*.mc"
 

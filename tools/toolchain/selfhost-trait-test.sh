@@ -25,7 +25,7 @@
 # the exact shape mcc2's own containers use (they thread `*mut dyn Allocator` on nearly every line).
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/tests/toolchain/selfhost_trait_user.mc"
 CLANG="${CLANG:-clang}"
@@ -34,7 +34,7 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: selfhost-trait-test (clang 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/trait.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/trait.o" >/dev/null
 
 # ----- Stage A: dump the emitted C for the accept case + assert sema diagnostics -----
 cat >"$WORK/dumper.c" <<'EOF'

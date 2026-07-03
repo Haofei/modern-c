@@ -4,7 +4,7 @@
 # (SCTLR_EL1.M=1), and reads a translation-only test VA back — proving real VA->PA translation.
 # Boots under qemu-system-aarch64 'virt'; reports over the PL011 UART; greps for ARM64-VM-OK.
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; LLC="${LLC:-llc}"; QEMU="${QEMU:-qemu-system-aarch64}"
@@ -33,7 +33,7 @@ case "$BACKEND" in
         "$CLANG" "${CFLAGS[@]}" -Wno-switch-bool -c "$WORK/vm.c" -o "$WORK/vm.o"
         ;;
     llvm)
-        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/vm_arm_runtime.mc" -o "$WORK/vm.o" \
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/vm_arm_runtime.mc" -o "$WORK/vm.o" \
             -mtriple=aarch64-unknown-elf \
             -relocation-model=static \
             -code-model=small \

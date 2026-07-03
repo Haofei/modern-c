@@ -11,7 +11,7 @@
 # `function` is excluded inside host-harness.sh (the type-erased closure/Allocator vtable ABI).
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
@@ -53,12 +53,12 @@ san_one() {
     case "$sanitize_skip" in
         *" $name "*) echo "SKIP: sanitize $name (hand-built device-state globals confuse ASan; covered by UBSan + diff-backend)"; return 0 ;;
     esac
-    if ! SANITIZE= bash "$HERE/tools/lib/host-harness.sh" "$MCC" "$name" >/dev/null 2>&1; then
+    if ! MCC_UNDER_TEST="$MCC" SANITIZE= bash "$HERE/tools/lib/host-harness.sh" "$MCC" "$name" >/dev/null 2>&1; then
         echo "SKIP: sanitize $name (does not build/run on this host without sanitizers)"
         return 0
     fi
     local out
-    if ! out="$(SANITIZE=1 bash "$HERE/tools/lib/host-harness.sh" "$MCC" "$name" 2>&1)"; then
+    if ! out="$(MCC_UNDER_TEST="$MCC" SANITIZE=1 bash "$HERE/tools/lib/host-harness.sh" "$MCC" "$name" 2>&1)"; then
         echo "FAIL: sanitize $name"
         printf '%s\n' "$out" | grep -iE "runtime error|AddressSanitizer|SUMMARY|FAIL:" | head -5
         return 1

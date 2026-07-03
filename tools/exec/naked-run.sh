@@ -8,7 +8,7 @@
 # before the hand-written `ret`; the 42 read back is the proof it was omitted.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 EXPECT=42
 
 case "$(uname -m)" in

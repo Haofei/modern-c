@@ -21,7 +21,7 @@
 # Usage: tools/toolchain/reproducible-build-test.sh <path-to-mcc>
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/test-env.sh"
 HERE="$(mc_repo_root)"

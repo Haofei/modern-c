@@ -2,7 +2,7 @@
 # Second-architecture gate: an MC computation compiled for aarch64 + a minimal ARM64
 # boot runtime, booted on qemu-system-aarch64 'virt'. Proves portability beyond riscv64.
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; LLC="${LLC:-llc}"; QEMU="${QEMU:-qemu-system-aarch64}"
@@ -29,7 +29,7 @@ case "$BACKEND" in
         "$CLANG" "${CFLAGS[@]}" -Wno-switch-bool -c "$WORK/c.c" -o "$WORK/mc.o"
         ;;
     llvm)
-        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/boot_arm_runtime.mc" -o "$WORK/mc.o" \
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/boot_arm_runtime.mc" -o "$WORK/mc.o" \
             -mtriple=aarch64-unknown-elf \
             -relocation-model=static \
             -code-model=small

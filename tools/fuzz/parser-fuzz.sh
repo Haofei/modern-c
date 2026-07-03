@@ -25,10 +25,18 @@
 set -euo pipefail
 
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
-MCC="${1:-$HERE/zig-out/bin/mcc}"
+MCC_WAS_SELECTED=0
+if [ "$#" -gt 0 ] || [ -n "${MCC_UNDER_TEST:-}" ]; then
+    MCC_WAS_SELECTED=1
+fi
+MCC="${1:-${MCC_UNDER_TEST:-$HERE/zig-out/bin/mcc}}"
 
 # Build the compiler if the caller did not hand us a fresh one.
 if [ ! -x "$MCC" ]; then
+    if [ "$MCC_WAS_SELECTED" -eq 1 ]; then
+        echo "parser-fuzz: selected compiler is not executable: $MCC" >&2
+        exit 2
+    fi
     echo "parser-fuzz: building mcc (no $MCC) ..."
     ( cd "$HERE" && zig build >/dev/null )
     MCC="$HERE/zig-out/bin/mcc"

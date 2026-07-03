@@ -28,7 +28,7 @@
 # strbuf use unsafe+raw.* pervasively; lexer/main use extern "C").
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/tests/toolchain/selfhost_lowlevel_user.mc"
 CLANG="${CLANG:-clang}"
@@ -37,7 +37,7 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: selfhost-lowlevel-test (cla
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/ll.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/ll.o" >/dev/null
 
 # ----- Stage A: dump the emitted C for the accept case + assert sema diagnostics -----
 cat >"$WORK/dumper.c" <<'EOF'

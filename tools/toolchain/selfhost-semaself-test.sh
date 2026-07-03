@@ -27,7 +27,7 @@
 # A green run proves mcc2 (lex->parse->sema->emit_c) turned its OWN sema into clang-clean C.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/selfhost/main.mc"
 RT="$HERE/tools/toolchain/mcc2_rt.c"
@@ -44,7 +44,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK" "$SROOT" "$UROOT"' EXIT
 
 # ----- Stage BUILD: compile selfhost/main.mc and link the mcc2 CLI -----
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/main.o" --profile=hosted >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/main.o" --profile=hosted >/dev/null
 "$CLANG" "$WORK/main.o" "$RT" -lm -o "$WORK/mcc2"
 
 # ----- Stage LANDMARK: mcc2 compiles its OWN sema selfhost/sema.mc -> clang-clean C -----

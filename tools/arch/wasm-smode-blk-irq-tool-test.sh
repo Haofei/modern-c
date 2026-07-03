@@ -8,7 +8,7 @@
 # Usage: tools/arch/wasm-smode-blk-irq-tool-test.sh <mcc> [c|llvm] [guest.c] [expect] [name-base]
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 GUEST_REL="${3:-examples/apps/wasm/wasi_blk_irq.c}"
 EXPECT="${4:-blk-irq: ok}"

@@ -12,7 +12,7 @@
 # directly and are intentionally NOT covered here.
 set -euo pipefail
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
-MCC="${1:-$HERE/zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-$HERE/zig-out/bin/mcc}}"
 TEST_NAME="arch-emit-test"
 
 MODULES=(

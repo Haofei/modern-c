@@ -12,7 +12,7 @@
 # Usage: tools/lang/qjs-agent-smoke-test.sh <path-to-mcc> [c|llvm]
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 AGENT_JS_REL="examples/agents/agent_smoke.js"
 NAME_BASE="qjs-agent-smoke"

@@ -4,7 +4,7 @@
 # into DWARF sections across calls, control flow, atomics/fences, and narrowing.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 LLC="${LLC:-llc}"
 DWARFDUMP="${LLVM_DWARFDUMP:-llvm-dwarfdump}"
@@ -25,7 +25,7 @@ compile_fixture() {
     # in the dev container) whose line-table column attribution differs from the line/column
     # rows asserted below — those were calibrated for x86-64/riscv64. Without this the gate is
     # host-dependent (the expected `<line> <col> 1` DWARF rows simply do not appear on aarch64).
-    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/$rel" -o "$obj" -mtriple=x86_64-unknown-none >/dev/null
+    MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/$rel" -o "$obj" -mtriple=x86_64-unknown-none >/dev/null
 
     "$READELF" -S "$obj" >"$WORK/$stem.sections.txt"
     grep -q '\.debug_info' "$WORK/$stem.sections.txt"

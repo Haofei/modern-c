@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 BACKEND="${1:-${BACKEND:-c}}"
-MCC="${MCC:-zig-out/bin/mcc}"; CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; LLC="${LLC:-llc}"; QEMU="${QEMU:-qemu-system-riscv64}"
+MCC="${MCC_UNDER_TEST:-${MCC:-zig-out/bin/mcc}}"; CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; LLC="${LLC:-llc}"; QEMU="${QEMU:-qemu-system-riscv64}"
 [ -x "$MCC" ] || zig build >/dev/null
 source tools/qemu/kernel-boot-lib.sh
 HERE="$(pwd)"

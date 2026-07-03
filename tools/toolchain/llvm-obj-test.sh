@@ -1,7 +1,18 @@
 #!/usr/bin/env sh
 set -eu
 
-MCC="${1:?usage: llvm-obj-test.sh path/to/mcc}"
+if [ "$#" -gt 0 ]; then
+    if [ -z "$1" ]; then
+        echo "usage: llvm-obj-test.sh path/to/mcc" >&2
+        exit 1
+    fi
+    MCC="$1"
+elif [ -n "${MCC_UNDER_TEST:-}" ]; then
+    MCC="$MCC_UNDER_TEST"
+else
+    echo "usage: llvm-obj-test.sh path/to/mcc" >&2
+    exit 1
+fi
 OUT_DIR="${2:-zig-out/llvm-obj-test}"
 
 command -v llc >/dev/null 2>&1 || { echo "SKIP: llvm-obj-test (llc not found)"; exit 0; }
@@ -13,7 +24,7 @@ mkdir -p "$OUT_DIR"
 # arm64 dev container) and fail to assemble the precise-asm fixtures' inline asm. Pin one
 # deterministic triple for every object (their valid asm is x86-64; all other fixtures emit
 # target-neutral IR that assembles for it just as well).
-objc() { MCC="$MCC" tools/toolchain/mcc-llvm-cc.sh "$@" -mtriple=x86_64-unknown-none; }
+objc() { MCC_UNDER_TEST="$MCC" MCC="$MCC" tools/toolchain/mcc-llvm-cc.sh "$@" -mtriple=x86_64-unknown-none; }
 
 objc tests/c_emit/smoke.mc -o "$OUT_DIR/smoke.o"
 objc tests/llvm/scalar_expressions.mc -o "$OUT_DIR/scalar_expressions.o"

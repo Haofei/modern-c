@@ -16,7 +16,7 @@
 # Skips (exit 0) when clang (or llc, for the llvm backend) is unavailable.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
@@ -41,7 +41,7 @@ case "$BACKEND" in
         "$CLANG" -c "$WORK/mod.c" -o "$WORK/mod.o" -I"$B/inc" -Wno-everything
         ;;
     llvm)
-        MCC="$MCC" LLC="$LLC" bash "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$RUNTIME" -o "$WORK/mod.o"
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" bash "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$RUNTIME" -o "$WORK/mod.o"
         ;;
     *)
         echo "FAIL: $TEST_NAME — unknown backend '$BACKEND'"; exit 1 ;;

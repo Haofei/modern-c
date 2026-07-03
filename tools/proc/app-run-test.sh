@@ -9,7 +9,7 @@
 # Skips (exit 0) when the riscv toolchain or QEMU is unavailable.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 APP_REL="${3:-examples/apps/hello.mc}"   # the app source (.mc or .c)
 MARKER="${4:-hello}"                      # output substring proving the app ran

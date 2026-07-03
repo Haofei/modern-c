@@ -8,7 +8,7 @@
 # green run proves mcc2 emitted C that clang compiled and ran.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/tests/toolchain/selfhost_emit_user.mc"
 CLANG="${CLANG:-clang}"
@@ -17,7 +17,7 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: selfhost-emit-test (clang n
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/emit.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/emit.o" >/dev/null
 
 # ----- Stage A: dump the emitted C for each case to a file -----
 cat >"$WORK/dumper.c" <<'EOF'

@@ -11,7 +11,7 @@
 # variant reaches the caller on both backends.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 SRC="tests/exec/error_from_run.mc"
 EXPECT=1207
 

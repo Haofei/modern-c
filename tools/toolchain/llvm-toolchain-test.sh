@@ -3,7 +3,7 @@
 # surfaces that already have C-driver coverage.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: llvm-toolchain-test (clang not found)"; exit 0; }
@@ -12,14 +12,14 @@ command -v llc >/dev/null 2>&1 || { echo "SKIP: llvm-toolchain-test (llc not fou
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/toolchain/app.mc" -o "$WORK/app.o" >/dev/null
-MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/toolchain/mono.mc" -o "$WORK/mono.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/toolchain/app.mc" -o "$WORK/app.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/toolchain/mono.mc" -o "$WORK/mono.o" >/dev/null
 
 # Reflection has no exported runtime entry point; this still proves the
 # comptime layout assertions pass and the reflected layout module lowers to a
 # linkable LLVM object.
 "$MCC" check "$HERE/tests/toolchain/reflect.mc" >/dev/null
-MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/toolchain/reflect.mc" -o "$WORK/reflect.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/toolchain/reflect.mc" -o "$WORK/reflect.o" >/dev/null
 test -s "$WORK/reflect.o"
 
 cat >"$WORK/app_driver.c" <<'EOF'

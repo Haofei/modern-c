@@ -3,7 +3,7 @@
 # then link the resulting object against a C driver and run it.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 PKG="$HERE/tests/pkg"
 CLANG="${CLANG:-clang}"
@@ -13,12 +13,12 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"; rm -f "$PKG/demo.o"' EXIT
 
 # `info` must report the manifest fields.
-MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" info "$PKG" | grep -q "package: demo" || {
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" info "$PKG" | grep -q "package: demo" || {
     echo "FAIL: pkg-test — mcc-pkg info did not report the package name"
     exit 1
 }
 
-DEPS_OUT="$(MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" deps "$PKG")"
+DEPS_OUT="$(MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" deps "$PKG")"
 
 # `deps` must resolve the declared dependency and its transitive dependency at
 # their required versions.
@@ -36,7 +36,7 @@ cp -R "$PKG" "$BADPKG"
 awk '{ if ($1 == "version") print "version = 9.9.9"; else print }' \
     "$BADPKG/deps/baselib/mcpkg.txt" >"$BADPKG/deps/baselib/mcpkg.txt.tmp"
 mv "$BADPKG/deps/baselib/mcpkg.txt.tmp" "$BADPKG/deps/baselib/mcpkg.txt"
-if MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" deps "$BADPKG" >"$WORK/bad_deps.out" 2>&1; then
+if MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" deps "$BADPKG" >"$WORK/bad_deps.out" 2>&1; then
     echo "FAIL: pkg-test — transitive dependency version mismatch was accepted"
     exit 1
 fi
@@ -47,7 +47,7 @@ grep -q "dependency 'baselib' version mismatch" "$WORK/bad_deps.out" || {
 }
 
 # `build` must produce the object from the entry + its imports.
-MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" build "$PKG" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" build "$PKG" >/dev/null
 cp "$PKG/demo.o" "$WORK/demo.o"
 
 cat >"$WORK/driver.c" <<'EOF'

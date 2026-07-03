@@ -16,7 +16,7 @@
 # explicit fail() checks classify the outcome (and print the offending path's tail) instead.
 set -uo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-wasm-js-bench-test" || echo "wasm-js-bench-test")

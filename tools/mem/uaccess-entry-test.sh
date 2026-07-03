@@ -14,7 +14,7 @@
 # Skips (exit 0) when the riscv toolchain or QEMU is unavailable.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 FIXTURE="${3:?usage: uaccess-entry-test.sh <mcc> <backend> <fixture.mc> <entry-fn> <base-name>}"
 ENTRY="${4:?missing entry function name}"

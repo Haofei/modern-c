@@ -10,7 +10,7 @@
 #                     input size / #functions, mcc2 wall time, emitted C size, and clang -O0 time.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/selfhost/main.mc"
 RT="$HERE/tools/toolchain/mcc2_rt.c"
@@ -21,7 +21,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # ----- Stage BUILD: compile selfhost/main.mc and link the mcc2 CLI -----
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/main.o" --profile=hosted >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/main.o" --profile=hosted >/dev/null
 "$CLANG" "$WORK/main.o" "$RT" -lm -o "$WORK/mcc2"
 
 # ----- Stage FUNCTIONAL: mcc2 add.mc -> out.c -> clang -> run, assert add(2,3)==5 -----

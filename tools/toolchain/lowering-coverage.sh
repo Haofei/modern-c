@@ -30,7 +30,7 @@ cd "$HERE"
 
 FUZZ_N="${FUZZ_N:-60}"          # number of mcfuzz programs to fold into the corpus
 OUTDIR="${OUTDIR:-zig-out/lowering-cov}"
-MCC="zig-out/bin/mcc"
+MCC="${MCC_UNDER_TEST:-zig-out/bin/mcc}"
 LC="src/lower_c.zig"
 LL="src/lower_llvm.zig"
 

@@ -10,7 +10,7 @@
 # Usage: tools/lang/sbrk-grow-test.sh <mcc> [c|llvm]
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 AGENT_REL="${3:-examples/apps/sbrk_grow.c}"
 EXPECT="${4:-SBRK-GROW-OK}"

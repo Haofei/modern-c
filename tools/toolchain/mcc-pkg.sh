@@ -20,7 +20,7 @@
 # own manifest `version` matches the requested one.
 set -euo pipefail
 
-MCC="${MCC:-zig-out/bin/mcc}"
+MCC="${MCC_UNDER_TEST:-${MCC:-zig-out/bin/mcc}}"
 MCC_PKG_CC="${MCC_PKG_CC:-}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 
@@ -120,7 +120,7 @@ case "$cmd" in
         ENTRY="$MANIFEST_DIR/$PKG_ENTRY"
         OUT="$MANIFEST_DIR/$PKG_OUTPUT"
         DRIVER="${MCC_PKG_CC:-$HERE/tools/toolchain/mcc-cc.sh}"
-        MCC="$MCC" "$DRIVER" "$ENTRY" -o "$OUT" >/dev/null
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" "$DRIVER" "$ENTRY" -o "$OUT" >/dev/null
         echo "mcc-pkg: built ${PKG_NAME:-package} -> $OUT"
         ;;
     *)

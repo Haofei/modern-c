@@ -41,7 +41,7 @@ import tempfile
 DIAG_RE = re.compile(r"^(?P<path>.+?):(?P<line>\d+):(?P<col>\d+):\s*error:\s*(?P<rest>.*)$")
 CODE_RE = re.compile(r"^(E_[A-Z0-9_]+):\s*(.*)$")
 
-MCC = os.environ.get("MCC", "mcc")
+MCC = os.environ.get("MCC_UNDER_TEST") or os.environ.get("MCC") or "mcc"
 
 
 def log(*a):

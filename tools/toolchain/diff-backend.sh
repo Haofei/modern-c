@@ -14,7 +14,7 @@
 # Each row is independent, so the corpus fans out across cores (override with JOBS=N).
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
@@ -46,10 +46,10 @@ diff_one() {
         *)      echo "FAIL: diff-backend $name — unknown manifest mode '$mode'"; return 1 ;;
     esac
 
-    if ! MCC="$MCC" bash "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/$fixture" -o "$W/c.o" $mcc_flags >/dev/null 2>&1; then
+    if ! MCC_UNDER_TEST="$MCC" MCC="$MCC" bash "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/$fixture" -o "$W/c.o" $mcc_flags >/dev/null 2>&1; then
         echo "SKIP: diff-backend $name (C backend does not build on this host)"; return 0
     fi
-    if ! MCC="$MCC" LLC="$LLC" bash "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/$fixture" -o "$W/l.o" >/dev/null 2>&1; then
+    if ! MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" bash "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/$fixture" -o "$W/l.o" >/dev/null 2>&1; then
         echo "SKIP: diff-backend $name (LLVM backend cannot lower this fixture yet)"; return 0
     fi
     # The C backend inlines its mc_trap_* helpers; the LLVM backend references them externally,

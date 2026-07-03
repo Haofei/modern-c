@@ -8,7 +8,7 @@
 # compiles each to a native binary (cc / clang), runs it, and asserts 319.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 SRC="tests/exec/labeled_break_run.mc"
 EXPECT=1420
 

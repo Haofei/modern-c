@@ -31,7 +31,7 @@ set -euo pipefail
 SRC_IN="${1:-tests/qemu/arch/signed_boot_demo.mc}"
 BACKEND="${2:-c}"
 
-MCC="${MCC:-zig-out/bin/mcc}"
+MCC="${MCC_UNDER_TEST:-${MCC:-zig-out/bin/mcc}}"
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
 QEMU="${QEMU:-qemu-system-riscv64}"

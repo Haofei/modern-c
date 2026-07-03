@@ -19,7 +19,7 @@
 #
 # Usage: tools/arch/arm-qjs-test.sh <path-to-mcc> [c|llvm] [agent.js] [expect-substring] [name]
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 AGENT_JS_REL="${3:-examples/agents/agent.js}"
 EXPECT="${4:-agent: done}"
@@ -77,7 +77,7 @@ build_user_mc() { # <src.mc> <out.o>
         $CLANG "${APP_CFLAGS[@]}" -Wno-switch-bool -c "$WORK/mc.c" -o "$out"
         ;;
       llvm)
-        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$src" -o "$out" \
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$src" -o "$out" \
           -mtriple=aarch64-unknown-elf -relocation-model=static -code-model=small
         ;;
     esac
@@ -143,7 +143,7 @@ case "$BACKEND" in
     SUPPORT_OBJ=
     ;;
   llvm)
-    MC_ARCH=aarch64 MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/qjs_arm_demo.mc" -o "$WORK/fixture.o" \
+    MC_ARCH=aarch64 MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/qjs_arm_demo.mc" -o "$WORK/fixture.o" \
       -mtriple=aarch64-unknown-elf -relocation-model=static -code-model=small -mattr=-neon
     $CLANG "${KCF[@]}" -x c -c /dev/null -o "$WORK/llvm-support.o"
     SUPPORT_OBJ="$WORK/llvm-support.o"
@@ -158,7 +158,7 @@ case "$BACKEND" in
     $CLANG "${KCF[@]}" -Wno-switch-bool -c "$WORK/qjs_runtime.c" -o "$WORK/qjs_runtime.o"
     ;;
   llvm)
-    MC_ARCH=aarch64 MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/qjs_user_arm_runtime.mc" -o "$WORK/qjs_runtime.o" \
+    MC_ARCH=aarch64 MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/qjs_user_arm_runtime.mc" -o "$WORK/qjs_runtime.o" \
       -mtriple=aarch64-unknown-elf -relocation-model=static -code-model=small -mattr=-neon
     ;;
 esac

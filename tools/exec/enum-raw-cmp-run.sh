@@ -8,7 +8,7 @@
 # type); a wrong/absent result changes the checksum and fails the run.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 SRC="tests/exec/enum_raw_cmp_run.mc"
 EXPECT=55
 

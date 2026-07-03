@@ -104,7 +104,7 @@ kernel_boot_compile_mc_object() {
             # path's -fno-omit-frame-pointer in CFLAGS).
             local llc_extra=()
             [ -n "${MC_LLC_EXTRA:-}" ] && read -r -a llc_extra <<<"${MC_LLC_EXTRA}"
-            MC_CHECKS="$checks" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$src" -o "$out" \
+            MC_CHECKS="$checks" MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$src" -o "$out" \
                 -mtriple=riscv64-unknown-elf \
                 -mattr="$mc_mattr" \
                 -target-abi="$mc_abi" \
