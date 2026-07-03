@@ -4,31 +4,50 @@
 > `self-host-plan.md`, `self-host-arch.md`, `self-host-gaps.md`, `language-gap-fixes.md`, and
 > `self-host-perf.md` (merged 2026-07-02). Section numbers below (§1–§5) are the five former docs.
 
-**Status (2026-07-02): SELF-HOSTING ACHIEVED + architecture-hardened + review-hardened.** `mcc2` (the
-MC-compiler-in-MC under `selfhost/`) compiles `mcc2` to a byte-identical fixpoint (gate
-`selfhost-bootstrap-test`), both backends m0-green. It was then refactored from a 3-pass AST re-walker
-into a typed pipeline (§2) and its sema hardened across four review passes (§3). Perf: ~2 MB/s, faster
-than clang -O0 on its own output (§5).
+## ⚠️ TRUE STATUS — read this first
+
+**The ideal goal (NOT yet achieved): a compiler written in MC that REPLACES the ~67,000-line Zig
+compiler in `src/`.** That has not happened and is a large, largely-unstarted effort.
+
+**What HAS been achieved** is a strictly narrower thing — a **subset self-host PROOF plus gap-driven
+hardening of the real (Zig) compiler:**
+
+- `mcc2` (the MC-compiler-in-MC under `selfhost/`, **~8,900 lines of MC**) compiles **a SUBSET of MC** —
+  namely *itself + its std dependencies* — to a byte-identical fixpoint (gate `selfhost-bootstrap-test`,
+  both backends m0-green). This **proves the language can host a real compiler subset**. It does NOT
+  compile the full MC language, the kernel, the full std, or with the full checker, and it is **not a
+  replacement for `src/`**.
+- The self-host attempt was used as a **stress test** to surface everything MC can't express or does
+  slowly (the §3 gap ledger); the gaps it found were then **fixed in the real Zig compiler** (§4 —
+  those are `src/*.zig` edits, e.g. G7/G8/G11–G30).
+- `mcc2` itself was **architecture-hardened** (§2, typed pipeline) and **review-hardened** (§3).
+
+**Scale gap (why "self-hosting" is not finished):** production compiler = **67,097 LoC Zig** vs. `mcc2`
+= **8,875 LoC MC** covering a subset. To make MC truly self-host you must reimplement in MC the full
+checker (all hardening/move/effect/trait passes), **both** backends' complete feature coverage, the
+optimizer/opt-equiv paths, the whole std/kernel language surface, and the driver — none of which `mcc2`
+does today. See **[§6 — Path to true self-hosting](#6-path-to-true-self-hosting)** for the honest gap.
 
 ## Contents
 
-1. [Plan and execution](#1-plan-and-execution) — the stress-test goal, phases P0–P5, and how self-host was reached.
-2. [Architecture hardening](#2-architecture-hardening) — the 7-phase refactor to a typed pipeline (parse-once → typed facts → scope stack → impl/generic checking).
+1. [Plan and execution](#1-plan-and-execution) — the stress-test goal, phases P0–P5, and how the SUBSET self-host proof was reached.
+2. [Architecture hardening](#2-architecture-hardening) — the 7-phase refactor of `mcc2` to a typed pipeline (parse-once → typed facts → scope stack → impl/generic checking).
 3. [Gap ledger](#3-gap-ledger) — every language/library gap the effort surfaced (G1–G35) with current status.
 4. [Real-compiler language fixes](#4-real-compiler-language-fixes) — the `src/*.zig` fixes that closed most of those gaps.
 5. [Performance](#5-performance) — scale/throughput measurements.
+6. [Path to true self-hosting](#6-path-to-true-self-hosting) — the honest gap between the subset proof and replacing the 67k-line Zig compiler.
 
 ---
 
 ## 1. Plan and execution
 
 
-> **✅ STATUS (2026-07-02): SELF-HOSTING ACHIEVED — `mcc2` compiles `mcc2` (byte-identical fixpoint),
-> gated by `selfhost-bootstrap-test` in m0.** The sections below are the ORIGINAL PLAN + phase-by-phase
-> EXECUTION LOG (historical). Where an early section says a phase is "remaining/partial", read it as the
-> state *at that point in the log* — the "SELF-HOSTING ACHIEVED" entry near the end (and
-> §4) reflects the final state. 13 language/compiler gaps were found+fixed; perf
-> measured (~2 MB/s, faster than clang -O0 on mcc2's output).
+> **STATUS (2026-07-02): SUBSET self-host PROOF achieved — `mcc2` compiles `mcc2` (byte-identical
+> fixpoint), gated by `selfhost-bootstrap-test` in m0.** This is a SUBSET proof, NOT full self-hosting —
+> see the ⚠️ TRUE STATUS box at the top of this document and [§6](#6-path-to-true-self-hosting). The
+> sections below are the ORIGINAL PLAN + phase-by-phase EXECUTION LOG (historical); early "SELF-HOSTING
+> ACHIEVED" phrasing means "the subset fixpoint closed", not "the Zig compiler was replaced." 13+
+> language/compiler gaps were found+fixed in the real compiler (§4); perf measured (§5).
 
 **Goal (the "why"):** bootstrap the MC compiler *in MC* to stress-test the language and
 compiler harder than any synthetic benchmark can. The largest MC program written to date is
@@ -182,7 +201,10 @@ The gap and perf ledgers are the primary output. Scaffolds live in
 
 ---
 
-### 🎉 SELF-HOSTING ACHIEVED (2026-07-02)
+### 🎉 SUBSET SELF-HOST FIXPOINT ACHIEVED (2026-07-02)
+> NOTE: "achieved" here = the SUBSET fixpoint closed (mcc2 compiles mcc2). It does NOT mean MC replaced the
+> 67k-line Zig compiler — see the ⚠️ TRUE STATUS box up top and [§6](#6-path-to-true-self-hosting).
+
 **`mcc2` compiles `mcc2`.** All 5 core modules (lexer, parser, sema, emit_c, main) + all std deps compile
 through `mcc2` to clang-clean C; the emitted whole-program TU links into `mcc2′`; `mcc2′` compiles a program
 and its output is **byte-identical to `mcc2`'s (a true fixpoint)**. Permanently gated: `selfhost-bootstrap-test`
@@ -689,7 +711,7 @@ This is exactly the class of latent codegen bug the stress test exists to surfac
 recursion — needed once imports put a caller textually before its callee.
 
 **⚠️ SUPERSEDED SNAPSHOT (this paragraph is a P5.4-era status, kept for history).** As of 2026-07-02
-**MC self-hosts**: all five `mcc2` modules + std deps compile through `mcc2` to a byte-identical fixpoint
+**the SUBSET self-hosts**: all five `mcc2` modules + std deps compile through `mcc2` to a byte-identical fixpoint
 (gate `selfhost-bootstrap-test`). Every "recommended order" item below was subsequently done (generics
 over structs, `impl`/traits, `unsafe`/`raw`, value-optionals; `match`/`?` — some turned out already-present).
 See §1 "SELF-HOSTING ACHIEVED" and §4.
@@ -752,7 +774,7 @@ dispatch `d.vtbl->m(d.data, ...)`. Coercion `*mut T`→`*mut dyn Trait` at CALL 
 **⚠️ SUPERSEDED SNAPSHOT (P5.10-era status, kept for history) — ALL RESOLVED as of 2026-07-02.** Every
 "remaining blocker" below was subsequently closed: value optionals (P5.15), module-qualified calls + opaque
 address classes (P5.14/5.19), the std API incl. `StrHashMap` over struct values (P5.19), G32 impl-body
-mutation (P5.15); `match` was a non-gap. **MC self-hosts** — `mcc2` compiles all of selfhost/*.mc + std deps
+mutation (P5.15); `match` was a non-gap. **the SUBSET self-hosts** — `mcc2` compiles all of selfhost/*.mc + std deps
 to a byte-identical fixpoint (gate `selfhost-bootstrap-test`). See §1 "SELF-HOSTING ACHIEVED".
 
 **REMAINING blockers to LITERAL `mcc2`-compiles-`mcc2`** (after 11 verticals, ~70–75% coverage): `?T`
@@ -954,3 +976,50 @@ wall. Not yet done (correctness first). Fixed input ceiling: 1 MiB (`global g_sr
 can't build `[]const u8` from a malloc'd ptr+len — gap G12).
 
 _(append: phase, metric, workload, baseline, result, delta, commit)_
+
+---
+
+## 6. Path to true self-hosting
+
+**Ideal goal:** an MC-written compiler that fully **replaces `src/` (67,097 LoC Zig)** — compiles the
+whole MC language (not a subset), passes the same gates the Zig compiler does (including emitting the
+kernel and full std), on both backends. **This is not done.** `mcc2` today is **8,875 LoC of MC** and
+compiles only a subset (itself + its std deps). The rest of this document is about that subset proof
+and the Zig-compiler gap fixes it drove — real work, but a fraction of the goal.
+
+### What "true self-hosting" requires that `mcc2` does NOT have
+
+The Zig compiler's surface, by subsystem, and mcc2's coverage:
+
+| Subsystem (Zig `src/`) | mcc2 today | Gap to replace `src/` |
+|---|---|---|
+| Lexer / parser | subset (its own grammar) | full grammar: all attrs, `async`/`await`, `asm`, comptime, MMIO/overlay/packed decls, unions, opaque, effects syntax |
+| Sema / type-checker | subset name-res + a few checks | the FULL checker: move/borrow, definite-init, effects (irq/bounded/sleep), traits+bounds+coherence, hardening passes (UserPtr/Cap/Rights/Secret), exhaustiveness, const-eval |
+| Monomorphization | emit-time, scalar/1-param | a real pre-sema mono pass over nested/multi-param generics + trait bounds |
+| C backend | subset emit | full feature coverage (async state machines, atomics, u128, SIMD, inline asm, MMIO, every intrinsic) |
+| LLVM backend | **none** (mcc2 emits C only) | an entire second backend |
+| Optimizer / opt-equiv | none | the opt pipeline + its equivalence gates |
+| Driver / toolchain | a CLI that emits C to stdout | mcc-cc, profiles, import/loader parity, diagnostics parity |
+| Std / kernel language surface | hosted subset | everything the kernel + full std use |
+
+Rough scale: mcc2 covers on the order of **an eighth** of the Zig compiler's line count, and a smaller
+fraction of its *feature* surface (the hard parts — full sema + both backends + optimizer — are the
+least covered).
+
+### Honest sequencing if pursued
+
+True self-hosting is a **large, multi-phase, multi-session** project, roughly:
+
+1. **Freeze the target.** Decide "done" = mcc2′ (MC compiler) reproduces the Zig compiler's emitted
+   output on a defined corpus (start: std; stretch: kernel), both backends, byte-diffable.
+2. **Full sema in MC** — the biggest lift; port the checker subsystem-by-subsystem behind a differential
+   gate against the Zig checker's diagnostics.
+3. **Full C backend in MC** — feature-complete emit, gated by byte-diff vs the Zig C backend.
+4. **Second backend (LLVM) in MC** — or accept C-only self-host and keep LLVM in Zig (a lesser goal).
+5. **Optimizer + driver + full std/kernel surface.**
+6. **Cutover** — the Zig `src/` is retired only when the MC compiler passes m0 on both backends for the
+   whole corpus.
+
+Until step 6, MC **does not self-host** in the full sense; it **proves it can** (this document) and its
+stress test has hardened the real compiler (§4). Treat §1–§5 as "subset proof + gap-fix record," and
+this §6 as the outstanding goal.
