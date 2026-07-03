@@ -213,7 +213,7 @@ Total codes: **218**.
 | `E_UNION_CASE_HAS_NO_PAYLOAD` | union case binding requires a payload case<br>union case has no payload type | `src/mir_verify_util.zig:130`<br>`src/sema.zig:4413`<br>`src/sema.zig:6022` |
 | `E_UNKNOWN_ENUM_CASE` | enum has no case with this name | `src/mir_verify_util.zig:127`<br>`src/sema.zig:5051`<br>`src/sema.zig:6004` |
 | `E_UNKNOWN_FUNCTION` | unknown function | `src/sema.zig:3114` |
-| `E_UNKNOWN_IDENTIFIER` | asm output names an unknown local<br>unknown identifier<br>unknown identifier \`{s}\` | `src/diagnostics.zig:308`<br>`src/diagnostics.zig:316`<br>`src/sema.zig:2168`<br>`src/sema.zig:3098` |
+| `E_UNKNOWN_IDENTIFIER` | asm output names an unknown local<br>unknown identifier<br>unknown identifier \`{s}\` | `src/diagnostics.zig:334`<br>`src/diagnostics.zig:342`<br>`src/diagnostics.zig:363`<br>`src/sema.zig:2168`<br>`src/sema.zig:3098` |
 | `E_UNKNOWN_LOOP_LABEL` | break targets a loop label that is not in scope<br>continue targets a loop label that is not in scope | `src/sema.zig:2216`<br>`src/sema.zig:2228` |
 | `E_UNKNOWN_STRUCT_FIELD` | layout type has no field with this name<br>packed bits type has no field with this name<br>struct has no field with this name | `src/mir_verify_util.zig:104`<br>`src/sema.zig:4397`<br>`src/sema.zig:4409`<br>`src/sema.zig:4592`<br>`src/sema.zig:4644`<br>`src/sema.zig:5418` |
 | `E_UNKNOWN_TRAIT` | unknown trait in \`*dyn Trait\`<br>unknown trait in impl | `src/sema.zig:3223`<br>`src/sema.zig:5648` |

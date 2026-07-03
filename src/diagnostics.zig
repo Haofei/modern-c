@@ -29,6 +29,14 @@ pub const Location = struct {
     column: usize,
 };
 
+const MappedSpan = struct {
+    path: []const u8,
+    offset: usize,
+    len: usize,
+    line: usize,
+    column: usize,
+};
+
 pub const SourceLine = struct {
     text: []const u8,
     column: usize,
@@ -123,7 +131,7 @@ pub const Reporter = struct {
                 .error_ => "error",
                 .warning => "warning",
             };
-            const loc = self.location(diag.span);
+            const loc = self.mappedSpan(diag.span);
             const parsed = parseDiagnosticMessage(diag.message);
 
             try out.appendSlice(self.allocator, "{\"severity\":");
@@ -140,10 +148,10 @@ pub const Reporter = struct {
                 try appendJsonString(out, self.allocator, code);
             }
             try out.print(self.allocator, ",\"span\":{{\"offset\":{d},\"length\":{d},\"line\":{d},\"column\":{d}}}", .{
-                diag.span.offset,
-                diag.span.len,
-                diag.span.line,
-                diag.span.column,
+                loc.offset,
+                loc.len,
+                loc.line,
+                loc.column,
             });
             if (self.sourceLine(diag.span)) |line| {
                 try out.appendSlice(self.allocator, ",\"source\":{");
@@ -162,8 +170,20 @@ pub const Reporter = struct {
     }
 
     pub fn location(self: *const Reporter, span: Span) Location {
-        const boundaries = self.file_boundaries orelse return .{ .path = self.path, .line = span.line, .column = span.column };
-        if (boundaries.len == 0) return .{ .path = self.path, .line = span.line, .column = span.column };
+        const loc = self.mappedSpan(span);
+        return .{ .path = loc.path, .line = loc.line, .column = loc.column };
+    }
+
+    fn mappedSpan(self: *const Reporter, span: Span) MappedSpan {
+        const raw = MappedSpan{
+            .path = self.path,
+            .offset = span.offset,
+            .len = span.len,
+            .line = span.line,
+            .column = span.column,
+        };
+        const boundaries = self.file_boundaries orelse return raw;
+        if (boundaries.len == 0) return raw;
 
         var boundary = boundaries[0];
         for (boundaries[1..]) |candidate| {
@@ -171,7 +191,7 @@ pub const Reporter = struct {
             boundary = candidate;
         }
         if (span.offset < boundary.start or boundary.start > self.source.len) {
-            return .{ .path = self.path, .line = span.line, .column = span.column };
+            return raw;
         }
 
         var line: usize = 1;
@@ -185,7 +205,13 @@ pub const Reporter = struct {
                 column += 1;
             }
         }
-        return .{ .path = boundary.path, .line = line, .column = column };
+        return .{
+            .path = boundary.path,
+            .offset = span.offset - boundary.start,
+            .len = span.len,
+            .line = line,
+            .column = column,
+        };
     }
 
     pub fn sourceLine(self: *const Reporter, span: Span) ?SourceLine {
@@ -319,4 +345,35 @@ test "Reporter emits structured JSON diagnostics" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"line\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"column\":12") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"caret\":\"^~~~~~~\"") != null);
+}
+
+test "Reporter emits boundary-aware JSON spans for imported files" {
+    const root_source = "import \"lib.mc\";\n\nexport fn main() -> u32 {\n    return imported();\n}\n";
+    const imported_source = "fn imported() -> u32 {\n    return missing;\n}\n";
+    const source = root_source ++ imported_source;
+    var reporter = Reporter.init(std.testing.allocator, "root.mc", source);
+    defer reporter.deinit();
+    const boundaries = [_]FileBoundary{
+        .{ .start = 0, .path = "root.mc" },
+        .{ .start = root_source.len, .path = "lib.mc" },
+    };
+    reporter.file_boundaries = &boundaries;
+
+    const offset = std.mem.indexOf(u8, source, "missing").?;
+    reporter.err(.{ .offset = offset, .len = "missing".len, .line = 7, .column = 12 }, "E_UNKNOWN_IDENTIFIER: unknown identifier `{s}`", .{"missing"});
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try reporter.appendJson(&out);
+
+    const file_local_offset = std.mem.indexOf(u8, imported_source, "missing").?;
+    const expected_span = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "\"span\":{{\"offset\":{d},\"length\":{d},\"line\":2,\"column\":12}}",
+        .{ file_local_offset, "missing".len },
+    );
+    defer std.testing.allocator.free(expected_span);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"path\":\"lib.mc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"line\":2,\"column\":12") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, expected_span) != null);
 }

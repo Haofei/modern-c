@@ -139,7 +139,11 @@ assert d["severity"] == "error", d
 assert d["code"] == "E_UNKNOWN_IDENTIFIER", d
 assert "unknown identifier" in d["message"], d
 assert d["path"].endswith("lib.mc"), d
+assert d["file"] == d["path"], d
 assert d["line"] == 2 and d["column"] == 12, d
+expected_offset = len("fn helper() -> u32 {\n    return ")
+assert d["span"]["offset"] == expected_offset, d
+assert d["span"]["line"] == 2 and d["span"]["column"] == 12, d
 assert d["span"]["length"] == 4, d
 assert d["source"]["text"] == "    return nope;", d
 assert d["source"]["highlight_length"] == 4, d
