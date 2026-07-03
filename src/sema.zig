@@ -3045,7 +3045,9 @@ pub const Checker = struct {
                     self.errorCode(expr.span, "E_C_VOID_DEREF", "c_void pointer cannot be dereferenced");
                 }
                 if (isOpaqueAddressClass(inner_class)) {
-                    self.errorCode(expr.span, addressDerefDiagnostic(inner_class), addressDerefMessage(inner_class));
+                    if (addressDerefDiagnostic(inner_class)) |code| {
+                        self.errorCode(expr.span, code, addressDerefMessage(inner_class));
+                    }
                 }
                 if (derefResultType(inner.*, ctx)) |ty| return classifyTypeCtx(ty, ctx);
                 return .unknown;
@@ -6762,7 +6764,7 @@ fn addressClassMismatchMessage(target: TypeClass, source: TypeClass) []const u8 
     return "opaque address classes are not implicitly interchangeable";
 }
 
-fn addressDerefDiagnostic(kind: TypeClass) []const u8 {
+fn addressDerefDiagnostic(kind: TypeClass) ?[]const u8 {
     return switch (kind) {
         .paddr => "E_PADDR_DEREF",
         .vaddr => "E_VADDR_DEREF",
@@ -6770,7 +6772,7 @@ fn addressDerefDiagnostic(kind: TypeClass) []const u8 {
         .user_ptr => "E_USER_PTR_DEREF",
         .mmio_ptr => "E_MMIO_PTR_DEREF",
         .phys_ptr => "E_PHYS_PTR_DEREF",
-        else => "E_ADDRESS_CLASS_DEREF",
+        else => null,
     };
 }
 
