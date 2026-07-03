@@ -22,6 +22,14 @@ class Fixture:
     path: Path
 
 
+EMIT_LLVM_BAD_FIXTURES = (
+    "tests/c_emit/bad/export_struct_param_by_value.mc",
+    "tests/c_emit/bad/export_struct_return_by_value.mc",
+    "tests/c_emit/bad/extern_struct_param_by_value.mc",
+    "tests/c_emit/bad/extern_struct_return_by_value.mc",
+)
+
+
 def fixture_plan(root: Path) -> list[Fixture]:
     specs: list[Fixture] = []
     for pattern, command in (
@@ -31,6 +39,8 @@ def fixture_plan(root: Path) -> list[Fixture]:
     ):
         for path in sorted(root.glob(pattern)):
             specs.append(Fixture(command=command, path=path.relative_to(root)))
+    for fixture in EMIT_LLVM_BAD_FIXTURES:
+        specs.append(Fixture(command="emit-llvm", path=Path(fixture)))
     return specs
 
 

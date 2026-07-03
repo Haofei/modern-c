@@ -11,6 +11,12 @@ fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.Arra
     try lower_llvm.appendLlvm(std.testing.allocator, parsed.module, output);
 }
 
+fn llvmFunctionBody(output: []const u8, signature_prefix: []const u8) ![]const u8 {
+    const start = std.mem.indexOf(u8, output, signature_prefix) orelse return error.TestUnexpectedResult;
+    const body_end = std.mem.indexOf(u8, output[start..], "\n}\n\n") orelse return error.TestUnexpectedResult;
+    return output[start .. start + body_end];
+}
+
 test "LLVM backend emits a backend_name alias for the override symbol" {
     const source =
         \\#[backend_name("rss_helper_x")]
@@ -73,6 +79,8 @@ test "LLVM check elision is scoped to the current function" {
     defer output.deinit(std.testing.allocator);
     try lower_llvm.appendLlvmWithSourcePath(std.testing.allocator, module, &output, "combined.mc", true);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "define internal i32 @checked") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "call void @mc_trap_Bounds()") != null);
+    const proven_body = try llvmFunctionBody(output.items, "define internal i32 @proven");
+    const checked_body = try llvmFunctionBody(output.items, "define internal i32 @checked");
+    try std.testing.expect(std.mem.indexOf(u8, proven_body, "call void @mc_trap_Bounds()") == null);
+    try std.testing.expect(std.mem.indexOf(u8, checked_body, "call void @mc_trap_Bounds()") != null);
 }

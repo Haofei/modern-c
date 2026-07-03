@@ -23,7 +23,6 @@ these codes, remove the row; the gate fails on redundant or stale entries.
 | `E_DUPLICATE_BACKEND_NAME` | Backend symbol collision requires two declarations assigning the same backend name. No focused negative fixture exists yet. |
 | `E_DYN_MUT_BORROW` | Dynamic trait mutable-borrow coercion error. Existing dynamic trait fixtures cover forge/nullability/signature failures; this mutability edge remains fixture debt. |
 | `E_ENUM_RAW_REQUIRES_OPEN_ENUM` | MIR verifier fallback for `.raw()` on non-open enums. Positive enum raw behavior is covered; this verifier diagnostic does not have a negative fixture yet. |
-| `E_EXTERN_STRUCT_BY_VALUE` | C ABI guard for extern/export struct-by-value until ABI classification exists. No focused ABI negative fixture exists yet. |
 | `E_IMPORT_NOT_FOUND` | CLI integration path is covered by `diagnostics-test`, which creates temporary import failures rather than a stable corpus fixture. |
 | `E_IMPORT_OUTSIDE_SANDBOX` | CLI integration path is covered by `diagnostics-test`, which creates temporary sandbox import failures rather than a stable corpus fixture. |
 | `E_INTERNAL_OOM` | Defensive compiler out-of-memory diagnostic. It should not be forced through a deterministic fixture. |
