@@ -151,6 +151,10 @@ pub const FunctionInfo = struct {
     // functions (or non-blocking primitives) - this mirrors the MIR verifier's
     // `E_IRQ_CONTEXT_CALL` discipline so `mcc check` and `mcc verify` agree.
     irq_context: bool = false,
+    // G8: this function is an `#[error_from]` conversion `fn(E1) -> E2`, invoked by
+    // `?` on the error path when the propagated error type differs from the
+    // enclosing function's error type.
+    error_from: bool = false,
 };
 
 pub const GlobalInfo = struct {

@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
@@ -301,8 +302,8 @@ pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: 
     }
     for (module.decls) |decl| {
         switch (decl.kind) {
-            .fn_decl => |fn_decl| try ctx.collectFunction(fn_decl),
-            .extern_fn => |fn_decl| try ctx.collectFunction(fn_decl),
+            .fn_decl => |fn_decl| try ctx.collectFunction(fn_decl, decl.attrs),
+            .extern_fn => |fn_decl| try ctx.collectFunction(fn_decl, decl.attrs),
             else => {},
         }
     }
@@ -551,7 +552,7 @@ const LlvmEmitter = struct {
         try self.tagged_unions.put(union_decl.name.text, union_decl);
     }
 
-    fn collectFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl) !void {
+    fn collectFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl, attrs: []const ast.Attr) !void {
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         _ = try self.llvmType(ret_ty);
         for (fn_decl.params) |param| _ = try self.llvmType(param.ty);
@@ -566,7 +567,7 @@ const LlvmEmitter = struct {
             });
             break :blk id;
         } else null;
-        try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .debug_id = debug_id });
+        try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
@@ -1719,7 +1720,13 @@ const LlvmEmitter = struct {
     fn emitResultPropagationCheck(self: *LlvmEmitter, value: []const u8, operand_ty: ast.TypeExpr, info: ResultTypeInfo, span: ast.Span) !bool {
         const return_ty = self.current_return_ty orelse return false;
         const return_info = self.resultInfo(return_ty) orelse return false;
-        if (!std.mem.eql(u8, try self.llvmType(info.err_ty), try self.llvmType(return_info.err_ty))) return false;
+        // G8: when the operand error (E1) differs from the function error (E2), a
+        // `#[error_from]` conversion is invoked on the propagated error. When the
+        // error types match no conversion resolves and the same-repr fast path is
+        // preserved byte-for-byte. A genuine E1!=E2 with no conversion is rejected
+        // by sema (E_NO_ERROR_CONVERSION), so it never reaches here.
+        const convert_fn = error_from.resolveTypes(&self.fn_sigs, info.err_ty, return_info.err_ty);
+        if (convert_fn == null and !std.mem.eql(u8, try self.llvmType(info.err_ty), try self.llvmType(return_info.err_ty))) return false;
 
         const is_ok = try self.nextTemp();
         const ok_label = try self.nextLabel("try_ok");
@@ -1728,8 +1735,14 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ is_ok, try self.llvmType(operand_ty), value });
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ is_ok, ok_label, err_label, try self.debugCallSuffix(), err_label });
         try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 2\n", .{ err_value, try self.llvmType(operand_ty), value });
+        var propagated_err = err_value;
+        if (convert_fn) |cf| {
+            const converted = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} {s}){s}\n", .{ converted, try self.llvmType(return_info.err_ty), cf, try self.llvmType(info.err_ty), err_value, try self.debugCallSuffix() });
+            propagated_err = converted;
+        }
         const ok_zero = try self.resultPayloadZero(return_info.ok_ty);
-        const propagated_value = try self.emitResultValue(return_ty, "false", ok_zero, err_value);
+        const propagated_value = try self.emitResultValue(return_ty, "false", ok_zero, propagated_err);
         // `?` returns from the function on the error branch, so it must run every active
         // defer first — exactly like an explicit `return`. Flush from 0 (whole function
         // scope) without truncating: the ok path continues after this block with the same

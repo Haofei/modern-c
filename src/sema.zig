@@ -4,6 +4,7 @@ const array_len = @import("array_len.zig");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
+const error_from = @import("error_from.zig");
 const numeric = @import("numeric.zig");
 const eval = @import("eval.zig");
 const loader = @import("loader.zig");
@@ -741,6 +742,7 @@ pub const Checker = struct {
                         .is_const = fn_decl.is_const,
                         .may_sleep = hasMaySleep(decl.attrs),
                         .irq_context = hasIrqContext(decl.attrs),
+                        .error_from = error_from.hasAttr(decl.attrs),
                     }) catch {
                         self.oom = true;
                     };
@@ -2252,6 +2254,25 @@ pub const Checker = struct {
         }
     }
 
+    // G8: a bare `EXPR?` that propagates a `Result<_, E1>` out of a function
+    // returning `Result<_, E2>` needs an explicit `#[error_from]` conversion when
+    // `E1 != E2`. `?` invokes it on the error path (see src/error_from.zig). When no
+    // conversion is declared, reject rather than silently reinterpret the error
+    // bits. The `? else MAPPED` form supplies its own error and is left untouched.
+    fn checkTryErrorConversion(self: *Checker, span: ast.Span, inner: anytype, ctx: Context) void {
+        if (inner.mapped != null) return; // explicit `? else` remap owns the error
+        const return_ty = ctx.return_ty orelse return; // no return type: `?` traps, not propagate
+        const fn_err = resultPayloadType(return_ty, "err") orelse return; // enclosing fn returns no Result
+        const operand_result_ty = exprResultType(inner.operand.*, ctx) orelse return;
+        const op_err = resultPayloadType(operand_result_ty, "err") orelse return; // nullable operand: no error type
+        const e1 = ast_query.typeName(resolveAliasType(op_err, ctx)) orelse return;
+        const e2 = ast_query.typeName(resolveAliasType(fn_err, ctx)) orelse return;
+        if (std.mem.eql(u8, e1, e2)) return; // same error type: propagate as-is (unchanged behavior)
+        const functions = ctx.functions orelse return;
+        if (error_from.resolve(functions, e1, e2) != null) return; // an #[error_from] conversion exists
+        self.errorCode(span, "E_NO_ERROR_CONVERSION", "'?' cannot convert the propagated error to the function's error type; declare an #[error_from] fn converting it");
+    }
+
     fn checkExpr(self: *Checker, expr: ast.Expr, ctx: Context) TypeClass {
         return switch (expr.kind) {
             // The async transform eliminates every `await_expr` pre-sema.
@@ -2289,6 +2310,7 @@ pub const Checker = struct {
                 if (!isTryOperand(operand)) {
                     self.errorCode(expr.span, "E_TRY_REQUIRES_RESULT_OR_NULLABLE", "postfix '?' requires a Result or nullable operand");
                 }
+                self.checkTryErrorConversion(expr.span, inner, ctx);
                 if (tryPayloadType(inner.operand.*, ctx)) |payload_ty| return classifyTypeCtx(payload_ty, ctx);
                 return tryResultType(operand);
             },

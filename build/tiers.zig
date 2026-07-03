@@ -330,6 +330,9 @@ pub fn register(ctx: *h.Ctx) void {
     // labeled-break-run-test compiles+runs labeled `break :L` / `continue :L`
     // targeting a named outer loop on both backends (G7; needs cc + clang).
     m0_step.dependOn(ctx.cmd("labeled-break-run-test"));
+    // error-from-run-test compiles+runs `?` error coercion via an explicit
+    // `#[error_from]` conversion on both backends (G8; needs cc + clang).
+    m0_step.dependOn(ctx.cmd("error-from-run-test"));
     // std-test compiles and runs std/core through the toolchain (needs clang).
     m0_step.dependOn(ctx.cmd("std-test"));
     // import-test exercises the module system end-to-end (needs clang).

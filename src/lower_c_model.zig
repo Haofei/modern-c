@@ -64,6 +64,9 @@ pub const FnInfo = struct {
     params: []const ast.Param,
     return_type: ?ast.TypeExpr,
     is_extern: bool,
+    // G8: `#[error_from]` conversion `fn(E1) -> E2`, invoked by `?` on the error
+    // path when the propagated error type differs from the function's error type.
+    error_from: bool = false,
 };
 
 pub const SequencedArgTemp = struct {

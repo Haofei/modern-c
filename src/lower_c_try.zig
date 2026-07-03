@@ -7,6 +7,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const error_from = @import("error_from.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_arith = @import("lower_c_arith.zig");
@@ -432,7 +433,7 @@ pub fn emitResultTryLocalInit(ctx: TryDirectEmitContext, name: []const u8, decl_
     _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return false;
 
     const temp_name = try emitResultTryLocalOperandTemp(ctx, operand.expr, locals, operand_result_ty);
-    try emitResultTryErrGuard(ctx, enclosing_return_ty, temp_name, operand.mapped, locals);
+    try emitResultTryErrGuard(ctx, enclosing_return_ty, temp_name, operand.mapped, operand_result_ty, locals);
     try emitResultTryOkLocal(ctx, name, decl_ty, temp_name);
     return true;
 }
@@ -739,14 +740,14 @@ fn tryOperandForExpr(expr: ast.Expr) ?ResultTryOperand {
     };
 }
 
-fn emitTryErrReturn(ctx: TryDirectEmitContext, enclosing_return_ty: ast.TypeExpr, temp_name: []const u8, mapped: ?*ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !void {
+fn emitTryErrReturn(ctx: TryDirectEmitContext, enclosing_return_ty: ast.TypeExpr, temp_name: []const u8, mapped: ?*ast.Expr, operand_result_ty: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !void {
     if (locals) |l| try ctx.emit_deferred_cleanups(ctx.replacement.emit_ctx, l, enclosing_return_ty);
     try writeIndent(ctx.replacement);
     const ret_c = try ctx.replacement.c_type(ctx.replacement.emit_ctx, enclosing_return_ty);
     if (mapped) |m| {
         try emitMappedTryErrReturn(ctx, enclosing_return_ty, ret_c, m.*, locals);
     } else {
-        try emitPropagatedTryErrReturn(ctx, ret_c, temp_name);
+        try emitPropagatedTryErrReturn(ctx, ret_c, temp_name, enclosing_return_ty, operand_result_ty);
     }
 }
 
@@ -760,8 +761,21 @@ fn emitMappedTryErrReturn(ctx: TryDirectEmitContext, enclosing_return_ty: ast.Ty
     try ctx.replacement.out.appendSlice(ctx.replacement.allocator, " });\n");
 }
 
-fn emitPropagatedTryErrReturn(ctx: TryDirectEmitContext, ret_c: []const u8, temp_name: []const u8) !void {
+fn emitPropagatedTryErrReturn(ctx: TryDirectEmitContext, ret_c: []const u8, temp_name: []const u8, enclosing_return_ty: ast.TypeExpr, operand_result_ty: ast.TypeExpr) !void {
+    // G8: when the operand's error type (E1) differs from the function's error type
+    // (E2), invoke the resolved `#[error_from]` conversion on the propagated error.
+    // When E1 == E2 no conversion resolves and this is byte-identical to before.
+    if (errorConversionFn(ctx, enclosing_return_ty, operand_result_ty)) |fname| {
+        try ctx.replacement.out.print(ctx.replacement.allocator, "return (({s}){{ .is_ok = false, .payload.err = {s}({s}.payload.err) }});\n", .{ ret_c, fname, temp_name });
+        return;
+    }
     try ctx.replacement.out.print(ctx.replacement.allocator, "return (({s}){{ .is_ok = false, .payload.err = {s}.payload.err }});\n", .{ ret_c, temp_name });
+}
+
+fn errorConversionFn(ctx: TryDirectEmitContext, enclosing_return_ty: ast.TypeExpr, operand_result_ty: ast.TypeExpr) ?[]const u8 {
+    const e1 = resultPayloadTypeForTag(operand_result_ty, "err") orelse return null;
+    const e2 = resultPayloadTypeForTag(enclosing_return_ty, "err") orelse return null;
+    return error_from.resolveTypes(ctx.replacement.functions, e1, e2);
 }
 
 fn emitResultTryLocalOperandTemp(ctx: TryDirectEmitContext, operand: ast.Expr, locals: *std.StringHashMap(LocalInfo), operand_result_ty: ast.TypeExpr) ![]const u8 {
@@ -773,11 +787,11 @@ fn emitResultTryLocalOperandTemp(ctx: TryDirectEmitContext, operand: ast.Expr, l
     return temp_name;
 }
 
-fn emitResultTryErrGuard(ctx: TryDirectEmitContext, enclosing_return_ty: ast.TypeExpr, temp_name: []const u8, mapped: ?*ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+fn emitResultTryErrGuard(ctx: TryDirectEmitContext, enclosing_return_ty: ast.TypeExpr, temp_name: []const u8, mapped: ?*ast.Expr, operand_result_ty: ast.TypeExpr, locals: *std.StringHashMap(LocalInfo)) !void {
     try writeIndent(ctx.replacement);
     try ctx.replacement.out.print(ctx.replacement.allocator, "if (!{s}.is_ok) {{\n", .{temp_name});
     ctx.replacement.indent.* += 1;
-    try emitTryErrReturn(ctx, enclosing_return_ty, temp_name, mapped, locals);
+    try emitTryErrReturn(ctx, enclosing_return_ty, temp_name, mapped, operand_result_ty, locals);
     ctx.replacement.indent.* -= 1;
     try writeIndent(ctx.replacement);
     try ctx.replacement.out.appendSlice(ctx.replacement.allocator, "}\n");
@@ -824,11 +838,12 @@ fn emitResultTryPropagateHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!boo
         else => return false,
     };
     const temp_name = (try emitResultTryHoistTemp(ctx, expr.span, inner.operand.*)) orelse return false;
+    const operand_result_ty = ctx.ctx.result_type_for_expr(ctx.ctx.replacement.emit_ctx, inner.operand.*, ctx.locals) orelse return false;
 
     try writeIndent(ctx.ctx.replacement);
     try ctx.ctx.replacement.out.print(ctx.ctx.replacement.allocator, "if (!{s}.is_ok) {{\n", .{temp_name});
     ctx.ctx.replacement.indent.* += 1;
-    try emitTryErrReturn(ctx.ctx, enclosing_return_ty, temp_name, inner.mapped, ctx.locals);
+    try emitTryErrReturn(ctx.ctx, enclosing_return_ty, temp_name, inner.mapped, operand_result_ty, ctx.locals);
     ctx.ctx.replacement.indent.* -= 1;
     try writeIndent(ctx.ctx.replacement);
     try ctx.ctx.replacement.out.appendSlice(ctx.ctx.replacement.allocator, "}\n");

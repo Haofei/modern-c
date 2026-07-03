@@ -16,6 +16,9 @@ pub const FnSig = struct {
     ret: ast.TypeExpr,
     params: []const ast.Param,
     debug_id: ?usize = null,
+    // G8: `#[error_from]` conversion `fn(E1) -> E2`, invoked by `?` on the error
+    // path when the propagated error type differs from the function's error type.
+    error_from: bool = false,
 };
 
 // A generated env-widening thunk for a scalar-env `bind`. `fname` is the real

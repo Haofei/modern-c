@@ -2252,6 +2252,32 @@ switch tmp {
 
 The error branch has type `never`, because `return err(e)` does not continue. The whole `?` expression has the success type.
 
+**Error coercion across `?` (explicit `#[error_from]` conversion).** When the
+operand is `Result<T, E1>` and the enclosing function returns `Result<U, E2>`
+with `E1 == E2`, the error propagates as-is (the lowering above, unchanged). When
+`E1 != E2`, `?` does NOT silently reinterpret the error; instead it invokes a
+user-written conversion on the error path. The conversion is a free function
+annotated `#[error_from]` taking one parameter of type `E1` and returning `E2`:
+
+```mc
+#[error_from]
+fn promote(e: LowErr) -> HighErr { ... }
+
+fn caller() -> Result<u32, HighErr> {
+    let x = producer()?;   // producer: Result<u32, LowErr>; `?` calls promote on err
+    return ok(x);
+}
+```
+
+The user writes the conversion (it is EXPLICIT); the compiler only inserts its
+invocation at the `?` site, so the error branch becomes `return err(promote(e))`.
+The conversion is an ordinary Tier-1 static call — no vtable, no allocation. If
+`E1 != E2` and no matching `#[error_from]` conversion is declared, the `?` is a
+compile error (`E_NO_ERROR_CONVERSION`); MC never coerces error types
+implicitly or structurally. (This is distinct from `? else MAPPED`, which
+supplies a specific replacement error inline rather than reusing the propagated
+value.)
+
 No stack unwinding.  
 No hidden allocation.  
 No hidden runtime.
