@@ -120,6 +120,61 @@ test "ComptimeScope records domain metadata allocation failure" {
     try std.testing.expect(scope.hasOom());
 }
 
+test "foldComptimeExpr records aggregate allocation failure" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var scope = ComptimeScope.init(failing.allocator());
+    defer scope.deinit();
+
+    const expr = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{
+        .array_literal = try a.dupe(ast.Expr, &.{(try testInt(a, "1")).*}),
+    } });
+
+    try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, expr.*)) == .unknown);
+    try std.testing.expect(scope.hasOom());
+}
+
+test "foldComptimeExpr records Result construction allocation failure" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var scope = ComptimeScope.init(failing.allocator());
+    defer scope.deinit();
+
+    const expr = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .call = .{
+        .callee = try testIdent(a, "ok"),
+        .type_args = &.{},
+        .args = try a.dupe(ast.Expr, &.{(try testInt(a, "1")).*}),
+    } } });
+
+    try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, expr.*)) == .unknown);
+    try std.testing.expect(scope.hasOom());
+}
+
+test "foldComptimeExpr records string literal decode allocation failure" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var scope = ComptimeScope.init(failing.allocator());
+    defer scope.deinit();
+
+    const string_lit = try ast.makePtr(std.testing.allocator, ast.Expr{
+        .span = zero_span,
+        .kind = .{ .string_literal = "\"abc\"" },
+    });
+    defer std.testing.allocator.destroy(string_lit);
+    const expr = ast.Expr{ .span = zero_span, .kind = .{ .member = .{
+        .base = string_lit,
+        .name = .{ .text = "len", .span = zero_span },
+    } } };
+
+    try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, expr)) == .unknown);
+    try std.testing.expect(scope.hasOom());
+}
+
 test "const fn parameter metadata OOM does not silently use untyped arithmetic" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

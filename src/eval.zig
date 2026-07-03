@@ -425,6 +425,24 @@ pub const ComptimeScope = struct {
         return self.oom;
     }
 
+    pub fn recordOom(self: *const ComptimeScope) void {
+        @constCast(self).oom = true;
+    }
+
+    fn alloc(self: *const ComptimeScope, comptime T: type, len: usize) std.mem.Allocator.Error![]T {
+        return self.bindings.allocator.alloc(T, len) catch |err| {
+            self.recordOom();
+            return err;
+        };
+    }
+
+    fn dupe(self: *const ComptimeScope, comptime T: type, slice: []const T) std.mem.Allocator.Error![]T {
+        return self.bindings.allocator.dupe(T, slice) catch |err| {
+            self.recordOom();
+            return err;
+        };
+    }
+
     pub fn bind(self: *ComptimeScope, name: []const u8, value: ComptimeValue) !void {
         self.bindings.put(name, value) catch |err| {
             self.oom = true;
@@ -729,18 +747,18 @@ fn substituteComptimeType(scope: *const ComptimeScope, ty: ast.TypeExpr) ?ast.Ty
             break :blk .{ .span = ty.span, .kind = .{ .array = .{ .len = node.len, .child = child } } };
         },
         .generic => |node| blk: {
-            const args = scope.bindings.allocator.alloc(ast.TypeExpr, node.args.len) catch return null;
+            const args = scope.alloc(ast.TypeExpr, node.args.len) catch return null;
             for (node.args, 0..) |arg, i| args[i] = substituteComptimeType(scope, arg) orelse return null;
             break :blk .{ .span = ty.span, .kind = .{ .generic = .{ .base = node.base, .args = args } } };
         },
         .fn_pointer => |node| blk: {
-            const params = scope.bindings.allocator.alloc(ast.TypeExpr, node.params.len) catch return null;
+            const params = scope.alloc(ast.TypeExpr, node.params.len) catch return null;
             for (node.params, 0..) |param, i| params[i] = substituteComptimeType(scope, param) orelse return null;
             const ret = trySubstituteTypePtr(scope, node.ret.*) orelse return null;
             break :blk .{ .span = ty.span, .kind = .{ .fn_pointer = .{ .params = params, .ret = ret } } };
         },
         .closure_type => |node| blk: {
-            const params = scope.bindings.allocator.alloc(ast.TypeExpr, node.params.len) catch return null;
+            const params = scope.alloc(ast.TypeExpr, node.params.len) catch return null;
             for (node.params, 0..) |param, i| params[i] = substituteComptimeType(scope, param) orelse return null;
             const ret = trySubstituteTypePtr(scope, node.ret.*) orelse return null;
             break :blk .{ .span = ty.span, .kind = .{ .closure_type = .{ .params = params, .ret = ret } } };
@@ -753,7 +771,10 @@ fn substituteComptimeType(scope: *const ComptimeScope, ty: ast.TypeExpr) ?ast.Ty
 
 fn trySubstituteTypePtr(scope: *const ComptimeScope, ty: ast.TypeExpr) ?*ast.TypeExpr {
     const substituted = substituteComptimeType(scope, ty) orelse return null;
-    return ast.makePtr(scope.bindings.allocator, substituted) catch null;
+    return ast.makePtr(scope.bindings.allocator, substituted) catch {
+        scope.recordOom();
+        return null;
+    };
 }
 
 fn foldComptimeReflection(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFold {
@@ -768,13 +789,13 @@ fn rewriteReflectionExpr(scope: *const ComptimeScope, expr: ast.Expr) ?ast.Expr 
         else => return expr,
     };
     if (call.type_args.len > 0) {
-        const type_args = scope.bindings.allocator.alloc(ast.TypeExpr, call.type_args.len) catch return null;
+        const type_args = scope.alloc(ast.TypeExpr, call.type_args.len) catch return null;
         for (call.type_args, 0..) |ty, i| type_args[i] = substituteComptimeType(scope, ty) orelse return null;
         return .{ .span = expr.span, .kind = .{ .call = .{ .callee = call.callee, .type_args = type_args, .args = call.args } } };
     }
     if (call.args.len > 0) {
         const ty = comptimeTypeArg(scope, call.args[0]) orelse return expr;
-        const type_args = scope.bindings.allocator.alloc(ast.TypeExpr, 1) catch return null;
+        const type_args = scope.alloc(ast.TypeExpr, 1) catch return null;
         type_args[0] = substituteComptimeType(scope, ty) orelse return null;
         return .{ .span = expr.span, .kind = .{ .call = .{ .callee = call.callee, .type_args = type_args, .args = call.args[1..] } } };
     }
@@ -813,7 +834,7 @@ pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFol
                     .unknown => break :blk .unknown,
                 };
                 const is_ok = isOkErrName(call.callee.*, "ok");
-                break :blk if (comptimeResult(scope.bindings.allocator, is_ok, payload)) |v| .{ .value = v } else .unknown;
+                break :blk if (comptimeResult(scope, is_ok, payload)) |v| .{ .value = v } else .unknown;
             }
             break :blk switch (foldComptimeCall(scope, call)) {
                 .unknown => foldComptimeReflection(scope, expr),
@@ -840,7 +861,7 @@ pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFol
 // Fold a struct literal `.{ .field = value, … }` (section 22). Field storage is
 // allocated in the scope's allocator, which lives for the whole fold.
 fn foldComptimeStructLiteral(scope: *const ComptimeScope, fields: []const ast.StructLiteralField) ComptimeFold {
-    const out = scope.bindings.allocator.alloc(ComptimeStructField, fields.len) catch return .unknown;
+    const out = scope.alloc(ComptimeStructField, fields.len) catch return .unknown;
     for (fields, 0..) |field, i| {
         const value = switch (foldComptimeExpr(scope, field.value)) {
             .value => |v| v,
@@ -865,8 +886,8 @@ fn isComptimeBitcastName(expr: ast.Expr) bool {
 // consumer) is needed. `?T` none is a `{ __null }` struct; `ok(v)`/`err(e)` is a
 // `{ __result_tag: "ok"|"err", __result_payload: v }` struct. The double-underscore field
 // names are reserved like the desugar temporaries.
-fn comptimeResult(allocator: std.mem.Allocator, is_ok: bool, payload: ComptimeValue) ?ComptimeValue {
-    const fields = allocator.alloc(ComptimeStructField, 2) catch return null;
+fn comptimeResult(scope: *const ComptimeScope, is_ok: bool, payload: ComptimeValue) ?ComptimeValue {
+    const fields = scope.alloc(ComptimeStructField, 2) catch return null;
     fields[0] = .{ .name = "__result_tag", .value = .{ .tag = if (is_ok) "ok" else "err" } };
     fields[1] = .{ .name = "__result_payload", .value = payload };
     return .{ .@"struct" = fields };
@@ -972,7 +993,7 @@ fn foldComptimeMember(scope: *const ComptimeScope, base_expr: ast.Expr, field_na
     // here, where it is consumed as a value rather than a pointer).
     if (std.mem.eql(u8, field_name, "len")) {
         if (base_expr.kind == .string_literal) {
-            if (decodeStringLiteral(scope.bindings.allocator, base_expr.kind.string_literal)) |b| {
+            if (decodeStringLiteral(scope, base_expr.kind.string_literal)) |b| {
                 return .{ .value = .{ .int = @intCast(b.len) } };
             }
         }
@@ -1003,7 +1024,7 @@ fn foldComptimeMember(scope: *const ComptimeScope, base_expr: ast.Expr, field_na
 // Fold an array literal `.{a, b, …}` (section 22). Element storage is allocated
 // in the scope's allocator, which lives for the whole fold.
 fn foldComptimeArrayLiteral(scope: *const ComptimeScope, items: []const ast.Expr) ComptimeFold {
-    const elems = scope.bindings.allocator.alloc(ComptimeValue, items.len) catch return .unknown;
+    const elems = scope.alloc(ComptimeValue, items.len) catch return .unknown;
     for (items, 0..) |item, i| {
         elems[i] = switch (foldComptimeExpr(scope, item)) {
             .value => |v| v,
@@ -1019,7 +1040,7 @@ fn foldComptimeArrayLiteral(scope: *const ComptimeScope, items: []const ast.Expr
 fn foldComptimeIndex(scope: *const ComptimeScope, base_expr: ast.Expr, index_expr: ast.Expr) ComptimeFold {
     // `"abc"[i]` — index a string literal's bytes (decoded here, as a value).
     const literal_bytes: ?[]const u8 = if (base_expr.kind == .string_literal)
-        decodeStringLiteral(scope.bindings.allocator, base_expr.kind.string_literal)
+        decodeStringLiteral(scope, base_expr.kind.string_literal)
     else
         null;
     const base: ?ComptimeValue = if (literal_bytes == null) switch (foldComptimeExpr(scope, base_expr)) {
@@ -1081,7 +1102,7 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
         if (isComptimeTypeParam(param)) {
             const ty = comptimeTypeArg(scope, arg) orelse return .unknown;
             callee_scope.bindType(param.name.text, ty) catch {
-                @constCast(scope).oom = true;
+                scope.recordOom();
                 return .unknown;
             };
             continue;
@@ -1092,16 +1113,16 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
             .unknown => return .unknown,
         };
         callee_scope.bind(param.name.text, value) catch {
-            @constCast(scope).oom = true;
+            scope.recordOom();
             return .unknown;
         };
         callee_scope.bindTypeInfo(param.name.text, param.ty) catch {
-            @constCast(scope).oom = true;
+            scope.recordOom();
             return .unknown;
         };
     }
     const folded = foldComptimeFnBody(&callee_scope, body);
-    if (callee_scope.hasOom()) @constCast(scope).oom = true;
+    if (callee_scope.hasOom()) scope.recordOom();
     return folded;
 }
 
@@ -1414,7 +1435,10 @@ const AssignPathSegment = union(enum) {
 fn foldComptimeUpdateTarget(scope: *ComptimeScope, current: ComptimeValue, target: ast.Expr, replacement: ComptimeValue) ComptimeFold {
     var path: std.ArrayList(AssignPathSegment) = .empty;
     defer path.deinit(scope.bindings.allocator);
-    appendAssignPath(scope.bindings.allocator, &path, target) catch return .unknown;
+    appendAssignPath(scope.bindings.allocator, &path, target) catch |err| {
+        if (err == error.OutOfMemory) scope.recordOom();
+        return .unknown;
+    };
     return foldComptimeUpdatePath(scope, current, path.items, replacement);
 }
 
@@ -1442,7 +1466,7 @@ fn foldComptimeUpdatePath(scope: *ComptimeScope, current: ComptimeValue, path: [
                 .@"struct" => |items| items,
                 else => return .unknown,
             };
-            const copy = scope.bindings.allocator.dupe(ComptimeStructField, fields) catch return .unknown;
+            const copy = scope.dupe(ComptimeStructField, fields) catch return .unknown;
             for (copy) |*field| {
                 if (!std.mem.eql(u8, field.name, name)) continue;
                 field.value = switch (foldComptimeUpdatePath(scope, field.value, path[1..], replacement)) {
@@ -1468,7 +1492,7 @@ fn foldComptimeUpdatePath(scope: *ComptimeScope, current: ComptimeValue, path: [
                 .unknown => return .unknown,
             };
             if (idx < 0 or idx >= arr.len) return .trap;
-            const copy = scope.bindings.allocator.dupe(ComptimeValue, arr) catch return .unknown;
+            const copy = scope.dupe(ComptimeValue, arr) catch return .unknown;
             copy[@intCast(idx)] = switch (foldComptimeUpdatePath(scope, arr[@intCast(idx)], path[1..], replacement)) {
                 .value => |value| value,
                 .trap => return .trap,
@@ -1754,11 +1778,11 @@ fn parseFloat(raw: []const u8) EvalError!f64 {
 }
 
 // Decode a string-literal lexeme (with surrounding quotes and escape sequences) into its
-// raw bytes, allocated in `allocator`. Returns null on a malformed/unsupported escape.
-fn decodeStringLiteral(allocator: std.mem.Allocator, literal: []const u8) ?[]const u8 {
+// raw bytes, allocated in `scope`. Returns null on a malformed/unsupported escape.
+fn decodeStringLiteral(scope: *const ComptimeScope, literal: []const u8) ?[]const u8 {
     if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return null;
     const body = literal[1 .. literal.len - 1];
-    var out = allocator.alloc(u8, body.len) catch return null;
+    var out = scope.alloc(u8, body.len) catch return null;
     var n: usize = 0;
     var i: usize = 0;
     while (i < body.len) : (i += 1) {

@@ -276,14 +276,16 @@ fn appendCaretJsonString(out: *std.ArrayList(u8), allocator: std.mem.Allocator, 
 }
 
 test "Reporter errors fail closed when diagnostic allocation fails" {
-    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
-    var reporter = Reporter.init(failing.allocator(), "oom.mc", "");
-    defer reporter.deinit();
+    for ([_]usize{ 0, 1 }) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+        var reporter = Reporter.init(failing.allocator(), "oom.mc", "");
+        defer reporter.deinit();
 
-    reporter.err(.{ .offset = 0, .len = 0, .line = 1, .column = 1 }, "E_TEST: {s}", .{"boom"});
+        reporter.err(.{ .offset = 0, .len = 0, .line = 1, .column = 1 }, "E_TEST: {s}", .{"boom"});
 
-    try std.testing.expect(reporter.has_errors);
-    try std.testing.expectEqual(@as(usize, 0), reporter.diagnostics.items.len);
+        try std.testing.expect(reporter.has_errors);
+        try std.testing.expectEqual(@as(usize, 0), reporter.diagnostics.items.len);
+    }
 }
 
 test "Reporter maps flattened import offsets back to source file locations" {
