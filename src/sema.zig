@@ -395,6 +395,11 @@ pub const Checker = struct {
     // Trait declarations by name, so a `d.method(args)` dispatch through a
     // `*dyn Trait` can resolve the method signature.
     trait_decls: ?*const std.StringHashMap(ast.TraitDecl) = null,
+    // Template precheck mode is used before monomorphization drops generic
+    // templates. It collects the full symbol/type context, then checks only
+    // declarations that can disappear before normal sema sees them.
+    generic_template_precheck: bool = false,
+    generic_template_fns: ?*const std.StringHashMap(void) = null,
 
     pub fn init(reporter: *diagnostics.Reporter) Checker {
         return .{ .reporter = reporter };
@@ -435,10 +440,12 @@ pub const Checker = struct {
         defer trait_decls.deinit();
         self.trait_decls = &trait_decls;
         defer self.trait_decls = null;
-        self.checkTopLevelNames(module);
-        self.checkBackendNameUniqueness(module);
+        if (!self.generic_template_precheck) {
+            self.checkTopLevelNames(module);
+            self.checkBackendNameUniqueness(module);
+        }
         self.collectTypeAliases(module, &type_aliases);
-        self.checkTypeAliasCycles(module, &type_aliases);
+        if (!self.generic_template_precheck) self.checkTypeAliasCycles(module, &type_aliases);
         self.collectMmioStructs(module, &mmio_structs);
         self.collectStructs(module, &structs);
         self.collectPackedBits(module, &packed_bits);
@@ -446,13 +453,13 @@ pub const Checker = struct {
         self.collectTaggedUnions(module, &tagged_unions);
         self.collectEnums(module, &enums);
         self.collectFunctions(module, &functions);
-        self.checkErrorFromDecls(module);
+        if (!self.generic_template_precheck) self.checkErrorFromDecls(module);
         self.collectGlobals(module, &globals);
 
         // Orphan rule: an `impl` of an `opaque struct` must live in the type's defining file,
         // so the name-keyed private-field gate (`opaqueAccessAllowed`) cannot be forged by a
         // peer `impl <OpaqueType>` written in another file. No-op without file boundaries.
-        self.checkOrphanImpls(module);
+        if (!self.generic_template_precheck) self.checkOrphanImpls(module);
 
         // Tier 1 traits: conformance (every trait method present, matching self-mode +
         // effect annotations) and coherence (<=1 impl per (Trait, Type)). Bound
@@ -585,14 +592,17 @@ pub const Checker = struct {
         self.private_items = &private_items;
         defer self.private_items = null;
 
-        for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
+        for (module.decls) |decl| {
+            if (self.generic_template_precheck and !self.shouldCheckGenericTemplateDecl(decl)) continue;
+            self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
+        }
 
         // Definite-initialization pass (S0.1). A scalar `var x: T = uninit;`
         // must be definitely assigned on every control-flow path before it is
         // read; a read-before-assign is E_USE_BEFORE_INIT. Runs over every
         // function body (the `uninit` idiom is pervasive, but the analysis is
         // precise enough to accept it — see checkDefiniteInit).
-        {
+        if (!self.generic_template_precheck) {
             const di_ctx = Context{
                 .functions = &functions,
                 .globals = &globals,
@@ -608,7 +618,7 @@ pub const Checker = struct {
 
         // Linear `move`/liveness pass (section 18.1, annex D.7). No-op unless the
         // module declares `move` types.
-        if (move_types.count() > 0) {
+        if (!self.generic_template_precheck and move_types.count() > 0) {
             var move_ctx = Context{
                 .functions = &functions,
                 .globals = &globals,
@@ -629,6 +639,15 @@ pub const Checker = struct {
         if (self.oom) {
             self.errorCode(.{ .offset = 0, .len = 0, .line = 1, .column = 1 }, "E_INTERNAL_OOM", "compiler ran out of memory while building symbol tables; results are incomplete");
         }
+    }
+
+    fn shouldCheckGenericTemplateDecl(self: *Checker, decl: ast.Decl) bool {
+        return switch (decl.kind) {
+            .fn_decl => |fn_decl| if (self.generic_template_fns) |names| names.contains(fn_decl.name.text) else false,
+            .struct_decl => |struct_decl| struct_decl.type_params.len > 0,
+            .union_decl => |union_decl| union_decl.type_params.len > 0,
+            else => false,
+        };
     }
 
     fn collectTypeAliases(self: *Checker, module: ast.Module, type_aliases: *std.StringHashMap(ast.TypeExpr)) void {
@@ -745,7 +764,7 @@ pub const Checker = struct {
                 self.oom = true;
             };
         }
-        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields, .abi = struct_decl.abi, .is_opaque = struct_decl.is_opaque, .is_c_union = struct_decl.is_c_union }) catch {
+        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields, .abi = struct_decl.abi, .type_param_count = struct_decl.type_params.len, .is_opaque = struct_decl.is_opaque, .is_c_union = struct_decl.is_c_union }) catch {
             fields.deinit();
         };
     }
@@ -785,7 +804,7 @@ pub const Checker = struct {
                 self.oom = true;
             };
         }
-        tagged_unions.put(union_decl.name.text, .{ .cases = cases }) catch {
+        tagged_unions.put(union_decl.name.text, .{ .cases = cases, .type_param_count = union_decl.type_params.len }) catch {
             cases.deinit();
         };
     }
@@ -1135,9 +1154,17 @@ pub const Checker = struct {
         }
     }
 
-    fn checkTaggedUnion(self: *Checker, union_decl: ast.UnionDecl, ctx: Context) void {
+    fn checkTaggedUnion(self: *Checker, union_decl: ast.UnionDecl, ctx_in: Context) void {
         var cases = std.StringHashMap(void).init(self.reporter.allocator);
         defer cases.deinit();
+
+        var type_params = std.StringHashMap(void).init(self.reporter.allocator);
+        defer type_params.deinit();
+        for (union_decl.type_params) |tp| type_params.put(tp.text, {}) catch {
+            self.oom = true;
+        };
+        var ctx = ctx_in;
+        if (union_decl.type_params.len > 0) ctx.type_params = &type_params;
 
         for (union_decl.cases) |case| {
             if (case.ty) |ty| self.checkType(ty, .storage, ctx);
@@ -1279,14 +1306,20 @@ pub const Checker = struct {
         // signature and body may use them as type names (user-defined generics).
         var type_params = std.StringHashMap(void).init(self.reporter.allocator);
         defer type_params.deinit();
+        var comptime_params = std.StringHashMap(void).init(self.reporter.allocator);
+        defer comptime_params.deinit();
         for (fn_decl.params) |param| {
             if (param.is_comptime and isTypeName(param.ty, "type")) {
                 type_params.put(param.name.text, {}) catch {
                     self.oom = true;
                 };
+            } else if (param.is_comptime) {
+                comptime_params.put(param.name.text, {}) catch {
+                    self.oom = true;
+                };
             }
         }
-        const sig_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases, .type_params = &type_params };
+        const sig_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases, .type_params = &type_params, .comptime_params = &comptime_params };
         if (abi_boundary) self.checkExternExportStructAbi(fn_decl, sig_ctx);
 
         for (fn_decl.params) |param| {
@@ -1355,6 +1388,7 @@ pub const Checker = struct {
                 .const_fns = self.const_fns,
                 .const_globals = self.const_globals,
                 .type_params = &type_params,
+                .comptime_params = &comptime_params,
                 .trait_decls = self.trait_decls,
             };
             self.checkBlock(body, fn_ctx);
@@ -2783,7 +2817,7 @@ pub const Checker = struct {
                                 } else {
                                     self.errorCode(arg.span, "E_TYPE_ARG_REQUIRED", "type parameter requires a type argument");
                                 }
-                            } else if (!self.comptimeConstantFolds(arg)) {
+                            } else if (!self.comptimeConstantFolds(arg) and !exprMentionsComptimeParam(arg, ctx)) {
                                 self.errorCode(arg.span, "E_COMPTIME_ARG_REQUIRED", "comptime parameter requires a compile-time constant argument");
                             }
                         }
@@ -3045,7 +3079,8 @@ pub const Checker = struct {
                 // is a valid compile-time array length and need not type-check
                 // as a runtime usize expression.
                 if (comptimeUsizeValue(node.len, self.const_fns, self.const_globals) == null) {
-                    const len_class = self.checkExpr(node.len, .{});
+                    if (exprMentionsGenericValueParam(node.len, ctx)) return;
+                    const len_class = self.checkExpr(node.len, ctx);
                     if (!isIndexType(len_class)) {
                         self.errorCode(node.len.span, "E_ARRAY_LENGTH_TYPE", "array length must be a compile-time checked usize integer expression");
                     }
@@ -3053,6 +3088,13 @@ pub const Checker = struct {
                 self.checkType(node.child.*, if (mode == .storage) .storage else .normal, ctx);
             },
             .generic => |node| {
+                if (userGenericTypeExpectedArgs(node.base.text, ctx)) |expected| {
+                    if (node.args.len != expected) {
+                        self.errorCode(node.base.span, "E_GENERIC_TYPE_ARG_COUNT", "generic type has the wrong number of type arguments");
+                    }
+                    for (node.args) |arg| self.checkUserGenericTypeArgument(arg, ctx);
+                    return;
+                }
                 if (!isKnownGenericTypeName(node.base.text)) {
                     self.errorCode(node.base.span, "E_UNKNOWN_TYPE", "unknown generic type name");
                 } else if (genericTypeExpectedArgs(node.base.text)) |expected| {
@@ -3099,6 +3141,25 @@ pub const Checker = struct {
         if (!self.object_safe_traits.contains(trait_name.text)) {
             self.errorCode(trait_name.span, "E_TRAIT_NOT_OBJECT_SAFE", "trait is not object-safe (every method must take `self` by pointer and be non-generic) so it cannot be used as `*dyn Trait`");
         }
+    }
+
+    fn userGenericTypeExpectedArgs(name: []const u8, ctx: Context) ?usize {
+        if (ctx.structs) |structs| {
+            if (structs.get(name)) |info| {
+                if (info.type_param_count > 0) return info.type_param_count;
+            }
+        }
+        if (ctx.tagged_unions) |tagged_unions| {
+            if (tagged_unions.get(name)) |info| {
+                if (info.type_param_count > 0) return info.type_param_count;
+            }
+        }
+        return null;
+    }
+
+    fn checkUserGenericTypeArgument(self: *Checker, arg: ast.TypeExpr, ctx: Context) void {
+        if (typeExprIsGenericValueArg(arg, ctx)) return;
+        self.checkType(arg, .normal, ctx);
     }
 
     fn checkGenericTypeArgs(self: *Checker, node: anytype, ctx: Context) void {
@@ -6157,6 +6218,7 @@ fn pointerSourceIsMutable(ty: ast.TypeExpr) bool {
 fn structTypeName(ty: ast.TypeExpr) ?[]const u8 {
     return switch (ty.kind) {
         .name => |name| name.text,
+        .generic => |node| node.base.text,
         .qualified => |node| structTypeName(node.child.*),
         // Member access auto-dereferences a pointer (`p.field` == `(*p).field`), so
         // the field-type lookup must see through a pointer to the struct too.
@@ -6208,6 +6270,7 @@ fn closedEnumInfoForType(ty: ast.TypeExpr, ctx: Context) ?EnumInfo {
 fn unionTypeName(ty: ast.TypeExpr) ?[]const u8 {
     return switch (ty.kind) {
         .name => |name| name.text,
+        .generic => |node| node.base.text,
         .qualified => |node| unionTypeName(node.child.*),
         else => null,
     };
@@ -6259,6 +6322,108 @@ fn checkValueOptionalInitializer(target_ty: ast.TypeExpr, target: TypeClass, exp
     const inner_class = classifyTypeCtx(inner, ctx);
     // present: the payload value must be assignable to the payload type T.
     return canInitialize(inner_class, source);
+}
+
+fn exprMentionsComptimeParam(expr: ast.Expr, ctx: Context) bool {
+    const params = ctx.comptime_params orelse return false;
+    return exprMentionsAnyName(expr, params);
+}
+
+fn exprMentionsGenericValueParam(expr: ast.Expr, ctx: Context) bool {
+    if (exprMentionsComptimeParam(expr, ctx)) return true;
+    const params = ctx.type_params orelse return false;
+    return exprMentionsAnyName(expr, params);
+}
+
+fn typeExprIsGenericValueArg(ty: ast.TypeExpr, ctx: Context) bool {
+    return switch (ty.kind) {
+        .name => |name| blk: {
+            if (ctx.comptime_params) |params| {
+                if (params.contains(name.text)) break :blk true;
+            }
+            break :blk numeric.parseIntegerLiteral(name.text) != null;
+        },
+        .qualified => |node| typeExprIsGenericValueArg(node.child.*, ctx),
+        else => false,
+    };
+}
+
+fn exprMentionsAnyName(expr: ast.Expr, names: *const std.StringHashMap(void)) bool {
+    return switch (expr.kind) {
+        .ident => |ident| names.contains(ident.text),
+        .grouped, .address_of, .deref, .await_expr => |inner| exprMentionsAnyName(inner.*, names),
+        .try_expr => |inner| exprMentionsAnyName(inner.operand.*, names) or if (inner.mapped) |mapped| exprMentionsAnyName(mapped.*, names) else false,
+        .unary => |node| exprMentionsAnyName(node.expr.*, names),
+        .binary => |node| exprMentionsAnyName(node.left.*, names) or exprMentionsAnyName(node.right.*, names),
+        .cast => |node| exprMentionsAnyName(node.value.*, names),
+        .call => |node| blk: {
+            if (exprMentionsAnyName(node.callee.*, names)) break :blk true;
+            for (node.args) |arg| if (exprMentionsAnyName(arg, names)) break :blk true;
+            break :blk false;
+        },
+        .index => |node| exprMentionsAnyName(node.base.*, names) or exprMentionsAnyName(node.index.*, names),
+        .slice => |node| exprMentionsAnyName(node.base.*, names) or exprMentionsAnyName(node.start.*, names) or exprMentionsAnyName(node.end.*, names),
+        .member => |node| exprMentionsAnyName(node.base.*, names),
+        .array_literal => |items| blk: {
+            for (items) |item| if (exprMentionsAnyName(item, names)) break :blk true;
+            break :blk false;
+        },
+        .struct_literal => |fields| blk: {
+            for (fields) |field| if (exprMentionsAnyName(field.value, names)) break :blk true;
+            break :blk false;
+        },
+        .block => |block| blockMentionsAnyName(block, names),
+        .int_literal,
+        .float_literal,
+        .string_literal,
+        .char_literal,
+        .bool_literal,
+        .null_literal,
+        .uninit_literal,
+        .unreachable_expr,
+        .void_literal,
+        .enum_literal,
+        => false,
+    };
+}
+
+fn blockMentionsAnyName(block: ast.Block, names: *const std.StringHashMap(void)) bool {
+    for (block.items) |stmt| {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| if (local.init) |init| {
+                if (exprMentionsAnyName(init, names)) return true;
+            },
+            .loop => |loop| {
+                if (loop.iterable) |iterable| if (exprMentionsAnyName(iterable, names)) return true;
+                if (blockMentionsAnyName(loop.body, names)) return true;
+            },
+            .if_let => |node| {
+                if (exprMentionsAnyName(node.value, names) or blockMentionsAnyName(node.then_block, names)) return true;
+                if (node.else_block) |else_block| if (blockMentionsAnyName(else_block, names)) return true;
+            },
+            .@"switch" => |node| {
+                if (exprMentionsAnyName(node.subject, names)) return true;
+                for (node.arms) |arm| {
+                    for (arm.patterns) |pattern| {
+                        if (pattern.kind == .literal and exprMentionsAnyName(pattern.kind.literal, names)) return true;
+                    }
+                    switch (arm.body) {
+                        .block => |body| if (blockMentionsAnyName(body, names)) return true,
+                        .expr => |body| if (exprMentionsAnyName(body, names)) return true,
+                    }
+                }
+            },
+            .block, .unsafe_block, .comptime_block => |inner| if (blockMentionsAnyName(inner, names)) return true,
+            .contract_block => |node| if (blockMentionsAnyName(node.block, names)) return true,
+            .@"return" => |maybe| if (maybe) |expr| {
+                if (exprMentionsAnyName(expr, names)) return true;
+            },
+            .@"defer", .assert, .expr => |expr| if (exprMentionsAnyName(expr, names)) return true,
+            .assignment => |node| if (exprMentionsAnyName(node.target, names) or exprMentionsAnyName(node.value, names)) return true,
+            .asm_stmt, .@"break", .@"continue" => {},
+        }
+    }
+    return false;
 }
 
 fn canInitialize(target: TypeClass, initializer: TypeClass) bool {

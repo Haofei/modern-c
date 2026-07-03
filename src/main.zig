@@ -8,6 +8,7 @@ const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const eval_tests = @import("eval_tests.zig");
 const fmt = @import("fmt.zig");
+const generic_precheck = @import("generic_precheck.zig");
 const hir = @import("hir.zig");
 const hir_tests = @import("hir_tests.zig");
 const ir = @import("ir.zig");
@@ -826,6 +827,11 @@ fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *
         diag.render();
         return err;
     };
+    try generic_precheck.check(allocator, lowered, diag, combined_boundaries);
+    if (diag.has_errors) {
+        diag.render();
+        return error.CheckFailed;
+    }
     // Specialize comptime-parameter type-generic functions (section 22). This is
     // a no-op for modules without any such function, so non-generic code is
     // passed through untouched.
@@ -848,6 +854,7 @@ test {
     _ = eval_tests;
     _ = ast;
     _ = backend;
+    _ = generic_precheck;
     _ = hir;
     _ = hir_tests;
     _ = ir;

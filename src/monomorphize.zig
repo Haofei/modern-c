@@ -371,6 +371,14 @@ fn typeGenericParams(arena: std.mem.Allocator, fn_decl: ast.FnDecl) !?[]const []
     return try names.toOwnedSlice(arena);
 }
 
+pub fn isTypeGenericFunction(fn_decl: ast.FnDecl) bool {
+    for (fn_decl.params) |param| {
+        if (!param.is_comptime) continue;
+        if (fnTypeMentions(fn_decl, param.name.text)) return true;
+    }
+    return false;
+}
+
 fn fnTypeMentions(fn_decl: ast.FnDecl, name: []const u8) bool {
     for (fn_decl.params) |p| if (typeMentionsIdent(p.ty, name)) return true;
     if (fn_decl.return_type) |ty| if (typeMentionsIdent(ty, name)) return true;

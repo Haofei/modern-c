@@ -3,6 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
+const generic_precheck = @import("generic_precheck.zig");
 const hir = @import("hir.zig");
 const ir = @import("ir.zig");
 const loader = @import("loader.zig");
@@ -896,6 +897,7 @@ fn allMetadataValuesSupported(path: []const u8, key: []const u8, value: []const 
 fn parseSpecModule(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !ast.Module {
     var p = parser.Parser.init(source, reporter);
     const module = try p.parseModule(allocator);
+    try generic_precheck.check(allocator, module, reporter, null);
     return try monomorphize.transformReport(allocator, module, reporter);
 }
 

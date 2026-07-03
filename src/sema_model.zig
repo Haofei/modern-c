@@ -54,6 +54,10 @@ pub const Context = struct {
     // Names of the current function's `comptime T: type` type parameters
     // (user-defined generics, section 22); valid as type names in its body.
     type_params: ?*const std.StringHashMap(void) = null,
+    // Names of the current function's non-type `comptime` parameters. Expressions
+    // derived from these are compile-time constants once a generic caller is
+    // instantiated, even if the template precheck cannot fold their concrete value.
+    comptime_params: ?*const std.StringHashMap(void) = null,
 };
 
 // G7: one entry in the in-scope loop-label chain (see Context.loop_labels).
@@ -82,6 +86,7 @@ pub const StructInfo = struct {
     fields: std.StringHashMap(ast.TypeExpr),
     ordered: []const ast.Field,
     abi: ?[]const u8 = null,
+    type_param_count: usize = 0,
     // `opaque struct` - fields are private to the struct's associated functions.
     is_opaque: bool = false,
     // `#[c_union]` - compiler-internal addressable union (union layout; see ast.StructDecl).
@@ -137,6 +142,7 @@ pub const EnumInfo = struct {
 
 pub const UnionInfo = struct {
     cases: std.StringHashMap(?ast.TypeExpr),
+    type_param_count: usize = 0,
 };
 
 pub const FunctionInfo = struct {

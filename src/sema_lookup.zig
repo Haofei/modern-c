@@ -115,11 +115,25 @@ pub fn layoutFieldInfo(name: []const u8, ctx: Context) ?LayoutFieldInfo {
 }
 
 fn isKnownLayoutGeneric(node: anytype, ctx: Context) bool {
-    const expected = genericTypeExpectedArgs(node.base.text) orelse return false;
+    const expected = genericTypeExpectedArgs(node.base.text) orelse userGenericTypeExpectedArgs(node.base.text, ctx) orelse return false;
     if (node.args.len != expected) return false;
     for (node.args) |arg| {
         if (arg.kind == .enum_literal) continue;
         if (!isKnownLayoutType(arg, ctx)) return false;
     }
     return true;
+}
+
+fn userGenericTypeExpectedArgs(name: []const u8, ctx: Context) ?usize {
+    if (ctx.structs) |structs| {
+        if (structs.get(name)) |info| {
+            if (info.type_param_count > 0) return info.type_param_count;
+        }
+    }
+    if (ctx.tagged_unions) |tagged_unions| {
+        if (tagged_unions.get(name)) |info| {
+            if (info.type_param_count > 0) return info.type_param_count;
+        }
+    }
+    return null;
 }
