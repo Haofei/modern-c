@@ -74,10 +74,33 @@ fn continue_bare() -> u32 {
     return acc; // 306
 }
 
+// G7 regression: a labeled `break :o` must run the defers of EVERY loop it exits —
+// the inner loop's AND the TARGET loop's. The C backend previously ran only the
+// innermost loop's defers (started cleanup at the innermost mark regardless of the
+// label), so this returned 101 instead of 1101; LLVM was already correct.
+global g_defer: u32 = 0;
+fn dadd(n: u32) -> void { g_defer = g_defer + n; }
+fn defer_break_labeled() -> u32 {
+    g_defer = 0;
+    var i: u32 = 0;
+    o: while i < 5 {
+        defer dadd(1000);          // outer-loop defer
+        var j: u32 = 0;
+        while j < 5 {
+            defer dadd(100);       // inner-loop defer
+            dadd(1);
+            break :o;              // unwinds inner (+100) THEN outer (+1000)
+        }
+        i = i + 1;
+    }
+    return g_defer;                // 1 + 100 + 1000 = 1101
+}
+
 export fn run() -> u32 {
-    return break_labeled()      // 2
-        + break_bare()          // 8
-        + continue_labeled()    // 3
-        + continue_bare();      // 306
-    // expect 2 + 8 + 3 + 306 = 319
+    return break_labeled()          // 2
+        + break_bare()              // 8
+        + continue_labeled()        // 3
+        + continue_bare()           // 306
+        + defer_break_labeled();    // 1101
+    // expect 2 + 8 + 3 + 306 + 1101 = 1420
 }

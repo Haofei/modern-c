@@ -10,7 +10,7 @@ set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
 SRC="tests/exec/labeled_break_run.mc"
-EXPECT=319
+EXPECT=1420
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

@@ -3054,8 +3054,13 @@ const CEmitter = struct {
                 try self.emitBlockExitItem(stmt, locals, return_ty, block_start, 0);
                 return .exit_block;
             },
-            .@"break", .@"continue" => {
-                const mark = self.loop_defer_marks.getLastOrNull() orelse block_start;
+            .@"break" => |target| {
+                const mark = self.loopDeferMarkFor(target, block_start);
+                try self.emitBlockExitItem(stmt, locals, return_ty, block_start, mark);
+                return .exit_block;
+            },
+            .@"continue" => |target| {
+                const mark = self.loopDeferMarkFor(target, block_start);
                 try self.emitBlockExitItem(stmt, locals, return_ty, block_start, mark);
                 return .exit_block;
             },
@@ -3065,6 +3070,25 @@ const CEmitter = struct {
 
     fn emitBlockDeferItem(self: *CEmitter, expr: ast.Expr) !void {
         self.defer_stack.append(self.allocator, expr) catch return error.OutOfMemory;
+    }
+
+    // The defer-stack mark from which a `break`/`continue` must run cleanups. A LABELED jump
+    // (`break :outer`) unwinds every loop from the innermost up to AND INCLUDING the targeted
+    // loop, so cleanup starts at the TARGET loop's mark (running the inner loops' and the target's
+    // body defers). A bare jump targets the innermost loop (its mark = the top of the stack). This
+    // mirrors `resolveLoopIndex` in lower_c_flow.zig, which emits the matching `goto`; sema rejects
+    // unknown labels, so a labeled target always resolves.
+    fn loopDeferMarkFor(self: *CEmitter, target: ?ast.Ident, block_start: usize) usize {
+        if (target) |t| {
+            var i = self.loop_labels.items.len;
+            while (i > 0) {
+                i -= 1;
+                if (self.loop_labels.items[i]) |lbl| {
+                    if (std.mem.eql(u8, lbl, t.text)) return self.loop_defer_marks.items[i];
+                }
+            }
+        }
+        return self.loop_defer_marks.getLastOrNull() orelse block_start;
     }
 
     fn emitBlockExitItem(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: usize, cleanup_start: usize) anyerror!void {
