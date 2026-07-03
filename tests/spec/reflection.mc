@@ -257,6 +257,11 @@ fn reject_spec_unknown_generic_reflection_type() -> usize {
     return sizeof(MissingGeneric<u8>);
 }
 
+fn reject_giant_array_layout_overflow() -> usize {
+    // EXPECT_ERROR: E_REFLECTION_UNKNOWN_TYPE
+    return sizeof([9223372036854775807][9223372036854775807]u128);
+}
+
 fn reject_dma_buf_missing_mode() -> usize {
     // EXPECT_ERROR: E_REFLECTION_GENERIC_ARG_COUNT
     return sizeof(DmaBuf<Packet>);

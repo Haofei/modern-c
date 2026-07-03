@@ -4263,6 +4263,10 @@ pub const Checker = struct {
             self.errorCode(span, "E_CALL_ARG_COUNT", "type reflection builtin does not take runtime arguments");
         }
 
+        if (self.reporter.diagnostics.items.len == errors_before) {
+            self.checkComputableReflectionLayout(kind, target, ctx);
+        }
+
         if (kind == .field_type and self.reporter.diagnostics.items.len == errors_before) {
             self.errorCode(span, "E_REFLECTION_TYPE_VALUE", "field_type produces a type and is valid only in type position");
         }
@@ -4299,6 +4303,28 @@ pub const Checker = struct {
         }
         if (isKnownLayoutType(ty, ctx)) return;
         self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "reflection requires a known layout-capable type");
+    }
+
+    fn checkComputableReflectionLayout(self: *Checker, kind: ReflectionKind, target: ReflectionTarget, ctx: Context) void {
+        if (kind == .field_type or reflectionTargetDependsOnGenericParam(target.ty, ctx)) return;
+        const env = self.reflect_env orelse return;
+        const value: ?i128 = switch (kind) {
+            .size => sema_reflect.comptimeSizeOf(env, target.ty, 0),
+            .alignment => sema_reflect.comptimeAlignOf(env, target.ty, 0),
+            .repr => sema_reflect.comptimeReprOf(env, target.ty, 0),
+            .field_offset => blk: {
+                const field = enumLiteralName(target.args[0]) orelse return;
+                break :blk sema_reflect.comptimeFieldOffset(env, target.ty, field.text, 0);
+            },
+            .bit_offset => blk: {
+                const field = enumLiteralName(target.args[0]) orelse return;
+                break :blk sema_reflect.comptimeBitOffset(env, target.ty, field.text, 0);
+            },
+            .field_type => unreachable,
+        };
+        if (value == null) {
+            self.errorCode(target.ty.span, "E_REFLECTION_UNKNOWN_TYPE", "reflection layout could not be computed for this type");
+        }
     }
 
     fn checkReflectedGenericTypeArgs(self: *Checker, ty: ast.TypeExpr, ctx: Context) void {
@@ -6387,6 +6413,42 @@ fn exprMentionsGenericValueParam(expr: ast.Expr, ctx: Context) bool {
     if (exprMentionsComptimeParam(expr, ctx)) return true;
     const params = ctx.type_params orelse return false;
     return exprMentionsAnyName(expr, params);
+}
+
+fn reflectionTargetDependsOnGenericParam(ty: ast.TypeExpr, ctx: Context) bool {
+    return switch (ty.kind) {
+        .name => |name| blk: {
+            if (ctx.type_params) |params| {
+                if (params.contains(name.text)) break :blk true;
+            }
+            break :blk false;
+        },
+        .member, .enum_literal, .dyn_trait => false,
+        .nullable => |child| reflectionTargetDependsOnGenericParam(child.*, ctx),
+        .qualified => |node| reflectionTargetDependsOnGenericParam(node.child.*, ctx),
+        .pointer => |node| reflectionTargetDependsOnGenericParam(node.child.*, ctx),
+        .raw_many_pointer => |node| reflectionTargetDependsOnGenericParam(node.child.*, ctx),
+        .slice => |node| reflectionTargetDependsOnGenericParam(node.child.*, ctx),
+        .array => |node| exprMentionsGenericValueParam(node.len, ctx) or reflectionTargetDependsOnGenericParam(node.child.*, ctx),
+        .generic => |node| blk: {
+            for (node.args) |arg| {
+                if (reflectionTargetDependsOnGenericParam(arg, ctx)) break :blk true;
+            }
+            break :blk false;
+        },
+        .fn_pointer => |node| blk: {
+            for (node.params) |param| {
+                if (reflectionTargetDependsOnGenericParam(param, ctx)) break :blk true;
+            }
+            break :blk reflectionTargetDependsOnGenericParam(node.ret.*, ctx);
+        },
+        .closure_type => |node| blk: {
+            for (node.params) |param| {
+                if (reflectionTargetDependsOnGenericParam(param, ctx)) break :blk true;
+            }
+            break :blk reflectionTargetDependsOnGenericParam(node.ret.*, ctx);
+        },
+    };
 }
 
 fn typeExprIsGenericValueArg(ty: ast.TypeExpr, ctx: Context) bool {

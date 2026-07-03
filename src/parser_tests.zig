@@ -218,14 +218,14 @@ test "parser recovers after malformed impl body" {
     try std.testing.expectEqual(@as(usize, 4), reporter.diagnostics.items[1].span.line);
 }
 
-test "parser rejects excessive nesting with diagnostic" {
+test "parser rejects 10k-depth balanced nesting with diagnostic" {
     var source: std.ArrayList(u8) = .empty;
     defer source.deinit(std.testing.allocator);
 
     try source.appendSlice(std.testing.allocator, "fn too_deep() -> u32 { return ");
-    for (0..300) |_| try source.append(std.testing.allocator, '(');
+    for (0..10_000) |_| try source.append(std.testing.allocator, '(');
     try source.append(std.testing.allocator, '1');
-    for (0..300) |_| try source.append(std.testing.allocator, ')');
+    for (0..10_000) |_| try source.append(std.testing.allocator, ')');
     try source.appendSlice(std.testing.allocator, "; }\n");
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "too_deep.mc", source.items);
