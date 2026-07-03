@@ -21,8 +21,6 @@ these codes, remove the row; the gate fails on redundant or stale entries.
 | `E_CONST_GET_BASE` | `const_get` intrinsic misuse for non-array bases. This is a narrow compile-time intrinsic edge without a dedicated negative fixture yet. |
 | `E_CONST_GET_BOUNDS` | `const_get` intrinsic compile-time bounds misuse. This is a narrow intrinsic edge without a dedicated negative fixture yet. |
 | `E_CONST_GET_INDEX` | `const_get` intrinsic arity/index misuse. This is a narrow intrinsic edge without a dedicated negative fixture yet. |
-| `E_DUPLICATE_BACKEND_NAME` | Backend symbol collision requires two declarations assigning the same backend name. No focused negative fixture exists yet. |
-| `E_DYN_MUT_BORROW` | Dynamic trait mutable-borrow coercion error. Existing dynamic trait fixtures cover forge/nullability/signature failures; this mutability edge remains fixture debt. |
 | `E_ENUM_RAW_REQUIRES_OPEN_ENUM` | MIR verifier fallback for `.raw()` on non-open enums. Positive enum raw behavior is covered; this verifier diagnostic does not have a negative fixture yet. |
 | `E_IMPORT_NOT_FOUND` | CLI integration path is covered by `diagnostics-test`, which creates temporary import failures rather than a stable corpus fixture. |
 | `E_IMPORT_OUTSIDE_SANDBOX` | CLI integration path is covered by `diagnostics-test`, which creates temporary sandbox import failures rather than a stable corpus fixture. |
@@ -32,8 +30,6 @@ these codes, remove the row; the gate fails on redundant or stale entries.
 | `E_NULLABLE_DYN_NARROW` | Nullable dynamic trait narrowing error. Existing dynamic trait fixtures cover nullable dispatch and forge cases; this coercion edge remains fixture debt. |
 | `E_PRIVATE_IMPORT` | Cross-file module privacy diagnostic. Import diagnostics are integration-tested, but no stable negative fixture currently asserts this privacy edge. |
 | `E_REPRESENTATION_CHECK_MISSING` | MIR verifier internal representation-proof diagnostic. Source fixtures should prove or reject via higher-level rules rather than synthesize missing verifier facts. |
-| `E_TRAIT_EFFECT_MISMATCH` | Trait implementation effect-annotation mismatch. Trait signature/count/type/return coverage exists; effect mismatch remains a focused fixture gap. |
 | `E_TRAIT_UNKNOWN_METHOD` | Trait implementation provides an undeclared method. Existing trait reject fixtures cover missing and mismatched methods; this edge remains fixture debt. |
 | `E_TRIVIAL_DROP_NOT_MOVE` | Attribute misuse for `#[trivial_drop]` on non-move structs. No focused attribute negative fixture exists yet. |
 | `E_TYPE_ARG_REQUIRED` | Generic type argument inference failure. Generic fixtures cover arity and body precheck cases; this inference edge remains fixture debt. |
-| `E_UNKNOWN_TRAIT` | Unknown trait in impl or dynamic trait position. Existing trait fixtures cover satisfaction/signature/coherence errors; this name-resolution edge remains fixture debt. |
