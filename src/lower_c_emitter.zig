@@ -1133,7 +1133,7 @@ const CEmitter = struct {
 
     // Maps an MC value identifier to a safe C identifier. Identity for ordinary
     // names (so generated C is stable) and for the emitter's own `mc_`-prefixed
-    // temporaries; only C reserved words are rewritten (e.g. `int` -> `int_`).
+    // temporaries; C/header-reserved words are rewritten (e.g. `int` -> `int_`).
     // The mapping is deterministic, so declarations and uses stay consistent.
     fn cIdent(self: *CEmitter, name: []const u8) ![]const u8 {
         if (isCReservedWord(name)) return std.fmt.allocPrint(self.scratch.allocator(), "{s}_", .{name});

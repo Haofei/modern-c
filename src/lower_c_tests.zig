@@ -2147,6 +2147,28 @@ test "lower-c emits extern structs and member access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, " == NULL) mc_trap_InvalidRepresentation();\n    uint8_t * p = mc_tmp") != null);
 }
 
+test "lower-c sanitizes C header names used as fields" {
+    const source =
+        \\extern struct Packet {
+        \\    offsetof: u32,
+        \\    uint32_t: u32,
+        \\}
+        \\
+        \\fn sum(packet: Packet) -> u32 {
+        \\    return packet.offsetof + packet.uint32_t;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_field_reserved_names.mc", source, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t offsetof_;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t uint32_t_;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " = packet.offsetof_;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " = packet.uint32_t_;") != null);
+}
+
 test "lower-c emits overlay unions as byte storage" {
     const source =
         \\overlay union Word {

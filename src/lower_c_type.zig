@@ -293,19 +293,27 @@ pub fn signedCTypeForInner(name: []const u8) ?[]const u8 {
 
 pub fn isCReservedWord(name: []const u8) bool {
     const reserved = [_][]const u8{
-        // C keywords (C11).
-        "auto",     "break",      "case",           "char",          "const",
-        "continue", "default",    "do",             "double",        "else",
-        "enum",     "extern",     "float",          "for",           "goto",
-        "if",       "inline",     "int",            "long",          "register",
-        "restrict", "return",     "short",          "signed",        "sizeof",
-        "static",   "struct",     "switch",         "typedef",       "union",
-        "unsigned", "void",       "volatile",       "while",         "_Bool",
-        "_Complex", "_Imaginary", "_Alignas",       "_Alignof",      "_Atomic",
-        "_Generic", "_Noreturn",  "_Static_assert", "_Thread_local",
-        // Macros from the headers the prelude includes.
-        "bool",
-        "true",     "false",      "NULL",
+        // C keywords, compiler extensions, and builtin spellings the C emitter uses.
+        "auto",              "break",              "case",              "char",             "const",
+        "continue",          "default",            "do",                "double",           "else",
+        "enum",              "extern",             "float",             "for",              "goto",
+        "if",                "inline",             "int",               "long",             "register",
+        "restrict",          "return",             "short",             "signed",           "sizeof",
+        "static",            "struct",             "switch",            "typedef",          "union",
+        "unsigned",          "void",               "volatile",          "while",            "_Bool",
+        "_Complex",          "_Imaginary",         "_Alignas",          "_Alignof",         "_Atomic",
+        "_Generic",          "_Noreturn",          "_Static_assert",    "_Thread_local",    "__auto_type",
+        "__asm__",           "__attribute__",      "__builtin_trap",    "__builtin_memcpy", "__builtin_memcmp",
+        "__builtin_va_list", "__builtin_va_start", "__builtin_va_copy", "__builtin_va_arg", "__builtin_va_end",
+        // Macros and typedefs from the headers the prelude includes.
+        "bool",              "true",               "false",             "NULL",             "offsetof",
+        "size_t",            "ptrdiff_t",          "uintptr_t",         "intptr_t",         "uint8_t",
+        "uint16_t",          "uint32_t",           "uint64_t",          "int8_t",           "int16_t",
+        "int32_t",           "int64_t",            "UINT8_MAX",         "UINT16_MAX",       "UINT32_MAX",
+        "UINT64_MAX",        "UINTPTR_MAX",        "INT8_MIN",          "INT16_MIN",        "INT32_MIN",
+        "INT64_MIN",         "INTPTR_MIN",         "INT8_MAX",          "INT16_MAX",        "INT32_MAX",
+        "INT64_MAX",         "INTPTR_MAX",         "CHAR_BIT",          "MC_UNUSED",        "MC_NORETURN",
+        "MC_WEAK",
     };
     for (reserved) |word| {
         if (std.mem.eql(u8, name, word)) return true;
@@ -403,7 +411,7 @@ pub fn isCKeyword(name: []const u8) bool {
 }
 
 pub fn cPayloadFieldName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
-    if (!isCKeyword(name)) return name;
+    if (!isCReservedWord(name)) return name;
     return std.fmt.allocPrint(allocator, "{s}_", .{name});
 }
 

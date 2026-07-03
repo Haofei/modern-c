@@ -222,6 +222,77 @@ const signedBounds = numeric.signedBounds;
 const integerLiteralValue = numeric.integerLiteralValue;
 const atomicPayloadType = sema_type.atomicPayloadType;
 
+fn isCBackendReservedTopLevelName(kind: ast.Decl.Kind, name: []const u8) bool {
+    if (isCBackendRuntimeHelperName(name)) return true;
+    // Value-level top-level symbols go through the C emitter's `cIdent` sanitizer
+    // (`fn double` -> `double_`). Nominal type declarations are emitted as C tags /
+    // typedefs in several places, so reject header/keyword collisions there.
+    return !isValueLevelDecl(kind) and isCBackendReservedExactName(name);
+}
+
+fn isCBackendReservedLocalName(name: []const u8) bool {
+    return isCBackendRuntimeHelperName(name) or
+        std.mem.startsWith(u8, name, "mc_tmp") or
+        std.mem.startsWith(u8, name, "mc_acc") or
+        std.mem.startsWith(u8, name, "mc_xs") or
+        std.mem.startsWith(u8, name, "mc_i") or
+        std.mem.startsWith(u8, name, "mc_a");
+}
+
+fn isCBackendReservedExactName(name: []const u8) bool {
+    const reserved = [_][]const u8{
+        // C keywords and contextual/builtin names the C emitter may put in scope.
+        "auto",              "break",              "case",              "char",             "const",
+        "continue",          "default",            "do",                "double",           "else",
+        "enum",              "extern",             "float",             "for",              "goto",
+        "if",                "inline",             "int",               "long",             "register",
+        "restrict",          "return",             "short",             "signed",           "sizeof",
+        "static",            "struct",             "switch",            "typedef",          "union",
+        "unsigned",          "void",               "volatile",          "while",            "_Bool",
+        "_Complex",          "_Imaginary",         "_Alignas",          "_Alignof",         "_Atomic",
+        "_Generic",          "_Noreturn",          "_Static_assert",    "_Thread_local",    "__auto_type",
+        "__asm__",           "__attribute__",      "__builtin_trap",    "__builtin_memcpy", "__builtin_memcmp",
+        "__builtin_va_list", "__builtin_va_start", "__builtin_va_copy", "__builtin_va_arg", "__builtin_va_end",
+        // Macros and typedefs from the headers emitted by the C prelude.
+        "bool",              "true",               "false",             "NULL",             "offsetof",
+        "size_t",            "ptrdiff_t",          "uintptr_t",         "intptr_t",         "uint8_t",
+        "uint16_t",          "uint32_t",           "uint64_t",          "int8_t",           "int16_t",
+        "int32_t",           "int64_t",            "UINT8_MAX",         "UINT16_MAX",       "UINT32_MAX",
+        "UINT64_MAX",        "UINTPTR_MAX",        "INT8_MIN",          "INT16_MIN",        "INT32_MIN",
+        "INT64_MIN",         "INTPTR_MIN",         "INT8_MAX",          "INT16_MAX",        "INT32_MAX",
+        "INT64_MAX",         "INTPTR_MAX",         "CHAR_BIT",          "MC_UNUSED",        "MC_NORETURN",
+        "MC_WEAK",
+    };
+    for (reserved) |word| {
+        if (std.mem.eql(u8, name, word)) return true;
+    }
+    return false;
+}
+
+fn isCBackendRuntimeHelperName(name: []const u8) bool {
+    const exact = [_][]const u8{
+        "mc_check_index_usize",
+        "mc_cpu_pause",
+        "mc_barrier_release_before",
+        "mc_barrier_acquire_after",
+        "mc_barrier_full",
+    };
+    for (exact) |word| {
+        if (std.mem.eql(u8, name, word)) return true;
+    }
+    return std.mem.startsWith(u8, name, "mc_trap_") or
+        std.mem.startsWith(u8, name, "mc_checked_") or
+        std.mem.startsWith(u8, name, "mc_wrap_") or
+        std.mem.startsWith(u8, name, "mc_sat_") or
+        std.mem.startsWith(u8, name, "mc_race_") or
+        std.mem.startsWith(u8, name, "mc_raw_") or
+        std.mem.startsWith(u8, name, "mc_mmio_") or
+        std.mem.startsWith(u8, name, "mc_envthunk_") or
+        std.mem.startsWith(u8, name, "mc_dyn_") or
+        std.mem.startsWith(u8, name, "__vt_") or
+        std.mem.startsWith(u8, name, "VT_");
+}
+
 pub const Checker = struct {
     reporter: *diagnostics.Reporter,
     // Set when building a symbol table runs out of memory. Surfaced as a fatal
@@ -819,6 +890,9 @@ pub const Checker = struct {
                     self.oom = true;
                 };
             }
+            if (isCBackendReservedTopLevelName(decl.kind, name.text)) {
+                self.errorCode(name.span, "E_RESERVED_C_IDENTIFIER", "identifier is reserved by the C backend or C headers; choose a different source name");
+            }
             // A value-level top-level declaration (function or global) may not shadow a
             // module/impl owner name, or `Owner.member` would bind to the qualified symbol
             // instead of this value. Type declarations are exempt: an `impl T` owner IS the
@@ -1217,7 +1291,9 @@ pub const Checker = struct {
 
         for (fn_decl.params) |param| {
             self.checkType(param.ty, .storage, sig_ctx);
-            if (self.isQualifiedOwner(param.name.text)) {
+            if (isCBackendReservedLocalName(param.name.text)) {
+                self.errorCode(param.name.span, "E_RESERVED_C_IDENTIFIER", "parameter name is reserved by the C backend or C headers; choose a different source name");
+            } else if (self.isQualifiedOwner(param.name.text)) {
                 self.errorCode(param.name.span, "E_RESERVED_QUALIFIED_NAME", "a parameter may not shadow a module/impl name");
             } else if (scope.contains(param.name.text)) {
                 self.errorCode(param.name.span, "E_DUPLICATE_PARAMETER", "function parameter names must be unique");
@@ -2175,6 +2251,10 @@ pub const Checker = struct {
     }
 
     fn addLocalBinding(self: *Checker, scope: *Scope, name: ast.Ident, info: LocalInfo) void {
+        if (isCBackendReservedLocalName(name.text)) {
+            self.errorCode(name.span, "E_RESERVED_C_IDENTIFIER", "local binding name is reserved by the C backend or C headers; choose a different source name");
+            return;
+        }
         if (self.isQualifiedOwner(name.text)) {
             self.errorCode(name.span, "E_RESERVED_QUALIFIED_NAME", "a local binding may not shadow a module/impl name");
             return;
