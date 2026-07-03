@@ -389,6 +389,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
     // std-api-docs-test keeps the generated stdlib API index in sync with std/**/*.mc exports.
     m0_step.dependOn(ctx.cmd("std-api-docs-test"));
+    // vendoring-test keeps third_party provenance and CVE/advisory process docs present.
+    m0_step.dependOn(ctx.cmd("vendoring-test"));
     // mcc-cli-test pins documented top-level help/version/usage behavior.
     m0_step.dependOn(ctx.cmd("mcc-cli-test"));
     // release-metadata-test keeps version/process metadata present and consistent.
@@ -892,6 +894,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     fast_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
     fast_step.dependOn(ctx.cmd("std-api-docs-test"));
+    fast_step.dependOn(ctx.cmd("vendoring-test"));
     fast_step.dependOn(ctx.cmd("mcc-cli-test"));
     fast_step.dependOn(ctx.cmd("release-metadata-test"));
     fast_step.dependOn(ctx.cmd("ci-pass-gates-test"));
@@ -928,6 +931,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("diagnostics-reference-test")); // generated diagnostic-code reference stays current
     c0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test")); // emitted diagnostics stay fixture-owned or documented
     c0_step.dependOn(ctx.cmd("std-api-docs-test")); // generated stdlib API index stays current
+    c0_step.dependOn(ctx.cmd("vendoring-test")); // third_party provenance and CVE/advisory process stay documented
     c0_step.dependOn(ctx.cmd("mcc-cli-test")); // top-level CLI help/version/usage behavior stays documented
     c0_step.dependOn(ctx.cmd("release-metadata-test")); // release/version/process metadata remains present
     c0_step.dependOn(ctx.cmd("ci-pass-gates-test")); // CI anti-vacuity assertions stay derived from tier definitions
