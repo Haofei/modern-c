@@ -10,6 +10,7 @@ pub const Options = struct {
     structs_flag: ?[]const u8 = null,
     arch_flag: ?[]const u8 = null,
     platform_flag: ?[]const u8 = null,
+    std_dir: ?[]const u8 = null,
     stub_asm: bool = false,
 
     pub fn parse(command: []const u8, args: *std.process.Args.Iterator) !Options {
@@ -19,6 +20,7 @@ pub const Options = struct {
         var saw_arch_flag = false;
         var saw_platform_flag = false;
         var saw_stub_asm_flag = false;
+        var saw_std_dir_flag = false;
 
         while (args.next()) |flag| {
             if (std.mem.startsWith(u8, flag, "--arch=")) {
@@ -41,6 +43,11 @@ pub const Options = struct {
                 }
             } else if (std.mem.startsWith(u8, flag, "--structs=")) {
                 opts.structs_flag = flag["--structs=".len..];
+            } else if (std.mem.startsWith(u8, flag, "--std-dir=")) {
+                saw_std_dir_flag = true;
+                const value = flag["--std-dir=".len..];
+                if (value.len == 0) return error.InvalidArgs;
+                opts.std_dir = value;
             } else if (std.mem.startsWith(u8, flag, "--profile=")) {
                 saw_profile_flag = true;
                 const value = flag["--profile=".len..];
@@ -74,6 +81,7 @@ pub const Options = struct {
             .saw_arch_flag = saw_arch_flag,
             .saw_platform_flag = saw_platform_flag,
             .saw_stub_asm_flag = saw_stub_asm_flag,
+            .saw_std_dir_flag = saw_std_dir_flag,
         });
         return opts;
     }
@@ -88,6 +96,26 @@ pub const Options = struct {
 
     pub fn isEmitCStruct(command: []const u8) bool {
         return std.mem.eql(u8, command, "emit-c-struct");
+    }
+
+    pub fn isSourceLoadingCommand(command: []const u8) bool {
+        return std.mem.eql(u8, command, "lex") or
+            std.mem.eql(u8, command, "check") or
+            std.mem.eql(u8, command, "run-trap") or
+            std.mem.eql(u8, command, "facts") or
+            std.mem.eql(u8, command, "lower-hir") or
+            std.mem.eql(u8, command, "verify-hir") or
+            std.mem.eql(u8, command, "lower-mir") or
+            std.mem.eql(u8, command, "verify") or
+            std.mem.eql(u8, command, "lower-ir") or
+            std.mem.eql(u8, command, "lower-c") or
+            std.mem.eql(u8, command, "emit-c") or
+            std.mem.eql(u8, command, "emit-map") or
+            std.mem.eql(u8, command, "emit-llvm") or
+            isEmitLayout(command) or
+            isEmitCStruct(command) or
+            std.mem.eql(u8, command, "symbols") or
+            std.mem.eql(u8, command, "list-tests");
     }
 
     fn parseChecks(self: *Options, value: []const u8) !void {
@@ -117,6 +145,7 @@ pub const Options = struct {
         saw_arch_flag: bool,
         saw_platform_flag: bool,
         saw_stub_asm_flag: bool,
+        saw_std_dir_flag: bool,
     };
 
     fn validate(self: Options, command: []const u8, seen: SeenFlags) !void {
@@ -131,6 +160,7 @@ pub const Options = struct {
         if (seen.saw_stub_asm_flag and !is_emit_command) return error.InvalidArgs;
         if (seen.saw_arch_flag and !accepts_checks) return error.InvalidArgs;
         if (seen.saw_platform_flag and !accepts_checks) return error.InvalidArgs;
+        if (seen.saw_std_dir_flag and !isSourceLoadingCommand(command)) return error.InvalidArgs;
         if (self.checks.csan and (self.checks.ksan or self.checks.msan)) {
             std.debug.print("error: --checks=csan cannot be combined with ksan/msan (a single raw access wraps one shadow protocol)\n", .{});
             return error.InvalidArgs;

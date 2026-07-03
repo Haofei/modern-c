@@ -67,6 +67,13 @@ const usage =
     \\  mcc symbols <file.mc>
     \\  mcc list-tests <file.mc>
     \\
+    \\import fallback for installed layouts (source-loading commands only):
+    \\  --std-dir=<dir>       after project-root search misses, resolve import "std/x.mc"
+    \\                         as <dir>/x.mc.
+    \\  MC_PATH=dir[:dir...]  after --std-dir misses, search entries left-to-right as
+    \\                         import roots. For import "std/x.mc", an entry named std
+    \\                         maps to <entry>/x.mc; otherwise to <entry>/std/x.mc.
+    \\
     \\build-safety profile (orthogonal to the --profile target axis):
     \\  --checks=all           SAFE build (DEFAULT): keep every runtime trap check.
     \\  --checks=elide-proven  RELEASE build: elide ONLY the checks the fact-gated MIR
@@ -165,7 +172,20 @@ fn runMain(init: std.process.Init) !void {
     }
     var load_diag = diagnostics.Reporter.init(allocator, path, root_source);
     defer load_diag.deinit();
-    const source = try loader.loadCombinedSourceWithBoundariesReport(allocator, init.io, path, root_source, &boundaries, options.arch_flag, options.platform_flag, &load_diag);
+    var mc_path_entries: std.ArrayList([]const u8) = .empty;
+    defer mc_path_entries.deinit(allocator);
+    if (init.environ_map.get("MC_PATH")) |mc_path| {
+        var entries = std.mem.splitScalar(u8, mc_path, std.fs.path.delimiter);
+        while (entries.next()) |entry| {
+            if (entry.len != 0) try mc_path_entries.append(allocator, entry);
+        }
+    }
+    const source = try loader.loadCombinedSourceWithBoundariesOptionsReport(allocator, init.io, path, root_source, &boundaries, .{
+        .arch = options.arch_flag,
+        .platform = options.platform_flag,
+        .std_dir = options.std_dir,
+        .mc_path = mc_path_entries.items,
+    }, &load_diag);
     defer allocator.free(source);
     load_diag.source = source;
     load_diag.file_boundaries = boundaries.items;

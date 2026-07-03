@@ -383,6 +383,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("import-test"));
     // diagnostics-test locks down import-aware file/line rendering and clean CLI failures.
     m0_step.dependOn(ctx.cmd("diagnostics-test"));
+    // install-layout-test locks down installed std import fallback without broadening explicit imports.
+    m0_step.dependOn(ctx.cmd("install-layout-test"));
     // diagnostics-reference-test keeps the generated E_* reference in sync with compiler sources.
     m0_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     // diagnostic-code-inventory-test ensures every emitted E_* has fixture or allowlist ownership.
@@ -893,6 +895,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("test"));
     fast_step.dependOn(ctx.cmd("test-lint"));
     fast_step.dependOn(ctx.cmd("bad-diagnostics-test"));
+    fast_step.dependOn(ctx.cmd("install-layout-test"));
     fast_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     fast_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
     fast_step.dependOn(ctx.cmd("std-api-docs-test"));

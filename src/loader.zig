@@ -19,6 +19,12 @@ const token = @import("token.zig");
 //     up the importing file's ancestor directories and taking the first existing
 //     match. So `import "std/sync.mc"` works from any depth in a project (it
 //     finds `<project-root>/std/sync.mc`) without `../../` prefixes.
+//   - If that rooted search misses, `--std-dir=<dir>` may supply the standard
+//     library directory: `import "std/sync.mc"` maps to `<dir>/sync.mc`.
+//   - Finally, `MC_PATH` entries are searched left-to-right as installed import
+//     roots. For `import "std/sync.mc"`, an entry whose basename is `std` maps
+//     to `<entry>/sync.mc`; otherwise the candidate is `<entry>/std/sync.mc`.
+//     These installed roots never apply to explicit relative or absolute imports.
 //
 // `import` is recognized lexically (an `import` identifier followed by a string
 // literal and `;` at brace-depth 0), so no parser/sema/backend changes are
@@ -26,6 +32,23 @@ const token = @import("token.zig");
 // ordinary declarations.
 
 pub const LoadError = error{ImportNotFound} || std.mem.Allocator.Error;
+
+pub const LoadOptions = struct {
+    arch: ?[]const u8 = null,
+    platform: ?[]const u8 = null,
+    std_dir: ?[]const u8 = null,
+    mc_path: []const []const u8 = &.{},
+};
+
+const InstalledRootKind = enum {
+    std_dir,
+    import_root,
+};
+
+const InstalledRoot = struct {
+    kind: InstalledRootKind,
+    path: []const u8,
+};
 
 const ImportRef = struct {
     path: []const u8, // resolved path, owned by the arena
@@ -92,7 +115,10 @@ pub fn loadCombinedSourceWithBoundaries(
     arch: ?[]const u8,
     platform: ?[]const u8,
 ) LoadError![]u8 {
-    return loadCombinedSourceWithBoundariesReport(allocator, io, root_path, root_source, boundaries, arch, platform, null);
+    return loadCombinedSourceWithBoundariesOptionsReport(allocator, io, root_path, root_source, boundaries, .{
+        .arch = arch,
+        .platform = platform,
+    }, null);
 }
 
 pub fn loadCombinedSourceWithBoundariesReport(
@@ -103,6 +129,21 @@ pub fn loadCombinedSourceWithBoundariesReport(
     boundaries: ?*std.ArrayList(FileBoundary),
     arch: ?[]const u8,
     platform: ?[]const u8,
+    reporter: ?*diagnostics.Reporter,
+) LoadError![]u8 {
+    return loadCombinedSourceWithBoundariesOptionsReport(allocator, io, root_path, root_source, boundaries, .{
+        .arch = arch,
+        .platform = platform,
+    }, reporter);
+}
+
+pub fn loadCombinedSourceWithBoundariesOptionsReport(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    root_path: []const u8,
+    root_source: []const u8,
+    boundaries: ?*std.ArrayList(FileBoundary),
+    options: LoadOptions,
     reporter: ?*diagnostics.Reporter,
 ) LoadError![]u8 {
     var visited = std.StringHashMap(void).init(allocator);
@@ -117,7 +158,42 @@ pub fn loadCombinedSourceWithBoundariesReport(
     defer allocator.free(canon_root);
     const sandbox_root = try defaultSandboxRoot(allocator, io, canon_root);
     defer allocator.free(sandbox_root);
-    try expand(allocator, io, canon_root, root_path, root_source, &visited, &out, boundaries, arch orelse default_arch, platform orelse default_platform, sandbox_root, reporter);
+    const cwd_root = (try realPathFileDupe(allocator, io, ".")) orelse try allocator.dupe(u8, ".");
+    defer allocator.free(cwd_root);
+    var installed_roots: std.ArrayList(InstalledRoot) = .empty;
+    defer {
+        for (installed_roots.items) |root| allocator.free(root.path);
+        installed_roots.deinit(allocator);
+    }
+    if (options.std_dir) |std_dir| {
+        try installed_roots.append(allocator, .{
+            .kind = .std_dir,
+            .path = try canonicalize(allocator, std_dir, cwd_root),
+        });
+    }
+    for (options.mc_path) |entry| {
+        const trimmed = std.mem.trim(u8, entry, " \t\r\n");
+        if (trimmed.len == 0) continue;
+        try installed_roots.append(allocator, .{
+            .kind = .import_root,
+            .path = try canonicalize(allocator, trimmed, cwd_root),
+        });
+    }
+    try expand(
+        allocator,
+        io,
+        canon_root,
+        root_path,
+        root_source,
+        &visited,
+        &out,
+        boundaries,
+        options.arch orelse default_arch,
+        options.platform orelse default_platform,
+        sandbox_root,
+        installed_roots.items,
+        reporter,
+    );
     return out.toOwnedSlice(allocator);
 }
 
@@ -133,6 +209,7 @@ fn expand(
     arch: []const u8,
     platform: []const u8,
     sandbox_root: []const u8,
+    installed_roots: []const InstalledRoot,
     reporter: ?*diagnostics.Reporter,
 ) LoadError!void {
     if (visited.contains(path)) return;
@@ -147,7 +224,7 @@ fn expand(
     defer arena.deinit();
     const a = arena.allocator();
 
-    const imports = try scanImports(a, io, path, file_source, arch, platform, sandbox_root);
+    const imports = try scanImports(a, io, path, file_source, arch, platform, sandbox_root, installed_roots);
 
     // Append this file's source with its import statements blanked out.
     const blanked = try allocator.dupe(u8, file_source);
@@ -189,13 +266,13 @@ fn expand(
             return error.ImportNotFound;
         };
         defer allocator.free(imp_source);
-        try expand(allocator, io, imp.path, imp.display_path, imp_source, visited, out, boundaries, arch, platform, sandbox_root, reporter);
+        try expand(allocator, io, imp.path, imp.display_path, imp_source, visited, out, boundaries, arch, platform, sandbox_root, installed_roots, reporter);
     }
 }
 
 // Find top-level `import "path";` statements by lexing. Returns the resolved
 // path and the byte range (start of `import` .. end of `;`) for each.
-fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: []const u8, arch: []const u8, platform: []const u8, sandbox_root: []const u8) LoadError![]ImportRef {
+fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: []const u8, arch: []const u8, platform: []const u8, sandbox_root: []const u8, installed_roots: []const InstalledRoot) LoadError![]ImportRef {
     var refs: std.ArrayList(ImportRef) = .empty;
     var reporter = diagnostics.Reporter.init(arena, path, source);
     var lx = lexer.Lexer.init(source, &reporter);
@@ -223,7 +300,7 @@ fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: [
                     // Platform-selection seam: rewrite `kernel/platform/active/<x>` to the board.
                     rel = try std.fmt.allocPrint(arena, "kernel/platform/{s}/{s}", .{ platform, rel[platform_active_prefix.len..] });
                 }
-                const resolved = try resolveImportPath(arena, io, path, rel, sandbox_root);
+                const resolved = try resolveImportPath(arena, io, path, rel, sandbox_root, installed_roots);
                 try refs.append(arena, .{
                     .path = resolved.path,
                     .display_path = resolved.display_path,
@@ -255,7 +332,7 @@ fn fileExists(io: std.Io, path: []const u8) bool {
     return true;
 }
 
-fn resolveImportPath(arena: std.mem.Allocator, io: std.Io, importer: []const u8, rel: []const u8, sandbox_root: []const u8) LoadError!ResolvedImport {
+fn resolveImportPath(arena: std.mem.Allocator, io: std.Io, importer: []const u8, rel: []const u8, sandbox_root: []const u8, installed_roots: []const InstalledRoot) LoadError!ResolvedImport {
     // Explicitly-relative or absolute: resolve against the importing file's
     // directory and canonicalize (so diamond imports dedup to one copy).
     if (std.fs.path.isAbsolute(rel) or isExplicitlyRelative(rel)) {
@@ -292,10 +369,36 @@ fn resolveImportPath(arena: std.mem.Allocator, io: std.Io, importer: []const u8,
     } else if (fileExists(io, bare)) {
         return .{ .path = bare, .display_path = try displayPath(arena, sandbox_root, bare) };
     }
+    for (installed_roots) |root| {
+        if (try installedCandidate(arena, root, rel)) |cand| {
+            if (fileExists(io, cand)) return .{ .path = cand, .display_path = try displayPath(arena, sandbox_root, cand) };
+        }
+    }
     // None found: return a sensible candidate for the error message.
     if (first) |candidate| return .{ .path = candidate, .display_path = try displayPath(arena, sandbox_root, candidate) };
     if (first_outside) |candidate| return .{ .path = candidate, .display_path = candidate, .outside_sandbox = true };
     return .{ .path = bare, .display_path = try displayPath(arena, sandbox_root, bare) };
+}
+
+fn installedCandidate(arena: std.mem.Allocator, root: InstalledRoot, rel: []const u8) LoadError!?[]const u8 {
+    const std_prefix = "std/";
+    var joined: []const u8 = undefined;
+    switch (root.kind) {
+        .std_dir => {
+            if (!std.mem.startsWith(u8, rel, std_prefix)) return null;
+            joined = try std.fs.path.join(arena, &.{ root.path, rel[std_prefix.len..] });
+        },
+        .import_root => {
+            if (std.mem.startsWith(u8, rel, std_prefix) and std.mem.eql(u8, std.fs.path.basename(root.path), "std")) {
+                joined = try std.fs.path.join(arena, &.{ root.path, rel[std_prefix.len..] });
+            } else {
+                joined = try std.fs.path.join(arena, &.{ root.path, rel });
+            }
+        },
+    }
+    const resolved = try canonicalize(arena, joined, root.path);
+    if (!pathWithin(root.path, resolved)) return null;
+    return resolved;
 }
 
 fn canonicalize(arena: std.mem.Allocator, path: []const u8, relative_root: []const u8) LoadError![]const u8 {

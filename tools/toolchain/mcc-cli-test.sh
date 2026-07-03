@@ -34,7 +34,7 @@ assert_rc() {
 assert_stdout_contains() {
     local needle="$1"
     local label="$2"
-    if ! grep -Fq "$needle" "$OUT"; then
+    if ! grep -Fq -- "$needle" "$OUT"; then
         echo "FAIL: mcc-cli-test — missing stdout $label"
         echo "expected substring: $needle"
         echo "stdout:"
@@ -46,7 +46,7 @@ assert_stdout_contains() {
 assert_stderr_contains() {
     local needle="$1"
     local label="$2"
-    if ! grep -Fq "$needle" "$ERR"; then
+    if ! grep -Fq -- "$needle" "$ERR"; then
         echo "FAIL: mcc-cli-test — missing stderr $label"
         echo "expected substring: $needle"
         echo "stderr:"
@@ -77,6 +77,8 @@ run_case --help
 assert_rc 0 "--help"
 assert_stdout_contains "usage:" "--help usage header"
 assert_stdout_contains "mcc list-tests <file.mc>" "--help list-tests command"
+assert_stdout_contains "--std-dir=<dir>" "--help installed std-dir option"
+assert_stdout_contains "MC_PATH=dir[:dir...]" "--help MC_PATH fallback"
 assert_stdout_contains "exit codes:" "--help exit-code section"
 assert_stderr_empty "--help"
 
@@ -115,5 +117,11 @@ run_case check "$WORK/ok.mc" --check
 assert_rc 1 "invalid check flag"
 assert_stdout_empty "invalid check flag"
 assert_stderr_contains "usage:" "invalid check flag usage"
+
+mkdir -p "$WORK/std"
+run_case fmt "$WORK/ok.mc" --std-dir="$WORK/std"
+assert_rc 1 "invalid std-dir for fmt"
+assert_stdout_empty "invalid std-dir for fmt"
+assert_stderr_contains "usage:" "invalid std-dir for fmt usage"
 
 echo "PASS: mcc-cli-test — help/version/usage transcripts are stable"
