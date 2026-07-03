@@ -10,8 +10,10 @@ jobs:
     env:
       MC_LLVM_MAJOR: "18"
     steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      # actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:
           version: 0.16.0
       - name: Install integration-test tools
@@ -56,7 +58,8 @@ jobs:
     env:
       MC_LLVM_MAJOR: "18"
     steps:
-      - uses: actions/checkout@v4
+      # actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Build the dev image
         run: docker compose build dev
       - name: Run the fast gate in the container
@@ -91,8 +94,10 @@ jobs:
     env:
       MC_LLVM_MAJOR: "18"
     steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      # actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:
           version: 0.16.0
       - name: Configure Homebrew LLVM 18

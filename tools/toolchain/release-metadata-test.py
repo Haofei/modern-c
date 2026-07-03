@@ -42,6 +42,8 @@ EXPECTED_NIGHTLY_BENCH_METRICS = (
     "HEAPFREE-CYCLES",
     "IPC-CYCLES",
 )
+PINNED_ACTION_REF_RE = re.compile(r"^[0-9a-f]{40}$")
+WORKFLOW_USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?([^'\"\s#]+)")
 
 
 def fail(message: str) -> None:
@@ -59,6 +61,26 @@ def read(path: str) -> str:
 def require_contains(path: str, needle: str) -> None:
     if needle not in read(path):
         fail(f"{path} does not contain {needle!r}")
+
+
+def require_workflow_actions_pinned() -> None:
+    workflow_paths = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+    if not workflow_paths:
+        fail("missing .github/workflows/*.yml")
+    for workflow_path in workflow_paths:
+        relative = workflow_path.relative_to(ROOT)
+        for line_number, line in enumerate(workflow_path.read_text(encoding="utf-8").splitlines(), 1):
+            match = WORKFLOW_USES_RE.match(line)
+            if not match:
+                continue
+            uses = match.group(1)
+            if uses.startswith("./") or uses.startswith("../"):
+                continue
+            if "@" not in uses:
+                fail(f"{relative}:{line_number} action {uses!r} must be pinned to a commit SHA")
+            action, ref = uses.rsplit("@", 1)
+            if not PINNED_ACTION_REF_RE.fullmatch(ref):
+                fail(f"{relative}:{line_number} action {action!r} must use a 40-char commit SHA, not {ref!r}")
 
 
 def load_python_module(path: str):
@@ -175,6 +197,8 @@ def require_nightly_bench_metadata() -> None:
 
 
 def main() -> None:
+    require_workflow_actions_pinned()
+
     zon = read("build.zig.zon")
     version = zon_field(zon, "version")
     if version != EXPECTED_VERSION:
@@ -283,7 +307,7 @@ def main() -> None:
     if "sort -V | tail -n1" in dockerfile or "llvm-*" in dockerfile:
         fail("Dockerfile must select the pinned LLVM major, not the highest installed one")
 
-    print("PASS: release-metadata-test - version, Docker/Zig/LLVM pins, nightly fuzz/bench, and process docs are in sync")
+    print("PASS: release-metadata-test - version, Docker/Zig/LLVM/action pins, nightly fuzz/bench, and process docs are in sync")
 
 
 if __name__ == "__main__":

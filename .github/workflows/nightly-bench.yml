@@ -16,8 +16,10 @@ jobs:
       MC_LLVM_MAJOR: "18"
       MC_REQUIRE_TOOLS: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      # actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:
           version: 0.16.0
       - name: Install benchmark toolchain
@@ -43,7 +45,8 @@ jobs:
             --log-dir zig-out/nightly-bench-logs
       - name: Upload benchmark results
         if: always()
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: nightly-bench-results
           path: |
