@@ -101,12 +101,45 @@ def did_open(proc, uri, text):
     proc.stdin.flush()
 
 
+def did_change(proc, uri, version, text, flush=True):
+    proc.stdin.write(frame({"jsonrpc": "2.0", "method": "textDocument/didChange",
+                            "params": {"textDocument": {"uri": uri, "version": version},
+                                       "contentChanges": [{"text": text}]}}))
+    if flush:
+        proc.stdin.flush()
+
+
+def check_count(path):
+    try:
+        with open(path) as f:
+            return sum(1 for _ in f)
+    except FileNotFoundError:
+        return 0
+
+
 def main():
     mcc = sys.argv[1] if len(sys.argv) > 1 else "mcc"
     mcc = os.path.abspath(mcc)
-    env = dict(os.environ, MCC=mcc)
 
     workdir = tempfile.mkdtemp(prefix="lsp_test_")
+    counter_path = os.path.join(workdir, "check.count")
+    wrapper_path = os.path.join(workdir, "mcc-wrapper.py")
+    with open(wrapper_path, "w") as f:
+        f.write(
+            "#!/usr/bin/env python3\n"
+            "import os\n"
+            "import subprocess\n"
+            "import sys\n"
+            "if len(sys.argv) > 1 and sys.argv[1] == 'check':\n"
+            "    with open(os.environ['MC_LSP_TEST_CHECK_COUNTER'], 'a') as count_file:\n"
+            "        count_file.write('1\\n')\n"
+            "proc = subprocess.run([os.environ['MC_LSP_TEST_REAL_MCC']] + sys.argv[1:])\n"
+            "sys.exit(proc.returncode)\n"
+        )
+    os.chmod(wrapper_path, 0o755)
+    env = dict(os.environ, MCC=wrapper_path, MC_LSP_DIAGNOSTIC_DEBOUNCE_MS="50",
+               MC_LSP_TEST_REAL_MCC=mcc, MC_LSP_TEST_CHECK_COUNTER=counter_path)
+
     bad_path = os.path.join(workdir, "bad.mc")
     good_path = os.path.join(workdir, "good.mc")
     with open(bad_path, "w") as f:
@@ -154,13 +187,27 @@ def main():
             raise SystemExit(f"FAIL: lsp-test — clean document produced diagnostics: {good_diags}")
 
         # didChange the good document to introduce the same error -> diagnostic reappears.
-        proc.stdin.write(frame({"jsonrpc": "2.0", "method": "textDocument/didChange",
-                                "params": {"textDocument": {"uri": good_uri, "version": 2},
-                                            "contentChanges": [{"text": BAD}]}}))
-        proc.stdin.flush()
+        did_change(proc, good_uri, 2, BAD)
         changed = diagnostics_for(proc, good_uri)
         if EXPECTED_CODE not in [d.get("code") for d in changed]:
             raise SystemExit(f"FAIL: lsp-test — didChange did not re-diagnose: {[d.get('code') for d in changed]}")
+
+        # Rapid didChange bursts should publish diagnostics for the final text, not a stale edit.
+        rapid_path = os.path.join(workdir, "rapid.mc")
+        with open(rapid_path, "w") as f:
+            f.write(GOOD)
+        rapid_uri = "file://" + rapid_path
+        did_open(proc, rapid_uri, GOOD)
+        diagnostics_for(proc, rapid_uri)
+        checks_before_burst = check_count(counter_path)
+        did_change(proc, rapid_uri, 2, BAD, flush=False)
+        did_change(proc, rapid_uri, 3, GOOD)
+        rapid_diags = diagnostics_for(proc, rapid_uri)
+        if rapid_diags:
+            raise SystemExit(f"FAIL: lsp-test — debounced didChange published stale diagnostics: {rapid_diags}")
+        burst_checks = check_count(counter_path) - checks_before_burst
+        if burst_checks != 1:
+            raise SystemExit(f"FAIL: lsp-test — didChange burst should run one check, ran {burst_checks}")
 
         # --- document symbols (via `mcc emit-map`) -------------------------------------------
         sym_path = os.path.join(workdir, "sym.mc")
@@ -308,9 +355,10 @@ def main():
         if proc.poll() is None:
             proc.kill()
 
-    print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, didChange, pull), documentSymbol "
-          "outline, `mcc fmt` formatting, UTF-16 positions, hover/definition/references/highlight/"
-          "rename/semantic-tokens, completion, signature help, workspace symbols, and call hierarchy all verified")
+    print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, debounced didChange, pull), "
+          "documentSymbol outline, `mcc fmt` formatting, UTF-16 positions, hover/definition/"
+          "references/highlight/rename/semantic-tokens, completion, signature help, workspace "
+          "symbols, and call hierarchy all verified")
 
 
 if __name__ == "__main__":

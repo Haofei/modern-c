@@ -4,9 +4,10 @@
 Speaks the Language Server Protocol over stdio (Content-Length-framed JSON-RPC). The compiler
 is the single source of truth; the server only drives `mcc` subcommands and translates output:
 
-  - Diagnostics  — on didOpen/didChange/didSave runs `mcc check` and publishes diagnostics with
-                   the SAME codes the CLI reports (`E_...`), so an editor squiggle and a CI
-                   `mcc check` failure name the identical rule.
+  - Diagnostics  — on didOpen/didSave runs `mcc check` immediately, and on didChange coalesces
+                   rapid edits before publishing diagnostics with the SAME codes the CLI reports
+                   (`E_...`), so an editor squiggle and a CI `mcc check` failure name the
+                   identical rule.
   - Formatting   — `textDocument/formatting` runs `mcc fmt` (token-preserving, so it works even
                    while the buffer has type errors).
   - Document symbols — `textDocument/documentSymbol` reuses `mcc emit-map`'s per-declaration
@@ -31,6 +32,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 
 # `path:line:col: error: rest` — the CLI diagnostic format, where `rest` is either
 # `E_CODE: message` (a checked diagnostic) or a bare message (e.g. a parse error like
@@ -42,6 +44,9 @@ DIAG_RE = re.compile(r"^(?P<path>.+?):(?P<line>\d+):(?P<col>\d+):\s*error:\s*(?P
 CODE_RE = re.compile(r"^(E_[A-Z0-9_]+):\s*(.*)$")
 
 MCC = os.environ.get("MCC", "mcc")
+DIAGNOSTIC_DEBOUNCE_MS = int(os.environ.get("MC_LSP_DIAGNOSTIC_DEBOUNCE_MS", "150"))
+DIAGNOSTIC_DEBOUNCE_SECONDS = max(DIAGNOSTIC_DEBOUNCE_MS, 0) / 1000.0
+WRITE_LOCK = threading.RLock()
 
 
 def log(*a):
@@ -67,10 +72,11 @@ def read_message(stream):
 
 
 def write_message(stream, payload):
-    data = json.dumps(payload).encode("utf-8")
-    stream.write(f"Content-Length: {len(data)}\r\n\r\n".encode("ascii"))
-    stream.write(data)
-    stream.flush()
+    with WRITE_LOCK:
+        data = json.dumps(payload).encode("utf-8")
+        stream.write(f"Content-Length: {len(data)}\r\n\r\n".encode("ascii"))
+        stream.write(data)
+        stream.flush()
 
 
 def uri_to_path(uri):
@@ -666,12 +672,16 @@ def completion(uri, text, position):
     return {"isIncomplete": False, "items": items}
 
 
-def publish(out, uri, text):
+def publish_diagnostics(out, uri, diagnostics):
     write_message(out, {
         "jsonrpc": "2.0",
         "method": "textDocument/publishDiagnostics",
-        "params": {"uri": uri, "diagnostics": run_diagnostics(uri, text)},
+        "params": {"uri": uri, "diagnostics": diagnostics},
     })
+
+
+def publish(out, uri, text):
+    publish_diagnostics(out, uri, run_diagnostics(uri, text))
 
 
 # ---- server loop ---------------------------------------------------------------------------
@@ -684,6 +694,72 @@ def main():
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
     docs = {}  # uri -> text
+    doc_versions = {}  # uri -> internal monotonically increasing document generation
+    diag_timers = {}  # uri -> threading.Timer
+    state_lock = threading.RLock()
+    shutting_down = False
+
+    def next_doc_version(uri):
+        return doc_versions.get(uri, 0) + 1
+
+    def update_doc(uri, text):
+        with state_lock:
+            docs[uri] = text
+            doc_versions[uri] = next_doc_version(uri)
+            _index_cache.pop(uri, None)
+
+    def get_doc_text(uri):
+        with state_lock:
+            return docs.get(uri, "")
+
+    def cancel_pending_diagnostics_locked(uri):
+        timer = diag_timers.pop(uri, None)
+        if timer is not None:
+            timer.cancel()
+
+    def cancel_pending_diagnostics(uri):
+        with state_lock:
+            cancel_pending_diagnostics_locked(uri)
+
+    def cancel_all_diagnostics():
+        with state_lock:
+            for timer in diag_timers.values():
+                timer.cancel()
+            diag_timers.clear()
+
+    def schedule_diagnostics(uri):
+        with state_lock:
+            if shutting_down or uri not in docs:
+                return
+            cancel_pending_diagnostics_locked(uri)
+            expected_version = doc_versions.get(uri, 0)
+
+        timer_ref = {"timer": None}
+
+        def worker():
+            with state_lock:
+                text = docs.get(uri)
+                if shutting_down or text is None or doc_versions.get(uri, 0) != expected_version:
+                    return
+
+            diagnostics = run_diagnostics(uri, text)
+
+            with state_lock:
+                if shutting_down or docs.get(uri) is None or doc_versions.get(uri, 0) != expected_version:
+                    return
+                if diag_timers.get(uri) is timer_ref["timer"]:
+                    diag_timers.pop(uri, None)
+
+            publish_diagnostics(stdout, uri, diagnostics)
+
+        timer = threading.Timer(DIAGNOSTIC_DEBOUNCE_SECONDS, worker)
+        timer.daemon = True
+        timer_ref["timer"] = timer
+        with state_lock:
+            if shutting_down or uri not in docs or doc_versions.get(uri, 0) != expected_version:
+                return
+            diag_timers[uri] = timer
+        timer.start()
 
     while True:
         msg = read_message(stdin)
@@ -727,72 +803,79 @@ def main():
             pass
         elif method == "textDocument/didOpen":
             doc = msg["params"]["textDocument"]
-            docs[doc["uri"]] = doc["text"]
+            cancel_pending_diagnostics(doc["uri"])
+            update_doc(doc["uri"], doc["text"])
             publish(stdout, doc["uri"], doc["text"])
         elif method == "textDocument/didChange":
             uri = msg["params"]["textDocument"]["uri"]
             changes = msg["params"]["contentChanges"]
             if changes:  # Full sync: the last change carries the whole document
-                docs[uri] = changes[-1]["text"]
-            publish(stdout, uri, docs.get(uri, ""))
+                update_doc(uri, changes[-1]["text"])
+                schedule_diagnostics(uri)
         elif method == "textDocument/didSave":
             uri = msg["params"]["textDocument"]["uri"]
-            publish(stdout, uri, docs.get(uri, ""))
+            cancel_pending_diagnostics(uri)
+            publish(stdout, uri, get_doc_text(uri))
         elif method == "textDocument/didClose":
-            docs.pop(msg["params"]["textDocument"]["uri"], None)
+            uri = msg["params"]["textDocument"]["uri"]
+            with state_lock:
+                cancel_pending_diagnostics_locked(uri)
+                docs.pop(uri, None)
+                doc_versions.pop(uri, None)
+                _index_cache.pop(uri, None)
         elif method == "textDocument/formatting":
             uri = msg["params"]["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": format_document(uri, docs.get(uri, ""))})
+                                   "result": format_document(uri, get_doc_text(uri))})
         elif method == "textDocument/documentSymbol":
             uri = msg["params"]["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": document_symbols(uri, docs.get(uri, ""))})
+                                   "result": document_symbols(uri, get_doc_text(uri))})
         elif method == "textDocument/hover":
             p = msg["params"]
             uri = p["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": hover(uri, docs.get(uri, ""), p["position"])})
+                                   "result": hover(uri, get_doc_text(uri), p["position"])})
         elif method == "textDocument/definition":
             p = msg["params"]
             uri = p["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": goto_definition(uri, docs.get(uri, ""), p["position"])})
+                                   "result": goto_definition(uri, get_doc_text(uri), p["position"])})
         elif method == "textDocument/references":
             p = msg["params"]
             uri = p["textDocument"]["uri"]
             include = p.get("context", {}).get("includeDeclaration", True)
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": find_references(uri, docs.get(uri, ""), p["position"], include)})
+                                   "result": find_references(uri, get_doc_text(uri), p["position"], include)})
         elif method == "textDocument/documentHighlight":
             p = msg["params"]
             uri = p["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": document_highlight(uri, docs.get(uri, ""), p["position"])})
+                                   "result": document_highlight(uri, get_doc_text(uri), p["position"])})
         elif method == "textDocument/rename":
             p = msg["params"]
             uri = p["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": do_rename(uri, docs.get(uri, ""), p["position"], p["newName"])})
+                                   "result": do_rename(uri, get_doc_text(uri), p["position"], p["newName"])})
         elif method == "textDocument/semanticTokens/full":
             uri = msg["params"]["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": semantic_tokens(uri, docs.get(uri, ""))})
+                                   "result": semantic_tokens(uri, get_doc_text(uri))})
         elif method == "textDocument/completion":
             p = msg["params"]
             uri = p["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": completion(uri, docs.get(uri, ""), p["position"])})
+                                   "result": completion(uri, get_doc_text(uri), p["position"])})
         elif method == "textDocument/signatureHelp":
             p = msg["params"]
             uri = p["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": signature_help(uri, docs.get(uri, ""), p["position"])})
+                                   "result": signature_help(uri, get_doc_text(uri), p["position"])})
         elif method == "textDocument/diagnostic":
             uri = msg["params"]["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
                                    "result": {"kind": "full",
-                                              "items": run_diagnostics(uri, docs.get(uri, ""))}})
+                                              "items": run_diagnostics(uri, get_doc_text(uri))}})
         elif method == "workspace/symbol":
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
                                    "result": workspace_symbols(docs, msg["params"].get("query", ""))})
@@ -800,20 +883,24 @@ def main():
             p = msg["params"]
             uri = p["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": prepare_call_hierarchy(uri, docs.get(uri, ""), p["position"])})
+                                   "result": prepare_call_hierarchy(uri, get_doc_text(uri), p["position"])})
         elif method == "callHierarchy/incomingCalls":
             item = msg["params"]["item"]
             uri = item["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": incoming_calls(uri, docs.get(uri, ""), item)})
+                                   "result": incoming_calls(uri, get_doc_text(uri), item)})
         elif method == "callHierarchy/outgoingCalls":
             item = msg["params"]["item"]
             uri = item["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": outgoing_calls(uri, docs.get(uri, ""), item)})
+                                   "result": outgoing_calls(uri, get_doc_text(uri), item)})
         elif method == "shutdown":
+            shutting_down = True
+            cancel_all_diagnostics()
             write_message(stdout, {"jsonrpc": "2.0", "id": mid, "result": None})
         elif method == "exit":
+            shutting_down = True
+            cancel_all_diagnostics()
             break
         elif mid is not None:
             # Unknown request: reply MethodNotFound rather than hang the client.
