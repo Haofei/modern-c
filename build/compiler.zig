@@ -8,11 +8,16 @@ const h = @import("helpers.zig");
 pub fn build(b: *std.Build) h.Ctx {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const version = b.option([]const u8, "version", "Version string reported by `mcc --version`") orelse "0.7.0-dev";
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", version);
+
     const root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    root_module.addOptions("build_options", options);
 
     const exe = b.addExecutable(.{
         .name = "mcc",

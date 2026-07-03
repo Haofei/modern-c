@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const backend = @import("backend.zig");
+const build_options = @import("build_options");
 const cli = @import("cli.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
@@ -40,8 +41,6 @@ const symbols = @import("symbols.zig");
 // rule for `impl` blocks of `opaque struct`s (a peer `impl` in a different file may not name the
 // type's private fields). Null when no module was loaded (e.g. `fmt`, which bypasses the loader).
 var combined_boundaries: ?[]const loader.FileBoundary = null;
-
-const version = "0.7.0-dev";
 
 const usage =
     \\usage:
@@ -135,7 +134,7 @@ fn runMain(init: std.process.Init) !void {
     }
     if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "version")) {
         if (args.next() != null) return failUsage();
-        try writeStdout("mcc " ++ version ++ "\n");
+        try writeStdout("mcc " ++ build_options.version ++ "\n");
         return;
     }
     const path = args.next() orelse return failUsage();

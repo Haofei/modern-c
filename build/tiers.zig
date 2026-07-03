@@ -344,6 +344,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     // mcc-cli-test pins documented top-level help/version/usage behavior.
     m0_step.dependOn(ctx.cmd("mcc-cli-test"));
+    // release-metadata-test keeps version/process metadata present and consistent.
+    m0_step.dependOn(ctx.cmd("release-metadata-test"));
     // mono-test exercises comptime-parameter monomorphization (needs clang).
     m0_step.dependOn(ctx.cmd("mono-test"));
     // reflect-test validates the comptime layout model against the C ABI.
@@ -838,6 +840,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("bad-diagnostics-test"));
     fast_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     fast_step.dependOn(ctx.cmd("mcc-cli-test"));
+    fast_step.dependOn(ctx.cmd("release-metadata-test"));
     fast_step.dependOn(ctx.cmd("c-test"));
     fast_step.dependOn(ctx.cmd("sweep"));
     fast_step.dependOn(ctx.cmd("diff-backend"));
@@ -865,6 +868,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("bad-diagnostics-test")); // golden wording for reject diagnostics
     c0_step.dependOn(ctx.cmd("diagnostics-reference-test")); // generated diagnostic-code reference stays current
     c0_step.dependOn(ctx.cmd("mcc-cli-test")); // top-level CLI help/version/usage behavior stays documented
+    c0_step.dependOn(ctx.cmd("release-metadata-test")); // release/version/process metadata remains present
     c0_step.dependOn(ctx.cmd("test"));
     c0_step.dependOn(ctx.cmd("c-test"));
     c0_step.dependOn(ctx.cmd("sweep"));

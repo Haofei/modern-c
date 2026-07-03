@@ -48,6 +48,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "mcc-cli-test", "Validate mcc help/version/usage exit behavior and stdout/stderr channels", &.{ "bash", "tools/toolchain/mcc-cli-test.sh", "zig-out/bin/mcc" });
 
+    _ = h.addScriptTestOpts(ctx, "release-metadata-test", "Check release/version/security/stability metadata stays in sync", &.{ "python3", "tools/toolchain/release-metadata-test.py" }, .{ .install = false });
+
     _ = h.addScriptTest(ctx, "mono-test", "Compile a comptime-param type-generic module, link, and run the specialization", &.{ "bash", "tools/toolchain/mono-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "reflect-test", "Validate comptime sizeof/alignof folding against clang's C ABI", &.{ "bash", "tools/toolchain/reflect-test.sh", "zig-out/bin/mcc" });
