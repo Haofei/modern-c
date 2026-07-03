@@ -337,16 +337,13 @@ test "tests/spec fixtures produce declared semantic error codes" {
         const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
         defer allocator.free(path);
 
-        // Soundness fixtures that import std/kernel opaque types are import-expanded so the
-        // cross-file orphan rule (E_ORPHAN_IMPL) has file boundaries to compare; single-file
-        // fixtures (the overwhelming majority) borrow `source` and carry no boundaries.
         var imported = false;
-        var spec = try resolveSpecSource(allocator, io, path, source, &imported);
-        defer spec.deinit(allocator, imported);
-
-        var reporter = diagnostics.Reporter.init(allocator, path, spec.source);
-        reporter.file_boundaries = spec.boundaries;
+        var reporter = diagnostics.Reporter.init(allocator, path, source);
         defer reporter.deinit();
+        var spec = try resolveSpecSource(allocator, io, path, source, &imported, &reporter);
+        defer spec.deinit(allocator, imported);
+        reporter.source = spec.source;
+        reporter.file_boundaries = spec.boundaries;
 
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
@@ -403,16 +400,13 @@ test "tests/spec inline EXPECT_ERROR comments match diagnostic lines" {
         const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
         defer allocator.free(path);
 
-        // Soundness fixtures that import std/kernel opaque types are import-expanded so the
-        // cross-file orphan rule (E_ORPHAN_IMPL) has file boundaries to compare; single-file
-        // fixtures (the overwhelming majority) borrow `source` and carry no boundaries.
         var imported = false;
-        var spec = try resolveSpecSource(allocator, io, path, source, &imported);
-        defer spec.deinit(allocator, imported);
-
-        var reporter = diagnostics.Reporter.init(allocator, path, spec.source);
-        reporter.file_boundaries = spec.boundaries;
+        var reporter = diagnostics.Reporter.init(allocator, path, source);
         defer reporter.deinit();
+        var spec = try resolveSpecSource(allocator, io, path, source, &imported, &reporter);
+        defer spec.deinit(allocator, imported);
+        reporter.source = spec.source;
+        reporter.file_boundaries = spec.boundaries;
 
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
@@ -933,13 +927,16 @@ fn hasTopLevelImport(source: []const u8) bool {
 // Resolve a spec fixture to its effective source. `raw` is the fixture's own bytes; `rel_path`
 // is its repo-relative path (`tests/spec/<name>.mc`). `imported_out` is set true when the loader
 // was used (so the caller frees with the same flag). The returned `source`/`boundaries` are
-// loader-owned when imported, else borrow `raw`.
+// loader-owned when imported, else borrow `raw`. `reporter`, when present, receives loader
+// diagnostics such as missing imports while its source still points at the raw fixture; callers
+// then retarget it to the combined source before parse/sema diagnostics are added.
 fn resolveSpecSource(
     allocator: std.mem.Allocator,
     io: std.Io,
     rel_path: []const u8,
     raw: []const u8,
     imported_out: *bool,
+    reporter: ?*diagnostics.Reporter,
 ) !SpecSource {
     if (!hasTopLevelImport(raw)) {
         imported_out.* = false;
@@ -953,7 +950,7 @@ fn resolveSpecSource(
         for (boundaries.items) |b| allocator.free(b.path);
         boundaries.deinit(allocator);
     }
-    const combined = try loader.loadCombinedSourceWithBoundaries(allocator, io, abs, raw, &boundaries, null, null);
+    const combined = try loader.loadCombinedSourceWithBoundariesReport(allocator, io, abs, raw, &boundaries, null, null, reporter);
     return .{ .source = combined, .boundaries = try boundaries.toOwnedSlice(allocator) };
 }
 

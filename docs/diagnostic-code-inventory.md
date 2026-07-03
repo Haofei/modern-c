@@ -19,8 +19,6 @@ these codes, remove the row; the gate fails on redundant or stale entries.
 | `E_ASYNC_LOOP_UNSUPPORTED` | Async v0 structural limitation for await-bearing loop shapes. Current async bad coverage exercises the general unsupported path; individual loop-shape fixtures are deferred until the async subset is expanded. |
 | `E_BACKEND_UNSUPPORTED` | CLI backend integration path is covered by `diagnostics-test`, which creates temporary C and LLVM backend unsupported fixtures and asserts source-spanned diagnostics instead of raw backend errors. |
 | `E_ENUM_RAW_REQUIRES_OPEN_ENUM` | MIR verifier fallback for `.raw()` on non-open enums. Positive enum raw behavior is covered; this verifier diagnostic does not have a negative fixture yet. |
-| `E_IMPORT_NOT_FOUND` | CLI integration path is covered by `diagnostics-test`, which creates temporary import failures rather than a stable corpus fixture. |
-| `E_IMPORT_OUTSIDE_SANDBOX` | CLI integration path is covered by `diagnostics-test`, which creates temporary sandbox import failures rather than a stable corpus fixture. |
 | `E_INTERNAL_OOM` | Defensive compiler out-of-memory diagnostic. It should not be forced through a deterministic fixture. |
 | `E_MIR_CFG` | MIR verifier internal malformed-CFG diagnostic. User-facing source fixtures should not normally construct malformed MIR. |
 | `E_NESTING_TOO_DEEP` | Parser recursion guard. A focused stress fixture would be large and brittle; keep the guard documented until a compact generator-based fixture exists. |
