@@ -2,8 +2,8 @@
 
 Status: draft release process with an implemented Linux and macOS artifact
 workflow. Release publication is still conservative: the workflow builds
-tarballs, checksums, a release inventory, and a CycloneDX SBOM. No public stable
-release has been cut yet.
+tarballs, checksums, a release inventory, a CycloneDX SBOM, and GitHub
+artifact attestations. No public stable release has been cut yet.
 
 ## Version Identity
 
@@ -49,10 +49,8 @@ Before tagging a release:
 10. Confirm `SHA256SUMS`, `mcc-<version>-release-inventory.json`, and
    `mcc-<version>-sbom.cdx.json` are present and that
    `sha256sum -c SHA256SUMS` passes.
-11. Sign the release artifact set before publishing. The current workflow emits
-   checksums, inventory, and SBOM metadata; external minisign/cosign signing is
-   still a manual release-manager step until signing keys and identity policy are
-   documented.
+11. Confirm the workflow generated Sigstore-backed artifact attestations with
+   `actions/attest` using `subject-checksums: zig-out/release/SHA256SUMS`.
 12. Tag the exact commit and record the tag in `CHANGELOG.md`. Pushing `v*`
    creates or updates the GitHub Release assets with `gh release upload`.
 
@@ -61,7 +59,8 @@ Before tagging a release:
 `.github/workflows/release.yml` runs on `v*` tags and manual dispatch. Manual
 dispatch defaults to a dry run, which uploads workflow artifacts without creating
 a GitHub Release. A tag run publishes the same artifact set to the GitHub Release
-for that tag.
+for that tag. Both dry-run and tag runs generate GitHub artifact attestations for
+the files named by `SHA256SUMS`.
 
 The packaging helper is intentionally local-testable:
 
@@ -75,6 +74,31 @@ The helper builds `mcc` with `zig build -Dtarget=<target> -Doptimize=ReleaseSafe
 deterministic tarball, emits release inventory and CycloneDX SBOM JSON files, and
 writes `SHA256SUMS`.
 
+The release workflow stages the VS Code extension into `zig-out/release`, appends
+it to `SHA256SUMS`, verifies that every checksum subject is a file in that
+directory, and then invokes `actions/attest` with `subject-checksums:
+zig-out/release/SHA256SUMS`. The attestation is signed with the workflow's GitHub
+OIDC identity and stored by GitHub's artifact attestation service.
+
+To verify a downloaded release asset, first check the digest manifest from the
+release directory:
+
+```sh
+sha256sum -c SHA256SUMS
+```
+
+Then verify the artifact attestation for each downloaded tarball, VSIX, inventory,
+or SBOM file named by the manifest:
+
+```sh
+gh attestation verify --owner <owner> mcc-0.7.0-x86_64-linux-musl.tar.gz
+```
+
+For repository-scoped checks, use the repository owner that published the release.
+The attestation confirms the artifact digest and the GitHub Actions provenance;
+the CycloneDX SBOM remains the component inventory for dependency and license
+review.
+
 The current target set is:
 
 - `x86_64-linux-musl`
@@ -85,4 +109,4 @@ The current target set is:
 ## Not Yet Implemented
 
 - Private security advisory intake.
-- Automated minisign/cosign signing in the release workflow.
+- Detached minisign signatures separate from GitHub/Sigstore attestations.

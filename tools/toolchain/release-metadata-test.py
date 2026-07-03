@@ -48,6 +48,7 @@ EXPECTED_RELEASE_TARGETS = (
     "x86_64-macos",
     "aarch64-macos",
 )
+EXPECTED_ATTEST_ACTION_REF = "a1948c3f048ba23858d222213b7c278aabede763"
 EXPECTED_RELEASE_PATHS = (
     "bin/mcc",
     "bin/mcc-real",
@@ -228,6 +229,10 @@ def require_release_artifact_metadata() -> None:
         '"v*"',
         "workflow_dispatch:",
         "dry_run:",
+        "contents: write",
+        "id-token: write",
+        "attestations: write",
+        "artifact-metadata: write",
         "runs-on: ubuntu-24.04",
         "actions/checkout@v4",
         "mlugg/setup-zig@v2",
@@ -236,11 +241,18 @@ def require_release_artifact_metadata() -> None:
         "--version",
         "--commit \"$GITHUB_SHA\"",
         "sha256sum -c SHA256SUMS",
+        "Stage VS Code extension release asset",
+        "Verify release checksum subjects",
+        "SHA256SUMS subject is not a file in zig-out/release",
+        "actions/attest@v4",
+        f"actions/attest@{EXPECTED_ATTEST_ACTION_REF}",
+        "subject-checksums: zig-out/release/SHA256SUMS",
         "actions/upload-artifact@v4",
         "zig-out/release/*.tar.gz",
         "zig-out/release/SHA256SUMS",
         "zig-out/release/*inventory*.json",
         "zig-out/release/*sbom*.json",
+        "zig-out/release/*.vsix",
         "startsWith(github.ref, 'refs/tags/v')",
         "gh release upload",
     ):
@@ -286,9 +298,12 @@ def require_release_artifact_metadata() -> None:
         "SHA256SUMS",
         "release inventory",
         "CycloneDX SBOM",
+        "artifact attestations",
+        "actions/attest",
+        "subject-checksums",
+        "gh attestation verify",
         "THIRD-PARTY-LICENSES.md",
         "gh release upload",
-        "minisign/cosign",
     ):
         if needle not in docs:
             fail(f"docs/release-process.md does not document release artifact requirement {needle!r}")
@@ -410,7 +425,7 @@ def main() -> None:
     if "sort -V | tail -n1" in dockerfile or "llvm-*" in dockerfile:
         fail("Dockerfile must select the pinned LLVM major, not the highest installed one")
 
-    print("PASS: release-metadata-test - version, Docker/Zig/LLVM/action pins, nightly fuzz/bench, release artifacts, and process docs are in sync")
+    print("PASS: release-metadata-test - version, Docker/Zig/LLVM/action pins, nightly fuzz/bench, release artifacts, attestations, and process docs are in sync")
 
 
 if __name__ == "__main__":

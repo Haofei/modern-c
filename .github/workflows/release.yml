@@ -18,6 +18,9 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   release-artifacts:
@@ -85,6 +88,45 @@ jobs:
           npm ci
           npm run package
 
+      - name: Stage VS Code extension release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          vsix=(editors/vscode/*.vsix)
+          if (( ${#vsix[@]} != 1 )); then
+            printf 'expected exactly one VSIX, found %d\n' "${#vsix[@]}" >&2
+            exit 1
+          fi
+          cp "${vsix[0]}" zig-out/release/
+          (
+            cd zig-out/release
+            sha256sum "$(basename "${vsix[0]}")" >> SHA256SUMS
+          )
+
+      - name: Verify release checksum subjects
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd zig-out/release
+          while read -r digest filename; do
+            if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "invalid SHA256 digest in SHA256SUMS: $digest" >&2
+              exit 1
+            fi
+            if [[ -z "$filename" || "$filename" == */* || ! -f "$filename" ]]; then
+              echo "SHA256SUMS subject is not a file in zig-out/release: $filename" >&2
+              exit 1
+            fi
+          done < SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Attest release artifact provenance
+        # actions/attest@v4
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
+        with:
+          subject-checksums: zig-out/release/SHA256SUMS
+
       - name: Upload release artifacts
         # actions/upload-artifact@v4
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -95,7 +137,7 @@ jobs:
             zig-out/release/SHA256SUMS
             zig-out/release/*inventory*.json
             zig-out/release/*sbom*.json
-            editors/vscode/*.vsix
+            zig-out/release/*.vsix
           if-no-files-found: error
 
       - name: Publish GitHub Release assets
@@ -115,5 +157,5 @@ jobs:
             zig-out/release/SHA256SUMS \
             zig-out/release/*inventory*.json \
             zig-out/release/*sbom*.json \
-            editors/vscode/*.vsix \
+            zig-out/release/*.vsix \
             --clobber
