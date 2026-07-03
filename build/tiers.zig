@@ -385,6 +385,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("diagnostics-test"));
     // diagnostics-reference-test keeps the generated E_* reference in sync with compiler sources.
     m0_step.dependOn(ctx.cmd("diagnostics-reference-test"));
+    // diagnostic-code-inventory-test ensures every emitted E_* has fixture or allowlist ownership.
+    m0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
     // mcc-cli-test pins documented top-level help/version/usage behavior.
     m0_step.dependOn(ctx.cmd("mcc-cli-test"));
     // release-metadata-test keeps version/process metadata present and consistent.
@@ -886,6 +888,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("test-lint"));
     fast_step.dependOn(ctx.cmd("bad-diagnostics-test"));
     fast_step.dependOn(ctx.cmd("diagnostics-reference-test"));
+    fast_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
     fast_step.dependOn(ctx.cmd("mcc-cli-test"));
     fast_step.dependOn(ctx.cmd("release-metadata-test"));
     fast_step.dependOn(ctx.cmd("ci-pass-gates-test"));
@@ -920,6 +923,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("test-lint")); // contract lint guards the corpus; c1 inherits it
     c0_step.dependOn(ctx.cmd("bad-diagnostics-test")); // golden wording for reject diagnostics
     c0_step.dependOn(ctx.cmd("diagnostics-reference-test")); // generated diagnostic-code reference stays current
+    c0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test")); // emitted diagnostics stay fixture-owned or documented
     c0_step.dependOn(ctx.cmd("mcc-cli-test")); // top-level CLI help/version/usage behavior stays documented
     c0_step.dependOn(ctx.cmd("release-metadata-test")); // release/version/process metadata remains present
     c0_step.dependOn(ctx.cmd("ci-pass-gates-test")); // CI anti-vacuity assertions stay derived from tier definitions

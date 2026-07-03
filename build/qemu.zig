@@ -45,6 +45,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "diagnostics-test", "Validate import-aware diagnostic locations, missing-import errors, and UTF-8 BOM handling", &.{ "bash", "tools/toolchain/diagnostics-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTestOpts(ctx, "diagnostics-reference-test", "Check docs/diagnostics.md covers every compiler E_* diagnostic code", &.{ "python3", "tools/toolchain/diagnostics-reference.py", "--check" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "diagnostic-code-inventory-test", "Check every emitted E_* diagnostic has a negative fixture or documented allowlist entry", &.{ "python3", "tools/toolchain/diagnostic-code-inventory.py", "--check" }, .{ .install = false });
 
     _ = h.addScriptTest(ctx, "mcc-cli-test", "Validate mcc help/version/usage exit behavior and stdout/stderr channels", &.{ "bash", "tools/toolchain/mcc-cli-test.sh", "zig-out/bin/mcc" });
 
