@@ -349,14 +349,16 @@ test "tests/spec fixtures produce declared semantic error codes" {
         defer arena.deinit();
         const parse_allocator = arena.allocator();
 
-        const module = try parseSpecModule(spec.source, parse_allocator, &reporter);
-        defer module.deinit(parse_allocator);
+        const module = try parseSpecModuleForExpectedDiagnostics(spec.source, parse_allocator, &reporter);
+        defer if (module) |m| m.deinit(parse_allocator);
 
-        var checker = sema.Checker.init(&reporter);
-        checker.file_boundaries = spec.boundaries;
-        checker.checkModule(module);
-        if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
-            try mir.verify(allocator, module, &reporter);
+        if (module) |m| {
+            var checker = sema.Checker.init(&reporter);
+            checker.file_boundaries = spec.boundaries;
+            checker.checkModule(m);
+            if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
+                try mir.verify(allocator, m, &reporter);
+            }
         }
 
         var checks = std.mem.splitScalar(u8, check_value, ',');
@@ -412,14 +414,16 @@ test "tests/spec inline EXPECT_ERROR comments match diagnostic lines" {
         defer arena.deinit();
         const parse_allocator = arena.allocator();
 
-        const module = try parseSpecModule(spec.source, parse_allocator, &reporter);
-        defer module.deinit(parse_allocator);
+        const module = try parseSpecModuleForExpectedDiagnostics(spec.source, parse_allocator, &reporter);
+        defer if (module) |m| m.deinit(parse_allocator);
 
-        var checker = sema.Checker.init(&reporter);
-        checker.file_boundaries = spec.boundaries;
-        checker.checkModule(module);
-        if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
-            try mir.verify(allocator, module, &reporter);
+        if (module) |m| {
+            var checker = sema.Checker.init(&reporter);
+            checker.file_boundaries = spec.boundaries;
+            checker.checkModule(m);
+            if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
+                try mir.verify(allocator, m, &reporter);
+            }
         }
 
         for (expected_errors.items) |expected| {
@@ -485,15 +489,18 @@ test "tests/spec semantic errors are all explicitly expected" {
         defer arena.deinit();
         const parse_allocator = arena.allocator();
 
-        const module = try parseSpecModule(source, parse_allocator, &reporter);
-        defer module.deinit(parse_allocator);
-
-        var checker = sema.Checker.init(&reporter);
-        checker.checkModule(module);
         var metadata = try parseLeadingMetadata(allocator, source);
         defer metadata.deinit(allocator);
-        if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
-            try mir.verify(allocator, module, &reporter);
+
+        const module = try parseSpecModuleForExpectedDiagnostics(source, parse_allocator, &reporter);
+        defer if (module) |m| m.deinit(parse_allocator);
+
+        if (module) |m| {
+            var checker = sema.Checker.init(&reporter);
+            checker.checkModule(m);
+            if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
+                try mir.verify(allocator, m, &reporter);
+            }
         }
 
         for (reporter.diagnostics.items) |diag| {
@@ -893,6 +900,13 @@ fn parseSpecModule(source: []const u8, allocator: std.mem.Allocator, reporter: *
     const module = try p.parseModule(allocator);
     try generic_precheck.check(allocator, module, reporter, null);
     return try monomorphize.transformReport(allocator, module, reporter);
+}
+
+fn parseSpecModuleForExpectedDiagnostics(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !?ast.Module {
+    return parseSpecModule(source, allocator, reporter) catch |err| switch (err) {
+        error.ParseFailed => if (reporter.has_errors) null else err,
+        else => err,
+    };
 }
 
 // A spec fixture's effective source, plus the import-flattened file boundaries needed to
