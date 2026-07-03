@@ -49,7 +49,7 @@ const usage =
     \\  mcc --version
     \\  mcc help
     \\  mcc lex <file.mc>
-    \\  mcc check <file.mc>
+    \\  mcc check <file.mc> [--json]
     \\  mcc run-trap <file.mc>
     \\  mcc facts <file.mc>
     \\  mcc lower-hir <file.mc>
@@ -100,6 +100,11 @@ const usage =
     \\                         concurrent access (one a write) to the same location without
     \\                         synchronization traps (CSAN-DETECTED). The synchronized
     \\                         mc_race_* accessors stay plain atomics and are clean.
+    \\
+    \\machine-readable diagnostics:
+    \\  mcc check <file.mc> --json
+    \\                         print {"diagnostics":[...]} JSON to stdout. Text diagnostics
+    \\                         remain the default and stay on stderr.
     \\
     \\exit codes:
     \\  0   success, --help, --version
@@ -194,7 +199,14 @@ fn runMain(init: std.process.Init) !void {
     load_diag.source = source;
     load_diag.file_boundaries = boundaries.items;
     if (load_diag.has_errors) {
-        load_diag.render();
+        if (std.mem.eql(u8, command, "check") and options.json_diagnostics) {
+            var out: std.ArrayList(u8) = .empty;
+            defer out.deinit(allocator);
+            try load_diag.appendJson(&out);
+            try writeStdout(out.items);
+        } else {
+            load_diag.render();
+        }
         return error.ImportNotFound;
     }
     combined_boundaries = boundaries.items;
@@ -205,7 +217,7 @@ fn runMain(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "symbols")) {
         try runSymbols(allocator, path, source);
     } else if (std.mem.eql(u8, command, "check")) {
-        try runCheck(allocator, path, source);
+        try runCheck(allocator, path, source, options.json_diagnostics);
     } else if (std.mem.eql(u8, command, "run-trap")) {
         try runTrap(allocator, path, source);
     } else if (std.mem.eql(u8, command, "facts")) {
@@ -442,7 +454,7 @@ fn runLex(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !v
     }
 }
 
-fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8, json_diagnostics: bool) !void {
     var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
@@ -450,11 +462,16 @@ fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = parseModuleOrReportMode(source, parse_allocator, &diag, !json_diagnostics) catch |err| {
+        if (diag.has_errors) {
+            try emitCheckDiagnostics(allocator, &diag, json_diagnostics);
+        }
+        return err;
+    };
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
-        diag.render();
+        try emitCheckDiagnostics(allocator, &diag, json_diagnostics);
         return error.CheckFailed;
     }
 
@@ -462,11 +479,26 @@ fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     checker.file_boundaries = combined_boundaries;
     checker.checkModule(module);
     if (diag.has_errors) {
-        diag.render();
+        try emitCheckDiagnostics(allocator, &diag, json_diagnostics);
         return error.CheckFailed;
     }
 
-    std.debug.print("parsed {d} top-level declarations\n", .{module.decls.len});
+    if (json_diagnostics) {
+        try emitCheckDiagnostics(allocator, &diag, true);
+    } else {
+        std.debug.print("parsed {d} top-level declarations\n", .{module.decls.len});
+    }
+}
+
+fn emitCheckDiagnostics(allocator: std.mem.Allocator, diag: *diagnostics.Reporter, json_diagnostics: bool) !void {
+    if (!json_diagnostics) {
+        diag.render();
+        return;
+    }
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    try diag.appendJson(&out);
+    try writeStdout(out.items);
 }
 
 // `mcc list-tests <file>` prints, one per line, the name of every `#[test]`-attributed
@@ -843,35 +875,39 @@ fn runEmitCStruct(allocator: std.mem.Allocator, path: []const u8, source: []cons
 }
 
 fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ast.Module {
+    return parseModuleOrReportMode(source, allocator, diag, true);
+}
+
+fn parseModuleOrReportMode(source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {
     var p = parser.Parser.init(source, diag);
     const module = p.parseModule(allocator) catch |err| {
-        diag.render();
+        if (render_errors) diag.render();
         return err;
     };
     // Lower `async fn` / `await` to stackless Future state machines BEFORE monomorphize/sema, so
     // the move/borrow checker and both backends only ever see ordinary MC. No-op for modules
     // without any `async fn` (passes the module through untouched).
     const lowered = async_lower.transform(allocator, module, diag) catch |err| {
-        diag.render();
+        if (render_errors) diag.render();
         return err;
     };
     try generic_precheck.check(allocator, lowered, diag, combined_boundaries);
     if (diag.has_errors) {
-        diag.render();
+        if (render_errors) diag.render();
         return error.CheckFailed;
     }
     // Specialize comptime-parameter type-generic functions (section 22). This is
     // a no-op for modules without any such function, so non-generic code is
     // passed through untouched.
     const specialized = monomorphize.transformReport(allocator, lowered, diag) catch |err| {
-        diag.render();
+        if (render_errors) diag.render();
         return err;
     };
     // G22: uniquify file-private top-level names that collide across imported files (§30).
     // No-op unless two strict files each define a file-private value of the same name; keeps
     // the flat namespace for every non-colliding `pub`/`export` name.
     return mangle_private.transform(allocator, specialized, combined_boundaries) catch |err| {
-        diag.render();
+        if (render_errors) diag.render();
         return err;
     };
 }

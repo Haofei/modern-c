@@ -53,6 +53,29 @@ assert_contains "$missing_output" 'cannot find import "missing/nope.mc"' "missin
 assert_not_contains "$missing_output" "error: ImportNotFound" "raw Zig ImportNotFound error"
 assert_not_contains "$missing_output" "src/main.zig" "Zig stack trace"
 
+missing_json=""
+if missing_json=$("$MCC" check "$WORK/root_missing.mc" --json); then
+    echo "FAIL: diagnostics-test — missing import JSON unexpectedly succeeded"
+    exit 1
+fi
+JSON_OUT="$missing_json" python3 - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["JSON_OUT"])
+diags = payload.get("diagnostics")
+assert isinstance(diags, list) and len(diags) == 1, payload
+d = diags[0]
+assert d["severity"] == "error", d
+assert d["code"] == "E_IMPORT_NOT_FOUND", d
+assert "cannot find import" in d["message"], d
+assert d["path"].endswith("root_missing.mc"), d
+assert d["file"] == d["path"], d
+assert d["line"] == 3 and d["column"] == 1, d
+assert d["span"]["line"] == 3 and d["span"]["column"] == 1, d
+assert payload["error_count"] == 1 and payload["warning_count"] == 0, payload
+PY
+
 OUTSIDE="$(mktemp -t mcc-outside-import.XXXXXX.mc)"
 trap 'rm -rf "$WORK"; rm -f "$OUTSIDE"' EXIT
 cat >"$OUTSIDE" <<'MC'
@@ -101,6 +124,28 @@ assert_contains "$boundary_output" "lib.mc:2:12: error: E_UNKNOWN_IDENTIFIER" "i
 assert_contains "$boundary_output" "  |     return nope;" "source-line snippet"
 assert_contains "$boundary_output" "  |            ^~~~" "caret underline"
 
+boundary_json=""
+if boundary_json=$("$MCC" check "$WORK/root_import.mc" --json); then
+    echo "FAIL: diagnostics-test — imported-file semantic error JSON unexpectedly succeeded"
+    exit 1
+fi
+JSON_OUT="$boundary_json" python3 - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["JSON_OUT"])
+d = payload["diagnostics"][0]
+assert d["severity"] == "error", d
+assert d["code"] == "E_UNKNOWN_IDENTIFIER", d
+assert "unknown identifier" in d["message"], d
+assert d["path"].endswith("lib.mc"), d
+assert d["line"] == 2 and d["column"] == 12, d
+assert d["span"]["length"] == 4, d
+assert d["source"]["text"] == "    return nope;", d
+assert d["source"]["highlight_length"] == 4, d
+assert d["source"]["caret"] == "^~~~", d
+PY
+
 cat >"$WORK/root_import_bom.mc" <<'MC'
 import "lib_bom.mc";
 
@@ -125,4 +170,13 @@ if ! "$MCC" check "$WORK/bom.mc" >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "PASS: diagnostics-test — import diagnostics, imported-source locations, and UTF-8 BOM handling are stable"
+clean_json="$("$MCC" check "$WORK/bom.mc" --json)"
+JSON_OUT="$clean_json" python3 - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["JSON_OUT"])
+assert payload == {"diagnostics": [], "error_count": 0, "warning_count": 0}, payload
+PY
+
+echo "PASS: diagnostics-test — text and JSON diagnostics, imported-source locations, and UTF-8 BOM handling are stable"

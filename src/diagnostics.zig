@@ -106,6 +106,61 @@ pub const Reporter = struct {
         }
     }
 
+    pub fn appendJson(self: *const Reporter, out: *std.ArrayList(u8)) !void {
+        var error_count: usize = 0;
+        var warning_count: usize = 0;
+        for (self.diagnostics.items) |diag| {
+            switch (diag.severity) {
+                .error_ => error_count += 1,
+                .warning => warning_count += 1,
+            }
+        }
+
+        try out.appendSlice(self.allocator, "{\"diagnostics\":[");
+        for (self.diagnostics.items, 0..) |diag, i| {
+            if (i > 0) try out.append(self.allocator, ',');
+            const severity = switch (diag.severity) {
+                .error_ => "error",
+                .warning => "warning",
+            };
+            const loc = self.location(diag.span);
+            const parsed = parseDiagnosticMessage(diag.message);
+
+            try out.appendSlice(self.allocator, "{\"severity\":");
+            try appendJsonString(out, self.allocator, severity);
+            try out.appendSlice(self.allocator, ",\"message\":");
+            try appendJsonString(out, self.allocator, parsed.message);
+            try out.appendSlice(self.allocator, ",\"path\":");
+            try appendJsonString(out, self.allocator, loc.path);
+            try out.appendSlice(self.allocator, ",\"file\":");
+            try appendJsonString(out, self.allocator, loc.path);
+            try out.print(self.allocator, ",\"line\":{d},\"column\":{d}", .{ loc.line, loc.column });
+            if (parsed.code) |code| {
+                try out.appendSlice(self.allocator, ",\"code\":");
+                try appendJsonString(out, self.allocator, code);
+            }
+            try out.print(self.allocator, ",\"span\":{{\"offset\":{d},\"length\":{d},\"line\":{d},\"column\":{d}}}", .{
+                diag.span.offset,
+                diag.span.len,
+                diag.span.line,
+                diag.span.column,
+            });
+            if (self.sourceLine(diag.span)) |line| {
+                try out.appendSlice(self.allocator, ",\"source\":{");
+                try out.appendSlice(self.allocator, "\"text\":");
+                try appendJsonString(out, self.allocator, line.text);
+                try out.print(self.allocator, ",\"column\":{d},\"highlight_length\":{d},\"caret\":", .{
+                    line.column,
+                    line.highlight_len,
+                });
+                try appendCaretJsonString(out, self.allocator, line.highlight_len);
+                try out.append(self.allocator, '}');
+            }
+            try out.append(self.allocator, '}');
+        }
+        try out.print(self.allocator, "],\"error_count\":{d},\"warning_count\":{d}}}\n", .{ error_count, warning_count });
+    }
+
     pub fn location(self: *const Reporter, span: Span) Location {
         const boundaries = self.file_boundaries orelse return .{ .path = self.path, .line = span.line, .column = span.column };
         if (boundaries.len == 0) return .{ .path = self.path, .line = span.line, .column = span.column };
@@ -150,6 +205,49 @@ pub const Reporter = struct {
         return .{ .text = line, .column = column, .highlight_len = highlight_len };
     }
 };
+
+const ParsedMessage = struct {
+    code: ?[]const u8,
+    message: []const u8,
+};
+
+fn parseDiagnosticMessage(message: []const u8) ParsedMessage {
+    if (!std.mem.startsWith(u8, message, "E_")) return .{ .code = null, .message = message };
+    const sep = std.mem.indexOfScalar(u8, message, ':') orelse return .{ .code = null, .message = message };
+    const code = message[0..sep];
+    for (code) |c| {
+        const ok = (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
+        if (!ok) return .{ .code = null, .message = message };
+    }
+    const rest = std.mem.trimStart(u8, message[sep + 1 ..], " \t");
+    return .{ .code = code, .message = rest };
+}
+
+fn appendJsonString(out: *std.ArrayList(u8), allocator: std.mem.Allocator, s: []const u8) !void {
+    try out.append(allocator, '"');
+    for (s) |c| {
+        switch (c) {
+            '"' => try out.appendSlice(allocator, "\\\""),
+            '\\' => try out.appendSlice(allocator, "\\\\"),
+            '\n' => try out.appendSlice(allocator, "\\n"),
+            '\r' => try out.appendSlice(allocator, "\\r"),
+            '\t' => try out.appendSlice(allocator, "\\t"),
+            0x08 => try out.appendSlice(allocator, "\\b"),
+            0x0c => try out.appendSlice(allocator, "\\f"),
+            0x00...0x07, 0x0b, 0x0e...0x1f => try out.print(allocator, "\\u{x:0>4}", .{c}),
+            else => try out.append(allocator, c),
+        }
+    }
+    try out.append(allocator, '"');
+}
+
+fn appendCaretJsonString(out: *std.ArrayList(u8), allocator: std.mem.Allocator, highlight_len: usize) !void {
+    try out.append(allocator, '"');
+    try out.append(allocator, '^');
+    var tail: usize = 1;
+    while (tail < highlight_len) : (tail += 1) try out.append(allocator, '~');
+    try out.append(allocator, '"');
+}
 
 test "Reporter errors fail closed when diagnostic allocation fails" {
     var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
@@ -199,4 +297,26 @@ test "Reporter omits snippets for blanked import lines" {
     defer reporter.deinit();
 
     try std.testing.expectEqual(@as(?SourceLine, null), reporter.sourceLine(.{ .offset = 0, .len = 6, .line = 1, .column = 1 }));
+}
+
+test "Reporter emits structured JSON diagnostics" {
+    const source = "fn f() -> u32 {\n    return missing;\n}\n";
+    var reporter = Reporter.init(std.testing.allocator, "json.mc", source);
+    defer reporter.deinit();
+
+    const offset = std.mem.indexOf(u8, source, "missing").?;
+    reporter.err(.{ .offset = offset, .len = "missing".len, .line = 2, .column = 12 }, "E_UNKNOWN_IDENTIFIER: unknown identifier `{s}`", .{"missing"});
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try reporter.appendJson(&out);
+
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"diagnostics\":[") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"severity\":\"error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"code\":\"E_UNKNOWN_IDENTIFIER\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"message\":\"unknown identifier `missing`\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"path\":\"json.mc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"line\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"column\":12") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"caret\":\"^~~~~~~\"") != null);
 }

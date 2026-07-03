@@ -7,6 +7,7 @@ pub const Options = struct {
     profile: lower_c.Profile = .kernel,
     checks: backend.Checks = .{},
     check_fmt: bool = false,
+    json_diagnostics: bool = false,
     structs_flag: ?[]const u8 = null,
     arch_flag: ?[]const u8 = null,
     platform_flag: ?[]const u8 = null,
@@ -28,6 +29,7 @@ pub const Options = struct {
         var saw_stub_asm_flag = false;
         var saw_std_dir_flag = false;
         var saw_remap_prefix_flag = false;
+        var saw_json_flag = false;
 
         while (args.next()) |flag| {
             if (std.mem.startsWith(u8, flag, "--arch=")) {
@@ -74,6 +76,9 @@ pub const Options = struct {
                 opts.checks.optimize = true;
             } else if (std.mem.eql(u8, flag, "--check")) {
                 opts.check_fmt = true;
+            } else if (std.mem.eql(u8, flag, "--json")) {
+                saw_json_flag = true;
+                opts.json_diagnostics = true;
             } else if (std.mem.eql(u8, flag, "--stub-asm")) {
                 saw_stub_asm_flag = true;
                 opts.stub_asm = true;
@@ -94,6 +99,7 @@ pub const Options = struct {
             .saw_stub_asm_flag = saw_stub_asm_flag,
             .saw_std_dir_flag = saw_std_dir_flag,
             .saw_remap_prefix_flag = saw_remap_prefix_flag,
+            .saw_json_flag = saw_json_flag,
         });
         return opts;
     }
@@ -176,6 +182,7 @@ pub const Options = struct {
         saw_stub_asm_flag: bool,
         saw_std_dir_flag: bool,
         saw_remap_prefix_flag: bool,
+        saw_json_flag: bool,
     };
 
     fn validate(self: Options, command: []const u8, seen: SeenFlags) !void {
@@ -192,6 +199,7 @@ pub const Options = struct {
         if (seen.saw_platform_flag and !accepts_checks) return error.InvalidArgs;
         if (seen.saw_std_dir_flag and !isSourceLoadingCommand(command)) return error.InvalidArgs;
         if (seen.saw_remap_prefix_flag and !is_c_artifact_command) return error.InvalidArgs;
+        if (seen.saw_json_flag and !std.mem.eql(u8, command, "check")) return error.InvalidArgs;
         if (self.checks.csan and (self.checks.ksan or self.checks.msan)) {
             std.debug.print("error: --checks=csan cannot be combined with ksan/msan (a single raw access wraps one shadow protocol)\n", .{});
             return error.InvalidArgs;

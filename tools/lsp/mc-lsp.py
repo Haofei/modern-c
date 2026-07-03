@@ -4,10 +4,10 @@
 Speaks the Language Server Protocol over stdio (Content-Length-framed JSON-RPC). The compiler
 is the single source of truth; the server only drives `mcc` subcommands and translates output:
 
-  - Diagnostics  — on didOpen/didSave runs `mcc check` immediately, and on didChange coalesces
-                   rapid edits before publishing diagnostics with the SAME codes the CLI reports
-                   (`E_...`), so an editor squiggle and a CI `mcc check` failure name the
-                   identical rule.
+  - Diagnostics  — on didOpen/didSave runs `mcc check --json` immediately, and on didChange
+                   coalesces rapid edits before publishing diagnostics with the SAME codes the
+                   CLI reports (`E_...`), so an editor squiggle and a CI `mcc check` failure name
+                   the identical rule.
   - Formatting   — `textDocument/formatting` runs `mcc fmt` (token-preserving, so it works even
                    while the buffer has type errors).
   - Document symbols — `textDocument/documentSymbol` reuses `mcc emit-map`'s per-declaration
@@ -200,17 +200,29 @@ def run_diagnostic_on_temp(path, text, cancel_handle):
         popen_kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
         if os.name == "posix":
             popen_kwargs["start_new_session"] = True
-        try:
-            proc = subprocess.Popen([MCC, "check", tmp], **popen_kwargs)
-        except FileNotFoundError:
-            log(f"compiler '{MCC}' not found")
-            return 127, "", "", tmp
-        if cancel_handle is not None:
-            cancel_handle.attach(proc)
-        out, err = proc.communicate()
-        if cancel_handle is not None and cancel_handle.is_canceled():
+        def run_check(args):
+            try:
+                proc = subprocess.Popen([MCC] + args, **popen_kwargs)
+            except FileNotFoundError:
+                log(f"compiler '{MCC}' not found")
+                return 127, "", ""
+            if cancel_handle is not None:
+                cancel_handle.attach(proc)
+            out, err = proc.communicate()
+            if cancel_handle is not None and cancel_handle.is_canceled():
+                return None
+            return proc.returncode, out, err
+
+        result = run_check(["check", tmp, "--json"])
+        if result is None:
             return None
-        return proc.returncode, out, err, tmp
+        rc, out, err = result
+        if rc != 127 and _json_diagnostics_payload(out) is None:
+            legacy = run_check(["check", tmp])
+            if legacy is None:
+                return None
+            rc, out, err = legacy
+        return rc, out, err, tmp
     finally:
         try:
             os.unlink(tmp)
@@ -219,6 +231,75 @@ def run_diagnostic_on_temp(path, text, cancel_handle):
 
 
 # ---- diagnostics ---------------------------------------------------------------------------
+def _json_diagnostics_payload(out):
+    try:
+        payload = json.loads(out)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if isinstance(payload, dict) and isinstance(payload.get("diagnostics"), list):
+        return payload
+    return None
+
+
+def _lsp_diagnostic_from_json(item, tmp, text_lines):
+    path = item.get("path") or item.get("file")
+    if path != tmp:
+        return None
+    try:
+        ln = int(item.get("line", 1))
+        col = int(item.get("column", 1))
+    except (TypeError, ValueError):
+        return None
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    span = item.get("span") if isinstance(item.get("span"), dict) else {}
+    length = source.get("highlight_length", span.get("length", 1))
+    try:
+        length = max(int(length), 1)
+    except (TypeError, ValueError):
+        length = 1
+    line_text = line_of(text_lines, ln)
+    start_char = byte_col_to_utf16(line_text, col)
+    end_char = byte_col_to_utf16(line_text, col + length)
+    if end_char <= start_char:
+        end_char = start_char + 1
+    severity = 2 if item.get("severity") == "warning" else 1
+    code = item.get("code")
+    msg = item.get("message") or ""
+    diag = {
+        "range": {
+            "start": {"line": max(ln - 1, 0), "character": start_char},
+            "end": {"line": max(ln - 1, 0), "character": end_char},
+        },
+        "severity": severity,
+        "source": "mcc",
+        "message": f"{code}: {msg}" if code else msg,
+    }
+    if code:
+        diag["code"] = code
+    return diag
+
+
+def _diagnostics_from_json(out, tmp, text_lines):
+    payload = _json_diagnostics_payload(out)
+    if payload is None:
+        return None
+    diags = []
+    seen = set()
+    for item in payload["diagnostics"]:
+        if not isinstance(item, dict):
+            continue
+        diag = _lsp_diagnostic_from_json(item, tmp, text_lines)
+        if diag is None:
+            continue
+        start = diag["range"]["start"]
+        key = (start["line"], start["character"], diag.get("code"), diag.get("message"))
+        if key in seen:
+            continue
+        seen.add(key)
+        diags.append(diag)
+    return diags
+
+
 def run_diagnostics(uri, text, cancel_handle=None):
     """Run `mcc check` on `text` and return diagnostics, or None when cancelled."""
     result = run_diagnostic_on_temp(uri_to_path(uri), text, cancel_handle)
@@ -228,6 +309,9 @@ def run_diagnostics(uri, text, cancel_handle=None):
     if rc == 127:
         return []
     text_lines = text.split("\n")
+    json_diags = _diagnostics_from_json(out, tmp, text_lines)
+    if json_diags is not None:
+        return json_diags
     diags = []
     seen = set()
     for line in (out + "\n" + err).splitlines():
