@@ -62,6 +62,7 @@ OUT_OF_SCOPE = {
     "soundness_guard_opaque_reject.mc": "opaque private-field reject fixture; positive impl cannot be chunk-isolated (phase=sema; owned by spec_tests.zig)",
     "soundness_orphan_impl_reject.mc": "orphan-impl reject fixture (phase=sema; owned by spec_tests.zig)",
     "traits_effect_sleep_in_atomic.mc": "effect-typed callees are EXPECT_ERROR-stripped, leaving dangling refs (phase=parse,sema; owned by spec_tests.zig)",
+    "traits_orphan_opaque_reject.mc": "pure compile_error fixture; residue cannot be chunk-isolated after EXPECT_ERROR stripping (phase=sema; owned by spec_tests.zig)",
 }
 
 
@@ -116,19 +117,24 @@ def run_llc_object(ir):
             os.unlink(obj_path)
 
 
-def check_module(mcc, label, source_path, source, extra_check=False):
+def check_module(mcc, label, source_path, source, extra_check=False, preserve_source_path=False):
     if extra_check:
         check = subprocess.run([mcc, "check", source_path], capture_output=True, text=True)
         if check.returncode != 0:
             return ("CHECK", first_error(check.stderr))
 
-    with tempfile.NamedTemporaryFile("w", suffix=".mc", delete=False) as tmp:
-        tmp.write(source)
-        tmp_path = tmp.name
+    tmp_path = None
+    emit_path = source_path
+    if not preserve_source_path:
+        with tempfile.NamedTemporaryFile("w", suffix=".mc", delete=False) as tmp:
+            tmp.write(source)
+            tmp_path = tmp.name
+        emit_path = tmp_path
     try:
-        emit = subprocess.run([mcc, "emit-llvm", tmp_path], capture_output=True, text=True)
+        emit = subprocess.run([mcc, "emit-llvm", emit_path], capture_output=True, text=True)
     finally:
-        os.unlink(tmp_path)
+        if tmp_path is not None:
+            os.unlink(tmp_path)
 
     if emit.returncode != 0:
         return ("EMIT", first_error(emit.stderr))
@@ -166,7 +172,7 @@ def sweep_one(mcc, path, is_spec):
     else:
         source = open(path).read()
         fn_count = 0
-        failure = check_module(mcc, name, path, source, extra_check=True)
+        failure = check_module(mcc, name, path, source, extra_check=True, preserve_source_path=True)
     return (name, fn_count, failure)
 
 

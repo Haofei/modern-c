@@ -68,6 +68,11 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("fuzz-failclosed"));
     m0_step.dependOn(ctx.cmd("fuzz-determinism"));
     m0_step.dependOn(ctx.cmd("fuzz-pipeline"));
+    m0_step.dependOn(ctx.cmd("fuzz-metamorphic"));
+    m0_step.dependOn(ctx.cmd("fuzz-optlevel"));
+    m0_step.dependOn(ctx.cmd("fuzz-floatbits"));
+    m0_step.dependOn(ctx.cmd("fuzz-corpus"));
+    m0_step.dependOn(ctx.cmd("fuzz-reference"));
     // LLVM backend gates: IR assembly, object lowering, spec sweep, broad
     // c_emit fixture sweeps, and host link/run smoke tests.
     m0_step.dependOn(ctx.cmd("llvm-test"));
@@ -831,10 +836,12 @@ pub fn register(ctx: *h.Ctx) void {
     // the compiler/spec unit suite, the emit-C sweep, the C-vs-LLVM differential
     // and move-resource checks, and the type-directed fuzz family (generation,
     // trap consistency, checker robustness, fail-closed soundness, emit
-    // determinism, and full-pipeline lowering). It deliberately omits the QEMU
-    // boot tests and the env-fragile gates (LLVM-IR sweeps needing `llvm-as`, the
-    // ASan/UBSan sanitize pass, and the riscv-assembler paths) — run `m0` for
-    // those. Pair it with `-j` oversubscription (e.g. `zig build fast -j28`).
+    // determinism, full-pipeline lowering, metamorphic and independent-reference
+    // semantics, opt-level stability, finite-float bit equality, and corpus
+    // replay). It deliberately omits the QEMU boot tests and the env-fragile
+    // gates (LLVM-IR sweeps needing `llvm-as`, the ASan/UBSan sanitize pass, and
+    // the riscv-assembler paths) — run `m0` for those. Pair it with `-j`
+    // oversubscription (e.g. `zig build fast -j28`).
     const fast_step = b.step("fast", "Inner-loop gate: host-only unit + spec-coverage tests, emit-C sweep, C/LLVM differential, and the fuzz family — no QEMU");
     fast_step.dependOn(ctx.cmd("test"));
     fast_step.dependOn(ctx.cmd("test-lint"));
@@ -853,6 +860,11 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("fuzz-failclosed"));
     fast_step.dependOn(ctx.cmd("fuzz-determinism"));
     fast_step.dependOn(ctx.cmd("fuzz-pipeline"));
+    fast_step.dependOn(ctx.cmd("fuzz-metamorphic"));
+    fast_step.dependOn(ctx.cmd("fuzz-optlevel"));
+    fast_step.dependOn(ctx.cmd("fuzz-floatbits"));
+    fast_step.dependOn(ctx.cmd("fuzz-corpus"));
+    fast_step.dependOn(ctx.cmd("fuzz-reference"));
 
     // Spec §L conformance-level tiers: subsets of the full m0 gate aligned to the
     // staged C-backend profiles, so a contributor can validate the level they touch.

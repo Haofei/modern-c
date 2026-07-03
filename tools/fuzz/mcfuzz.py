@@ -74,6 +74,11 @@ def _float_lit(rng):
     # a finite decimal literal (keep magnitudes modest so products stay finite)
     return "%d.%d" % (rng.randint(-1000, 1000), rng.randint(0, 999))
 
+def _small_float_lit(rng):
+    # float_bits observes exact bits, so keep generated arithmetic finite even
+    # after nested `+ - *` expressions.
+    return "%d.%d" % (rng.randint(-3, 3), rng.randint(0, 999))
+
 TYPES = {}
 def _t(name, kind, width, lit, fold):
     TYPES[name] = {"name": name, "kind": kind, "width": width, "lit": lit, "fold": fold}
@@ -156,6 +161,8 @@ class Gen:
 
     # ---- expressions ----
     def gen_leaf(self, tyname):
+        if self.float_bits and TYPES[tyname]["kind"] == "float":
+            return _small_float_lit(self.rng)
         live = self.env.get(tyname, [])
         if live and self.rng.random() < 0.6:
             return self.rng.choice(live)
@@ -210,8 +217,8 @@ class Gen:
             # false to everything but `!=`), unlike its bit pattern.
             if d >= 3 or self.rng.random() < 0.4:
                 return self.gen_leaf(tyname)
-            # `/` can yield inf/NaN; exclude it in float_bits mode so results stay finite and
-            # their exact bits are a stable cross-backend observable.
+            # `/` can yield inf/NaN; exclude it in float_bits mode, and pair it with
+            # small non-live leaves so exact-bit observations stay finite and stable.
             ops = ("+", "-", "*") if self.float_bits else ("+", "-", "*", "/")
             op = self.rng.choice(ops)
             return "(%s %s %s)" % (self.gen_value(tyname, d + 1), op, self.gen_value(tyname, d + 1))
@@ -1232,7 +1239,7 @@ def _differential_compare(env, src_path, work):
     drv, ts = os.path.join(work, "d.c"), os.path.join(work, "ts.c")
     open(drv, "w").write(DRIVER); open(ts, "w").write(TRAP_STUBS)
     link = env["link_flags"]
-    c_app, l_app = os.path.join(work, "c.app"), os.path.join(work, "l.app")
+    c_app, l_app = os.path.join(work, "c_exe"), os.path.join(work, "l_exe")
     if subprocess.run([env["clang"], *link, "-w", drv, c_obj, "-lm", "-o", c_app], capture_output=True).returncode != 0:
         return "C link failed"
     if subprocess.run([env["clang"], *link, "-w", drv, ts, l_obj, "-lm", "-o", l_app], capture_output=True).returncode != 0:
@@ -1408,7 +1415,7 @@ def _compile_run_c(env, src_path, work, tag, opt=None):
         return None
     drv = os.path.join(work, "d.c")
     open(drv, "w").write(DRIVER)
-    app = os.path.join(work, tag + ".app")
+    app = os.path.join(work, tag + "_exe")
     if subprocess.run([env["clang"], *env["link_flags"], "-w", drv, obj, "-lm", "-o", app], capture_output=True).returncode != 0:
         return None
     p = subprocess.run([app], capture_output=True)
