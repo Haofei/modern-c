@@ -1,0 +1,4 @@
+# Fixture-level skips allowed by tools/toolchain/diff-backend.sh.
+# Format: fixture<TAB>reason
+# A listed fixture may still compare successfully on a host/toolchain that supports it.
+scan-test	host-dependent C build gap observed on macOS/aarch64; any additional skipped fixture is a coverage regression.

@@ -8,10 +8,10 @@
 #   driver mode : the bespoke driver encodes pass/fail in its exit code; compare exit only
 #                 (its stdout may carry non-deterministic detail like addresses).
 #
-# The LLVM backend is an in-progress slice (spec annex M), so a fixture it cannot yet lower or
-# link is a SKIP — a running inventory of LLVM-backend gaps, not a failure. A fixture the C
-# backend cannot build on this host (riscv-only inline asm on x86) is likewise skipped.
-# Each row is independent, so the corpus fans out across cores (override with JOBS=N).
+# The LLVM backend is an in-progress slice (spec annex M), but fixture-level skips are
+# pinned below: an unexpected skipped fixture is a coverage regression and fails the gate.
+# A listed skip may disappear on a host/toolchain that can compare it. Each row is
+# independent, so the corpus fans out across cores (override with JOBS=N).
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
@@ -19,9 +19,26 @@ HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
-command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: diff-backend (clang not found)"; exit 0; }
-command -v "$LLC" >/dev/null 2>&1 || { echo "SKIP: diff-backend (llc not found)"; exit 0; }
 MANIFEST="$HERE/tools/lib/host-tests.tsv"
+EXPECTED_SKIPS="${DIFF_BACKEND_EXPECTED_SKIPS:-$HERE/tools/toolchain/diff-backend-expected-skips.tsv}"
+
+require_tool() {
+    local tool="$1"
+    if command -v "$tool" >/dev/null 2>&1; then return 0; fi
+    if [ -n "${MC_REQUIRE_TOOLS:-}" ] || [ -n "${CI:-}" ]; then
+        echo "FAIL: diff-backend ($tool not found)"
+        exit 1
+    fi
+    echo "SKIP: diff-backend ($tool not found)"
+    exit 0
+}
+
+require_tool "$CLANG"
+require_tool "$LLC"
+if [ ! -f "$EXPECTED_SKIPS" ]; then
+    echo "FAIL: diff-backend expected-skip file not found: $EXPECTED_SKIPS"
+    exit 1
+fi
 
 # The LLVM backend externalizes the trap helpers (the C backend inlines them); -no-pie matches
 # the existing LLVM host suite's link on Linux. (Scalar, not an array, so it survives the
@@ -73,8 +90,10 @@ C
     fi
 
     local c_out l_out c_rc l_rc
+    set +e
     c_out="$("$W/c.bin" 2>&1)"; c_rc=$?
     l_out="$("$W/l.bin" 2>&1)"; l_rc=$?
+    set -e
     if [ "$c_rc" != "$l_rc" ]; then
         echo "FAIL: diff-backend $name — exit codes differ: C=$c_rc LLVM=$l_rc"; return 1
     fi
@@ -96,8 +115,26 @@ out="$(printf '%s\0' "${names[@]}" | xargs -0 -P "$JOBS" -I{} bash -c 'diff_one 
 fails="$(printf '%s\n' "$out" | grep -c '^FAIL:' || true)"
 skips="$(printf '%s\n' "$out" | grep -c '^SKIP:' || true)"
 compared=$(( count - skips ))
+expected_skip_count="$(awk -F'\t' '/^#/ || NF == 0 { next } $1 != "" { n++ } END { print n + 0 }' "$EXPECTED_SKIPS")"
+min_compared=$(( count - expected_skip_count ))
 if [ "$fails" -gt 0 ]; then
     echo "FAIL: diff-backend — $fails backend divergence(s) across $count fixtures"
+    exit 1
+fi
+if [ "$compared" -lt "$min_compared" ]; then
+    echo "FAIL: diff-backend — only $compared comparable fixtures, minimum is $min_compared ($count total, $expected_skip_count expected skip(s))"
+    exit 1
+fi
+unexpected_skips="$(printf '%s\n' "$out" | awk '/^SKIP: diff-backend / { print $3 }' | while IFS= read -r skipped; do
+    [ -n "$skipped" ] || continue
+    if ! awk -F'\t' -v n="$skipped" 'BEGIN { found=0 } /^#/ { next } NF >= 1 && $1 == n { found=1 } END { exit(found ? 0 : 1) }' "$EXPECTED_SKIPS"; then
+        printf '%s\n' "$skipped"
+    fi
+done)"
+if [ -n "$unexpected_skips" ]; then
+    echo "FAIL: diff-backend — unexpected skipped fixture(s):"
+    printf '%s\n' "$unexpected_skips"
+    echo "Add a justified row to tools/toolchain/diff-backend-expected-skips.tsv only for intentional gaps."
     exit 1
 fi
 echo "PASS: diff-backend — C and LLVM agree on $compared comparable host fixtures ($skips skipped, $count total)"

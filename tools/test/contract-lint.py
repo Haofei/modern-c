@@ -18,6 +18,9 @@ back in. It checks:
   3. Every `tools/lib/host-tests.tsv` row points at a fixture file that exists, and
      an `entry`-mode row names an entry function in its `spec` column.
 
+  4. Every `tools/toolchain/diff-backend-expected-skips.tsv` row names an existing
+     host-test fixture exactly once and carries a reason.
+
 Usage: tools/test/contract-lint.py [<repo-root>]
 Exit status is non-zero if any rule is violated.
 """
@@ -128,13 +131,58 @@ def check_host_tests():
     return n, errors
 
 
+def load_host_test_names():
+    names = set()
+    tsv = os.path.join(ROOT, "tools/lib/host-tests.tsv")
+    if not os.path.exists(tsv):
+        return names
+    for line in open(tsv):
+        if line.startswith("#") or not line.strip():
+            continue
+        cols = line.rstrip("\n").split("\t")
+        if cols and cols[0]:
+            names.add(cols[0])
+    return names
+
+
+def check_diff_backend_expected_skips():
+    errors = []
+    n = 0
+    seen = set()
+    host_names = load_host_test_names()
+    path = os.path.join(ROOT, "tools/toolchain/diff-backend-expected-skips.tsv")
+    if not os.path.exists(path):
+        errors.append("diff-backend-expected-skips.tsv: missing expected-skip allowlist")
+        return 0, errors
+    for lineno, line in enumerate(open(path), 1):
+        if line.startswith("#") or not line.strip():
+            continue
+        cols = line.rstrip("\n").split("\t")
+        n += 1
+        if len(cols) != 2:
+            errors.append(f"diff-backend-expected-skips.tsv:{lineno}: expected '<fixture>\\t<reason>'")
+            continue
+        name, reason = cols[0].strip(), cols[1].strip()
+        if not name:
+            errors.append(f"diff-backend-expected-skips.tsv:{lineno}: empty fixture name")
+        elif name not in host_names:
+            errors.append(f"diff-backend-expected-skips.tsv:{lineno}: '{name}' is not in tools/lib/host-tests.tsv")
+        elif name in seen:
+            errors.append(f"diff-backend-expected-skips.tsv:{lineno}: duplicate fixture '{name}'")
+        seen.add(name)
+        if not reason:
+            errors.append(f"diff-backend-expected-skips.tsv:{lineno}: empty reason")
+    return n, errors
+
+
 def main():
     all_errors = []
     rn, re_ = check_reject_fixtures(); all_errors += re_
     on, oe = check_out_of_scope(); all_errors += oe
     hn, he = check_host_tests(); all_errors += he
+    sn, se = check_diff_backend_expected_skips(); all_errors += se
 
-    print(f"contract-lint: {rn} reject fixtures, {on} out-of-scope entries, {hn} host-test rows checked")
+    print(f"contract-lint: {rn} reject fixtures, {on} out-of-scope entries, {hn} host-test rows, {sn} diff-backend expected skips checked")
     if all_errors:
         print(f"FAIL: {len(all_errors)} contract violation(s):")
         for e in all_errors:
