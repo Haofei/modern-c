@@ -1,15 +1,24 @@
-# Self-Hosting MC
+# MC Subset Bootstrap Record and Full Self-Host Guide
 
-> Single consolidated record of the MC self-hosting effort. **Supersedes and merges** the former
+> Single consolidated record of the MC self-hosting stress-test and subset bootstrap proof, plus the
+> implementation guide for full self-hosting. **This is not a record of MC replacing the Zig compiler
+> in `src/` yet.** §6 defines the remaining work to replace `src/`. Supersedes and merges the former
 > `self-host-plan.md`, `self-host-arch.md`, `self-host-gaps.md`, `language-gap-fixes.md`, and
 > `self-host-perf.md` (merged 2026-07-02). Section numbers below (§1–§5) are the five former docs.
 
-## ⚠️ TRUE STATUS — read this first
+## ⚠️ STATUS TERMS — read this first
+
+| Term | Meaning | Current status |
+|---|---|---|
+| **True self-hosting / replacement** | An MC-written compiler replaces the ~67k-line Zig compiler in `src/` and passes the same whole-corpus gates. | **NOT achieved** |
+| **Subset bootstrap proof** | `mcc2`, written in MC, compiles the subset needed for `mcc2` itself + its std deps, emits C, and reaches a byte-identical fixpoint. | **Achieved** |
+| **Stress-test gap-fix program** | Use the subset compiler effort to find language/library/compiler gaps, then fix them in the real Zig compiler. | **Achieved for the logged gaps** |
 
 **The ideal goal (NOT yet achieved): a compiler written in MC that REPLACES the ~67,000-line Zig
-compiler in `src/`.** That has not happened and is a large, largely-unstarted effort.
+compiler in `src/`.** That has not happened and is a large, largely-unstarted effort. §6 is the
+guide for finishing that replacement.
 
-**What HAS been achieved** is a strictly narrower thing — a **subset self-host PROOF plus gap-driven
+**What HAS been achieved** is a strictly narrower thing — a **subset bootstrap proof plus gap-driven
 hardening of the real (Zig) compiler:**
 
 - `mcc2` (the MC-compiler-in-MC under `selfhost/`, **~8,900 lines of MC**) compiles **a SUBSET of MC** —
@@ -24,31 +33,31 @@ hardening of the real (Zig) compiler:**
   those are `src/*.zig` edits, e.g. G7/G8/G11–G30).
 - `mcc2` itself was **architecture-hardened** (§2, typed pipeline) and **review-hardened** (§3).
 
-**Scale gap (why "self-hosting" is not finished):** production compiler = **67,097 LoC Zig** vs. `mcc2`
+**Scale gap (why true self-hosting is not finished):** production compiler = **67,097 LoC Zig** vs. `mcc2`
 = **8,875 LoC MC** covering a subset. To make MC truly self-host you must reimplement in MC the full
 checker (all hardening/move/effect/trait passes), **both** backends' complete feature coverage, the
 optimizer/opt-equiv paths, the whole std/kernel language surface, and the driver — none of which `mcc2`
-does today. See **[§6 — Path to true self-hosting](#6-path-to-true-self-hosting)** for the honest gap.
+does today. See **[§6 — Full self-host implementation guide](#6-full-self-host-implementation-guide)**.
 
 ## Contents
 
-1. [Plan and execution](#1-plan-and-execution) — the stress-test goal, phases P0–P5, and how the SUBSET self-host proof was reached.
+1. [Plan and execution](#1-plan-and-execution) — the stress-test goal, phases P0–P5, and how the SUBSET bootstrap proof was reached.
 2. [Architecture hardening](#2-architecture-hardening) — the 7-phase refactor of `mcc2` to a typed pipeline (parse-once → typed facts → scope stack → impl/generic checking).
 3. [Gap ledger](#3-gap-ledger) — every language/library gap the effort surfaced (G1–G35) with current status.
 4. [Real-compiler language fixes](#4-real-compiler-language-fixes) — the `src/*.zig` fixes that closed most of those gaps.
 5. [Performance](#5-performance) — scale/throughput measurements.
-6. [Path to true self-hosting](#6-path-to-true-self-hosting) — the honest gap between the subset proof and replacing the 67k-line Zig compiler.
+6. [Full self-host implementation guide](#6-full-self-host-implementation-guide) — the acceptance criteria, harness, phases, and cutover plan for replacing the 67k-line Zig compiler.
 
 ---
 
 ## 1. Plan and execution
 
 
-> **STATUS (2026-07-02): SUBSET self-host PROOF achieved — `mcc2` compiles `mcc2` (byte-identical
+> **STATUS (2026-07-02): SUBSET BOOTSTRAP PROOF achieved — `mcc2` compiles `mcc2` (byte-identical
 > fixpoint), gated by `selfhost-bootstrap-test` in m0.** This is a SUBSET proof, NOT full self-hosting —
-> see the ⚠️ TRUE STATUS box at the top of this document and [§6](#6-path-to-true-self-hosting). The
-> sections below are the ORIGINAL PLAN + phase-by-phase EXECUTION LOG (historical); early "SELF-HOSTING
-> ACHIEVED" phrasing means "the subset fixpoint closed", not "the Zig compiler was replaced." 13+
+> see the ⚠️ STATUS TERMS box at the top of this document and [§6](#6-full-self-host-implementation-guide). The
+> sections below are the ORIGINAL PLAN + phase-by-phase EXECUTION LOG (historical); any early celebratory
+> wording means "the subset fixpoint closed", not "the Zig compiler was replaced." 13+
 > language/compiler gaps were found+fixed in the real compiler (§4); perf measured (§5).
 
 **Goal (the "why"):** bootstrap the MC compiler *in MC* to stress-test the language and
@@ -203,17 +212,17 @@ The gap and perf ledgers are the primary output. Scaffolds live in
 
 ---
 
-### 🎉 SUBSET SELF-HOST FIXPOINT ACHIEVED (2026-07-02)
-> NOTE: "achieved" here = the SUBSET fixpoint closed (mcc2 compiles mcc2). It does NOT mean MC replaced the
-> 67k-line Zig compiler — see the ⚠️ TRUE STATUS box up top and [§6](#6-path-to-true-self-hosting).
+### SUBSET BOOTSTRAP FIXPOINT ACHIEVED (2026-07-02)
+> NOTE: "achieved" here = the SUBSET fixpoint closed (`mcc2` compiles `mcc2`). It does NOT mean MC replaced the
+> 67k-line Zig compiler — see the ⚠️ STATUS TERMS box up top and [§6](#6-full-self-host-implementation-guide).
 
 **`mcc2` compiles `mcc2`.** All 5 core modules (lexer, parser, sema, emit_c, main) + all std deps compile
 through `mcc2` to clang-clean C; the emitted whole-program TU links into `mcc2′`; `mcc2′` compiles a program
 and its output is **byte-identical to `mcc2`'s (a true fixpoint)**. Permanently gated: `selfhost-bootstrap-test`
 (`605b8cc1`) in m0 — builds mcc2 → mcc2 self-emits mcc2′ (diagnostic-clean, 314 KB TU) → links → fixpoint
 byte-identical → mcc2′ compiles+runs a program. Per-module gates: selfhost-{lexself,parseself,semaself,emitself,
-mainself}-test. The subset self-hosts; the original stress-test goal ("what MC doesn't support, or is slow") is
-fully answered — 13 real language/compiler gaps found+fixed along the way (§4), perf
+mainself}-test. This is a subset bootstrap result; the original stress-test goal ("what MC doesn't support,
+or is slow") is fully answered — 13 real language/compiler gaps found+fixed along the way (§4), perf
 measured (mcc2 ~2 MB/s, faster than clang -O0 on its output).
 
 ### Execution log (post-gap-fix continuation, 2026-07-01)
@@ -603,7 +612,7 @@ All phases held the invariant: `selfhost-bootstrap-test` byte-identical fixpoint
 ## 3. Gap ledger
 
 
-Every MC language/library feature the self-hosting effort ([§1](#1-plan-and-execution))
+Every MC language/library feature the subset bootstrap/stress-test effort ([§1](#1-plan-and-execution))
 found missing, broken, or awkward — with a minimal repro. This is the "what MC does not support"
 output of the stress test.
 
@@ -681,7 +690,7 @@ imported `open enum`) + a contiguous-ordinal range check for the 13 bin-ops, sid
 exhaustiveness/`.raw()` tension entirely.
 
 **⚠️ SUPERSEDED SNAPSHOT (P5.0-era; kept for history). ALL of this list was subsequently implemented** —
-mcc2 self-hosts (gate `selfhost-bootstrap-test`); its parser handles keyword scalar types, `var`, structs/
+`mcc2` reaches the subset bootstrap fixpoint (gate `selfhost-bootstrap-test`); its parser handles keyword scalar types, `var`, structs/
 enums/generics/slices/`switch`/`unsafe`/`raw`/imports, etc. Read the paragraph below as a P5-start to-do, not
 current state.
 
@@ -713,10 +722,10 @@ This is exactly the class of latent codegen bug the stress test exists to surfac
 recursion — needed once imports put a caller textually before its callee.
 
 **⚠️ SUPERSEDED SNAPSHOT (this paragraph is a P5.4-era status, kept for history).** As of 2026-07-02
-**the SUBSET self-hosts**: all five `mcc2` modules + std deps compile through `mcc2` to a byte-identical fixpoint
+**the SUBSET bootstrap proof is closed**: all five `mcc2` modules + std deps compile through `mcc2` to a byte-identical fixpoint
 (gate `selfhost-bootstrap-test`). Every "recommended order" item below was subsequently done (generics
 over structs, `impl`/traits, `unsafe`/`raw`, value-optionals; `match`/`?` — some turned out already-present).
-See §1 "SELF-HOSTING ACHIEVED" and §4.
+See §1 "SUBSET BOOTSTRAP FIXPOINT ACHIEVED" and §4.
 
 **HONEST self-compile status (after P5.4):** the subset can compile **~0%** of `mcc2`'s OWN source. Import
 plumbing was necessary but not the bottleneck — mcc2's modules pervasively use features the subset still
@@ -762,8 +771,9 @@ enum resolution (Phase 2) and slice/ptr/dyn base classification (Phase 3) → im
 G28-value/G34/G35 into structural guarantees and closes G32. Two latent builtins surfaced by first-time
 generic-body checking (`forget_unchecked`, `mem.bytes_equal`) were taught to sema. Follow-up review passes
 then fully closed G28 (switch-arm case labels + assign now resolve via facts — see the G28 row) and G33
-(all decl kinds + cross-namespace + traits). Residual: the subset can't put a regular fn call in a generic
-body (monomorphizer limit), so Phase 6's catch is undefined idents/arity, not undefined calls.
+(all decl kinds + cross-namespace + traits). Regular helper calls inside generic bodies are now covered by
+`selfhost-generic-test`; Phase 6's catch is still intentionally limited to undefined idents/arity, not
+full concrete per-instantiation type checking.
 | G33 | post-P5 | selfhost-sema | **Duplicate top-level declaration accepted** — `sm_collect` overwrote the symbol-table entry, so a repeated top-level name type-checked (exit 0) and the emitter output duplicate C definitions. Found across four review passes (fn-only → same-kind struct/const/global/enum → cross-namespace → traits). | `fn f`×2 / `struct S`+`fn S` / `const X`+`fn X` / `enum Y`+`struct Y` / `trait T`×2 / `trait T`+`fn T` → dup C; `trait T { fn m; fn m; }` → dup vtable field | ~~medium~~ **FIXED (all kinds + cross-namespace + traits)** | every top-level registration in collect calls `sm_toplevel_taken(name)`, which checks ALL FIVE tables (`fns`/`structs`/`enums`/`traits`/`globals`); trait names now register in `s.traits`; a clash in either declaration order emits `duplicate_decl` (SmErr 17). Method names are also deduped WITHIN each trait. MC has one flat top-level namespace (G22), so this matches the language. |
 | G34 | post-P5 | selfhost-sema | **`if let` binding leaked past its block** — the payload binding was added to the fn-wide locals table and never removed, so a use *after* the `if`/`else` type-checked (exit 0) and emitted C referencing a variable out of its C block scope (invalid C). Found by review. Same for `if let ok(v)/err(e)`. | `if let y=o {} return y;` | ~~high~~ **FIXED** | Originally: a new `strmap_del` dropped the binding at the then-block's end. SUPERSEDED by arch Phase 4 — sema now uses a lexical SCOPE STACK (`sm_scope_mark`/`sm_scope_pop` around the then-block, `selfhost/sema.mc`), so the `if let` binding (and any block-local `let`) is out of scope after the block. `strmap_del` is no longer used by sema. |
 | G35 | post-P5 | selfhost-sema | **`ok(x)`/`err(x)` payload type unchecked** — the ctor yielded a LOOSE `result_` that unified with any target `Result<T,E>` without comparing the payload, so `return ok(true)` into `-> Result<u32,u32>` type-checked (exit 0). Found by review. | `ok(true)` into `Result<u32,u32>` | ~~medium~~ **FIXED** | `sm_check_result_ctor` checks a non-literal `ok`/`err` arg against the target's OK/ERR payload at `return` and typed `let`/`var` sites |
@@ -776,8 +786,8 @@ dispatch `d.vtbl->m(d.data, ...)`. Coercion `*mut T`→`*mut dyn Trait` at CALL 
 **⚠️ SUPERSEDED SNAPSHOT (P5.10-era status, kept for history) — ALL RESOLVED as of 2026-07-02.** Every
 "remaining blocker" below was subsequently closed: value optionals (P5.15), module-qualified calls + opaque
 address classes (P5.14/5.19), the std API incl. `StrHashMap` over struct values (P5.19), G32 impl-body
-mutation (P5.15); `match` was a non-gap. **the SUBSET self-hosts** — `mcc2` compiles all of selfhost/*.mc + std deps
-to a byte-identical fixpoint (gate `selfhost-bootstrap-test`). See §1 "SELF-HOSTING ACHIEVED".
+mutation (P5.15); `match` was a non-gap. **The SUBSET bootstrap proof is closed** — `mcc2` compiles all of selfhost/*.mc + std deps
+to a byte-identical fixpoint (gate `selfhost-bootstrap-test`). See §1 "SUBSET BOOTSTRAP FIXPOINT ACHIEVED".
 
 **REMAINING blockers to LITERAL `mcc2`-compiles-`mcc2`** (after 11 verticals, ~70–75% coverage): `?T`
 optionals (G11 — selfhost mostly avoids), `match` + payload binding, GENERAL module-qualified calls (`mod.fn`
@@ -826,7 +836,7 @@ fixing G12.
 
 Fixing the real MC compiler (`src/*.zig`) gaps that self-hosting surfaced (see
 [§3](#3-gap-ledger), G9–G32), so `mcc2` can be de-workaround-ed and the
-rest of self-hosting done idiomatically. **User directive: fix ALL of them, incl. the
+rest of the subset bootstrap work done idiomatically. **User directive: fix ALL of them, incl. the
 by-design/ergonomic ones.** Order: fix language → refactor selfhost → continue self-host work.
 
 **Gating per fix (MC rules):** reproduce first (probe); fix in sema + **both** backends (C +
@@ -885,7 +895,7 @@ except G29, which is intentionally Linux-hosted by design.
 **SUPERSEDED by later §1 execution:** P5.12+ and the dependency long-tail were completed for the subset.
 The current capstone is `selfhost-bootstrap-test`: all `selfhost/*.mc` plus std deps are compiled by
 `mcc2` into a byte-identical second-generation `mcc2′`. Full replacement of `src/` remains the separate
-true-self-hosting gap in §6.
+full-self-hosting guide in §6.
 
 ### Execution log
 - **2026-07-01 — Batch 1 landed** (G19 `6ef4534`, G23 `a3f5305`, G24 `5dbef9e`; fixture fix included).
@@ -925,7 +935,7 @@ true-self-hosting gap in §6.
   genuine mismatches still reject. Unlocks fully-generic `HashMap<K,V>` via `where K: Keyed` + UFCS
   (demo runs both backends). diff-backend 169; m0 green.
 
-### PROGRAM COMPLETE
+### GAP-FIX PROGRAM COMPLETE
 **13 real gaps fixed on both backends, each m0-green:** G11 (value optionals), G12 (slices + soundness hole),
 G14 (escape), G18 (generic unions), G19 (aggregate raw.*), G20 (block-scoped let), G22 (file-private names),
 G23 (call-compare codegen), G24 (reserved-word idents), G25 (closed-enum .raw() + exhaustiveness), G27
@@ -944,7 +954,7 @@ _(append per landed fix: gap, commit, what changed, backends, m0)_
 ## 5. Performance
 
 
-Scale/perf measurements from the self-hosting effort ([§1](#1-plan-and-execution)).
+Scale/perf measurements from the subset bootstrap/stress-test effort ([§1](#1-plan-and-execution)).
 This is the "or slow" output of the stress test. Every entry is a first-principle measurement
 (cycle CSR / wall clock), per MC rules.
 
@@ -983,47 +993,206 @@ _(append: phase, metric, workload, baseline, result, delta, commit)_
 
 ---
 
-## 6. Path to true self-hosting
+## 6. Full self-host implementation guide
 
-**Ideal goal:** an MC-written compiler that fully **replaces `src/` (67,097 LoC Zig)** — compiles the
-whole MC language (not a subset), passes the same gates the Zig compiler does (including emitting the
-kernel and full std), on both backends. **This is not done.** `mcc2` today is **8,875 LoC of MC** and
-compiles only a subset (itself + its std deps). The rest of this document is about that subset proof
-and the Zig-compiler gap fixes it drove — real work, but a fraction of the goal.
+This section is the project guide for **true self-hosting**: replacing the Zig compiler in `src/`
+with an MC-written compiler for the normal toolchain path. Sections §1–§5 are historical evidence:
+`mcc2` can host a serious compiler subset and the stress test hardened the real compiler. §6 is the
+remaining implementation contract.
 
-### What "true self-hosting" requires that `mcc2` does NOT have
+Until every acceptance criterion below passes, MC **does not self-host in the full sense**. A C-only
+bootstrap, a subset fixpoint, or an MC compiler that still depends on Zig for sema/backends is useful
+progress, but it must be named as a lesser milestone.
 
-The Zig compiler's surface, by subsystem, and mcc2's coverage:
+### 6.1 Definition of done
 
-| Subsystem (Zig `src/`) | mcc2 today | Gap to replace `src/` |
+True self-hosting is achieved only when all of these are true:
+
+| Area | Required end state | Required proof |
 |---|---|---|
-| Lexer / parser | subset (own grammar; incl. module `const`/`global` and opaque-struct parsing — `selfhost/parser.mc`) | full attrs, `async`/`await`, inline `asm`, full comptime blocks/const-eval, MMIO/overlay/packed decls, full unions, full opaque privacy semantics, effects syntax |
-| Sema / type-checker | subset name-res + a few checks | the FULL checker: move/borrow, definite-init, effects (irq/bounded/sleep), traits+bounds+coherence, hardening passes (UserPtr/Cap/Rights/Secret), exhaustiveness, const-eval |
-| Monomorphization | emit-time, scalar/1-param | a real pre-sema mono pass over nested/multi-param generics + trait bounds |
-| C backend | subset emit | full feature coverage (async state machines, atomics, u128, SIMD, inline asm, MMIO, every intrinsic) |
-| LLVM backend | **none** (mcc2 emits C only) | an entire second backend |
-| Optimizer / opt-equiv | none | the opt pipeline + its equivalence gates |
-| Driver / toolchain | a CLI that emits C to stdout | mcc-cc, profiles, import/loader parity, diagnostics parity |
-| Std / kernel language surface | hosted subset | everything the kernel + full std use |
+| Source of record | The production compiler implementation is written in MC, not Zig. Zig `src/*.zig` may remain as a seed/oracle/fallback during transition, but not as the production compiler. | The default compiler entry point used by local tests and CI is the MC implementation. |
+| Language coverage | The MC compiler accepts the whole MC language used by `std/`, `kernel/`, `examples/`, `demo/`, `user/`, and the test corpus, not just the `selfhost/` subset. | Parser, sema, lowering, and backend sweeps pass with the MC compiler under test. |
+| Checker coverage | The MC compiler implements the full checker: type resolution, const-eval, definite-init, move/borrow rules, effects, traits/bounds/coherence, hardening types, exhaustiveness, layout, and all current diagnostics. | Differential check gates match the Zig compiler on success/failure and diagnostic codes for `tests/spec/` plus widened negative fixtures. |
+| Backend coverage | Both production backends are implemented in MC: C and LLVM. | `diff-backend`, LLVM object/sweep/debug/opt gates, and C backend gates pass under the MC compiler. |
+| Driver/toolchain | `mcc-cc`, `mcc-llvm-cc`, profiles, imports, package/registry flows, source maps, diagnostics, and reproducible-build behavior work through the MC compiler. | Toolchain gates pass with the MC compiler selected. |
+| Whole corpus | The MC compiler builds the full hosted and kernel corpus, including QEMU tests. | `zig build m0` and `tools/m0-parallel.sh <jobs>` report `real_failures=0` with the MC compiler under test. |
+| Bootstrap fixpoint | The compiler can build itself twice and reach a stable artifact. | Stage0 -> Stage1 -> Stage2 bootstrap succeeds; Stage1 and Stage2 outputs are byte-identical or match an explicitly-normalized stable-output contract. |
 
-Rough scale: mcc2 covers on the order of **an eighth** of the Zig compiler's line count, and a smaller
-fraction of its *feature* surface (the hard parts — full sema + both backends + optimizer — are the
-least covered).
+**Non-negotiable naming rule:** do not write "self-hosting achieved" until the full definition of done
+passes. Before then, use precise names: "subset bootstrap", "C-only bootstrap", "parser parity",
+"sema parity", "backend parity", or "stage1/stage2 bootstrap".
 
-### Honest sequencing if pursued
+### 6.2 Bootstrap model
 
-True self-hosting is a **large, multi-phase, multi-session** project, roughly:
+Use explicit stage names in scripts and logs:
 
-1. **Freeze the target.** Decide "done" = mcc2′ (MC compiler) reproduces the Zig compiler's emitted
-   output on a defined corpus (start: std; stretch: kernel), both backends, byte-diffable.
-2. **Full sema in MC** — the biggest lift; port the checker subsystem-by-subsystem behind a differential
-   gate against the Zig checker's diagnostics.
-3. **Full C backend in MC** — feature-complete emit, gated by byte-diff vs the Zig C backend.
-4. **Second backend (LLVM) in MC** — or accept C-only self-host and keep LLVM in Zig (a lesser goal).
-5. **Optimizer + driver + full std/kernel surface.**
-6. **Cutover** — the Zig `src/` is retired only when the MC compiler passes m0 on both backends for the
-   whole corpus.
+| Stage | Builder | Output | Purpose |
+|---|---|---|---|
+| Stage0 | Current Zig compiler (`src/*.zig`) | First MC compiler binary | Seed the transition and provide an oracle. |
+| Stage1 | Stage0 MC compiler | Rebuilt MC compiler binary | Prove the MC compiler can compile its own source. |
+| Stage2 | Stage1 MC compiler | Rebuilt MC compiler binary | Prove the self-built compiler is stable. |
+| Cutover | Stage2 MC compiler | Default `mcc` toolchain | Replace the Zig compiler in normal workflows. |
 
-Until step 6, MC **does not self-host** in the full sense; it **proves it can** (this document) and its
-stress test has hardened the real compiler (§4). Treat §1–§5 as "subset proof + gap-fix record," and
-this §6 as the outstanding goal.
+The Zig compiler remains valid as a seed and comparison oracle until cutover. After cutover, it should
+be kept temporarily as an explicitly named fallback such as `mcc-zig`, while the MC compiler owns the
+default `mcc` path. Retire or archive the Zig implementation only after a fallback period with clean
+full-corpus runs.
+
+### 6.3 Existing assets to reuse
+
+Do not restart from scratch. Build on these assets:
+
+| Asset | Current role | How to use it for full self-host |
+|---|---|---|
+| `src/*.zig` | Production compiler and truth source for behavior. | Use as the executable oracle until each subsystem has MC parity. Port behavior in vertical slices, not by hand-waving around drift. |
+| `selfhost/*.mc` | `mcc2` subset compiler with lexer/parser/sema/C emit/main and byte-identical fixpoint gate. | Reuse architecture lessons and useful code, but do not treat it as production-complete. Promote only pieces that survive the full parity gates. |
+| `tools/toolchain/selfhost-*-test.sh` | Subset bootstrap and feature gates. | Keep them as fast inner-loop gates; add new full-selfhost gates beside them instead of weakening their contracts. |
+| `tools/toolchain/diff-backend.sh` and fuzz gates | C/LLVM agreement checks for the Zig compiler. | Re-run them with the MC compiler selected; add oracle comparison while both compilers exist. |
+| LLVM sweep/object/debug/opt scripts | Current LLVM backend coverage. | Make these pass under the MC LLVM backend before claiming full replacement. |
+| `tools/toolchain/mcc-cc.sh`, `mcc-llvm-cc.sh`, `mcc-pkg.sh`, `mcc-registry.sh` | Toolchain and packaging surface. | Audit each script so it can select the compiler under test via an explicit environment variable or argument. |
+| `build/tiers.zig` and `tools/m0-parallel.sh` | Full conformance gate list and parallel local runner. | Treat `m0` as the final acceptance gate. The parallel runner is for fast local confidence; `zig build m0` remains the serial truth gate. |
+| `std/`, `kernel/`, `examples/`, `demo/`, `user/`, `tests/` | Real language surface. | Expand the corpus in this order: hosted std subset -> full std -> examples/demo/user -> kernel/QEMU -> whole `m0`. |
+
+### 6.4 Harness required before large porting
+
+Build the harness first. Without it, the project becomes a large rewrite with no trustworthy proof.
+
+1. **Compiler selector.** Every gate that invokes `zig-out/bin/mcc` must accept an explicit compiler
+   path, for example `${MCC_UNDER_TEST:-zig-out/bin/mcc}`. Scripts may keep their current defaults, but
+   the full-selfhost run must be able to swap in a Stage1 or Stage2 compiler without editing scripts.
+2. **Oracle runner.** Add a differential runner such as `tools/toolchain/full-selfhost-diff.sh` that
+   runs the Zig compiler and MC compiler over the same corpus, then compares status, diagnostic code,
+   normalized diagnostics, emitted C, emitted LLVM IR, object behavior, and runtime output as appropriate.
+3. **Diagnostic normalization.** Normalize absolute paths, temp dirs, line-ending differences, generated
+   symbol suffixes, source-map paths, and backend tool noise before diffing. Do not normalize away error
+   codes, source spans, safety checks, ABI-relevant symbols, layout, or runtime behavior.
+4. **Stage script.** Add a bootstrap script such as `tools/toolchain/full-selfhost-stage.sh`:
+   Stage0 builds the MC compiler, Stage1 rebuilds it, Stage2 rebuilds it again, then the script compares
+   Stage1/Stage2 artifacts and runs a smoke corpus with Stage2.
+5. **Corpus manifest.** Add a checked-in manifest for the self-host corpus rather than discovering files
+   ad hoc. Track expected mode per file: parse-only, check-fail, emit-C, emit-LLVM, object, run, QEMU.
+6. **Ledger.** Add a full-selfhost ledger section or companion file that records phase, corpus size,
+   pass/fail counts, unsupported features, performance, and the commit that changed the result.
+
+The first meaningful milestone is not "ported lots of code"; it is a harness that can say which exact
+Zig behavior the MC compiler matches and where it still diverges.
+
+### 6.5 Work phases
+
+Each phase must land as vertical slices. A phase is done only when its new corpus slice passes with both
+the Zig oracle and the MC implementation under the same harness. If a slice needs a temporary limitation,
+record it as a named lesser milestone and keep the full-self-host status as NOT achieved.
+
+| Phase | Scope | Done when | Main gates |
+|---|---|---|---|
+| P0. Contract and harness | Compiler selector, oracle runner, stage script, corpus manifest, normalization rules, ledger. | A tiny corpus can be run through Zig-vs-MC comparison and Stage0/Stage1/Stage2 scripts with meaningful pass/fail output. | New full-selfhost harness gates plus existing `selfhost-bootstrap-test`. |
+| P1. Production architecture in MC | Promote the typed architecture needed for a full compiler: AST, typed facts/IR, scopes, module graph, diagnostics, allocator conventions, deterministic output. | The MC compiler can parse/check a small multi-file corpus using the same module/import model and diagnostic style as the Zig compiler. | Parser/sema oracle diff on initial corpus. |
+| P2. Full parser parity | Implement the complete grammar: attrs, imports/privacy, structs/enums/unions/packed/overlay/opaque, generics, traits/impls, effects syntax, comptime syntax, async/await, inline asm, MMIO forms, extern/export, literals, patterns, and all current statements/expressions. | Every parse-valid file in the manifest builds the same AST-relevant facts, and every parse-invalid fixture reports the same diagnostic code/span class. | Parse oracle diff over `tests/spec/`, `std/`, and selected `kernel/` files. |
+| P3. Full sema/checker parity | Type model, name resolution, module privacy, const-eval, layout, definite-init, moves/borrows, effects, traits/bounds/coherence, dyn trait rules, hardening types (`UserPtr`, `Cap`, `Rights`, `Secret`), exhaustiveness, escape checks, unsafe rules, and diagnostic parity. | The MC compiler accepts and rejects the same corpus as Zig with matching diagnostic codes, and no hardening pass is skipped or weakened. | Sema oracle diff, negative spec fixtures, hardening gates, move/fuzz gates. |
+| P4. Monomorphization and generic lowering | Deterministic generic instantiation for nested/multi-param generics, generic structs/unions/enums, trait bounds, impl methods, UFCS, dyn interactions, and cross-module instantiations. | Generic-heavy std/kernel fixtures compile with stable symbol names and no emit-time type guessing. | Generic corpus, `diff-backend`, std collection gates. |
+| P5. Typed lowering and optimizer inputs | MC-side HIR/MIR or equivalent typed lowering, layout facts, control-flow facts, safety-check facts, source maps, and optimizer metadata. | The lowerer produces verifier-clean IR/facts for all accepted corpus files and preserves safety checks before optimization. | HIR/MIR verifier, source-map tests, opt precondition tests. |
+| P6. Full C backend | Feature-complete C emission: async state machines, atomics, fences, checked arithmetic, u128, SIMD where supported, inline asm, MMIO/volatile, ABI/layout, intrinsics, panic/trap paths, runtime hooks, debug/source-map expectations. | Emitted C compiles warning-clean where current gates require it and matches Zig C backend behavior on object/run/QEMU corpus. | C emit sweeps, `mcc-cc-test`, runtime tests, kernel C gates, C side of `diff-backend`. |
+| P7. Full LLVM backend | Textual LLVM IR emission, object lowering, debug metadata, target ABI/layout, atomics, traps, async/runtime paths, kernel profile, and forbidden-assumption policy. | LLVM gates that pass under Zig also pass under MC, including object/run/QEMU coverage. | `llvm-test`, object/sweep/debug/opt/pkg/runtime/std/kernel/QEMU gates. |
+| P8. Optimizer and equivalence | Port optimizer decisions and opt-equiv behavior without changing the safety contract. | Optimized and unoptimized C/LLVM outputs remain behavior-equivalent and preserve required checks. | `opt-test`, `opt-equiv-test`, LLVM opt sweeps, fuzz equivalence. |
+| P9. Driver, packages, and tools | CLI compatibility, `emit-c`, `emit-llvm`, `emit-map`, profiles, `mcc-cc`, `mcc-llvm-cc`, package manifests, registry/lockfiles, editor diagnostics surface, reproducible builds. | Toolchain scripts and package flows work with the MC compiler selected. | Toolchain, package, registry, map, reproducible-build, and editor-facing diagnostic gates. |
+| P10. Corpus widening and cutover | Full std, examples, demo, userland, kernel, QEMU, fuzz, and complete `m0` under Stage2. | Stage2 is the default compiler for the full gate matrix and reports zero real failures. | `tools/m0-parallel.sh <jobs>` and final `zig build m0` with MC compiler selected. |
+
+### 6.6 Subsystem checklist
+
+Use this checklist when breaking phases into issues or commits. Each row needs an oracle test, a positive
+fixture, and a negative fixture where rejection behavior matters.
+
+| Subsystem | Must cover before cutover |
+|---|---|
+| Lexer/parser | All token forms, attributes, imports, visibility/privacy, type declarations, generics, traits/impls, `where`, effects syntax, async/await, inline asm, unsafe/raw, comptime syntax, patterns, and all literals. |
+| Module/import system | Relative paths, duplicate declarations, file-private names, import cycles/errors, module-qualified lookup, private symbol mangling, and deterministic cross-file order. |
+| Type model/layout | Scalars, pointers, slices, arrays, structs, packed bits, overlay unions, unions, enums/open enums, optionals/results, dyn traits, function pointers, alignment, ABI size, and target-specific layout. |
+| Const-eval | Constants, comptime expressions/blocks, enum raw values, array lengths, layout constants, compile-time errors, overflow behavior, and deterministic evaluation order. |
+| Sema and hardening | Type checking, coercions, moves/borrows, definite-init, escape checks, unsafe boundaries, effects, IRQ/sleep/bounded rules, user pointer validation, capabilities/rights/secrets, exhaustiveness, and diagnostic codes. |
+| Generics/traits | Multi-param and nested generics, trait bounds, impl coherence, method resolution, UFCS, generic containers, generic unions/enums, dyn coercions, vtables, and stable instantiated names. |
+| C backend | Every accepted feature, warning-clean C, runtime hooks, source maps, debug names, ABI/layout parity, volatile/MMIO, atomics/fences, checked operations, panic/trap, async lowering, and kernel profile constraints. |
+| LLVM backend | IR validity, object generation, debug metadata, ABI/layout parity, forbidden-assumption policy, atomics/fences, traps, runtime hooks, async/kernel lowering, and target-specific object behavior. |
+| Optimizer | Safety-preserving rewrites, bounds/div/null checks, alias/poison policy, opt-equiv behavior, deterministic output, and backend agreement after optimization. |
+| Driver/toolchain | CLI flags, profiles, import paths, object/link flows, package registry, lockfiles, reproducibility, diagnostics formatting, source-map output, and editor/LSP expectations. |
+| Performance | Compiler wall time, memory, output size, generated C/LLVM size, QEMU-heavy gate time, and comparison to Zig compiler baselines. |
+
+### 6.7 Cutover checklist
+
+Cutover starts only after P0–P9 are green on the widened corpus.
+
+1. Build Stage0 with the Zig compiler.
+2. Use Stage0 to build Stage1 from the MC compiler source.
+3. Use Stage1 to build Stage2 from the same source.
+4. Compare Stage1 and Stage2 artifacts using the documented normalization contract.
+5. Run the full oracle corpus with Stage2 selected as `MCC_UNDER_TEST`.
+6. Run `tools/m0-parallel.sh <jobs>` and require `real_failures=0`.
+7. Run the serial truth gate, `zig build m0`, with the MC compiler selected for compiler-produced
+   artifacts.
+8. Switch the default `mcc` toolchain entry point to Stage2/MC.
+9. Keep the Zig implementation available only as an explicitly named fallback/oracle during a fixed
+   stabilization window.
+10. After the fallback window, either archive the Zig compiler or keep it in a non-production oracle
+    location with docs that say it is no longer the default compiler.
+
+If any step fails, revert only the cutover wiring and keep the MC implementation behind the selector.
+Do not weaken `m0`, `diff-backend`, hardening checks, LLVM checks, or diagnostic gates to force cutover.
+
+### 6.8 Lesser milestones and status labels
+
+These are valid milestones, but none equals true self-hosting:
+
+| Milestone | Meaning | Status label to use |
+|---|---|---|
+| Subset bootstrap | `mcc2` compiles its own subset and reaches the existing byte-identical C fixpoint. | `Subset bootstrap achieved` |
+| C-only self-compile | An MC compiler compiles itself through C but has no LLVM backend parity. | `C-only bootstrap achieved; true self-hosting not achieved` |
+| Parser parity | MC parser matches Zig parser on the chosen corpus. | `Parser parity achieved` |
+| Sema parity | MC checker matches Zig checker on success/failure and diagnostic codes. | `Sema parity achieved` |
+| Backend parity | MC C and LLVM backends match behavior and gate coverage. | `Backend parity achieved` |
+| Stage2 stable | Stage1-built compiler rebuilds itself to stable output. | `Stage2 bootstrap stable` |
+| Full replacement | Stage2 MC compiler is default and full `m0` passes on both backends. | `True self-hosting achieved` |
+
+### 6.9 Work rules
+
+- Keep every slice vertically gated: parser + sema + lowering + backend + test for the smallest real
+  feature. Avoid landing large ungated ports.
+- Use the Zig compiler as oracle until the corresponding MC subsystem has better proof than the oracle.
+- Preserve the MC safety contract. Never bypass hardening, move/effect checks, or backend forbidden-
+  assumption rules to get a bootstrap milestone.
+- Keep C and LLVM honest. If a feature lands in one backend first, the status must say backend parity is
+  incomplete and the other backend must have a tracked blocker.
+- Prefer deterministic data structures and stable traversal order from the start. Bootstrap diffs become
+  painful if symbol order, import order, or diagnostics are nondeterministic.
+- Update this document or the full-selfhost ledger whenever a phase changes status, a corpus expands, or
+  a gap is discovered.
+- Use strict file staging for commits. Do not mix unrelated fixes with self-host phase work.
+- For local confidence use `tools/m0-parallel.sh <jobs>`; for final acceptance use serial `zig build m0`.
+
+### 6.10 Open risks
+
+| Risk | Why it matters | Mitigation |
+|---|---|---|
+| Scale | The target is the full 67k-line Zig compiler behavior, not the 8.9k-line subset. | Corpus-first phases; never claim replacement from line count alone. |
+| Diagnostic drift | Tooling and tests depend on stable error codes/spans. | Diff diagnostics early, normalize only incidental text, and gate negative fixtures. |
+| Sema complexity | Most safety value lives in checker passes, not parsing. | Port checker subsystems with hardening-focused negative tests before backend work hides bugs. |
+| LLVM effort | `mcc2` has no LLVM backend. | Treat LLVM as a first-class phase; a C-only bootstrap is explicitly a lesser milestone. |
+| Determinism | Self-host fixpoints require stable output. | Stable maps/order, deterministic symbol naming, checked normalization contract. |
+| Performance | A correct compiler that is too slow may make `m0` impractical. | Record wall/cycle/memory metrics by phase and compare to Zig baselines. |
+| Bootstrap trust | A compiler that only works when seeded by Zig may hide stage-specific behavior. | Require Stage0/Stage1/Stage2 and keep the Zig oracle until after cutover stabilization. |
+| Safety regression pressure | Bootstrap pressure can tempt weakening checks. | No hardening waiver counts toward true self-hosting; waivers must block cutover. |
+
+### 6.11 Immediate next actions
+
+1. Add the compiler-selector contract to the toolchain scripts: default to the current compiler, but allow
+   `MCC_UNDER_TEST` or an equivalent explicit argument everywhere a gate invokes `mcc`.
+2. Add a full-selfhost differential harness for a tiny manifest: one positive hosted file, one negative
+   diagnostic fixture, one emitted-C run, and one emitted-LLVM/object run.
+3. Add the Stage0/Stage1/Stage2 bootstrap script with stable artifact comparison, even if the first MC
+   compiler source is still the current `selfhost/` subset.
+4. Create the corpus manifest and grow it in this order: `selfhost/` -> hosted `std/` subset -> full
+   `std/` -> `examples/`/`demo/`/`user/` -> `kernel/` -> full `m0`.
+5. Start P1/P2 with parser and diagnostic parity, because every later phase depends on trustworthy
+   source locations, module paths, and diagnostics.
+
+The historical result in §1 is therefore useful but not sufficient: MC has proven a subset bootstrap.
+The full self-host project is complete only when this §6 guide reaches cutover and the MC compiler is
+the default compiler passing the full gate matrix.
