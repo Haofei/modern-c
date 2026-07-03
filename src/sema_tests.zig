@@ -1,6 +1,8 @@
 const std = @import("std");
 
+const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
+const monomorphize = @import("monomorphize.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
@@ -30,6 +32,100 @@ fn countDiagnosticCode(reporter: *const diagnostics.Reporter, code: []const u8) 
         if (std.mem.indexOf(u8, diagnostic.message, code) != null) count += 1;
     }
     return count;
+}
+
+fn parseWithAllocator(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !ast.Module {
+    var p = parser.Parser.init(source, reporter);
+    return p.parseModule(allocator);
+}
+
+test "allocation failure across parse monomorphize and sema never reports clean success" {
+    {
+        const source = "fn main() -> void {}\n";
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+        var arena = std.heap.ArenaAllocator.init(failing.allocator());
+        defer arena.deinit();
+
+        var reporter = diagnostics.Reporter.init(std.testing.allocator, "parse_oom.mc", source);
+        defer reporter.deinit();
+
+        const parsed = parseWithAllocator(source, arena.allocator(), &reporter);
+        if (parsed) |module| {
+            module.deinit(arena.allocator());
+            try std.testing.expect(reporter.has_errors);
+        } else |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+        }
+    }
+
+    {
+        const source =
+            \\fn make(comptime N: usize) -> [N]u8 {
+            \\    var scratch: [N]u8 = uninit;
+            \\    scratch[0] = 0;
+            \\    return scratch;
+            \\}
+            \\
+            \\fn trigger() -> u8 {
+            \\    let a: [1]u8 = make(1);
+            \\    return a[0];
+            \\}
+        ;
+
+        var parse_reporter = diagnostics.Reporter.init(std.testing.allocator, "mono_oom_pipeline.mc", source);
+        defer parse_reporter.deinit();
+        var parse_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer parse_arena.deinit();
+
+        const module = try parseWithAllocator(source, parse_arena.allocator(), &parse_reporter);
+        try std.testing.expect(!parse_reporter.has_errors);
+
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+        var mono_arena = std.heap.ArenaAllocator.init(failing.allocator());
+        defer mono_arena.deinit();
+
+        var reporter = diagnostics.Reporter.init(std.testing.allocator, "mono_oom_pipeline.mc", source);
+        defer reporter.deinit();
+
+        const specialized = monomorphize.transformReport(mono_arena.allocator(), module, &reporter);
+        if (specialized) |_| {
+            try std.testing.expect(reporter.has_errors);
+        } else |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+        }
+    }
+
+    {
+        const source =
+            \\fn id(x: u32) -> u32 {
+            \\    return x;
+            \\}
+            \\
+            \\fn main() -> u32 {
+            \\    return id(1);
+            \\}
+        ;
+
+        var parse_reporter = diagnostics.Reporter.init(std.testing.allocator, "sema_oom.mc", source);
+        defer parse_reporter.deinit();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        const module = try parseWithAllocator(source, arena.allocator(), &parse_reporter);
+        try std.testing.expect(!parse_reporter.has_errors);
+        const specialized = try monomorphize.transformReport(arena.allocator(), module, &parse_reporter);
+        try std.testing.expect(!parse_reporter.has_errors);
+
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+        var reporter = diagnostics.Reporter.init(failing.allocator(), "sema_oom.mc", source);
+        defer reporter.deinit();
+
+        var checker = sema.Checker.init(&reporter);
+        checker.checkModule(specialized);
+
+        try std.testing.expect(reporter.has_errors);
+        try std.testing.expect(checker.oom);
+    }
 }
 
 test "rejects nested MMIO register field assignment" {

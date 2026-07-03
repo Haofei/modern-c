@@ -11,8 +11,17 @@ const diagnostics = @import("diagnostics.zig");
 // the old nested form — no observable change.
 const ConformanceSet = std.StringHashMap(void);
 
-const max_monomorphization_depth: usize = 128;
-const max_monomorphization_instances: usize = 4096;
+pub const default_max_monomorphization_depth: usize = 128;
+pub const default_max_monomorphization_instances: usize = 4096;
+
+pub const Limits = struct {
+    max_depth: usize = default_max_monomorphization_depth,
+    max_instances: usize = default_max_monomorphization_instances,
+};
+
+pub const Options = struct {
+    limits: Limits = .{},
+};
 
 // Build the combined conformance key into `buf` (or arena-allocate if it doesn't fit).
 // Names are identifiers, so the stack buffer covers every realistic case.
@@ -130,6 +139,7 @@ const Rewriter = struct {
     // surviving trait_decl/impl_trait still let sema run its other trait checks).
     conformance: *const ConformanceSet,
     reporter: ?*diagnostics.Reporter,
+    limits: Limits = .{},
     current_depth: usize = 0,
     limit_reported: bool = false,
     oom: bool = false,
@@ -140,6 +150,10 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
 }
 
 pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagnostics.Reporter) !ast.Module {
+    return transformReportOptions(arena, module, reporter, .{});
+}
+
+pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagnostics.Reporter, options: Options) !ast.Module {
     var type_generic = std.StringHashMap(TypeGenericInfo).init(arena);
     var const_fns = std.StringHashMap(ast.FnDecl).init(arena);
     var generic_structs = std.StringHashMap(ast.StructDecl).init(arena);
@@ -224,6 +238,7 @@ pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?
         .fn_names = &fn_names,
         .conformance = &conformance,
         .reporter = reporter,
+        .limits = options.limits,
     };
     const ctx = CloneCtx{ .arena = arena, .rewrite = &rewriter };
 
@@ -724,13 +739,13 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
 }
 
 fn admitInstance(rw: *Rewriter, span: ast.Span, depth: usize) bool {
-    if (depth > max_monomorphization_depth) {
-        reportMonomorphizationLimit(rw, span, "instantiation depth", depth, max_monomorphization_depth);
+    if (depth > rw.limits.max_depth) {
+        reportMonomorphizationLimit(rw, span, "instantiation depth", depth, rw.limits.max_depth);
         return false;
     }
     const total = rw.instances.count() + rw.struct_instances.count() + rw.union_instances.count();
-    if (total >= max_monomorphization_instances) {
-        reportMonomorphizationLimit(rw, span, "total specialization count", total + 1, max_monomorphization_instances);
+    if (total >= rw.limits.max_instances) {
+        reportMonomorphizationLimit(rw, span, "total specialization count", total + 1, rw.limits.max_instances);
         return false;
     }
     return true;
