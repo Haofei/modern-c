@@ -17,12 +17,13 @@ The development version is `0.7.0-dev`.
 Before tagging a release:
 
 1. Choose the release version and build with `zig build -Dversion=<version> install`.
-2. Run `zig build m0` in the pinned Linux container with no skips.
-3. Run `zig build fast` on every supported host tier.
-4. Generate Linux and macOS tarballs containing `bin/mcc`, `std/`, driver scripts,
+2. Run `zig build m0` on Ubuntu 24.04 with LLVM 18 (`MC_LLVM_MAJOR=18`) and no skips.
+3. Run `zig build m0` in the pinned Linux container with no skips.
+4. Run `zig build fast` on every supported host tier.
+5. Generate Linux and macOS tarballs containing `bin/mcc`, `std/`, driver scripts,
    `README.md`, `LICENSE`, `SECURITY.md`, `STABILITY.md`, and `CHANGELOG.md`.
-5. Publish SHA256 checksums for every artifact.
-6. Tag the exact commit and record the tag in `CHANGELOG.md`.
+6. Publish SHA256 checksums for every artifact.
+7. Tag the exact commit and record the tag in `CHANGELOG.md`.
 
 ## Not Yet Implemented
 

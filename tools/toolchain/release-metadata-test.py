@@ -10,6 +10,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 EXPECTED_VERSION = "0.7.0-dev"
+EXPECTED_UBUNTU_RUNNER = "ubuntu-24.04"
+EXPECTED_LLVM_MAJOR = "18"
 
 
 def fail(message: str) -> None:
@@ -55,11 +57,27 @@ def main() -> None:
 
     for path in ("SECURITY.md", "STABILITY.md", "CHANGELOG.md", "docs/release-process.md"):
         require_contains(path, EXPECTED_VERSION)
+    require_contains("docs/release-process.md", f"LLVM {EXPECTED_LLVM_MAJOR}")
 
     if "root_module.addOptions(\"build_options\"" not in compiler_build:
         fail("build/compiler.zig does not expose build_options to src/main.zig")
 
-    print("PASS: release-metadata-test - version, Zig pin, and process docs are in sync")
+    ci = read(".github/workflows/ci.yml")
+    require_contains(".github/workflows/ci.yml", f"runs-on: {EXPECTED_UBUNTU_RUNNER}")
+    require_contains(".github/workflows/ci.yml", f'MC_LLVM_MAJOR: "{EXPECTED_LLVM_MAJOR}"')
+    require_contains(".github/workflows/ci.yml", f"clang-{EXPECTED_LLVM_MAJOR} lld-{EXPECTED_LLVM_MAJOR} llvm-{EXPECTED_LLVM_MAJOR}")
+    require_contains(".github/workflows/ci.yml", f"/usr/lib/llvm-{EXPECTED_LLVM_MAJOR}/bin")
+    if "ubuntu-latest" in ci:
+        fail(".github/workflows/ci.yml must not use ubuntu-latest for compiler qualification")
+
+    dockerfile = read("Dockerfile")
+    require_contains("Dockerfile", f"ARG LLVM_MAJOR={EXPECTED_LLVM_MAJOR}")
+    require_contains("Dockerfile", "ENV MC_LLVM_MAJOR=${LLVM_MAJOR}")
+    require_contains("Dockerfile", "clang-${LLVM_MAJOR} lld-${LLVM_MAJOR} llvm-${LLVM_MAJOR}")
+    if "sort -V | tail -n1" in dockerfile or "llvm-*" in dockerfile:
+        fail("Dockerfile must select the pinned LLVM major, not the highest installed one")
+
+    print("PASS: release-metadata-test - version, Zig/LLVM pins, and process docs are in sync")
 
 
 if __name__ == "__main__":

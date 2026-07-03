@@ -7,8 +7,11 @@ FROM ubuntu:24.04
 
 # Pinned to the version setup-zig fetches in CI.
 ARG ZIG_VERSION=0.16.0
+# Pinned to the major installed in .github/workflows/ci.yml.
+ARG LLVM_MAJOR=18
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV MC_LLVM_MAJOR=${LLVM_MAJOR}
 
 # Toolchain:
 #   clang        — the C backend's compile-check + the LLVM cross-compiler for riscv64/aarch64
@@ -22,22 +25,27 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
         ca-certificates wget xz-utils ; \
     apt-get install -y --no-install-recommends \
-        clang lld llvm \
+        clang-${LLVM_MAJOR} lld-${LLVM_MAJOR} llvm-${LLVM_MAJOR} \
         qemu-system-misc qemu-system-arm qemu-system-x86 \
         binutils python3 git bash make; \
     rm -rf /var/lib/apt/lists/*
 
-# The toolchain scripts call llc/opt/llvm-as/ld.lld by their unversioned names; Ubuntu ships
-# them versioned (e.g. llc-18). Symlink the highest installed version to an unversioned name
-# wherever one is missing, then assert the whole set resolves.
+# The toolchain scripts call clang/llc/opt/llvm-as/ld.lld by their unversioned names.
+# Symlink the pinned major to those names, then assert the whole set resolves.
 RUN set -eux; \
     for tool in clang clang++ llc opt llvm-as llvm-dis ld.lld lld wasm-ld; do \
-        if ! command -v "$tool" >/dev/null 2>&1; then \
-            cand="$(ls /usr/lib/llvm-*/bin/"$tool" 2>/dev/null | sort -V | tail -n1 || true)"; \
-            [ -n "$cand" ] && ln -sf "$cand" /usr/local/bin/"$tool" || true; \
+        cand=""; \
+        if [ -x "/usr/lib/llvm-${LLVM_MAJOR}/bin/${tool}" ]; then \
+            cand="/usr/lib/llvm-${LLVM_MAJOR}/bin/${tool}"; \
+        elif [ -x "/usr/bin/${tool}-${LLVM_MAJOR}" ]; then \
+            cand="/usr/bin/${tool}-${LLVM_MAJOR}"; \
         fi; \
+        [ -n "$cand" ] && ln -sf "$cand" /usr/local/bin/"$tool" || true; \
     done; \
-    command -v clang; command -v llc; command -v opt; command -v llvm-as; command -v ld.lld; command -v nm
+    command -v clang; command -v llc; command -v opt; command -v llvm-as; command -v ld.lld; command -v nm; \
+    clang --version | grep -E "version ${LLVM_MAJOR}\\."; \
+    llc --version | grep -E "version ${LLVM_MAJOR}\\."; \
+    opt --version | grep -E "version ${LLVM_MAJOR}\\."
 
 # Zig: fetch the exact release tarball for this build's architecture from ziglang.org's
 # index.json (naming-scheme- and arch-agnostic), so the same Dockerfile works on amd64/arm64.
