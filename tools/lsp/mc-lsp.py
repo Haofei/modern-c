@@ -29,6 +29,7 @@ The `MCC` environment variable (or --mcc) selects the compiler binary; default `
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -128,10 +129,102 @@ def run_on_temp(path, text, args):
             pass
 
 
+class DiagnosticRun:
+    """Cancellation handle for one in-flight `mcc check` process."""
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.proc = None
+        self.canceled = False
+
+    def is_canceled(self):
+        with self.lock:
+            return self.canceled
+
+    def attach(self, proc):
+        with self.lock:
+            self.proc = proc
+            canceled = self.canceled
+        if canceled:
+            self._terminate(proc)
+        return not canceled
+
+    def cancel(self):
+        with self.lock:
+            self.canceled = True
+            proc = self.proc
+        if proc is not None:
+            self._terminate(proc)
+
+    def _send_signal(self, proc, sig):
+        if proc.poll() is not None:
+            return
+        try:
+            if os.name == "posix":
+                os.killpg(proc.pid, sig)
+            elif sig == signal.SIGTERM:
+                proc.terminate()
+            else:
+                proc.kill()
+        except ProcessLookupError:
+            pass
+        except OSError:
+            pass
+
+    def _terminate(self, proc):
+        self._send_signal(proc, signal.SIGTERM)
+
+        def force_kill():
+            kill_signal = getattr(signal, "SIGKILL", None)
+            if kill_signal is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            else:
+                self._send_signal(proc, kill_signal)
+
+        killer = threading.Timer(1.0, force_kill)
+        killer.daemon = True
+        killer.start()
+
+
+def run_diagnostic_on_temp(path, text, cancel_handle):
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".mclsp_", suffix=".mc", dir=directory)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        if cancel_handle is not None and cancel_handle.is_canceled():
+            return None
+        popen_kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
+        if os.name == "posix":
+            popen_kwargs["start_new_session"] = True
+        try:
+            proc = subprocess.Popen([MCC, "check", tmp], **popen_kwargs)
+        except FileNotFoundError:
+            log(f"compiler '{MCC}' not found")
+            return 127, "", "", tmp
+        if cancel_handle is not None:
+            cancel_handle.attach(proc)
+        out, err = proc.communicate()
+        if cancel_handle is not None and cancel_handle.is_canceled():
+            return None
+        return proc.returncode, out, err, tmp
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 # ---- diagnostics ---------------------------------------------------------------------------
-def run_diagnostics(uri, text):
-    """Run `mcc check` on `text` and return a list of LSP Diagnostic objects."""
-    rc, out, err, tmp = run_on_temp(uri_to_path(uri), text, ["check"])
+def run_diagnostics(uri, text, cancel_handle=None):
+    """Run `mcc check` on `text` and return diagnostics, or None when cancelled."""
+    result = run_diagnostic_on_temp(uri_to_path(uri), text, cancel_handle)
+    if result is None:
+        return None
+    rc, out, err, tmp = result
     if rc == 127:
         return []
     text_lines = text.split("\n")
@@ -696,6 +789,7 @@ def main():
     docs = {}  # uri -> text
     doc_versions = {}  # uri -> internal monotonically increasing document generation
     diag_timers = {}  # uri -> threading.Timer
+    active_diag_runs = {}  # uri -> DiagnosticRun
     state_lock = threading.RLock()
     shutting_down = False
 
@@ -716,6 +810,9 @@ def main():
         timer = diag_timers.pop(uri, None)
         if timer is not None:
             timer.cancel()
+        run = active_diag_runs.pop(uri, None)
+        if run is not None:
+            run.cancel()
 
     def cancel_pending_diagnostics(uri):
         with state_lock:
@@ -726,6 +823,10 @@ def main():
             for timer in diag_timers.values():
                 timer.cancel()
             diag_timers.clear()
+            runs = list(active_diag_runs.values())
+            active_diag_runs.clear()
+        for run in runs:
+            run.cancel()
 
     def schedule_diagnostics(uri):
         with state_lock:
@@ -741,14 +842,19 @@ def main():
                 text = docs.get(uri)
                 if shutting_down or text is None or doc_versions.get(uri, 0) != expected_version:
                     return
+                diag_run = DiagnosticRun()
+                active_diag_runs[uri] = diag_run
 
-            diagnostics = run_diagnostics(uri, text)
+            diagnostics = run_diagnostics(uri, text, diag_run)
 
             with state_lock:
-                if shutting_down or docs.get(uri) is None or doc_versions.get(uri, 0) != expected_version:
-                    return
+                if active_diag_runs.get(uri) is diag_run:
+                    active_diag_runs.pop(uri, None)
                 if diag_timers.get(uri) is timer_ref["timer"]:
                     diag_timers.pop(uri, None)
+                if (diagnostics is None or shutting_down or docs.get(uri) is None
+                        or doc_versions.get(uri, 0) != expected_version):
+                    return
 
             publish_diagnostics(stdout, uri, diagnostics)
 

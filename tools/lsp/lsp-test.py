@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SERVER = os.path.join(HERE, "tools", "lsp", "mc-lsp.py")
@@ -22,6 +23,7 @@ BAD = (
 )
 EXPECTED_CODE = "E_NO_LANG_TRAP_EDGE"
 GOOD = "fn add_nums(a: u32, b: u32) -> u32 {\n    return a + b;\n}\n"
+CANCEL_BAD = "# cancel_probe\n" + BAD
 MESSY = "fn   f( )->u32{\n        return 7;\n}\n"  # misindented -> formatting changes it
 # A multi-byte string literal before an undefined-identifier error on the same line: the LSP
 # `character` must be the UTF-16 offset of `missing_id`, not its byte offset.
@@ -117,28 +119,63 @@ def check_count(path):
         return 0
 
 
+def wait_for_file(path, label, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if os.path.exists(path):
+            return
+        time.sleep(0.02)
+    raise SystemExit(f"FAIL: lsp-test — timed out waiting for {label}")
+
+
 def main():
     mcc = sys.argv[1] if len(sys.argv) > 1 else "mcc"
     mcc = os.path.abspath(mcc)
 
     workdir = tempfile.mkdtemp(prefix="lsp_test_")
     counter_path = os.path.join(workdir, "check.count")
+    slow_started_path = os.path.join(workdir, "slow-check.started")
+    slow_killed_path = os.path.join(workdir, "slow-check.killed")
     wrapper_path = os.path.join(workdir, "mcc-wrapper.py")
     with open(wrapper_path, "w") as f:
         f.write(
             "#!/usr/bin/env python3\n"
             "import os\n"
+            "import signal\n"
             "import subprocess\n"
             "import sys\n"
+            "import time\n"
+            "\n"
+            "def path_from_env(name):\n"
+            "    return os.environ.get(name, '')\n"
+            "\n"
+            "def write_marker(path, text='1'):\n"
+            "    if path:\n"
+            "        with open(path, 'w') as marker:\n"
+            "            marker.write(text)\n"
+            "\n"
             "if len(sys.argv) > 1 and sys.argv[1] == 'check':\n"
             "    with open(os.environ['MC_LSP_TEST_CHECK_COUNTER'], 'a') as count_file:\n"
             "        count_file.write('1\\n')\n"
+            "    with open(sys.argv[-1]) as source_file:\n"
+            "        source = source_file.read()\n"
+            "    if 'cancel_probe' in source:\n"
+            "        killed_path = path_from_env('MC_LSP_TEST_SLOW_KILLED')\n"
+            "        def on_term(signum, frame):\n"
+            "            write_marker(killed_path, str(os.getpid()))\n"
+            "            sys.exit(128 + signum)\n"
+            "        signal.signal(signal.SIGTERM, on_term)\n"
+            "        write_marker(path_from_env('MC_LSP_TEST_SLOW_STARTED'), str(os.getpid()))\n"
+            "        while True:\n"
+            "            time.sleep(0.05)\n"
             "proc = subprocess.run([os.environ['MC_LSP_TEST_REAL_MCC']] + sys.argv[1:])\n"
             "sys.exit(proc.returncode)\n"
         )
     os.chmod(wrapper_path, 0o755)
     env = dict(os.environ, MCC=wrapper_path, MC_LSP_DIAGNOSTIC_DEBOUNCE_MS="50",
-               MC_LSP_TEST_REAL_MCC=mcc, MC_LSP_TEST_CHECK_COUNTER=counter_path)
+               MC_LSP_TEST_REAL_MCC=mcc, MC_LSP_TEST_CHECK_COUNTER=counter_path,
+               MC_LSP_TEST_SLOW_STARTED=slow_started_path,
+               MC_LSP_TEST_SLOW_KILLED=slow_killed_path)
 
     bad_path = os.path.join(workdir, "bad.mc")
     good_path = os.path.join(workdir, "good.mc")
@@ -208,6 +245,22 @@ def main():
         burst_checks = check_count(counter_path) - checks_before_burst
         if burst_checks != 1:
             raise SystemExit(f"FAIL: lsp-test — didChange burst should run one check, ran {burst_checks}")
+
+        # A newer document generation must cancel an obsolete in-flight `mcc check`, not merely
+        # discard its eventual output.
+        cancel_path = os.path.join(workdir, "cancel.mc")
+        with open(cancel_path, "w") as f:
+            f.write(GOOD)
+        cancel_uri = "file://" + cancel_path
+        did_open(proc, cancel_uri, GOOD)
+        diagnostics_for(proc, cancel_uri)
+        did_change(proc, cancel_uri, 2, CANCEL_BAD)
+        wait_for_file(slow_started_path, "slow diagnostic check to start")
+        did_change(proc, cancel_uri, 3, GOOD)
+        wait_for_file(slow_killed_path, "stale diagnostic check to be killed")
+        cancel_diags = diagnostics_for(proc, cancel_uri)
+        if cancel_diags:
+            raise SystemExit(f"FAIL: lsp-test — cancelled stale check published diagnostics: {cancel_diags}")
 
         # --- document symbols (via `mcc emit-map`) -------------------------------------------
         sym_path = os.path.join(workdir, "sym.mc")
@@ -355,7 +408,8 @@ def main():
         if proc.poll() is None:
             proc.kill()
 
-    print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, debounced didChange, pull), "
+    print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, debounced didChange, "
+          "in-flight cancellation, pull), "
           "documentSymbol outline, `mcc fmt` formatting, UTF-16 positions, hover/definition/"
           "references/highlight/rename/semantic-tokens, completion, signature help, workspace "
           "symbols, and call hierarchy all verified")
