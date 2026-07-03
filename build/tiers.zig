@@ -339,6 +339,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("import-test"));
     // diagnostics-test locks down import-aware file/line rendering and clean CLI failures.
     m0_step.dependOn(ctx.cmd("diagnostics-test"));
+    // diagnostics-reference-test keeps the generated E_* reference in sync with compiler sources.
+    m0_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     // mono-test exercises comptime-parameter monomorphization (needs clang).
     m0_step.dependOn(ctx.cmd("mono-test"));
     // reflect-test validates the comptime layout model against the C ABI.
@@ -830,6 +832,7 @@ pub fn register(ctx: *h.Ctx) void {
     const fast_step = b.step("fast", "Inner-loop gate: host-only unit + spec-coverage tests, emit-C sweep, C/LLVM differential, and the fuzz family — no QEMU");
     fast_step.dependOn(ctx.cmd("test"));
     fast_step.dependOn(ctx.cmd("test-lint"));
+    fast_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     fast_step.dependOn(ctx.cmd("c-test"));
     fast_step.dependOn(ctx.cmd("sweep"));
     fast_step.dependOn(ctx.cmd("diff-backend"));
@@ -854,6 +857,7 @@ pub fn register(ctx: *h.Ctx) void {
     // not gated here.)
     const c0_step = b.step("c0", "Spec §L.1 MC-C0 baseline-language gates: fixtures + spec coverage, emit-C sweep, demo lowering");
     c0_step.dependOn(ctx.cmd("test-lint")); // contract lint guards the corpus; c1 inherits it
+    c0_step.dependOn(ctx.cmd("diagnostics-reference-test")); // generated diagnostic-code reference stays current
     c0_step.dependOn(ctx.cmd("test"));
     c0_step.dependOn(ctx.cmd("c-test"));
     c0_step.dependOn(ctx.cmd("sweep"));
