@@ -46,6 +46,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTestOpts(ctx, "diagnostics-reference-test", "Check docs/diagnostics.md covers every compiler E_* diagnostic code", &.{ "python3", "tools/toolchain/diagnostics-reference.py", "--check" }, .{ .install = false });
 
+    _ = h.addScriptTest(ctx, "mcc-cli-test", "Validate mcc help/version/usage exit behavior and stdout/stderr channels", &.{ "bash", "tools/toolchain/mcc-cli-test.sh", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "mono-test", "Compile a comptime-param type-generic module, link, and run the specialization", &.{ "bash", "tools/toolchain/mono-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "reflect-test", "Validate comptime sizeof/alignof folding against clang's C ABI", &.{ "bash", "tools/toolchain/reflect-test.sh", "zig-out/bin/mcc" });

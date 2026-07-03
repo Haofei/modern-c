@@ -41,8 +41,13 @@ const symbols = @import("symbols.zig");
 // type's private fields). Null when no module was loaded (e.g. `fmt`, which bypasses the loader).
 var combined_boundaries: ?[]const loader.FileBoundary = null;
 
+const version = "0.7.0-dev";
+
 const usage =
     \\usage:
+    \\  mcc --help
+    \\  mcc --version
+    \\  mcc help
     \\  mcc lex <file.mc>
     \\  mcc check <file.mc>
     \\  mcc run-trap <file.mc>
@@ -60,6 +65,7 @@ const usage =
     \\  mcc emit-c-struct <file.mc> --structs=A,B,C
     \\  mcc fmt <file.mc> [--check]
     \\  mcc symbols <file.mc>
+    \\  mcc list-tests <file.mc>
     \\
     \\build-safety profile (orthogonal to the --profile target axis):
     \\  --checks=all           SAFE build (DEFAULT): keep every runtime trap check.
@@ -83,6 +89,11 @@ const usage =
     \\                         concurrent access (one a write) to the same location without
     \\                         synchronization traps (CSAN-DETECTED). The synchronized
     \\                         mc_race_* accessors stay plain atomics and are clean.
+    \\
+    \\exit codes:
+    \\  0   success, --help, --version
+    \\  1   expected user-facing failure after diagnostics/usage
+    \\  >1  unexpected compiler/runtime failure
     \\
 ;
 
@@ -117,6 +128,16 @@ fn runMain(init: std.process.Init) !void {
 
     _ = args.next();
     const command = args.next() orelse return failUsage();
+    if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "help")) {
+        if (args.next() != null) return failUsage();
+        try writeStdout(usage);
+        return;
+    }
+    if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "version")) {
+        if (args.next() != null) return failUsage();
+        try writeStdout("mcc " ++ version ++ "\n");
+        return;
+    }
     const path = args.next() orelse return failUsage();
     const options = cli.Options.parse(command, &args) catch |err| switch (err) {
         error.InvalidArgs => return failUsage(),
