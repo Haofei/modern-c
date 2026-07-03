@@ -598,7 +598,7 @@ output of the stress test.
 | G9 | stdlib/API | `Allocator` trait exposes only `alloc`/`free` — **no `realloc`/`try_alloc`** (`std/alloc/alloc.mc:13`). `heap_try_grow_in_place` exists but is not in the trait. | std/alloc/alloc.mc:13 | medium | **decided** — growth is allocate-copy-free (no trait change); capacity doubling gives amortized O(1). |
 | G10 | toolchain | `mcc-cc.sh` compiles emitted C with `-Werror=unused-parameter`, so every trait-impl method must reference all params (an allocator ignoring `align`/`self`). Idiom: a cheap validating `unreachable` guard, as `arena_free_noop` does. | vec spike | low | workaround |
 | G7 | ergonomics | No labeled break/continue | spec §11 | low | ~~open~~ **FIXED (2026-07-02, `02a1d7da`).** Zig-style labeled loops `outer: while/for {…}` + `break :outer;` / `continue :outer;` (bare jumps unchanged = innermost). New `Loop.loop_label` AST field (separate from the for-binding); break/continue carry an optional target; new diagnostic `E_UNKNOWN_LOOP_LABEL`; both backends; spec §8.5; gate `labeled-break-run-test` in m0 (labeled≠bare proof). Labeled jumps inside an await-bearing async loop are rejected (documented limit). |
-| G8 | ergonomics | `?` needs matching return type (no error-set auto-coerce like Zig `try`) | spec | low (watch) | **open — DESIGN-GATED.** Verified 2026-07-02: MC has NO error sets (single-`E` `Result<T,E>`); coercing `?`'s error `E1`→`E2` across a function boundary needs a conversion mechanism (a `From`/`Into`-style trait or explicit map) that the spec does not define. A design decision, not a bug fix. |
+| G8 | ergonomics + **soundness** | `?` needs matching return type (no error-set auto-coerce like Zig `try`) | spec | ~~low (watch)~~ **was a SOUNDNESS HOLE** | ~~open~~ **FIXED (2026-07-02, `c0603cfa`).** Finding: cross-error-type `?` was NOT rejected — it was silently UNSOUND (C bit-copied `E1` into the `E2` slot; LLVM trapped on repr mismatch). Now `?` across differing error types requires an EXPLICIT user-written conversion, invoked automatically on the error path; absent one → new diagnostic `E_NO_ERROR_CONVERSION`. Mechanism: an `#[error_from]` free fn `#[error_from] fn(E1) -> E2` (a `From<E1>` trait is not expressible — impl blocks are keyed by `(trait,type)`, so one target can't carry two `From` impls; the attribute convention needs zero parser changes and stays explicit). Both backends; spec §21; gate `error-from-run-test` in m0 (proves the CONVERTED variant, not a reinterpret). `E1==E2` byte-identical. |
 
 ### Discovered during execution (Phase 0, 2026-07-01)
 
@@ -613,11 +613,12 @@ proper compiler fix (candidate Phase 0.6) before the P1–P5 port, rather than p
 > no fix needed): `match`, `?T`-not-needed-for-selfhost, and the broad "no Hash/Eq bounds" (bounds work via
 > `where`+UFCS — only Self-in-param, = G16, was a real gap).
 >
-> **Genuinely-still-open real-compiler gaps** (updated 2026-07-02): **G7** (labeled break/continue) and
-> **G8** (`?` error-set coercion) — both low ergonomics. The former partial residuals **G13** (struct-field
-> sub-slice) and **G23** (closed-enum `.raw()` value-context compare) and the **G15** workaround were FIXED
-> 2026-07-02 (`4ae2a25a` / `ba25302d` / `6ab8b667`, both backends m0-green). **G10**/**G26** retain usable
-> toolchain workarounds. The `G28`/`G31`–`G35` rows carry their own current status inline.
+> **Real-compiler gap status** (updated 2026-07-02): the last two "open" ergonomic gaps were implemented —
+> **G7** (labeled break/continue, `02a1d7da`) and **G8** (`?` error coercion — which turned out to be a
+> SOUNDNESS hole, `c0603cfa`). Together with the earlier wave (**G13** `4ae2a25a`, **G23** `ba25302d`,
+> **G15** `6ab8b667`), every actionable real-compiler gap this ledger tracks is now FIXED, both backends
+> m0-green. Only **G10**/**G26** remain as deliberate low toolchain workarounds (usable as-is). The
+> `G28`/`G31`–`G35` rows carry their own current status inline.
 
 | ID | Phase | Area | Gap | Repro / root cause | Severity | Status |
 |----|-------|------|-----|--------------------|----------|--------|
