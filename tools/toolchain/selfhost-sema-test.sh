@@ -34,7 +34,10 @@ extern uint32_t sema_case_parse_err_count(uint32_t c);
 /* SmErr ordinals — same declaration order as selfhost/sema.mc's SmErr enum. */
 enum {
     SE_NONE = 0, SE_UNKNOWN_NAME, SE_ARG_COUNT, SE_ARG_TYPE, SE_NOT_BOOL_COND,
-    SE_RET_MISMATCH, SE_ASSIGN_IMMUTABLE, SE_TYPE_MISMATCH
+    SE_RET_MISMATCH, SE_ASSIGN_IMMUTABLE, SE_TYPE_MISMATCH,
+    SE_UNKNOWN_FIELD, SE_STRUCT_TARGET, SE_UNKNOWN_VARIANT, SE_ENUM_TARGET,
+    SE_NONEXHAUSTIVE_SWITCH, SE_DUPLICATE_ARM, SE_SWITCH_SUBJECT,
+    SE_ARRAY_LENGTH, SE_ARRAY_TARGET, SE_DUPLICATE_DECL
 };
 
 static int fails = 0;
@@ -47,7 +50,7 @@ static void ne0(const char *what, uint32_t got) {
 
 int main(void) {
     /* All inputs are well-FORMED (parse cleanly); only their TYPES differ. */
-    for (uint32_t c = 0; c <= 6; c++) eq("parse clean", sema_case_parse_err_count(c), 0);
+    for (uint32_t c = 0; c <= 9; c++) eq("parse clean", sema_case_parse_err_count(c), 0);
 
     /* ---- case 0: a well-typed module (two fns, a matching call) -> zero semantic errors ---- */
     eq("case0 accept err count", sema_case_err_count(0), 0);
@@ -71,6 +74,15 @@ int main(void) {
     ne0("case6 assign-param errs",   sema_case_err_count(6));
     eq ("case6 assign-param code",   sema_case_first_err(6), SE_ASSIGN_IMMUTABLE);
 
+    ne0("case7 duplicate-decl errs", sema_case_err_count(7));
+    eq ("case7 duplicate-decl code", sema_case_first_err(7), SE_DUPLICATE_DECL);
+
+    ne0("case8 if-let-scope errs",   sema_case_err_count(8));
+    eq ("case8 if-let-scope code",   sema_case_first_err(8), SE_UNKNOWN_NAME);
+
+    ne0("case9 result-payload errs", sema_case_err_count(9));
+    eq ("case9 result-payload code", sema_case_first_err(9), SE_TYPE_MISMATCH);
+
     if (fails != 0) { printf("FAIL: selfhost-sema-test — %d assertion(s) failed\n", fails); return 1; }
     return 0;
 }
@@ -78,7 +90,7 @@ EOF
 
 "$CLANG" -std=c11 -Wall -Wextra -Werror "$WORK/driver.c" "$WORK/sema.o" -o "$WORK/prog"
 if "$WORK/prog"; then
-    echo "PASS: selfhost-sema-test — mcc2 sema (selfhost/sema.mc) type-checked the Phase-2 AST: a well-typed module passed clean, and it rejected unknown names, call arg-count/type mismatches, a non-bool if-condition, a return-type mismatch, and assign-to-param (first-error codes match SmErr / src/sema.zig subset)"
+    echo "PASS: selfhost-sema-test — mcc2 sema (selfhost/sema.mc) type-checked the Phase-2 AST: a well-typed module passed clean, and it rejected unknown names, call arg-count/type mismatches, a non-bool if-condition, a return-type mismatch, assign-to-param, duplicate top-level declarations, leaked if-let payload bindings, and mismatched Result constructor payloads (first-error codes match SmErr / src/sema.zig subset)"
     exit 0
 fi
 echo "FAIL: selfhost-sema-test — program returned non-zero"

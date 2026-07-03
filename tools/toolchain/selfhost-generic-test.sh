@@ -5,16 +5,19 @@
 #
 #   ACCEPT: `struct Box<T> { v: T }
 #            fn unbox(comptime T: type, b: Box<T>) -> T { return b.v; }
+#            fn add1(x: u32) -> u32 { return x + 1; }
+#            fn box_plus_one(comptime T: type, b: Box<T>) -> T { return add1(b.v); }
 #            export fn run(a: u32, c: u32) -> u32 {
 #              var bi: Box<u32> = .{ .v = a }; var bj: Box<u32> = .{ .v = c };
-#              return unbox(u32, bi) + unbox(u32, bj); }
+#              return unbox(u32, bi) + unbox(u32, bj) + box_plus_one(u32, bi); }
 #            export fn run64(a: u64) -> u64 { var b: Box<u64> = .{ .v = a }; return unbox(u64, b); }`
 #           — a generic struct + generic fn instantiated at TWO distinct scalar types (u32 and u64),
 #           with the two `Box<u32>` uses and two `unbox(u32, ..)` calls deduped to ONE copy each.
-#           Stage A dumps the emitted C (sema reports zero errors) and asserts it contains the
-#           monomorphic `Box_u32`, `unbox_u32`, `Box_u64`, and `unbox_u64` (and NOT the generic
-#           template names). Stage B clang-compiles it with a `main` and asserts run(2,3)==5 (2+3),
-#           run(10,20)==30, run64(7)==7.
+#           It also proves a monomorphic generic body can call a regular helper (`box_plus_one_u32`
+#           calls `add1`). Stage A dumps the emitted C (sema reports zero errors) and asserts it
+#           contains the monomorphic `Box_u32`, `unbox_u32`, `box_plus_one_u32`, `Box_u64`, and
+#           `unbox_u64` (and NOT the generic template names). Stage B clang-compiles it with a `main`
+#           and asserts run(2,3)==8 (2+3+3), run(10,20)==41, run64(7)==7.
 #   REJECT: a generic call with the WRONG arity (`unbox(u32)`, missing the value arg) — sema must
 #           report >= 1 error whose first code is `arg_count` (SmErr ordinal 2).
 #
@@ -77,9 +80,10 @@ cat "$WORK/out.c"
 
 # ----- assert the emitted C contains the monomorphic names (and not the raw template spellings) ---
 gfails=0
-for want in "Box_u32" "unbox_u32" "Box_u64" "unbox_u64"; do
+for want in "Box_u32" "unbox_u32" "box_plus_one_u32" "Box_u64" "unbox_u64"; do
     grep -q "$want" "$WORK/out.c" || { echo "FAIL: emitted C missing monomorphic '$want'"; gfails=$((gfails+1)); }
 done
+grep -q "return add1(b.v);" "$WORK/out.c" || { echo "FAIL: emitted C missing regular helper call from generic body"; gfails=$((gfails+1)); }
 # The generic type usage `Box<u32>` and the abstract-typed template `<T>` must NOT survive into C.
 grep -q "Box<" "$WORK/out.c" && { echo "FAIL: emitted C still contains a generic type usage 'Box<'"; gfails=$((gfails+1)); }
 # Exactly one Box_u32 typedef (dedup): count the 'typedef struct Box_u32' occurrences.
@@ -97,8 +101,8 @@ extern uint64_t run64(uint64_t a);
 
 int main(void) {
     int fails = 0;
-    if (run(2, 3) != 5)    { printf("FAIL: run(2,3)=%u want 5\n", run(2, 3)); fails++; }
-    if (run(10, 20) != 30) { printf("FAIL: run(10,20)=%u want 30\n", run(10, 20)); fails++; }
+    if (run(2, 3) != 8)    { printf("FAIL: run(2,3)=%u want 8\n", run(2, 3)); fails++; }
+    if (run(10, 20) != 41) { printf("FAIL: run(10,20)=%u want 41\n", run(10, 20)); fails++; }
     if (run64(7) != 7)     { printf("FAIL: run64(7)=%llu want 7\n", (unsigned long long)run64(7)); fails++; }
     if (fails != 0) { printf("FAIL: selfhost-generic-test — %d assertion(s) failed\n", fails); return 1; }
     return 0;
@@ -107,7 +111,7 @@ EOF
 
 "$CLANG" -std=c11 -Wall -Wextra -Werror "$WORK/out.c" "$WORK/main.c" -o "$WORK/prog"
 if "$WORK/prog"; then
-    echo "PASS: selfhost-generic-test — mcc2 (parser+sema+emit_c) MONOMORPHIZED a generic program: generic struct Box<T> + generic fn unbox(comptime T, ..) instantiated at u32 and u64 (Box<u32>/unbox(u32) deduped to one copy each) -> C that clang ran (run(2,3)==5, run(10,20)==30, run64(7)==7); and rejected a wrong-arity generic call (first-err arg_count)"
+    echo "PASS: selfhost-generic-test — mcc2 (parser+sema+emit_c) MONOMORPHIZED a generic program: generic struct Box<T> + generic fns unbox/box_plus_one instantiated at u32/u64 as needed (Box<u32>/unbox(u32) deduped to one copy each; box_plus_one_u32 calls regular helper add1) -> C that clang ran (run(2,3)==8, run(10,20)==41, run64(7)==7); and rejected a wrong-arity generic call (first-err arg_count)"
     exit 0
 fi
 echo "FAIL: selfhost-generic-test — program returned non-zero"

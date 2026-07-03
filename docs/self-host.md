@@ -588,10 +588,10 @@ All phases held the invariant: `selfhost-bootstrap-test` byte-identical fixpoint
   `mem.bytes_equal` (module-qualified builtin).
 
 **Findings / residuals:**
-- The mcc2 SUBSET does not support a regular (non-generic, non-intrinsic) function call inside a
-  generic body — the monomorphizer emits the template as garbage. Pre-existing, orthogonal to this
-  refactor; it limits what generic bodies can express (they use intrinsics + generic calls). So
-  Phase 6's practical catch is undefined **identifiers** / arity, not undefined regular calls.
+- Regular helper calls inside a generic body are supported and now gated by `selfhost-generic-test`
+  (`box_plus_one_u32` calls the non-generic `add1`). Phase 6's practical catch is still intentionally
+  limited to generic-template **identifier** / arity errors, not full concrete per-instantiation
+  type checking.
 - `.variant` in `switch`-arm case labels and `assign` lvalues still use the emit name-scan (no
   expr-node fact for those positions) — documented G28 residual, unchanged by this refactor.
 - Not yet done (future cleanup, not blocking): fully retire `e_local_type_node` once generic/impl
@@ -834,58 +834,61 @@ LLVM); add a spec/`c_emit` test + parity; full `m0` green both backends; front-e
 `llvm-trap-test` (kernel-emit validation), not just tests. Worktree agent → host-verify →
 cherry-pick → m0.
 
+**Current status (2026-07-02): COMPLETE.** The batching tables below are the original execution map,
+updated to current state: every actionable real-compiler gap in this section is fixed and m0-gated
+except G29, which is intentionally Linux-hosted by design.
+
 ### Batching (by disjoint files, to parallelize safely)
 
-#### Batch 1 — correctness bugs, file-disjoint (START)
+#### Batch 1 — correctness bugs, file-disjoint (DONE)
 | Gap | What | Primary files | Status |
 |-----|------|---------------|--------|
-| G23 | `<call>==x` fails in `return`/`let bool=` (works in `if`) → `UnsupportedCEmission` | `src/lower_c_flow.zig` (+llvm equiv) | pending |
-| G19 | `raw.load/store<T>` of aggregate T → `UnsupportedCEmission` (scalar-only) | `src/lower_c_type.zig`, `lower_c_call.zig` (+llvm) | pending |
-| G24 | reserved words (`ok/err/type/use/open/sat/wrap`) can't be locals → contextual keywords | `src/lexer.zig`, `src/parser.zig` | pending |
+| G23 | `<call>==x` fails in `return`/`let bool=` (works in `if`) → `UnsupportedCEmission` | `src/lower_c_flow.zig` (+llvm equiv) | **fixed + m0-gated** |
+| G19 | `raw.load/store<T>` of aggregate T → `UnsupportedCEmission` (scalar-only) | `src/lower_c_type.zig`, `lower_c_call.zig` (+llvm) | **fixed + m0-gated** |
+| G24 | reserved words (`ok/err/type/use/open/sat/wrap`) can't be locals → contextual keywords | `src/lexer.zig`, `src/parser.zig` | **fixed + m0-gated** |
 
-#### Batch 2 — the two big features
+#### Batch 2 — the two big features (DONE)
 | Gap | What | Files | Status |
 |-----|------|-------|--------|
-| G12 | slices: string-literal→`[]const u8` lowering; construct-from-parts; `[]mut`→`[]const`; **the `x as []const u8` soundness hole** (checker accepts, emits length-dropping C) | `sema_type.zig`, `lower_c_emitter.zig`, `lower_llvm*.zig` | pending |
-| G11 | value optionals `?V` (tagged `{present,value}` repr; `if let`/`==null`/`switch`) | `sema_type.zig`, `lower_c_*`, `lower_llvm*` | pending |
+| G12 | slices: string-literal→`[]const u8` lowering; `[]mut`→`[]const`; **the `x as []const u8` soundness hole** closed | `sema_type.zig`, `lower_c_emitter.zig`, `lower_llvm*.zig` | **fixed + m0-gated** |
+| G11 | value optionals `?V` (tagged `{present,value}` repr; `if let`/`==null`/`.?`; `switch` deferred) | `sema_type.zig`, `lower_c_*`, `lower_llvm*` | **fixed + m0-gated** |
 
-#### Batch 3 — ergonomic / design (user opted in)
+#### Batch 3 — ergonomic / design (DONE)
 | Gap | What | Files | Status |
 |-----|------|-------|--------|
-| G20 | block-scoped `let` (currently function-scoped) | `sema.zig` scopes | pending |
-| G22 | module-qualified imports / overloading (flat namespace today) | `loader.zig`, `sema.zig` | pending |
-| G25 | `.raw()` on closed enums OR exhaustiveness on `open enum` switches (resolve the tension) | `sema.zig`, `sema_type.zig` | pending |
-| G18 | generic tagged unions (`union Opt<T>`) | `parser.zig`, `sema.zig`, `monomorphize.zig` | pending |
-| G16 | `Hash`/`Eq` trait bounds for generic containers | `sema.zig`, `monomorphize.zig` | pending |
+| G20 | block-scoped `let` | `sema.zig` scopes | **fixed + m0-gated** |
+| G22 | file-private imported names no longer collide; call-site module qualification/overloading remains out of scope | `loader.zig`, `sema.zig`, `mangle_private.zig` | **fixed + m0-gated** |
+| G25 | `.raw()` on closed enums, preserving closed-enum exhaustiveness | `sema.zig`, `sema_type.zig` | **fixed + m0-gated** |
+| G18 | generic tagged unions (`union Opt<T>`) | `parser.zig`, `sema.zig`, `monomorphize.zig` | **fixed + m0-gated** |
+| G16 | `Self` in non-receiver trait param/return positions, unlocking Hash/Eq-style bounds | `sema.zig`, `monomorphize.zig` | **fixed + m0-gated** |
 
-#### Batch 4 — narrower
+#### Batch 4 — narrower (DONE)
 | Gap | What | Files | Status |
 |-----|------|-------|--------|
-| G14 | escape analysis over-rejects `return &heapptr.field` | `sema_move.zig`/escape | pending |
-| G27 | `.raw()` on a variant-path literal (`Enum.variant.raw()`) | `sema.zig` | pending |
-| G30 | `*mut T`→`*const T` param coercion | `sema_type.zig` | pending |
-| G29 | `hosted_io` `AT_FDCWD` Linux-hardcoded (macOS relative imports) | `std/hosted_io.mc` | pending |
+| G14 | escape analysis over-rejects `return &heapptr.field` | `sema_move.zig`/escape | **fixed + m0-gated** |
+| G27 | `.raw()` on a variant-path literal (`Enum.variant.raw()`) | `sema.zig` | **fixed + m0-gated** |
+| G30 | `*mut T`→`*const T` param coercion | `sema_type.zig` | **fixed + m0-gated** |
+| G29 | `hosted_io` `AT_FDCWD` Linux-hardcoded (macOS relative imports) | `std/hosted_io.mc` | **by design** — hosted target is Linux libc; use absolute paths on macOS or run Docker/Linux |
 
 ### Selfhost refactor (2026-07-01) — flagship de-workarounds DONE + m0-green
 - **R1** (`5bed952`) — byte-array keyword/scalar tables → string-literal `mem_eql(s,"fn")` across
   selfhost lexer/sema/emit/parser/main (**−98 LOC**); block-scoped-let cleanup (dropped `cf`/`ce`
   dodges). Proves G12 in real code.
 - **R-std** (`b99c5aed`, −11 LOC) — `mem_index_of → ?usize`, dropped `MemFound` + the hashmap `+1`
-  sentinel. Proves G11 (scalar value optionals) in real code. **Residual:** value optionals cover
-  scalar/address/bool/struct but NOT slices (`?[]const u8` still fails — G11 payload scope excludes
-  slices; `split_next` kept its struct); `.?` unwrap syntax not parse-supported (`if let`/`==null` only).
-  Both minor follow-ups (extend G11 to slice payloads).
+  sentinel. Proves G11 in real code. Later G11 follow-up covers `?[]const u8` and `.?` unwrap;
+  optional `switch` remains deferred.
 - **De-prefix (G22) + closed-enum-switches (G25): SKIPPED as low-value/high-churn** — the `lex_/p_/sm_/e_`
   prefixes aren't ugly workarounds (G22 already proven by g22-priv-name-test), and the if/else-on-kind
   form works fine; converting to closed enums is churn with regression risk. Available as future polish.
 
 ### Continue self-host (integration long-tail → literal mcc2-compiles-mcc2)
-- **P5.12 opaque struct** — in flight (unblocks `std/addr.mc`, whose `PAddr`/`VAddr` are `opaque struct`).
-- Then per real dep: `Result`/`if let` (hosted_io), `wrap`/`sat` arithmetic domains, `bitcast`, const
-  globals, `#[attr]`s → feed all `selfhost/*.mc` + `std` deps through `mcc2` and fix residual errors.
+**SUPERSEDED by later §1 execution:** P5.12+ and the dependency long-tail were completed for the subset.
+The current capstone is `selfhost-bootstrap-test`: all `selfhost/*.mc` plus std deps are compiled by
+`mcc2` into a byte-identical second-generation `mcc2′`. Full replacement of `src/` remains the separate
+true-self-hosting gap in §6.
 
 ### Execution log
-- **2026-07-01 — Batch 1 landed** (G19 `6ef4534`, G23 `a3f5305`, G24 `5dbef9e`; fixture fix `<pending>`).
+- **2026-07-01 — Batch 1 landed** (G19 `6ef4534`, G23 `a3f5305`, G24 `5dbef9e`; fixture fix included).
   - **G19** — aggregate `raw.load/store<T>` now lower (whole-object typed load/store) on C + LLVM; scalar/MMIO path untouched. `diff-backend`/`c-test` green.
   - **G23** — sequenced-comparison operand-type recovery in value contexts (`return`/`let bool=`) for call/`.raw()`/member operands (C backend; LLVM was already correct — types via sema, not AST heuristics). New `enum_raw_compare` fixture.
   - **G24** — `ok`/`err`/`type`/`use`/`open`/`sat`/`wrap` now usable as locals/params/fields (contextual keywords in the parser; lexer table unchanged so keyword semantics preserved). Caveat: `ok(..)`/`err(..)` calls still resolve to the Result ctor by lexeme.
@@ -907,7 +910,7 @@ cherry-pick → m0.
   private `advance`s become distinct symbols; `pub`/`export`/`extern` keep their exact ABI name. Two `pub`
   same-name, same-file private dups, and private-vs-pub collisions still `E_DUPLICATE_DECLARATION`.
   diff-backend 168, 0 skipped. Completes §30 (no call-site qualification / no overloading, per intent).
-- **G16 (Hash/Eq bounds) — NARROWED to a real small gap, fix in flight.** Probing showed `where K: Trait`
+- **G16 (Hash/Eq bounds) — NARROWED to a real small gap, then fixed.** Probing showed `where K: Trait`
   bounds + UFCS `K.method(x)` calls ALREADY work (traits_tier1); a self-only bounded method works. The ONLY
   gap: `Self` in a NON-receiver param/return position (`eq(self: *Self, other: *Self)`) → `E_TRAIT_SIGNATURE_MISMATCH`
   in conformance checking. Fix substitutes `Self` in all positions → unlocks fully-generic `HashMap<K,V>` via
@@ -920,16 +923,15 @@ cherry-pick → m0.
 - **2026-07-01 — G16 (Self-in-param trait signature) landed** (`d8909ed`). `sameTraitTypeSyntax` substitutes
   `Self` (bare/`*`/`*mut`/`*const`/`[]`/`?`/nested) in ALL param + return positions during conformance;
   genuine mismatches still reject. Unlocks fully-generic `HashMap<K,V>` via `where K: Keyed` + UFCS
-  (demo runs both backends). diff-backend 169. **m0 verifying (final gap-fix).**
+  (demo runs both backends). diff-backend 169; m0 green.
 
-### PROGRAM COMPLETE (pending final m0)
+### PROGRAM COMPLETE
 **13 real gaps fixed on both backends, each m0-green:** G11 (value optionals), G12 (slices + soundness hole),
 G14 (escape), G18 (generic unions), G19 (aggregate raw.*), G20 (block-scoped let), G22 (file-private names),
 G23 (call-compare codegen), G24 (reserved-word idents), G25 (closed-enum .raw() + exhaustiveness), G27
 (variant-path .raw()), G30 (*mut→*const coercion), G16 (Self-in-param). Plus 2 real codegen bugs found+fixed
-(double-paren `if`, and G19). G29 = by-design (Linux hosted target). NEXT: **refactor selfhost to drop the
-workarounds** (value optionals, `[]const u8` literals, block-scoped let, closed-enum switches, de-prefix
-file-private helpers, generic unions), keeping all 15 selfhost gates green; then continue the self-host work.
+(double-paren `if`, and G19). G29 = by-design (Linux hosted target). The follow-on selfhost cleanup and
+subset bootstrap are also complete; see §1 and §2 for the capstone evidence.
 
 **NON-GAPS discovered (overstated in the ledger, no fix needed):** `match` (selfhost uses 0 real `match` —
 `grep` counted prose); `?T`-not-needed-for-selfhost (0 uses); broad "no Hash/Eq bounds" (bounds work via
