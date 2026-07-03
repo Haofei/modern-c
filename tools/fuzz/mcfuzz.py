@@ -1318,21 +1318,94 @@ def _mutate(data, rng):
     return bytes(b)
 
 
+def _repeat_token(token, count):
+    return " ".join([token] * count)
+
+
+def _hostile_frontend_case(seed):
+    """Deterministic grammar-hostile inputs for front-end totality.
+
+    Byte mutation is good at malformed tokens, but poor at balanced structures that
+    drive recursive-descent parsers deep before they reject. Keep these synthetic
+    cases small enough for CI, but deep enough to prove depth guards and resync
+    paths run instead of relying on the host stack.
+    """
+    rng = random.Random((seed * 1103515245 + 12345) & 0xFFFFFFFF)
+    depth = 1024 + rng.randrange(128)
+    width = 512 + rng.randrange(128)
+    cases = []
+
+    cases.append((
+        "deep balanced parens",
+        ("fn hostile() -> u32 { return " + ("(" * depth) + "1" + (")" * depth) + "; }\n").encode(),
+    ))
+    cases.append((
+        "deep unary chain",
+        ("fn hostile() -> bool { return " + ("!" * depth) + "false; }\n").encode(),
+    ))
+    cases.append((
+        "deep pointer type",
+        ("fn hostile(p: " + ("*" * depth) + "u32) -> void { }\n").encode(),
+    ))
+    cases.append((
+        "deep nested blocks",
+        ("fn hostile() -> void { " + ("{ " * depth) + ("} " * depth) + "}\n").encode(),
+    ))
+    cases.append((
+        "deep else-if chain",
+        ("fn hostile() -> void { if true { } " + ("else if false { } " * depth) + "else { } }\n").encode(),
+    ))
+    cases.append((
+        "wide unterminated call",
+        ("fn hostile() -> u32 { return f(" + ", ".join(str(i) for i in range(width)) + "\n").encode(),
+    ))
+    cases.append((
+        "wide flat expression",
+        ("fn hostile() -> u32 { return " + " + ".join("1" for _ in range(width)) + "; }\n").encode(),
+    ))
+    cases.append((
+        "invalid bytes in declaration stream",
+        b"fn hostile() -> u32 {\n  let x: u32 = 1;\n}\n" + bytes([0, 0x80, 0xFF]) + b"\nfn after() -> void {}\n",
+    ))
+    cases.append((
+        "unbalanced delimiter storm",
+        ("fn hostile() -> void { " + _repeat_token("(", width) + _repeat_token("{", width) + "\n").encode(),
+    ))
+    return cases[seed % len(cases)]
+
+
+def _check_no_crash(env, path, label, timeout=15):
+    try:
+        r = subprocess.run([env["mcc"], "check", path], capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return "mcc check HANGS (>%ss) on %s" % (timeout, label)
+    if r.returncode < 0:  # killed by a signal: a crash, not a clean rejection
+        return "mcc check CRASHED (signal %d) on %s" % (-r.returncode, label)
+    err = r.stderr.decode("utf-8", "replace")
+    if "panic:" in err or "error return trace:" in err:
+        first = next((line for line in err.splitlines() if "panic:" in line or "error return trace:" in line), "")
+        return "mcc check leaked compiler failure on %s: %s" % (label, first)
+    return None
+
+
 def oracle_robust(env, seed, src_path, work):
     """Robustness: `mcc check` must never crash (signal) or hang on *any* input, even malformed.
     A clean accept or a clean diagnostic exit are both fine; a Zig panic / segfault / timeout is
-    a front-end robustness bug. (rss-testgen's hostile/parse_check driver.)"""
+    a front-end robustness bug. This combines byte-mutation with grammar-hostile amplifiers
+    that hit balanced nesting and wide/deep parser paths byte mutation almost never synthesizes.
+    (rss-testgen's hostile/parse_check driver.)"""
     rng = random.Random((seed * 2654435761) & 0xFFFFFFFF)
     mutated = _mutate(open(src_path, "rb").read(), rng)
     mpath = os.path.join(work, "m.mc")
     open(mpath, "wb").write(mutated)
-    try:
-        r = subprocess.run([env["mcc"], "check", mpath], capture_output=True, timeout=15)
-    except subprocess.TimeoutExpired:
-        return "mcc check HANGS (>15s) on mutated input"
-    if r.returncode < 0:  # killed by a signal: a crash, not a clean rejection
-        return "mcc check CRASHED (signal %d) on mutated input" % (-r.returncode)
-    return None
+    finding = _check_no_crash(env, mpath, "mutated input")
+    if finding is not None:
+        return finding
+
+    hlabel, hostile = _hostile_frontend_case(seed)
+    hpath = os.path.join(work, "hostile.mc")
+    open(hpath, "wb").write(hostile)
+    return _check_no_crash(env, hpath, hlabel)
 
 
 # Statements that are *definitely* ill-typed: the checker must reject every one. (Each is
@@ -1737,7 +1810,7 @@ def main():
     summary = {
         "differential": "C and LLVM agree",
         "sanitize": "emitted C is UBSan-clean",
-        "robust": "mcc check never crashed/hung on mutated input",
+        "robust": "mcc check never crashed/hung on mutated or grammar-hostile input",
         "failclosed": "mcc check rejected every ill-typed program (no soundness hole)",
         "determinism": "emit-c/emit-llvm are byte-deterministic",
         "pipeline": "every lowering/verify stage succeeds on check-accepted programs",
