@@ -731,8 +731,8 @@ export fn proc_supervisor_scan(t: *mut ProcTable, now: u64, max_restarts: u32) -
     // phase-1 given-up roots, in the same "a child of a given-up parent is given up" relation.
     //
     // head[p] = first child slot of parent p (MAX_PROCS = none); sib[c] = next sibling of child c.
-    var head: [MAX_PROCS]usize = uninit;
-    var sib: [MAX_PROCS]usize = uninit;
+    var head: [MAX_PROCS]usize = .{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    var sib: [MAX_PROCS]usize = .{ 0, 0, 0, 0, 0, 0, 0, 0 };
     var k: usize = 0;
     while k < MAX_PROCS {
         head[k] = MAX_PROCS; // empty child list
@@ -751,7 +751,7 @@ export fn proc_supervisor_scan(t: *mut ProcTable, now: u64, max_restarts: u32) -
     }
     // Worklist DFS. Seed with the slots given up in phase 1; a node is pushed exactly once (the
     // `given` bit guards re-entry), so the stack never exceeds MAX_PROCS entries.
-    var stack: [MAX_PROCS]usize = uninit;
+    var stack: [MAX_PROCS]usize = .{ 0, 0, 0, 0, 0, 0, 0, 0 };
     var top: usize = 0;
     var s0: usize = 0;
     while s0 < t.count {

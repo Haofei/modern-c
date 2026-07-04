@@ -94,7 +94,7 @@ export fn ipc_tag_dead() -> u32 {
 
 // The IPC tag the kernel sends to a process's scheduler service when its quantum expires; the
 // notification's `from` is the expired process, so the scheduler knows whom to reschedule.
-const TAG_QUANTUM: u32 = 0xDEAD + 1;
+pub const TAG_QUANTUM: u32 = 0xDEAD + 1;
 
 export fn ipc_tag_quantum() -> u32 {
     return TAG_QUANTUM;
@@ -293,7 +293,7 @@ fn ipc_send_ep_id(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, a
     }
 }
 
-export fn ipc_send_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, a2: u64) -> Result<bool, EpError> {
+pub fn ipc_send_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, a2: u64) -> Result<bool, EpError> {
     return ipc_send_ep_id(t, ep, tag, a0, a1, a2, 0);
 }
 
@@ -357,7 +357,7 @@ export fn ipc_notify(t: *mut ProcTable, dst_pid: u32, tag: u32) -> bool {
 
 // Endpoint-validated notify: rejects a stale endpoint with DeadEndpoint; ok(false) = dropped
 // because the mailbox was full.
-export fn ipc_notify_ep(t: *mut ProcTable, ep: Endpoint, tag: u32) -> Result<bool, EpError> {
+pub fn ipc_notify_ep(t: *mut ProcTable, ep: Endpoint, tag: u32) -> Result<bool, EpError> {
     switch endpoint_slot(t, ep) {
         ok(dst) => {
             let msg: Message = proc_make_msg(t, tag, 0, 0, 0, 0);
@@ -483,7 +483,7 @@ export fn ipc_call(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, 
 // up front (DeadEndpoint) rather than sending to whoever now occupies the slot. ipc_send_ep /
 // ipc_notify_ep / ipc_call_ep are the primary IPC API; the raw-pid forms remain for callers
 // that hold a pid directly (and self-validate via proc_is_live on every send).
-export fn ipc_call_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, a2: u64, out: *mut Message) -> Result<bool, EpError> {
+pub fn ipc_call_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, a2: u64, out: *mut Message) -> Result<bool, EpError> {
     // Re-validate the endpoint on *every* delivery attempt via ipc_send_ep, not just once up
     // front. The blocking raw-pid path captured a pid and could deliver to a new incarnation if
     // the slot died and was reused while we waited for mailbox room; here, if the endpoint dies

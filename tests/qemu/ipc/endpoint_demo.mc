@@ -11,8 +11,8 @@ fn worker() -> void {}
 // idle path is taken (instead of a busy spin) when a blocked process has nothing else to run.
 struct IdleCounter { n: u32 }
 global g_idle_counter: IdleCounter;
-fn count_idle(c: *mut IdleCounter) -> void {
-    c.n = c.n + 1;
+fn count_idle() -> void {
+    g_idle_counter.n = g_idle_counter.n + 1;
 }
 
 export fn endpoint_run() -> u32 {
@@ -137,7 +137,7 @@ export fn endpoint_run() -> u32 {
     // (rather than returning to busy-spin as a blocked current process). current is slot 1;
     // the bootstrap is a zombie and no other slot is runnable, so yield_or_idle must idle.
     g_idle_counter.n = 0;
-    proc_set_idle(&g_t, bind(&g_idle_counter, count_idle));
+    proc_set_idle(&g_t, count_idle);
     proc_yield_or_idle(&g_t);
     if g_idle_counter.n != 1 { pass = 0; }         // idled once instead of spinning
     proc_yield_or_idle(&g_t);

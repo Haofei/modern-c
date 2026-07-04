@@ -5,7 +5,7 @@
 // request type; servers switch on it exhaustively). The send/receive primitives live
 // in process.mc because they drive the scheduler (block/wake on rendezvous).
 
-struct Message {
+pub struct Message {
     from: u32,     // sender slot/pid — stamped by the kernel on delivery (unforgeable)
     from_gen: u32, // sender's generation when sent — so a message from a dead incarnation of a
                    // since-reused slot is not mistaken for the new occupant (endpoint identity)
@@ -18,6 +18,6 @@ struct Message {
 }
 
 // An empty message (a convenient zero value for `var reply: Message = message_zero();`).
-export fn message_zero() -> Message {
+pub fn message_zero() -> Message {
     return .{ .from = 0, .from_gen = 0, .call_id = 0, .tag = 0, .a0 = 0, .a1 = 0, .a2 = 0 };
 }

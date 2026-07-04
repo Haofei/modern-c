@@ -121,12 +121,12 @@ struct ProcTable {
     // The platform's CPU-idle action (e.g. `wfi`), invoked when a process blocks and nothing
     // else is runnable — so the kernel sleeps until an interrupt instead of busy-spinning as a
     // blocked "current" process. Defaults to a no-op (set by the platform via proc_set_idle).
-    idle_hook: closure() -> void,
+    idle_hook: fn() -> void,
     // Global resource-cleanup hook, invoked with (dead pid, dead gen) when a process dies, so
     // subsystems that hold per-owner resources (grant tables, service registries, …) can revoke
     // everything the dead process owned. The process table stays decoupled from those subsystems:
-    // whoever owns them registers a closure via proc_set_death_hook. Defaults to a no-op.
-    death_hook: closure(u32, u32) -> void,
+    // whoever owns them registers a function pointer via proc_set_death_hook. Defaults to a no-op.
+    death_hook: fn(u32, u32) -> void,
     // Monotonic source of correlation ids for synchronous calls (ipc_call / ipc_call_ep), so
     // each outstanding call is distinguishable and its reply can be matched. Never reused.
     next_call_id: u64,
@@ -140,15 +140,11 @@ struct ProcTable {
     metrics: Metrics,
 }
 
-// The no-op default idle action (a closure needs a captured env; this one is empty).
-struct IdleEnv { unused: u32 }
-global g_idle_env: IdleEnv;
-fn idle_noop(e: *mut IdleEnv) -> void {}
+// The no-op default idle action.
+fn idle_noop() -> void {}
 
-// The no-op default death hook (same empty-env pattern as idle).
-struct DeathEnv { unused: u32 }
-global g_death_env: DeathEnv;
-fn death_noop(e: *mut DeathEnv, pid: u32, gen: u32) -> void {}
+// The no-op default death hook.
+fn death_noop(pid: u32, gen: u32) -> void {}
 
 // Runnable state is DERIVED: a process runs only when it is Ready/Running *and* has no
 // outstanding block reasons. Nothing sets a "runnable" bit directly — proc_block/proc_unblock
@@ -261,8 +257,8 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
     t.count = 1;
     t.current = 0;
     t.next_call_id = 1; // 0 means "not a call"; real call ids start at 1
-    t.idle_hook = bind(&g_idle_env, idle_noop); // platform overrides with wfi via proc_set_idle
-    t.death_hook = bind(&g_death_env, death_noop); // subsystems override via proc_set_death_hook
+    t.idle_hook = idle_noop; // platform overrides with wfi via proc_set_idle
+    t.death_hook = death_noop; // subsystems override via proc_set_death_hook
     ledger_init(&t.ledger);   // every dimension starts unlimited (limit 0); callers opt in per dimension
     metrics_init(&t.metrics); // all hot-path counters start at zero
 }
@@ -282,20 +278,20 @@ export fn proc_metrics(t: *mut ProcTable) -> *mut Metrics {
 // Set the platform's CPU-idle action (e.g. a `wfi` wrapper). Called when the scheduler has
 // nothing runnable, so a blocked kernel sleeps instead of spinning. The wfi itself lives in
 // arch code (this module stays host-portable); the platform installs it at boot.
-export fn proc_set_idle(t: *mut ProcTable, hook: closure() -> void) -> void {
+export fn proc_set_idle(t: *mut ProcTable, hook: fn() -> void) -> void {
     t.idle_hook = hook;
 }
 
 // Run the platform idle action once (sleep until an interrupt, on a real machine).
 fn proc_idle(t: *mut ProcTable) -> void {
-    let hook: closure() -> void = t.idle_hook;
+    let hook: fn() -> void = t.idle_hook;
     hook();
 }
 
 // Install the global resource-cleanup hook, run with (pid, gen) on every process death.
 // A microkernel installs one closure that revokes the dead pid's grants and unregisters
 // its services, so a dead owner's resources can never outlive it. See proc_death_cleanup.
-export fn proc_set_death_hook(t: *mut ProcTable, hook: closure(u32, u32) -> void) -> void {
+export fn proc_set_death_hook(t: *mut ProcTable, hook: fn(u32, u32) -> void) -> void {
     t.death_hook = hook;
 }
 
@@ -372,7 +368,7 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
 // (t.current, the spawner) and the requested subset. A bit the parent lacks can never appear
 // in the child even if `*_subset` requests it (intersection is monotone-decreasing). Mask32
 // has no intersect op, so we AND the raw bits via mask32_raw and rebuild with mask32_from.
-export fn proc_spawn_attenuated(t: *mut ProcTable, stack_top: usize, entry: fn() -> void, allow_subset: Mask32, kcall_subset: Mask32) -> u32 {
+fn proc_spawn_attenuated(t: *mut ProcTable, stack_top: usize, entry: fn() -> void, allow_subset: Mask32, kcall_subset: Mask32) -> u32 {
     let pid: u32 = proc_spawn(t, stack_top, entry); // spawns with empty masks; parent = t.current
     let slot: usize = pid as usize;
     var parent_allow: Mask32 = t.procs[t.current].allow_mask;
@@ -388,11 +384,11 @@ export fn proc_spawn_attenuated(t: *mut ProcTable, stack_top: usize, entry: fn()
 
 // Read a process's IPC allow-mask / kernel-call mask (introspection, e.g. for tests and a
 // policy server). Returned by value — Mask32 is a single-field struct, trivially copyable.
-export fn proc_allow_mask(t: *mut ProcTable, slot: usize) -> Mask32 {
+fn proc_allow_mask(t: *mut ProcTable, slot: usize) -> Mask32 {
     return t.procs[slot].allow_mask;
 }
 
-export fn proc_kcall_mask(t: *mut ProcTable, slot: usize) -> Mask32 {
+fn proc_kcall_mask(t: *mut ProcTable, slot: usize) -> Mask32 {
     return t.procs[slot].kcall_mask;
 }
 
@@ -636,7 +632,7 @@ export fn proc_self(t: *mut ProcTable) -> u32 {
 }
 
 // The endpoint (slot + current generation) of process `pid`.
-export fn proc_endpoint(t: *mut ProcTable, pid: u32) -> Endpoint {
+fn proc_endpoint(t: *mut ProcTable, pid: u32) -> Endpoint {
     let s: usize = pid as usize;
     if s < t.count {
         return .{ .slot = s, .gen = t.procs[s].gen };
@@ -645,13 +641,13 @@ export fn proc_endpoint(t: *mut ProcTable, pid: u32) -> Endpoint {
 }
 
 // The current process's endpoint.
-export fn proc_self_endpoint(t: *mut ProcTable) -> Endpoint {
+fn proc_self_endpoint(t: *mut ProcTable) -> Endpoint {
     return proc_endpoint(t, proc_self(t));
 }
 
 // Validate an endpoint: returns its slot if it still refers to the same live incarnation,
 // else DeadEndpoint (the slot was freed, reused by a newer generation, or has died/exited).
-export fn endpoint_slot(t: *mut ProcTable, ep: Endpoint) -> Result<usize, EpError> {
+fn endpoint_slot(t: *mut ProcTable, ep: Endpoint) -> Result<usize, EpError> {
     if ep.slot >= t.count {
         return err(.DeadEndpoint);
     }
@@ -678,7 +674,7 @@ export fn endpoint_slot(t: *mut ProcTable, ep: Endpoint) -> Result<usize, EpErro
 // ISR wake path (`wq_wake_one` <- `async_complete`) calls. Pass `t.count` as the sentinel (no live
 // slot equals it) and check `< t.count`.
 #[irq_context]
-export fn endpoint_slot_or(t: *mut ProcTable, ep: Endpoint, sentinel: usize) -> usize {
+fn endpoint_slot_or(t: *mut ProcTable, ep: Endpoint, sentinel: usize) -> usize {
     if ep.slot >= t.count {
         return sentinel;
     }
@@ -699,7 +695,7 @@ export fn endpoint_slot_or(t: *mut ProcTable, ep: Endpoint, sentinel: usize) -> 
 }
 
 // True if the endpoint still refers to the same live process.
-export fn endpoint_live(t: *mut ProcTable, ep: Endpoint) -> bool {
+fn endpoint_live(t: *mut ProcTable, ep: Endpoint) -> bool {
     switch endpoint_slot(t, ep) {
         ok(s) => {
             return true;
@@ -719,7 +715,7 @@ fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
     // Revoke global resources the dead process owned (grants, registered services, …)
     // through the installed hook, before the slot is reused. Decoupled: the hook is
     // whatever the subsystem owner registered (a no-op if none).
-    let death_hook: closure(u32, u32) -> void = t.death_hook;
+    let death_hook: fn(u32, u32) -> void = t.death_hook;
     death_hook(dead_pid, dead_gen);
     // Drop the dead process's own pending IPC + signals + wait state, and close its open file
     // descriptors — a zombie holds only its exit status, never live resources, so a later

@@ -28,7 +28,7 @@ export fn proc_kill(t: *mut ProcTable, target_pid: u32, sig: u32) -> void {
 // Endpoint-validated signal delivery: rejects a stale endpoint (slot reused by a new
 // generation, or freed/dead) with DeadEndpoint before signaling, so a signal can never be
 // delivered to a different incarnation than the one the caller named.
-export fn proc_kill_ep(t: *mut ProcTable, ep: Endpoint, sig: u32) -> Result<bool, EpError> {
+pub fn proc_kill_ep(t: *mut ProcTable, ep: Endpoint, sig: u32) -> Result<bool, EpError> {
     switch endpoint_slot(t, ep) {
         ok(target) => {
             mask32_set(&t.procs[target].pending_sig, sig);

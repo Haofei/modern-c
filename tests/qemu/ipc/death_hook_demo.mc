@@ -20,9 +20,9 @@ global g_cleanup_env: CleanupEnv;
 
 // Revoke everything the dead pid owned. (Counts returned by the revoke calls are
 // ignored — the hook's contract is "leave nothing owned by `pid`".)
-fn on_death(e: *mut CleanupEnv, pid: u32, gen: u32) -> void {
-    let revoked: usize = grant_table_revoke_owner(e.grants, pid, gen);
-    let dropped: usize = registry_unregister_endpoint(e.reg, pid);
+fn on_death(pid: u32, gen: u32) -> void {
+    let revoked: usize = grant_table_revoke_owner(g_cleanup_env.grants, pid, gen);
+    let dropped: usize = registry_unregister_endpoint(g_cleanup_env.reg, pid);
 }
 
 fn worker() -> void {}
@@ -37,7 +37,7 @@ export fn death_hook_run() -> u32 {
 
     g_cleanup_env.grants = &g_grants;
     g_cleanup_env.reg = &g_reg;
-    proc_set_death_hook(&g_t, bind(&g_cleanup_env, on_death));
+    proc_set_death_hook(&g_t, on_death);
 
     // A spawned process gives the dying bootstrap (pid 0) somewhere to switch to.
     let w: u32 = proc_spawn(&g_t, 0x1000, worker);

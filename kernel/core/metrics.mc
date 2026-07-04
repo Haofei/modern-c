@@ -19,7 +19,7 @@
 
 // The set of things we count. Ordinals (0..METRIC_COUNT) index the counter array
 // and are also the on-the-wire `Event.kind` values, so the log is self-describing.
-enum MetricId {
+pub enum MetricId {
     ProcSpawn,     // a process was spawned
     ProcExit,      // a process exited
     IpcSend,       // an IPC message was sent
@@ -39,7 +39,7 @@ const EVLOG_CAP: usize = 64;          // event-log capacity (bounded; recording 
 // counter update built on it (metrics_add/metrics_inc) can meter an event from an ISR path
 // (e.g. proc_preempt_tick's quantum-expiry edge).
 #[irq_context]
-fn metric_ord(id: MetricId) -> usize {
+pub fn metric_ord(id: MetricId) -> usize {
     switch id {
         .ProcSpawn => { return 0; }
         .ProcExit => { return 1; }
@@ -52,12 +52,12 @@ fn metric_ord(id: MetricId) -> usize {
     }
 }
 
-struct Metrics {
+pub struct Metrics {
     counters: [METRIC_COUNT]u64,
 }
 
 // Zero every counter — start of a fresh measurement (or a replay target).
-export fn metrics_init(m: *mut Metrics) -> void {
+pub fn metrics_init(m: *mut Metrics) -> void {
     var i: usize = 0;
     while i < METRIC_COUNT {
         m.counters[i] = 0;
@@ -69,7 +69,7 @@ export fn metrics_init(m: *mut Metrics) -> void {
 // `#[irq_context]`: only a bounded array read/write plus saturating arithmetic — no blocking or
 // indirect calls — so a hot-path counter can be bumped directly from an ISR (see proc_preempt_tick).
 #[irq_context]
-export fn metrics_add(m: *mut Metrics, id: MetricId, n: u64) -> void {
+pub fn metrics_add(m: *mut Metrics, id: MetricId, n: u64) -> void {
     let i: usize = metric_ord(id);
     let cur: u64 = m.counters[i];
     // saturate: guard the add so `cur + n` can never overflow (and trap)
@@ -84,37 +84,37 @@ export fn metrics_add(m: *mut Metrics, id: MetricId, n: u64) -> void {
 // `#[irq_context]`: delegates to the irq-safe metrics_add, so an ISR edge (e.g. a scheduler
 // preemption) can meter itself with a single call.
 #[irq_context]
-export fn metrics_inc(m: *mut Metrics, id: MetricId) -> void {
+pub fn metrics_inc(m: *mut Metrics, id: MetricId) -> void {
     metrics_add(m, id, 1);
 }
 
 // Read a counter's current value.
-export fn metrics_get(m: *Metrics, id: MetricId) -> u64 {
+pub fn metrics_get(m: *Metrics, id: MetricId) -> u64 {
     let i: usize = metric_ord(id); // bind the ordinal first (a bare call inside the index emits an unused C pre-temp)
     return m.counters[i];
 }
 
 // One recorded event: `kind` is a MetricId ordinal; `a`/`b` are free payload slots
 // (e.g. a pid and a byte count) carried for the record, not used by counter replay.
-struct Event {
+pub struct Event {
     kind: u32,
     a: u64,
     b: u64,
 }
 
-struct EventLog {
+pub struct EventLog {
     items: [EVLOG_CAP]Event,
     count: usize,
 }
 
 // Empty the log.
-export fn evlog_init(l: *mut EventLog) -> void {
+pub fn evlog_init(l: *mut EventLog) -> void {
     l.count = 0;
 }
 
 // Append an event. Returns false (and records nothing) when the log is full — the
 // log is BOUNDED and never overflows or overwrites earlier records.
-export fn evlog_record(l: *mut EventLog, kind: u32, a: u64, b: u64) -> bool {
+pub fn evlog_record(l: *mut EventLog, kind: u32, a: u64, b: u64) -> bool {
     if l.count >= EVLOG_CAP {
         return false;
     }
@@ -127,12 +127,12 @@ export fn evlog_record(l: *mut EventLog, kind: u32, a: u64, b: u64) -> bool {
 }
 
 // Number of events recorded so far.
-export fn evlog_count(l: *EventLog) -> usize {
+pub fn evlog_count(l: *EventLog) -> usize {
     return l.count;
 }
 
 // The i-th recorded event (caller must ensure i < evlog_count).
-export fn evlog_get(l: *EventLog, i: usize) -> Event {
+pub fn evlog_get(l: *EventLog, i: usize) -> Event {
     return l.items[i];
 }
 
@@ -140,7 +140,7 @@ export fn evlog_get(l: *EventLog, i: usize) -> Event {
 // `kind` ordinal selects a counter, which is incremented by one. Unknown kinds
 // (outside the MetricId range) are skipped, so a log can never corrupt the
 // reconstructed state. Same log => byte-identical counters.
-export fn evlog_replay(l: *EventLog, m: *mut Metrics) -> void {
+pub fn evlog_replay(l: *EventLog, m: *mut Metrics) -> void {
     metrics_init(m);
     var i: usize = 0;
     let n: usize = l.count;
