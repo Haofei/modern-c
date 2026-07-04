@@ -94,7 +94,9 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("c-test"));
     m0_step.dependOn(ctx.cmd("sweep"));
     m0_step.dependOn(ctx.cmd("sanitize"));
+    // Coverage ratchets are part of the main qualification tier.
     m0_step.dependOn(ctx.cmd("lowering-coverage"));
+    m0_step.dependOn(ctx.cmd("compiler-coverage"));
     m0_step.dependOn(ctx.cmd("diff-backend"));
     m0_step.dependOn(ctx.cmd("diff-fuzz"));
     m0_step.dependOn(ctx.cmd("move-fuzz"));
