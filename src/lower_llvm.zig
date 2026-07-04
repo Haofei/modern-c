@@ -221,7 +221,7 @@ fn appendLlvmCheckedReport(allocator: std.mem.Allocator, module: ast.Module, out
     try out.print(allocator, "target datalayout = \"{s}\"\n", .{llvmTargetDataLayout(target_arch)});
     try out.print(allocator, "target triple = \"{s}\"\n", .{llvmTargetTriple(target_arch)});
     try out.appendSlice(allocator, "; MC LLVM IR backend v0\n");
-    try out.appendSlice(allocator, "; semantic source: verified MC MIR\n\n");
+    try out.appendSlice(allocator, "; semantic checks: sema + MIR policy/CFG verification\n\n");
     try emitTargetTypeDecls(allocator, out, target_arch);
     try emitTrapDecl(allocator, out, module);
 
