@@ -76,7 +76,12 @@ RULES: tuple[Rule, ...] = (
         "unit test source changes are covered by the compiler unit/spec test step",
     ),
     Rule(
-        ("build.zig", "build/*.zig", "tools/ci/pass-gates.py", "tools/m0-parallel.sh"),
+        ("tools/ci/pass-gates.py",),
+        ("ci-pass-gates-test",),
+        "CI PASS assertion helper changes need the focused CI anti-vacuity contract gate",
+    ),
+    Rule(
+        ("build.zig", "build/*.zig", "tools/m0-parallel.sh"),
         ("test", "ci-pass-gates-test", "fast"),
         "build graph changes need tier anti-drift checks; fast is the broad host-only confidence gate",
     ),
