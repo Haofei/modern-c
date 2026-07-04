@@ -3239,7 +3239,15 @@ pub const Checker = struct {
                 if (base_class == .user_ptr) {
                     self.errorCode(expr.span, "E_USER_PTR_DEREF", "cannot directly access a field through UserPtr; copy it in with copy_from_user first");
                 }
-                self.checkKnownStructField(expr.span, node.base.*, node.name.text, ctx);
+                if (base_class != .c_void_pointer and
+                    base_class != .user_ptr and
+                    !isMmioRegisterTarget(expr, ctx) and
+                    !isMaybeUninitOperationMember(node, ctx) and
+                    !isResidueOperationMember(node, ctx) and
+                    !isEnumRawOperationMember(node, ctx))
+                {
+                    self.checkKnownStructField(expr.span, node.base.*, node.name.text, ctx);
+                }
                 // Gap #1: reading ANY arm of an overlay union that has at least one `Secret<…>`
                 // arm is itself secret — the arms alias the same bytes, so a plain-arm read can
                 // observe secret bytes written through the secret arm. Classify the read secret
@@ -3286,7 +3294,11 @@ pub const Checker = struct {
             .member => |node| {
                 if (self.checkGenericTypeParamMemberCallee(node, ctx)) return;
                 if (isAtomicOperationMember(node, ctx)) return;
+                if (isMaybeUninitOperationMember(node, ctx)) return;
+                if (isResidueOperationName(node)) return;
+                if (isEnumRawOperationMember(node, ctx)) return;
                 if (isDmaOperationMember(node, ctx)) return;
+                if (isRawManyOffsetOperationMember(node, ctx)) return;
                 if (isTypeStaticMember(node, ctx)) return;
                 if (isBuiltinNamespaceMember(node)) return;
                 _ = self.checkExpr(callee, ctx);
@@ -5623,8 +5635,11 @@ pub const Checker = struct {
                 }
             }
         }
-        const layout_name = structTypeName(base_ty) orelse return;
-        const layout_info = layoutFieldInfo(layout_name, ctx) orelse return;
+        const layout_name = memberLayoutTypeName(base_ty, ctx) orelse return;
+        const layout_info = layoutFieldInfo(layout_name, ctx) orelse {
+            self.errorCode(span, "E_UNKNOWN_STRUCT_FIELD", "member access requires a struct, packed-bits, or overlay-union value");
+            return;
+        };
         if (!layout_info.fields.contains(field_name)) {
             self.errorCode(span, "E_UNKNOWN_STRUCT_FIELD", "struct has no field with this name");
         }
@@ -6694,6 +6709,17 @@ fn structTypeName(ty: ast.TypeExpr) ?[]const u8 {
     };
 }
 
+fn memberLayoutTypeName(ty: ast.TypeExpr, ctx: Context) ?[]const u8 {
+    const resolved = resolveAliasType(ty, ctx);
+    return switch (resolved.kind) {
+        .name => |name| name.text,
+        .generic => |node| node.base.text,
+        .qualified => |node| memberLayoutTypeName(node.child.*, ctx),
+        .pointer => |node| memberLayoutTypeName(node.child.*, ctx),
+        else => null,
+    };
+}
+
 fn enumTypeName(ty: ast.TypeExpr) ?[]const u8 {
     return switch (ty.kind) {
         .name => |name| name.text,
@@ -7136,9 +7162,7 @@ fn isMmioRegisterTarget(target: ast.Expr, ctx: Context) bool {
     const member = memberExpr(target) orelse return false;
     if (mmioRegisterMemberInfo(target, ctx) != null) return true;
     if (isMmioRegisterTarget(member.base.*, ctx)) return true;
-    const base_name = calleeIdentName(member.base.*) orelse return false;
-    const mmio_params = ctx.mmio_params orelse return false;
-    const struct_name = mmio_params.get(base_name) orelse return false;
+    const struct_name = mmioStructNameForValue(member.base.*, ctx) orelse return false;
     const mmio_structs = ctx.mmio_structs orelse return false;
     const mmio_struct = mmio_structs.get(struct_name) orelse return false;
     return mmio_struct.fields.contains(member.name.text);
@@ -7156,6 +7180,29 @@ fn isAtomicOperationMember(member: anytype, ctx: Context) bool {
     return true;
 }
 
+fn isMaybeUninitOperationMember(member: anytype, ctx: Context) bool {
+    if (!std.mem.eql(u8, member.name.text, "write") and !std.mem.eql(u8, member.name.text, "assume_init")) return false;
+    _ = maybeUninitPayloadTypeForValue(member.base.*, ctx) orelse return false;
+    return true;
+}
+
+fn isResidueOperationMember(member: anytype, ctx: Context) bool {
+    if (!isResidueOperationName(member)) return false;
+    _ = wrapValueInnerType(member.base.*, ctx) orelse return false;
+    return true;
+}
+
+fn isResidueOperationName(member: anytype) bool {
+    return std.mem.eql(u8, member.name.text, "residue");
+}
+
+fn isEnumRawOperationMember(member: anytype, ctx: Context) bool {
+    if (!std.mem.eql(u8, member.name.text, "raw")) return false;
+    const base_ty = exprResultType(member.base.*, ctx) orelse return false;
+    _ = enumInfoForType(base_ty, ctx) orelse return false;
+    return true;
+}
+
 fn isDmaOperationMember(member: anytype, ctx: Context) bool {
     if (isIdentNamed(member.base.*, "cache")) {
         return std.mem.eql(u8, member.name.text, "clean") or
@@ -7165,14 +7212,28 @@ fn isDmaOperationMember(member: anytype, ctx: Context) bool {
     return true;
 }
 
+fn isRawManyOffsetOperationMember(member: anytype, ctx: Context) bool {
+    if (!std.mem.eql(u8, member.name.text, "offset")) return false;
+    const base_ty = exprResultType(member.base.*, ctx) orelse exprStorageType(member.base.*, ctx) orelse return false;
+    return isRawManyPointerTypeCtx(base_ty, ctx);
+}
+
 fn mmioRegisterMemberInfo(expr: ast.Expr, ctx: Context) ?MmioFieldInfo {
     const member = memberExpr(expr) orelse return null;
-    const base_name = calleeIdentName(member.base.*) orelse return null;
-    const mmio_params = ctx.mmio_params orelse return null;
-    const struct_name = mmio_params.get(base_name) orelse return null;
+    const struct_name = mmioStructNameForValue(member.base.*, ctx) orelse return null;
     const mmio_structs = ctx.mmio_structs orelse return null;
     const mmio_struct = mmio_structs.get(struct_name) orelse return null;
     return mmio_struct.fields.get(member.name.text);
+}
+
+fn mmioStructNameForValue(expr: ast.Expr, ctx: Context) ?[]const u8 {
+    if (calleeIdentName(expr)) |base_name| {
+        if (ctx.mmio_params) |mmio_params| {
+            if (mmio_params.get(base_name)) |struct_name| return struct_name;
+        }
+    }
+    const ty = exprStorageType(expr, ctx) orelse exprResultType(expr, ctx) orelse return null;
+    return mmioPointee(resolveAliasType(ty, ctx));
 }
 
 fn isAssignableTarget(target: ast.Expr) bool {
@@ -7465,7 +7526,7 @@ fn memberResultFieldType(member: anytype, ctx: Context) ?ast.TypeExpr {
 }
 
 pub fn structFieldType(base_ty: ast.TypeExpr, field_name: []const u8, ctx: Context) ?ast.TypeExpr {
-    const layout_name = structTypeName(base_ty) orelse return null;
+    const layout_name = memberLayoutTypeName(base_ty, ctx) orelse return null;
     const layout_info = layoutFieldInfo(layout_name, ctx) orelse return null;
     return layout_info.fields.get(field_name);
 }

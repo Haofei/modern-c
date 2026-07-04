@@ -83,6 +83,16 @@ fn reject_direct_call_missing_member_read() -> u32 {
     return make_packet().missing;
 }
 
+fn reject_scalar_member_read(v: u32) -> u32 {
+    // EXPECT_ERROR: E_UNKNOWN_STRUCT_FIELD
+    return v.x;
+}
+
+fn reject_scalar_pointer_member_read(p: *u32) -> u32 {
+    // EXPECT_ERROR: E_UNKNOWN_STRUCT_FIELD
+    return p.x;
+}
+
 fn reject_missing_member_call(packet: Packet) -> void {
     // EXPECT_ERROR: E_UNKNOWN_STRUCT_FIELD
     packet.missing();
