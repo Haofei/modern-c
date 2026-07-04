@@ -15,8 +15,13 @@ struct SliceBag {
     values: []const u32,
 }
 
-extern fn make_for_bag() -> ForBag;
-extern fn make_slice_bag() -> SliceBag;
+fn make_for_bag() -> ForBag {
+    return .{ .values = .{ 1, 2, 3 }, .rows = .{ .{ 4, 5 }, .{ 6, 7 } } };
+}
+
+fn make_slice_bag() -> SliceBag {
+    return .{ .values = make_u32_slice() };
+}
 
 fn first_from_slice(xs: []const u32) -> u32 {
     for x in xs {

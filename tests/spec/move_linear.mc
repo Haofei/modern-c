@@ -11,10 +11,20 @@ move struct Token {
     v: u32,
 }
 
-extern fn make() -> Token;
-extern fn consume(t: Token) -> u32;
-extern fn relabel(t: Token) -> Token;
-extern fn peek(t: *Token) -> u32;
+fn make() -> Token {
+    return .{ .v = 1 };
+}
+fn consume(t: Token) -> u32 {
+    let v: u32 = t.v;
+    unsafe { forget_unchecked(t); }
+    return v;
+}
+fn relabel(t: Token) -> Token {
+    return t;
+}
+fn peek(t: *Token) -> u32 {
+    return t.v;
+}
 
 // --- accepted: each move value consumed exactly once ---
 

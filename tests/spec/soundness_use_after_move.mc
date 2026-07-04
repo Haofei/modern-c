@@ -28,13 +28,25 @@ struct Holder { p: *T }        // element type for the nested-aggregate channel
 struct Outer { h: Holder }     // struct-of-struct, for the nested-decl channel
 struct Deep { o: Outer }       // struct-of-struct-of-struct, for the triple-nested channel
 
-extern fn mk() -> T;
-extern fn cn(t: T) -> u32;       // consumes (moves) t
-extern fn pk(p: *T) -> u32;      // reads through a borrow
+fn mk() -> T {
+    return .{ .v = 1 };
+}
+fn cn(t: T) -> u32 {       // consumes (moves) t
+    let v: u32 = t.v;
+    unsafe { forget_unchecked(t); }
+    return v;
+}
+fn pk(p: *T) -> u32 {      // reads through a borrow
+    return p.v;
+}
 extern fn rd(p: *u32) -> u32;    // reads through a sub-place borrow
 extern fn id(p: *T) -> *T;       // returns the borrow it was given (laundering channel)
-extern fn sink(h: Holder) -> void;       // takes an aggregate by value (call-arg escape channel)
-extern fn sinkOuter(o: Outer) -> void;   // takes a nested aggregate by value
+fn sink(h: Holder) -> void {       // takes an aggregate by value (call-arg escape channel)
+    return;
+}
+fn sinkOuter(o: Outer) -> void {   // takes a nested aggregate by value
+    return;
+}
 extern fn sinkArr(a: [1]*T) -> void;     // takes an array of borrows by value
 
 // ---------------------------------------------------------------------------

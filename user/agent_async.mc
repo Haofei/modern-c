@@ -265,8 +265,8 @@ fn tool_begin(p: *mut ToolPump, op: u32, flags: u32, arg: u64,
 //   arg      -> ToolReq.arg (scalar)
 //   in_ptr/in_len  -> request payload (copied IN by the kernel, <= MAX_REQ_BYTES)
 //   out_ptr/out_cap-> where the result payload is staged OUT on poll (<= MAX_RES_BYTES)
-export fn tool_call_async(p: *mut ToolPump, op: u32, arg: u64,
-                          in_ptr: usize, in_len: u32, out_ptr: usize, out_cap: u32) -> ToolFut {
+fn tool_call_async(p: *mut ToolPump, op: u32, arg: u64,
+                   in_ptr: usize, in_len: u32, out_ptr: usize, out_cap: u32) -> ToolFut {
     return tool_begin(p, op, 0, arg, in_ptr, in_len, out_ptr, out_cap);
 }
 
@@ -275,8 +275,8 @@ export fn tool_call_async(p: *mut ToolPump, op: u32, arg: u64,
 // read bytes are staged to `dst` (out_ptr) up to `n` (out_cap); the count read is the ok() result.
 // NOTE: `offset` is accepted for a stable signature but the current mock FS server reads from 0; it
 // is forwarded as ToolReq.flags so a future seekable server can honor it without an ABI change.
-export fn read_async(p: *mut ToolPump, path_ptr: usize, path_len: u32,
-                     offset: u32, dst: usize, n: u32) -> ToolFut {
+fn read_async(p: *mut ToolPump, path_ptr: usize, path_len: u32,
+              offset: u32, dst: usize, n: u32) -> ToolFut {
     return tool_begin(p, TOOL_OP_FS_READ, offset, path_len as u64,
                       path_ptr, path_len, dst, n);
 }
@@ -285,7 +285,7 @@ export fn read_async(p: *mut ToolPump, path_ptr: usize, path_len: u32,
 // payload as path[0..path_len] then data[path_len..path_len+n], with arg = path_len. This wrapper
 // requires the caller to have pre-packed that layout at `pack_ptr` (path followed by data), since the
 // kernel copies one contiguous in-payload; `pack_len` = path_len + n. ok() result = bytes written.
-export fn write_async(p: *mut ToolPump, path_len: u32, pack_ptr: usize, pack_len: u32) -> ToolFut {
+fn write_async(p: *mut ToolPump, path_len: u32, pack_ptr: usize, pack_len: u32) -> ToolFut {
     return tool_begin(p, TOOL_OP_FS_WRITE, 0, path_len as u64,
                       pack_ptr, pack_len, 0, 0);
 }
@@ -295,7 +295,7 @@ export fn write_async(p: *mut ToolPump, path_len: u32, pack_ptr: usize, pack_len
 // err(E_TIMEDOUT) as the NORMAL result of a successful sleep. An agent treats err(E_TIMEDOUT) from
 // sleep_async as "the timer fired" (not a failure). The delay rides ToolReq.flags (clamped to
 // DELAY_MAX by the broker), so a later short-delay op can finish first — the pump handles that.
-export fn sleep_async(p: *mut ToolPump, delay_ticks: u32) -> ToolFut {
+fn sleep_async(p: *mut ToolPump, delay_ticks: u32) -> ToolFut {
     return tool_begin(p, TOOL_OP_TIMEOUT, delay_ticks, 0, 0, 0, 0, 0);
 }
 
@@ -305,8 +305,8 @@ export fn sleep_async(p: *mut ToolPump, delay_ticks: u32) -> ToolFut {
 // only this body changes; the signature and the agent code stay the same. ok() result = response
 // bytes; the bytes themselves land at resp_ptr (read ToolFut_out_len for the count).
 //   endpoint_id -> ToolReq.arg (which remote; ignored by the ECHO stand-in)
-export fn net_fetch_async(p: *mut ToolPump, endpoint_id: u64,
-                          req_ptr: usize, req_len: u32, resp_ptr: usize, resp_cap: u32) -> ToolFut {
+fn net_fetch_async(p: *mut ToolPump, endpoint_id: u64,
+                   req_ptr: usize, req_len: u32, resp_ptr: usize, resp_cap: u32) -> ToolFut {
     return tool_begin(p, TOOL_OP_ECHO, 0, endpoint_id, req_ptr, req_len, resp_ptr, resp_cap);
 }
 

@@ -15,8 +15,14 @@
 
 move struct Handle { v: u32 }
 enum E { Bad }
-extern fn acquire() -> Handle;
-extern fn release(h: Handle) -> u32;
+fn acquire() -> Handle {
+    return .{ .v = 1 };
+}
+fn release(h: Handle) -> u32 {
+    let v: u32 = h.v;
+    unsafe { forget_unchecked(h); }
+    return v;
+}
 extern fn risky() -> Result<u32, E>;
 
 // --- accepted: the `?` error edge is covered by a defer ---

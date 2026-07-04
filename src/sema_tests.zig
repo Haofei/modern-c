@@ -233,22 +233,27 @@ test "rejects by-value struct signatures at extern and export ABI boundaries" {
         \\    value: u32,
         \\}
         \\
+        \\struct Plain {
+        \\    value: u32,
+        \\}
+        \\
         \\type PacketAlias = Packet;
+        \\type PlainAlias = Plain;
         \\
         \\extern "C" fn take_packet(packet: Packet) -> void;
         \\extern "C" fn make_packet() -> PacketAlias;
         \\extern fn take_packet_ptr(packet: *Packet) -> void;
         \\
-        \\export fn exported_take(packet: Packet) -> u32 {
-        \\    return packet.value;
+        \\export fn exported_take(plain: Plain) -> u32 {
+        \\    return plain.value;
         \\}
         \\
-        \\export fn exported_make() -> Packet {
+        \\export fn exported_make() -> PlainAlias {
         \\    return .{ .value = 1 };
         \\}
         \\
-        \\fn internal_roundtrip(packet: Packet) -> Packet {
-        \\    return packet;
+        \\fn internal_roundtrip(plain: Plain) -> Plain {
+        \\    return plain;
         \\}
     ;
 

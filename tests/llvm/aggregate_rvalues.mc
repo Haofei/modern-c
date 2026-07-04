@@ -4,8 +4,12 @@ struct Bag {
 }
 
 extern fn make_values(seed: u32) -> [4]u32;
-extern fn make_bag(seed: u32) -> Bag;
+extern fn make_tail(seed: u32) -> []const u32;
 extern fn next_seed() -> u32;
+
+fn make_bag(seed: u32) -> Bag {
+    return .{ .values = make_values(seed), .tail = make_tail(seed) };
+}
 
 fn direct_array_call_index(seed: u32, index: usize) -> u32 {
     return make_values(seed)[index];

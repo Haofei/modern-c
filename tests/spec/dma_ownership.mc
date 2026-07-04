@@ -17,11 +17,25 @@ move struct DeviceOwned {
     addr: usize,
 }
 
-extern fn make() -> CpuOwned;
-extern fn handoff(b: CpuOwned) -> DeviceOwned;     // clean caches, give to device
-extern fn submit(b: DeviceOwned) -> DeviceOwned;   // queue it; returns in-flight handle
-extern fn reclaim(b: DeviceOwned) -> CpuOwned;     // invalidate, take back
-extern fn release(b: CpuOwned) -> void;            // free
+fn make() -> CpuOwned {
+    return .{ .addr = 1 };
+}
+fn handoff(b: CpuOwned) -> DeviceOwned {     // clean caches, give to device
+    let addr: usize = b.addr;
+    unsafe { forget_unchecked(b); }
+    return .{ .addr = addr };
+}
+fn submit(b: DeviceOwned) -> DeviceOwned {   // queue it; returns in-flight handle
+    return b;
+}
+fn reclaim(b: DeviceOwned) -> CpuOwned {     // invalidate, take back
+    let addr: usize = b.addr;
+    unsafe { forget_unchecked(b); }
+    return .{ .addr = addr };
+}
+fn release(b: CpuOwned) -> void {            // free
+    unsafe { forget_unchecked(b); }
+}
 
 // Accepted: the full ownership cycle, each handle consumed exactly once.
 fn accept_cycle() -> void {

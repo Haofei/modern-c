@@ -17,7 +17,10 @@ global row_boxes: [2]RowBox = .{ .{ .row = .{ 9, 10 } }, .{ .row = .{ 11, 12 } }
 global default_pair: Pair = .{ .left = 13, .right = 14 };
 
 extern fn consume_row(row: [2]u32) -> u32;
-extern fn consume_pair(pair: Pair) -> u32;
+
+fn consume_pair(pair: Pair) -> u32 {
+    return pair.left + pair.right;
+}
 
 fn assign_array_literal() -> [2]u32 {
     var xs: [2]u32 = uninit;

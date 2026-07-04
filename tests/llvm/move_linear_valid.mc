@@ -10,11 +10,25 @@ move struct TrapReady {
     hartid: u32,
 }
 
-extern fn make_token() -> Token;
-extern fn consume_token(t: Token) -> u32;
-extern fn relabel_token(t: Token) -> Token;
+fn make_token() -> Token {
+    return .{ .v = 1 };
+}
+
+fn consume_token(t: Token) -> u32 {
+    let v: u32 = t.v;
+    unsafe { forget_unchecked(t); }
+    return v;
+}
+
+fn relabel_token(t: Token) -> Token {
+    return t;
+}
+
 extern fn peek_token(t: *Token) -> u32;
-extern fn boot_hart(id: u32) -> Boot;
+
+fn boot_hart(id: u32) -> Boot {
+    return .{ .hartid = id };
+}
 
 fn accept_consume_once() -> u32 {
     let t: Token = make_token();

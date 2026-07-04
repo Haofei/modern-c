@@ -14,8 +14,14 @@
 // rejected by the frontend analysis, which only understood `return`/`break`/`continue`.
 
 move struct Handle { v: u32 }
-extern fn acquire() -> Handle;
-extern fn release(h: Handle) -> u32;
+fn acquire() -> Handle {
+    return .{ .v = 1 };
+}
+fn release(h: Handle) -> u32 {
+    let v: u32 = h.v;
+    unsafe { forget_unchecked(h); }
+    return v;
+}
 extern fn panicf() -> never;
 
 // --- accepted: deeply nested returns, every path consumes exactly once ---

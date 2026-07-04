@@ -2500,10 +2500,13 @@ test "lower-c emits unsafe contract blocks as scoped blocks" {
         \\extern fn next_value() -> u32;
         \\extern fn consume_value(value: u32) -> void;
         \\extern fn consume_values(values: [1]u32) -> void;
-        \\extern fn consume_counter(counter: Counter) -> void;
         \\
         \\struct Counter {
         \\    next: u32,
+        \\}
+        \\
+        \\fn consume_counter(counter: Counter) -> void {
+        \\    return;
         \\}
         \\
         \\fn accept_plain_contract_scope() -> u32 {

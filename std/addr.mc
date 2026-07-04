@@ -86,7 +86,7 @@ struct PhysRange {
 }
 
 // Build a range of `len` bytes from `start`, trapping if `start + len` overflows.
-export fn phys_range(start: PAddr, len: usize) -> PhysRange {
+fn phys_range(start: PAddr, len: usize) -> PhysRange {
     return .{ .start = start, .end = pa_offset(start, len) };
 }
 

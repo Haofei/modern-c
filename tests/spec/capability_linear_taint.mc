@@ -34,7 +34,9 @@ impl Cap {
 
 // The consuming sink stands in for `cap_revoke`/`forget_unchecked` — a cap's single linear end
 // of life (a cap owns nothing to release, so revoke just consumes the linear value).
-extern fn cap_revoke(c: Cap) -> void;
+fn cap_revoke(c: Cap) -> void {
+    unsafe { forget_unchecked(c); }
+}
 
 // ---- rights-bearing capability: opaque MOVE struct ----
 opaque struct Rights { bits: u32 }
@@ -53,7 +55,9 @@ impl RCap {
     fn rights_of(c: *RCap) -> Rights { return c.rights; }
 }
 
-extern fn rcap_revoke(c: RCap) -> void;
+fn rcap_revoke(c: RCap) -> void {
+    unsafe { forget_unchecked(c); }
+}
 
 // ---- tainted untrusted scalar: opaque struct (no raw accessor) ----
 enum UaccessError { OutOfRange }

@@ -11,8 +11,14 @@
 move struct Token { v: u32 }
 enum E { Bad }
 
-extern fn make() -> Token;
-extern fn consume(t: Token) -> u32;
+fn make() -> Token {
+    return .{ .v = 1 };
+}
+fn consume(t: Token) -> u32 {
+    let v: u32 = t.v;
+    unsafe { forget_unchecked(t); }
+    return v;
+}
 
 // --- accepted: a Result<Token,E> binding consumed once (the switch moves the payload out) ---
 fn accept_result_once() -> u32 {

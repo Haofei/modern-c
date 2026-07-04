@@ -26,10 +26,22 @@ const ENGINE_TX: u8 = 0;
 const ENGINE_RX: u8 = 1;
 const ENGINE_COPY: u8 = 2;
 
-extern fn make() -> CpuOwned;
-extern fn handoff(b: CpuOwned, engine: u8) -> DeviceOwned;  // clean caches, give to engine
-extern fn reclaim(b: DeviceOwned) -> CpuOwned;              // invalidate, take back
-extern fn release(b: CpuOwned) -> void;                     // free
+fn make() -> CpuOwned {
+    return .{ .addr = 1 };
+}
+fn handoff(b: CpuOwned, engine: u8) -> DeviceOwned {  // clean caches, give to engine
+    let addr: usize = b.addr;
+    unsafe { forget_unchecked(b); }
+    return .{ .addr = addr, .queue = engine };
+}
+fn reclaim(b: DeviceOwned) -> CpuOwned {              // invalidate, take back
+    let addr: usize = b.addr;
+    unsafe { forget_unchecked(b); }
+    return .{ .addr = addr };
+}
+fn release(b: CpuOwned) -> void {                     // free
+    unsafe { forget_unchecked(b); }
+}
 
 // ----- accepted: two engines with a buffer in flight on each, simultaneously --
 fn accept_two_engines_concurrent() -> void {

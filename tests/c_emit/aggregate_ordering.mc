@@ -11,7 +11,10 @@ fn slice_of_struct(xs: []const Inner) -> u32 {
 }
 
 extern fn make_inner_slice() -> []const Inner;
-extern fn consume_inner(inner: Inner) -> u32;
+
+fn consume_inner(inner: Inner) -> u32 {
+    return inner.x;
+}
 
 fn inferred_call_slice_element() -> u32 {
     let inner = make_inner_slice()[0];

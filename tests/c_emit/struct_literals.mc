@@ -9,7 +9,13 @@ struct PairBox {
 
 global default_pair: Pair = .{ .left = 1, .right = 2 };
 
-extern fn consume_pair(pair: Pair) -> void;
+fn consume_pair(pair: Pair) -> void {
+    let left: u32 = pair.left;
+    if left == 0 {
+        return;
+    }
+    return;
+}
 
 fn make_pair() -> Pair {
     return .{ .left = 1, .right = 2 };

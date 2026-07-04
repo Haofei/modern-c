@@ -18,9 +18,17 @@
 move struct T { v: u32 }
 struct H { p: *T }
 
-extern fn mk() -> T;
-extern fn cn(t: T) -> u32;       // consumes (moves) t
-extern fn pk(p: *T) -> u32;      // reads through a borrow
+fn mk() -> T {
+    return .{ .v = 1 };
+}
+fn cn(t: T) -> u32 {       // consumes (moves) t
+    let v: u32 = t.v;
+    unsafe { forget_unchecked(t); }
+    return v;
+}
+fn pk(p: *T) -> u32 {      // reads through a borrow
+    return p.v;
+}
 extern fn use_ptr(p: *T) -> u32;
 extern fn id(p: *T) -> *T;       // returns the borrow it was given (laundering channel)
 

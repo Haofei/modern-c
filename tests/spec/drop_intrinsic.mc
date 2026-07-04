@@ -12,7 +12,9 @@
 move struct Boot { hartid: u32 }
 move struct TrapReady { hartid: u32 }
 
-extern fn boot_hart(id: u32) -> Boot;
+fn boot_hart(id: u32) -> Boot {
+    return .{ .hartid = id };
+}
 
 // Accepted: retire the old typestate token (it owns nothing), return the new state.
 fn install_trap_vector(h: Boot) -> TrapReady {

@@ -9,7 +9,9 @@ struct Pair {
     right: u32,
 }
 
-extern fn consume_pair(pair: Pair) -> void;
+fn consume_pair(pair: Pair) -> void {
+    return;
+}
 
 global default_pair: Pair = .{ .left = 1, .right = 2 };
 

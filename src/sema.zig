@@ -1416,7 +1416,7 @@ pub const Checker = struct {
     }
 
     fn checkExternExportStructAbi(self: *Checker, fn_decl: ast.FnDecl, ctx: Context) void {
-        const include_plain_structs = fn_decl.abi != null;
+        const include_plain_structs = true;
         for (fn_decl.params) |param| {
             if (isByValueStructAbiType(param.ty, ctx, include_plain_structs)) {
                 self.errorCode(param.ty.span, "E_EXTERN_STRUCT_BY_VALUE", "extern/export functions cannot pass structs by value until C ABI classification is implemented; pass a pointer instead");

@@ -14,11 +14,29 @@ move struct Res { v: u32 }
 move struct Pair { a: Res, b: Res }
 move struct Nest { p: Pair }
 
-extern fn mk() -> Pair;
-extern fn mknest() -> Nest;
-extern fn consume(r: Res) -> u32;
-extern fn peek(r: *Res) -> u32;
-extern fn take_whole(p: Pair) -> u32;
+fn mkres(v: u32) -> Res {
+    return .{ .v = v };
+}
+fn mk() -> Pair {
+    return .{ .a = mkres(1), .b = mkres(2) };
+}
+fn mknest() -> Nest {
+    return .{ .p = mk() };
+}
+fn consume(r: Res) -> u32 {
+    let v: u32 = r.v;
+    unsafe { forget_unchecked(r); }
+    return v;
+}
+fn peek(r: *Res) -> u32 {
+    return r.v;
+}
+fn take_whole(p: Pair) -> u32 {
+    let a: Res = p.a;
+    let b: Res = p.b;
+    unsafe { forget_unchecked(p); }
+    return consume(a) + consume(b);
+}
 
 // Rejected: a nested place (n.p.a) moved twice — place tracking is not just one level deep.
 fn reject_nested_field_move() -> u32 {

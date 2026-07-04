@@ -27,13 +27,37 @@ move struct Inner { v: u32 }
 move struct Outer { inner: Inner }
 move struct T { v: u32 }
 
-extern fn mk_outer() -> Outer;
-extern fn cn_outer(t: Outer) -> u32;
-extern fn pkin(p: *Inner) -> u32;
+fn mk_inner(v: u32) -> Inner {
+    return .{ .v = v };
+}
+fn mk_outer() -> Outer {
+    return .{ .inner = mk_inner(1) };
+}
+fn cn_outer(t: Outer) -> u32 {
+    let inner: Inner = t.inner;
+    unsafe { forget_unchecked(t); }
+    return cn_inner(inner);
+}
+fn cn_inner(t: Inner) -> u32 {
+    let v: u32 = t.v;
+    unsafe { forget_unchecked(t); }
+    return v;
+}
+fn pkin(p: *Inner) -> u32 {
+    return p.v;
+}
 
-extern fn mk() -> T;
-extern fn cn(t: T) -> u32;
-extern fn pk(p: *T) -> u32;
+fn mk() -> T {
+    return .{ .v = 1 };
+}
+fn cn(t: T) -> u32 {
+    let v: u32 = t.v;
+    unsafe { forget_unchecked(t); }
+    return v;
+}
+fn pk(p: *T) -> u32 {
+    return p.v;
+}
 
 // FALSE POSITIVE #1: subfield borrow `&t.inner`, used BEFORE the move, never read after.
 // This program is SAFE (the borrow is dead at the move) but is rejected conservatively.

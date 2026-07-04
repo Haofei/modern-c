@@ -2,10 +2,10 @@
 // Exported functions cross the external ABI boundary. Struct returns must use an
 // out pointer until MC implements target C ABI classification for by-value aggregates.
 
-extern "C" struct Packet {
+struct Plain {
     value: u32,
 }
 
-export fn bad() -> Packet {
+export fn bad() -> Plain {
     return .{ .value = 1 };
 }

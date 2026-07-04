@@ -23,7 +23,7 @@ export const fn digit_char(d: u32) -> u8 {
 }
 
 // Render `value` as decimal ASCII digits (most significant first).
-export const fn format_u32(value: u32) -> U32Decimal {
+const fn format_u32(value: u32) -> U32Decimal {
     var tmp: [10]u8 = uninit;
     var n: u32 = value;
     var count: usize = 0;
