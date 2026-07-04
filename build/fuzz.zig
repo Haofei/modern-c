@@ -7,6 +7,8 @@ const h = @import("helpers.zig");
 pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "fuzz", "mcfuzz: type-directed differential fuzzer over the full scalar type system (C vs LLVM)", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--mcc", "zig-out/bin/mcc" });
 
+    _ = h.addScriptTest(ctx, "fuzz-async", "mcfuzz: generated async/await state-machine programs must agree across C and LLVM", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--async", "--count", "40", "--mcc", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "fuzz-sanitize", "mcfuzz: run generated full-type-system programs' emitted C under UBSan", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "sanitize", "--mcc", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "fuzz-asan", "mcfuzz: run generated pointer/slice programs' emitted C under AddressSanitizer", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "asan", "--mcc", "zig-out/bin/mcc" });

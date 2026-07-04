@@ -28,9 +28,9 @@ a trap. New type families (structs, enums, optionals, move resources) plug in as
 the type model + generator handlers; new checks plug in as new oracles.
 
 Usage:
-  tools/fuzz/mcfuzz.py gen <seed>                       # print one program
+  tools/fuzz/mcfuzz.py gen <seed> [--async]             # print one program
   tools/fuzz/mcfuzz.py run [--count N] [--oracle X] [--start S] [--jobs J] [--mcc PATH]
-        [--triage-dir DIR] [--shrink-failures]
+        [--async] [--triage-dir DIR] [--shrink-failures]
         oracle: differential (default) | sanitize | asan | robust | failclosed | determinism |
                 pipeline | artifacts | roundtrip | metamorphic | optlevel | floatbits |
                 reference | trapsite
@@ -72,6 +72,184 @@ TRAPSITE_STUBS = "#include <stdlib.h>\n" + "\n".join(
 DRIVER = ('#include <stdint.h>\n#include <stdio.h>\n'
           'extern uint64_t harness(void);\n'
           'int main(void){ printf("%llu\\n", (unsigned long long)harness()); return 0; }\n')
+
+
+def async_program(seed):
+    rng = random.Random(seed)
+    base = rng.randrange(2, 20)
+    branch_true = rng.randrange(10, 80)
+    branch_false = rng.randrange(90, 180)
+    loop_step = rng.randrange(2, 11)
+    tail = rng.randrange(1, 17)
+    n0 = rng.randrange(0, 4)
+    n1 = rng.randrange(1, 5)
+    d0 = rng.randrange(0, 3)
+    d1 = rng.randrange(1, 4)
+    far = d1 + rng.randrange(20, 80)
+    return """trait Future {
+    fn poll(self: *mut Self) -> bool;
+    fn cancel(self: *mut Self) -> void;
+}
+
+fn run_to_completion(f: *mut dyn Future, idle: fn() -> void) -> u64 {
+    var ticks: u64 = 0;
+    while !f.poll() {
+        (idle)();
+        ticks = ticks + 1;
+    }
+    return ticks;
+}
+
+global g_clock: u64 = 0;
+fn tick_idle() -> void { g_clock = g_clock + 1; }
+
+global g_open: i32 = 0;
+struct ValFut { deadline: u64, val: i32, held: bool }
+fn mk_val(deadline: u64, val: i32) -> ValFut {
+    g_open = g_open + 1;
+    return .{ .deadline = deadline, .val = val, .held = true };
+}
+impl Future for ValFut {
+    fn poll(self: *mut ValFut) -> bool {
+        if g_clock >= self.deadline {
+            if self.held { self.held = false; g_open = g_open - 1; }
+            return true;
+        }
+        return false;
+    }
+    fn cancel(self: *mut ValFut) -> void {
+        if self.held { self.held = false; g_open = g_open - 1; }
+    }
+}
+fn ValFut_take_result(self: *mut ValFut) -> i32 { return self.val; }
+fn ValFut_cancel(self: *mut ValFut) -> void {
+    if self.held { self.held = false; g_open = g_open - 1; }
+}
+
+async fn seq(a: i32, b: i32, d: u64) -> i32 {
+    let x: i32 = await mk_val(d, a + %(base)d);
+    let y: i32 = await mk_val(d, x + b);
+    return y + %(tail)d;
+}
+
+async fn branch(flag: bool, a: i32, d: u64) -> i32 {
+    let pre: i32 = await mk_val(d, a);
+    var out: i32 = 0;
+    if flag {
+        let t: i32 = await mk_val(d, pre + %(branch_true)d);
+        out = t + 1;
+    } else {
+        let e: i32 = await mk_val(d, pre + %(branch_false)d);
+        out = e + 2;
+    }
+    return out;
+}
+
+async fn loop_sum(n: i32, d: u64) -> i32 {
+    var acc: i32 = 0;
+    var i: i32 = 0;
+    while i < n {
+        let v: i32 = await mk_val(d, i * %(loop_step)d);
+        acc = acc + v;
+        i = i + 1;
+    }
+    return acc;
+}
+
+async fn mixed(flag: bool, n: i32, dpre: u64, dloop: u64) -> i32 {
+    let first: i32 = await mk_val(dpre, %(base)d);
+    var pick: i32 = 0;
+    if flag {
+        let t: i32 = await mk_val(dpre, first + %(branch_true)d);
+        pick = t;
+    } else {
+        let e: i32 = await mk_val(dpre, first + %(branch_false)d);
+        pick = e;
+    }
+    var sum: i32 = 0;
+    var j: i32 = 0;
+    while j < n {
+        let v: i32 = await mk_val(dloop, j + %(tail)d);
+        sum = sum + v;
+        j = j + 1;
+    }
+    return pick + sum;
+}
+
+fn drive_seq(a: i32, b: i32, d: u64) -> i32 {
+    var f: seq__Fut = seq(a, b, d);
+    run_to_completion(&f, tick_idle);
+    return seq__Fut_take_result(&f);
+}
+
+fn drive_branch(flag: bool, a: i32, d: u64) -> i32 {
+    var f: branch__Fut = branch(flag, a, d);
+    run_to_completion(&f, tick_idle);
+    return branch__Fut_take_result(&f);
+}
+
+fn drive_loop(n: i32, d: u64) -> i32 {
+    var f: loop_sum__Fut = loop_sum(n, d);
+    run_to_completion(&f, tick_idle);
+    return loop_sum__Fut_take_result(&f);
+}
+
+fn drive_mixed(flag: bool, n: i32, dpre: u64, dloop: u64) -> i32 {
+    var f: mixed__Fut = mixed(flag, n, dpre, dloop);
+    run_to_completion(&f, tick_idle);
+    return mixed__Fut_take_result(&f);
+}
+
+export fn harness() -> u64 {
+    var out: u64 = 0;
+
+    g_clock = 0; g_open = 0;
+    out = out ^ (drive_seq(3, 7, %(d0)d) as u64);
+    out = out ^ ((g_open as u64) << 8);
+
+    g_clock = 0; g_open = 0;
+    out = out ^ ((drive_branch(true, 5, %(d1)d) as u64) << 1);
+    out = out ^ ((g_open as u64) << 16);
+
+    g_clock = 0; g_open = 0;
+    out = out ^ ((drive_branch(false, 5, %(d0)d) as u64) << 2);
+    out = out ^ ((g_open as u64) << 24);
+
+    g_clock = 0; g_open = 0;
+    out = out ^ ((drive_loop(%(n0)d, %(d0)d) as u64) << 3);
+    out = out ^ ((g_open as u64) << 32);
+
+    g_clock = 0; g_open = 0;
+    out = out ^ ((drive_loop(%(n1)d, %(d1)d) as u64) << 4);
+    out = out ^ ((g_open as u64) << 40);
+
+    g_clock = 0; g_open = 0;
+    out = out ^ ((drive_mixed(true, %(n1)d, %(d1)d, %(d1)d) as u64) << 5);
+    out = out ^ ((g_open as u64) << 48);
+
+    g_clock = 0; g_open = 0;
+    var c0: mixed__Fut = mixed(false, %(n1)d, %(d1)d, %(far)d);
+    let p0: bool = mixed__Fut__poll(&c0);
+    if !p0 && g_open == 1 { out = out ^ 0x4000000000000000; }
+    mixed__Fut_cancel(&c0);
+    if g_open == 0 { out = out ^ 0x2000000000000000; }
+    let p1: bool = mixed__Fut__poll(&c0);
+    if p1 && g_open == 0 { out = out ^ 0x1000000000000000; }
+
+    return out;
+}
+""" % {
+        "base": base,
+        "branch_true": branch_true,
+        "branch_false": branch_false,
+        "loop_step": loop_step,
+        "tail": tail,
+        "n0": n0,
+        "n1": n1,
+        "d0": d0,
+        "d1": d1,
+        "far": far,
+    }
 
 
 # ----- type model -----
@@ -2232,7 +2410,8 @@ def run_one(env, oracle, seed):
     work = tempfile.mkdtemp()
     try:
         src = os.path.join(work, "p.mc")
-        open(src, "w").write(Gen(seed, trapping=env.get("trapping", False)).program())
+        source = async_program(seed) if env.get("async_mode", False) else Gen(seed, trapping=env.get("trapping", False)).program()
+        open(src, "w").write(source)
         try:
             chk = subprocess.run([env["mcc"], "check", src], capture_output=True)
         except OSError as e:
@@ -2244,7 +2423,8 @@ def run_one(env, oracle, seed):
         except OSError as e:
             return "FAIL seed=%d: tool failed to execute: %s" % (seed, e)
         if res is not None:
-            return "FAIL seed=%d: %s (reproduce: tools/fuzz/mcfuzz.py gen %d)" % (seed, res, seed)
+            gen_flag = " --async" if env.get("async_mode", False) else ""
+            return "FAIL seed=%d: %s (reproduce: tools/fuzz/mcfuzz.py gen %d%s)" % (seed, res, seed, gen_flag)
         return None
     finally:
         subprocess.run(["rm", "-rf", work])
@@ -2259,6 +2439,8 @@ def _run_reproduce_command(args, seed):
             "--count", "1", "--start", str(seed), "--jobs", "1", "--mcc", args.mcc]
     if args.trapping:
         argv.append("--trapping")
+    if getattr(args, "async_mode", False):
+        argv.append("--async")
     return _shell_command(argv)
 
 
@@ -2267,6 +2449,8 @@ def _shrink_command(args, seed):
             "--oracle", args.oracle, "--mcc", args.mcc]
     if args.trapping:
         argv.append("--trapping")
+    if getattr(args, "async_mode", False):
+        argv.append("--async")
     return _shell_command(argv)
 
 
@@ -2277,6 +2461,7 @@ def _triage_record(args, finding, confirmed_after_hang_recheck):
         "seed": seed,
         "oracle": args.oracle,
         "trapping": bool(args.trapping),
+        "async": bool(getattr(args, "async_mode", False)),
         "signature": sig,
         "message": finding,
         "reproduce_command": _run_reproduce_command(args, seed) if seed is not None else None,
@@ -2314,6 +2499,8 @@ def _source_for_auto_shrink(args, seed):
     # is tied to its generated AST, and floatbits regenerates a separate source internally.
     if args.oracle in ("reference", "floatbits"):
         return None
+    if getattr(args, "async_mode", False):
+        return async_program(seed)
     return Gen(seed, trapping=args.trapping).program()
 
 
@@ -2352,12 +2539,13 @@ def _auto_shrink_failures(env, args, records):
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    g = sub.add_parser("gen"); g.add_argument("seed", type=int); g.add_argument("--trapping", action="store_true")
+    g = sub.add_parser("gen"); g.add_argument("seed", type=int); g.add_argument("--trapping", action="store_true"); g.add_argument("--async", dest="async_mode", action="store_true", help="emit an async/await program")
     r = sub.add_parser("run")
     r.add_argument("--count", type=int, default=int(os.environ.get("COUNT", "300")))
     r.add_argument("--start", type=int, default=1)
     r.add_argument("--oracle", choices=list(ORACLES), default="differential")
     r.add_argument("--trapping", action="store_true", help="emit checked arithmetic that may trap")
+    r.add_argument("--async", dest="async_mode", action="store_true", help="emit async/await programs")
     r.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", os.cpu_count() or 4)))
     r.add_argument("--mcc", default=os.environ.get("MCC", "zig-out/bin/mcc"))
     r.add_argument("--triage-dir", help="write failure triage artifacts under DIR")
@@ -2372,13 +2560,19 @@ def main():
     sh.add_argument("--seed", type=int, required=True)
     sh.add_argument("--oracle", choices=list(ORACLES), default="differential")
     sh.add_argument("--trapping", action="store_true")
+    sh.add_argument("--async", dest="async_mode", action="store_true")
     sh.add_argument("--mcc", default=os.environ.get("MCC", "zig-out/bin/mcc"))
     args = ap.parse_args()
     if getattr(args, "shrink_failures", False) and not getattr(args, "triage_dir", None):
         ap.error("--shrink-failures requires --triage-dir")
+    if getattr(args, "async_mode", False) and getattr(args, "trapping", False):
+        ap.error("--async and --trapping are separate generation modes")
+    if getattr(args, "async_mode", False) and getattr(args, "oracle", None) in ("metamorphic", "floatbits", "reference"):
+        ap.error("--async does not support oracles that regenerate a different source internally")
 
     if args.cmd == "gen":
-        sys.stdout.write(Gen(args.seed, trapping=args.trapping).program())
+        source = async_program(args.seed) if args.async_mode else Gen(args.seed, trapping=args.trapping).program()
+        sys.stdout.write(source)
         return 0
 
     if args.cmd == "report":  # G17: what fraction of seeds exercise each construct
@@ -2427,6 +2621,7 @@ def main():
         "mcc": args.mcc, "clang": os.environ.get("CLANG", "clang"), "llc": os.environ.get("LLC", "llc"),
         "link_flags": ["-no-pie"] if sys.platform.startswith("linux") else [],
         "trapping": args.trapping,
+        "async_mode": bool(getattr(args, "async_mode", False)),
     }
 
     if args.cmd == "corpus":  # G17: persisted regression gates — each fixed-bug repro stays clean
@@ -2456,7 +2651,7 @@ def main():
 
     if args.cmd == "shrink":
         oracle = ORACLES[args.oracle]
-        source = Gen(args.seed, trapping=args.trapping).program()
+        source = async_program(args.seed) if getattr(args, "async_mode", False) else Gen(args.seed, trapping=args.trapping).program()
         res = oracle_on_source(env, oracle, source, seed=args.seed)
         if res is None:
             print("seed %d does not fail mcfuzz/%s — nothing to shrink" % (args.seed, args.oracle))
@@ -2524,7 +2719,12 @@ def main():
         "reference": "compiled output matches the independent Python interpreter",
         "trapsite": "C and LLVM agree on trap kind or normal output",
     }.get(args.oracle, "no findings")
-    mode = " (trapping)" if args.trapping else ""
+    modes = []
+    if args.trapping:
+        modes.append("trapping")
+    if getattr(args, "async_mode", False):
+        modes.append("async")
+    mode = " (%s)" % ", ".join(modes) if modes else ""
     print("PASS: mcfuzz/%s%s — %s over %d programs (seeds %d..%d)"
           % (args.oracle, mode, summary, args.count, args.start, args.start + args.count - 1))
     return 0

@@ -101,6 +101,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("diff-fuzz"));
     m0_step.dependOn(ctx.cmd("move-fuzz"));
     m0_step.dependOn(ctx.cmd("fuzz"));
+    m0_step.dependOn(ctx.cmd("fuzz-async"));
     m0_step.dependOn(ctx.cmd("fuzz-sanitize"));
     m0_step.dependOn(ctx.cmd("fuzz-asan"));
     m0_step.dependOn(ctx.cmd("fuzz-trap"));
@@ -930,6 +931,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("diff-fuzz"));
     fast_step.dependOn(ctx.cmd("move-fuzz"));
     fast_step.dependOn(ctx.cmd("fuzz"));
+    fast_step.dependOn(ctx.cmd("fuzz-async"));
     fast_step.dependOn(ctx.cmd("fuzz-trap"));
     fast_step.dependOn(ctx.cmd("fuzz-trapsite"));
     fast_step.dependOn(ctx.cmd("fuzz-robust"));

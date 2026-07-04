@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import subprocess
 import sys
 from collections.abc import Sequence
 
@@ -89,7 +90,31 @@ def main() -> None:
             "bad-diagnostics-test",
         ],
     )
+    assert_gates(
+        module,
+        ["src/async_lower.zig"],
+        [
+            "test",
+            "diagnostics-reference-test",
+            "diagnostic-code-inventory-test",
+            "c-test",
+            "diff-backend",
+            "fuzz-async",
+            "fuzz-corpus",
+        ],
+    )
     assert_checks(module, ["docs/compiler-production-readiness.md"], ["git diff --check"])
+    docs_only = subprocess.run(
+        [sys.executable, str(DEV_GATES), "docs/compiler-production-readiness.md"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    if "zig build fast" in docs_only or "zig build m0" in docs_only:
+        fail("docs-only dev-gates output should not recommend compiler confidence/truth gates")
+    if "none for checks-only changes" not in docs_only:
+        fail("docs-only dev-gates output should explain that compiler confidence gates are unnecessary")
     assert_route(
         module,
         ["docs/diagnostics.md"],
@@ -113,6 +138,11 @@ def main() -> None:
     assert_gates(module, ["tools/test/contract-lint.py"], ["test-lint"])
     assert_gates(module, ["tools/toolchain/bad-diagnostics-test.py"], ["bad-diagnostics-test"])
     assert_gates(module, ["tools/toolchain/diff-backend.sh"], ["diff-backend"])
+    assert_gates(
+        module,
+        ["tools/fuzz/mcfuzz.py"],
+        ["diff-fuzz", "fuzz-async", "fuzz-robust", "fuzz-reference", "fuzz-corpus"],
+    )
     assert_gates(module, ["tools/toolchain/diagnostics-test.sh"], ["diagnostics-test"])
     assert_gates(module, ["tools/toolchain/mcc-cli-test.sh"], ["mcc-cli-test"])
     assert_gates(module, ["tools/toolchain/install-layout-test.sh"], ["install-layout-test"])

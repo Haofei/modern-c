@@ -72,8 +72,8 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         ("src/async_lower.zig",),
-        ("test", "c-test", "llvm-test", "diff-backend", "fuzz-corpus"),
-        "async lowering rewrites source before sema and must stay cross-backend equivalent",
+        ("test", "c-test", "diff-backend", "fuzz-async", "fuzz-corpus"),
+        "async lowering rewrites source before sema; expected-output fixtures, backend parity, generated async fuzzing, and corpus replay cover its risk",
     ),
     Rule(
         ("src/*_tests.zig",),
@@ -403,7 +403,7 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         ("tools/fuzz/*", "tools/fuzz/corpus/*"),
-        ("diff-fuzz", "fuzz-robust", "fuzz-reference", "fuzz-corpus"),
+        ("diff-fuzz", "fuzz-async", "fuzz-robust", "fuzz-reference", "fuzz-corpus"),
         "fuzzer changes need deterministic oracle families and persisted corpus replay",
     ),
     Rule(
@@ -547,12 +547,16 @@ def main() -> int:
         for reason in reasons:
             print(f"  - {reason}")
 
-    print("\nConfidence gates:")
-    print("  zig build fast")
-    print("  tools/m0-parallel.sh <jobs>    # broad local milestone check when the slice is large")
+    if gates:
+        print("\nConfidence gates:")
+        print("  zig build fast")
+        print("  tools/m0-parallel.sh <jobs>    # broad local milestone check when the slice is large")
 
-    print("\nTruth gate:")
-    print("  zig build m0                   # required before release/production claims")
+        print("\nTruth gate:")
+        print("  zig build m0                   # required before release/production claims")
+    else:
+        print("\nConfidence gates:")
+        print("  none for checks-only changes")
     return 0
 
 
