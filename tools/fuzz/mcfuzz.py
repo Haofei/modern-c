@@ -27,7 +27,8 @@ Usage:
   tools/fuzz/mcfuzz.py gen <seed>                       # print one program
   tools/fuzz/mcfuzz.py run [--count N] [--oracle X] [--start S] [--jobs J] [--mcc PATH]
         oracle: differential (default) | sanitize | robust | failclosed | determinism |
-                pipeline | roundtrip | metamorphic | optlevel | floatbits | reference
+                pipeline | artifacts | roundtrip | metamorphic | optlevel | floatbits |
+                reference
 """
 import argparse
 import os
@@ -1483,6 +1484,216 @@ def oracle_pipeline(env, seed, src_path, work):
     return None
 
 
+def _run_required_stage(env, stage, src_path, timeout=20):
+    try:
+        r = subprocess.run([env["mcc"], stage, src_path], capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return (None, "mcc %s HANGS on a check-accepted program" % stage)
+    if r.returncode < 0:
+        return (None, "mcc %s CRASHED (signal %d) on a check-accepted program" % (stage, -r.returncode))
+    if r.returncode != 0:
+        err = r.stderr.decode("utf-8", "replace")
+        return (None, "INTERNAL INCONSISTENCY: mcc %s rejected a check-accepted program: %s" % (stage, _first_error(err)))
+    return (r.stdout.decode("utf-8", "replace"), None)
+
+
+_KV_RE = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)=(?:"((?:\\.|[^"])*)"|([^ \t\r\n]+))')
+
+
+def _unescape_map_string(value):
+    out = []
+    i = 0
+    while i < len(value):
+        ch = value[i]
+        if ch != "\\" or i + 1 >= len(value):
+            out.append(ch)
+            i += 1
+            continue
+        nxt = value[i + 1]
+        if nxt == "n":
+            out.append("\n")
+        elif nxt == "r":
+            out.append("\r")
+        elif nxt == "t":
+            out.append("\t")
+        elif nxt in ('"', "\\"):
+            out.append(nxt)
+        elif nxt == "x" and i + 3 < len(value):
+            try:
+                out.append(chr(int(value[i + 2:i + 4], 16)))
+                i += 2
+            except ValueError:
+                out.append(nxt)
+        else:
+            out.append(nxt)
+        i += 2
+    return "".join(out)
+
+
+def _parse_kv(line):
+    values = {}
+    for match in _KV_RE.finditer(line):
+        key = match.group(1)
+        quoted = match.group(2)
+        values[key] = _unescape_map_string(quoted) if quoted is not None else match.group(3)
+    return values
+
+
+def _positive_int(value):
+    try:
+        return int(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _parse_trap_edges(text, prefix):
+    functions = {}
+    edges = {}
+    edge_keys = set()
+    for line in text.splitlines():
+        if line.startswith(prefix + " function "):
+            kv = _parse_kv(line)
+            name = kv.get("name")
+            count = kv.get("trap_edges")
+            if not name or count is None:
+                return (None, None, None, "%s function row missing name/trap_edges: %s" % (prefix, line))
+            try:
+                functions[name] = int(count)
+            except ValueError:
+                return (None, None, None, "%s function %s has non-integer trap_edges=%r" % (prefix, name, count))
+            edges.setdefault(name, 0)
+        elif line.startswith(prefix + " trap_edge "):
+            kv = _parse_kv(line)
+            fn = kv.get("fn")
+            kind = kv.get("kind")
+            line_no = kv.get("line")
+            column = kv.get("column")
+            if not fn or not kind or line_no is None or column is None:
+                return (None, None, None, "%s trap_edge row missing fn/kind/line/column: %s" % (prefix, line))
+            try:
+                edge_keys.add((fn, kind, int(line_no), int(column)))
+            except ValueError:
+                return (None, None, None, "%s trap_edge has non-integer source position: %s" % (prefix, line))
+            edges[fn] = edges.get(fn, 0) + 1
+    return (functions, edges, edge_keys, None)
+
+
+def _check_trap_edge_counts(text, prefix):
+    functions, edges, _edge_keys, err = _parse_trap_edges(text, prefix)
+    if err is not None:
+        return err
+    for fn in edges:
+        if fn not in functions:
+            return "%s trap_edge references unknown function %s" % (prefix, fn)
+    for fn, expected in functions.items():
+        actual = edges.get(fn, 0)
+        if actual != expected:
+            return "%s function %s declares trap_edges=%d but has %d trap_edge row(s)" % (prefix, fn, expected, actual)
+    return None
+
+
+def _checked_fact_traps(facts_text):
+    traps = []
+    for line in facts_text.splitlines():
+        if line.startswith("fact checked_arithmetic_trap ") or line.startswith("fact checked_shift_trap "):
+            kv = _parse_kv(line)
+            fn = kv.get("fn")
+            kind = kv.get("trap")
+            line_no = kv.get("line")
+            column = kv.get("column")
+            if not fn or not kind or line_no is None or column is None:
+                return (None, "checked trap fact missing fn/trap/line/column: %s" % line)
+            try:
+                traps.append((fn, kind, int(line_no), int(column)))
+            except ValueError:
+                return (None, "checked trap fact has non-integer source position: %s" % line)
+    return (traps, None)
+
+
+def _check_checked_facts_reach_ir(facts_text, ir_text):
+    fact_traps, err = _checked_fact_traps(facts_text)
+    if err is not None:
+        return err
+    _functions, _edges, ir_edge_keys, err = _parse_trap_edges(ir_text, "ir")
+    if err is not None:
+        return err
+    for fact in fact_traps:
+        if fact not in ir_edge_keys:
+            fn, kind, line_no, column = fact
+            return "fact checked trap missing matching IR trap_edge fn=%s kind=%s line=%d column=%d" % (fn, kind, line_no, column)
+    return None
+
+
+def _parse_mcmap_entries(map_text):
+    lines = map_text.splitlines()
+    if not lines or lines[0].strip() != "# mcmap v1":
+        return (None, "emit-map missing # mcmap v1 header")
+    entries = []
+    for line in lines:
+        if line.startswith("entry "):
+            entries.append(_parse_kv(line))
+    if not entries:
+        return (None, "emit-map produced no entry rows")
+    return (entries, None)
+
+
+def _check_emit_map(map_text, src_path, mir_functions):
+    entries, err = _parse_mcmap_entries(map_text)
+    if err is not None:
+        return err
+    synthetic_mir_names = {"function", "global", "switch"}
+    saw_harness_export = False
+    for entry in entries:
+        for key in ("kind", "symbol", "source_line", "source_column", "source_len",
+                    "source_path", "typed_ast_node", "mir_block", "visibility", "origin"):
+            if key not in entry:
+                return "emit-map entry missing %s: %r" % (key, entry)
+        for key in ("source_line", "source_column", "source_len"):
+            if not _positive_int(entry.get(key)):
+                return "emit-map entry has non-positive %s=%r for kind=%s symbol=%s" % (
+                    key, entry.get(key), entry.get("kind"), entry.get("symbol"))
+        if entry.get("origin") == "source" and entry.get("source_path") != src_path:
+            return "emit-map source-origin entry has source_path=%r, expected %r" % (entry.get("source_path"), src_path)
+        if (entry.get("kind") == "function" and entry.get("symbol") == "harness"
+                and entry.get("visibility") == "exported"):
+            saw_harness_export = True
+        mir_block = entry.get("mir_block", "")
+        if mir_block.startswith("mir:"):
+            parts = mir_block.split(":")
+            if len(parts) >= 3:
+                fn = parts[1]
+                if fn not in synthetic_mir_names and fn not in mir_functions:
+                    return "emit-map mir_block=%r references unknown lower-mir function %s" % (mir_block, fn)
+    if not saw_harness_export:
+        return "emit-map missing exported function entry for harness"
+    return None
+
+
+def oracle_artifacts(env, seed, src_path, work):
+    """Artifact consistency oracle (E4): parse the real line-oriented compiler artifacts and
+    enforce conservative cross-artifact invariants that go beyond status-only pipeline success."""
+    outputs = {}
+    for stage in ("facts", "lower-mir", "lower-ir", "emit-map"):
+        text, err = _run_required_stage(env, stage, src_path)
+        if err is not None:
+            return err
+        outputs[stage] = text
+
+    for prefix, stage in (("mir", "lower-mir"), ("ir", "lower-ir")):
+        err = _check_trap_edge_counts(outputs[stage], prefix)
+        if err is not None:
+            return err
+
+    err = _check_checked_facts_reach_ir(outputs["facts"], outputs["lower-ir"])
+    if err is not None:
+        return err
+
+    mir_functions, _mir_edges, _mir_edge_keys, err = _parse_trap_edges(outputs["lower-mir"], "mir")
+    if err is not None:
+        return err
+    return _check_emit_map(outputs["emit-map"], src_path, mir_functions)
+
+
 def _run_mcc(env, stage, src_path, timeout=20):
     try:
         return subprocess.run([env["mcc"], stage, src_path], capture_output=True, timeout=timeout)
@@ -1711,6 +1922,7 @@ def oracle_reference(env, seed, src_path, work):
 ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize,
            "robust": oracle_robust, "failclosed": oracle_failclosed,
            "determinism": oracle_determinism, "pipeline": oracle_pipeline,
+           "artifacts": oracle_artifacts,
            "roundtrip": oracle_roundtrip,
            "metamorphic": oracle_metamorphic, "optlevel": oracle_optlevel,
            "floatbits": oracle_floatbits, "reference": oracle_reference}
@@ -1936,6 +2148,7 @@ def main():
         "failclosed": "mcc check rejected every ill-typed program (no soundness hole)",
         "determinism": "emit-c/emit-llvm are byte-deterministic",
         "pipeline": "every lowering/verify stage succeeds on check-accepted programs",
+        "artifacts": "facts/lower-mir/lower-ir/emit-map cross-artifact invariants hold",
         "roundtrip": "fmt output checks, is idempotent, preserves tokens, and lowers identically",
         "reference": "compiled output matches the independent Python interpreter",
     }.get(args.oracle, "no findings")

@@ -107,6 +107,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("fuzz-failclosed"));
     m0_step.dependOn(ctx.cmd("fuzz-determinism"));
     m0_step.dependOn(ctx.cmd("fuzz-pipeline"));
+    m0_step.dependOn(ctx.cmd("fuzz-artifacts"));
     m0_step.dependOn(ctx.cmd("fuzz-roundtrip"));
     m0_step.dependOn(ctx.cmd("fuzz-metamorphic"));
     m0_step.dependOn(ctx.cmd("fuzz-optlevel"));
@@ -922,6 +923,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("fuzz-failclosed"));
     fast_step.dependOn(ctx.cmd("fuzz-determinism"));
     fast_step.dependOn(ctx.cmd("fuzz-pipeline"));
+    fast_step.dependOn(ctx.cmd("fuzz-artifacts"));
     fast_step.dependOn(ctx.cmd("fuzz-roundtrip"));
     fast_step.dependOn(ctx.cmd("fuzz-metamorphic"));
     fast_step.dependOn(ctx.cmd("fuzz-optlevel"));

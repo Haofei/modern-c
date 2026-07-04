@@ -46,6 +46,9 @@ jobs:
           - name: pipeline
             oracle: pipeline
             extra_args: ""
+          - name: artifacts
+            oracle: artifacts
+            extra_args: ""
           - name: roundtrip
             oracle: roundtrip
             extra_args: ""
