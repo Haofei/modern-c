@@ -801,16 +801,17 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
         return error.EmitLlvmFailed;
     }
 
-    try mir.verifyOpt(allocator, module, &diag, .{ .optimize = optimize });
+    var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
+    defer module_mir.deinit();
+    try mir.verifyBuiltMir(module_mir, &diag);
     if (diag.has_errors) {
         diag.render();
         return error.EmitLlvmFailed;
     }
 
-    const be = backend.byName("llvm").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    be.lower(allocator, module, &output, .{ .profile = .kernel, .source_path = path, .target_arch = target_arch, .checks = checks, .stub_asm = stub_asm, .reporter = &diag }) catch |err| switch (err) {
+    lower_llvm.appendLlvmCheckedMir(allocator, module, &module_mir, &output, path, checks, stub_asm, target_arch, &diag) catch |err| switch (err) {
         error.UnsupportedLlvmEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "LLVM");
             diag.render();

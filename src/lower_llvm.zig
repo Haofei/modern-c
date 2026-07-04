@@ -217,12 +217,15 @@ pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: 
 
 fn appendLlvmCheckedReport(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, reporter: ?*diagnostics.Reporter) !void {
     const optimize = checks.optimize;
+    var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
+    defer module_mir.deinit();
+    try appendLlvmCheckedMir(allocator, module, &module_mir, out, source_path, checks, stub_asm, target_arch, reporter);
+}
+
+pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, reporter: ?*diagnostics.Reporter) !void {
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;
-    var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
-    defer module_mir.deinit();
-
     const escaped_source_path = try escapedLlvmString(allocator, source_path);
     defer allocator.free(escaped_source_path);
     try out.print(allocator, "source_filename = \"{s}\"\n", .{escaped_source_path});
@@ -236,7 +239,7 @@ fn appendLlvmCheckedReport(allocator: std.mem.Allocator, module: ast.Module, out
     var ctx = LlvmEmitter{
         .allocator = allocator,
         .out = out,
-        .mir_module = module_mir,
+        .mir_module = module_mir.*,
         .scratch = std.heap.ArenaAllocator.init(allocator),
         .need_uadd = std.StringHashMap(void).init(allocator),
         .need_usub = std.StringHashMap(void).init(allocator),

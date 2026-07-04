@@ -3,6 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const lower_llvm = @import("lower_llvm.zig");
+const mir = @import("mir.zig");
 const test_support = @import("test_support.zig");
 
 fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
@@ -84,6 +85,34 @@ test "LLVM check elision is scoped to the current function" {
     const checked_body = try llvmFunctionBody(output.items, "define internal i32 @checked");
     try std.testing.expect(std.mem.indexOf(u8, proven_body, "call void @mc_trap_Bounds()") == null);
     try std.testing.expect(std.mem.indexOf(u8, checked_body, "call void @mc_trap_Bounds()") != null);
+}
+
+test "LLVM backend reuses prebuilt verified MIR without changing output" {
+    const source =
+        \\fn add_one(value: u32) -> u32 {
+        \\    return value + 1;
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_prebuilt_mir.mc", source);
+    defer parsed.deinit();
+
+    var rebuilt_output: std.ArrayList(u8) = .empty;
+    defer rebuilt_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmWithSourcePath(std.testing.allocator, parsed.module, &rebuilt_output, "llvm_prebuilt_mir.mc", true);
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "llvm_prebuilt_mir.mc", source);
+    defer reporter.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{ .optimize = true });
+    defer module_mir.deinit();
+    try mir.verifyBuiltMir(module_mir, &reporter);
+    try std.testing.expect(!reporter.has_errors);
+
+    var prebuilt_output: std.ArrayList(u8) = .empty;
+    defer prebuilt_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &prebuilt_output, "llvm_prebuilt_mir.mc", .{ .optimize = true }, false, .riscv64, &reporter);
+
+    try std.testing.expectEqualSlices(u8, rebuilt_output.items, prebuilt_output.items);
 }
 
 test "LLVM unsupported diagnostics use nearest source span for generated nodes" {
