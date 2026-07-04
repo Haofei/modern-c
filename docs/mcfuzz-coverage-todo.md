@@ -11,8 +11,10 @@ each other** (differential, pipeline, sanitize, determinism all assume C≡LLVM 
 (**Update:** the independent oracles below — E1 reference interpreter and E2 metamorphic
 — are now **implemented** as build steps (`fuzz-reference` / `fuzz-metamorphic`) and,
 alongside `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-artifacts`, `fuzz-corpus`, and
-`fuzz-trapsite`, are wired into both `m0` and `fast` in `build/tiers.zig`. The remaining
-backlog is generator surface, where the differential oracles still apply.)
+`fuzz-trapsite`, are wired into both `m0` and `fast` in `build/tiers.zig`; `fuzz-asan`
+is wired into `m0` and nightly only because it depends on host ASan compiler-rt
+availability. The remaining backlog is generator surface, where the differential oracles
+still apply.)
 
 They share the entire frontend, MIR verifier, and constant-folder, so a bug *there* is
 invisible to all of them. The >512-block verifier bug was only caught because `pipeline`
@@ -43,9 +45,11 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 11. **A1** `Result<T,E>` + `?` propagation.
 12. **A2** tagged unions with payload.
 13. **A6** fold `move`/`defer` into mcfuzz (today only in `mcgen_move`).
-14. **A3 → A5** optionals → pointers → slices (unlocks **E5** memory-safety oracle).
+14. ~~**E5** memory-safety oracle~~ — **DONE / expanding** (`oracle_asan`, build step
+    `fuzz-asan`): emitted C is compiled address-only under ASan and run over the current
+    nullable/non-null pointer, byte-view slice, and `[]mut T` slice generator surface.
 15. **A7** f32 (blocked on double-literal-suffix fix).
-16. Remaining infra/oracles (E5, F-series except F5) and the high-effort type features
+16. Remaining infra/oracles (F-series except F5) and the high-effort type features
     (A8 generics, A9 closures, D5 multi-module).
 
 ---
@@ -77,7 +81,7 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 | A2 | Tagged `union` with payload (`.variant(payload)`, payload-binding switch) | Med-High | Tag+payload layout; finicky syntax |
 | A3 | Optionals `?*T` (nullable pointers) | Med | Needs null/unwrap oracle |
 | A4 | Pointers / references `*T`, address-of, deref | High | Lifetime/alias tracking |
-| A5 | Slices `[]T` (ptr+len), slicing | High | Unlocks bounds oracle (E5) |
+| A5 | Slices `[]T` (ptr+len), slicing | Done / expanding | Byte-view slices and `[]mut T` generator surface now feed E5/ASan; keep widening slice forms. |
 | A6 | `move` linear types + `defer` cleanup | Med | Exists in `mcgen_move`; unify; invariant `live_count==0` |
 | A7 | f32 | Low-Med | **Blocked** on double-literal-suffix fix (currently excluded) |
 | A8 | Generics / type parameters | High | Monomorphization path |
@@ -133,7 +137,7 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 | E2 | **Metamorphic/algebraic** (semantics-preserving transform → same digest) | Done / expanding | `fuzz-metamorphic`, gated by `m0`/`fast`; keep adding transforms for new constructs. |
 | E3 | Optimization-level differential | Done / expanding | `fuzz-optlevel`, gated by `m0`/`fast`; keep widening the generated surface. |
 | E4 | Artifact consistency oracle over `facts`/`emit-map`/`lower-mir`/`lower-ir` | Done / expanding | `fuzz-artifacts`, gated by `m0`/`fast`; checks stage status, MIR/IR trap-edge counters, checked-trap facts reaching IR, and core mcmap source/function/MIR-reference invariants. |
-| E5 | Memory-safety oracle (ASan over pointer/slice programs) | Med | Depends on A4/A5 |
+| E5 | Memory-safety oracle (ASan over pointer/slice programs) | Done / expanding | `fuzz-asan`, gated by `m0` and nightly but omitted from `fast` with the other env-fragile sanitizer gates; covers C-emitted memory safety over the current nullable/non-null pointer, byte-view slice, and `[]mut T` slice generator surface. |
 | E6 | Round-trip / idempotence (re-parse, re-lower → stable) | Done / expanding | `fuzz-roundtrip`, gated by `m0`/`fast`; generated and formatted source both check, `fmt(fmt(src)) == fmt(src)`, stripped token streams match, and emitted C matches after source-location normalization. |
 | E7 | Crash-bucketing & auto-minimization of findings | Done / expanding | `mcfuzz.py run` prints root-cause bucket summaries on failure, can write `--triage-dir` JSONL findings, and `--shrink-failures` opt-in minimizes the first finding per signature. |
 | E8 | Trap-location/trap-kind agreement | Done / expanding | `fuzz-trapsite`, gated by `m0`/`fast`; generated trapping programs run through both backends with trap helpers instrumented in temp artifacts, and normalized outcomes must agree as `ok:<stdout>`, `trap:<Kind>`, or `status:<rc>`. |
@@ -228,20 +232,25 @@ roundtrip, artifacts) + 3 real C-backend bugs found & fixed. The original core o
   backend's emitted temp C has `mc_trap_<Kind>()` helper bodies rewritten to deterministic
   `exit(<code>)`; the LLVM backend links strong C definitions over the weak IR trap helpers.
   Runs normalize to `ok:<stdout>`, `trap:<Kind>`, or `status:<rc>` and mismatches are findings.
+- **A5** slices: byte-view slices and `[]mut T` views are now generated into runnable programs,
+  including `.len`, indexing, slice-of-slice, and slice function-parameter coverage.
+- **E5** memory-safety oracle (`fuzz-asan`): generated programs are emitted through the C backend,
+  compiled address-only with AddressSanitizer, and run with ASan leak detection disabled. This is
+  distinct from `fuzz-sanitize`/UBSan and targets the current pointer/slice generator surface:
+  nullable and non-null pointers, stack/global pointer reads, byte-view slices, and `[]mut T`
+  slices.
 
-**Current tally: 19 coverage items + 6 promoted oracles (metamorphic, optlevel, reference,
-roundtrip, artifacts, trapsite) + 3 real C-backend bugs found & fixed. The original core oracle
-family plus `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-corpus`,
+**Current tally: 19 coverage items + 7 promoted oracles (metamorphic, optlevel, reference,
+roundtrip, artifacts, trapsite, asan) + 3 real C-backend bugs found & fixed. The original core
+oracle family plus `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-corpus`,
 `fuzz-reference`, `fuzz-roundtrip`, `fuzz-artifacts`, and `fuzz-trapsite` now gate both `m0`
-and `fast`.**
+and `fast`; `fuzz-asan` gates `m0` and nightly only.**
 
 ### Blocked by missing backend support (can't be generated into runnable programs)
 
 - **A2** tagged unions with payload — **not runtime-lowerable**: even the spec's own
   `ReflectToken` union fails both `emit-c` and `emit-llvm` (`UnsupportedC/LlvmEmission`); tagged
   unions are a sema/comptime-reflection construct only. Needs tagged-union codegen first.
-- **A5** slices `[]T` — `arr[0..n]` -> `[]const T` hits `E_NO_IMPLICIT_POINTER_CONVERSION`; the
-  slice-construction surface is finicky/limited. Deferred (would unlock E5 memory-safety oracle).
 - **C4** cross-domain conversions — no clean plain↔`wrap`/`sat` conversion form
   (`wrap<u8>.from(p)` → `E_NO_IMPLICIT_CONVERSION`); only literal init + domain ops + `wrap_from`.
 - **D2** `extern fn` calls — not runnable without linking external definitions the harness can't
@@ -255,5 +264,5 @@ and `fast`.**
   absence of the oracle.
 - **D5** multi-module — needs an import/module system (no such surface today).
 - **F1** coverage-guided — blocked by subprocess speed (needs persistent/in-process harness).
-- Misc lower-value: C6/C7 (mostly covered), D3/D6, E5/E7, F2–F7, A10 (usize already
+- Misc lower-value: C6/C7 (mostly covered), D3/D6, E7, F2–F7, A10 (usize already
   generated)/A12 (depends on A2/A5).

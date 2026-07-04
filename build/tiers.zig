@@ -102,6 +102,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("move-fuzz"));
     m0_step.dependOn(ctx.cmd("fuzz"));
     m0_step.dependOn(ctx.cmd("fuzz-sanitize"));
+    m0_step.dependOn(ctx.cmd("fuzz-asan"));
     m0_step.dependOn(ctx.cmd("fuzz-trap"));
     m0_step.dependOn(ctx.cmd("fuzz-trapsite"));
     m0_step.dependOn(ctx.cmd("fuzz-robust"));
@@ -896,7 +897,7 @@ pub fn register(ctx: *h.Ctx) void {
     // metamorphic and independent-reference semantics, opt-level stability,
     // finite-float bit equality, and corpus replay). It deliberately omits the
     // QEMU boot tests and the env-fragile
-    // gates (LLVM-IR sweeps needing `llvm-as`, the ASan/UBSan sanitize pass, and
+    // gates (LLVM-IR sweeps needing `llvm-as`, the ASan/UBSan sanitizer passes, and
     // the riscv-assembler paths) — run `m0` for those. Pair it with `-j`
     // oversubscription (e.g. `zig build fast -j28`).
     const fast_step = b.step("fast", "Inner-loop gate: host-only unit + spec-coverage tests, emit-C sweep, C/LLVM differential, and the fuzz family — no QEMU");

@@ -67,6 +67,9 @@ jobs:
           - name: reference
             oracle: reference
             extra_args: ""
+          - name: asan
+            oracle: asan
+            extra_args: ""
     steps:
       # actions/checkout@v4
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5

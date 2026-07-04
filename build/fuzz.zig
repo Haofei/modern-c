@@ -2,12 +2,14 @@ const std = @import("std");
 const h = @import("helpers.zig");
 
 // The mcfuzz oracle family (generation, trap consistency, robustness, fail-closed,
-// determinism, full-pipeline, artifact consistency, round-trip/idempotence, and the
-// metamorphic/optlevel/floatbits/reference/corpus oracles).
+// determinism, full-pipeline, artifact consistency, round-trip/idempotence,
+// sanitizer, and the metamorphic/optlevel/floatbits/reference/corpus oracles).
 pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "fuzz", "mcfuzz: type-directed differential fuzzer over the full scalar type system (C vs LLVM)", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--mcc", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "fuzz-sanitize", "mcfuzz: run generated full-type-system programs' emitted C under UBSan", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "sanitize", "--mcc", "zig-out/bin/mcc" });
+
+    _ = h.addScriptTest(ctx, "fuzz-asan", "mcfuzz: run generated pointer/slice programs' emitted C under AddressSanitizer", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "asan", "--mcc", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "fuzz-trap", "mcfuzz: trap-consistency — generated programs that may trap must trap on both backends together", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--trapping", "--mcc", "zig-out/bin/mcc" });
 

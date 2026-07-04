@@ -15,6 +15,8 @@ wrap<u64>, this is a small *framework*:
         evaluation-order / ABI divergences);
       * sanitize     — compile the emitted C with UBSan and run (undefined behavior the C
         backend should never emit for safe MC);
+      * asan         — compile the emitted C with ASan and run (memory-safety bugs over
+        generated pointer/slice programs);
       * roundtrip    — format generated source, re-check it, prove formatter idempotence, and
         assert formatting preserves the lexed token stream and emitted C.
       * trapsite     — for trapping programs, instrument backend trap helpers and assert C/LLVM
@@ -29,7 +31,7 @@ Usage:
   tools/fuzz/mcfuzz.py gen <seed>                       # print one program
   tools/fuzz/mcfuzz.py run [--count N] [--oracle X] [--start S] [--jobs J] [--mcc PATH]
         [--triage-dir DIR] [--shrink-failures]
-        oracle: differential (default) | sanitize | robust | failclosed | determinism |
+        oracle: differential (default) | sanitize | asan | robust | failclosed | determinism |
                 pipeline | artifacts | roundtrip | metamorphic | optlevel | floatbits |
                 reference | trapsite
 """
@@ -1382,6 +1384,29 @@ def _ubsan_runtime_available():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _asan_runtime_available():
+    """True if clang can LINK and RUN a trivial program with -fsanitize=address. ASan commonly
+    depends on compiler-rt pieces outside the base clang package, so absence is an unsupported
+    environment rather than a compiler/generator finding."""
+    import tempfile, shutil
+    clang = os.environ.get("CLANG", "clang")
+    d = tempfile.mkdtemp()
+    try:
+        c = os.path.join(d, "p.c")
+        app = os.path.join(d, "p")
+        open(c, "w").write("int main(void){return 0;}\n")
+        link = subprocess.run([clang, "-fsanitize=address", c, "-o", app], capture_output=True)
+        if link.returncode != 0:
+            return False
+        run = subprocess.run([app], capture_output=True,
+                             env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
+        return run.returncode == 0
+    except Exception:
+        return False
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def oracle_sanitize(env, seed, src_path, work):
     """Compile the emitted C with UBSan and run; any report is a finding."""
     obj = os.path.join(work, "c.o")
@@ -1398,6 +1423,30 @@ def oracle_sanitize(env, seed, src_path, work):
     msg = (r.stdout + r.stderr).decode("utf-8", "replace")
     if "runtime error" in msg or r.returncode not in (0,):
         return "UBSan: %s" % (next((l for l in msg.splitlines() if "runtime error" in l), "abort rc=%d" % r.returncode))
+    return None
+
+
+def oracle_asan(env, seed, src_path, work):
+    """Compile the emitted C with AddressSanitizer and run; any ASan report/nonzero exit is a
+    finding. Keep this address-only so it stays distinct from the UBSan `sanitize` oracle."""
+    obj = os.path.join(work, "c_asan.o")
+    san = ["-fsanitize=address", "-fno-omit-frame-pointer"]
+    err = _emit_c_obj(env["mcc"], env["clang"], src_path, obj, extra=san)
+    if err is not None:
+        return "C backend emit/compile failed"
+    drv = os.path.join(work, "d.c"); open(drv, "w").write(DRIVER)
+    app = os.path.join(work, "asan_app")
+    link = subprocess.run([env["clang"], *env["link_flags"], "-w", *san, drv, obj, "-lm", "-o", app],
+                          capture_output=True)
+    if link.returncode != 0:
+        return "link failed"
+    r = subprocess.run([app], capture_output=True,
+                       env={**os.environ, "ASAN_OPTIONS": "halt_on_error=1:abort_on_error=1:detect_leaks=0"})
+    msg = (r.stdout + r.stderr).decode("utf-8", "replace")
+    if "ERROR: AddressSanitizer:" in msg or r.returncode not in (0,):
+        line = next((l for l in msg.splitlines() if "ERROR: AddressSanitizer:" in l),
+                    "abort rc=%d" % r.returncode)
+        return "ASan: %s" % line
     return None
 
 
@@ -2021,6 +2070,7 @@ def oracle_reference(env, seed, src_path, work):
 
 
 ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize,
+           "asan": oracle_asan,
            "robust": oracle_robust, "failclosed": oracle_failclosed,
            "determinism": oracle_determinism, "pipeline": oracle_pipeline,
            "artifacts": oracle_artifacts,
@@ -2031,7 +2081,7 @@ ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize,
 
 
 def _oracle_needs_clang(name, cmd):
-    return cmd == "corpus" or name in ("differential", "sanitize", "metamorphic",
+    return cmd == "corpus" or name in ("differential", "sanitize", "asan", "metamorphic",
                                        "optlevel", "floatbits", "reference", "trapsite")
 
 
@@ -2093,6 +2143,10 @@ def finding_signature(finding, oracle_name=None):
     if body.startswith("UBSan:"):
         m = re.search(r"runtime error:\s*([^:\n]+)", body)
         return "ubsan:" + (re.sub(r"\s+", "-", m.group(1).strip().lower()) if m else "abort")
+
+    if body.startswith("ASan:"):
+        m = re.search(r"ERROR: AddressSanitizer:\s*([^ \n]+)", body)
+        return "asan:" + (re.sub(r"[^a-z0-9_-]+", "-", m.group(1).strip().lower()) if m else "abort")
 
     m = re.match(r"([A-Z-]+(?: [A-Z-]+)*) DIVERGENCE \(([^)]+)\)", body)
     if m:
@@ -2417,6 +2471,9 @@ def main():
     if args.oracle == "sanitize" and not _ubsan_runtime_available():
         print("SKIP: mcfuzz/sanitize — UBSan runtime (compiler-rt) unavailable for this host arch")
         return 0
+    if args.oracle == "asan" and not _asan_runtime_available():
+        print("SKIP: mcfuzz/asan — ASan runtime (compiler-rt) unavailable for this host arch")
+        return 0
     seeds = range(args.start, args.start + args.count)
     fails, suspects = [], []
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
@@ -2457,6 +2514,7 @@ def main():
     summary = {
         "differential": "C and LLVM agree",
         "sanitize": "emitted C is UBSan-clean",
+        "asan": "emitted C is ASan-clean",
         "robust": "mcc check never crashed/hung on mutated or grammar-hostile input",
         "failclosed": "mcc check rejected every ill-typed program (no soundness hole)",
         "determinism": "emit-c/emit-llvm are byte-deterministic",
