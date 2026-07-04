@@ -266,6 +266,52 @@ assert_contains "$c_backend_output" "  |     ^~~~~~~~~" "C backend unsupported c
 assert_not_contains "$c_backend_output" "UnsupportedCEmission" "raw C backend unsupported error"
 assert_not_contains "$c_backend_output" "src/main.zig" "C backend Zig stack trace"
 
+cat >"$WORK/backend_iflet_alias_nullable.mc" <<'MC'
+type MaybeU32 = ?u32;
+extern fn maybe() -> MaybeU32;
+
+export fn main() -> u32 {
+    if let v = maybe() {
+        return v;
+    }
+    return 0;
+}
+MC
+
+c_iflet_output=""
+if c_iflet_output=$("$MCC" emit-c "$WORK/backend_iflet_alias_nullable.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — unsupported C if-let value unexpectedly succeeded"
+    exit 1
+fi
+assert_contains "$c_iflet_output" "backend_iflet_alias_nullable.mc:5:16: error: E_BACKEND_UNSUPPORTED" "C if-let unsupported diagnostic location"
+assert_contains "$c_iflet_output" "  |     if let v = maybe() {" "C if-let unsupported source-line snippet"
+assert_contains "$c_iflet_output" "  |                ^~~~~~~" "C if-let unsupported caret underline"
+assert_not_contains "$c_iflet_output" "UnsupportedCEmission" "raw C if-let unsupported error"
+assert_not_contains "$c_iflet_output" "src/main.zig" "C if-let Zig stack trace"
+
+cat >"$WORK/backend_iflet_alias_result.mc" <<'MC'
+type MyResult = Result<u32, u32>;
+extern fn make_result() -> MyResult;
+
+export fn main() -> u32 {
+    if let ok(v) = make_result() {
+        return v;
+    }
+    return 0;
+}
+MC
+
+c_result_iflet_output=""
+if c_result_iflet_output=$("$MCC" emit-c "$WORK/backend_iflet_alias_result.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — unsupported C result if-let value unexpectedly succeeded"
+    exit 1
+fi
+assert_contains "$c_result_iflet_output" "backend_iflet_alias_result.mc:5:20: error: E_BACKEND_UNSUPPORTED" "C result if-let unsupported diagnostic location"
+assert_contains "$c_result_iflet_output" "  |     if let ok(v) = make_result() {" "C result if-let unsupported source-line snippet"
+assert_contains "$c_result_iflet_output" "  |                    ^~~~~~~~~~~~~" "C result if-let unsupported caret underline"
+assert_not_contains "$c_result_iflet_output" "UnsupportedCEmission" "raw C result if-let unsupported error"
+assert_not_contains "$c_result_iflet_output" "src/main.zig" "C result if-let Zig stack trace"
+
 llvm_backend_output=""
 if llvm_backend_output=$("$MCC" emit-llvm "$WORK/backend_unsupported.mc" 2>&1); then
     echo "FAIL: diagnostics-test — unsupported LLVM backend construct unexpectedly succeeded"

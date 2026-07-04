@@ -3284,6 +3284,7 @@ const CEmitter = struct {
     fn emitIfLet(self: *CEmitter, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         if (node.pattern.kind == .tag_bind) {
             const subject = (try lower_c_switch.resultSubjectForValueExpr(self.switchEmitContext(), node.value, locals)) orelse {
+                self.reportUnsupported(node.value.span, "result if-let value");
                 try self.writeIndent();
                 try self.out.print(self.allocator, "/* unsupported result if-let value: {s} */\n", .{@tagName(node.value.kind)});
                 return error.UnsupportedCEmission;
@@ -3292,6 +3293,7 @@ const CEmitter = struct {
         }
 
         const subject = (try lower_c_switch.nullableSubjectForExpr(self.switchEmitContext(), node.value, locals)) orelse {
+            self.reportUnsupported(node.value.span, "if-let value");
             try self.writeIndent();
             try self.out.print(self.allocator, "/* unsupported if-let value: {s} */\n", .{@tagName(node.value.kind)});
             return error.UnsupportedCEmission;
