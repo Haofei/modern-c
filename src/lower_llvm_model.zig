@@ -115,6 +115,21 @@ pub const DebugLocation = struct {
     column: usize,
 };
 
+pub const DebugLocalKind = enum {
+    parameter,
+    variable,
+};
+
+pub const DebugLocal = struct {
+    id: usize,
+    name: []const u8,
+    scope: usize,
+    line: usize,
+    ty: ast.TypeExpr,
+    kind: DebugLocalKind,
+    arg_index: ?usize = null,
+};
+
 pub const LoopLabels = struct {
     break_label: []const u8,
     continue_label: []const u8,

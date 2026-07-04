@@ -159,6 +159,8 @@ const ArgValue = lower_llvm_model.ArgValue;
 const StringLiteralGlobal = lower_llvm_model.StringLiteralGlobal;
 const DebugFunction = lower_llvm_model.DebugFunction;
 const DebugLocation = lower_llvm_model.DebugLocation;
+const DebugLocal = lower_llvm_model.DebugLocal;
+const DebugLocalKind = lower_llvm_model.DebugLocalKind;
 const LoopLabels = lower_llvm_model.LoopLabels;
 const RawManyOffsetInfo = lower_llvm_model.RawManyOffsetInfo;
 const EnumRawCallInfo = lower_llvm_model.EnumRawCallInfo;
@@ -171,6 +173,12 @@ const IntRange = lower_llvm_model.IntRange;
 const AtomicCallInfo = lower_llvm_model.AtomicCallInfo;
 const MaybeUninitCallInfo = lower_llvm_model.MaybeUninitCallInfo;
 const ResultTypeInfo = lower_llvm_model.ResultTypeInfo;
+
+const DebugBasicType = struct {
+    name: []const u8,
+    size_bits: u16,
+    encoding: []const u8,
+};
 
 /// Construct the `Backend` registry entry for the LLVM backend. The LLVM
 /// backend is profile-agnostic and has no source-map artifact.
@@ -259,6 +267,7 @@ fn appendLlvmCheckedReport(allocator: std.mem.Allocator, module: ast.Module, out
         .string_literals = std.ArrayList(StringLiteralGlobal).empty,
         .debug_functions = std.ArrayList(DebugFunction).empty,
         .debug_locations = std.ArrayList(DebugLocation).empty,
+        .debug_locals = std.ArrayList(DebugLocal).empty,
         .source_path = source_path,
         .target_arch = target_arch,
         .reporter = reporter,
@@ -404,7 +413,10 @@ const LlvmEmitter = struct {
     string_literals: std.ArrayList(StringLiteralGlobal) = undefined,
     debug_functions: std.ArrayList(DebugFunction) = undefined,
     debug_locations: std.ArrayList(DebugLocation) = undefined,
+    debug_locals: std.ArrayList(DebugLocal) = undefined,
     debug_next_id: usize = 6,
+    need_dbg_declare: bool = false,
+    need_dbg_value: bool = false,
     current_debug_scope: ?usize = null,
     current_debug_span: ?ast.Span = null,
     current_return_ty: ?ast.TypeExpr = null,
@@ -465,6 +477,7 @@ const LlvmEmitter = struct {
         self.string_literals.deinit(self.allocator);
         self.debug_functions.deinit(self.allocator);
         self.debug_locations.deinit(self.allocator);
+        self.debug_locals.deinit(self.allocator);
         self.scratch.deinit();
     }
 
@@ -1063,7 +1076,7 @@ const LlvmEmitter = struct {
         self.local_types.clearRetainingCapacity();
         self.local_slots.clearRetainingCapacity();
         self.defer_stack.clearRetainingCapacity();
-        for (fn_decl.params) |param| {
+        for (fn_decl.params, 0..) |param, i| {
             try self.local_types.put(param.name.text, param.ty);
             if (self.isVaListType(param.ty)) {
                 const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{param.name.text});
@@ -1075,6 +1088,9 @@ const LlvmEmitter = struct {
                 try self.emitAlloca(ptr, try self.llvmType(param.ty));
                 try self.out.print(self.allocator, "  store {s} %{s}, ptr {s}\n", .{ try self.llvmType(param.ty), param.name.text, ptr });
                 try self.local_slots.put(param.name.text, .{ .ty = param.ty, .ptr = ptr });
+            } else {
+                const value = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{param.name.text});
+                try self.emitDebugValue(param.name.text, param.ty, value, param.name.span, i + 1);
             }
         }
 
@@ -1976,6 +1992,7 @@ const LlvmEmitter = struct {
         try self.emitAlloca(ptr, llvm_ty);
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
+        try self.emitDebugDeclare(name, ty, ptr, local.names[0].span, null);
         // `var ap: va_list = va.start();` — the slot IS the va_list cursor storage; initialize
         // it in place with llvm.va_start (it has no value to store).
         if (init.kind == .call and isVaStartCall(init.kind.call.callee.*)) {
@@ -4729,6 +4746,8 @@ const LlvmEmitter = struct {
         try self.emitIntrinsicSet(self.need_sadd);
         try self.emitIntrinsicSet(self.need_ssub);
         try self.emitIntrinsicSet(self.need_smul);
+        if (self.need_dbg_declare) try self.out.appendSlice(self.allocator, "declare void @llvm.dbg.declare(metadata, metadata, metadata)\n");
+        if (self.need_dbg_value) try self.out.appendSlice(self.allocator, "declare void @llvm.dbg.value(metadata, metadata, metadata)\n");
     }
 
     fn emitIntrinsicSet(self: *LlvmEmitter, set: std.StringHashMap(void)) !void {
@@ -4797,6 +4816,27 @@ const LlvmEmitter = struct {
         try self.out.appendSlice(self.allocator, "!3 = !{i32 1, !\"wchar_size\", i32 4}\n");
         try self.out.appendSlice(self.allocator, "!4 = !DISubroutineType(types: !5)\n");
         try self.out.appendSlice(self.allocator, "!5 = !{null}\n");
+        var debug_type_ids = std.StringHashMap(usize).init(self.allocator);
+        defer debug_type_ids.deinit();
+        var debug_types: std.ArrayList(DebugBasicType) = .empty;
+        defer debug_types.deinit(self.allocator);
+        for (self.debug_locals.items) |local| {
+            const ty = self.debugBasicType(local.ty) orelse continue;
+            if (!debug_type_ids.contains(ty.name)) {
+                const id = self.debug_next_id;
+                self.debug_next_id += 1;
+                try debug_type_ids.put(ty.name, id);
+                try debug_types.append(self.allocator, ty);
+            }
+        }
+        for (debug_types.items) |ty| {
+            const id = debug_type_ids.get(ty.name) orelse continue;
+            try self.out.print(
+                self.allocator,
+                "!{d} = !DIBasicType(name: \"{s}\", size: {d}, encoding: {s})\n",
+                .{ id, ty.name, ty.size_bits, ty.encoding },
+            );
+        }
         for (self.debug_functions.items) |function| {
             const name = try escapedLlvmString(self.scratch.allocator(), function.name);
             try self.out.print(
@@ -4804,6 +4844,23 @@ const LlvmEmitter = struct {
                 "!{d} = distinct !DISubprogram(name: \"{s}\", linkageName: \"{s}\", scope: !1, file: !1, line: {d}, type: !4, scopeLine: {d}, spFlags: DISPFlagDefinition, unit: !0)\n",
                 .{ function.id, name, name, function.line, function.line },
             );
+        }
+        for (self.debug_locals.items) |local| {
+            const ty = self.debugBasicType(local.ty) orelse continue;
+            const type_id = debug_type_ids.get(ty.name) orelse continue;
+            const name = try escapedLlvmString(self.scratch.allocator(), local.name);
+            switch (local.kind) {
+                .parameter => try self.out.print(
+                    self.allocator,
+                    "!{d} = !DILocalVariable(name: \"{s}\", arg: {d}, scope: !{d}, file: !1, line: {d}, type: !{d})\n",
+                    .{ local.id, name, local.arg_index orelse 0, local.scope, local.line, type_id },
+                ),
+                .variable => try self.out.print(
+                    self.allocator,
+                    "!{d} = !DILocalVariable(name: \"{s}\", scope: !{d}, file: !1, line: {d}, type: !{d})\n",
+                    .{ local.id, name, local.scope, local.line, type_id },
+                ),
+            }
         }
         for (self.debug_locations.items) |location| {
             try self.out.print(
@@ -4831,6 +4888,62 @@ const LlvmEmitter = struct {
         const span = self.current_debug_span orelse return "";
         const location = (try self.debugLocation(span)) orelse return "";
         return try std.fmt.allocPrint(self.scratch.allocator(), ", !dbg !{d}", .{location});
+    }
+
+    fn emitDebugDeclare(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, ptr: []const u8, span: ast.Span, arg_index: ?usize) !void {
+        if (self.current_debug_scope == null or self.debugBasicType(ty) == null) return;
+        const local_id = try self.reserveDebugLocal(name, ty, span, if (arg_index == null) .variable else .parameter, arg_index);
+        const location = (try self.debugLocation(span)) orelse return;
+        self.need_dbg_declare = true;
+        try self.out.print(
+            self.allocator,
+            "  call void @llvm.dbg.declare(metadata ptr {s}, metadata !{d}, metadata !DIExpression()), !dbg !{d}\n",
+            .{ ptr, local_id, location },
+        );
+    }
+
+    fn emitDebugValue(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, value: []const u8, span: ast.Span, arg_index: usize) !void {
+        if (self.current_debug_scope == null or self.debugBasicType(ty) == null) return;
+        const local_id = try self.reserveDebugLocal(name, ty, span, .parameter, arg_index);
+        const location = (try self.debugLocation(span)) orelse return;
+        self.need_dbg_value = true;
+        try self.out.print(
+            self.allocator,
+            "  call void @llvm.dbg.value(metadata {s} {s}, metadata !{d}, metadata !DIExpression()), !dbg !{d}\n",
+            .{ try self.llvmType(ty), value, local_id, location },
+        );
+    }
+
+    fn reserveDebugLocal(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, span: ast.Span, kind: DebugLocalKind, arg_index: ?usize) !usize {
+        const scope = self.current_debug_scope orelse return error.UnsupportedLlvmEmission;
+        const id = self.debug_next_id;
+        self.debug_next_id += 1;
+        try self.debug_locals.append(self.allocator, .{
+            .id = id,
+            .name = name,
+            .scope = scope,
+            .line = debugLine(span),
+            .ty = ty,
+            .kind = kind,
+            .arg_index = arg_index,
+        });
+        return id;
+    }
+
+    fn debugBasicType(self: *LlvmEmitter, ty: ast.TypeExpr) ?DebugBasicType {
+        const resolved = self.resolveAliasType(ty);
+        if (typeNameEql(resolved, "bool")) return .{ .name = "bool", .size_bits = 1, .encoding = "DW_ATE_boolean" };
+        if (typeNameEql(resolved, "f32")) return .{ .name = "f32", .size_bits = 32, .encoding = "DW_ATE_float" };
+        if (typeNameEql(resolved, "f64")) return .{ .name = "f64", .size_bits = 64, .encoding = "DW_ATE_float" };
+        const bits = integerBits(resolved) orelse return null;
+        return switch (resolved.kind) {
+            .name => |name| .{
+                .name = name.text,
+                .size_bits = bits,
+                .encoding = if (isSignedInteger(resolved)) "DW_ATE_signed" else "DW_ATE_unsigned",
+            },
+            else => null,
+        };
     }
 
     fn llvmType(self: *LlvmEmitter, ty: ast.TypeExpr) anyerror![]const u8 {

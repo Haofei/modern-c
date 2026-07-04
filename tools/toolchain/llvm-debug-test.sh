@@ -52,11 +52,40 @@ function_die() {
     grep -q "DW_AT_name.*$name" "$WORK/$stem.dwarf.txt"
 }
 
+die_name() {
+    local stem="$1"
+    local tag="$2"
+    local name="$3"
+    awk -v tag="$tag" -v name="\"$name\"" '
+        $0 ~ tag { in_die = 1; next }
+        in_die && /DW_TAG_/ { in_die = 0 }
+        in_die && /DW_AT_name/ && index($0, name) { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$WORK/$stem.dwarf.txt"
+}
+
+formal_parameter_die() {
+    die_name "$1" "DW_TAG_formal_parameter" "$2"
+}
+
+variable_die() {
+    die_name "$1" "DW_TAG_variable" "$2"
+}
+
+base_type_die() {
+    die_name "$1" "DW_TAG_base_type" "$2"
+}
+
 compile_fixture tests/llvm/statement_workflow.mc statement_workflow
 function_die statement_workflow void_call
 function_die statement_workflow scoped_block
 function_die statement_workflow assignment_workflow
 function_die statement_workflow contract_block_return
+formal_parameter_die statement_workflow value
+formal_parameter_die statement_workflow left
+variable_die statement_workflow out
+variable_die statement_workflow inner
+base_type_die statement_workflow u32
 line_row statement_workflow 13 9
 line_row statement_workflow 36 5
 line_row statement_workflow 43 9
@@ -92,4 +121,4 @@ line_row if_let_narrowing 48 5
 line_row if_let_narrowing 56 20
 line_row if_let_narrowing 57 16
 
-echo "PASS: llvm-debug-test - LLVM objects contain DWARF file, function, and source line mappings across calls, control flow, atomics, fences, and narrowing"
+echo "PASS: llvm-debug-test - LLVM objects contain DWARF file, function, parameter/local variable, type, and source line mappings across calls, control flow, atomics, fences, and narrowing"
