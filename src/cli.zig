@@ -87,6 +87,7 @@ pub const Options = struct {
                 if (opts.remap_prefix != null) return error.InvalidArgs;
                 opts.remap_prefix = try parsePathRemap(flag["--remap-prefix=".len..]);
             } else {
+                std.debug.print("error: unknown option: {s}\n", .{flag});
                 return error.InvalidArgs;
             }
         }
@@ -192,20 +193,25 @@ pub const Options = struct {
         const needs_structs = isEmitLayout(command) or isEmitCStruct(command);
         const is_emit_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-llvm");
 
-        if (seen.saw_profile_flag and !is_c_artifact_command) return error.InvalidArgs;
-        if (seen.saw_checks_flag and !accepts_checks) return error.InvalidArgs;
-        if (seen.saw_stub_asm_flag and !is_emit_command) return error.InvalidArgs;
-        if (seen.saw_arch_flag and !accepts_checks) return error.InvalidArgs;
-        if (seen.saw_platform_flag and !accepts_checks) return error.InvalidArgs;
-        if (seen.saw_std_dir_flag and !isSourceLoadingCommand(command)) return error.InvalidArgs;
-        if (seen.saw_remap_prefix_flag and !is_c_artifact_command) return error.InvalidArgs;
-        if (seen.saw_json_flag and !std.mem.eql(u8, command, "check")) return error.InvalidArgs;
+        if (seen.saw_profile_flag and !is_c_artifact_command) return invalidOptionForCommand("--profile", command);
+        if (seen.saw_checks_flag and !accepts_checks) return invalidOptionForCommand("--checks", command);
+        if (seen.saw_stub_asm_flag and !is_emit_command) return invalidOptionForCommand("--stub-asm", command);
+        if (seen.saw_arch_flag and !accepts_checks) return invalidOptionForCommand("--arch", command);
+        if (seen.saw_platform_flag and !accepts_checks) return invalidOptionForCommand("--platform", command);
+        if (seen.saw_std_dir_flag and !isSourceLoadingCommand(command)) return invalidOptionForCommand("--std-dir", command);
+        if (seen.saw_remap_prefix_flag and !is_c_artifact_command) return invalidOptionForCommand("--remap-prefix", command);
+        if (seen.saw_json_flag and !std.mem.eql(u8, command, "check")) return invalidOptionForCommand("--json", command);
         if (self.checks.csan and (self.checks.ksan or self.checks.msan)) {
             std.debug.print("error: --checks=csan cannot be combined with ksan/msan (a single raw access wraps one shadow protocol)\n", .{});
             return error.InvalidArgs;
         }
-        if (self.check_fmt and !std.mem.eql(u8, command, "fmt")) return error.InvalidArgs;
-        if (self.structs_flag != null and !needs_structs) return error.InvalidArgs;
+        if (self.check_fmt and !std.mem.eql(u8, command, "fmt")) return invalidOptionForCommand("--check", command);
+        if (self.structs_flag != null and !needs_structs) return invalidOptionForCommand("--structs", command);
         if (needs_structs and self.structs_flag == null) return error.InvalidArgs;
+    }
+
+    fn invalidOptionForCommand(option: []const u8, command: []const u8) error{InvalidArgs} {
+        std.debug.print("error: option {s} is not valid for command `{s}`\n", .{ option, command });
+        return error.InvalidArgs;
     }
 };

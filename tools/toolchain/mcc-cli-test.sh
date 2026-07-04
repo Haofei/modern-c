@@ -55,6 +55,20 @@ assert_stderr_contains() {
     fi
 }
 
+assert_stderr_starts_with() {
+    local needle="$1"
+    local label="$2"
+    local first_line
+    first_line="$(head -n 1 "$ERR")"
+    if [ "$first_line" != "$needle" ]; then
+        echo "FAIL: mcc-cli-test — unexpected stderr start for $label"
+        echo "expected first line: $needle"
+        echo "stderr:"
+        cat "$ERR"
+        exit 1
+    fi
+}
+
 assert_stdout_empty() {
     local label="$1"
     if [ -s "$OUT" ]; then
@@ -118,7 +132,14 @@ printf 'export fn main() -> u32 { return 0; }\n' >"$WORK/ok.mc"
 run_case check "$WORK/ok.mc" --check
 assert_rc 1 "invalid check flag"
 assert_stdout_empty "invalid check flag"
+assert_stderr_starts_with 'error: option --check is not valid for command `check`' "invalid check flag"
 assert_stderr_contains "usage:" "invalid check flag usage"
+
+run_case check "$WORK/ok.mc" --definitely-bad
+assert_rc 1 "unknown check flag"
+assert_stdout_empty "unknown check flag"
+assert_stderr_starts_with "error: unknown option: --definitely-bad" "unknown check flag"
+assert_stderr_contains "usage:" "unknown check flag usage"
 
 mkdir -p "$WORK/std"
 run_case fmt "$WORK/ok.mc" --std-dir="$WORK/std"
