@@ -451,7 +451,9 @@ pub const Checker = struct {
 
         // Orphan rule: an `impl` of an `opaque struct` must live in the type's defining file,
         // so the name-keyed private-field gate (`opaqueAccessAllowed`) cannot be forged by a
-        // peer `impl <OpaqueType>` written in another file. No-op without file boundaries.
+        // peer `impl <OpaqueType>` written in another file. Trait impls follow the spec's
+        // wider coherence boundary: `impl Trait for Type` must be in `Type`'s declaring file.
+        // No-op without file boundaries.
         if (!self.generic_template_precheck) self.checkOrphanImpls(module);
 
         // Tier 1 traits: conformance (every trait method present, matching self-mode +
@@ -5739,16 +5741,18 @@ pub const Checker = struct {
         }
     }
 
-    // Orphan rule (closes the name-keyed opacity bypass). MC's field-privacy for an
-    // `opaque struct` is decided purely on the symbol name (`opaqueAccessAllowed`): a function
-    // named `Owner__member` may read `Owner`'s private fields. Because the loader flattens all
-    // files into one unit with no module visibility, ANY file could write a peer
-    // `impl <OpaqueType> { fn member(...) { ...&t.private... } }` — the parser mangles it to the
-    // SAME `Owner__member` symbol and the name-match grants access, defeating Cap/Rights/Tainted/
-    // Guarded/Guard opacity with no `unsafe`. This pass requires that every `impl` accessor of an
-    // `opaque struct` live in the SAME file as the type's definition; a cross-file peer `impl`
-    // is E_ORPHAN_IMPL. Co-located stdlib/kernel impls (the legitimate case) are accepted. No-op
-    // without file boundaries (single-file/standalone check — nothing cross-file to forge).
+    // Orphan rule (closes the name-keyed opacity bypass and enforces trait coherence ownership).
+    // MC's field-privacy for an `opaque struct` is decided purely on the symbol name
+    // (`opaqueAccessAllowed`): a function named `Owner__member` may read `Owner`'s private
+    // fields. Because the loader flattens all files into one unit with no module visibility,
+    // ANY file could write a peer `impl <OpaqueType> { fn member(...) { ...&t.private... } }` —
+    // the parser mangles it to the SAME `Owner__member` symbol and the name-match grants access,
+    // defeating Cap/Rights/Tainted/Guarded/Guard opacity with no `unsafe`. This pass requires
+    // that every inherent `impl` accessor of an `opaque struct` live in the SAME file as the
+    // type's definition. Trait conformance impls are stricter per §32.2: `impl Trait for Type`
+    // belongs in the file declaring `Type`, even when `Type` is non-opaque. Co-located
+    // stdlib/kernel impls (the legitimate case) are accepted. No-op without file boundaries
+    // (single-file/standalone check — nothing cross-file to forge).
     fn checkOrphanImpls(self: *Checker, module: ast.Module) void {
         if (self.file_boundaries == null) return;
         // Map each opaque struct's OWNER segment -> its defining file. Keying on the owner
@@ -5759,37 +5763,73 @@ pub const Checker = struct {
         // orphan rule must compare files on the SAME granularity.
         var opaque_files = std.StringHashMap([]const u8).init(self.reporter.allocator);
         defer opaque_files.deinit();
+        var type_files = std.StringHashMap([]const u8).init(self.reporter.allocator);
+        defer type_files.deinit();
         for (module.decls) |decl| {
-            const sd = switch (decl.kind) {
-                .struct_decl => |s| s,
-                else => continue,
-            };
-            if (!sd.is_opaque) continue;
-            const file = self.originFile(sd.name.span.offset) orelse continue;
-            const owner = ownerSegment(sd.name.text);
-            // First definition of an owner wins; later monomorphization specializations of the
-            // same opaque template share the owner and the same defining file, so ignore dups.
-            if (!opaque_files.contains(owner)) opaque_files.put(owner, file) catch {
-                self.oom = true;
-            };
+            switch (decl.kind) {
+                .struct_decl => |sd| {
+                    const file = self.originFile(sd.name.span.offset) orelse continue;
+                    self.recordTypeFile(&type_files, sd.name, file);
+                    if (sd.is_opaque) {
+                        const owner = ownerSegment(sd.name.text);
+                        // First definition of an owner wins; later monomorphization
+                        // specializations of the same opaque template share the owner and the
+                        // same defining file, so ignore dups.
+                        if (!opaque_files.contains(owner)) opaque_files.put(owner, file) catch {
+                            self.oom = true;
+                        };
+                    }
+                },
+                .enum_decl => |ed| if (self.originFile(ed.name.span.offset)) |file| self.recordTypeFile(&type_files, ed.name, file),
+                .union_decl => |ud| if (self.originFile(ud.name.span.offset)) |file| self.recordTypeFile(&type_files, ud.name, file),
+                .packed_bits_decl => |pd| if (self.originFile(pd.name.span.offset)) |file| self.recordTypeFile(&type_files, pd.name, file),
+                .overlay_union_decl => |od| if (self.originFile(od.name.span.offset)) |file| self.recordTypeFile(&type_files, od.name, file),
+                .opaque_decl => |name| if (self.originFile(name.span.offset)) |file| self.recordTypeFile(&type_files, name, file),
+                .type_alias => |alias| if (self.originFile(alias.name.span.offset)) |file| self.recordTypeFile(&type_files, alias.name, file),
+                .fn_decl, .extern_fn, .global_decl, .trait_decl, .impl_trait => {},
+            }
         }
-        if (opaque_files.count() == 0) return;
         // Any function whose owner segment names an opaque struct is one of its `impl` accessors
         // (the parser mangles `impl Owner { fn m }` to `Owner__m`). It must originate in the SAME
         // file as the type's definition. A plain free function with no `__` owns itself, skipped.
-        for (module.decls) |decl| {
-            const fd = switch (decl.kind) {
-                .fn_decl, .extern_fn => |f| f,
-                else => continue,
-            };
-            const owner = ownerSegment(fd.name.text);
-            if (std.mem.eql(u8, owner, fd.name.text)) continue; // not an impl/qualified member
-            const type_file = opaque_files.get(owner) orelse continue; // owner isn't an opaque type
-            const member_file = self.originFile(fd.name.span.offset) orelse continue;
-            if (!std.mem.eql(u8, member_file, type_file)) {
-                self.errorCode(fd.name.span, "E_ORPHAN_IMPL", "impl of an opaque type must be in its defining module (file); a peer impl in another file cannot reach its private fields");
+        if (opaque_files.count() > 0) {
+            for (module.decls) |decl| {
+                const fd = switch (decl.kind) {
+                    .fn_decl, .extern_fn => |f| f,
+                    else => continue,
+                };
+                const owner = ownerSegment(fd.name.text);
+                if (std.mem.eql(u8, owner, fd.name.text)) continue; // not an impl/qualified member
+                const type_file = opaque_files.get(owner) orelse continue; // owner isn't an opaque type
+                const member_file = self.originFile(fd.name.span.offset) orelse continue;
+                if (!std.mem.eql(u8, member_file, type_file)) {
+                    self.errorCode(fd.name.span, "E_ORPHAN_IMPL", "impl of an opaque type must be in its defining module (file); a peer impl in another file cannot reach its private fields");
+                }
             }
         }
+        // Trait conformance impls attach methods to the target type's flat owner namespace, so
+        // the conformance must be declared with that target type. Builtin/scalar targets have no
+        // declaring file in this map and are left to the normal trait checks.
+        if (type_files.count() > 0) {
+            for (module.decls) |decl| {
+                const it = switch (decl.kind) {
+                    .impl_trait => |node| node,
+                    else => continue,
+                };
+                const type_file = type_files.get(it.type_name.text) orelse continue;
+                const impl_file = self.originFile(it.type_name.span.offset) orelse continue;
+                if (!std.mem.eql(u8, impl_file, type_file)) {
+                    self.errorCode(it.type_name.span, "E_ORPHAN_IMPL", "trait impl for a type must be in the file that declares the type");
+                }
+            }
+        }
+    }
+
+    fn recordTypeFile(self: *Checker, files: *std.StringHashMap([]const u8), name: ast.Ident, file: []const u8) void {
+        const owner = ownerSegment(name.text);
+        if (!files.contains(owner)) files.put(owner, file) catch {
+            self.oom = true;
+        };
     }
 
     // Tier 1 trait checks (docs/traits-design.md §7): conformance and coherence. The

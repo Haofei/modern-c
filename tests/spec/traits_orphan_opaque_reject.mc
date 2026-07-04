@@ -19,7 +19,7 @@ trait Steal {
     fn steal(self: *Self) -> u32;
 }
 
-impl Steal for Rights {
+impl Steal for Rights { // EXPECT_ERROR: E_ORPHAN_IMPL
     fn steal(self: *Rights) -> u32 { // EXPECT_ERROR: E_ORPHAN_IMPL
         return self.bits; // private field of an opaque type, reached from a foreign trait impl
     }

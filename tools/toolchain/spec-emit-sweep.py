@@ -46,6 +46,7 @@ OUT_OF_SCOPE = {
     "soundness_orphan_impl_reject.mc": "orphan-impl reject fixture (phase=sema; E_ORPHAN_IMPL owned by spec_tests.zig)",
     "traits_effect_sleep_in_atomic.mc": "effect-typed callees are EXPECT_ERROR-stripped, leaving dangling refs (phase=parse,sema; E_SLEEP_IN_ATOMIC owned by spec_tests.zig)",
     "traits_orphan_opaque_reject.mc": "pure compile_error fixture; residue emits a `static main` the sweep's -Wmain rejects (phase=sema; E_ORPHAN_IMPL owned by spec_tests.zig)",
+    "traits_orphan_nonopaque_reject.mc": "pure compile_error fixture with std import; residue cannot be chunk-isolated after EXPECT_ERROR stripping (phase=sema; E_ORPHAN_IMPL owned by spec_tests.zig)",
     "pointer_view_conversions.mc": "accept/reject pointer+view const-narrow cases share types the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_NO_IMPLICIT_POINTER_CONVERSION owned by spec_tests.zig; accept emit covered by tests/c_emit/pointer_views.mc + pointer_const_narrow.mc)",
     "closure_typing.mc": "accept/reject closure typing cases share helper functions and globals; stripping rejected closure bodies leaves dangling references (phase=sema; E_CLOSURE_SIGNATURE_MISMATCH/E_LOCAL_ADDRESS_ESCAPE owned by spec_tests.zig; accept emit covered by tests/c_emit/global_closure.mc)",
 }
