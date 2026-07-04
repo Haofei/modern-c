@@ -175,9 +175,9 @@ if mono_output=$("$MCC" check tests/spec/monomorphization_limits.mc 2>&1); then
 fi
 assert_occurrences "$mono_output" "E_MONOMORPHIZATION_LIMIT" 1 "monomorphization-limit diagnostic"
 assert_contains "$mono_output" "required from here:" "monomorphization instantiation chain header"
-assert_contains "$mono_output" 'function `runaway__129` at tests/spec/monomorphization_limits.mc:13:16' "monomorphization current instantiation"
-assert_contains "$mono_output" 'function `runaway__128` at tests/spec/monomorphization_limits.mc:13:16' "monomorphization parent instantiation"
-assert_contains "$mono_output" "  ..." "monomorphization bounded chain elision"
+assert_contains "$mono_output" 'function `runaway__129` required from here' "monomorphization current instantiation"
+assert_contains "$mono_output" 'function `runaway__128` required from here' "monomorphization parent instantiation"
+assert_contains "$mono_output" "note: ..." "monomorphization bounded chain elision"
 assert_not_contains "$mono_output" "src/main.zig" "monomorphization-limit Zig stack trace"
 
 mono_json=""
@@ -194,8 +194,14 @@ diags = payload.get("diagnostics")
 assert isinstance(diags, list) and len(diags) == 1, payload
 d = diags[0]
 assert d["code"] == "E_MONOMORPHIZATION_LIMIT", d
-assert "required from here:" in d["message"], d
-assert "function `runaway__129`" in d["message"], d
+assert "required from here:" not in d["message"], d
+notes = d.get("notes")
+assert isinstance(notes, list) and len(notes) >= 3, d
+assert notes[0]["message"] == "required from here:", notes
+assert notes[1]["message"] == "function `runaway__129` required from here", notes[1]
+assert notes[1]["path"].endswith("monomorphization_limits.mc"), notes[1]
+assert notes[1]["line"] == 13 and notes[1]["column"] == 16, notes[1]
+assert any(n.get("message") == "..." for n in notes), notes
 assert payload["error_count"] == 1 and payload["warning_count"] == 0, payload
 PY
 

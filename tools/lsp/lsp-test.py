@@ -24,6 +24,18 @@ BAD = (
 )
 EXPECTED_CODE = "E_NO_LANG_TRAP_EDGE"
 GOOD = "fn add_nums(a: u32, b: u32) -> u32 {\n    return a + b;\n}\n"
+MONO_BAD = (
+    "fn runaway(comptime N: usize) -> [N]u8 {\n"
+    "    var scratch: [N]u8 = uninit;\n"
+    "    let next: [N + 1]u8 = runaway(N + 1);\n"
+    "    return scratch;\n"
+    "}\n"
+    "\n"
+    "fn trigger() -> u8 {\n"
+    "    let out: [1]u8 = runaway(1);\n"
+    "    return out[0];\n"
+    "}\n"
+)
 CANCEL_BAD = "# cancel_probe\n" + BAD
 MESSY = "fn   f( )->u32{\n        return 7;\n}\n"  # misindented -> formatting changes it
 # A multi-byte string literal before an undefined-identifier error on the same line: the LSP
@@ -230,6 +242,20 @@ def main():
         d = next(d for d in diags if d.get("code") == EXPECTED_CODE)
         assert d.get("source") == "mcc", f"diagnostic source should be 'mcc': {d}"
         assert d["range"]["start"]["line"] == 2, f"E_NO_LANG_TRAP_EDGE should be on line 3 (0-based 2): {d}"
+
+        # Structured compiler notes should survive JSON -> LSP as related information.
+        mono_path = os.path.join(workdir, "mono.mc")
+        with open(mono_path, "w") as f:
+            f.write(MONO_BAD)
+        mono_uri = "file://" + mono_path
+        did_open(proc, mono_uri, MONO_BAD)
+        mono_diags = diagnostics_for(proc, mono_uri)
+        mono = next((d for d in mono_diags if d.get("code") == "E_MONOMORPHIZATION_LIMIT"), None)
+        if mono is None:
+            raise SystemExit(f"FAIL: lsp-test — missing monomorphization diagnostic: {mono_diags}")
+        related = mono.get("relatedInformation", [])
+        if not any("runaway__129" in item.get("message", "") for item in related):
+            raise SystemExit(f"FAIL: lsp-test — monomorphization notes missing related information: {mono}")
 
         # Open a clean document -> expect no diagnostics.
         proc.stdin.write(frame({"jsonrpc": "2.0", "method": "textDocument/didOpen",

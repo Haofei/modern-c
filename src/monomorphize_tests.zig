@@ -15,6 +15,15 @@ fn hasDiagnosticMessage(reporter: *const diagnostics.Reporter, needle: []const u
     return false;
 }
 
+fn hasDiagnosticNote(reporter: *const diagnostics.Reporter, needle: []const u8) bool {
+    for (reporter.diagnostics.items) |diagnostic| {
+        for (diagnostic.notes) |note| {
+            if (std.mem.indexOf(u8, note.message, needle) != null) return true;
+        }
+    }
+    return false;
+}
+
 test "monomorphize.cloneType substitutes a comptime parameter in an array length" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -111,6 +120,8 @@ test "monomorphize total specialization cap reports a focused diagnostic" {
     try testing.expect(hasDiagnosticMessage(&reporter, "E_MONOMORPHIZATION_LIMIT"));
     try testing.expect(hasDiagnosticMessage(&reporter, "total specialization count"));
     try testing.expect(hasDiagnosticMessage(&reporter, "4 > 3"));
+    try testing.expect(hasDiagnosticNote(&reporter, "required from here:"));
+    try testing.expect(hasDiagnosticNote(&reporter, "function `make__4` required from here"));
     try testing.expect(!hasDiagnosticMessage(&reporter, "instantiation depth"));
 }
 
@@ -146,6 +157,8 @@ test "monomorphize instantiation depth cap reports a focused diagnostic" {
     try testing.expect(hasDiagnosticMessage(&reporter, "E_MONOMORPHIZATION_LIMIT"));
     try testing.expect(hasDiagnosticMessage(&reporter, "instantiation depth"));
     try testing.expect(hasDiagnosticMessage(&reporter, "3 > 2"));
+    try testing.expect(hasDiagnosticNote(&reporter, "required from here:"));
+    try testing.expect(hasDiagnosticNote(&reporter, "function `runaway__3` required from here"));
     try testing.expect(!hasDiagnosticMessage(&reporter, "total specialization count"));
 }
 

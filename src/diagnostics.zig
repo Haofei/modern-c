@@ -16,6 +16,17 @@ pub const Diagnostic = struct {
     severity: Severity,
     span: Span,
     message: []const u8,
+    notes: []const Note = &.{},
+};
+
+pub const Note = struct {
+    span: ?Span = null,
+    message: []const u8,
+};
+
+pub const NoteMessage = struct {
+    span: ?Span = null,
+    message: []const u8,
 };
 
 pub const FileBoundary = struct {
@@ -63,6 +74,8 @@ pub const Reporter = struct {
     pub fn deinit(self: *Reporter) void {
         for (self.diagnostics.items) |diag| {
             self.allocator.free(diag.message);
+            for (diag.notes) |note| self.allocator.free(note.message);
+            self.allocator.free(diag.notes);
         }
         self.diagnostics.deinit(self.allocator);
     }
@@ -71,18 +84,49 @@ pub const Reporter = struct {
         self.add(.error_, span, fmt, args);
     }
 
+    pub fn errWithNotes(self: *Reporter, span: Span, comptime fmt: []const u8, args: anytype, notes: []const NoteMessage) void {
+        self.addWithNotes(.error_, span, fmt, args, notes);
+    }
+
     pub fn warn(self: *Reporter, span: Span, comptime fmt: []const u8, args: anytype) void {
         self.add(.warning, span, fmt, args);
     }
 
     fn add(self: *Reporter, severity: Severity, span: Span, comptime fmt: []const u8, args: anytype) void {
+        self.addWithNotes(severity, span, fmt, args, &.{});
+    }
+
+    fn addWithNotes(self: *Reporter, severity: Severity, span: Span, comptime fmt: []const u8, args: anytype, notes: []const NoteMessage) void {
         if (severity == .error_) self.has_errors = true;
         const msg = std.fmt.allocPrint(self.allocator, fmt, args) catch return;
+
+        const owned_notes = self.allocator.alloc(Note, notes.len) catch {
+            self.allocator.free(msg);
+            return;
+        };
+        var initialized: usize = 0;
+        for (notes, 0..) |note, i| {
+            const note_msg = self.allocator.dupe(u8, note.message) catch {
+                for (owned_notes[0..initialized]) |owned_note| self.allocator.free(owned_note.message);
+                self.allocator.free(owned_notes);
+                self.allocator.free(msg);
+                return;
+            };
+            owned_notes[i] = .{
+                .span = note.span,
+                .message = note_msg,
+            };
+            initialized += 1;
+        }
+
         self.diagnostics.append(self.allocator, .{
             .severity = severity,
             .span = span,
             .message = msg,
+            .notes = owned_notes,
         }) catch {
+            for (owned_notes) |note| self.allocator.free(note.message);
+            self.allocator.free(owned_notes);
             self.allocator.free(msg);
             return;
         };
@@ -110,6 +154,28 @@ pub const Reporter = struct {
                 var tail: usize = 1;
                 while (tail < line.highlight_len) : (tail += 1) std.debug.print("~", .{});
                 std.debug.print("\n", .{});
+            }
+            for (diag.notes) |note| {
+                if (note.span) |note_span| {
+                    const note_loc = self.location(note_span);
+                    std.debug.print("{s}:{d}:{d}: note: {s}\n", .{
+                        note_loc.path,
+                        note_loc.line,
+                        note_loc.column,
+                        note.message,
+                    });
+                    if (self.sourceLine(note_span)) |line| {
+                        std.debug.print("  | {s}\n  | ", .{line.text});
+                        var pad: usize = 1;
+                        while (pad < line.column) : (pad += 1) std.debug.print(" ", .{});
+                        std.debug.print("^", .{});
+                        var tail: usize = 1;
+                        while (tail < line.highlight_len) : (tail += 1) std.debug.print("~", .{});
+                        std.debug.print("\n", .{});
+                    }
+                } else {
+                    std.debug.print("note: {s}\n", .{note.message});
+                }
             }
         }
     }
@@ -163,6 +229,41 @@ pub const Reporter = struct {
                 });
                 try appendCaretJsonString(out, self.allocator, line.highlight_len);
                 try out.append(self.allocator, '}');
+            }
+            if (diag.notes.len > 0) {
+                try out.appendSlice(self.allocator, ",\"notes\":[");
+                for (diag.notes, 0..) |note, note_i| {
+                    if (note_i > 0) try out.append(self.allocator, ',');
+                    try out.appendSlice(self.allocator, "{\"message\":");
+                    try appendJsonString(out, self.allocator, note.message);
+                    if (note.span) |note_span| {
+                        const note_loc = self.mappedSpan(note_span);
+                        try out.appendSlice(self.allocator, ",\"path\":");
+                        try appendJsonString(out, self.allocator, note_loc.path);
+                        try out.appendSlice(self.allocator, ",\"file\":");
+                        try appendJsonString(out, self.allocator, note_loc.path);
+                        try out.print(self.allocator, ",\"line\":{d},\"column\":{d}", .{ note_loc.line, note_loc.column });
+                        try out.print(self.allocator, ",\"span\":{{\"offset\":{d},\"length\":{d},\"line\":{d},\"column\":{d}}}", .{
+                            note_loc.offset,
+                            note_loc.len,
+                            note_loc.line,
+                            note_loc.column,
+                        });
+                        if (self.sourceLine(note_span)) |line| {
+                            try out.appendSlice(self.allocator, ",\"source\":{");
+                            try out.appendSlice(self.allocator, "\"text\":");
+                            try appendJsonString(out, self.allocator, line.text);
+                            try out.print(self.allocator, ",\"column\":{d},\"highlight_length\":{d},\"caret\":", .{
+                                line.column,
+                                line.highlight_len,
+                            });
+                            try appendCaretJsonString(out, self.allocator, line.highlight_len);
+                            try out.append(self.allocator, '}');
+                        }
+                    }
+                    try out.append(self.allocator, '}');
+                }
+                try out.append(self.allocator, ']');
             }
             try out.append(self.allocator, '}');
         }
@@ -346,6 +447,29 @@ test "Reporter emits structured JSON diagnostics" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"path\":\"json.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"line\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"column\":12") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"caret\":\"^~~~~~~\"") != null);
+}
+
+test "Reporter emits structured diagnostic notes" {
+    const source = "fn f() -> u32 {\n    return missing;\n}\n";
+    var reporter = Reporter.init(std.testing.allocator, "notes.mc", source);
+    defer reporter.deinit();
+
+    const offset = std.mem.indexOf(u8, source, "missing").?;
+    const span = Span{ .offset = offset, .len = "missing".len, .line = 2, .column = 12 };
+    reporter.errWithNotes(span, "E_TEST: primary", .{}, &.{
+        .{ .message = "required from here:" },
+        .{ .span = span, .message = "function `f` required from here" },
+    });
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try reporter.appendJson(&out);
+
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"notes\":[") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"message\":\"required from here:\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"message\":\"function `f` required from here\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"path\":\"notes.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"caret\":\"^~~~~~~\"") != null);
 }
 

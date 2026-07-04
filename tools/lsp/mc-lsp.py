@@ -101,6 +101,10 @@ def uri_to_path(uri):
     return uri
 
 
+def path_to_uri(path):
+    return "file://" + path
+
+
 # ---- positions -----------------------------------------------------------------------------
 # LSP `character` is a UTF-16 code-unit offset, but `mcc` reports a 1-based *byte* column (its
 # lexer advances one column per UTF-8 byte). Converting byte→UTF-16 against the document text is
@@ -291,6 +295,42 @@ def _lsp_diagnostic_from_json(item, tmp, text_lines):
     }
     if code:
         diag["code"] = code
+    related = []
+    for note in item.get("notes", []):
+        if not isinstance(note, dict):
+            continue
+        note_path = note.get("path") or note.get("file")
+        if note_path != tmp:
+            continue
+        try:
+            note_ln = int(note.get("line", 1))
+            note_col = int(note.get("column", 1))
+        except (TypeError, ValueError):
+            continue
+        note_source = note.get("source") if isinstance(note.get("source"), dict) else {}
+        note_span = note.get("span") if isinstance(note.get("span"), dict) else {}
+        note_length = note_source.get("highlight_length", note_span.get("length", 1))
+        try:
+            note_length = max(int(note_length), 1)
+        except (TypeError, ValueError):
+            note_length = 1
+        note_line_text = line_of(text_lines, note_ln)
+        note_start = byte_col_to_utf16(note_line_text, note_col)
+        note_end = byte_col_to_utf16(note_line_text, note_col + note_length)
+        if note_end <= note_start:
+            note_end = note_start + 1
+        related.append({
+            "location": {
+                "uri": path_to_uri(note_path),
+                "range": {
+                    "start": {"line": max(note_ln - 1, 0), "character": note_start},
+                    "end": {"line": max(note_ln - 1, 0), "character": note_end},
+                },
+            },
+            "message": note.get("message") or "",
+        })
+    if related:
+        diag["relatedInformation"] = related
     return diag
 
 

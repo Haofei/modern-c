@@ -874,17 +874,16 @@ fn reportMonomorphizationLimit(
     if (rw.limit_reported) return;
     rw.limit_reported = true;
     if (rw.reporter) |reporter| {
-        reporter.err(span, "{s}: {s}", .{
+        const notes = monomorphizationLimitNotes(rw, origin) catch &.{};
+        reporter.errWithNotes(span, "{s}: {s}", .{
             "E_MONOMORPHIZATION_LIMIT",
-            monomorphizationLimitMessage(rw, reporter, origin, kind, actual, limit),
-        });
+            monomorphizationLimitMessage(rw, kind, actual, limit),
+        }, notes);
     }
 }
 
 fn monomorphizationLimitMessage(
     rw: *Rewriter,
-    reporter: *const diagnostics.Reporter,
-    origin: ?*const InstantiationOrigin,
     kind: []const u8,
     actual: usize,
     limit: usize,
@@ -895,24 +894,31 @@ fn monomorphizationLimitMessage(
         "monomorphization exceeded {s} ({d} > {d}); possible polymorphic recursion or specialization explosion",
         .{ kind, actual, limit },
     ) catch return "monomorphization limit exceeded";
+    return out.items;
+}
+
+fn monomorphizationLimitNotes(rw: *Rewriter, origin: ?*const InstantiationOrigin) ![]const diagnostics.NoteMessage {
     var current = origin;
-    if (current != null) out.appendSlice(rw.arena, "\nrequired from here:") catch return out.items;
+    if (current == null) return &.{};
+
+    var notes: std.ArrayList(diagnostics.NoteMessage) = .empty;
+    try notes.append(rw.arena, .{ .message = "required from here:" });
     var shown: usize = 0;
     while (current) |entry| {
         if (shown == 8) {
-            out.appendSlice(rw.arena, "\n  ...") catch return out.items;
+            try notes.append(rw.arena, .{ .message = "..." });
             break;
         }
-        const loc = reporter.location(entry.span);
-        out.print(
+        const message = try std.fmt.allocPrint(
             rw.arena,
-            "\n  {s} `{s}` at {s}:{d}:{d}",
-            .{ instantiationKindLabel(entry.kind), entry.name, loc.path, loc.line, loc.column },
-        ) catch return out.items;
+            "{s} `{s}` required from here",
+            .{ instantiationKindLabel(entry.kind), entry.name },
+        );
+        try notes.append(rw.arena, .{ .span = entry.span, .message = message });
         shown += 1;
         current = entry.parent;
     }
-    return out.items;
+    return notes.toOwnedSlice(rw.arena);
 }
 
 fn instantiationKindLabel(kind: InstantiationKind) []const u8 {
