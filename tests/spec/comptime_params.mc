@@ -40,6 +40,12 @@ fn block_len_size(comptime N: usize) -> usize {
     return sizeof([{ return N; }]u8);
 }
 
+fn checked_comptime_width(comptime N: u8) -> void {
+    comptime {
+        let _x: u8 = N + 100;
+    }
+}
+
 const fn require_four_byte_type(comptime T: type) -> usize {
     comptime {
         assert(sizeof(T) == 4);
@@ -70,6 +76,11 @@ fn accept_type_param_comptime_assert() -> usize {
 fn reject_non_power_of_two_capacity() -> usize {
     // EXPECT_ERROR: E_COMPTIME_TRAP
     return make_ring(17);
+}
+
+fn reject_comptime_param_width_overflow() -> void {
+    // EXPECT_ERROR: E_COMPTIME_TRAP
+    checked_comptime_width(200);
 }
 
 fn reject_runtime_comptime_argument(n: usize) -> usize {

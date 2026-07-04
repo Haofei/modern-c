@@ -2155,6 +2155,10 @@ pub const Checker = struct {
                 self.noteComptimeOom(&scope);
                 return;
             };
+            scope.bindTypeInfo(param.name.text, param.ty) catch {
+                self.noteComptimeOom(&scope);
+                return;
+            };
         }
         self.noteComptimeOom(&scope);
         self.foldComptimeCallBody(body, &scope, call_span);

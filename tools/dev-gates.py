@@ -101,6 +101,36 @@ RULES: tuple[Rule, ...] = (
         "diagnostic inventory changes need generated reference and ownership checks",
     ),
     Rule(
+        ("tools/toolchain/spec-*-sweep.py", "tools/toolchain/llvm-opt-sweep.py"),
+        ("test-lint",),
+        "spec sweep allowlist changes need fixture-contract lint so codegen fixtures cannot be hidden",
+    ),
+    Rule(
+        ("tools/toolchain/spec-emit-sweep.py",),
+        ("sweep",),
+        "spec C-emission sweep script changes need the spec C emit sweep",
+    ),
+    Rule(
+        ("tools/toolchain/spec-llvm-sweep.py",),
+        ("llvm-sweep",),
+        "spec LLVM IR sweep script changes need the spec LLVM sweep",
+    ),
+    Rule(
+        ("tools/toolchain/spec-llvm-obj-sweep.py",),
+        ("llvm-spec-obj-sweep",),
+        "spec LLVM object sweep script changes need the spec LLVM object sweep",
+    ),
+    Rule(
+        ("tools/toolchain/llvm-opt-sweep.py",),
+        ("llvm-opt-sweep",),
+        "LLVM optimizer sweep script changes need the optimizer/verifier sweep",
+    ),
+    Rule(
+        ("tools/toolchain/spec_sweep_lib.py",),
+        ("sweep", "llvm-sweep", "llvm-spec-obj-sweep", "llvm-opt-sweep"),
+        "shared spec sweep parsing changes need every spec-backed emit/object/optimizer sweep",
+    ),
+    Rule(
         ("docs/**/*.md", "docs/*.md", "*.md"),
         (),
         "generic documentation changes need whitespace/patch sanity, not compiler execution",
@@ -122,7 +152,7 @@ RULES: tuple[Rule, ...] = (
         "host C fixtures are cross-backend parity surface",
     ),
     Rule(
-        ("tests/llvm/*.mc", "tools/toolchain/llvm-*.sh", "tools/toolchain/llvm-*.py"),
+        ("tests/llvm/*.mc", "tools/toolchain/llvm-*.sh", "tools/toolchain/llvm-c-*.py"),
         ("llvm-test", "llvm-obj-test", "llvm-sweep", "llvm-c-obj-sweep"),
         "LLVM fixtures and scripts need textual, object, and sweep coverage",
     ),

@@ -49,6 +49,7 @@ OUT_OF_SCOPE = {
     "traits_orphan_nonopaque_reject.mc": "pure compile_error fixture with std import; residue cannot be chunk-isolated after EXPECT_ERROR stripping (phase=sema; E_ORPHAN_IMPL owned by spec_tests.zig)",
     "pointer_view_conversions.mc": "accept/reject pointer+view const-narrow cases share types the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_NO_IMPLICIT_POINTER_CONVERSION owned by spec_tests.zig; accept emit covered by tests/c_emit/pointer_views.mc + pointer_const_narrow.mc)",
     "closure_typing.mc": "accept/reject closure typing cases share helper functions and globals; stripping rejected closure bodies leaves dangling references (phase=sema; E_CLOSURE_SIGNATURE_MISMATCH/E_LOCAL_ADDRESS_ESCAPE owned by spec_tests.zig; accept emit covered by tests/c_emit/global_closure.mc)",
+    "reflection.mc": "reflection accept/reject cases include sema-only overflow layouts whose top-level declarations cannot be chunk-isolated by EXPECT_ERROR stripping (phase=parse,sema; E_REFLECTION_* owned by spec_tests.zig; accept emit covered by tests/c_emit/reflection.mc)",
 }
 
 # Compile the emitted C exactly as the MC kernel profile intends: a deterministic
