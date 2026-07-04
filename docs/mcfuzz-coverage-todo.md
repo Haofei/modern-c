@@ -8,12 +8,11 @@ to pick up later. See also memory `differential-testing.md`.
 
 The single biggest blind spot: **every value-oracle compares the two backends against
 each other** (differential, pipeline, sanitize, determinism all assume C≡LLVM ⇒ correct).
-(**Update:** the two independent oracles below — E1 reference interpreter and E2 metamorphic
-— are now **implemented** as standalone build steps (`fuzz-reference` /
-`fuzz-metamorphic`). As of this docs pass, `build/tiers.zig` does not include them
-in `m0` or `fast`; either the gate or this note should change when that policy is
-decided. The remaining backlog is generator surface, where the differential
-oracles still apply.)
+(**Update:** the independent oracles below — E1 reference interpreter and E2 metamorphic
+— are now **implemented** as build steps (`fuzz-reference` / `fuzz-metamorphic`) and,
+alongside `fuzz-optlevel`, `fuzz-floatbits`, and `fuzz-corpus`, are wired into both
+`m0` and `fast` in `build/tiers.zig`. The remaining backlog is generator surface,
+where the differential oracles still apply.)
 
 They share the entire frontend, MIR verifier, and constant-folder, so a bug *there* is
 invisible to all of them. The >512-block verifier bug was only caught because `pipeline`
@@ -120,9 +119,9 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 
 | # | Item | Effort | Notes |
 |---|------|--------|-------|
-| E1 | **Reference interpreter** (eval generated subset, assert digest) | Done / expanding | Standalone `fuzz-reference`; highest leverage for bugs both backends share. Keep extending the interpreted subset as generator surface grows. |
-| E2 | **Metamorphic/algebraic** (semantics-preserving transform → same digest) | Done / expanding | Standalone `fuzz-metamorphic`; keep adding transforms for new constructs. |
-| E3 | Optimization-level differential | Done / expanding | Standalone `fuzz-optlevel`; keep widening the generated surface. |
+| E1 | **Reference interpreter** (eval generated subset, assert digest) | Done / expanding | `fuzz-reference`, gated by `m0`/`fast`; highest leverage for bugs both backends share. Keep extending the interpreted subset as generator surface grows. |
+| E2 | **Metamorphic/algebraic** (semantics-preserving transform → same digest) | Done / expanding | `fuzz-metamorphic`, gated by `m0`/`fast`; keep adding transforms for new constructs. |
+| E3 | Optimization-level differential | Done / expanding | `fuzz-optlevel`, gated by `m0`/`fast`; keep widening the generated surface. |
 | E4 | Independent oracles on `facts`/`emit-map`/`lower-hir/-mir/-ir` | Med | Today only verify-hir/verify/emit-c/emit-llvm asserted |
 | E5 | Memory-safety oracle (ASan over pointer/slice programs) | Med | Depends on A4/A5 |
 | E6 | Round-trip / idempotence (re-parse, re-lower → stable) | Med | Printer/parser asymmetries |
@@ -185,9 +184,10 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 - **E1** reference interpreter (`fuzz-reference`): compiled output must match the independent
   Python interpreter for the generated subset.
 
-**Tally: 19 coverage items + 3 standalone oracles (metamorphic, optlevel, reference) + 3 real
+**Tally: 19 coverage items + 3 promoted oracles (metamorphic, optlevel, reference) + 3 real
 C-backend bugs found & fixed (INT64_MIN, narrow wrap-mul UB, f32 double-rounding). The original
-core oracle family gates `m0`; the newer oracles are standalone until the tier policy is decided.**
+core oracle family plus `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-corpus`, and
+`fuzz-reference` now gate both `m0` and `fast`.**
 
 ### Blocked by missing backend support (can't be generated into runnable programs)
 
