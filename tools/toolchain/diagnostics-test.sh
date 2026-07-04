@@ -114,6 +114,37 @@ assert diags[0]["code"] == "E_NESTING_TOO_DEEP", diags[0]
 assert payload["error_count"] == 1 and payload["warning_count"] == 0, payload
 PY
 
+mono_output=""
+if mono_output=$("$MCC" check tests/spec/monomorphization_limits.mc 2>&1); then
+    echo "FAIL: diagnostics-test — monomorphization limit unexpectedly succeeded"
+    exit 1
+fi
+assert_occurrences "$mono_output" "E_MONOMORPHIZATION_LIMIT" 1 "monomorphization-limit diagnostic"
+assert_contains "$mono_output" "required from here:" "monomorphization instantiation chain header"
+assert_contains "$mono_output" 'function `runaway__129` at tests/spec/monomorphization_limits.mc:13:16' "monomorphization current instantiation"
+assert_contains "$mono_output" 'function `runaway__128` at tests/spec/monomorphization_limits.mc:13:16' "monomorphization parent instantiation"
+assert_contains "$mono_output" "  ..." "monomorphization bounded chain elision"
+assert_not_contains "$mono_output" "src/main.zig" "monomorphization-limit Zig stack trace"
+
+mono_json=""
+if mono_json=$("$MCC" check tests/spec/monomorphization_limits.mc --json); then
+    echo "FAIL: diagnostics-test — monomorphization limit JSON unexpectedly succeeded"
+    exit 1
+fi
+JSON_OUT="$mono_json" python3 - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["JSON_OUT"])
+diags = payload.get("diagnostics")
+assert isinstance(diags, list) and len(diags) == 1, payload
+d = diags[0]
+assert d["code"] == "E_MONOMORPHIZATION_LIMIT", d
+assert "required from here:" in d["message"], d
+assert "function `runaway__129`" in d["message"], d
+assert payload["error_count"] == 1 and payload["warning_count"] == 0, payload
+PY
+
 cat >"$WORK/root_missing.mc" <<'MC'
 
 // line marker

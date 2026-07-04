@@ -80,6 +80,7 @@ const Instance = struct {
     attrs: []ast.Attr = &.{},
     is_pub: bool = false,
     depth: usize = 0,
+    origin: ?*const InstantiationOrigin = null,
     generated: bool = false,
     // A `where T: Trait` bound was unsatisfied for this instantiation (already reported
     // E_TRAIT_NOT_SATISFIED at the call). We still emit a specialization so the call
@@ -95,6 +96,7 @@ const StructInstance = struct {
     mangled: []const u8,
     is_pub: bool = false,
     depth: usize = 0,
+    origin: ?*const InstantiationOrigin = null,
     generated: bool = false,
     limit_failed: bool = false,
 };
@@ -105,8 +107,23 @@ const UnionInstance = struct {
     mangled: []const u8,
     is_pub: bool = false,
     depth: usize = 0,
+    origin: ?*const InstantiationOrigin = null,
     generated: bool = false,
     limit_failed: bool = false,
+};
+
+const InstantiationKind = enum {
+    function,
+    @"struct",
+    @"union",
+};
+
+const InstantiationOrigin = struct {
+    kind: InstantiationKind,
+    name: []const u8,
+    span: ast.Span,
+    depth: usize,
+    parent: ?*const InstantiationOrigin,
 };
 
 pub const CloneCtx = struct {
@@ -155,6 +172,7 @@ const Rewriter = struct {
     reporter: ?*diagnostics.Reporter,
     limits: Limits = .{},
     current_depth: usize = 0,
+    current_origin: ?*const InstantiationOrigin = null,
     limit_reported: bool = false,
     oom: bool = false,
 };
@@ -297,8 +315,13 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
             if (inst.generated) continue;
             inst.generated = true;
             const saved_depth = rewriter.current_depth;
+            const saved_origin = rewriter.current_origin;
             rewriter.current_depth = inst.depth;
-            defer rewriter.current_depth = saved_depth;
+            rewriter.current_origin = inst.origin;
+            defer {
+                rewriter.current_depth = saved_depth;
+                rewriter.current_origin = saved_origin;
+            }
             var spec_ctx = CloneCtx{ .arena = arena, .subst = &inst.subst, .rewrite = &rewriter };
             var spec = if (inst.limit_failed) try cloneFnDeclSignatureCtx(&spec_ctx, inst.decl) else try cloneFnDeclCtx(&spec_ctx, inst.decl);
             spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
@@ -325,8 +348,13 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                 if (inst.generated) continue;
                 inst.generated = true;
                 const saved_depth = rewriter.current_depth;
+                const saved_origin = rewriter.current_origin;
                 rewriter.current_depth = inst.depth;
-                defer rewriter.current_depth = saved_depth;
+                rewriter.current_origin = inst.origin;
+                defer {
+                    rewriter.current_depth = saved_depth;
+                    rewriter.current_origin = saved_origin;
+                }
                 var sctx = CloneCtx{ .arena = arena, .subst = &inst.subst, .rewrite = &rewriter };
                 var spec = if (inst.limit_failed) inst.decl else try cloneStructDeclCtx(&sctx, inst.decl);
                 spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
@@ -339,8 +367,13 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                 if (inst.generated) continue;
                 inst.generated = true;
                 const saved_depth = rewriter.current_depth;
+                const saved_origin = rewriter.current_origin;
                 rewriter.current_depth = inst.depth;
-                defer rewriter.current_depth = saved_depth;
+                rewriter.current_origin = inst.origin;
+                defer {
+                    rewriter.current_depth = saved_depth;
+                    rewriter.current_origin = saved_origin;
+                }
                 var uctx = CloneCtx{ .arena = arena, .subst = &inst.subst, .rewrite = &rewriter };
                 var spec = if (inst.limit_failed) inst.decl else try cloneUnionDeclCtx(&uctx, inst.decl);
                 spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
@@ -764,7 +797,8 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
     const mangled_name = try mangled.toOwnedSlice(rw.arena);
     if (!rw.instances.contains(mangled_name)) {
         const depth = rw.current_depth + 1;
-        const limit_failed = !admitInstance(rw, node.callee.*.span, depth);
+        const origin = createInstantiationOrigin(rw, .function, mangled_name, node.callee.*.span, depth);
+        const limit_failed = !admitInstance(rw, node.callee.*.span, origin, depth);
         const inst = rw.arena.create(Instance) catch {
             rw.oom = true;
             return null;
@@ -776,6 +810,7 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
             .attrs = info.attrs,
             .is_pub = info.is_pub,
             .depth = depth,
+            .origin = origin,
             .bound_failed = bound_failed,
             .limit_failed = limit_failed,
         };
@@ -794,32 +829,98 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
     } } };
 }
 
-fn admitInstance(rw: *Rewriter, span: ast.Span, depth: usize) bool {
+fn createInstantiationOrigin(
+    rw: *Rewriter,
+    kind: InstantiationKind,
+    name: []const u8,
+    span: ast.Span,
+    depth: usize,
+) ?*const InstantiationOrigin {
+    const origin = rw.arena.create(InstantiationOrigin) catch {
+        rw.oom = true;
+        return null;
+    };
+    origin.* = .{
+        .kind = kind,
+        .name = name,
+        .span = span,
+        .depth = depth,
+        .parent = rw.current_origin,
+    };
+    return origin;
+}
+
+fn admitInstance(rw: *Rewriter, span: ast.Span, origin: ?*const InstantiationOrigin, depth: usize) bool {
     if (depth > rw.limits.max_depth) {
-        reportMonomorphizationLimit(rw, span, "instantiation depth", depth, rw.limits.max_depth);
+        reportMonomorphizationLimit(rw, span, origin, "instantiation depth", depth, rw.limits.max_depth);
         return false;
     }
     const total = rw.instances.count() + rw.struct_instances.count() + rw.union_instances.count();
     if (total >= rw.limits.max_instances) {
-        reportMonomorphizationLimit(rw, span, "total specialization count", total + 1, rw.limits.max_instances);
+        reportMonomorphizationLimit(rw, span, origin, "total specialization count", total + 1, rw.limits.max_instances);
         return false;
     }
     return true;
 }
 
-fn reportMonomorphizationLimit(rw: *Rewriter, span: ast.Span, kind: []const u8, actual: usize, limit: usize) void {
+fn reportMonomorphizationLimit(
+    rw: *Rewriter,
+    span: ast.Span,
+    origin: ?*const InstantiationOrigin,
+    kind: []const u8,
+    actual: usize,
+    limit: usize,
+) void {
     if (rw.limit_reported) return;
     rw.limit_reported = true;
     if (rw.reporter) |reporter| {
         reporter.err(span, "{s}: {s}", .{
             "E_MONOMORPHIZATION_LIMIT",
-            std.fmt.allocPrint(
-                rw.arena,
-                "monomorphization exceeded {s} ({d} > {d}); possible polymorphic recursion or specialization explosion",
-                .{ kind, actual, limit },
-            ) catch "monomorphization limit exceeded",
+            monomorphizationLimitMessage(rw, reporter, origin, kind, actual, limit),
         });
     }
+}
+
+fn monomorphizationLimitMessage(
+    rw: *Rewriter,
+    reporter: *const diagnostics.Reporter,
+    origin: ?*const InstantiationOrigin,
+    kind: []const u8,
+    actual: usize,
+    limit: usize,
+) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    out.print(
+        rw.arena,
+        "monomorphization exceeded {s} ({d} > {d}); possible polymorphic recursion or specialization explosion",
+        .{ kind, actual, limit },
+    ) catch return "monomorphization limit exceeded";
+    var current = origin;
+    if (current != null) out.appendSlice(rw.arena, "\nrequired from here:") catch return out.items;
+    var shown: usize = 0;
+    while (current) |entry| {
+        if (shown == 8) {
+            out.appendSlice(rw.arena, "\n  ...") catch return out.items;
+            break;
+        }
+        const loc = reporter.location(entry.span);
+        out.print(
+            rw.arena,
+            "\n  {s} `{s}` at {s}:{d}:{d}",
+            .{ instantiationKindLabel(entry.kind), entry.name, loc.path, loc.line, loc.column },
+        ) catch return out.items;
+        shown += 1;
+        current = entry.parent;
+    }
+    return out.items;
+}
+
+fn instantiationKindLabel(kind: InstantiationKind) []const u8 {
+    return switch (kind) {
+        .function => "function",
+        .@"struct" => "struct",
+        .@"union" => "union",
+    };
 }
 
 fn foldConst(rw: *Rewriter, expr: ast.Expr) ?i128 {
@@ -1007,12 +1108,13 @@ fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, info: GenericStruct
     const key = (try instantiateGeneric(ctx, rw, sd.name.text, sd.type_params, node)) orelse return null;
     if (!rw.struct_instances.contains(key.name)) {
         const depth = rw.current_depth + 1;
-        const limit_failed = !admitInstance(rw, node.base.span, depth);
+        const origin = createInstantiationOrigin(rw, .@"struct", key.name, node.base.span, depth);
+        const limit_failed = !admitInstance(rw, node.base.span, origin, depth);
         const si = rw.arena.create(StructInstance) catch {
             rw.oom = true;
             return key.name;
         };
-        si.* = .{ .decl = sd, .subst = key.subst, .mangled = key.name, .is_pub = info.is_pub, .depth = depth, .limit_failed = limit_failed };
+        si.* = .{ .decl = sd, .subst = key.subst, .mangled = key.name, .is_pub = info.is_pub, .depth = depth, .origin = origin, .limit_failed = limit_failed };
         rw.struct_instances.put(key.name, si) catch {
             rw.oom = true;
         };
@@ -1030,12 +1132,13 @@ fn rewriteGenericUnion(ctx: *const CloneCtx, rw: *Rewriter, info: GenericUnionIn
     const key = (try instantiateGeneric(ctx, rw, ud.name.text, ud.type_params, node)) orelse return null;
     if (!rw.union_instances.contains(key.name)) {
         const depth = rw.current_depth + 1;
-        const limit_failed = !admitInstance(rw, node.base.span, depth);
+        const origin = createInstantiationOrigin(rw, .@"union", key.name, node.base.span, depth);
+        const limit_failed = !admitInstance(rw, node.base.span, origin, depth);
         const ui = rw.arena.create(UnionInstance) catch {
             rw.oom = true;
             return key.name;
         };
-        ui.* = .{ .decl = ud, .subst = key.subst, .mangled = key.name, .is_pub = info.is_pub, .depth = depth, .limit_failed = limit_failed };
+        ui.* = .{ .decl = ud, .subst = key.subst, .mangled = key.name, .is_pub = info.is_pub, .depth = depth, .origin = origin, .limit_failed = limit_failed };
         rw.union_instances.put(key.name, ui) catch {
             rw.oom = true;
         };
