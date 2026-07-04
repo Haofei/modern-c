@@ -111,3 +111,49 @@ test "builds lower-ir trap edge artifact" {
     try std.testing.expectEqual(@as(usize, 1), module_ir.functions[3].safe_no_trap_ops.len);
     try std.testing.expectEqualStrings("saturating.add", module_ir.functions[3].safe_no_trap_ops[0].kind);
 }
+
+fn expectLowerIrOutOfMemory(source: []const u8, fail_index: usize) !void {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "lower_ir_oom.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+    var module_ir = ir.buildModuleIr(failing.allocator(), module) catch |err| {
+        try std.testing.expectEqual(error.OutOfMemory, err);
+        try std.testing.expect(failing.has_induced_failure);
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+        return;
+    };
+    defer module_ir.deinit();
+
+    try std.testing.expect(false);
+}
+
+test "lower-ir parameter wrap and sat bookkeeping fails closed on OOM" {
+    const source =
+        \\fn parameter_bookkeeping(a: wrap<u32>, b: sat<u32>) -> u32 {
+        \\    return 0;
+        \\}
+    ;
+
+    try expectLowerIrOutOfMemory(source, 1);
+}
+
+test "lower-ir local wrap and sat bookkeeping fails closed on OOM" {
+    const source =
+        \\fn local_bookkeeping() -> u32 {
+        \\    let x: wrap<u32> = 0;
+        \\    let y: sat<u32> = 0;
+        \\    return 0;
+        \\}
+    ;
+
+    try expectLowerIrOutOfMemory(source, 1);
+}

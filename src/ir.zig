@@ -82,23 +82,24 @@ pub const ModuleIr = struct {
 
     pub fn deinit(self: *ModuleIr) void {
         for (self.functions) |function| {
-            self.allocator.free(function.trap_edges);
-            self.allocator.free(function.safe_no_trap_ops);
-            self.allocator.free(function.contract_regions);
-            self.allocator.free(function.unchecked_calls);
+            deinitFunctionIr(self.allocator, function);
         }
         self.allocator.free(self.functions);
     }
 };
 
+fn deinitFunctionIr(allocator: std.mem.Allocator, function: FunctionIr) void {
+    allocator.free(function.trap_edges);
+    allocator.free(function.safe_no_trap_ops);
+    allocator.free(function.contract_regions);
+    allocator.free(function.unchecked_calls);
+}
+
 pub fn buildModuleIr(allocator: std.mem.Allocator, module: ast.Module) !ModuleIr {
     var functions: std.ArrayList(FunctionIr) = .empty;
     errdefer {
         for (functions.items) |function| {
-            allocator.free(function.trap_edges);
-            allocator.free(function.safe_no_trap_ops);
-            allocator.free(function.contract_regions);
-            allocator.free(function.unchecked_calls);
+            deinitFunctionIr(allocator, function);
         }
         functions.deinit(allocator);
     }
@@ -107,10 +108,14 @@ pub fn buildModuleIr(allocator: std.mem.Allocator, module: ast.Module) !ModuleIr
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
-                    var builder = FunctionIrBuilder.init(allocator, fn_decl, hasNoLangTrap(decl.attrs));
-                    errdefer builder.deinit();
-                    try builder.collectBlock(body);
-                    try functions.append(allocator, try builder.finish());
+                    const function_ir = blk: {
+                        var builder = try FunctionIrBuilder.init(allocator, fn_decl, hasNoLangTrap(decl.attrs));
+                        errdefer builder.deinit();
+                        try builder.collectBlock(body);
+                        break :blk try builder.finish();
+                    };
+                    errdefer deinitFunctionIr(allocator, function_ir);
+                    try functions.append(allocator, function_ir);
                 }
             },
             .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
@@ -193,7 +198,7 @@ const FunctionIrBuilder = struct {
     active_contract_region_id: ?usize = null,
     next_contract_region_id: usize = 1,
 
-    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, no_lang_trap: bool) FunctionIrBuilder {
+    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, no_lang_trap: bool) !FunctionIrBuilder {
         var builder = FunctionIrBuilder{
             .allocator = allocator,
             .function_name = fn_decl.name.text,
@@ -205,9 +210,10 @@ const FunctionIrBuilder = struct {
             .wrap_values = std.StringHashMap(void).init(allocator),
             .sat_values = std.StringHashMap(void).init(allocator),
         };
+        errdefer builder.deinit();
         for (fn_decl.params) |param| {
-            if (isWrapType(param.ty)) builder.wrap_values.put(param.name.text, {}) catch {};
-            if (isSatType(param.ty)) builder.sat_values.put(param.name.text, {}) catch {};
+            if (isWrapType(param.ty)) try builder.wrap_values.put(param.name.text, {});
+            if (isSatType(param.ty)) try builder.sat_values.put(param.name.text, {});
         }
         return builder;
     }
@@ -252,10 +258,10 @@ const FunctionIrBuilder = struct {
             .let_decl, .var_decl => |local| {
                 if (local.ty) |ty| {
                     if (isWrapType(ty)) {
-                        for (local.names) |name| self.wrap_values.put(name.text, {}) catch {};
+                        for (local.names) |name| try self.wrap_values.put(name.text, {});
                     }
                     if (isSatType(ty)) {
-                        for (local.names) |name| self.sat_values.put(name.text, {}) catch {};
+                        for (local.names) |name| try self.sat_values.put(name.text, {});
                     }
                 }
                 if (local.init) |expr| try self.collectExpr(expr);
