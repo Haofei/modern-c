@@ -237,27 +237,27 @@ export fn mem_index_of(hay: []const u8, needle: []const u8) -> ?usize {
 // "a","","c"; "" -> one empty field. The cursor advances one PAST each separator, and
 // `pos > s.len` is the terminal state (the step past the final field's end).
 
-struct Split {
+pub struct Split {
     s: []const u8,
     sep: u8,
     pos: usize,
 }
 
 // The result of `split_next`: `valid` false means iteration is done and `s` is empty.
-struct SplitField {
+pub struct SplitField {
     valid: bool,
     s: []const u8,
 }
 
 // Seed a splitter over `s` on separator byte `sep`, positioned at the first field.
-export fn split_by(s: []const u8, sep: u8) -> Split {
+pub fn split_by(s: []const u8, sep: u8) -> Split {
     return .{ .s = s, .sep = sep, .pos = 0 };
 }
 
 // Yield the next field, or `.valid = false` when the input is exhausted. Each field is
 // a borrowed sub-slice `sp.s[start..end]`; the cursor moves one past the separator so
 // the following call starts at the next field.
-export fn split_next(sp: *mut Split) -> SplitField {
+pub fn split_next(sp: *mut Split) -> SplitField {
     // Copy the field slice into a locally-typed binding before sub-slicing: the C
     // emitter can recover a slice's source type from a plain local (or param) but NOT
     // from a struct-field access directly (exprSourceTypeForEmission -> null).

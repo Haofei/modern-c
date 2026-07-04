@@ -1,20 +1,20 @@
 # MC standard library API
 
-This file is generated from exported declarations in `std/**/*.mc`.
+This file is generated from public declarations in `std/**/*.mc`.
 Regenerate it with:
 
 ```sh
 python3 tools/toolchain/std-api-docs.py --write
 ```
 
-The extractor is static: it records `export fn` signatures, exported constants,
-exported type declarations, and local types named by exported declarations.
+The extractor is static: it records `pub`/`export` function signatures, public constants,
+public type declarations, and local types named by public declarations.
 
 Total modules: **40**.
-Total exported functions: **341**.
-Total exported constants: **6**.
-Total exported type declarations: **0**.
-Total referenced local types: **54**.
+Total public functions: **341**.
+Total public constants: **6**.
+Total public type declarations: **2**.
+Total referenced local types: **52**.
 
 ## Modules
 
@@ -28,7 +28,7 @@ Source: `std/addr.mc`
 |---|---|
 | <code>struct PhysRange</code> | `std/addr.mc:83` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -68,7 +68,7 @@ Source: `std/alloc/alloc.mc`
 | <code>trait Allocator</code> | `std/alloc/alloc.mc:13` |
 | <code>move struct Owned&lt;T&gt;</code> | `std/alloc/alloc.mc:44` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -90,7 +90,7 @@ Source: `std/alloc/arena.mc`
 | <code>opaque struct GenRef&lt;T&gt;</code> | `std/alloc/arena.mc:105` |
 | <code>enum ArenaError</code> | `std/alloc/arena.mc:122` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -115,7 +115,7 @@ Source: `std/alloc/dma.mc`
 | <code>move struct DeviceBuffer</code> | `std/alloc/dma.mc:21` |
 | <code>enum DmaError</code> | `std/alloc/dma.mc:37` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -150,7 +150,7 @@ Source: `std/alloc/pool.mc`
 | <code>opaque struct PoolRef&lt;T&gt;</code> | `std/alloc/pool.mc:23` |
 | <code>enum PoolError</code> | `std/alloc/pool.mc:40` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -164,7 +164,7 @@ Source: `std/alloc/pool.mc`
 
 Source: `std/ascii.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -182,7 +182,7 @@ Source: `std/ascii.mc`
 
 Source: `std/bits.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -207,7 +207,7 @@ Source: `std/bytes.mc`
 | <code>enum BytesError</code> | `std/bytes.mc:35` |
 | <code>struct ByteWriter</code> | `std/bytes.mc:214` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -244,7 +244,7 @@ Source: `std/byteview.mc`
 | <code>struct ByteBuf&lt;N&gt;</code> | `std/byteview.mc:18` |
 | <code>enum ByteError</code> | `std/byteview.mc:23` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -265,7 +265,7 @@ Source: `std/canary.mc`
 |---|---|
 | <code>struct StackGuard</code> | `std/canary.mc:21` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -284,7 +284,7 @@ Source: `std/collections/arc.mc`
 |---|---|
 | <code>move struct Arc&lt;T&gt;</code> | `std/collections/arc.mc:25` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -306,7 +306,7 @@ Source: `std/collections/dynarray.mc`
 |---|---|
 | <code>struct Vec&lt;T&gt;</code> | `std/collections/dynarray.mc:33` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -329,7 +329,7 @@ Source: `std/collections/hashmap.mc`
 |---|---|
 | <code>struct StrHashMap&lt;V&gt;</code> | `std/collections/hashmap.mc:52` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -352,7 +352,7 @@ Source: `std/collections/ring.mc`
 |---|---|
 | <code>struct Ring&lt;T, N&gt;</code> | `std/collections/ring.mc:12` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -375,7 +375,7 @@ Source: `std/collections/slotmap.mc`
 | <code>struct SlotMap&lt;T, N&gt;</code> | `std/collections/slotmap.mc:15` |
 | <code>enum SlotError</code> | `std/collections/slotmap.mc:21` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -392,7 +392,7 @@ Source: `std/collections/slotmap.mc`
 
 Source: `std/collections/vec.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -410,7 +410,7 @@ Source: `std/collections/vec.mc`
 
 Source: `std/core.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -427,7 +427,7 @@ Source: `std/core.mc`
 
 Source: `std/endian.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -451,7 +451,7 @@ Source: `std/endian.mc`
 
 Source: `std/fmt/fmt.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -469,7 +469,7 @@ Source: `std/grant.mc`
 | <code>struct GrantRef</code> | `std/grant.mc:25` |
 | <code>enum GrantError</code> | `std/grant.mc:31` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -485,7 +485,7 @@ Source: `std/grant.mc`
 
 Source: `std/hosted_args.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -506,7 +506,7 @@ Source: `std/hosted_io.mc`
 | <code>struct Fd</code> | `std/hosted_io.mc:24` |
 | <code>enum IoError</code> | `std/hosted_io.mc:62` |
 
-### Exported constants
+### Public constants
 
 | Signature | Source |
 |---|---|
@@ -517,7 +517,7 @@ Source: `std/hosted_io.mc`
 | <code>export const O_TRUNC: i32 = 512;</code> | `std/hosted_io.mc:42` |
 | <code>export const MODE_0644: i32 = 420;</code> | `std/hosted_io.mc:45` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -536,7 +536,7 @@ Source: `std/hosted_io.mc`
 
 Source: `std/libc.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -554,7 +554,7 @@ Source: `std/mask.mc`
 |---|---|
 | <code>struct Mask32</code> | `std/mask.mc:8` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -571,7 +571,7 @@ Source: `std/mask.mc`
 
 Source: `std/math.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -589,7 +589,7 @@ Source: `std/math.mc`
 
 Source: `std/mathf.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -614,14 +614,14 @@ Source: `std/mathf.mc`
 
 Source: `std/mem.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct Split</code> | `std/mem.mc:240` |
-| <code>struct SplitField</code> | `std/mem.mc:247` |
+| <code>pub struct Split</code> | `std/mem.mc:240` |
+| <code>pub struct SplitField</code> | `std/mem.mc:247` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -635,8 +635,8 @@ Source: `std/mem.mc`
 | <code>export fn mem_starts_with(hay: []const u8, prefix: []const u8) -&gt; bool</code> | `std/mem.mc:179` |
 | <code>export fn mem_index_of_byte(hay: []const u8, b: u8) -&gt; ?usize</code> | `std/mem.mc:194` |
 | <code>export fn mem_index_of(hay: []const u8, needle: []const u8) -&gt; ?usize</code> | `std/mem.mc:207` |
-| <code>export fn split_by(s: []const u8, sep: u8) -&gt; Split</code> | `std/mem.mc:253` |
-| <code>export fn split_next(sp: *mut Split) -&gt; SplitField</code> | `std/mem.mc:260` |
+| <code>pub fn split_by(s: []const u8, sep: u8) -&gt; Split</code> | `std/mem.mc:253` |
+| <code>pub fn split_next(sp: *mut Split) -&gt; SplitField</code> | `std/mem.mc:260` |
 
 ## `std/mmio`
 
@@ -648,7 +648,7 @@ Source: `std/mmio.mc`
 |---|---|
 | <code>struct RegField</code> | `std/mmio.mc:27` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -677,7 +677,7 @@ Source: `std/mmio.mc`
 
 Source: `std/scan.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -688,7 +688,7 @@ Source: `std/scan.mc`
 
 Source: `std/sort.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -709,7 +709,7 @@ Source: `std/strbuf.mc`
 |---|---|
 | <code>struct StrBuf</code> | `std/strbuf.mc:30` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -728,7 +728,7 @@ Source: `std/strbuf.mc`
 
 Source: `std/sync/barrier.mc`
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -747,7 +747,7 @@ Source: `std/sync/rwlock.mc`
 |---|---|
 | <code>struct RwLock</code> | `std/sync/rwlock.mc:12` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -768,7 +768,7 @@ Source: `std/sync/seqlock.mc`
 |---|---|
 | <code>struct SeqLock</code> | `std/sync/seqlock.mc:17` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -788,7 +788,7 @@ Source: `std/sync/spinlock.mc`
 |---|---|
 | <code>struct Spinlock</code> | `std/sync/spinlock.mc:9` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -808,7 +808,7 @@ Source: `std/sync/sync.mc`
 | <code>move struct Guard</code> | `std/sync/sync.mc:17` |
 | <code>move struct IrqGuard</code> | `std/sync/sync.mc:23` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -831,7 +831,7 @@ Source: `std/task.mc`
 | <code>struct Race2</code> | `std/task.mc:118` |
 | <code>struct Timeout</code> | `std/task.mc:158` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -854,7 +854,7 @@ Source: `std/time.mc`
 |---|---|
 | <code>type Ticks = counter&lt;u64&gt;;</code> | `std/time.mc:15` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -876,7 +876,7 @@ Source: `std/virtio.mc`
 | <code>extern mmio struct VirtioMmio</code> | `std/virtio.mc:8` |
 | <code>enum VirtioError</code> | `std/virtio.mc:47` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|
@@ -899,7 +899,7 @@ Source: `std/virtqueue.mc`
 | <code>move struct CompletedChain3</code> | `std/virtqueue.mc:339` |
 | <code>move struct CompletedBuffer</code> | `std/virtqueue.mc:458` |
 
-### Exported functions
+### Public functions
 
 | Signature | Source |
 |---|---|

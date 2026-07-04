@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate/check docs/std-api.md from exported stdlib declarations."""
+"""Generate/check docs/std-api.md from public stdlib declarations."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-EXPORT_RE = re.compile(r"^\s*export\s+")
-EXPORT_FN_RE = re.compile(r"^\s*export\s+(?:const\s+)?fn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b")
-EXPORT_CONST_RE = re.compile(r"^\s*export\s+const\s+(?!fn\b)(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b")
-EXPORT_TYPE_RE = re.compile(
-    r"^\s*export\s+(?:(?:opaque|move|extern|mmio)\s+){0,4}(?P<kind>struct|enum|trait|type)\s+"
+PUBLIC_RE = re.compile(r"^\s*(?:pub\s+)?export\s+|^\s*pub\s+")
+PUBLIC_FN_RE = re.compile(r"^\s*(?:(?:pub\s+)?export\s+|pub\s+)(?:const\s+)?fn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b")
+PUBLIC_CONST_RE = re.compile(r"^\s*(?:(?:pub\s+)?export\s+|pub\s+)const\s+(?!fn\b)(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b")
+PUBLIC_TYPE_RE = re.compile(
+    r"^\s*(?:(?:pub\s+)?export\s+|pub\s+)(?:(?:opaque|move|extern|mmio)\s+){0,4}(?P<kind>struct|enum|trait|type)\s+"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
 )
 TYPE_RE = re.compile(
@@ -44,6 +44,7 @@ KEYWORDS_AND_BUILTINS = {
     "move",
     "mut",
     "opaque",
+    "pub",
     "struct",
     "trait",
     "true",
@@ -71,16 +72,21 @@ class ModuleApi:
     path: str
     functions: list[Decl] = field(default_factory=list)
     constants: list[Decl] = field(default_factory=list)
-    exported_types: list[Decl] = field(default_factory=list)
+    public_types: list[Decl] = field(default_factory=list)
     local_types: dict[str, Decl] = field(default_factory=dict)
 
     def referenced_local_types(self) -> list[Decl]:
         names: set[str] = set()
-        for decl in [*self.functions, *self.constants, *self.exported_types]:
+        for decl in [*self.functions, *self.constants, *self.public_types]:
             for ident in IDENT_RE.findall(decl.signature):
                 if ident not in KEYWORDS_AND_BUILTINS:
                     names.add(ident)
-        return [decl for name, decl in self.local_types.items() if name in names]
+        public_type_names = {decl.name for decl in self.public_types}
+        return [
+            decl
+            for name, decl in self.local_types.items()
+            if name in names and name not in public_type_names
+        ]
 
 
 def strip_line_comment(line: str) -> str:
@@ -138,12 +144,12 @@ def decl_end(text: str, kind: str) -> tuple[int, bool]:
     return len(text), False
 
 
-def classify_export(line: str) -> tuple[str, str] | None:
-    if match := EXPORT_FN_RE.match(line):
+def classify_public(line: str) -> tuple[str, str] | None:
+    if match := PUBLIC_FN_RE.match(line):
         return "fn", match.group("name")
-    if match := EXPORT_CONST_RE.match(line):
+    if match := PUBLIC_CONST_RE.match(line):
         return "const", match.group("name")
-    if match := EXPORT_TYPE_RE.match(line):
+    if match := PUBLIC_TYPE_RE.match(line):
         return match.group("kind"), match.group("name")
     return None
 
@@ -159,7 +165,7 @@ def parse_module(root: Path, path: Path) -> ModuleApi:
         line = strip_line_comment(raw)
         stripped = line.strip()
 
-        if not EXPORT_RE.match(line):
+        if not PUBLIC_RE.match(line):
             if match := TYPE_RE.match(line):
                 kind = match.group("kind")
                 name = match.group("name")
@@ -177,7 +183,7 @@ def parse_module(root: Path, path: Path) -> ModuleApi:
             idx += 1
             continue
 
-        classified = classify_export(line)
+        classified = classify_public(line)
         if classified is None:
             idx += 1
             continue
@@ -201,7 +207,7 @@ def parse_module(root: Path, path: Path) -> ModuleApi:
         elif kind == "const":
             module.constants.append(decl)
         else:
-            module.exported_types.append(decl)
+            module.public_types.append(decl)
             module.local_types.setdefault(name, decl)
         idx += 1
 
@@ -213,7 +219,7 @@ def collect(root: Path) -> list[ModuleApi]:
     return [
         module
         for module in modules
-        if module.functions or module.constants or module.exported_types
+        if module.functions or module.constants or module.public_types
     ]
 
 
@@ -245,26 +251,26 @@ def render(root: Path) -> str:
     modules = collect(root)
     fn_count = sum(len(module.functions) for module in modules)
     const_count = sum(len(module.constants) for module in modules)
-    exported_type_count = sum(len(module.exported_types) for module in modules)
+    public_type_count = sum(len(module.public_types) for module in modules)
     referenced_type_count = sum(len(module.referenced_local_types()) for module in modules)
 
     lines: list[str] = [
         "# MC standard library API",
         "",
-        "This file is generated from exported declarations in `std/**/*.mc`.",
+        "This file is generated from public declarations in `std/**/*.mc`.",
         "Regenerate it with:",
         "",
         "```sh",
         "python3 tools/toolchain/std-api-docs.py --write",
         "```",
         "",
-        "The extractor is static: it records `export fn` signatures, exported constants,",
-        "exported type declarations, and local types named by exported declarations.",
+        "The extractor is static: it records `pub`/`export` function signatures, public constants,",
+        "public type declarations, and local types named by public declarations.",
         "",
         f"Total modules: **{len(modules)}**.",
-        f"Total exported functions: **{fn_count}**.",
-        f"Total exported constants: **{const_count}**.",
-        f"Total exported type declarations: **{exported_type_count}**.",
+        f"Total public functions: **{fn_count}**.",
+        f"Total public constants: **{const_count}**.",
+        f"Total public type declarations: **{public_type_count}**.",
         f"Total referenced local types: **{referenced_type_count}**.",
         "",
         "## Modules",
@@ -274,9 +280,9 @@ def render(root: Path) -> str:
         module_name = module.path.removesuffix(".mc")
         lines.extend(["", f"## `{module_name}`", "", f"Source: `{module.path}`"])
         table(lines, "Referenced local types", module.referenced_local_types())
-        table(lines, "Exported types", module.exported_types)
-        table(lines, "Exported constants", module.constants)
-        table(lines, "Exported functions", module.functions)
+        table(lines, "Public types", module.public_types)
+        table(lines, "Public constants", module.constants)
+        table(lines, "Public functions", module.functions)
 
     lines.append("")
     return "\n".join(lines)
@@ -308,7 +314,7 @@ def main() -> int:
             print("\n".join(diff), file=sys.stderr)
             print("FAIL: std API docs are stale; run python3 tools/toolchain/std-api-docs.py --write", file=sys.stderr)
             return 1
-        print("PASS: std-api-docs - docs/std-api.md covers exported stdlib declarations")
+        print("PASS: std-api-docs - docs/std-api.md covers public stdlib declarations")
         return 0
     print(generated)
     return 0
