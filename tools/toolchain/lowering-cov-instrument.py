@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Inject function-entry coverage probes into a backend lowering file (V3.2).
+"""Inject function-entry coverage probes into a Zig source file.
 
 For every Zig function definition in the file (a line of the form
 `<indent>[pub ]fn <name>(...) ... {` whose signature ends on that line), insert a
 `lower_cov.hit("<basename>:<name>:<lineno>");` call as the first statement of the
-body. Also prepend `const lower_cov = @import("lower_cov.zig");` so the probe
-resolves. The transform is line-oriented and idempotent-safe (it refuses to run if
-the file already imports lower_cov).
+body. Also prepend `const lower_cov = @import("lower_cov.zig");` so the existing
+coverage recorder resolves. The transform is line-oriented and idempotent-safe (it
+refuses to run if the file already imports lower_cov).
 
 Usage: lowering-cov-instrument.py <src.zig>   # rewrites the file in place
 

@@ -1,7 +1,7 @@
 const std = @import("std");
 const h = @import("helpers.zig");
 
-// Opt-in static audits (unsafe boundary / double-fetch / taint / lowering-coverage),
+// Opt-in static audits (unsafe boundary / double-fetch / taint / coverage),
 // the ASan/UBSan sanitize pass, the SAFE/RELEASE parity gate, and the KASAN/KMSAN/KCSAN
 // + redzone sanitizer-profile QEMU boots.
 pub fn register(ctx: *h.Ctx) void {
@@ -11,6 +11,11 @@ pub fn register(ctx: *h.Ctx) void {
     // backend files, builds an instrumented mcc itself, and restores the sources on
     // exit — so it deliberately does NOT depend on the normal install step.
     _ = h.addScriptTestOpts(ctx, "lowering-coverage", "Report and ratchet which split lower_c*/lower_llvm* functions the differential corpus never exercises (V3.2)", &.{ "bash", "tools/toolchain/lowering-coverage.sh", "--check" }, .{ .install = false });
+
+    // Function-level parser/sema/monomorphize/async coverage. Like lowering coverage,
+    // this builds an instrumented compiler in a temporary checkout and compares the
+    // uncovered function count against a checked-in ratchet.
+    _ = h.addScriptTestOpts(ctx, "compiler-coverage", "Report and ratchet parser/sema/monomorphize/async compiler frontend function coverage", &.{ "bash", "tools/toolchain/compiler-coverage.sh", "--check" }, .{ .install = false });
 
     // The three source-level security audits (unsafe boundary / double-fetch / taint) are
     // now one parameterized tool, tools/toolchain/mc-audit.sh, invoked with `--mode`. Pure

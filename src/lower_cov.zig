@@ -1,20 +1,21 @@
-//! Lowering-coverage instrumentation (hardening item V3.2).
+//! Function-level compiler coverage instrumentation.
 //!
 //! This module provides a *function-level* coverage tracker for the split C and LLVM
-//! backend modules (`lower_c*.zig`, `lower_llvm*.zig`). The Zig toolchain in the dev image ships
-//! `llvm-cov`/`llvm-profdata` but Zig 0.16's self-hosted compiler exposes no
-//! `-fprofile-instr-generate`/source-coverage flag for *its own* output, and `kcov`
-//! is not installed — so true line/branch coverage of the `mcc` binary is not
-//! available. Instead, `tools/toolchain/lowering-coverage.sh` injects a
-//! `lower_cov.hit("<fn>")` probe at the top of every function in those backend
-//! files, builds that instrumented `mcc`, and runs it over the differential corpus.
-//! The set of probed-but-never-fired functions is the list of UNCOVERED lowering
-//! branches.
+//! backend modules (`lower_c*.zig`, `lower_llvm*.zig`) and the front-end/semantic
+//! modules measured by `tools/toolchain/compiler-coverage.sh`. The Zig toolchain in
+//! the dev image ships `llvm-cov`/`llvm-profdata` but Zig 0.16's self-hosted
+//! compiler exposes no `-fprofile-instr-generate`/source-coverage flag for *its own*
+//! output, and `kcov` is not installed, so true line/branch coverage of the `mcc`
+//! binary is not available. Instead, the coverage scripts inject a
+//! `lower_cov.hit("<fn>")` probe at the top of every function in a temporary
+//! checkout, build that instrumented `mcc`, and run it over a deterministic corpus.
+//! The set of probed-but-never-fired functions is the list of uncovered compiler
+//! functions.
 //!
 //! Fidelity: FUNCTION-level (a function counts as "covered" if it was entered at
 //! least once). This is coarser than branch coverage, but it is exactly the
-//! granularity that surfaces "this whole lowering family is never exercised by the
-//! corpus" — which is the class the overlay-read miscompile lived in.
+//! granularity that surfaces "this whole lowering or checking family is never
+//! exercised by the corpus" - the class this ratchet is intended to expose.
 //!
 //! The probe is gated on the `MC_LOWER_COV` environment variable (the value is the
 //! output file path). When unset, `hit` is a single cheap branch and the tracker is
