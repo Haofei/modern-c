@@ -25,6 +25,7 @@ class Rule:
     patterns: tuple[str, ...]
     gates: tuple[str, ...]
     reason: str
+    checks: tuple[str, ...] = ()
 
 
 RULES: tuple[Rule, ...] = (
@@ -90,6 +91,12 @@ RULES: tuple[Rule, ...] = (
         "diagnostic inventory changes need generated reference and ownership checks",
     ),
     Rule(
+        ("docs/**/*.md", "docs/*.md", "*.md"),
+        (),
+        "generic documentation changes need whitespace/patch sanity, not compiler execution",
+        ("git diff --check",),
+    ),
+    Rule(
         ("tests/spec/*.mc",),
         ("test", "c-test", "llvm-sweep"),
         "spec fixtures feed parser/sema plus C and LLVM sweeps",
@@ -153,10 +160,12 @@ def matches(path: str, pattern: str) -> bool:
     return fnmatch.fnmatch(path, pattern)
 
 
-def select_gates(paths: list[str]) -> tuple[list[str], list[str]]:
+def select_gates(paths: list[str]) -> tuple[list[str], list[str], list[str]]:
     gates: list[str] = []
+    checks: list[str] = []
     reasons: list[str] = []
     seen_gates: set[str] = set()
+    seen_checks: set[str] = set()
     seen_reasons: set[str] = set()
     for path in paths:
         for rule in RULES:
@@ -165,13 +174,17 @@ def select_gates(paths: list[str]) -> tuple[list[str], list[str]]:
                     if gate not in seen_gates:
                         seen_gates.add(gate)
                         gates.append(gate)
+                for check in rule.checks:
+                    if check not in seen_checks:
+                        seen_checks.add(check)
+                        checks.append(check)
                 if rule.reason not in seen_reasons:
                     seen_reasons.add(rule.reason)
                     reasons.append(rule.reason)
-    if paths and not gates:
+    if paths and not gates and not checks:
         gates = ["test"]
         reasons = ["unmapped changes default to compiler unit/spec tests"]
-    return gates, reasons
+    return gates, checks, reasons
 
 
 def main() -> int:
@@ -184,7 +197,7 @@ def main() -> int:
     args = parser.parse_args()
 
     paths = sorted(set(args.paths)) if args.paths else changed_files(args.base, args.staged, args.unstaged, args.all or not (args.base or args.staged or args.unstaged))
-    gates, reasons = select_gates(paths)
+    gates, checks, reasons = select_gates(paths)
 
     if not paths:
         print("No changed files found.")
@@ -194,8 +207,11 @@ def main() -> int:
     for path in paths:
         print(f"  {path}")
 
-    print("\nFocused gates:")
-    print("  zig build " + " ".join(gates))
+    print("\nFocused checks:")
+    for check in checks:
+        print(f"  {check}")
+    if gates:
+        print("  zig build " + " ".join(gates))
 
     if reasons:
         print("\nWhy:")
