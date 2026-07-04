@@ -200,7 +200,22 @@ pub fn appendModule(
     var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
     defer typed_mir.deinit();
 
-    var emitter = CEmitter.init(allocator, out, &typed_mir, source_path, reporter);
+    try appendModuleMir(allocator, module, &typed_mir, out, source_path, ksan, msan, csan, stub_asm, reporter);
+}
+
+pub fn appendModuleMir(
+    allocator: std.mem.Allocator,
+    module: ast.Module,
+    typed_mir: *const mir.Module,
+    out: *std.ArrayList(u8),
+    source_path: ?[]const u8,
+    ksan: bool,
+    msan: bool,
+    csan: bool,
+    stub_asm: bool,
+    reporter: ?*diagnostics.Reporter,
+) anyerror!void {
+    var emitter = CEmitter.init(allocator, out, typed_mir, source_path, reporter);
     emitter.ksan = ksan;
     emitter.msan = msan;
     emitter.csan = csan;

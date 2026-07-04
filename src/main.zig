@@ -718,16 +718,17 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, artifact_source_path
         return error.EmitCFailed;
     }
 
-    try mir.verifyOpt(allocator, module, &diag, .{ .optimize = optimize });
+    var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
+    defer module_mir.deinit();
+    try mir.verifyBuiltMir(module_mir, &diag);
     if (diag.has_errors) {
         diag.render();
         return error.EmitCFailed;
     }
 
-    const be = backend.byName("c").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    be.lower(allocator, module, &output, .{ .profile = profile, .source_path = artifact_source_path, .checks = checks, .stub_asm = stub_asm, .reporter = &diag }) catch |err| switch (err) {
+    lower_c.appendCProfileWithMir(allocator, module, &module_mir, &output, profile, artifact_source_path, checks, stub_asm, &diag) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
             diag.render();

@@ -80,6 +80,12 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
 }
 
 fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
+    var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = checks.optimize });
+    defer typed_mir.deinit();
+    try appendCProfileWithMir(allocator, module, &typed_mir, out, profile, source_path, checks, stub_asm, reporter);
+}
+
+pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast.Module, typed_mir: *const mir.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
     const profile_marker = switch (profile) {
         .kernel => "/* mc-profile: kernel (freestanding) */\n",
         .hosted => "/* mc-profile: hosted (links libc + -lm) */\n",
@@ -88,11 +94,11 @@ fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast.Module, o
     try lower_c_runtime.appendCheckedArithmeticHelpers(allocator, out);
     try lower_c_runtime.appendMemoryAccessHelpers(allocator, out, checks.ksan, checks.msan, checks.csan);
 
-    try lower_c_emitter.appendModule(
+    try lower_c_emitter.appendModuleMir(
         allocator,
         module,
+        typed_mir,
         out,
-        checks.optimize,
         source_path,
         checks.ksan,
         checks.msan,

@@ -2,6 +2,7 @@ const std = @import("std");
 
 const diagnostics = @import("diagnostics.zig");
 const lower_c = @import("lower_c.zig");
+const mir = @import("mir.zig");
 const parser = @import("parser.zig");
 const test_support = @import("test_support.zig");
 
@@ -139,6 +140,34 @@ test "lower-c emits support helpers used by evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_thread_fence(__ATOMIC_RELEASE)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_thread_fence(__ATOMIC_ACQUIRE)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_signal_fence") == null);
+}
+
+test "lower-c reuses prebuilt verified MIR without changing output" {
+    const source =
+        \\fn add_one(value: u32) -> u32 {
+        \\    return value + 1;
+        \\}
+    ;
+
+    var parsed = try test_support.parseCheckedModule("c_prebuilt_mir.mc", source);
+    defer parsed.deinit();
+
+    var rebuilt_output: std.ArrayList(u8) = .empty;
+    defer rebuilt_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithSourcePath(std.testing.allocator, parsed.module, &rebuilt_output, .kernel, "c_prebuilt_mir.mc", .{ .optimize = true }, false);
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "c_prebuilt_mir.mc", source);
+    defer reporter.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{ .optimize = true });
+    defer module_mir.deinit();
+    try mir.verifyBuiltMir(module_mir, &reporter);
+    try std.testing.expect(!reporter.has_errors);
+
+    var prebuilt_output: std.ArrayList(u8) = .empty;
+    defer prebuilt_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &prebuilt_output, .kernel, "c_prebuilt_mir.mc", .{ .optimize = true }, false, &reporter);
+
+    try std.testing.expectEqualSlices(u8, rebuilt_output.items, prebuilt_output.items);
 }
 
 test "lower-c path-aware C emission writes source line hints" {
