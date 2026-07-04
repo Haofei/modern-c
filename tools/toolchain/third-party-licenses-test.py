@@ -84,7 +84,9 @@ DEPENDENCIES = {
         "needles": (
             "Component: openlibm",
             "https://github.com/JuliaMath/openlibm",
-            "exact recorded version and commit currently unknown",
+            "b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8",
+            "b387919068d5ec49929cc012119375b889724175918e851851d3eacab92a665a",
+            "original import commit is not uniquely provable",
             "mixed permissive",
             "MIT",
             "ISC",
@@ -92,6 +94,9 @@ DEPENDENCIES = {
             "FDLIBM",
             "Redistribution note:",
             "LICENSE.md",
+        ),
+        "forbidden": (
+            "exact recorded version and commit currently unknown",
         ),
     },
 }

@@ -1,11 +1,21 @@
 # openlibm (vendored)
 
 - **Upstream:** <https://github.com/JuliaMath/openlibm>
-- **Recorded version:** unknown. No upstream version macro, commit, tag file, or
-  archive checksum is present in this tree.
+- **Recorded version:** no upstream release tag or version macro is retained in
+  this tree. The retained subset does not match release tag `v0.8.7` exactly.
+- **Retained-subset comparison commit:**
+  `b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8`.
+- **Source archive:**
+  <https://codeload.github.com/JuliaMath/openlibm/tar.gz/b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8>.
+- **Archive SHA-256:**
+  `b387919068d5ec49929cc012119375b889724175918e851851d3eacab92a665a`.
 - **Source evidence:** `LICENSE.md` identifies the tree as OpenLibm derived from
   FreeBSD msun and OpenBSD libm; headers under `include/` expose the OpenLibm
   API and `isopenlibm()` marker.
+- **Provenance limit:** all retained files match the comparison commit
+  byte-for-byte, but the original import commit is not uniquely provable from
+  retained files alone because adjacent upstream commits can change files that
+  this local subset dropped.
 - **License:** mixed permissive licenses inherited from OpenLibm, FreeBSD msun,
   and OpenBSD libm (see `LICENSE.md`)
 
@@ -23,14 +33,15 @@ integration not needed by the local freestanding archive were dropped.
 
 ## Local modifications
 
-No local patch markers are present in the vendored openlibm files. The local
-integration is in `tools/user/build-openlibm.sh`, which compiles the subset with
-freestanding target flags and skips translation units that do not compile for
-the selected target.
+No retained source, header, or license file differs from comparison commit
+`b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8`. The local integration is outside the
+vendored source, primarily in `tools/user/build-openlibm.sh`, which compiles the
+subset with freestanding target flags and skips translation units that do not
+compile for the selected target.
 
-Because the exact upstream version/commit is unknown, the next openlibm
-re-vendor must identify the imported upstream tag or commit, record an archive
-checksum, and preserve a diff of any local changes before replacing this tree.
+The next openlibm re-vendor must replace the retained subset from an explicit
+tag or commit, record the source archive checksum, and preserve a diff of any
+local changes.
 
 ## How it is built and used
 

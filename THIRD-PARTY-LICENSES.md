@@ -59,9 +59,13 @@ upstream source tree and has no top-level license file.
 ## openlibm
 
 - Component: openlibm.
-- Upstream and provenance: <https://github.com/JuliaMath/openlibm>, exact
-  recorded version and commit currently unknown; local source evidence is the
-  retained OpenLibm headers and `LICENSE.md`. See
+- Upstream and provenance: <https://github.com/JuliaMath/openlibm>, retained
+  subset comparison commit `b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8`, source
+  archive SHA-256
+  `b387919068d5ec49929cc012119375b889724175918e851851d3eacab92a665a`;
+  the original import commit is not uniquely provable from retained files
+  alone. Local source evidence is the retained OpenLibm headers and
+  `LICENSE.md`. See
   `third_party/openlibm/README.vendored.md`.
 - License summary: mixed permissive terms from the Julia project MIT license,
   ISC-licensed Stephen L. Moshier code, FreeBSD/2-clause BSD msun code, FDLIBM
