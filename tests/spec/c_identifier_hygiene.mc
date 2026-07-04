@@ -8,10 +8,45 @@
 // that would collide with those names are rejected before C emission.
 
 // EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
-type uint32_t = u32;
+type size_t = u32;
 
 // EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
 global mc_check_index_usize: u32 = 0;
+
+// EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
+fn mc_tmp0() -> u32 {
+    return 0;
+}
+
+// EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
+fn mc_acc0() -> u32 {
+    return 0;
+}
+
+// EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
+fn mc_xs0() -> u32 {
+    return 0;
+}
+
+// EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
+fn mc_i0() -> u32 {
+    return 0;
+}
+
+// EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
+fn mc_a0() -> u32 {
+    return 0;
+}
+
+// EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
+fn uint32_t() -> u32 {
+    return 0;
+}
+
+// EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
+fn offsetof() -> u32 {
+    return 0;
+}
 
 // EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
 fn reject_reserved_param(mc_checked_add_u32: u32) -> u32 {

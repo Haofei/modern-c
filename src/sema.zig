@@ -213,11 +213,11 @@ const integerLiteralValue = numeric.integerLiteralValue;
 const atomicPayloadType = sema_type.atomicPayloadType;
 
 fn isCBackendReservedTopLevelName(kind: ast.Decl.Kind, name: []const u8) bool {
-    if (isCBackendRuntimeHelperName(name)) return true;
-    // Value-level top-level symbols go through the C emitter's `cIdent` sanitizer
-    // (`fn double` -> `double_`). Nominal type declarations are emitted as C tags /
-    // typedefs in several places, so reject header/keyword collisions there.
-    return !isValueLevelDecl(kind) and isCBackendReservedExactName(name);
+    if (isCBackendRuntimeHelperName(name) or isCBackendGeneratedTopLevelValueName(name)) return true;
+    // Value-level C keywords are sanitized by C emission, but C prelude/header names
+    // and nominal declarations still share generated C namespaces.
+    if (isValueLevelDecl(kind)) return isCBackendReservedHeaderName(name);
+    return isCBackendReservedExactName(name);
 }
 
 fn isCBackendReservedLocalName(name: []const u8) bool {
@@ -7991,6 +7991,42 @@ fn callContainsDeferControlFlow(node: anytype, ctx: Context) bool {
     if (exprContainsDeferControlFlow(node.callee.*, ctx)) return true;
     for (node.args) |arg| {
         if (exprContainsDeferControlFlow(arg, ctx)) return true;
+    }
+    return false;
+}
+
+fn isCBackendGeneratedTopLevelValueName(name: []const u8) bool {
+    return hasPrefixAndDecimalSuffix(name, "mc_tmp") or
+        hasPrefixAndDecimalSuffix(name, "mc_acc") or
+        hasPrefixAndDecimalSuffix(name, "mc_xs") or
+        hasPrefixAndDecimalSuffix(name, "mc_i") or
+        hasPrefixAndDecimalSuffix(name, "mc_a");
+}
+
+fn hasPrefixAndDecimalSuffix(name: []const u8, prefix: []const u8) bool {
+    if (!std.mem.startsWith(u8, name, prefix)) return false;
+    const suffix = name[prefix.len..];
+    if (suffix.len == 0) return false;
+    for (suffix) |c| {
+        if (c < '0' or c > '9') return false;
+    }
+    return true;
+}
+
+fn isCBackendReservedHeaderName(name: []const u8) bool {
+    const reserved = [_][]const u8{
+        // Macros and typedefs from the headers emitted by the C prelude.
+        "bool",       "true",        "false",     "NULL",       "offsetof",
+        "size_t",     "ptrdiff_t",   "uintptr_t", "intptr_t",   "uint8_t",
+        "uint16_t",   "uint32_t",    "uint64_t",  "int8_t",     "int16_t",
+        "int32_t",    "int64_t",     "UINT8_MAX", "UINT16_MAX", "UINT32_MAX",
+        "UINT64_MAX", "UINTPTR_MAX", "INT8_MIN",  "INT16_MIN",  "INT32_MIN",
+        "INT64_MIN",  "INTPTR_MIN",  "INT8_MAX",  "INT16_MAX",  "INT32_MAX",
+        "INT64_MAX",  "INTPTR_MAX",  "CHAR_BIT",  "MC_UNUSED",  "MC_NORETURN",
+        "MC_WEAK",
+    };
+    for (reserved) |word| {
+        if (std.mem.eql(u8, name, word)) return true;
     }
     return false;
 }
