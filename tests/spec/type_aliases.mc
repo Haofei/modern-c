@@ -11,6 +11,7 @@ type BytePtr = *mut u8;
 type MaybeBytePtr = ?*mut u8;
 type RawBytes = [*]mut u8;
 type Counts = [4]Count;
+type MutabilityTuple = (*mut u8, [*]const u8, []mut u8, const u8);
 
 packed bits Flags: u8 {
     ready: bool,
@@ -53,6 +54,10 @@ fn accept_raw_alias(p: RawBytes, i: usize) -> RawBytes {
 
 fn accept_array_alias(xs: Counts, i: usize) -> Count {
     return xs[i];
+}
+
+fn accept_tuple_mutability_alias(t: MutabilityTuple) -> MutabilityTuple {
+    return t;
 }
 
 fn accept_packed_alias(flags: FlagAlias) -> bool {
