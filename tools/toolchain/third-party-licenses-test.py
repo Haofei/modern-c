@@ -59,6 +59,8 @@ DEPENDENCIES = {
             "Component: WAMR",
             "https://github.com/bytecodealliance/wasm-micro-runtime",
             "2.4.3",
+            "0e65961d8e560b3d8a125045a29336ce6a0b16ad",
+            "dc27b60a1aff64b89d2ca51f036e0f1baee000e156ed7e9283e4f97b660e6e65",
             "Apache-2.0 WITH LLVM-exception",
             "Apache License, Version 2.0",
             "Redistribution note:",
@@ -68,6 +70,11 @@ DEPENDENCIES = {
             "LLVM exception",
             "Apache-2.0 Sections",
             "4(a), 4(b), and 4(d)",
+        ),
+        "forbidden": (
+            "exact recorded commit is currently unknown",
+            "exact upstream commit is unknown",
+            "next WAMR re-vendor",
         ),
     },
     "openlibm": {

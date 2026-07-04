@@ -2,10 +2,13 @@
 
 - **Upstream:** <https://github.com/bytecodealliance/wasm-micro-runtime>
 - **Recorded version:** `2.4.3`, from `WAMR_VERSION_MAJOR/MINOR/PATCH` in
-  `core/version.h`.
-- **Recorded commit:** unknown. No upstream commit, archive checksum, or tag file is
-  present in this tree; `tools/wamr/README.md` records that the original spike used
-  upstream `main`.
+  `core/version.h`. This is an untagged upstream `main` snapshot after
+  `WAMR-2.4.3`; the upstream version header still reports `2.4.3`.
+- **Recorded commit:** `0e65961d8e560b3d8a125045a29336ce6a0b16ad`.
+- **Source archive:**
+  <https://github.com/bytecodealliance/wasm-micro-runtime/archive/0e65961d8e560b3d8a125045a29336ce6a0b16ad.tar.gz>.
+- **Archive SHA-256:**
+  `dc27b60a1aff64b89d2ca51f036e0f1baee000e156ed7e9283e4f97b660e6e65`.
 - **License:** Apache-2.0 WITH LLVM-exception (see `LICENSE`)
 
 ## What is kept
@@ -39,8 +42,9 @@ The build also selects local feature defines rather than upstream defaults:
 `WASM_ENABLE_CALL_INDIRECT_OVERLONG=1`, and optional
 `WASM_ENABLE_FAST_INTERP`.
 
-Because the exact upstream commit is unknown, the next WAMR re-vendor must
-record the tag/commit and source archive checksum before replacing this tree.
+All retained upstream files match commit
+`0e65961d8e560b3d8a125045a29336ce6a0b16ad`. The only local source subtree is
+`core/shared/platform/mc/`.
 
 ## How it is built and used
 

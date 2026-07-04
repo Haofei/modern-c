@@ -39,8 +39,10 @@ upstream source tree and has no top-level license file.
 - Component: WAMR, the WebAssembly Micro Runtime.
 - Upstream and provenance:
   <https://github.com/bytecodealliance/wasm-micro-runtime>, recorded version
-  `2.4.3`; exact recorded commit is currently unknown and must be recovered on
-  the next re-vendor. See `third_party/wamr/README.vendored.md`.
+  `2.4.3`, untagged upstream `main` snapshot commit
+  `0e65961d8e560b3d8a125045a29336ce6a0b16ad`, source archive SHA-256
+  `dc27b60a1aff64b89d2ca51f036e0f1baee000e156ed7e9283e4f97b660e6e65`; see
+  `third_party/wamr/README.vendored.md`.
 - License summary: Apache-2.0 WITH LLVM-exception.
 - Local license file: `third_party/wamr/LICENSE`.
 - Redistribution note: provide a copy of the Apache License, Version 2.0; keep
