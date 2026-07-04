@@ -3168,18 +3168,47 @@ const LlvmEmitter = struct {
         for (items, 0..) |item, i| {
             const ptr = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(array_ty), array_ptr, i });
-            const value = try self.emitExpr(item, element_ty);
+            const value = try self.emitExprOrTargetTypedUninit(item, element_ty);
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ element_llvm, value, ptr, try self.debugCallSuffix() });
         }
     }
 
+    fn emitExprOrTargetTypedUninit(self: *LlvmEmitter, expr: ast.Expr, target_ty: ast.TypeExpr) ![]const u8 {
+        if (isUninitExpr(expr)) return try self.zeroInitializer(target_ty);
+        return self.emitExpr(expr, target_ty);
+    }
+
+    fn cUnionLiteralActiveField(self: *LlvmEmitter, fields: []const ast.StructLiteralField) ?ast.StructLiteralField {
+        _ = self;
+        var active: ?ast.StructLiteralField = null;
+        for (fields) |field| {
+            if (!isUninitExpr(field.value)) active = field;
+        }
+        return active orelse if (fields.len > 0) fields[0] else null;
+    }
+
+    fn structDeclField(self: *LlvmEmitter, struct_decl: ast.StructDecl, name: []const u8) ?ast.Field {
+        _ = self;
+        for (struct_decl.fields) |field| {
+            if (std.mem.eql(u8, field.name.text, name)) return field;
+        }
+        return null;
+    }
+
     fn emitStructLiteralStores(self: *LlvmEmitter, struct_ptr: []const u8, struct_ty: ast.TypeExpr, fields: []const ast.StructLiteralField) !void {
         const struct_decl = self.structDeclForType(struct_ty) orelse return error.UnsupportedLlvmEmission;
+        if (struct_decl.is_c_union) {
+            const active = self.cUnionLiteralActiveField(fields) orelse return error.UnsupportedLlvmEmission;
+            const field = self.structDeclField(struct_decl, active.name.text) orelse return error.UnsupportedLlvmEmission;
+            const value = try self.emitExprOrTargetTypedUninit(active.value, field.ty);
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(field.ty), value, struct_ptr, try self.debugCallSuffix() });
+            return;
+        }
         for (struct_decl.fields, 0..) |field, i| {
             const value_expr = structLiteralField(fields, field.name.text) orelse return error.UnsupportedLlvmEmission;
             const ptr = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ ptr, try self.llvmType(struct_ty), struct_ptr, i });
-            const value = try self.emitExpr(value_expr, field.ty);
+            const value = try self.emitExprOrTargetTypedUninit(value_expr, field.ty);
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(field.ty), value, ptr, try self.debugCallSuffix() });
         }
     }

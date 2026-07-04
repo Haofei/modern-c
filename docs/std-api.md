@@ -13,8 +13,8 @@ public type declarations, and local types named by public declarations.
 Total modules: **40**.
 Total public functions: **341**.
 Total public constants: **6**.
-Total public type declarations: **8**.
-Total referenced local types: **46**.
+Total public type declarations: **11**.
+Total referenced local types: **43**.
 
 ## Modules
 
@@ -461,25 +461,25 @@ Source: `std/fmt/fmt.mc`
 
 Source: `std/grant.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct Grant</code> | `std/grant.mc:15` |
-| <code>struct GrantRef</code> | `std/grant.mc:25` |
-| <code>enum GrantError</code> | `std/grant.mc:31` |
+| <code>pub struct Grant</code> | `std/grant.mc:15` |
+| <code>pub struct GrantRef</code> | `std/grant.mc:25` |
+| <code>pub enum GrantError</code> | `std/grant.mc:31` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn grant_make(base: PAddr, len: usize) -&gt; Grant</code> | `std/grant.mc:50` |
-| <code>export fn grant_make_gen(base: PAddr, len: usize, gen: u32) -&gt; Grant</code> | `std/grant.mc:58` |
-| <code>export fn grant_ref(g: *Grant) -&gt; GrantRef</code> | `std/grant.mc:63` |
-| <code>export fn grant_revoke(g: *mut Grant) -&gt; void</code> | `std/grant.mc:70` |
-| <code>export fn grant_open(g: *Grant, r: GrantRef) -&gt; Result&lt;bool, GrantError&gt;</code> | `std/grant.mc:75` |
-| <code>export fn grant_copy_out(g: *Grant, r: GrantRef, off: usize, dst: PAddr, n: usize) -&gt; Result&lt;bool, GrantError&gt;</code> | `std/grant.mc:83` |
-| <code>export fn grant_copy_in(g: *Grant, r: GrantRef, off: usize, src: PAddr, n: usize) -&gt; Result&lt;bool, GrantError&gt;</code> | `std/grant.mc:100` |
+| <code>pub fn grant_make(base: PAddr, len: usize) -&gt; Grant</code> | `std/grant.mc:50` |
+| <code>pub fn grant_make_gen(base: PAddr, len: usize, gen: u32) -&gt; Grant</code> | `std/grant.mc:58` |
+| <code>pub fn grant_ref(g: *Grant) -&gt; GrantRef</code> | `std/grant.mc:63` |
+| <code>pub fn grant_revoke(g: *mut Grant) -&gt; void</code> | `std/grant.mc:70` |
+| <code>pub fn grant_open(g: *Grant, r: GrantRef) -&gt; Result&lt;bool, GrantError&gt;</code> | `std/grant.mc:75` |
+| <code>pub fn grant_copy_out(g: *Grant, r: GrantRef, off: usize, dst: PAddr, n: usize) -&gt; Result&lt;bool, GrantError&gt;</code> | `std/grant.mc:83` |
+| <code>pub fn grant_copy_in(g: *Grant, r: GrantRef, off: usize, src: PAddr, n: usize) -&gt; Result&lt;bool, GrantError&gt;</code> | `std/grant.mc:100` |
 
 ## `std/hosted_args`
 

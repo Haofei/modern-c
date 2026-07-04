@@ -34,8 +34,9 @@ export fn fdt_version(blob: PAddr, len: usize) -> u32 {
 }
 
 // The result of an FDT /memory walk: whether a usable node was found and its first
-// (base, size) reg pair. A 2x u64 + flag struct is ABI-clean to return by value.
-struct FdtMemory {
+// (base, size) reg pair. This is an MC module API; C-facing wrappers below expose
+// scalar fields instead of returning this struct by value.
+pub struct FdtMemory {
     found: bool,
     base: u64,
     size: u64,
@@ -177,7 +178,7 @@ fn fdt_read_cells_u64(r: *ByteReader, off: usize, cells: u32) -> Result<u64, Byt
 // children of the implicit pre-root) before we encounter the memory node. When we enter
 // a node at depth 1 whose name starts with "memory", we record that we're inside it; its
 // `reg` property is then decoded with the root's cell counts.
-export fn fdt_memory(blob: PAddr, len: usize) -> FdtMemory {
+pub fn fdt_memory(blob: PAddr, len: usize) -> FdtMemory {
     var out: FdtMemory = .{ .found = false, .base = 0, .size = 0 };
 
     if !fdt_valid(blob, len) {
@@ -358,7 +359,7 @@ const FDT_MAX_DEPTH: usize = 16;
 
 // The result of a device-node lookup: whether a matching node was found and its
 // first reg (base, size) pair, decoded with the parent's cell counts.
-struct FdtDevice {
+pub struct FdtDevice {
     found: bool,
     base: u64,
     size: u64,
@@ -703,17 +704,17 @@ fn fdt_count_compatible_impl(
     return count;
 }
 
-// ----- per-device exported wrappers (clean scalar ABI for the C boot runtime) -----
+// ----- per-device MC wrappers; scalar C ABI wrappers follow below -----
 
-export fn fdt_find_uart(blob: PAddr, len: usize) -> FdtDevice {
+pub fn fdt_find_uart(blob: PAddr, len: usize) -> FdtDevice {
     let pat: [16]u8 = fdt_pat_ns16550a();
     return fdt_find_compatible_impl(blob, len, pat, 8);
 }
-export fn fdt_find_plic(blob: PAddr, len: usize) -> FdtDevice {
+pub fn fdt_find_plic(blob: PAddr, len: usize) -> FdtDevice {
     let pat: [16]u8 = fdt_pat_plic_riscv();
     return fdt_find_compatible_impl(blob, len, pat, 11);
 }
-export fn fdt_first_virtio_mmio(blob: PAddr, len: usize) -> FdtDevice {
+pub fn fdt_first_virtio_mmio(blob: PAddr, len: usize) -> FdtDevice {
     let pat: [16]u8 = fdt_pat_virtio_mmio();
     return fdt_find_compatible_impl(blob, len, pat, 11);
 }

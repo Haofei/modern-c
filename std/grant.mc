@@ -12,7 +12,7 @@ import "std/addr.mc";
 import "std/mem.mc";
 import "std/math.mc";
 
-struct Grant {
+pub struct Grant {
     base: PAddr,
     len: usize,
     gen: u32, // bumped on revoke
@@ -22,13 +22,13 @@ struct Grant {
 // anything on the IPC path) can fabricate or widen one, so its `base`/`len` are never used to
 // bound an access. The authoritative region always comes from the live `Grant`; the ref is
 // re-validated against it (`grant_open`, and every copy) before any memory is touched.
-struct GrantRef {
+pub struct GrantRef {
     base: PAddr,
     len: usize,
     gen: u32,
 }
 
-enum GrantError {
+pub enum GrantError {
     OutOfBounds, // access outside the granted region (or a forged/widened ref)
     Revoked,     // the grant was revoked since this handle was issued
 }
@@ -47,7 +47,7 @@ fn grant_check(g: *Grant, r: GrantRef) -> Result<bool, GrantError> {
 }
 
 // Owner side: grant access to [base, base+len).
-export fn grant_make(base: PAddr, len: usize) -> Grant {
+pub fn grant_make(base: PAddr, len: usize) -> Grant {
     return .{ .base = base, .len = len, .gen = 0 };
 }
 
@@ -55,24 +55,24 @@ export fn grant_make(base: PAddr, len: usize) -> Grant {
 // uses this so a reused slot continues past the previous incarnation's generation instead of
 // resetting to 0 — otherwise a stale ref (matching base/len) could re-validate against the
 // reused slot once its generation wrapped back to the ref's.
-export fn grant_make_gen(base: PAddr, len: usize, gen: u32) -> Grant {
+pub fn grant_make_gen(base: PAddr, len: usize, gen: u32) -> Grant {
     return .{ .base = base, .len = len, .gen = gen };
 }
 
 // Owner side: hand out a reference to pass to a server.
-export fn grant_ref(g: *Grant) -> GrantRef {
+pub fn grant_ref(g: *Grant) -> GrantRef {
     return .{ .base = g.base, .len = g.len, .gen = g.gen };
 }
 
 // Owner side: revoke — outstanding refs become stale. The generation uses checked addition so
 // it fails closed (traps) on exhaustion rather than wrapping back to a value a stale ref could
 // match — a capability generation must never silently revive an old handle.
-export fn grant_revoke(g: *mut Grant) -> void {
+pub fn grant_revoke(g: *mut Grant) -> void {
     g.gen = g.gen + 1;
 }
 
 // Server side: validate a ref against the live grant (catches use-after-revoke and forgery).
-export fn grant_open(g: *Grant, r: GrantRef) -> Result<bool, GrantError> {
+pub fn grant_open(g: *Grant, r: GrantRef) -> Result<bool, GrantError> {
     return grant_check(g, r);
 }
 
@@ -80,7 +80,7 @@ export fn grant_open(g: *Grant, r: GrantRef) -> Result<bool, GrantError> {
 // re-validated against the live grant on this access, and the bounds are taken from the grant
 // (`g.base`/`g.len`) — never from the untrusted ref — so a forged/widened ref cannot reach
 // outside the granted region.
-export fn grant_copy_out(g: *Grant, r: GrantRef, off: usize, dst: PAddr, n: usize) -> Result<bool, GrantError> {
+pub fn grant_copy_out(g: *Grant, r: GrantRef, off: usize, dst: PAddr, n: usize) -> Result<bool, GrantError> {
     switch grant_check(g, r) {
         ok(b) => {}
         err(e) => { return err(e); }
@@ -97,7 +97,7 @@ export fn grant_copy_out(g: *Grant, r: GrantRef, off: usize, dst: PAddr, n: usiz
 
 // Server side: copy `n` bytes from `src` into the granted region at offset `off`. Validated
 // and bounded against the live grant exactly as `grant_copy_out`.
-export fn grant_copy_in(g: *Grant, r: GrantRef, off: usize, src: PAddr, n: usize) -> Result<bool, GrantError> {
+pub fn grant_copy_in(g: *Grant, r: GrantRef, off: usize, src: PAddr, n: usize) -> Result<bool, GrantError> {
     switch grant_check(g, r) {
         ok(b) => {}
         err(e) => { return err(e); }

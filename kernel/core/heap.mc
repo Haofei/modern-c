@@ -108,12 +108,12 @@ fn redzone_intact(start: PAddr, len: usize) -> bool {
 }
 
 // One free region [start, start+len). `len == 0` marks an empty slot.
-struct FreeBlock {
+pub struct FreeBlock {
     start: PAddr,
     len: usize,
 }
 
-struct Heap {
+pub struct Heap {
     range: PhysRange,
     next: PAddr, // bump frontier: [next, range.end) is untouched tail
     free: [HEAP_FREE_SLOTS]FreeBlock,
@@ -136,27 +136,36 @@ fn fb_empty() -> FreeBlock {
     return .{ .start = pa(0), .len = 0 };
 }
 
+fn heap_empty_free_list() -> [HEAP_FREE_SLOTS]FreeBlock {
+    return .{
+        fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(),
+        fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(),
+        fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(),
+        fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(),
+        fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(),
+        fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(),
+        fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(),
+        fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(), fb_empty(),
+    };
+}
+
 // Build a heap over a physical region (e.g. a frame range reserved at boot).
-export fn heap_new(range: PhysRange) -> Heap {
-    var h: Heap = uninit;
-    h.range = range;
-    h.next = pr_start(&range);
-    h.redzone = 0; // redzone profile off: original layout, no guard bytes
-    h.ksan = 0;    // KASAN shadow profile off: no poison/unpoison hooks
-    h.free_count = 0; // compacted free list: no live blocks yet
-    var i: usize = 0;
-    while i < HEAP_FREE_SLOTS {
-        h.free[i] = fb_empty();
-        i = i + 1;
-    }
-    return h;
+pub fn heap_new(range: PhysRange) -> Heap {
+    return .{
+        .range = range,
+        .next = pr_start(&range),
+        .free = heap_empty_free_list(),
+        .free_count = 0,
+        .redzone = 0,
+        .ksan = 0,
+    };
 }
 
 // Build a heap with the redzone hardening profile enabled (D2.4). Every allocation
 // is fenced by `REDZONE_BYTES` poison bytes on each side; overflow into a redzone is
 // detected and trapped on free / `heap_check_block`. Same backing store, same API —
 // the only difference is the guard bytes and the corruption check.
-export fn heap_new_redzoned(range: PhysRange) -> Heap {
+pub fn heap_new_redzoned(range: PhysRange) -> Heap {
     var h: Heap = heap_new(range);
     h.redzone = REDZONE_BYTES;
     return h;
@@ -169,7 +178,7 @@ export fn heap_new_redzoned(range: PhysRange) -> Heap {
 // freed (or out-of-bounds) byte traps at ACCESS time via `mc_ksan_check` — strictly
 // finer than D2.4, which only catches a redzone clobber on FREE. The caller must arm the
 // shadow region for this heap's backing store (`mc_ksan_arm`, runtime-side) first.
-export fn heap_new_ksan(range: PhysRange) -> Heap {
+pub fn heap_new_ksan(range: PhysRange) -> Heap {
     var h: Heap = heap_new_redzoned(range);
     h.ksan = 1;
     return h;
@@ -386,7 +395,7 @@ fn heap_release_legacy(h: *mut Heap, start: PAddr, len: usize) -> void {
 // in a fuller kernel, block on memory pressure) — allocating from an
 // `#[irq_context]` function is forbidden ("sleeping in interrupt").
 #[may_sleep]
-export fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
+pub fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
     let rz: usize = h.redzone;
     if rz == 0 {
         return heap_alloc_raw(h, size, align);
@@ -423,7 +432,7 @@ export fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
 }
 
 // Why a non-trapping allocation could not be satisfied.
-enum HeapError {
+pub enum HeapError {
     Exhausted, // no free block fit and the bump frontier is out of space
 }
 
@@ -494,7 +503,7 @@ fn heap_alloc_raw(h: *mut Heap, size: usize, align: usize) -> PAddr {
 // a typed error rather than a kernel trap. The loader heap is non-redzoned, so this is
 // the raw allocator directly; redzoned heaps must use the infallible `heap_alloc`.
 #[may_sleep]
-export fn heap_try_alloc(h: *mut Heap, size: usize, align: usize) -> Result<PAddr, HeapError> {
+pub fn heap_try_alloc(h: *mut Heap, size: usize, align: usize) -> Result<PAddr, HeapError> {
     if h.redzone != 0 {
         unreachable; // fallible allocation is only wired for non-redzoned heaps
     }
@@ -505,7 +514,7 @@ export fn heap_try_alloc(h: *mut Heap, size: usize, align: usize) -> Result<PAdd
 // Traps (`unreachable`) the moment a guard byte has been overwritten — i.e. on the
 // first detected heap buffer overflow/underflow. No-op for a non-redzone heap. Can
 // be called at any point to check a live allocation, not only on free.
-export fn heap_check_block(h: *mut Heap, addr: PAddr, size: usize) -> void {
+pub fn heap_check_block(h: *mut Heap, addr: PAddr, size: usize) -> void {
     let rz: usize = h.redzone;
     if rz == 0 {
         return;
@@ -527,7 +536,7 @@ export fn heap_check_block(h: *mut Heap, addr: PAddr, size: usize) -> void {
 // On a redzone heap, the user passes the same `(addr, size)` it received; this routine
 // first verifies both guard bands (trapping on a detected overflow before the block
 // re-enters the free list) and then releases the *fenced* block [addr-rz, addr+size+rz).
-export fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
+pub fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
     var faddr: PAddr = addr;
     var fsize: usize = size;
     let rz: usize = h.redzone;
@@ -579,7 +588,7 @@ export fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
 // backing range now covers the grown span, `heap_free` of a block later carved from it validates and
 // coalesces exactly like any other block. Precondition: the added region is contiguous; a non-adjacent
 // region must go through the free list instead.
-export fn heap_extend(h: *mut Heap, added_len: usize) -> void {
+pub fn heap_extend(h: *mut Heap, added_len: usize) -> void {
     if added_len == 0 {
         return;
     }
@@ -589,14 +598,14 @@ export fn heap_extend(h: *mut Heap, added_len: usize) -> void {
 
 // The end of this heap's backing range (one past the last usable byte). A demand-grown caller compares
 // it against a desired block end to decide how much more to SYS_SBRK before an in-place grow.
-export fn heap_range_end(h: *mut Heap) -> PAddr {
+pub fn heap_range_end(h: *mut Heap) -> PAddr {
     return pr_end(&h.range);
 }
 
 // Is [addr, addr+len) the topmost bump-frontier block (its end == h.next)? A caller that owns a
 // growable backing store (e.g. the demand-grown libc heap) uses this to decide whether it is worth
 // SYS_SBRK-extending the range so a subsequent heap_try_grow_in_place can succeed.
-export fn heap_is_frontier_block(h: *mut Heap, addr: PAddr, len: usize) -> bool {
+pub fn heap_is_frontier_block(h: *mut Heap, addr: PAddr, len: usize) -> bool {
     return pa_eq(pa_offset(addr, len), h.next);
 }
 
@@ -608,7 +617,7 @@ export fn heap_is_frontier_block(h: *mut Heap, addr: PAddr, len: usize) -> bool 
 // O(n^2) copy chain into O(n): after the first move the buffer sits at the frontier and every later
 // grow just bumps h.next. Shrink/equal (new_len <= old_len) is reported as success with no change —
 // the block is already big enough; realloc's shrink path keeps the original block.
-export fn heap_try_grow_in_place(h: *mut Heap, addr: PAddr, old_len: usize, new_len: usize) -> bool {
+pub fn heap_try_grow_in_place(h: *mut Heap, addr: PAddr, old_len: usize, new_len: usize) -> bool {
     if new_len <= old_len {
         return true;
     }
@@ -625,7 +634,7 @@ export fn heap_try_grow_in_place(h: *mut Heap, addr: PAddr, old_len: usize, new_
 }
 
 // Bytes still available: the untouched tail plus everything on the free list.
-export fn heap_available(h: *mut Heap) -> usize {
+pub fn heap_available(h: *mut Heap) -> usize {
     var total: usize = pa_diff(h.next, pr_end(&h.range));
     var i: usize = 0;
     while i < HEAP_FREE_SLOTS {
@@ -649,6 +658,6 @@ impl Allocator for Heap {
 
 // View this heap as a generic `*mut dyn Allocator` — the checked coercion synthesizes the
 // shared rodata vtable; the heap itself is the trait object's data.
-export fn heap_allocator(h: *mut Heap) -> *mut dyn Allocator {
+pub fn heap_allocator(h: *mut Heap) -> *mut dyn Allocator {
     return h;
 }
