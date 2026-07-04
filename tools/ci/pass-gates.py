@@ -18,6 +18,13 @@ ARRAYS = {
     "ci-m0-pass": "ci_m0_pass_assertions",
 }
 
+MIN_GATE_COUNTS = {
+    # Match the current assertion-list sizes. Any intentional reduction should
+    # update this contract explicitly so CI cannot quietly become less probative.
+    "ci-m0-pass": 28,
+    "riscv-qemu-validation": 32,
+}
+
 
 def fail(message: str) -> None:
     print(f"FAIL: ci-pass-gates-test - {message}", file=sys.stderr)
@@ -67,6 +74,14 @@ def require_unique(label: str, names: list[str]) -> None:
         fail(f"{label} has duplicate gate(s): {', '.join(sorted(set(dupes)))}")
 
 
+def require_count_floor(tier: str, zig_name: str, names: list[str]) -> None:
+    minimum = MIN_GATE_COUNTS.get(tier)
+    if minimum is None:
+        return
+    if len(names) < minimum:
+        fail(f"{zig_name} has {len(names)} gate(s), below required floor {minimum}")
+
+
 def tier_names(tier: str) -> list[str]:
     zig_name = ARRAYS.get(tier)
     if zig_name is None:
@@ -83,6 +98,7 @@ def check_static() -> None:
         if not names:
             fail(f"{zig_name} is empty")
         require_unique(zig_name, names)
+        require_count_floor(tier, zig_name, names)
         if tier == "ci-m0-pass":
             missing = [name for name in names if name not in deps]
             if missing:
