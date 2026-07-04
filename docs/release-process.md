@@ -15,43 +15,48 @@ The development version is `0.7.0-dev`.
 - Without `-Dversion`, local builds report `mcc 0.7.0-dev`.
 - Release tags use the `v<version>` form. The release workflow strips the leading
   `v` and passes `-Dversion=<version>` to Zig.
+- Manual dispatch may package `0.7.0-dev` for dry-run artifact inspection, but
+  tag-triggered publication rejects development versions containing `-dev`.
 
 ## Release Checklist
 
 Before tagging a release:
 
 1. Choose the release version and build with `zig build -Dversion=<version> install`.
-2. Run `zig build m0` on Ubuntu 24.04 with LLVM 18 (`MC_LLVM_MAJOR=18`) and no skips.
-3. Run `zig build m0` in the pinned Linux container with no skips.
-4. Confirm the nightly rotating-seed mcfuzz workflow is green for the release
+2. Confirm `SECURITY.md`, `STABILITY.md`, and `CHANGELOG.md` describe the support
+   window and compatibility surfaces for that exact tag. Until a private advisory
+   channel exists, releases remain best-effort with no embargo or SLA.
+3. Run `zig build m0` on Ubuntu 24.04 with LLVM 18 (`MC_LLVM_MAJOR=18`) and no skips.
+4. Run `zig build m0` in the pinned Linux container with no skips.
+5. Confirm the nightly rotating-seed mcfuzz workflow is green for the release
    candidate commit. Shrink any reported failing seed with `tools/fuzz/mcfuzz.py
    shrink` and commit the minimized repro under `tools/fuzz/corpus/` before
    tagging.
-5. Confirm the nightly QEMU benchmark workflow is green for the release candidate
+6. Confirm the nightly QEMU benchmark workflow is green for the release candidate
    commit. Its committed baseline lives in `tools/bench/nightly-baseline.tsv`; update
    the TSV only when a deliberate performance change is measured on the pinned
    Ubuntu 24.04 / Zig 0.16.0 / LLVM 18 toolchain.
-6. Run `zig build fast` on every supported host tier.
-7. For generated C or `.mcmap` artifacts kept for release audit, invoke `mcc
+7. Run `zig build fast` on every supported host tier.
+8. For generated C or `.mcmap` artifacts kept for release audit, invoke `mcc
    emit-c` / `mcc emit-map` with `--remap-prefix=<build-root>=<logical-root>`
    so `#line` directives and source-map `source_path` metadata do not record
    host-specific temporary paths.
-8. Run a manual dry run of `.github/workflows/release.yml` for the candidate
+9. Run a manual dry run of `.github/workflows/release.yml` for the candidate
    version. The workflow builds with Zig 0.16.0, `-Doptimize=ReleaseSafe`, and
    `-Dversion=<version>` via `tools/ci/package-release.py`.
-9. Confirm the dry-run workflow artifact contains tarballs for
+10. Confirm the dry-run workflow artifact contains tarballs for
    `x86_64-linux-musl`, `aarch64-linux-musl`, `x86_64-macos`, and
    `aarch64-macos`.
    Each tarball must contain `bin/mcc`, `bin/mcc-real`, `std/`,
    `tools/toolchain/mcc-build.sh`, `tools/toolchain/mcc-cc.sh`,
    `tools/toolchain/mcc-llvm-cc.sh`, `README.md`, `LICENSE`, `SECURITY.md`,
    `STABILITY.md`, `CHANGELOG.md`, and `THIRD-PARTY-LICENSES.md`.
-10. Confirm `SHA256SUMS`, `mcc-<version>-release-inventory.json`, and
+11. Confirm `SHA256SUMS`, `mcc-<version>-release-inventory.json`, and
    `mcc-<version>-sbom.cdx.json` are present and that
    `sha256sum -c SHA256SUMS` passes.
-11. Confirm the workflow generated Sigstore-backed artifact attestations with
+12. Confirm the workflow generated Sigstore-backed artifact attestations with
    `actions/attest` using `subject-checksums: zig-out/release/SHA256SUMS`.
-12. Tag the exact commit and record the tag in `CHANGELOG.md`. Pushing `v*`
+13. Tag the exact commit and record the tag in `CHANGELOG.md`. Pushing `v*`
    creates or updates the GitHub Release assets with `gh release upload`.
 
 ## Release Artifacts

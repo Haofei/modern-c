@@ -59,6 +59,10 @@ jobs:
             echo "version must not include a leading v" >&2
             exit 1
           fi
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "$VERSION" == *-dev* ]]; then
+            echo "tag-triggered releases must not publish development versions: $VERSION" >&2
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"

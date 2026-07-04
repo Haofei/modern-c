@@ -241,6 +241,7 @@ def require_release_artifact_metadata() -> None:
         "tools/ci/package-release.py release",
         "--version",
         "--commit \"$GITHUB_SHA\"",
+        "tag-triggered releases must not publish development versions",
         "sha256sum -c SHA256SUMS",
         "Stage VS Code extension release asset",
         "Verify release checksum subjects",
@@ -306,6 +307,9 @@ def require_release_artifact_metadata() -> None:
         workflow_path,
         package_path,
         "ReleaseSafe",
+        "window and compatibility surfaces",
+        "best-effort with no embargo or SLA",
+        "tag-triggered publication rejects development versions",
         "SHA256SUMS",
         "release inventory",
         "CycloneDX SBOM",
@@ -380,6 +384,39 @@ def require_llvm_support_matrix() -> None:
     ):
         if needle not in readme:
             fail(f"{path} does not document LLVM support-matrix requirement {needle!r}")
+
+
+def require_release_support_policy() -> None:
+    security = read("SECURITY.md")
+    for needle in (
+        "## Tagged Release Support Policy",
+        "No tagged release has shipped yet",
+        "first `v*` tag",
+        "only supported release line until a newer tag supersedes it",
+        "fixes are expected to land on `master` first",
+        "backported to the latest tag",
+        "Older tags are retained for reproducibility but are unsupported",
+        "exact tag",
+        "artifact digest",
+        "release inventory/SBOM",
+        "no embargo or SLA",
+    ):
+        if needle not in security:
+            fail(f"SECURITY.md does not document tagged-release support policy requirement {needle!r}")
+
+    stability = read("STABILITY.md")
+    for needle in (
+        "## Tagged Release Compatibility",
+        "supported surfaces in the changelog",
+        "release artifact layout",
+        "`mcc --version`",
+        "`mcc --help`",
+        "documented exit-code behavior",
+        "diagnostic `E_*` code identities",
+        "remain experimental through `0.x`",
+    ):
+        if needle not in stability:
+            fail(f"STABILITY.md does not document tagged-release compatibility requirement {needle!r}")
 
 
 def main() -> None:
@@ -474,6 +511,7 @@ def main() -> None:
     require_release_artifact_metadata()
     require_threat_model_metadata()
     require_llvm_support_matrix()
+    require_release_support_policy()
 
     dockerfile = read("Dockerfile")
     require_contains("Dockerfile", f"FROM {EXPECTED_DOCKER_BASE_IMAGE}")

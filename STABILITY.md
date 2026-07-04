@@ -2,7 +2,7 @@
 
 MC is currently `0.7.0-dev`. The language, compiler CLI, generated C/LLVM text, stdlib
 APIs, and kernel support libraries are allowed to change without compatibility
-guarantees until a tagged release policy says otherwise.
+guarantees until a tagged release declares its supported surfaces.
 
 ## Stable Enough To Depend On In-Repo
 
@@ -22,6 +22,15 @@ guarantees until a tagged release policy says otherwise.
   ecosystem.
 - Async, traits, kernel libraries, editor integration, and self-hosted compiler
   slices remain subject to incompatible changes.
+
+## Tagged Release Compatibility
+
+The first `v*` tag may still be a development release, but it must state its
+supported surfaces in the changelog. Unless that release note says otherwise, only
+the release artifact layout, `mcc --version`, `mcc --help`, documented exit-code
+behavior, and diagnostic `E_*` code identities are compatibility surfaces for that
+tag. Language semantics, generated C/LLVM text, stdlib APIs, kernel libraries, and
+editor integration remain experimental through `0.x`.
 
 ## Changing Behavior
 
