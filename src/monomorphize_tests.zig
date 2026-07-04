@@ -114,6 +114,41 @@ test "monomorphize total specialization cap reports a focused diagnostic" {
     try testing.expect(!hasDiagnosticMessage(&reporter, "instantiation depth"));
 }
 
+test "monomorphize instantiation depth cap reports a focused diagnostic" {
+    const source =
+        \\fn runaway(comptime N: usize) -> [N]u8 {
+        \\    var scratch: [N]u8 = uninit;
+        \\    let next: [N + 1]u8 = runaway(N + 1);
+        \\    return scratch;
+        \\}
+        \\
+        \\fn trigger() -> u8 {
+        \\    let out: [1]u8 = runaway(1);
+        \\    return out[0];
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(testing.allocator, "mono_depth_limit.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    try testing.expect(!reporter.has_errors);
+
+    _ = try monomorphize.transformReportOptions(arena.allocator(), module, &reporter, .{
+        .limits = .{ .max_depth = 2 },
+    });
+
+    try testing.expect(reporter.has_errors);
+    try testing.expect(hasDiagnosticMessage(&reporter, "E_MONOMORPHIZATION_LIMIT"));
+    try testing.expect(hasDiagnosticMessage(&reporter, "instantiation depth"));
+    try testing.expect(hasDiagnosticMessage(&reporter, "3 > 2"));
+    try testing.expect(!hasDiagnosticMessage(&reporter, "total specialization count"));
+}
+
 test "monomorphize OOM fail-closes instead of returning a clean transform" {
     const source =
         \\fn make(comptime N: usize) -> [N]u8 {
