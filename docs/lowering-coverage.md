@@ -124,23 +124,20 @@ priority, being adjacent to the known overlay-read miscompile.
   through the inferred-local-init, call-argument, checked-unary-operand, and
   packed-bits-mask-test positions over a host-backed device window. C and LLVM agree.
 - **Atomics** (`atomicAccess` / order-synchronizes family) — `fuzz-atomics-test`
-  (`tests/c_emit/fuzz_atomics.mc`). `atomic<T>` load/store/fetch_add across all five
-  memory orders, 32- and 64-bit. C and LLVM agree.
+  (`tests/c_emit/fuzz_atomics.mc`). `atomic<T>` load/store/fetch_add/fetch_sub
+  across all five memory orders, 32- and 64-bit, including inferred RMW result
+  locals for u64 and signed payloads. C and LLVM agree.
 
 ## C-backend parity follow-ups (found while adding the atomics gate)
 
-The C backend raises `UnsupportedCEmission` for two atomic-result forms the LLVM
-backend lowers cleanly. Neither is a silent miscompile (the C backend refuses to
-emit), but both are real parity gaps — the C backend hoists MMIO reads in these
-positions yet does not hoist atomic ops:
+The C backend still lacks the expression-position temp-hoisting that LLVM lowering
+effectively gets for nested atomic-result expressions. This is a parity gap with the
+MMIO read path, which already hoists reads in these positions:
 
-1. An `atomic.load()` nested directly inside a compound expression (as a call
+1. An atomic result nested directly inside a compound expression (as a call
    argument or arithmetic operand), e.g. `mix(x.load(.acquire) + y)`.
-2. An **inferred-type** local bound to an atomic op (`let r = x.fetch_add(1, .acq_rel)`)
-   when `r` is later combined in a multi-term expression. A **typed** local
-   (`let r: u32 = …`) lowers fine — so kernel code (std/spinlock, std/arc), which
-   already types these, is unaffected.
 
 Fix direction: give atomic reads the same expression-position temp-hoisting the MMIO
 read path already has (`emitMmioRead*` in `src/lower_c.zig`). Until then, write
-atomic results into typed locals before using them in compound expressions.
+atomic results into locals before using them in compound expressions. Inferred locals
+bound directly to atomic RMW results are covered by `fuzz_atomics.mc`.

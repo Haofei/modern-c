@@ -4559,7 +4559,7 @@ const CEmitter = struct {
         if (self.assumeNoaliasReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
         if (byteViewCallReturnTypeForCall(call)) |ty| return ty;
-        if (self.atomicLoadReturnTypeForCall(call, locals)) |ty| return ty;
+        if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawMethodReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.enumRawReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.dynDispatchReturnTypeForCall(call, locals)) |ty| return ty;
@@ -4579,13 +4579,19 @@ const CEmitter = struct {
         return null;
     }
 
-    // `<atomic expr>.load(order)` returns the atomic's payload type (`atomic<u32>.load` -> `u32`),
-    // so a comparison/return whose operand is an atomic load — `flag.load(.acquire) != x` — can be
-    // typed for emission instead of failing UnsupportedCEmission.
-    fn atomicLoadReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    // Atomic value-producing calls return the atomic payload type
+    // (`atomic<u64>.fetch_add` -> `u64`), so inferred locals and compound
+    // operands do not fall back to the C emitter's default `uint32_t`.
+    fn atomicResultReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         const member = memberCallee(call.callee.*) orelse return null;
-        if (!std.mem.eql(u8, member.name.text, "load")) return null;
+        if (!std.mem.eql(u8, member.name.text, "load") and
+            !std.mem.eql(u8, member.name.text, "fetch_add") and
+            !std.mem.eql(u8, member.name.text, "fetch_sub"))
+        {
+            return null;
+        }
         const payload = self.atomicLocalPayload(member.base.*, locals) orelse return null;
+        if (!std.mem.eql(u8, member.name.text, "load") and !lower_c_atomic.isAtomicIntegerPayload(payload)) return null;
         return simpleNameType(payload, member.name.span);
     }
 
@@ -4653,7 +4659,7 @@ const CEmitter = struct {
         if (self.assumeNoaliasReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
         if (byteViewCallReturnTypeForCall(call)) |ty| return ty;
-        if (self.atomicLoadReturnTypeForCall(call, locals)) |ty| return ty;
+        if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawMethodReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.enumRawReturnTypeForCall(call, locals)) |ty| return ty;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
