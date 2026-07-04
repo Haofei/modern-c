@@ -119,6 +119,13 @@ fn reject_while_condition_consumes() -> u32 {
     return 0;
 }
 
+fn reject_while_condition_short_circuit_consumes(flag: bool) -> u32 {
+    let t: Token = make(); // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while flag && consume(t) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    }
+    return 0;
+}
+
 fn accept_while_condition_borrows(flag: bool) -> u32 {
     let t: Token = make();
     while peek(&t) != 0 {
