@@ -26,14 +26,17 @@ the type model + generator handlers; new checks plug in as new oracles.
 Usage:
   tools/fuzz/mcfuzz.py gen <seed>                       # print one program
   tools/fuzz/mcfuzz.py run [--count N] [--oracle X] [--start S] [--jobs J] [--mcc PATH]
+        [--triage-dir DIR] [--shrink-failures]
         oracle: differential (default) | sanitize | robust | failclosed | determinism |
                 pipeline | artifacts | roundtrip | metamorphic | optlevel | floatbits |
                 reference
 """
 import argparse
+import json
 import os
 import random
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -1937,22 +1940,117 @@ def _oracle_needs_llc(name, cmd):
     return cmd == "corpus" or name in ("differential", "floatbits")
 
 
-def oracle_on_source(env, oracle, source):
+def oracle_on_source(env, oracle, source, seed=0):
     """Run an oracle on a raw source string; returns the finding message or None."""
     work = tempfile.mkdtemp()
     try:
         src = os.path.join(work, "p.mc")
         open(src, "w").write(source)
-        return oracle(env, 0, src, work)
+        try:
+            return oracle(env, seed, src, work)
+        except OSError as e:
+            return "tool failed to execute: %s" % e
     finally:
         subprocess.run(["rm", "-rf", work])
 
 
-def shrink_source(env, oracle, source, signature):
+def _split_finding(finding):
+    text = finding.strip()
+    m = re.match(r"FAIL seed=(\d+):\s*(.*)", text, re.S)
+    if m:
+        return (int(m.group(1)), m.group(2))
+    return (None, text)
+
+
+def _finding_body(finding):
+    _seed, body = _split_finding(finding)
+    body = re.sub(r"\s+\[confirmed on serial re-verify\]\s*$", "", body)
+    body = re.sub(r"\s+\(reproduce: tools/fuzz/mcfuzz\.py gen \d+\)\s*$", "", body)
+    return body.strip()
+
+
+def _signature_fallback(text):
+    s = text.lower()
+    s = re.sub(r"/(?:private/)?tmp/[^\s:)]+", "<tmp>", s)
+    s = re.sub(r"\bseed=\d+\b", "seed=#", s)
+    s = re.sub(r"\b\d+\b", "#", s)
+    s = re.sub(r"[^a-z0-9_<>#.-]+", "-", s).strip("-")
+    return "fallback:" + (s[:96] or "empty")
+
+
+def finding_signature(finding, oracle_name=None):
+    """Stable root-cause bucket for a finding string.
+
+    Keep this intentionally broader than the full message: it is used both for run summaries and
+    as the shrinker predicate, so reductions keep the same failure class without depending on
+    seed-specific values, temp paths, or exact output bytes.
+    """
+    body = _finding_body(finding)
+
+    m = re.search(r"\bE_[A-Z0-9_]+\b", body)
+    if m:
+        return "compiler-error:" + m.group(0)
+
+    if body.startswith("UBSan:"):
+        m = re.search(r"runtime error:\s*([^:\n]+)", body)
+        return "ubsan:" + (re.sub(r"\s+", "-", m.group(1).strip().lower()) if m else "abort")
+
+    m = re.match(r"([A-Z-]+(?: [A-Z-]+)*) DIVERGENCE \(([^)]+)\)", body)
+    if m:
+        family = m.group(1).lower().replace(" ", "-")
+        subtype = re.sub(r"[^a-z0-9]+", "-", m.group(2).lower()).strip("-")
+        return "divergence:%s:%s" % (family, subtype)
+
+    m = re.match(r"BACKEND DIVERGENCE \(([^)]+)\)", body)
+    if m:
+        subtype = re.sub(r"[^a-z0-9]+", "-", m.group(1).lower()).strip("-")
+        return "divergence:backend:%s" % subtype
+
+    m = re.search(r"\bmcc ([A-Za-z0-9_-]+) CRASHED \(signal ([0-9]+)\)", body)
+    if m:
+        return "crash:mcc-%s:signal-%s" % (m.group(1), m.group(2))
+
+    m = re.search(r"\bmcc ([A-Za-z0-9_-]+) HANGS(?: \(>[^)]*\))?", body)
+    if m:
+        return "hang:mcc-%s" % m.group(1)
+
+    m = re.search(r"INTERNAL INCONSISTENCY: mcc ([A-Za-z0-9_-]+)", body)
+    if m:
+        return "internal-inconsistency:mcc-%s" % m.group(1)
+
+    if body.startswith("SOUNDNESS:"):
+        return "soundness:" + re.sub(r"[^a-z0-9]+", "-", body.split("(", 1)[0].lower()).strip("-")
+
+    m = re.match(r"ROUNDTRIP ([A-Z ]+):", body)
+    if m:
+        return "roundtrip:" + re.sub(r"[^a-z0-9]+", "-", m.group(1).lower()).strip("-")
+
+    if oracle_name == "artifacts":
+        if body.startswith("emit-map "):
+            return "artifacts:emit-map"
+        if body.startswith("mir "):
+            return "artifacts:lower-mir"
+        if body.startswith("ir "):
+            return "artifacts:lower-ir"
+        if body.startswith("fact ") or body.startswith("checked "):
+            return "artifacts:facts"
+
+    if "emit/compile failed" in body:
+        return "compile:emit-compile-failed"
+    if "link failed" in body:
+        return "compile:link-failed"
+    if "mcc check rejected a generated program" in body:
+        return "generator:mcc-check-rejected-generated-program"
+    if "failed to execute" in body:
+        fallback = _signature_fallback(body)
+        return "tool-exec:" + fallback[len("fallback:"):]
+
+    return _signature_fallback(body)
+
+
+def shrink_source(env, oracle, source, signature, seed=0, oracle_name=None):
     """Delta-debug `source` to a minimal program that still fails the oracle with the same kind
-    of finding (`signature` must stay in the message — so a divergence stays a divergence, not a
-    reduction that merely fails to compile). Line-greedy: keep removing lines while the failure
-    holds; repeat to fixpoint."""
+    of finding. Line-greedy: keep removing lines while the failure holds; repeat to fixpoint."""
     lines = source.split("\n")
     changed = True
     while changed:
@@ -1960,8 +2058,8 @@ def shrink_source(env, oracle, source, signature):
         i = 0
         while i < len(lines):
             trial = lines[:i] + lines[i + 1:]
-            res = oracle_on_source(env, oracle, "\n".join(trial))
-            if res is not None and signature in res:
+            res = oracle_on_source(env, oracle, "\n".join(trial), seed=seed)
+            if res is not None and finding_signature(res, oracle_name) == signature:
                 lines = trial
                 changed = True
             else:
@@ -1979,15 +2077,120 @@ def run_one(env, oracle, seed):
     try:
         src = os.path.join(work, "p.mc")
         open(src, "w").write(Gen(seed, trapping=env.get("trapping", False)).program())
-        chk = subprocess.run([env["mcc"], "check", src], capture_output=True)
+        try:
+            chk = subprocess.run([env["mcc"], "check", src], capture_output=True)
+        except OSError as e:
+            return "FAIL seed=%d: mcc check failed to execute: %s" % (seed, e)
         if chk.returncode != 0:
             return "FAIL seed=%d: mcc check rejected a generated program" % seed
-        res = oracle(env, seed, src, work)
+        try:
+            res = oracle(env, seed, src, work)
+        except OSError as e:
+            return "FAIL seed=%d: tool failed to execute: %s" % (seed, e)
         if res is not None:
             return "FAIL seed=%d: %s (reproduce: tools/fuzz/mcfuzz.py gen %d)" % (seed, res, seed)
         return None
     finally:
         subprocess.run(["rm", "-rf", work])
+
+
+def _shell_command(argv):
+    return " ".join(shlex.quote(str(a)) for a in argv)
+
+
+def _run_reproduce_command(args, seed):
+    argv = ["python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", args.oracle,
+            "--count", "1", "--start", str(seed), "--jobs", "1", "--mcc", args.mcc]
+    if args.trapping:
+        argv.append("--trapping")
+    return _shell_command(argv)
+
+
+def _shrink_command(args, seed):
+    argv = ["python3", "tools/fuzz/mcfuzz.py", "shrink", "--seed", str(seed),
+            "--oracle", args.oracle, "--mcc", args.mcc]
+    if args.trapping:
+        argv.append("--trapping")
+    return _shell_command(argv)
+
+
+def _triage_record(args, finding, confirmed_after_hang_recheck):
+    seed, _body = _split_finding(finding)
+    sig = finding_signature(finding, args.oracle)
+    return {
+        "seed": seed,
+        "oracle": args.oracle,
+        "trapping": bool(args.trapping),
+        "signature": sig,
+        "message": finding,
+        "reproduce_command": _run_reproduce_command(args, seed) if seed is not None else None,
+        "shrink_command": _shrink_command(args, seed) if seed is not None else None,
+        "confirmed_after_hang_recheck": bool(confirmed_after_hang_recheck),
+    }
+
+
+def _print_bucket_summary(records):
+    buckets = {}
+    for record in records:
+        buckets.setdefault(record["signature"], []).append(record)
+    print("mcfuzz bucket summary:")
+    for sig in sorted(buckets):
+        items = buckets[sig]
+        seeds = [str(r["seed"]) for r in items if r["seed"] is not None]
+        first = _finding_body(items[0]["message"]).splitlines()[0]
+        seed_text = " seeds=%s" % ",".join(seeds[:8]) if seeds else ""
+        more = " (+%d more)" % (len(seeds) - 8) if len(seeds) > 8 else ""
+        print("  %dx %s%s%s" % (len(items), sig, seed_text, more))
+        print("      %s" % first)
+
+
+def _write_triage_findings(triage_dir, records):
+    os.makedirs(triage_dir, exist_ok=True)
+    path = os.path.join(triage_dir, "findings.jsonl")
+    with open(path, "w") as f:
+        for record in records:
+            f.write(json.dumps(record, sort_keys=True) + "\n")
+    return path
+
+
+def _source_for_auto_shrink(args, seed):
+    # Keep auto-shrink to source-preserving run_one oracles. The reference oracle's expected value
+    # is tied to its generated AST, and floatbits regenerates a separate source internally.
+    if args.oracle in ("reference", "floatbits"):
+        return None
+    return Gen(seed, trapping=args.trapping).program()
+
+
+def _auto_shrink_failures(env, args, records):
+    seen = set()
+    oracle = ORACLES[args.oracle]
+    for record in records:
+        sig = record["signature"]
+        seed = record["seed"]
+        if sig in seen or seed is None:
+            continue
+        seen.add(sig)
+        source = _source_for_auto_shrink(args, seed)
+        if source is None:
+            record["shrink_status"] = "skipped"
+            record["shrink_error"] = "oracle does not shrink against the run source"
+            continue
+        original = oracle_on_source(env, oracle, source, seed=seed)
+        if original is None or finding_signature(original, args.oracle) != sig:
+            record["shrink_status"] = "skipped"
+            record["shrink_error"] = "failure did not reproduce through the shrink oracle"
+            continue
+        print("mcfuzz auto-shrink: seed=%d signature=%s" % (seed, sig))
+        minimal = shrink_source(env, oracle, source, sig, seed=seed, oracle_name=args.oracle)
+        repro_name = "minimized-seed-%d-%s.mc" % (seed, re.sub(r"[^A-Za-z0-9_.-]+", "_", sig))
+        repro_path = os.path.join(args.triage_dir, repro_name)
+        with open(repro_path, "w") as f:
+            f.write("// minimized repro for seed %d (mcfuzz/%s, signature %s)\n" % (seed, args.oracle, sig))
+            f.write(minimal)
+            if not minimal.endswith("\n"):
+                f.write("\n")
+        record["shrink_status"] = "minimized"
+        record["minimized_path"] = repro_path
 
 
 def main():
@@ -2001,6 +2204,9 @@ def main():
     r.add_argument("--trapping", action="store_true", help="emit checked arithmetic that may trap (differential only)")
     r.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", os.cpu_count() or 4)))
     r.add_argument("--mcc", default=os.environ.get("MCC", "zig-out/bin/mcc"))
+    r.add_argument("--triage-dir", help="write failure triage artifacts under DIR")
+    r.add_argument("--shrink-failures", action="store_true",
+                   help="with --triage-dir, shrink the first finding per root-cause signature")
     rp = sub.add_parser("report", help="construct-coverage statistics over generated programs")
     rp.add_argument("--count", type=int, default=int(os.environ.get("COUNT", "300")))
     cp = sub.add_parser("corpus", help="replay the persisted regression corpus (fixed-bug repros)")
@@ -2012,6 +2218,8 @@ def main():
     sh.add_argument("--trapping", action="store_true")
     sh.add_argument("--mcc", default=os.environ.get("MCC", "zig-out/bin/mcc"))
     args = ap.parse_args()
+    if getattr(args, "shrink_failures", False) and not getattr(args, "triage_dir", None):
+        ap.error("--shrink-failures requires --triage-dir")
 
     if args.cmd == "gen":
         sys.stdout.write(Gen(args.seed, trapping=args.trapping).program())
@@ -2093,18 +2301,13 @@ def main():
     if args.cmd == "shrink":
         oracle = ORACLES[args.oracle]
         source = Gen(args.seed, trapping=args.trapping).program()
-        res = oracle_on_source(env, oracle, source)
+        res = oracle_on_source(env, oracle, source, seed=args.seed)
         if res is None:
             print("seed %d does not fail mcfuzz/%s — nothing to shrink" % (args.seed, args.oracle))
             return 0
-        # Prefer a specific compiler error code (E_…) as the signature so the shrinker keeps the
-        # *same* failure and never over-reduces to a different one (e.g. a bare syntax error).
-        m = re.search(r"E_[A-Z0-9_]+", res)
-        sig = m.group(0) if m else next(
-            (s for s in ("DIVERGENCE", "CRASHED", "HANGS", "UBSan", "runtime error",
-                         "emit/compile failed", "link failed") if s in res), res[:24])
+        sig = finding_signature(res, args.oracle)
         sys.stderr.write("original finding: %s\nshrinking (signature %r)...\n" % (res.splitlines()[0], sig))
-        minimal = shrink_source(env, oracle, source, sig)
+        minimal = shrink_source(env, oracle, source, sig, seed=args.seed, oracle_name=args.oracle)
         print("// minimal repro for seed %d (mcfuzz/%s, signature %r):\n%s" % (args.seed, args.oracle, sig, minimal))
         return 0
 
@@ -2125,7 +2328,7 @@ def main():
                 if "HANGS" in res:
                     suspects.append(res)
                 else:
-                    print(res); fails.append(res)
+                    print(res); fails.append((res, False))
     # Re-verify suspected hangs one at a time, pool drained, so a real infinite loop still
     # trips the deadline while a contention flake completes and is dropped (with a note).
     for res in suspects:
@@ -2133,12 +2336,20 @@ def main():
         recheck = run_one(env, oracle, seed) if seed is not None else res
         if recheck and "HANGS" in recheck:
             msg = recheck + " [confirmed on serial re-verify]"
-            print(msg); fails.append(msg)
+            print(msg); fails.append((msg, True))
         elif recheck:
-            print(recheck); fails.append(recheck)  # reproduced as a *different* finding — still real
+            print(recheck); fails.append((recheck, False))  # reproduced as a *different* finding — still real
         else:
             print("seed=%s: timeout under parallel load did NOT reproduce serially — dropped as a contention flake" % seed)
     if fails:
+        records = [_triage_record(args, msg, confirmed) for msg, confirmed in fails]
+        _print_bucket_summary(records)
+        if args.triage_dir:
+            os.makedirs(args.triage_dir, exist_ok=True)
+            if args.shrink_failures:
+                _auto_shrink_failures(env, args, records)
+            findings_path = _write_triage_findings(args.triage_dir, records)
+            print("mcfuzz triage artifacts: %s" % findings_path)
         print("FAIL: mcfuzz/%s — %d finding(s) over %d programs" % (args.oracle, len(fails), args.count))
         return 1
     summary = {

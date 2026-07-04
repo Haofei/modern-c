@@ -109,7 +109,9 @@ jobs:
           {
             echo "### mcfuzz failure triage"
             echo
-            echo "Re-run the reported seed locally, shrink it with tools/fuzz/mcfuzz.py shrink,"
+            echo "Re-run the failing window locally with \`tools/fuzz/mcfuzz.py run --triage-dir /tmp/mcfuzz-triage ...\`"
+            echo "to get grouped findings in \`findings.jsonl\`. Add \`--shrink-failures\` to also"
+            echo "auto-minimize the first finding in each root-cause bucket, or shrink a single seed manually,"
             echo "and commit the minimized repro under tools/fuzz/corpus/ before release."
           } >> "$GITHUB_STEP_SUMMARY"
 
