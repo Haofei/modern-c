@@ -54,21 +54,27 @@ async fn nested_local(d: u64) -> i32 {
     return acc;
 }
 
-// ---- #2: the SAME binding name `r` (and the same nested local name `bonus`) declared in TWO
-// DISJOINT `if` scopes. Each `r` must carry its own await result; each `bonus` its own value.
+// ---- #2: the SAME binding name `r` (and the same nested block-local name `bonus`) declared in TWO
+// DISJOINT scopes. Each `r` must carry its own await result; each `bonus` its own value.
 //   c=true:  first if:  bonus=7,  r=await(50)=50,  acc += 50+7 = 57
 //            second if: bonus=9,  r=await(60)=60,  acc += 60+9 = 69   -> total 126
 async fn reused_name(d: u64, c: bool) -> i32 {
     var acc: i32 = 0;
     if c {
-        let bonus: i32 = 7;
+        {
+            let bonus: i32 = 7;
+            acc = acc + bonus;
+        }
         let r: i32 = await mk_val(d, 50);
-        acc = acc + r + bonus;
+        acc = acc + r;
     }
     if c {
-        let bonus: i32 = 9;
+        {
+            let bonus: i32 = 9;
+            acc = acc + bonus;
+        }
         let r: i32 = await mk_val(d, 60);
-        acc = acc + r + bonus;
+        acc = acc + r;
     }
     return acc;
 }

@@ -2186,7 +2186,7 @@ fn collectLoopBody(low: *Lowerer, blk: ast.Block, steps: *std.ArrayList(AwaitSte
         }
         in_tail = true;
         // E3a/E3b: `return` / `break` / `continue` inside an await-bearing loop body ARE now
-        // supported — lowered by rewriteLoopBodyStmt to a DONE / loop-exit / loop-head transition
+        // supported — lowered by the loop-body rewriter to a DONE / loop-exit / loop-head transition
         // (a `break`/`continue` is typically written nested in an `if`, which already flows through
         // here as a switch and is rewritten recursively). Still reject any await beyond the leading
         // run (E3c: awaits nested in inner control flow).
@@ -2789,10 +2789,6 @@ fn rewriteRegionBlock(low: *Lowerer, b: ast.Block, names: *std.StringHashMap(voi
 // runs AFTER the body await took its result, so no child is live. `continue` re-enters at state 0,
 // where the loop head rebuilds __c0 exactly once per entry; `break` builds no child. So no leak and
 // no double-build across the back-edge/exit edge.
-fn rewriteLoopBodyStmt(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(void), done_str: []const u8, cont_state: usize) Error!ast.Stmt {
-    return rewriteLoopBodyStmtIn(low, s, names, done_str, cont_state, false);
-}
-
 fn rewriteLoopBodyStmtIn(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(void), done_str: []const u8, cont_state: usize, in_inner_loop: bool) Error!ast.Stmt {
     const arena = low.arena;
     switch (s.kind) {
