@@ -63,6 +63,7 @@ EXPECTED_RELEASE_PATHS = (
     "CHANGELOG.md",
     "THIRD-PARTY-LICENSES.md",
 )
+EXPECTED_PACKAGE_RELEASE_TEST = "package-release-test"
 PINNED_ACTION_REF_RE = re.compile(r"^[0-9a-f]{40}$")
 WORKFLOW_USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?([^'\"\s#]+)")
 
@@ -287,6 +288,16 @@ def require_release_artifact_metadata() -> None:
         require_contains(package_path, needle)
     for path in EXPECTED_RELEASE_PATHS:
         require_contains(package_path, path)
+    qemu = read("build/qemu.zig")
+    if not re.search(
+        r'addScriptTestOpts\(ctx,\s*"package-release-test"[^;]*"tools/toolchain/package-release-test\.py"[^;]*\.install = false',
+        qemu,
+    ):
+        fail("build/qemu.zig does not register package-release-test as an install=false script test")
+    tiers = read("build/tiers.zig")
+    for tier in ("m0_step", "fast_step", "c0_step"):
+        if f'{tier}.dependOn(ctx.cmd("{EXPECTED_PACKAGE_RELEASE_TEST}"))' not in tiers:
+            fail(f"build/tiers.zig does not wire {EXPECTED_PACKAGE_RELEASE_TEST} into {tier}")
     if "mcc build" in workflow or "mcc build" in packager:
         fail("release artifact workflow must not implement or invoke `mcc build`")
 

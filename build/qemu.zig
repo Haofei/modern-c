@@ -57,6 +57,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "path-remap-test", "Validate emit-c/emit-map source path remapping for reproducible artifacts", &.{ "bash", "tools/toolchain/path-remap-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTestOpts(ctx, "release-metadata-test", "Check release/version/security/stability metadata stays in sync", &.{ "python3", "tools/toolchain/release-metadata-test.py" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "package-release-test", "Smoke-test release packaging metadata and deterministic tarballs without building a release", &.{ "python3", "tools/toolchain/package-release-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "ci-pass-gates-test", "Check CI PASS assertions are derived from tier definitions", &.{ "python3", "tools/ci/pass-gates.py", "check" }, .{ .install = false });
 
     _ = h.addScriptTest(ctx, "mono-test", "Compile a comptime-param type-generic module, link, and run the specialization", &.{ "bash", "tools/toolchain/mono-test.sh", "zig-out/bin/mcc" });

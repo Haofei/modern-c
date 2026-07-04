@@ -409,6 +409,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("path-remap-test"));
     // release-metadata-test keeps version/process metadata present and consistent.
     m0_step.dependOn(ctx.cmd("release-metadata-test"));
+    m0_step.dependOn(ctx.cmd("package-release-test"));
     // ci-pass-gates-test prevents CI's positive PASS assertions from drifting away from tiers.zig.
     m0_step.dependOn(ctx.cmd("ci-pass-gates-test"));
     // mono-test exercises comptime-parameter monomorphization (needs clang).
@@ -916,6 +917,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("mcc-build-test"));
     fast_step.dependOn(ctx.cmd("path-remap-test"));
     fast_step.dependOn(ctx.cmd("release-metadata-test"));
+    fast_step.dependOn(ctx.cmd("package-release-test"));
     fast_step.dependOn(ctx.cmd("ci-pass-gates-test"));
     fast_step.dependOn(ctx.cmd("c-test"));
     fast_step.dependOn(ctx.cmd("sweep"));
@@ -959,6 +961,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("mcc-build-test")); // installed mcc build hosted executable driver remains functional
     c0_step.dependOn(ctx.cmd("path-remap-test")); // generated C/source-map source paths can be remapped for reproducibility
     c0_step.dependOn(ctx.cmd("release-metadata-test")); // release/version/process metadata remains present
+    c0_step.dependOn(ctx.cmd("package-release-test")); // release packager remains smoke-tested without cross-builds
     c0_step.dependOn(ctx.cmd("ci-pass-gates-test")); // CI anti-vacuity assertions stay derived from tier definitions
     c0_step.dependOn(ctx.cmd("test"));
     c0_step.dependOn(ctx.cmd("c-test"));
