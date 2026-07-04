@@ -31,6 +31,7 @@ const floatCTypeName = lower_c_type.floatCTypeName;
 const genericChildType = lower_c_shape.genericChildType;
 const intTypeRange = lower_c_type.intTypeRange;
 const isCheckedBinaryOp = lower_c_op.isCheckedBinaryOp;
+const exprIsNumericLiteral = lower_c_expr.exprIsNumericLiteral;
 const isNoTrapBitwiseInfixOp = lower_c_op.isNoTrapBitwiseInfixOp;
 const isIdentNamed = ast_query.isIdentNamed;
 const isSatType = ast_query.isSatType;
@@ -40,6 +41,7 @@ const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const satHelperParts = lower_c_op.satHelperParts;
 const signedTypeSuffix = lower_c_type.signedTypeSuffix;
 const simpleNameType = ast_query.simpleNameType;
+const sameCStorageType = lower_c_type.sameCStorageType;
 const typeName = ast_query.typeName;
 const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
 const uncheckedNoOverflowCallOp = lower_c_expr.uncheckedNoOverflowCallOp;
@@ -302,12 +304,42 @@ pub fn emitUncheckedAddLocalInit(ctx: Context, name: []const u8, decl_ty: ast.Ty
 }
 
 pub fn emitUncheckedAddInferredLocalInit(ctx: Context, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const inferred_ty = simpleNameType("u32", initializer.span);
+    const inferred_ty = (try uncheckedInferredLocalType(ctx, initializer, locals, name)) orelse return false;
     const temp = (try emitUncheckedAddValueTemp(ctx, initializer, locals, inferred_ty, name)) orelse return false;
     try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, inferred_ty));
     try writeIndent(ctx);
-    try ctx.out.print(ctx.allocator, "uint32_t {s} = {s};\n", .{ try ctx.c_ident(ctx.emit_ctx, name), temp.name });
+    try ctx.out.print(ctx.allocator, "{s} {s} = {s};\n", .{ try ctx.c_type(ctx.emit_ctx, inferred_ty), try ctx.c_ident(ctx.emit_ctx, name), temp.name });
     return true;
+}
+
+fn uncheckedInferredLocalType(ctx: Context, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), range_target: []const u8) !?ast.TypeExpr {
+    if (ctx.numeric_expr_type(ctx.emit_ctx, initializer, locals)) |ty| return ty;
+    return switch (initializer.kind) {
+        .grouped => |inner| try uncheckedInferredLocalType(ctx, inner.*, locals, range_target),
+        .call => |call| try uncheckedCallResultType(ctx, call, initializer.span, locals, range_target),
+        else => null,
+    };
+}
+
+fn uncheckedCallResultType(ctx: Context, call: anytype, call_span: ast.Span, locals: *std.StringHashMap(LocalInfo), range_target: []const u8) !?ast.TypeExpr {
+    const op = uncheckedNoOverflowCallOp(call) orelse return null;
+    if (!ctx.has_mir_no_overflow_range_fact(ctx.emit_ctx, range_target, op, call_span)) return null;
+
+    const left_ty = ctx.numeric_expr_type(ctx.emit_ctx, call.args[0], locals);
+    const right_ty = ctx.numeric_expr_type(ctx.emit_ctx, call.args[1], locals);
+    if (left_ty != null and right_ty != null) {
+        if (sameCStorageType(left_ty.?, right_ty.?)) return left_ty.?;
+        return error.UnsupportedCEmission;
+    }
+    if (left_ty) |ty| {
+        if (exprIsNumericLiteral(call.args[1])) return ty;
+        return error.UnsupportedCEmission;
+    }
+    if (right_ty) |ty| {
+        if (exprIsNumericLiteral(call.args[0])) return ty;
+        return error.UnsupportedCEmission;
+    }
+    return error.UnsupportedCEmission;
 }
 
 pub fn emitUncheckedAddAssignmentStmt(ctx: Context, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
