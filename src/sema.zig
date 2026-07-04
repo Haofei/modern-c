@@ -161,8 +161,6 @@ const reflectionKind = sema_builtin.reflectionKind;
 const reflectionRequiresField = sema_builtin.reflectionRequiresField;
 const reflectionReturnClass = sema_builtin.reflectionReturnClass;
 const reflectionTypeExprFromArg = sema_builtin.reflectionTypeExprFromArg;
-const reflectionFieldFromCall = sema_reflect.reflectionFieldFromCall;
-const reflectionTypeFromCall = sema_reflect.reflectionTypeFromCall;
 const reduceCallReturnClass = sema_call.reduceCallReturnClass;
 const resolveAliasType = sema_type.resolveAliasType;
 pub const resultPayloadType = sema_type.resultPayloadType;
@@ -7196,32 +7194,13 @@ pub fn exprIsNeverCall(expr: ast.Expr, ctx: Context) bool {
     };
 }
 
-// The type name of a type-parameter argument: either a bare type-name ident or
-// the named field type from `field_type(T, .field)`.
+// The type name of a type-parameter argument after production monomorphization.
 fn typeArgName(arg: ast.Expr, ctx: Context) ?[]const u8 {
     return switch (arg.kind) {
         .ident => |id| id.text,
         .grouped => |inner| typeArgName(inner.*, ctx),
-        .call => |node| fieldTypeArgName(node, ctx),
         else => null,
     };
-}
-
-fn fieldTypeArgName(call: anytype, ctx: Context) ?[]const u8 {
-    const kind = reflectionKind(call.callee.*) orelse return null;
-    if (kind != .field_type) return null;
-    const ty = reflectionTypeFromCall(call) orelse return null;
-    const field = reflectionFieldFromCall(call) orelse return null;
-    const field_ty = reflectedFieldType(ty, field, ctx) orelse return null;
-    return typeName(field_ty);
-}
-
-fn reflectedFieldType(ty: ast.TypeExpr, field: []const u8, ctx: Context) ?ast.TypeExpr {
-    const name = typeName(ty) orelse return null;
-    if (layoutFieldInfo(name, ctx)) |layout| return layout.fields.get(field);
-    const tagged_unions = ctx.tagged_unions orelse return null;
-    const union_info = tagged_unions.get(name) orelse return null;
-    return union_info.cases.get(field) orelse null;
 }
 
 // The struct name a type expression directly names (a known struct/move type),
