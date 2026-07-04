@@ -43,6 +43,17 @@ fn reject_defer_block_return() -> void {
     };
 }
 
+fn reject_defer_switch_return(flag: bool) -> void {
+    // EXPECT_ERROR: E_DEFER_CONTROL_FLOW
+    defer {
+        switch flag {
+            true => { return; },
+            _ => { close_resource(); },
+        }
+    };
+    return;
+}
+
 fn reject_defer_block_trap() -> void {
     // EXPECT_ERROR: E_DEFER_CONTROL_FLOW
     defer {
