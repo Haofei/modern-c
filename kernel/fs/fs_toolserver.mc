@@ -26,30 +26,30 @@ import "kernel/fs/treefs.mc";
 import "kernel/core/ipc_trace.mc";
 
 // Rights a path capability may carry (bitset; attenuation only clears bits).
-const FS_READ: u32 = 1;
-const FS_WRITE: u32 = 2;
+pub const FS_READ: u32 = 1;
+pub const FS_WRITE: u32 = 2;
 
 // Verdict codes recorded in the audit event's `to` field.
-const V_DENY: u32 = 0;
-const V_ALLOW: u32 = 1;
+pub const V_DENY: u32 = 0;
+pub const V_ALLOW: u32 = 1;
 
 // Operation codes recorded in the audit event's `tag` field.
-const OP_WRITE: u32 = 1;
-const OP_READ: u32 = 2;
-const OP_MKDIR: u32 = 3;
-const OP_LIST: u32 = 4;
+pub const OP_WRITE: u32 = 1;
+pub const OP_READ: u32 = 2;
+pub const OP_MKDIR: u32 = 3;
+pub const OP_LIST: u32 = 4;
 
 // A path capability: authority over a subtree of the tree filesystem, attributed
 // to an agent. `root` is the authorized subtree root (a tree node index); a path
 // is in-scope iff the resolved node is `root` or a descendant of it. `rights`
 // gates read vs write. `agent_pid` is carried for attribution in the audit trail.
-struct PathCap {
+pub struct PathCap {
     agent_pid: u32,
     root: usize,
     rights: u32,
 }
 
-enum FsToolError {
+pub enum FsToolError {
     Denied,    // target is outside the capability's subtree
     NoRight,   // capability lacks the required right (read/write)
     NotFound,  // path (or an intermediate) does not exist
@@ -80,7 +80,7 @@ fn map_tree_err(e: TreeError) -> FsToolError {
 // Mint a root capability over subtree `root` with `rights`, attributed to
 // `agent_pid`. Minting is a kernel-side act (the agent receives the result); the
 // agent has no constructor that widens authority.
-export fn pathcap_root(agent_pid: u32, root: usize, rights: u32) -> PathCap {
+pub fn pathcap_root(agent_pid: u32, root: usize, rights: u32) -> PathCap {
     return .{ .agent_pid = agent_pid, .root = root, .rights = rights };
 }
 
@@ -110,7 +110,7 @@ fn within_cap(t: *mut Tree, node: usize, root: usize) -> bool {
 // current subtree, and rights are intersected with `rights_keep`. There is no
 // way to widen — the new root is a descendant and the new rights are a subset.
 // Denied if `sub_root` escapes the current authority.
-export fn pathcap_attenuate(t: *mut Tree, cap: *PathCap, sub_root: usize, rights_keep: u32) -> Result<PathCap, FsToolError> {
+pub fn pathcap_attenuate(t: *mut Tree, cap: *PathCap, sub_root: usize, rights_keep: u32) -> Result<PathCap, FsToolError> {
     if !within_cap(t, sub_root, cap.root) {
         return err(.Denied);
     }
@@ -133,7 +133,7 @@ fn has_right(cap: *PathCap, want: u32) -> bool {
 // Create a directory at `path`. Authorized against the PARENT directory (must be
 // in-scope and writable) BEFORE any node is created, so an out-of-scope mkdir is
 // denied with no side effect.
-export fn fs_tool_mkdir(t: *mut Tree, sink: *mut IpcTrace, cap: *PathCap, path: usize, path_len: usize) -> Result<usize, FsToolError> {
+pub fn fs_tool_mkdir(t: *mut Tree, sink: *mut IpcTrace, cap: *PathCap, path: usize, path_len: usize) -> Result<usize, FsToolError> {
     var parent: usize = 0;
     switch tree_lookup_parent(t, path, path_len) {
         ok(p) => { parent = p; }
@@ -191,7 +191,7 @@ fn open_or_create_for_write(t: *mut Tree, sink: *mut IpcTrace, cap: *PathCap, pa
 
 // Write `n` bytes from `src` to `path` at `offset`, creating the file (reserving
 // `capacity`) if absent. Authorized for write against the parent directory.
-export fn fs_tool_write(t: *mut Tree, sink: *mut IpcTrace, cap: *PathCap, path: usize, path_len: usize, offset: usize, src: usize, n: usize, capacity: usize) -> Result<usize, FsToolError> {
+pub fn fs_tool_write(t: *mut Tree, sink: *mut IpcTrace, cap: *PathCap, path: usize, path_len: usize, offset: usize, src: usize, n: usize, capacity: usize) -> Result<usize, FsToolError> {
     let idx: usize = open_or_create_for_write(t, sink, cap, path, path_len, capacity)?;
     switch tree_write_at(t, idx, offset, src, n) {
         ok(wrote) => {
@@ -204,7 +204,7 @@ export fn fs_tool_write(t: *mut Tree, sink: *mut IpcTrace, cap: *PathCap, path: 
 
 // Read up to `n` bytes of `path` from `offset` into `dst`. Authorized for read
 // against the resolved file node (must be in-scope). Returns the byte count.
-export fn fs_tool_read(t: *mut Tree, sink: *mut IpcTrace, cap: *PathCap, path: usize, path_len: usize, offset: usize, dst: usize, n: usize) -> Result<usize, FsToolError> {
+pub fn fs_tool_read(t: *mut Tree, sink: *mut IpcTrace, cap: *PathCap, path: usize, path_len: usize, offset: usize, dst: usize, n: usize) -> Result<usize, FsToolError> {
     var idx: usize = 0;
     switch tree_resolve(t, path, path_len) {
         ok(i) => { idx = i; }
@@ -225,7 +225,7 @@ export fn fs_tool_read(t: *mut Tree, sink: *mut IpcTrace, cap: *PathCap, path: u
 
 // Count the entries of directory `path`. Authorized for read against the
 // resolved directory (must be in-scope).
-export fn fs_tool_list_count(t: *mut Tree, sink: *mut IpcTrace, cap: *PathCap, path: usize, path_len: usize) -> Result<usize, FsToolError> {
+pub fn fs_tool_list_count(t: *mut Tree, sink: *mut IpcTrace, cap: *PathCap, path: usize, path_len: usize) -> Result<usize, FsToolError> {
     var idx: usize = 0;
     switch tree_resolve(t, path, path_len) {
         ok(i) => { idx = i; }

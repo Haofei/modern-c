@@ -24,7 +24,10 @@ import "std/mask.mc";
 // double's multiply cannot overflow (no checked-mult trap).
 fn tool_echo(x: u32) -> u32 { return x; }
 fn tool_double(x: u32) -> u32 { return x * 2; }
-fn tool_secret(x: u32) -> u32 { return 0xBADC0DE; } // the agent is NOT allowed to call this
+fn tool_secret(x: u32) -> u32 {
+    let _x: u32 = x;
+    return 0xBADC0DE;
+} // the agent is NOT allowed to call this
 
 // The agent's process entry. A no-op on the host (we drive the tool-call ABI directly rather than
 // switching into the agent thread).

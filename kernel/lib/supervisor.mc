@@ -5,24 +5,23 @@
 // per policy. This is the foundation for pluggable user-space OS services.
 
 import "std/mask.mc";
-import "std/scan.mc";
 import "kernel/lib/registry.mc";
 
 const SVC_MAX: usize = 8;
 
-enum RestartPolicy {
+pub enum RestartPolicy {
     Never,     // a core service: failure is fatal, do not restart
     OnFailure, // restart automatically if it fails
 }
 
-enum SvcState {
+pub enum SvcState {
     Registered, // known, not yet started
     Running,
     Failed,     // crashed; eligible for restart per its policy
     Stopped,    // intentionally stopped
 }
 
-enum SvcError {
+pub enum SvcError {
     Full,
     NotFound,
     Fatal,          // a core (Never) service failed; not restartable
@@ -30,7 +29,7 @@ enum SvcError {
 }
 
 // Declarative service manifest: identity, endpoint, privileges, and policy as data.
-struct ServiceManifest {
+pub struct ServiceManifest {
     name_key: u32,          // service-name hash / id (also the registry lookup key)
     endpoint: u32,          // the service's IPC endpoint (pid) once started
     allowed_ipc: Mask32,    // peers this service may message (least privilege)
@@ -47,7 +46,7 @@ struct ServiceEntry {
     present: bool,
 }
 
-struct Supervisor {
+pub struct Supervisor {
     services: [SVC_MAX]ServiceEntry,
     // Per-service dependency: the name_key of a service that must be Running first (0 = none).
     // Kept parallel to `services` so the manifest stays unchanged.
@@ -55,7 +54,7 @@ struct Supervisor {
     count: usize,
 }
 
-export fn supervisor_init(sup: *mut Supervisor) -> void {
+pub fn supervisor_init(sup: *mut Supervisor) -> void {
     var i: usize = 0;
     while i < SVC_MAX {
         sup.services[i].present = false;
@@ -67,7 +66,7 @@ export fn supervisor_init(sup: *mut Supervisor) -> void {
 
 // Declare that the service at `idx` depends on the service named `dep_name_key` — it will not be
 // started until that dependency is Running. `dep_name_key == 0` clears the dependency.
-export fn supervisor_set_dep(sup: *mut Supervisor, idx: usize, dep_name_key: u32) -> Result<bool, SvcError> {
+pub fn supervisor_set_dep(sup: *mut Supervisor, idx: usize, dep_name_key: u32) -> Result<bool, SvcError> {
     if idx >= sup.count {
         return err(.NotFound);
     }
@@ -79,7 +78,7 @@ export fn supervisor_set_dep(sup: *mut Supervisor, idx: usize, dep_name_key: u32
 // for a fresh endpoint) and marked Running only once its declared dependency is Running. Repeats
 // until no further progress; any service still Registered then has a missing or cyclic
 // dependency (`DepUnsatisfied`). Returns the number of services started.
-export fn supervisor_start_ordered(sup: *mut Supervisor) -> Result<usize, SvcError> {
+pub fn supervisor_start_ordered(sup: *mut Supervisor) -> Result<usize, SvcError> {
     var started: usize = 0;
     var progress: bool = true;
     while progress {
@@ -127,13 +126,13 @@ export fn supervisor_start_ordered(sup: *mut Supervisor) -> Result<usize, SvcErr
     return ok(started);
 }
 
-export fn supervisor_count(sup: *mut Supervisor) -> usize {
+pub fn supervisor_count(sup: *mut Supervisor) -> usize {
     return sup.count;
 }
 
 // Register a service by manifest + a spawn closure (how to (re)spawn it, returning the new
 // endpoint). Returns its index, or Full.
-export fn supervisor_register(sup: *mut Supervisor, m: ServiceManifest, spawn: closure() -> u32) -> Result<usize, SvcError> {
+pub fn supervisor_register(sup: *mut Supervisor, m: ServiceManifest, spawn: closure() -> u32) -> Result<usize, SvcError> {
     var i: usize = 0;
     while i < SVC_MAX {
         if !sup.services[i].present {
@@ -150,23 +149,22 @@ export fn supervisor_register(sup: *mut Supervisor, m: ServiceManifest, spawn: c
     return err(.Full);
 }
 
-// Predicate: a present service entry whose manifest name key matches the captured target.
-fn svc_name_matches(name_key: u32, e: ServiceEntry) -> bool {
-    return e.present && e.manifest.name_key == name_key;
-}
-
 // Find a registered service's index by its name key.
-export fn supervisor_find(sup: *mut Supervisor, name_key: u32) -> Result<usize, SvcError> {
-    let pred: closure(ServiceEntry) -> bool = bind(name_key, svc_name_matches);
-    let i: usize = find_index(ServiceEntry, SVC_MAX, sup.services, pred);
-    if i < SVC_MAX {
-        return ok(i);
+pub fn supervisor_find(sup: *mut Supervisor, name_key: u32) -> Result<usize, SvcError> {
+    var i: usize = 0;
+    while i < SVC_MAX {
+        if sup.services[i].present {
+            if sup.services[i].manifest.name_key == name_key {
+                return ok(i);
+            }
+        }
+        i = i + 1;
     }
     return err(.NotFound);
 }
 
 // Resolve a service's endpoint by name (discovery for clients).
-export fn supervisor_lookup(sup: *mut Supervisor, name_key: u32) -> Result<u32, SvcError> {
+pub fn supervisor_lookup(sup: *mut Supervisor, name_key: u32) -> Result<u32, SvcError> {
     switch supervisor_find(sup, name_key) {
         ok(i) => {
             return ok(sup.services[i].manifest.endpoint);
@@ -177,14 +175,14 @@ export fn supervisor_lookup(sup: *mut Supervisor, name_key: u32) -> Result<u32, 
     }
 }
 
-export fn supervisor_state(sup: *mut Supervisor, idx: usize) -> SvcState {
+pub fn supervisor_state(sup: *mut Supervisor, idx: usize) -> SvcState {
     if idx < sup.count {
         return sup.services[idx].state;
     }
     return .Stopped;
 }
 
-export fn supervisor_restarts(sup: *mut Supervisor, idx: usize) -> u32 {
+pub fn supervisor_restarts(sup: *mut Supervisor, idx: usize) -> u32 {
     if idx < sup.count {
         return sup.services[idx].restarts;
     }
@@ -193,19 +191,19 @@ export fn supervisor_restarts(sup: *mut Supervisor, idx: usize) -> u32 {
 
 // Declarative privileges, queryable from the manifest (data, not scattered checks): the
 // allowed-IPC and allowed-kcall masks a privilege check would consult, and the endpoint.
-export fn supervisor_endpoint(sup: *mut Supervisor, idx: usize) -> u32 {
+pub fn supervisor_endpoint(sup: *mut Supervisor, idx: usize) -> u32 {
     if idx < sup.count {
         return sup.services[idx].manifest.endpoint;
     }
     return 0;
 }
-export fn supervisor_allowed_ipc(sup: *mut Supervisor, idx: usize) -> u32 {
+pub fn supervisor_allowed_ipc(sup: *mut Supervisor, idx: usize) -> u32 {
     if idx < sup.count {
         return mask32_raw(&sup.services[idx].manifest.allowed_ipc);
     }
     return 0;
 }
-export fn supervisor_allowed_kcalls(sup: *mut Supervisor, idx: usize) -> u32 {
+pub fn supervisor_allowed_kcalls(sup: *mut Supervisor, idx: usize) -> u32 {
     if idx < sup.count {
         return mask32_raw(&sup.services[idx].manifest.allowed_kcalls);
     }
@@ -213,7 +211,7 @@ export fn supervisor_allowed_kcalls(sup: *mut Supervisor, idx: usize) -> u32 {
 }
 
 // Mark a service as started (Running).
-export fn supervisor_start(sup: *mut Supervisor, idx: usize) -> Result<bool, SvcError> {
+pub fn supervisor_start(sup: *mut Supervisor, idx: usize) -> Result<bool, SvcError> {
     if idx >= sup.count {
         return err(.NotFound);
     }
@@ -222,7 +220,7 @@ export fn supervisor_start(sup: *mut Supervisor, idx: usize) -> Result<bool, Svc
 }
 
 // Record that a service crashed.
-export fn supervisor_mark_failed(sup: *mut Supervisor, idx: usize) -> Result<bool, SvcError> {
+pub fn supervisor_mark_failed(sup: *mut Supervisor, idx: usize) -> Result<bool, SvcError> {
     if idx >= sup.count {
         return err(.NotFound);
     }
@@ -249,7 +247,7 @@ fn respawn_entry(p: *mut ServiceEntry, reg: *mut Registry) -> void {
 
 // Restart one failed service if its policy permits (respawning it and updating the registry);
 // Fatal for a core (Never) service.
-export fn supervisor_restart(sup: *mut Supervisor, idx: usize, reg: *mut Registry) -> Result<bool, SvcError> {
+pub fn supervisor_restart(sup: *mut Supervisor, idx: usize, reg: *mut Registry) -> Result<bool, SvcError> {
     if idx >= sup.count {
         return err(.NotFound);
     }
@@ -268,7 +266,7 @@ export fn supervisor_restart(sup: *mut Supervisor, idx: usize, reg: *mut Registr
 
 // Supervise: respawn every Failed service whose policy is OnFailure (updating the registry);
 // return how many were restarted. Core (Never) services that have failed are left Failed.
-export fn supervisor_tick(sup: *mut Supervisor, reg: *mut Registry) -> usize {
+pub fn supervisor_tick(sup: *mut Supervisor, reg: *mut Registry) -> usize {
     var restarted: usize = 0;
     var i: usize = 0;
     while i < sup.count {

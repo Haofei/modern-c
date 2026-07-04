@@ -56,6 +56,23 @@ struct RecFrame {
     events: [REC_CAP]IpcEvent,
 }
 
+fn rec_empty_event() -> IpcEvent {
+    return .{ .seq = 0, .from = 0, .to = 0, .tag = 0, .size = 0 };
+}
+
+fn rec_empty_events() -> [REC_CAP]IpcEvent {
+    return .{
+        rec_empty_event(), rec_empty_event(), rec_empty_event(), rec_empty_event(),
+        rec_empty_event(), rec_empty_event(), rec_empty_event(), rec_empty_event(),
+        rec_empty_event(), rec_empty_event(), rec_empty_event(), rec_empty_event(),
+        rec_empty_event(), rec_empty_event(), rec_empty_event(), rec_empty_event(),
+    };
+}
+
+fn rec_frame_empty() -> RecFrame {
+    return .{ .count = 0, .events = rec_empty_events() };
+}
+
 // The exact framed length for `count` events: the count word plus that many events. A short
 // capture writes (and a reader needs) only this prefix of the staging frame, so the blob never
 // carries dead trailing slots.
@@ -69,7 +86,7 @@ fn rec_frame_len(count: usize) -> usize {
 // PutFailed on any BlobStore rejection (never a partial write — blob_put fails closed). An empty
 // ring records a valid zero-event log (count 0).
 export fn record_capture(trace: *mut IpcTrace, store: *mut BlobStore, id: u32) -> Result<usize, RecError> {
-    var frame: RecFrame = uninit;
+    var frame: RecFrame = rec_frame_empty();
     var n: usize = 0;
 
     // Pop oldest-first until the ring is empty (or we have filled the frame, which cannot be
@@ -100,7 +117,7 @@ export fn record_capture(trace: *mut IpcTrace, store: *mut BlobStore, id: u32) -
 // How many events the recorded log under `id` holds. Reads just the framed count back.
 // NotFound if `id` was never recorded; GetFailed if the blob is shorter than the count word.
 export fn record_count(store: *mut BlobStore, id: u32) -> Result<usize, RecError> {
-    var frame: RecFrame = uninit;
+    var frame: RecFrame = rec_frame_empty();
     let need: usize = sizeof(usize); // only the count word is required to answer this
     switch blob_get(store, id, pa((&frame) as usize), need) {
         ok(m) => {
@@ -117,7 +134,7 @@ export fn record_count(store: *mut BlobStore, id: u32) -> Result<usize, RecError
 // if `i` is past the recorded count. This is the read the replay reader (P3.2) iterates to walk
 // the persisted provenance stream in causal order.
 export fn record_get(store: *mut BlobStore, id: u32, i: usize) -> Result<IpcEvent, RecError> {
-    var frame: RecFrame = uninit;
+    var frame: RecFrame = rec_frame_empty();
 
     // First read just the count word so we know how much of the frame is live, then validate.
     let head: usize = sizeof(usize);
@@ -168,10 +185,7 @@ struct ReplayCursor {
 export fn replay_open(store: *mut BlobStore, id: u32) -> Result<ReplayCursor, RecError> {
     switch record_count(store, id) {
         ok(n) => {
-            var c: ReplayCursor = uninit;
-            c.id = id;
-            c.pos = 0;
-            c.len = n;
+            var c: ReplayCursor = .{ .id = id, .pos = 0, .len = n };
             return ok(c);
         }
         err(e) => { return err(e); } // NotFound (absent log) or GetFailed (short blob)

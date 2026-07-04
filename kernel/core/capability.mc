@@ -20,7 +20,7 @@
 
 import "std/rights.mc";
 
-opaque move struct Cap<R> {
+pub opaque move struct Cap<R> {
     resource: R,
 }
 
@@ -38,17 +38,17 @@ impl Cap {
 
 // Grant a capability over `resource` (the kernel's setup-time primitive). Thin wrapper over
 // the privileged `Cap.mint` so the public name and call shape are unchanged.
-export fn cap_mint(comptime R: type, resource: R) -> Cap<R> {
+pub fn cap_mint(comptime R: type, resource: R) -> Cap<R> {
     return Cap.mint(R, resource);
 }
 
 // Use the capability: borrow it to read the granted resource. Does not consume it.
-export fn cap_resource(comptime R: type, c: *Cap<R>) -> R {
+pub fn cap_resource(comptime R: type, c: *Cap<R>) -> R {
     return Cap.resource_of(R, c);
 }
 
 // Revoke the capability, consuming it (its linear end of life).
-export fn cap_revoke(comptime R: type, c: Cap<R>) -> void {
+pub fn cap_revoke(comptime R: type, c: Cap<R>) -> void {
     unsafe { forget_unchecked(c); } // husk: a capability owns nothing to release
 }
 
@@ -66,7 +66,7 @@ export fn cap_revoke(comptime R: type, c: Cap<R>) -> void {
 // This is the attenuated-subgrant law made structural: a holder can delegate a strictly
 // weaker capability and the type system rejects any attempt to broaden one.
 
-opaque move struct RCap<R> {
+pub opaque move struct RCap<R> {
     resource: R,
     rights: Rights,
 }
@@ -89,22 +89,22 @@ impl RCap {
 }
 
 // Mint a rights-bearing capability (kernel setup-time primitive).
-export fn rcap_mint(comptime R: type, resource: R, rights: Rights) -> RCap<R> {
+pub fn rcap_mint(comptime R: type, resource: R, rights: Rights) -> RCap<R> {
     return RCap.mint(R, resource, rights);
 }
 
 // Read the resource a rights-bearing cap grants. Borrows; does not consume.
-export fn rcap_resource(comptime R: type, c: *RCap<R>) -> R {
+pub fn rcap_resource(comptime R: type, c: *RCap<R>) -> R {
     return RCap.resource_of(R, c);
 }
 
 // Read the rights a cap carries. Borrows; does not consume.
-export fn rcap_rights(comptime R: type, c: *RCap<R>) -> Rights {
+pub fn rcap_rights(comptime R: type, c: *RCap<R>) -> Rights {
     return RCap.rights_of(R, c);
 }
 
 // Does the cap permit operation (right id) `b`?
-export fn rcap_allows(comptime R: type, c: *RCap<R>, b: u32) -> bool {
+pub fn rcap_allows(comptime R: type, c: *RCap<R>, b: u32) -> bool {
     return rights_allows(RCap.rights_of(R, c), b);
 }
 
@@ -113,7 +113,7 @@ export fn rcap_allows(comptime R: type, c: *RCap<R>, b: u32) -> bool {
 // and returns the attenuated child, so a delegation always weakens authority and the
 // original is gone. There is intentionally no dual that adds rights: widening would require
 // minting a `Rights` from raw, which std/rights forbids outside its module.
-export fn rcap_attenuate(comptime R: type, c: RCap<R>, keep: Rights) -> RCap<R> {
+pub fn rcap_attenuate(comptime R: type, c: RCap<R>, keep: Rights) -> RCap<R> {
     let res: R = RCap.resource_of(R, &c);
     let narrowed: Rights = rights_attenuate(RCap.rights_of(R, &c), keep);
     unsafe { forget_unchecked(c); } // consume the linear parent; the child supersedes it
@@ -121,6 +121,6 @@ export fn rcap_attenuate(comptime R: type, c: RCap<R>, keep: Rights) -> RCap<R> 
 }
 
 // Revoke a rights-bearing capability, consuming it (its linear end of life).
-export fn rcap_revoke(comptime R: type, c: RCap<R>) -> void {
+pub fn rcap_revoke(comptime R: type, c: RCap<R>) -> void {
     unsafe { forget_unchecked(c); } // husk: a capability owns nothing to release
 }

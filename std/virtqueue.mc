@@ -20,17 +20,17 @@ const VRING_DESC_F_NEXT: u16 = 1;  // descriptor chains to `next`
 const VRING_DESC_F_WRITE: u16 = 2; // buffer is device-writable (RX)
 
 // Split-virtqueue structures laid out per the spec, in DMA memory.
-struct VringDesc { addr: u64, len: u32, flags: u16, next: u16 }
-struct DescTable { d: [8]VringDesc }
-struct VringAvail { flags: u16, idx: u16, ring: [8]u16, used_event: u16 }
-struct UsedElem { id: u32, len: u32 }
-struct VringUsed { flags: u16, idx: u16, ring: [8]UsedElem, avail_event: u16 }
+pub struct VringDesc { addr: u64, len: u32, flags: u16, next: u16 }
+pub struct DescTable { d: [8]VringDesc }
+pub struct VringAvail { flags: u16, idx: u16, ring: [8]u16, used_event: u16 }
+pub struct UsedElem { id: u32, len: u32 }
+pub struct VringUsed { flags: u16, idx: u16, ring: [8]UsedElem, avail_event: u16 }
 
 // A driver-side handle bundling the three vring regions, the negotiated size, a
 // free-descriptor list, the used-ring cursor, and an in-flight record (the bus
 // address/length each outstanding descriptor carries, so the buffer can be
 // reconstructed only after a valid device completion returns it).
-struct Virtq {
+pub struct Virtq {
     desc: *mut DescTable,
     avail: *mut VringAvail,
     used: *mut VringUsed,
@@ -48,7 +48,7 @@ fn hi32(a: u64) -> u32 { return (a >> 32) as u32; }
 
 // The device-visible (bus) address of a DMA buffer (no-IOMMU: the physical
 // address). A generic helper so drivers don't open-code the cast.
-export fn bus_addr(comptime T: type, p: *mut T) -> u64 {
+pub fn bus_addr(comptime T: type, p: *mut T) -> u64 {
     return p as usize as u64;
 }
 
@@ -69,7 +69,7 @@ fn vq_init_free(vq: *mut Virtq) -> void {
 }
 
 // How many descriptors are free (a producer checks this before submitting).
-export fn vq_free_count(vq: *mut Virtq) -> u16 {
+pub fn vq_free_count(vq: *mut Virtq) -> u16 {
     return vq.num_free;
 }
 
@@ -89,7 +89,7 @@ fn vq_alloc_desc(vq: *mut Virtq) -> u16 {
 // no MMIO), so it is safe to call from an interrupt handler — an IRQ-driven driver (e.g.
 // kernel/drivers/virtio/virtio_blk_async.mc) reaps the used ring and returns its descriptors here.
 #[irq_context]
-export fn vq_free_desc(vq: *mut Virtq, id: u16) -> void {
+pub fn vq_free_desc(vq: *mut Virtq, id: u16) -> void {
     vq.inflight_addr[id as usize] = 0;
     vq.inflight_len[id as usize] = 0;
     vq.inflight_present[id as usize] = false;
@@ -108,7 +108,7 @@ export fn vq_free_desc(vq: *mut Virtq, id: u16) -> void {
 // ISR. The caller must have already validated `head` (in [0, size) and in flight). Idempotent
 // against double-reap is the caller's responsibility (clear the desc-id→request record first).
 #[irq_context]
-export fn vq_free_chain3(vq: *mut Virtq, head: u16) -> void {
+pub fn vq_free_chain3(vq: *mut Virtq, head: u16) -> void {
     if head >= vq.size {
         return; // out-of-range head — fail safe, free nothing
     }
@@ -135,12 +135,12 @@ export fn vq_free_chain3(vq: *mut Virtq, head: u16) -> void {
 // ----- queue setup -----
 
 // Why a queue could not be set up.
-enum VqError {
+pub enum VqError {
     QueueUnavailable, // the device reports queue_num_max == 0 for this queue
 }
 
 // Why a submission could not be enqueued.
-enum VqSubmitError {
+pub enum VqSubmitError {
     QueueFull,       // not enough free descriptors for the (possibly multi-descriptor) request
     LengthTooLarge,  // a buffer exceeds the u32 length a vring descriptor can encode
 }
@@ -150,7 +150,7 @@ const VRING_DESC_LEN_MAX: usize = 0xFFFF_FFFF; // a descriptor's `len` field is 
 // Program the queue's three region addresses into the device, negotiate the size
 // against `queue_num_max`, and initialize the free list. Returns `QueueUnavailable`
 // if the device does not provide this queue.
-export fn vq_setup(regs: MmioPtr<VirtioMmio>, q: u32, vq: *mut Virtq) -> Result<bool, VqError> {
+pub fn vq_setup(regs: MmioPtr<VirtioMmio>, q: u32, vq: *mut Virtq) -> Result<bool, VqError> {
     regs.queue_sel.write(q, .release);
     let max: u32 = regs.queue_num_max.read(.acquire);
     if max == 0 {
@@ -230,11 +230,11 @@ fn vq_submit(vq: *mut Virtq, buf: DeviceBuffer, device_writable: bool) -> Result
     return ok(id);
 }
 
-export fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -> Result<u16, VqSubmitError> {
+pub fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -> Result<u16, VqSubmitError> {
     return vq_submit(vq, buf, false);
 }
 
-export fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -> Result<u16, VqSubmitError> {
+pub fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -> Result<u16, VqSubmitError> {
     return vq_submit(vq, buf, true);
 }
 
@@ -248,7 +248,7 @@ export fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -> Result<u16, VqSubmi
 // partial allocation that then trapped would leave the free list inconsistent and the
 // buffers in limbo. If there is not room for all three, the buffers are reclaimed and
 // QueueFull is returned — no descriptor is touched.
-export fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -> Result<u16, VqSubmitError> {
+pub fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -> Result<u16, VqSubmitError> {
     // Preflight every length before any descriptor is touched: if one would not fit a
     // descriptor's u32 `len`, reclaim all three buffers and return a typed error rather than
     // truncating (or trapping) on the `as u32` casts below. (MC has no `||`, so accumulate.)
@@ -323,7 +323,7 @@ export fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuf
 
 // Why a device completion could not be trusted. A driver that sees one of these has
 // a misbehaving (or malicious) device and should reset the queue, not retry.
-enum VqCompleteError {
+pub enum VqCompleteError {
     BadDescriptorId, // the used-ring id (or a chained `next`) is outside the queue
     NotInFlight,     // the device completed a descriptor we never submitted
     LengthOverflow,  // the device claims more bytes than the chain actually owns
@@ -336,7 +336,7 @@ enum VqCompleteError {
 // compile-time `E_RESOURCE_LEAK`. Each buffer's length is its *submitted allocation*
 // size, never the device-reported length, so a CPU view of it cannot exceed the real
 // allocation. `used_len` is the device-reported total (already bounds-validated).
-move struct CompletedChain3 {
+pub move struct CompletedChain3 {
     header: DeviceBuffer,
     data: DeviceBuffer,
     status: DeviceBuffer,
@@ -349,7 +349,7 @@ move struct CompletedChain3 {
 // descriptors in flight (the driver resets). On success it frees the three descriptors
 // and hands the three owned buffers back, reconstructed at their submitted sizes.
 // Call only when `vq_has_used` is true.
-export fn vq_complete_chain(vq: *mut Virtq) -> Result<CompletedChain3, VqCompleteError> {
+pub fn vq_complete_chain(vq: *mut Virtq) -> Result<CompletedChain3, VqCompleteError> {
     rmb();
     let slot: usize = (vq.last_used % vq.size) as usize;
     let raw_id: u32 = vq.used.ring[slot].id;
@@ -415,13 +415,13 @@ export fn vq_complete_chain(vq: *mut Virtq) -> Result<CompletedChain3, VqComplet
 }
 
 // Notify the device that `q` has new buffers (§4.2.3.3): order then doorbell.
-export fn vq_kick(regs: MmioPtr<VirtioMmio>, q: u32) -> void {
+pub fn vq_kick(regs: MmioPtr<VirtioMmio>, q: u32) -> void {
     wmb();
     regs.queue_notify.write(q, .release);
 }
 
 // Has the device returned a buffer on the used ring since we last reaped?
-export fn vq_has_used(vq: *mut Virtq) -> bool {
+pub fn vq_has_used(vq: *mut Virtq) -> bool {
     rmb();
     return vq.used.idx != vq.last_used;
 }
@@ -431,7 +431,7 @@ export fn vq_has_used(vq: *mut Virtq) -> bool {
 // vq_complete / vq_complete_chain). Replaces the hand-rolled read_ticks/timed_out
 // spin in each driver — the vq-specific form of `poll_until` (the probe needs the
 // virtqueue, which a non-capturing fn pointer can't carry yet).
-export fn vq_wait_used(vq: *mut Virtq, timeout: u64) -> bool {
+pub fn vq_wait_used(vq: *mut Virtq, timeout: u64) -> bool {
     let start: Ticks = read_ticks();
     while !timed_out(start, read_ticks(), timeout) {
         if vq_has_used(vq) {
@@ -443,7 +443,7 @@ export fn vq_wait_used(vq: *mut Virtq, timeout: u64) -> bool {
 
 // The number of bytes the device wrote into the next completed buffer (the
 // received length on RX). Call only when `vq_has_used` is true.
-export fn vq_used_len(vq: *mut Virtq) -> u32 {
+pub fn vq_used_len(vq: *mut Virtq) -> u32 {
     rmb();
     let slot: usize = (vq.last_used % vq.size) as usize;
     return vq.used.ring[slot].len;
@@ -455,7 +455,7 @@ export fn vq_used_len(vq: *mut Virtq) -> u32 {
 // use `len`, cover the whole allocation rather than just the bytes the device touched.
 // `used_len` is how many bytes the device actually wrote (the received length on RX),
 // already bounds-validated against the allocation.
-move struct CompletedBuffer {
+pub move struct CompletedBuffer {
     buf: DeviceBuffer,
     used_len: u32,
 }
@@ -470,7 +470,7 @@ move struct CompletedBuffer {
 // that is not in flight, or an over-reported length is returned as a typed error (the queue
 // is left untouched — no descriptor freed, cursor not advanced) so the driver can reset and
 // reclaim rather than trap, exactly like the chain path.
-export fn vq_complete(vq: *mut Virtq) -> Result<CompletedBuffer, VqCompleteError> {
+pub fn vq_complete(vq: *mut Virtq) -> Result<CompletedBuffer, VqCompleteError> {
     rmb();
     let slot: usize = (vq.last_used % vq.size) as usize;
     let raw_id: u32 = vq.used.ring[slot].id;
@@ -501,7 +501,7 @@ export fn vq_complete(vq: *mut Virtq) -> Result<CompletedBuffer, VqCompleteError
 // reconstructs each buffer at its *allocation* length, invalidates it back to CPU ownership
 // and frees it, and rebuilds the descriptor free list and ring cursors so the queue is empty
 // and reusable. Returns how many buffers were reclaimed.
-export fn vq_reset_reclaim(vq: *mut Virtq) -> usize {
+pub fn vq_reset_reclaim(vq: *mut Virtq) -> usize {
     var reclaimed: usize = 0;
     var i: usize = 0;
     while i < vq.size as usize {

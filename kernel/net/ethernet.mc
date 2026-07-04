@@ -5,9 +5,9 @@
 
 import "std/alloc/dma.mc";
 
-const ETH_HDR_LEN: usize = 14;
-const ETHERTYPE_ARP: u16 = 0x0806;
-const ETHERTYPE_IPV4: u16 = 0x0800;
+pub const ETH_HDR_LEN: usize = 14;
+pub const ETHERTYPE_ARP: u16 = 0x0806;
+pub const ETHERTYPE_IPV4: u16 = 0x0800;
 
 pub struct MacAddr {
     bytes: [6]u8,

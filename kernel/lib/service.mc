@@ -10,20 +10,20 @@
 import "kernel/core/process.mc";
 import "kernel/core/ipc.mc";
 
-struct Reply {
+pub struct Reply {
     tag: u32, // reply tag (a handler signals "unknown request" with its own error tag)
     a0: u64,  // reply payload
 }
 
 // Build a reply (small constructor so handlers read declaratively).
-export fn reply(tag: u32, a0: u64) -> Reply {
+pub fn reply(tag: u32, a0: u64) -> Reply {
     return .{ .tag = tag, .a0 = a0 };
 }
 
 // One request/reply transaction: block for a request, hand it to `handler`, send the reply
 // back to the requester. Returns the request tag so a driving loop can stop on a shutdown
 // tag without the loop needing to know which tag that is.
-export fn service_step(t: *mut ProcTable, handler: closure(Message) -> Reply) -> u32 {
+pub fn service_step(t: *mut ProcTable, handler: closure(Message) -> Reply) -> u32 {
     var req: Message = message_zero();
     ipc_receive(t, &req);
     let rep: Reply = handler(req);
@@ -32,7 +32,7 @@ export fn service_step(t: *mut ProcTable, handler: closure(Message) -> Reply) ->
 }
 
 // Serve requests until `handler` produces the `stop_tag` reply (e.g., a shutdown ack).
-export fn service_loop(t: *mut ProcTable, handler: closure(Message) -> Reply, stop_tag: u32) -> void {
+pub fn service_loop(t: *mut ProcTable, handler: closure(Message) -> Reply, stop_tag: u32) -> void {
     var running: bool = true;
     while running {
         var req: Message = message_zero();

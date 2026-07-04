@@ -363,6 +363,9 @@ pub const Checker = struct {
     // (uninit) names at an exit edge and how many defers were live there (so a defer at index
     // i is only checked against snapshots whose live_defers > i).
     di_exits: ?*std.ArrayListUnmanaged(DiExitSnapshot) = null,
+    // Definite-init owns synthetic place keys used for proven initialized array elements
+    // while a surrounding `var arr: [N]T = uninit` aggregate is still pending.
+    di_place_keys: std.ArrayListUnmanaged([]const u8) = .empty,
     // Origin-file boundaries of the import-flattened source (loader.FileBoundary), in append
     // order by start offset. Maps a decl's span offset back to the file it came from, which the
     // orphan rule (`checkOrphanImpls`) uses to require that an `impl` of an `opaque struct`
@@ -1466,12 +1469,19 @@ pub const Checker = struct {
         aggregate,
     };
 
-    const DefInitPending = struct {
-        span: diagnostics.Span,
-        kind: DefInitPendingKind,
+    const DefInitFactKind = enum {
+        pending_scalar,
+        pending_aggregate,
+        initialized_element,
     };
 
-    const DefInitState = std.StringHashMap(DefInitPending);
+    const DefInitFact = struct {
+        span: diagnostics.Span,
+        kind: DefInitFactKind,
+        array_len: ?usize = null,
+    };
+
+    const DefInitState = std.StringHashMap(DefInitFact);
 
     // A collected `defer EXPR`. `live_before` is the number of defers already collected when
     // this one was declared — equivalently, this defer's own index — used to scope it to the
@@ -1492,6 +1502,11 @@ pub const Checker = struct {
         const body = fn_decl.body orelse return;
         var pending = DefInitState.init(self.reporter.allocator);
         defer pending.deinit();
+        defer {
+            for (self.di_place_keys.items) |key| self.reporter.allocator.free(key);
+            self.di_place_keys.deinit(self.reporter.allocator);
+            self.di_place_keys = .empty;
+        }
         // Collect defer bodies during the walk instead of reading them in place; they
         // execute at scope exit, so their reads are checked against the EXIT state(s).
         var defers: std.ArrayListUnmanaged(DiDefer) = .empty;
@@ -1581,7 +1596,12 @@ pub const Checker = struct {
                         if (decl.ty) |ty| {
                             if (diPendingKindForType(ty, ctx)) |kind| {
                                 for (decl.names) |name| {
-                                    state.put(name.text, .{ .span = name.span, .kind = kind }) catch {
+                                    const fact_kind: DefInitFactKind = switch (kind) {
+                                        .scalar => .pending_scalar,
+                                        .aggregate => .pending_aggregate,
+                                    };
+                                    const arr = if (fact_kind == .pending_aggregate) fixedArrayType(resolveAliasType(ty, ctx), ctx.const_fns, ctx.const_globals) else null;
+                                    state.put(name.text, .{ .span = name.span, .kind = fact_kind, .array_len = if (arr) |a| a.len else null }) catch {
                                         self.oom = true;
                                     };
                                 }
@@ -1589,12 +1609,16 @@ pub const Checker = struct {
                         }
                     } else {
                         self.diRead(init_expr, state, ctx);
+                        if (diExprMayMutateThroughCall(init_expr)) self.diRemoveDynamicElementFacts(state);
                     }
                 }
                 return false;
             },
             .let_decl => |decl| {
-                if (decl.init) |init_expr| self.diRead(init_expr, state, ctx);
+                if (decl.init) |init_expr| {
+                    self.diRead(init_expr, state, ctx);
+                    if (diExprMayMutateThroughCall(init_expr)) self.diRemoveDynamicElementFacts(state);
+                }
                 return false;
             },
             .assignment => |a| {
@@ -1604,12 +1628,15 @@ pub const Checker = struct {
                     .ident => |id| {
                         // Whole-variable assignment: the pending var is now definitely set.
                         _ = state.remove(id.text);
+                        self.diRemoveDynamicElementFacts(state);
                     },
                     else => {
-                        // Member/index/deref target: this is an address-like storage use.
-                        // It does not prove a pending aggregate is fully initialized; only
-                        // read-check target subexpressions such as indexes and pointers.
-                        self.diUseTarget(a.target, state, ctx);
+                        // Member/deref targets stay address-like storage uses. Array element
+                        // targets can prove either one stable element, or the whole fixed array
+                        // once every constant element has been written.
+                        if (!self.diMarkArrayElementAssignment(a.target, state, ctx)) {
+                            self.diUseTarget(a.target, state, ctx);
+                        }
                     },
                 }
                 return false;
@@ -1625,6 +1652,7 @@ pub const Checker = struct {
             .@"break", .@"continue" => return true,
             .expr => |e| {
                 self.diRead(e, state, ctx);
+                if (diExprMayMutateThroughCall(e)) self.diRemoveDynamicElementFacts(state);
                 // An expression that cannot fall through (`unreachable`, `trap(...)`, a
                 // `-> never` call) ends this path, like `return`.
                 if (!exprMayFallThrough(e, ctx) or exprIsNeverCall(e, ctx)) return true;
@@ -1632,6 +1660,7 @@ pub const Checker = struct {
             },
             .assert => |e| {
                 self.diRead(e, state, ctx);
+                if (diExprMayMutateThroughCall(e)) self.diRemoveDynamicElementFacts(state);
                 return false;
             },
             .@"defer" => |e| {
@@ -1734,8 +1763,24 @@ pub const Checker = struct {
     // the join if it is still pending on EITHER reaching arm — assigned only if
     // assigned on BOTH).
     fn diMerge(self: *Checker, dest: *DefInitState, other: *const DefInitState) void {
+        var prune: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer prune.deinit(self.reporter.allocator);
+        var existing = dest.iterator();
+        while (existing.next()) |entry| {
+            if (entry.value_ptr.kind != .initialized_element) continue;
+            if (!diElementFactSurvives(entry.key_ptr.*, other)) {
+                prune.append(self.reporter.allocator, entry.key_ptr.*) catch {
+                    self.oom = true;
+                };
+            }
+        }
+        for (prune.items) |key| _ = dest.remove(key);
+
         var it = other.iterator();
         while (it.next()) |entry| {
+            if (entry.value_ptr.kind == .initialized_element) {
+                if (!diElementFactSurvives(entry.key_ptr.*, dest)) continue;
+            }
             dest.put(entry.key_ptr.*, entry.value_ptr.*) catch {
                 self.oom = true;
             };
@@ -1770,8 +1815,10 @@ pub const Checker = struct {
                 for (c.args) |arg| self.diRead(arg, state, ctx);
             },
             .index => |n| {
-                self.diRead(n.base.*, state, ctx);
                 self.diRead(n.index.*, state, ctx);
+                if (!self.diIndexReadProvenInitialized(expr, state, ctx)) {
+                    self.diRead(n.base.*, state, ctx);
+                }
             },
             .slice => |n| {
                 self.diRead(n.base.*, state, ctx);
@@ -1816,6 +1863,135 @@ pub const Checker = struct {
             .deref => |inner| self.diRead(inner.*, state, ctx),
             else => self.diRead(target, state, ctx),
         }
+    }
+
+    fn diMarkArrayElementAssignment(self: *Checker, target: ast.Expr, state: *DefInitState, ctx: Context) bool {
+        const ix = switch (target.kind) {
+            .index => |node| node,
+            .grouped => |inner| return self.diMarkArrayElementAssignment(inner.*, state, ctx),
+            else => return false,
+        };
+        self.diUseTarget(target, state, ctx);
+        const root = diPendingAggregateRoot(ix.base.*, state) orelse return true;
+        if (constIndexLiteral(ix.index.*)) |k| {
+            const len = diFixedArrayLenForRoot(root, state) orelse return true;
+            if (k >= len) return true;
+            self.diPutElementFact(state, target.span, root, ix.index.*, k);
+            if (self.diAllConstElementsInitialized(state, root, len)) {
+                _ = state.remove(root);
+                self.diRemoveElementFacts(state, root);
+            }
+            return true;
+        }
+        if (diPureIndexExpr(ix.index.*)) {
+            self.diPutElementFact(state, target.span, root, ix.index.*, null);
+        }
+        return true;
+    }
+
+    fn diIndexReadProvenInitialized(self: *Checker, expr: ast.Expr, state: *DefInitState, ctx: Context) bool {
+        const ix = switch (expr.kind) {
+            .index => |node| node,
+            .grouped => |inner| return self.diIndexReadProvenInitialized(inner.*, state, ctx),
+            else => return false,
+        };
+        const root = diPendingAggregateRoot(ix.base.*, state) orelse return false;
+        if (constIndexLiteral(ix.index.*)) |k| {
+            if (self.diHasElementFact(state, root, ix.index.*, k)) return true;
+            return false;
+        }
+        if (!diPureIndexExpr(ix.index.*)) return false;
+        return self.diHasElementFact(state, root, ix.index.*, null);
+    }
+
+    fn diPutElementFact(self: *Checker, state: *DefInitState, span: diagnostics.Span, root: []const u8, index: ast.Expr, const_index: ?usize) void {
+        const key = self.diOwnedElementKey(root, index, const_index) orelse return;
+        state.put(key, .{ .span = span, .kind = .initialized_element }) catch {
+            self.oom = true;
+        };
+    }
+
+    fn diHasElementFact(self: *Checker, state: *const DefInitState, root: []const u8, index: ast.Expr, const_index: ?usize) bool {
+        const key = self.diTempElementKey(root, index, const_index) orelse return false;
+        defer self.reporter.allocator.free(key);
+        return state.get(key) != null;
+    }
+
+    fn diAllConstElementsInitialized(self: *Checker, state: *const DefInitState, root: []const u8, len: usize) bool {
+        var i: usize = 0;
+        while (i < len) : (i += 1) {
+            const key = std.fmt.allocPrint(self.reporter.allocator, "{s}\x1f#{d}", .{ root, i }) catch {
+                self.oom = true;
+                return false;
+            };
+            defer self.reporter.allocator.free(key);
+            if (state.get(key) == null) return false;
+        }
+        return true;
+    }
+
+    fn diRemoveElementFacts(self: *Checker, state: *DefInitState, root: []const u8) void {
+        const prefix = std.fmt.allocPrint(self.reporter.allocator, "{s}\x1f", .{root}) catch {
+            self.oom = true;
+            return;
+        };
+        defer self.reporter.allocator.free(prefix);
+        var remove: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer remove.deinit(self.reporter.allocator);
+        var it = state.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.kind == .initialized_element and std.mem.startsWith(u8, entry.key_ptr.*, prefix)) {
+                remove.append(self.reporter.allocator, entry.key_ptr.*) catch {
+                    self.oom = true;
+                };
+            }
+        }
+        for (remove.items) |key| _ = state.remove(key);
+    }
+
+    fn diRemoveDynamicElementFacts(self: *Checker, state: *DefInitState) void {
+        var remove: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer remove.deinit(self.reporter.allocator);
+        var it = state.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.kind != .initialized_element) continue;
+            const sep = std.mem.indexOfScalar(u8, entry.key_ptr.*, 0x1f) orelse continue;
+            if (sep + 1 < entry.key_ptr.*.len and entry.key_ptr.*[sep + 1] == '#') continue;
+            remove.append(self.reporter.allocator, entry.key_ptr.*) catch {
+                self.oom = true;
+            };
+        }
+        for (remove.items) |key| _ = state.remove(key);
+    }
+
+    fn diOwnedElementKey(self: *Checker, root: []const u8, index: ast.Expr, const_index: ?usize) ?[]const u8 {
+        const key = self.diTempElementKey(root, index, const_index) orelse return null;
+        self.di_place_keys.append(self.reporter.allocator, key) catch {
+            self.reporter.allocator.free(key);
+            self.oom = true;
+            return null;
+        };
+        return key;
+    }
+
+    fn diTempElementKey(self: *Checker, root: []const u8, index: ast.Expr, const_index: ?usize) ?[]const u8 {
+        if (const_index) |k| {
+            return std.fmt.allocPrint(self.reporter.allocator, "{s}\x1f#{d}", .{ root, k }) catch {
+                self.oom = true;
+                return null;
+            };
+        }
+        const text = self.diIndexSourceText(index) orelse return null;
+        return std.fmt.allocPrint(self.reporter.allocator, "{s}\x1f{s}", .{ root, text }) catch {
+            self.oom = true;
+            return null;
+        };
+    }
+
+    fn diIndexSourceText(self: *Checker, index: ast.Expr) ?[]const u8 {
+        const end = std.math.add(usize, index.span.offset, index.span.len) catch return null;
+        if (end > self.reporter.source.len) return null;
+        return std.mem.trim(u8, self.reporter.source[index.span.offset..end], " \t\r\n");
     }
 
     fn checkBlock(self: *Checker, block: ast.Block, ctx: Context) void {
@@ -6210,6 +6386,111 @@ fn diPendingKindForType(ty: ast.TypeExpr, ctx: Context) ?Checker.DefInitPendingK
     if (diIsScalarType(resolved, ctx)) return .scalar;
     if (diIsAggregateType(resolved, ctx)) return .aggregate;
     return null;
+}
+
+fn diPendingAggregateRoot(expr: ast.Expr, state: *const Checker.DefInitState) ?[]const u8 {
+    return switch (expr.kind) {
+        .ident => |id| blk: {
+            const fact = state.get(id.text) orelse break :blk null;
+            break :blk if (fact.kind == .pending_aggregate) id.text else null;
+        },
+        .grouped => |inner| diPendingAggregateRoot(inner.*, state),
+        else => null,
+    };
+}
+
+fn diFixedArrayLenForRoot(root: []const u8, state: *const Checker.DefInitState) ?usize {
+    const fact = state.get(root) orelse return null;
+    return fact.array_len;
+}
+
+fn diPureIndexExpr(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .ident, .int_literal, .char_literal => true,
+        .grouped => |inner| diPureIndexExpr(inner.*),
+        .cast => |node| diPureIndexExpr(node.value.*),
+        .unary => |node| diPureIndexExpr(node.expr.*),
+        .binary => |node| diPureIndexExpr(node.left.*) and diPureIndexExpr(node.right.*),
+        else => false,
+    };
+}
+
+fn diExprMayMutateThroughCall(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .call => true,
+        .grouped => |inner| diExprMayMutateThroughCall(inner.*),
+        .address_of => |inner| diExprMayMutateThroughCall(inner.*),
+        .deref => |inner| diExprMayMutateThroughCall(inner.*),
+        .member => |node| diExprMayMutateThroughCall(node.base.*),
+        .index => |node| diExprMayMutateThroughCall(node.base.*) or diExprMayMutateThroughCall(node.index.*),
+        .slice => |node| diExprMayMutateThroughCall(node.base.*) or diExprMayMutateThroughCall(node.start.*) or diExprMayMutateThroughCall(node.end.*),
+        .cast => |node| diExprMayMutateThroughCall(node.value.*),
+        .unary => |node| diExprMayMutateThroughCall(node.expr.*),
+        .binary => |node| diExprMayMutateThroughCall(node.left.*) or diExprMayMutateThroughCall(node.right.*),
+        .array_literal => |items| {
+            for (items) |item| if (diExprMayMutateThroughCall(item)) return true;
+            return false;
+        },
+        .struct_literal => |fields| {
+            for (fields) |field| if (diExprMayMutateThroughCall(field.value)) return true;
+            return false;
+        },
+        .try_expr => |node| diExprMayMutateThroughCall(node.operand.*) or if (node.mapped) |m| diExprMayMutateThroughCall(m.*) else false,
+        .block => |block| {
+            for (block.items) |stmt| if (diStmtMayMutateThroughCall(stmt)) return true;
+            return false;
+        },
+        else => false,
+    };
+}
+
+fn diStmtMayMutateThroughCall(stmt: ast.Stmt) bool {
+    return switch (stmt.kind) {
+        .var_decl, .let_decl => |decl| if (decl.init) |init| diExprMayMutateThroughCall(init) else false,
+        .assignment => |node| diExprMayMutateThroughCall(node.target) or diExprMayMutateThroughCall(node.value),
+        .expr, .assert, .@"defer" => |expr| diExprMayMutateThroughCall(expr),
+        .@"return" => |maybe| if (maybe) |expr| diExprMayMutateThroughCall(expr) else false,
+        .block, .unsafe_block, .comptime_block => |block| {
+            for (block.items) |item| if (diStmtMayMutateThroughCall(item)) return true;
+            return false;
+        },
+        .contract_block => |node| {
+            for (node.block.items) |item| if (diStmtMayMutateThroughCall(item)) return true;
+            return false;
+        },
+        .if_let => |node| blk: {
+            if (diExprMayMutateThroughCall(node.value)) break :blk true;
+            for (node.then_block.items) |item| if (diStmtMayMutateThroughCall(item)) break :blk true;
+            if (node.else_block) |block| for (block.items) |item| if (diStmtMayMutateThroughCall(item)) break :blk true;
+            break :blk false;
+        },
+        .loop => |node| blk: {
+            if (node.iterable) |iter| if (diExprMayMutateThroughCall(iter)) break :blk true;
+            for (node.body.items) |item| if (diStmtMayMutateThroughCall(item)) break :blk true;
+            break :blk false;
+        },
+        .@"switch" => |node| blk: {
+            if (diExprMayMutateThroughCall(node.subject)) break :blk true;
+            for (node.arms) |arm| switch (arm.body) {
+                .expr => |expr| if (diExprMayMutateThroughCall(expr)) break :blk true,
+                .block => |block| for (block.items) |item| if (diStmtMayMutateThroughCall(item)) break :blk true,
+            };
+            break :blk false;
+        },
+        .@"break", .@"continue", .asm_stmt => false,
+    };
+}
+
+fn diElementFactRoot(key: []const u8) ?[]const u8 {
+    const sep = std.mem.indexOfScalar(u8, key, 0x1f) orelse return null;
+    return key[0..sep];
+}
+
+fn diElementFactSurvives(key: []const u8, other: *const Checker.DefInitState) bool {
+    if (other.get(key)) |fact| return fact.kind == .initialized_element;
+    const root = diElementFactRoot(key) orelse return false;
+    const root_fact = other.get(root) orelse return true;
+    return root_fact.kind != .pending_aggregate;
 }
 
 fn diIsScalarType(ty: ast.TypeExpr, ctx: Context) bool {

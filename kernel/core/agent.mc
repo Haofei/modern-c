@@ -27,7 +27,7 @@ import "kernel/core/ipc_trace.mc";  // ipc_trace_record (cap_audit() returns *mu
 import "std/mask.mc";               // Mask32, mask32_contains
 
 // Failure modes of a tool call, kept typed so a caller (or its logs) can distinguish them.
-enum ToolError {
+pub enum ToolError {
     Denied,      // the tool id is not in the agent's tool allowlist — refused without side effects
     NoSuchTool,  // the tool id is not registered in the system's tool registry
     Exhausted,   // the agent's tool-call budget is used up (resource bound hit)
@@ -39,7 +39,7 @@ const MAX_TOOLS: usize = 8;
 // One registered tool: a stable id, its handler, and whether the slot is occupied. In the mock a
 // handler is an in-process fn pointer; in a real system this would be a service endpoint to a tool
 // server (and `handler` a request schema), reached over IPC.
-struct ToolEntry {
+pub struct ToolEntry {
     id: u32,
     handler: fn(u32) -> u32,
     present: bool,
@@ -47,7 +47,7 @@ struct ToolEntry {
 
 // The system-wide TOOL REGISTRY: the set of tools the system offers. Disjoint from any one agent's
 // ALLOWLIST — the registry says what exists; an agent's Sandbox.tools says what THAT agent may call.
-struct ToolRegistry {
+pub struct ToolRegistry {
     tools: [MAX_TOOLS]ToolEntry,
 }
 
@@ -56,7 +56,7 @@ struct ToolRegistry {
 // this struct adds the tool-layer confinement:
 //   * `tools`      — the tool ALLOWLIST: bit `id` set ⇒ the agent may call tool `id`;
 //   * `calls_left` — the tool-call BUDGET: decremented per dispatched call, Exhausted at zero.
-struct Sandbox {
+pub struct Sandbox {
     slot: usize,     // the agent's process slot (its identity in the ProcTable)
     tools: Mask32,   // tool allowlist (capability confinement at the tool boundary)
     calls_left: u32, // remaining tool-call budget (resource bound on tool use)
@@ -65,7 +65,7 @@ struct Sandbox {
 // ----- tool registry -----
 
 // Clear every registry slot to "free". Call once before registering tools.
-export fn tool_registry_init(r: *mut ToolRegistry) -> void {
+pub fn tool_registry_init(r: *mut ToolRegistry) -> void {
     var i: usize = 0;
     while i < MAX_TOOLS {
         r.tools[i].id = 0;
@@ -77,7 +77,7 @@ export fn tool_registry_init(r: *mut ToolRegistry) -> void {
 // Register tool `id` with `handler` in the first free slot. Returns the claimed slot index, or
 // err(.Exhausted) if the registry is full (no free slot). Does NOT dedupe ids — the registry is
 // a set of slots, and tool_lookup returns the first matching id.
-export fn tool_register(r: *mut ToolRegistry, id: u32, handler: fn(u32) -> u32) -> Result<usize, ToolError> {
+pub fn tool_register(r: *mut ToolRegistry, id: u32, handler: fn(u32) -> u32) -> Result<usize, ToolError> {
     var i: usize = 0;
     while i < MAX_TOOLS {
         if !r.tools[i].present {
@@ -96,7 +96,7 @@ export fn tool_register(r: *mut ToolRegistry, id: u32, handler: fn(u32) -> u32) 
 // plain usize — a Result whose payload is a fn pointer is not emittable on the LLVM backend, and the
 // registry is the single source of truth for the handler anyway. Fetch the handler with
 // tool_handler_at(r, slot).)
-export fn tool_lookup(r: *mut ToolRegistry, id: u32) -> Result<usize, ToolError> {
+pub fn tool_lookup(r: *mut ToolRegistry, id: u32) -> Result<usize, ToolError> {
     var i: usize = 0;
     while i < MAX_TOOLS {
         if r.tools[i].present {
@@ -111,7 +111,7 @@ export fn tool_lookup(r: *mut ToolRegistry, id: u32) -> Result<usize, ToolError>
 
 // The handler stored in registry slot `slot`. Pair with a successful tool_lookup, which returns the
 // slot to read. (Split out so tool_lookup's Result carries a plain index, not a fn pointer.)
-export fn tool_handler_at(r: *mut ToolRegistry, slot: usize) -> fn(u32) -> u32 {
+pub fn tool_handler_at(r: *mut ToolRegistry, slot: usize) -> fn(u32) -> u32 {
     return r.tools[slot].handler;
 }
 
@@ -122,7 +122,7 @@ export fn tool_handler_at(r: *mut ToolRegistry, slot: usize) -> fn(u32) -> u32 {
 // subsets (it can never exceed its spawner — confinement). The returned Sandbox layers the
 // tool-allowlist (`tool_mask`) and tool-call budget (`call_budget`) on top. Together:
 //   sandbox = attenuated process (kcall/allow caps + memory quota) + tool allowlist + call budget.
-export fn agent_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void, allow_subset: Mask32, kcall_subset: Mask32, tool_mask: Mask32, call_budget: u32) -> Sandbox {
+pub fn agent_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void, allow_subset: Mask32, kcall_subset: Mask32, tool_mask: Mask32, call_budget: u32) -> Sandbox {
     let pid: u32 = proc_spawn_attenuated(t, stack_top, entry, allow_subset, kcall_subset);
     return .{ .slot = pid as usize, .tools = tool_mask, .calls_left = call_budget };
 }
@@ -136,7 +136,7 @@ export fn agent_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void, 
 //   4. audit            — record the (about-to-dispatch) call into the capability-use trace,
 //                         from = the agent's pid, tag = tool id (a tool call IS authority use);
 //   5. charge + dispatch — spend one budget unit, run the handler, return its result.
-export fn agent_tool_call(t: *mut ProcTable, reg: *mut ToolRegistry, sb: *mut Sandbox, tool_id: u32, arg: u32) -> Result<u32, ToolError> {
+pub fn agent_tool_call(t: *mut ProcTable, reg: *mut ToolRegistry, sb: *mut Sandbox, tool_id: u32, arg: u32) -> Result<u32, ToolError> {
     // 1. capability check: not in the agent's tool allowlist ⇒ Denied (no side effects, no budget spent).
     if !mask32_contains(&sb.tools, tool_id) {
         return err(.Denied);

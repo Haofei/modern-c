@@ -6,24 +6,24 @@
 
 import "ethernet.mc"; // MacAddr
 
-const ARP_CACHE_MAX: usize = 8;
+pub const ARP_CACHE_MAX: usize = 8;
 
-struct ArpEntry {
+pub struct ArpEntry {
     ip: u32,
     mac: MacAddr,
     valid: bool,
 }
 
-enum ArpCacheError {
+pub enum ArpCacheError {
     Miss, // no binding cached for the requested IP
 }
 
-struct ArpCache {
+pub struct ArpCache {
     entries: [ARP_CACHE_MAX]ArpEntry,
     hand: usize, // round-robin eviction hand, used only when the cache is full
 }
 
-export fn arp_cache_init(c: *mut ArpCache) -> void {
+pub fn arp_cache_init(c: *mut ArpCache) -> void {
     var i: usize = 0;
     while i < ARP_CACHE_MAX {
         c.entries[i].valid = false;
@@ -32,7 +32,7 @@ export fn arp_cache_init(c: *mut ArpCache) -> void {
     c.hand = 0;
 }
 
-export fn arp_cache_count(c: *mut ArpCache) -> usize {
+pub fn arp_cache_count(c: *mut ArpCache) -> usize {
     var n: usize = 0;
     var i: usize = 0;
     while i < ARP_CACHE_MAX {
@@ -46,7 +46,7 @@ export fn arp_cache_count(c: *mut ArpCache) -> usize {
 
 // Insert or refresh the IP→MAC binding: an existing entry for `ip` is updated in place;
 // otherwise the lowest free slot is used, or (when full) the round-robin hand evicts one.
-export fn arp_cache_insert(c: *mut ArpCache, ip: u32, mac: MacAddr) -> void {
+pub fn arp_cache_insert(c: *mut ArpCache, ip: u32, mac: MacAddr) -> void {
     var i: usize = 0;
     while i < ARP_CACHE_MAX {
         if c.entries[i].valid {
@@ -76,7 +76,7 @@ export fn arp_cache_insert(c: *mut ArpCache, ip: u32, mac: MacAddr) -> void {
 }
 
 // Resolve `ip` to its cached MAC, or Miss (the caller should ARP for it).
-export fn arp_cache_lookup(c: *mut ArpCache, ip: u32) -> Result<MacAddr, ArpCacheError> {
+pub fn arp_cache_lookup(c: *mut ArpCache, ip: u32) -> Result<MacAddr, ArpCacheError> {
     var i: usize = 0;
     while i < ARP_CACHE_MAX {
         if c.entries[i].valid {
@@ -90,7 +90,7 @@ export fn arp_cache_lookup(c: *mut ArpCache, ip: u32) -> Result<MacAddr, ArpCach
 }
 
 // Drop a binding (e.g. a peer that moved, or an interface going down). True if it was present.
-export fn arp_cache_invalidate(c: *mut ArpCache, ip: u32) -> bool {
+pub fn arp_cache_invalidate(c: *mut ArpCache, ip: u32) -> bool {
     var i: usize = 0;
     while i < ARP_CACHE_MAX {
         if c.entries[i].valid {

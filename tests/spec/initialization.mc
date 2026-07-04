@@ -135,10 +135,10 @@ fn accept_defer_reads_var_assigned_on_every_exit_edge() -> u32 {
     return x;
 }
 
-// Aggregates initialized with `uninit` are pending until whole assignment. Partial
-// member/index writes and address-taking are storage uses, but they do not prove the
-// whole aggregate initialized. Element/member/value reads before whole assignment are
-// rejected.
+// Aggregates initialized with `uninit` are pending until whole assignment or, for
+// fixed arrays, until DI can prove the read element was written. Partial member
+// writes and address-taking remain storage uses; they do not prove aggregate
+// initialization. Element/member/value reads without proof are rejected.
 fn reject_read_uninit_array_element() -> u8 {
     var buf: [4]u8 = uninit;
     // EXPECT_ERROR: E_USE_BEFORE_INIT
@@ -157,11 +157,26 @@ fn reject_read_uninit_struct_value() -> Header {
     return h;
 }
 
-fn reject_uninit_array_partial_write_then_read_same_element() -> u8 {
+fn accept_uninit_array_partial_write_then_read_same_const_element() -> u8 {
     var buf: [4]u8 = uninit;
     buf[0] = 7;
-    // EXPECT_ERROR: E_USE_BEFORE_INIT
     return buf[0];
+}
+
+fn accept_uninit_array_partial_write_then_read_same_dynamic_element() -> u8 {
+    var buf: [4]u8 = uninit;
+    let i: usize = 2;
+    buf[i] = 9;
+    return buf[i];
+}
+
+fn reject_uninit_array_dynamic_element_after_index_assignment() -> u8 {
+    var buf: [4]u8 = uninit;
+    var i: usize = 2;
+    buf[i] = 9;
+    i = 1;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
+    return buf[i];
 }
 
 fn reject_uninit_array_partial_write_then_read_sibling_element() -> u8 {
@@ -183,6 +198,16 @@ fn reject_uninit_struct_partial_write_then_read_sibling_field() -> u32 {
     h.len = 9;
     // EXPECT_ERROR: E_USE_BEFORE_INIT
     return h.cap;
+}
+
+fn accept_uninit_array_all_const_elements_written_then_dynamic_read() -> u8 {
+    var buf: [4]u8 = uninit;
+    buf[0] = 1;
+    buf[1] = 2;
+    buf[2] = 3;
+    buf[3] = 4;
+    let i: usize = 2;
+    return buf[i];
 }
 
 fn accept_uninit_array_whole_assignment_then_read() -> u8 {

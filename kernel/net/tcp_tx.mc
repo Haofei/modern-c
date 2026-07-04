@@ -26,7 +26,7 @@ const TCPTX_ETH_MIN: usize = 60;        // pad short frames up to the Ethernet m
 // region [payload_src, payload_src+payload_len) and copied after the TCP header
 // *before* the checksum is computed (tcp_write sums over the payload). Pass
 // payload_len = 0 for a pure control segment (SYN/ACK/FIN).
-export fn tcp_build_frame(
+pub fn tcp_build_frame(
     dst_mac: *MacAddr, src_mac: *MacAddr,
     src_ip: u32, dst_ip: u32,
     src_port: u16, dst_port: u16,
@@ -72,7 +72,7 @@ export fn tcp_build_frame(
 // A received TCP/IPv4 segment parsed into plain copyable fields. `is_tcp` is false
 // for any frame that is not IPv4-proto-6 (or is too short / fails the IP checksum);
 // the rest of the fields are then meaningless.
-struct TcpRx {
+pub struct TcpRx {
     is_tcp: bool,
     src_port: u16,
     dst_port: u16,
@@ -87,7 +87,7 @@ struct TcpRx {
 // Parse an Ethernet frame of `len` bytes starting at offset 0 of the raw region
 // `base` (as copied out by `nic_rx_into`, i.e. the virtio header already stripped).
 // Returns is_tcp=false for anything that is not a well-formed IPv4 TCP segment.
-export fn tcp_parse_frame(base: usize, len: usize) -> TcpRx {
+pub fn tcp_parse_frame(base: usize, len: usize) -> TcpRx {
     var out: TcpRx = .{
         .is_tcp = false, .src_port = 0, .dst_port = 0,
         .seq = 0, .ack = 0, .flags = 0, .window = 0,

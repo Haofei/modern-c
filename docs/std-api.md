@@ -10,11 +10,11 @@ python3 tools/toolchain/std-api-docs.py --write
 The extractor is static: it records `pub`/`export` function signatures, public constants,
 public type declarations, and local types named by public declarations.
 
-Total modules: **40**.
-Total public functions: **341**.
+Total modules: **41**.
+Total public functions: **351**.
 Total public constants: **6**.
-Total public type declarations: **24**.
-Total referenced local types: **31**.
+Total public type declarations: **37**.
+Total referenced local types: **24**.
 
 ## Modules
 
@@ -352,23 +352,23 @@ Source: `std/collections/hashmap.mc`
 
 Source: `std/collections/ring.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct Ring&lt;T, N&gt;</code> | `std/collections/ring.mc:12` |
+| <code>pub struct Ring&lt;T, N&gt;</code> | `std/collections/ring.mc:12` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn ring_init(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;) -&gt; void</code> | `std/collections/ring.mc:21` |
-| <code>export fn ring_len(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;) -&gt; usize</code> | `std/collections/ring.mc:27` |
-| <code>export fn ring_is_empty(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;) -&gt; bool</code> | `std/collections/ring.mc:31` |
-| <code>export fn ring_is_full(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;) -&gt; bool</code> | `std/collections/ring.mc:34` |
-| <code>export fn ring_push(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;, x: T) -&gt; bool</code> | `std/collections/ring.mc:39` |
-| <code>export fn ring_front(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;) -&gt; T</code> | `std/collections/ring.mc:50` |
-| <code>export fn ring_pop(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;) -&gt; T</code> | `std/collections/ring.mc:59` |
+| <code>pub fn ring_init(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;) -&gt; void</code> | `std/collections/ring.mc:21` |
+| <code>pub fn ring_len(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;) -&gt; usize</code> | `std/collections/ring.mc:27` |
+| <code>pub fn ring_is_empty(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;) -&gt; bool</code> | `std/collections/ring.mc:31` |
+| <code>pub fn ring_is_full(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;) -&gt; bool</code> | `std/collections/ring.mc:34` |
+| <code>pub fn ring_push(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;, x: T) -&gt; bool</code> | `std/collections/ring.mc:39` |
+| <code>pub fn ring_front(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;) -&gt; T</code> | `std/collections/ring.mc:50` |
+| <code>pub fn ring_pop(comptime T: type, comptime N: usize, r: *mut Ring&lt;T, N&gt;) -&gt; T</code> | `std/collections/ring.mc:59` |
 
 ## `std/collections/slotmap`
 
@@ -679,6 +679,31 @@ Source: `std/mmio.mc`
 | <code>pub fn mmio_set_bits(reg: PAddr, mask: u32) -&gt; void</code> | `std/mmio.mc:176` |
 | <code>pub fn mmio_clear_bits(reg: PAddr, mask: u32) -&gt; void</code> | `std/mmio.mc:182` |
 
+## `std/rights`
+
+Source: `std/rights.mc`
+
+### Public types
+
+| Signature | Source |
+|---|---|
+| <code>pub opaque struct Rights</code> | `std/rights.mc:34` |
+
+### Public functions
+
+| Signature | Source |
+|---|---|
+| <code>pub fn rights_none() -&gt; Rights</code> | `std/rights.mc:94` |
+| <code>pub fn rights_grant(bits: u32) -&gt; Rights</code> | `std/rights.mc:102` |
+| <code>pub fn rights_single(b: u32) -&gt; Rights</code> | `std/rights.mc:107` |
+| <code>pub fn rights_attenuate(r: Rights, keep: Rights) -&gt; Rights</code> | `std/rights.mc:114` |
+| <code>pub fn rights_attenuate_mask(r: Rights, keep_bits: u32) -&gt; Rights</code> | `std/rights.mc:120` |
+| <code>pub fn rights_without(r: Rights, b: u32) -&gt; Rights</code> | `std/rights.mc:125` |
+| <code>pub fn rights_allows(r: Rights, b: u32) -&gt; bool</code> | `std/rights.mc:130` |
+| <code>pub fn rights_subset_of(child: Rights, parent: Rights) -&gt; bool</code> | `std/rights.mc:137` |
+| <code>pub fn rights_is_empty(r: Rights) -&gt; bool</code> | `std/rights.mc:142` |
+| <code>pub fn rights_eq(a: Rights, b: Rights) -&gt; bool</code> | `std/rights.mc:147` |
+
 ## `std/scan`
 
 Source: `std/scan.mc`
@@ -894,33 +919,38 @@ Source: `std/virtio.mc`
 
 Source: `std/virtqueue.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct Virtq</code> | `std/virtqueue.mc:33` |
-| <code>enum VqError</code> | `std/virtqueue.mc:138` |
-| <code>enum VqSubmitError</code> | `std/virtqueue.mc:143` |
-| <code>enum VqCompleteError</code> | `std/virtqueue.mc:326` |
-| <code>move struct CompletedChain3</code> | `std/virtqueue.mc:339` |
-| <code>move struct CompletedBuffer</code> | `std/virtqueue.mc:458` |
+| <code>pub struct VringDesc</code> | `std/virtqueue.mc:23` |
+| <code>pub struct DescTable</code> | `std/virtqueue.mc:24` |
+| <code>pub struct VringAvail</code> | `std/virtqueue.mc:25` |
+| <code>pub struct UsedElem</code> | `std/virtqueue.mc:26` |
+| <code>pub struct VringUsed</code> | `std/virtqueue.mc:27` |
+| <code>pub struct Virtq</code> | `std/virtqueue.mc:33` |
+| <code>pub enum VqError</code> | `std/virtqueue.mc:138` |
+| <code>pub enum VqSubmitError</code> | `std/virtqueue.mc:143` |
+| <code>pub enum VqCompleteError</code> | `std/virtqueue.mc:326` |
+| <code>pub move struct CompletedChain3</code> | `std/virtqueue.mc:339` |
+| <code>pub move struct CompletedBuffer</code> | `std/virtqueue.mc:458` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn bus_addr(comptime T: type, p: *mut T) -&gt; u64</code> | `std/virtqueue.mc:51` |
-| <code>export fn vq_free_count(vq: *mut Virtq) -&gt; u16</code> | `std/virtqueue.mc:72` |
-| <code>export fn vq_free_desc(vq: *mut Virtq, id: u16) -&gt; void</code> | `std/virtqueue.mc:92` |
-| <code>export fn vq_free_chain3(vq: *mut Virtq, head: u16) -&gt; void</code> | `std/virtqueue.mc:111` |
-| <code>export fn vq_setup(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32, vq: *mut Virtq) -&gt; Result&lt;bool, VqError&gt;</code> | `std/virtqueue.mc:153` |
-| <code>export fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:233` |
-| <code>export fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:237` |
-| <code>export fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:251` |
-| <code>export fn vq_complete_chain(vq: *mut Virtq) -&gt; Result&lt;CompletedChain3, VqCompleteError&gt;</code> | `std/virtqueue.mc:352` |
-| <code>export fn vq_kick(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32) -&gt; void</code> | `std/virtqueue.mc:418` |
-| <code>export fn vq_has_used(vq: *mut Virtq) -&gt; bool</code> | `std/virtqueue.mc:424` |
-| <code>export fn vq_wait_used(vq: *mut Virtq, timeout: u64) -&gt; bool</code> | `std/virtqueue.mc:434` |
-| <code>export fn vq_used_len(vq: *mut Virtq) -&gt; u32</code> | `std/virtqueue.mc:446` |
-| <code>export fn vq_complete(vq: *mut Virtq) -&gt; Result&lt;CompletedBuffer, VqCompleteError&gt;</code> | `std/virtqueue.mc:473` |
-| <code>export fn vq_reset_reclaim(vq: *mut Virtq) -&gt; usize</code> | `std/virtqueue.mc:504` |
+| <code>pub fn bus_addr(comptime T: type, p: *mut T) -&gt; u64</code> | `std/virtqueue.mc:51` |
+| <code>pub fn vq_free_count(vq: *mut Virtq) -&gt; u16</code> | `std/virtqueue.mc:72` |
+| <code>pub fn vq_free_desc(vq: *mut Virtq, id: u16) -&gt; void</code> | `std/virtqueue.mc:92` |
+| <code>pub fn vq_free_chain3(vq: *mut Virtq, head: u16) -&gt; void</code> | `std/virtqueue.mc:111` |
+| <code>pub fn vq_setup(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32, vq: *mut Virtq) -&gt; Result&lt;bool, VqError&gt;</code> | `std/virtqueue.mc:153` |
+| <code>pub fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:233` |
+| <code>pub fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:237` |
+| <code>pub fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:251` |
+| <code>pub fn vq_complete_chain(vq: *mut Virtq) -&gt; Result&lt;CompletedChain3, VqCompleteError&gt;</code> | `std/virtqueue.mc:352` |
+| <code>pub fn vq_kick(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32) -&gt; void</code> | `std/virtqueue.mc:418` |
+| <code>pub fn vq_has_used(vq: *mut Virtq) -&gt; bool</code> | `std/virtqueue.mc:424` |
+| <code>pub fn vq_wait_used(vq: *mut Virtq, timeout: u64) -&gt; bool</code> | `std/virtqueue.mc:434` |
+| <code>pub fn vq_used_len(vq: *mut Virtq) -&gt; u32</code> | `std/virtqueue.mc:446` |
+| <code>pub fn vq_complete(vq: *mut Virtq) -&gt; Result&lt;CompletedBuffer, VqCompleteError&gt;</code> | `std/virtqueue.mc:473` |
+| <code>pub fn vq_reset_reclaim(vq: *mut Virtq) -&gt; usize</code> | `std/virtqueue.mc:504` |

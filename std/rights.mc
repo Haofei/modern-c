@@ -31,7 +31,7 @@
 
 import "std/math.mc";
 
-opaque struct Rights {
+pub opaque struct Rights {
     bits: u32,
 }
 
@@ -91,7 +91,7 @@ impl Rights {
 // ----- public, cross-module API (free wrappers over the `impl`) -----
 
 // The empty rights set: no authority. Always safe to hand out.
-fn rights_none() -> Rights {
+pub fn rights_none() -> Rights {
     return Rights.none();
 }
 
@@ -99,51 +99,51 @@ fn rights_none() -> Rights {
 // point where authority is created. By convention only the kernel/bootstrap calls it at
 // setup, exactly as `cap_mint` is the privileged capability constructor. Everything
 // downstream can only attenuate what it is given.
-fn rights_grant(bits: u32) -> Rights {
+pub fn rights_grant(bits: u32) -> Rights {
     return Rights.grant(bits);
 }
 
 // A single-right capability (right id = bit `b`, 0..31). A privileged mint, like grant.
-fn rights_single(b: u32) -> Rights {
+pub fn rights_single(b: u32) -> Rights {
     return Rights.single(b);
 }
 
 // Attenuate `r` to the subset also present in `keep`: result = r ∩ keep. The sole way to
 // derive a new `Rights` from an existing one, and it can only ever DROP bits — never add
 // them. Hence result ⊆ `r` (and ⊆ `keep`): a sub-grant is always weaker than its parent.
-fn rights_attenuate(r: Rights, keep: Rights) -> Rights {
+pub fn rights_attenuate(r: Rights, keep: Rights) -> Rights {
     return Rights.attenuate(r, keep);
 }
 
 // Attenuate by a raw allow-mask: drop every bit not set in `keep_bits`. Narrow-only —
 // `keep_bits` can only remove rights, never restore ones `r` already lacks.
-fn rights_attenuate_mask(r: Rights, keep_bits: u32) -> Rights {
+pub fn rights_attenuate_mask(r: Rights, keep_bits: u32) -> Rights {
     return Rights.attenuate_mask(r, keep_bits);
 }
 
 // Drop a single right (clear bit `b`). Pure attenuation.
-fn rights_without(r: Rights, b: u32) -> Rights {
+pub fn rights_without(r: Rights, b: u32) -> Rights {
     return Rights.without(r, b);
 }
 
 // Does this rights set permit right `b`?
-fn rights_allows(r: Rights, b: u32) -> bool {
+pub fn rights_allows(r: Rights, b: u32) -> bool {
     return Rights.allows(r, b);
 }
 
 // True iff `child` ⊆ `parent`: every right the child holds the parent also holds. The
 // attenuated-subgrant law as a checkable predicate — a faithfully derived child always
 // satisfies it, and any `Rights` that does not is impossible to obtain from `parent`.
-fn rights_subset_of(child: Rights, parent: Rights) -> bool {
+pub fn rights_subset_of(child: Rights, parent: Rights) -> bool {
     return Rights.subset_of(child, parent);
 }
 
 // True iff no rights are held.
-fn rights_is_empty(r: Rights) -> bool {
+pub fn rights_is_empty(r: Rights) -> bool {
     return Rights.is_empty(r);
 }
 
 // Equality of two rights sets.
-fn rights_eq(a: Rights, b: Rights) -> bool {
+pub fn rights_eq(a: Rights, b: Rights) -> bool {
     return Rights.eq(a, b);
 }

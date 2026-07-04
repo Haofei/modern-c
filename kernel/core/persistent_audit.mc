@@ -40,6 +40,41 @@ struct PersistentAuditFrame {
     events: [PERSIST_AUDIT_CAP]IpcEvent,
 }
 
+fn persistent_empty_event() -> IpcEvent {
+    return .{ .seq = 0, .from = 0, .to = 0, .tag = 0, .size = 0 };
+}
+
+fn persistent_empty_events() -> [PERSIST_AUDIT_CAP]IpcEvent {
+    return .{
+        persistent_empty_event(), persistent_empty_event(), persistent_empty_event(), persistent_empty_event(),
+        persistent_empty_event(), persistent_empty_event(), persistent_empty_event(), persistent_empty_event(),
+        persistent_empty_event(), persistent_empty_event(), persistent_empty_event(), persistent_empty_event(),
+        persistent_empty_event(), persistent_empty_event(), persistent_empty_event(), persistent_empty_event(),
+    };
+}
+
+fn persistent_policy_snapshot_empty() -> PersistentPolicySnapshot {
+    return .{
+        .magic = 0,
+        .policy_version = 0,
+        .throttle_at = 0,
+        .revoke_at = 0,
+        .kill_at = 0,
+        .revocation_epoch = 0,
+    };
+}
+
+fn persistent_audit_frame_empty() -> PersistentAuditFrame {
+    return .{
+        .magic = 0,
+        .policy_version = 0,
+        .boot_epoch = 0,
+        .trace_dropped = 0,
+        .count = 0,
+        .events = persistent_empty_events(),
+    };
+}
+
 fn persistent_audit_frame_len(count: usize) -> usize {
     return sizeof(u32) + sizeof(u64) + sizeof(u64) + sizeof(u64) + sizeof(usize) + (count * sizeof(IpcEvent));
 }
@@ -68,7 +103,7 @@ export fn persistent_policy_save(
 }
 
 export fn persistent_policy_load(store: *mut BlobStore, id: u32) -> Result<PersistentPolicySnapshot, PersistentAuditError> {
-    var snap: PersistentPolicySnapshot = uninit;
+    var snap: PersistentPolicySnapshot = persistent_policy_snapshot_empty();
     let need: usize = sizeof(PersistentPolicySnapshot);
     switch blob_get(store, id, pa((&snap) as usize), need) {
         ok(n) => {
@@ -87,12 +122,14 @@ export fn persistent_audit_capture(
     policy_version: u64,
     boot_epoch: u64,
 ) -> Result<usize, PersistentAuditError> {
-    var frame: PersistentAuditFrame = uninit;
-    frame.magic = PERSIST_AUDIT_MAGIC;
-    frame.policy_version = policy_version;
-    frame.boot_epoch = boot_epoch;
-    frame.trace_dropped = ipc_trace_dropped(trace);
-    frame.count = 0;
+    var frame: PersistentAuditFrame = .{
+        .magic = PERSIST_AUDIT_MAGIC,
+        .policy_version = policy_version,
+        .boot_epoch = boot_epoch,
+        .trace_dropped = ipc_trace_dropped(trace),
+        .count = 0,
+        .events = persistent_empty_events(),
+    };
 
     var draining: bool = true;
     while draining {
@@ -117,7 +154,7 @@ export fn persistent_audit_capture(
 }
 
 fn persistent_audit_load_frame(store: *mut BlobStore, id: u32) -> Result<PersistentAuditFrame, PersistentAuditError> {
-    var frame: PersistentAuditFrame = uninit;
+    var frame: PersistentAuditFrame = persistent_audit_frame_empty();
     let header: usize = persistent_audit_frame_len(0);
     switch blob_get(store, id, pa((&frame) as usize), header) {
         ok(n) => { if n < header { return err(.ShortRead); } }

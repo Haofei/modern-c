@@ -9,7 +9,7 @@
 // definition (E_MOVE_ARRAY_UNSUPPORTED) — so hold linear resources behind a copyable
 // handle (pointer, index, DmaAddr), not by value. (See §28.2.)
 
-struct Ring<T, N> {
+pub struct Ring<T, N> {
     slots: [N]T,
     head: usize, // next write index
     tail: usize, // next read index (oldest)
@@ -18,25 +18,25 @@ struct Ring<T, N> {
 
 // Reset `r` to empty in place. (A zero-initialized Ring is already empty; this is for
 // reuse. Slots are never read while `count` bounds the live region.)
-export fn ring_init(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> void {
+pub fn ring_init(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> void {
     r.head = 0;
     r.tail = 0;
     r.count = 0;
 }
 
-export fn ring_len(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> usize {
+pub fn ring_len(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> usize {
     return r.count;
 }
 #[irq_context]
-export fn ring_is_empty(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> bool {
+pub fn ring_is_empty(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> bool {
     return r.count == 0;
 }
-export fn ring_is_full(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> bool {
+pub fn ring_is_full(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> bool {
     return r.count == N;
 }
 
 // Enqueue at the head; returns false (no-op) if the ring is full.
-export fn ring_push(comptime T: type, comptime N: usize, r: *mut Ring<T, N>, x: T) -> bool {
+pub fn ring_push(comptime T: type, comptime N: usize, r: *mut Ring<T, N>, x: T) -> bool {
     if r.count == N {
         return false;
     }
@@ -47,7 +47,7 @@ export fn ring_push(comptime T: type, comptime N: usize, r: *mut Ring<T, N>, x: 
 }
 
 // The oldest element without removing it. Traps if empty — check `ring_is_empty` first.
-export fn ring_front(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> T {
+pub fn ring_front(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> T {
     if r.count == 0 {
         unreachable; // ring empty
     }
@@ -56,7 +56,7 @@ export fn ring_front(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) ->
 
 // Dequeue the tail (oldest) in place. Traps if empty — check `ring_is_empty` first.
 #[irq_context]
-export fn ring_pop(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> T {
+pub fn ring_pop(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> T {
     if r.count == 0 {
         unreachable; // ring empty
     }

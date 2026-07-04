@@ -28,27 +28,27 @@ import "std/mask.mc";
 
 // Tool ids = bit indices in the allowlist. 0..3 are the FS catalog; higher ids
 // (exec/net/...) are not served here and exist to be denied.
-const TOOL_FS_WRITE: u32 = 0;
-const TOOL_FS_READ: u32 = 1;
-const TOOL_FS_MKDIR: u32 = 2;
-const TOOL_FS_LIST: u32 = 3;
-const TOOL_CATALOG_MAX: u32 = 3; // highest id with a handler
+pub const TOOL_FS_WRITE: u32 = 0;
+pub const TOOL_FS_READ: u32 = 1;
+pub const TOOL_FS_MKDIR: u32 = 2;
+pub const TOOL_FS_LIST: u32 = 3;
+pub const TOOL_CATALOG_MAX: u32 = 3; // highest id with a handler
 
 // Verdict + a synthetic op code for front-door audit records. The FS catalog ops
 // reuse the server's OP_* tags; a denied/unknown tool is logged with its raw id
 // plus this bias so it is distinguishable from a served op in the trace.
-const FD_DENY: u32 = 0;
-const FD_TOOL_TAG_BIAS: u32 = 0x1000;
+pub const FD_DENY: u32 = 0;
+pub const FD_TOOL_TAG_BIAS: u32 = 0x1000;
 
 // An agent's FS-tool authority: the allowlist, the remaining call budget, and
 // the path capability the server will enforce. All three travel together.
-struct AgentFs {
+pub struct AgentFs {
     tools: Mask32,
     calls_left: u32,
     cap: PathCap,
 }
 
-enum AgentToolError {
+pub enum AgentToolError {
     Denied,      // tool id not in the allowlist, OR path cap refused the target
     Exhausted,   // call budget spent
     NoSuchTool,  // allowlisted id has no handler in the catalog
@@ -63,7 +63,7 @@ enum AgentToolError {
 }
 
 // Construct an agent's FS-tool authority by value (allowlist + budget + cap).
-export fn agent_fs_new(tools: Mask32, budget: u32, cap: PathCap) -> AgentFs {
+pub fn agent_fs_new(tools: Mask32, budget: u32, cap: PathCap) -> AgentFs {
     return .{ .tools = tools, .calls_left = budget, .cap = cap };
 }
 
@@ -91,7 +91,7 @@ fn fd_audit(sink: *mut IpcTrace, a: *mut AgentFs, tool_id: u32) -> void {
 // pre-dispatch refusal is audited and attributed. A permitted call charges one
 // budget unit and is handed to the FS tool server (which applies the path cap
 // and audits the capability verdict itself).
-export fn agent_fs_call(t: *mut Tree, sink: *mut IpcTrace, a: *mut AgentFs, tool_id: u32, path: usize, path_len: usize, offset: usize, buf: usize, n: usize, capacity: usize) -> Result<usize, AgentToolError> {
+pub fn agent_fs_call(t: *mut Tree, sink: *mut IpcTrace, a: *mut AgentFs, tool_id: u32, path: usize, path_len: usize, offset: usize, buf: usize, n: usize, capacity: usize) -> Result<usize, AgentToolError> {
     // 1. allowlist: not permitted -> Denied (audited; no budget spent).
     if !mask32_contains(&a.tools, tool_id) {
         fd_audit(sink, a, tool_id);
@@ -134,6 +134,6 @@ export fn agent_fs_call(t: *mut Tree, sink: *mut IpcTrace, a: *mut AgentFs, tool
     }
 }
 
-export fn agent_fs_calls_left(a: *mut AgentFs) -> u32 {
+pub fn agent_fs_calls_left(a: *mut AgentFs) -> u32 {
     return a.calls_left;
 }

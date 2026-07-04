@@ -40,6 +40,39 @@ struct BlockAuditFrame {
     events: [BPA_AUDIT_CAP]IpcEvent,
 }
 
+fn bpa_empty_event() -> IpcEvent {
+    return .{ .seq = 0, .from = 0, .to = 0, .tag = 0, .size = 0 };
+}
+
+fn bpa_empty_events() -> [BPA_AUDIT_CAP]IpcEvent {
+    return .{
+        bpa_empty_event(), bpa_empty_event(), bpa_empty_event(), bpa_empty_event(),
+        bpa_empty_event(), bpa_empty_event(), bpa_empty_event(), bpa_empty_event(),
+    };
+}
+
+fn block_policy_snapshot_empty() -> BlockPolicySnapshot {
+    return .{
+        .magic = 0,
+        .policy_version = 0,
+        .throttle_at = 0,
+        .revoke_at = 0,
+        .kill_at = 0,
+        .revocation_epoch = 0,
+    };
+}
+
+fn block_audit_frame_empty() -> BlockAuditFrame {
+    return .{
+        .magic = 0,
+        .policy_version = 0,
+        .boot_epoch = 0,
+        .trace_dropped = 0,
+        .count = 0,
+        .events = bpa_empty_events(),
+    };
+}
+
 global g_bpa_block: [BPA_BLOCK_SIZE]u8;
 
 fn clear_block() -> void {
@@ -93,7 +126,7 @@ export fn block_persistent_policy_save(
 }
 
 export fn block_persistent_policy_load(dev: *dyn BlockDevice, block: u64) -> Result<BlockPolicySnapshot, BlockPersistentAuditError> {
-    var snap: BlockPolicySnapshot = uninit;
+    var snap: BlockPolicySnapshot = block_policy_snapshot_empty();
     switch read_record(dev, block, (&snap) as usize, sizeof(BlockPolicySnapshot)) {
         ok(v) => {}
         err(e) => { return err(e); }
@@ -111,12 +144,14 @@ export fn block_persistent_audit_capture(
     policy_version: u64,
     boot_epoch: u64,
 ) -> Result<usize, BlockPersistentAuditError> {
-    var frame: BlockAuditFrame = uninit;
-    frame.magic = BPA_AUDIT_MAGIC;
-    frame.policy_version = policy_version;
-    frame.boot_epoch = boot_epoch;
-    frame.trace_dropped = ipc_trace_dropped(trace);
-    frame.count = 0;
+    var frame: BlockAuditFrame = .{
+        .magic = BPA_AUDIT_MAGIC,
+        .policy_version = policy_version,
+        .boot_epoch = boot_epoch,
+        .trace_dropped = ipc_trace_dropped(trace),
+        .count = 0,
+        .events = bpa_empty_events(),
+    };
 
     var draining: bool = true;
     while draining {
@@ -141,7 +176,7 @@ export fn block_persistent_audit_capture(
 }
 
 fn block_persistent_audit_load_frame(dev: *dyn BlockDevice, block: u64) -> Result<BlockAuditFrame, BlockPersistentAuditError> {
-    var frame: BlockAuditFrame = uninit;
+    var frame: BlockAuditFrame = block_audit_frame_empty();
     switch read_record(dev, block, (&frame) as usize, sizeof(BlockAuditFrame)) {
         ok(v) => {}
         err(e) => { return err(e); }

@@ -144,7 +144,10 @@ struct ProcTable {
 fn idle_noop() -> void {}
 
 // The no-op default death hook.
-fn death_noop(pid: u32, gen: u32) -> void {}
+fn death_noop(pid: u32, gen: u32) -> void {
+    let _pid: u32 = pid;
+    let _gen: u32 = gen;
+}
 
 // Runnable state is DERIVED: a process runs only when it is Ready/Running *and* has no
 // outstanding block reasons. Nothing sets a "runnable" bit directly — proc_block/proc_unblock
@@ -549,6 +552,7 @@ export fn proc_enter_agent(t: *mut ProcTable, slot: usize) -> void {
 // Leave the current fault domain (the agent returned cleanly): subsequent faults are the kernel's
 // until the next proc_enter_agent. Idempotent.
 export fn proc_leave_agent(t: *mut ProcTable) -> void {
+    let _t: *mut ProcTable = t;
     g_fault_domain = MAX_PROCS;
 }
 

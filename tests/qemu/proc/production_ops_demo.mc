@@ -70,8 +70,7 @@ export fn production_ops_run() -> u32 {
     if watchdog_expired(&wd, 120) { pass = 0; }
     if !watchdog_expired(&wd, 121) { pass = 0; }
 
-    var rr: RebootRecord = uninit;
-    reboot_record_set(&rr, 3, .Watchdog, 44);
+    var rr: RebootRecord = reboot_record(3, .Watchdog, 44);
     if rr.boot_epoch != 3 { pass = 0; }
     switch rr.reason {
         .Watchdog => {}
@@ -79,8 +78,7 @@ export fn production_ops_run() -> u32 {
     }
     if rr.detail != 44 { pass = 0; }
 
-    var ctl: AgentControlState = uninit;
-    agent_control_init(&ctl, 10);
+    var ctl: AgentControlState = agent_control(10);
     policy_apply_runtime_action(&ctl, .Throttle);
     if !ctl.throttled { pass = 0; }
     if ctl.budget != 5 { pass = 0; }
