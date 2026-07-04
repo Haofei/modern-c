@@ -24,8 +24,10 @@ upstream source tree and has no top-level license file.
 
 - Component: QuickJS-NG.
 - Upstream and provenance: <https://github.com/quickjs-ng/quickjs>, recorded
-  version `0.15.1`; exact recorded commit is currently unknown and must be
-  recovered on the next re-vendor. See `third_party/quickjs/README.vendored.md`.
+  version `0.15.1`, tag `v0.15.1`, commit
+  `fd0a0210b7be00957751871e7e01b8291268fc29`, source archive SHA-256
+  `c4e813951b7c46845096a948e978c620b11ab4cf5fd622ca09c727ec31f42623`; see
+  `third_party/quickjs/README.vendored.md`.
 - License summary: MIT license.
 - Local license file: `third_party/quickjs/LICENSE`.
 - Redistribution note: retain the QuickJS-NG copyright notices, permission

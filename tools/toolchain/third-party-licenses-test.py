@@ -36,12 +36,19 @@ DEPENDENCIES = {
             "Component: QuickJS-NG",
             "https://github.com/quickjs-ng/quickjs",
             "0.15.1",
-            "exact recorded commit is currently unknown",
+            "v0.15.1",
+            "fd0a0210b7be00957751871e7e01b8291268fc29",
+            "c4e813951b7c46845096a948e978c620b11ab4cf5fd622ca09c727ec31f42623",
             "MIT",
             "Redistribution note:",
             "copyright notices",
             "permission notice",
             "warranty disclaimer",
+        ),
+        "forbidden": (
+            "exact recorded commit is currently unknown",
+            "exact upstream commit is unknown",
+            "next QuickJS re-vendor",
         ),
     },
     "wamr": {
@@ -123,10 +130,12 @@ def check_dependency(name: str, cfg: dict[str, object], manifest: str) -> list[s
     readme_rel = cfg["readme"]
     heading = cfg["heading"]
     needles = cfg["needles"]
+    forbidden = cfg.get("forbidden", ())
     assert isinstance(license_rel, str)
     assert isinstance(readme_rel, str)
     assert isinstance(heading, str)
     assert isinstance(needles, tuple)
+    assert isinstance(forbidden, tuple)
 
     if not (ROOT / license_rel).is_file():
         errors.append(f"missing license file {license_rel}")
@@ -145,6 +154,11 @@ def check_dependency(name: str, cfg: dict[str, object], manifest: str) -> list[s
         assert isinstance(needle, str)
         if not contains_text(section, needle):
             errors.append(f"manifest section ## {heading} missing {needle!r}")
+
+    for needle in forbidden:
+        assert isinstance(needle, str)
+        if contains_text(section, needle):
+            errors.append(f"manifest section ## {heading} still contains {needle!r}")
 
     if name not in section.lower() and heading.lower() not in section.lower():
         errors.append(f"manifest section ## {heading} does not identify {name}")

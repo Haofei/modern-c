@@ -27,12 +27,25 @@ DEPENDENCIES = {
         "needles": [
             "Upstream",
             "Recorded version",
+            "Recorded tag",
+            "v0.15.1",
             "Recorded commit",
+            "fd0a0210b7be00957751871e7e01b8291268fc29",
+            "Archive SHA-256",
+            "c4e813951b7c46845096a948e978c620b11ab4cf5fd622ca09c727ec31f42623",
             "License",
             "What is kept",
             "dropped",
             "Local modifications",
+            "quickjs.h",
+            "BUILDING_QJS_SHARED",
+            "QUICKJS_NG_MODULE_BUILD",
             "How it is built and used",
+        ],
+        "forbidden": [
+            "Recorded commit:** unknown",
+            "exact upstream commit is unknown",
+            "exact recorded commit is currently unknown",
             "next QuickJS re-vendor",
         ],
     },
@@ -112,6 +125,13 @@ def check_dependency(name: str, cfg: dict[str, object]) -> list[str]:
         assert isinstance(needle, str)
         if needle.lower() not in lower_text:
             errors.append(f"{readme.relative_to(ROOT)} missing '{needle}'")
+
+    forbidden = cfg.get("forbidden", [])
+    assert isinstance(forbidden, list)
+    for needle in forbidden:
+        assert isinstance(needle, str)
+        if needle.lower() in lower_text:
+            errors.append(f"{readme.relative_to(ROOT)} still contains forbidden '{needle}'")
 
     return errors
 

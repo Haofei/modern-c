@@ -3,8 +3,11 @@
 - **Upstream:** <https://github.com/quickjs-ng/quickjs> (QuickJS-NG repository)
 - **Recorded version:** `0.15.1`, from `QJS_VERSION_MAJOR/MINOR/PATCH` in
   `quickjs.h`.
-- **Recorded commit:** unknown. No upstream commit, archive checksum, or tag file is
-  present in this tree.
+- **Recorded tag:** `v0.15.1`.
+- **Recorded commit:** `fd0a0210b7be00957751871e7e01b8291268fc29`.
+- **Source archive:** <https://github.com/quickjs-ng/quickjs/archive/refs/tags/v0.15.1.tar.gz>.
+- **Archive SHA-256:**
+  `c4e813951b7c46845096a948e978c620b11ab4cf5fd622ca09c727ec31f42623`.
 - **License:** MIT (see `LICENSE`)
 
 ## What is kept
@@ -24,12 +27,20 @@ and generated tables not referenced by this subset were dropped.
 
 ## Local modifications
 
-No local patch markers are present in the vendored QuickJS files. The local build
-adapts QuickJS through compiler flags and the all-MC libc/runtime, not by editing
-the engine sources.
+All retained files match upstream tag `v0.15.1` at
+`fd0a0210b7be00957751871e7e01b8291268fc29` except `quickjs.h`.
 
-Because the exact upstream commit is unknown, the next QuickJS re-vendor must
-record the tag/commit and source archive checksum before replacing this tree.
+The local `quickjs.h` patch narrows two GNU-like visibility macros for the
+freestanding/static build:
+
+- `JS_EXTERN` uses default visibility only when both `BUILDING_QJS_SHARED` and
+  `QUICKJS_NG_CC_GNULIKE` are defined.
+- `JS_MODULE_EXTERN` uses default visibility only when both
+  `QUICKJS_NG_MODULE_BUILD` and `QUICKJS_NG_CC_GNULIKE` are defined.
+
+This keeps the confined-agent static build from exporting all QuickJS symbols
+only because the compiler is GNU-like. The local build otherwise adapts QuickJS
+through compiler flags and the all-MC libc/runtime.
 
 ## How it is built and used
 
