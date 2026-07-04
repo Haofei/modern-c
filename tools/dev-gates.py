@@ -26,6 +26,7 @@ class Rule:
     gates: tuple[str, ...]
     reason: str
     checks: tuple[str, ...] = ()
+    excludes: tuple[str, ...] = ()
 
 
 RULES: tuple[Rule, ...] = (
@@ -38,26 +39,35 @@ RULES: tuple[Rule, ...] = (
         ("src/sema*.zig", "src/generic_precheck.zig", "src/monomorphize.zig", "src/sema_*.zig"),
         ("test", "bad-diagnostics-test", "c-test", "diff-backend"),
         "semantic changes need spec diagnostics, C emission sweep, and backend parity",
+        excludes=("src/*_tests.zig",),
     ),
     Rule(
         ("src/mir*.zig", "src/ir.zig", "src/hir.zig", "src/eval.zig", "src/numeric.zig"),
         ("test", "c-test", "llvm-test", "diff-backend", "fuzz-reference"),
         "middle-end and evaluator changes can affect both backends and the reference oracle",
+        excludes=("src/*_tests.zig",),
     ),
     Rule(
         ("src/lower_c*.zig",),
         ("test", "c-test", "diff-backend", "lowering-coverage"),
         "C backend changes need C sweep, parity, and lowering coverage ratchet",
+        excludes=("src/*_tests.zig",),
     ),
     Rule(
         ("src/lower_llvm*.zig",),
         ("test", "llvm-test", "llvm-obj-test", "diff-backend", "lowering-coverage"),
         "LLVM backend changes need textual/object LLVM gates, parity, and lowering coverage ratchet",
+        excludes=("src/*_tests.zig",),
     ),
     Rule(
         ("src/async_lower.zig",),
         ("test", "c-test", "llvm-test", "diff-backend", "fuzz-corpus"),
         "async lowering rewrites source before sema and must stay cross-backend equivalent",
+    ),
+    Rule(
+        ("src/*_tests.zig",),
+        ("test",),
+        "unit test source changes are covered by the compiler unit/spec test step",
     ),
     Rule(
         ("build.zig", "build/*.zig", "tools/ci/pass-gates.py", "tools/m0-parallel.sh"),
@@ -98,8 +108,8 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         ("tests/spec/*.mc",),
-        ("test", "c-test", "llvm-sweep"),
-        "spec fixtures feed parser/sema plus C and LLVM sweeps",
+        (),
+        "spec fixtures are routed from their SPEC phase metadata",
     ),
     Rule(
         ("tests/c_emit/bad/*.mc",),
@@ -160,6 +170,30 @@ def matches(path: str, pattern: str) -> bool:
     return fnmatch.fnmatch(path, pattern)
 
 
+def spec_fixture_gates(path: str) -> tuple[list[str], list[str]]:
+    gates = ["test"]
+    reasons = ["spec fixture metadata and inline EXPECT contracts are checked by compiler unit/spec tests"]
+    try:
+        with (ROOT / path).open("r", encoding="utf-8") as source:
+            for _, line in zip(range(20), source):
+                prefix = "// SPEC: phase="
+                stripped = line.strip()
+                if not stripped.startswith(prefix):
+                    continue
+                phases = {part.strip() for part in stripped[len(prefix) :].split(",")}
+                if "lower-c" in phases:
+                    gates.append("sweep")
+                    reasons.append("lower-c spec fixtures need the spec emit-C sweep, not the tests/c_emit c-test corpus")
+                if "llvm" in phases:
+                    gates.append("llvm-sweep")
+                    reasons.append("LLVM spec fixtures need the spec LLVM IR sweep")
+                return gates, reasons
+    except OSError:
+        pass
+    reasons.append("missing or unreadable SPEC phase metadata defaults to the conservative unit/spec gate")
+    return gates, reasons
+
+
 def select_gates(paths: list[str]) -> tuple[list[str], list[str], list[str]]:
     gates: list[str] = []
     checks: list[str] = []
@@ -168,8 +202,19 @@ def select_gates(paths: list[str]) -> tuple[list[str], list[str], list[str]]:
     seen_checks: set[str] = set()
     seen_reasons: set[str] = set()
     for path in paths:
+        if PurePosixPath(path).match("tests/spec/*.mc"):
+            spec_gates, spec_reasons = spec_fixture_gates(path)
+            for gate in spec_gates:
+                if gate not in seen_gates:
+                    seen_gates.add(gate)
+                    gates.append(gate)
+            for reason in spec_reasons:
+                if reason not in seen_reasons:
+                    seen_reasons.add(reason)
+                    reasons.append(reason)
+            continue
         for rule in RULES:
-            if any(matches(path, pattern) for pattern in rule.patterns):
+            if any(matches(path, pattern) for pattern in rule.patterns) and not any(matches(path, pattern) for pattern in rule.excludes):
                 for gate in rule.gates:
                     if gate not in seen_gates:
                         seen_gates.add(gate)
