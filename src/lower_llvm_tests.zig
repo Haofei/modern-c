@@ -53,6 +53,22 @@ test "LLVM backend emits checked integer add from MIR-gated source" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, " nuw ") == null);
 }
 
+test "LLVM reflection rejects oversized tagged union layout without panicking" {
+    const source =
+        \\union Big {
+        \\    data: [18446744073709551615]u8,
+        \\    none,
+        \\}
+        \\fn probe() -> usize {
+        \\    return sizeof(Big);
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_reflect_big_union.mc", source, &output));
+}
+
 test "LLVM check elision is scoped to the current function" {
     const proven_source =
         \\fn proven(xs: [4]u32) -> u32 {

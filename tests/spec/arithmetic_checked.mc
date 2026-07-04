@@ -16,6 +16,10 @@ fn mul_overflow_u32(a: u32) -> u32 {
     return a * 2;
 }
 
+fn mul_overflow_u64(a: u64, b: u64) -> u64 {
+    return a * b;
+}
+
 fn div_zero_u32(a: u32) -> u32 {
     return a / 0;
 }
@@ -50,6 +54,7 @@ fn right_shift_invalid_count(x: u32, n: u32) -> u32 {
 // EXPECT: run add_overflow_u32(4294967295) traps .IntegerOverflow.
 // EXPECT: run sub_underflow_u32(0) traps .IntegerOverflow.
 // EXPECT: run mul_overflow_u32(2147483648) traps .IntegerOverflow.
+// EXPECT: run mul_overflow_u64(18446744073709551615, 18446744073709551615) traps .IntegerOverflow.
 // EXPECT: run div_zero_u32(1) traps .DivideByZero.
 // EXPECT: run signed_div_min_overflow() traps .IntegerOverflow before target division.
 // EXPECT: run signed_rem_min_overflow() traps .IntegerOverflow before target remainder.

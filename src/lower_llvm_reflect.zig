@@ -29,6 +29,10 @@ const comptimeArraySize = type_layout.comptimeArraySize;
 const comptimeBitOffsetFromBytes = type_layout.comptimeBitOffset;
 const comptimeLayoutAdd = type_layout.comptimeLayoutAdd;
 
+fn castU64(value: i128) ?u64 {
+    return std.math.cast(u64, value);
+}
+
 pub const ReflectEnv = struct {
     type_aliases: *const std.StringHashMap(ast.TypeExpr),
     enum_types: *const std.StringHashMap(ast.EnumDecl),
@@ -264,12 +268,14 @@ pub fn taggedUnionLayout(env: *const ReflectEnv, union_decl: ast.UnionDecl, dept
     if (payload_align != 1 and payload_align != 2 and payload_align != 4 and payload_align != 8) return null;
     var payload_offset: i128 = 4;
     payload_offset = alignForward(payload_offset, @intCast(payload_align)) orelse return null;
-    const payload_offset_u64: u64 = @intCast(payload_offset);
+    const payload_offset_u64 = castU64(payload_offset) orelse return null;
     const aligned_payload_size = alignForward(@intCast(payload_size), @intCast(payload_align)) orelse return null;
+    const aligned_payload_size_u64 = castU64(aligned_payload_size) orelse return null;
     const size = alignForward(comptimeLayoutAdd(payload_offset, aligned_payload_size) orelse return null, @intCast(@max(@as(u64, 4), payload_align))) orelse return null;
-    const storage_count = @as(u64, @intCast(aligned_payload_size)) / payload_align;
+    const size_u64 = castU64(size) orelse return null;
+    const storage_count = aligned_payload_size_u64 / payload_align;
     return .{
-        .size = @intCast(size),
+        .size = size_u64,
         .alignment = @max(@as(u64, 4), payload_align),
         .payload_size = payload_size,
         .payload_alignment = payload_align,

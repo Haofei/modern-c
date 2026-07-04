@@ -29,6 +29,16 @@ union ReflectToken {
     eof,
 }
 
+struct HugeBitOffset {
+    a: [9223372036854775808][9223372036854775808]u8,
+    b: u8,
+}
+
+struct HugeSizeOverflow {
+    a: [9223372036854775808][9223372036854775808]u8,
+    b: [9223372036854775808][9223372036854775808]u8,
+}
+
 extern mmio struct Uart16550 {
     thr: Reg<u8, .write>,
     lsr: Reg<u8, .read>,
@@ -260,6 +270,16 @@ fn reject_spec_unknown_generic_reflection_type() -> usize {
 fn reject_giant_array_layout_overflow() -> usize {
     // EXPECT_ERROR: E_REFLECTION_UNKNOWN_TYPE
     return sizeof([9223372036854775807][9223372036854775807]u128);
+}
+
+fn reject_huge_bit_offset_overflow() -> usize {
+    // EXPECT_ERROR: E_REFLECTION_UNKNOWN_TYPE
+    return bit_offset(HugeBitOffset, .b);
+}
+
+fn reject_huge_struct_size_overflow() -> usize {
+    // EXPECT_ERROR: E_REFLECTION_UNKNOWN_TYPE
+    return sizeof(HugeSizeOverflow);
 }
 
 fn reject_dma_buf_missing_mode() -> usize {

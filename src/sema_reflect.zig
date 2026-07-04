@@ -22,6 +22,7 @@ const parseArrayLen = array_len.parseArrayLen;
 const reflectionKind = sema_builtin.reflectionKind;
 const reflectionTypeExprFromArg = sema_builtin.reflectionTypeExprFromArg;
 const comptimeArraySize = type_layout.comptimeArraySize;
+const comptimeLayoutAdd = type_layout.comptimeLayoutAdd;
 const scalarLayout = type_layout.scalarLayout;
 const simpleNameType = ast_query.simpleNameType;
 const typeName = ast_query.typeName;
@@ -152,7 +153,7 @@ pub fn comptimeBitOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []cons
         return null;
     }
     const byte_offset = comptimeFieldOffset(env, ty, field, depth + 1) orelse return null;
-    return byte_offset * 8;
+    return type_layout.comptimeBitOffset(byte_offset);
 }
 
 pub fn comptimeReprOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
@@ -237,7 +238,7 @@ fn comptimeTaggedUnionSize(env: *const ReflectEnv, info: UnionInfo, depth: usize
     if (payload.has_payload) {
         if (payload.alignment > max_align) max_align = payload.alignment;
         offset = alignForward(offset, payload.alignment) orelse return null;
-        offset += payload.size;
+        offset = comptimeLayoutAdd(offset, payload.size) orelse return null;
     }
     return alignForward(offset, max_align);
 }
@@ -312,7 +313,7 @@ fn comptimeStructLayout(env: *const ReflectEnv, info: StructInfo, want_field: ?[
         if (want_field) |wanted| {
             if (std.mem.eql(u8, field.name.text, wanted)) found = offset;
         }
-        offset += size;
+        offset = comptimeLayoutAdd(offset, size) orelse return null;
     }
     return .{
         .size = alignForward(offset, max_align) orelse return null,

@@ -190,7 +190,7 @@ const Evaluator = struct {
         if (node.op != .neg) return error.UnsupportedRunTrapFixture;
         if (node.expr.kind == .int_literal) {
             const magnitude = try parseInt(node.expr.kind.int_literal);
-            const value = -magnitude;
+            const value = std.math.negate(magnitude) catch return .{ .trap = .IntegerOverflow };
             if (!expected_ty.contains(value)) return .{ .trap = .IntegerOverflow };
             return .{ .value = .{ .value = value, .ty = expected_ty } };
         }
@@ -200,7 +200,8 @@ const Evaluator = struct {
         };
         const ty = inner.ty;
         if (!ty.signed or inner.value == ty.min()) return .{ .trap = .IntegerOverflow };
-        return .{ .value = .{ .value = -inner.value, .ty = ty } };
+        const value = std.math.negate(inner.value) catch return .{ .trap = .IntegerOverflow };
+        return .{ .value = .{ .value = value, .ty = ty } };
     }
 
     fn evalBinary(self: *Evaluator, node: anytype, expected_ty: IntInfo) EvalError!EvalResult {
@@ -215,9 +216,9 @@ const Evaluator = struct {
         const ty = left.ty;
 
         const value = switch (node.op) {
-            .add => left.value + right.value,
-            .sub => left.value - right.value,
-            .mul => left.value * right.value,
+            .add => std.math.add(i128, left.value, right.value) catch return .{ .trap = .IntegerOverflow },
+            .sub => std.math.sub(i128, left.value, right.value) catch return .{ .trap = .IntegerOverflow },
+            .mul => std.math.mul(i128, left.value, right.value) catch return .{ .trap = .IntegerOverflow },
             .div => blk: {
                 if (right.value == 0) return .{ .trap = .DivideByZero };
                 if (ty.signed and left.value == ty.min() and right.value == -1) return .{ .trap = .IntegerOverflow };
@@ -230,7 +231,11 @@ const Evaluator = struct {
             },
             .shl => blk: {
                 if (right.value < 0 or right.value >= ty.bits) return .{ .trap = .InvalidShift };
-                break :blk left.value * (@as(i128, 1) << @intCast(right.value));
+                if (right.value >= @bitSizeOf(i128)) {
+                    break :blk if (left.value == 0) 0 else return .{ .trap = .IntegerOverflow };
+                }
+                const factor = std.math.shl(i128, 1, @as(u7, @intCast(right.value)));
+                break :blk std.math.mul(i128, left.value, factor) catch return .{ .trap = .IntegerOverflow };
             },
             .shr => blk: {
                 if (right.value < 0 or right.value >= ty.bits) return .{ .trap = .InvalidShift };
