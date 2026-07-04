@@ -683,7 +683,7 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     try cbody.append(arena, .{ .span = zspan, .kind = .{ .var_decl = .{
         .names = try dupIdents(arena, &.{"self"}),
         .ty = try nameType(arena, fut_type),
-        .init = try initialSelfLiteral(low, future_fields, fd.params),
+        .init = try initialSelfLiteral(low, future_fields, fd.params, fd.name.span),
     } } });
     try cbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr("0")));
     for (fd.params) |p| {
@@ -1029,7 +1029,7 @@ fn lowerAsyncLoopFn(
     try cbody.append(arena, .{ .span = zspan, .kind = .{ .var_decl = .{
         .names = try dupIdents(arena, &.{"self"}),
         .ty = try nameType(arena, fut_type),
-        .init = try initialSelfLiteral(low, future_fields, fd.params),
+        .init = try initialSelfLiteral(low, future_fields, fd.params, fd.name.span),
     } } });
     try cbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr("0")));
     for (fd.params) |p| try cbody.append(arena, assignStmt(try selfMember(arena, p.name.text), identExpr(p.name.text)));
@@ -1843,7 +1843,7 @@ fn lowerAsyncGeneralFn(
     try cbody.append(arena, .{ .span = zspan, .kind = .{ .var_decl = .{
         .names = try dupIdents(arena, &.{"self"}),
         .ty = try nameType(arena, fut_type),
-        .init = try initialSelfLiteral(low, future_fields, fd.params),
+        .init = try initialSelfLiteral(low, future_fields, fd.params, fd.name.span),
     } } });
     try cbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr("0")));
     for (fd.params) |p| try cbody.append(arena, assignStmt(try selfMember(arena, p.name.text), identExpr(p.name.text)));
@@ -2571,8 +2571,8 @@ fn zeroFor(low: *Lowerer, ty: ast.TypeExpr) Error!?ast.Expr {
     return null; // aggregate/other nominal -> use an explicit typed `uninit` placeholder
 }
 
-fn uninitExpr() ast.Expr {
-    return .{ .span = zspan, .kind = .uninit_literal };
+fn uninitExpr(span: ast.Span) ast.Expr {
+    return .{ .span = span, .kind = .uninit_literal };
 }
 
 fn paramInitializer(params: []const ast.Param, field_name: []const u8) ?ast.Expr {
@@ -2582,7 +2582,7 @@ fn paramInitializer(params: []const ast.Param, field_name: []const u8) ?ast.Expr
     return null;
 }
 
-fn initialSelfLiteral(low: *Lowerer, fields: []const ast.Field, params: []const ast.Param) Error!ast.Expr {
+fn initialSelfLiteral(low: *Lowerer, fields: []const ast.Field, params: []const ast.Param, origin_span: ast.Span) Error!ast.Expr {
     const arena = low.arena;
     var literal_fields = try arena.alloc(ast.StructLiteralField, fields.len);
     for (fields, 0..) |field, i| {
@@ -2594,10 +2594,10 @@ fn initialSelfLiteral(low: *Lowerer, fields: []const ast.Field, params: []const 
         else if (try zeroFor(low, field.ty)) |zero|
             zero
         else
-            uninitExpr();
+            uninitExpr(origin_span);
         literal_fields[i] = .{ .name = field.name, .value = value };
     }
-    return .{ .span = zspan, .kind = .{ .struct_literal = literal_fields } };
+    return .{ .span = origin_span, .kind = .{ .struct_literal = literal_fields } };
 }
 
 // Append `self.<field> = <zero>;` only when the field type has a scalar zero (see zeroFor).

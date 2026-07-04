@@ -1116,8 +1116,16 @@ const LlvmEmitter = struct {
 
     fn reportUnsupported(self: *LlvmEmitter, span: ast.Span, construct: []const u8) void {
         if (self.reporter) |reporter| {
-            reporter.err(span, "E_BACKEND_UNSUPPORTED: LLVM backend does not yet support {s}", .{construct});
+            reporter.err(self.diagnosticSpan(span), "E_BACKEND_UNSUPPORTED: LLVM backend does not yet support {s}", .{construct});
         }
+    }
+
+    fn diagnosticSpan(self: *LlvmEmitter, span: ast.Span) ast.Span {
+        if (isSourceSpan(span)) return span;
+        if (self.current_debug_span) |current| {
+            if (isSourceSpan(current)) return current;
+        }
+        return span;
     }
 
     fn unsupportedExprValue(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
@@ -1372,7 +1380,7 @@ const LlvmEmitter = struct {
         errdefer self.defer_stack.items.len = defer_start;
         for (block.items) |stmt| {
             const old_debug_span = self.current_debug_span;
-            self.current_debug_span = stmt.span;
+            if (isSourceSpan(stmt.span)) self.current_debug_span = stmt.span;
             defer self.current_debug_span = old_debug_span;
 
             switch (stmt.kind) {
@@ -5919,6 +5927,10 @@ const LlvmEmitter = struct {
 // module; these aliases keep the existing call sites in this file reading unchanged.
 const ResultSwitchPattern = switch_lower.ResultArmPattern;
 const TaggedUnionBinding = switch_lower.TaggedUnionArmBinding;
+
+fn isSourceSpan(span: ast.Span) bool {
+    return span.line != 0 and span.column != 0;
+}
 
 fn restoreLocal(map: anytype, key: []const u8, old: anytype) !void {
     if (old) |entry| {

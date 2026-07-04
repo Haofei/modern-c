@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const diagnostics = @import("diagnostics.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const test_support = @import("test_support.zig");
 
@@ -83,4 +84,45 @@ test "LLVM check elision is scoped to the current function" {
     const checked_body = try llvmFunctionBody(output.items, "define internal i32 @checked");
     try std.testing.expect(std.mem.indexOf(u8, proven_body, "call void @mc_trap_Bounds()") == null);
     try std.testing.expect(std.mem.indexOf(u8, checked_body, "call void @mc_trap_Bounds()") != null);
+}
+
+test "LLVM unsupported diagnostics use nearest source span for generated nodes" {
+    const source =
+        \\// generated nodes should not point here
+        \\
+        \\fn synthetic_uninit() -> u32 { return 0; }
+    ;
+    const zspan = ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
+    const fn_span = ast.Span{ .offset = 42, .len = 16, .line = 3, .column = 4 };
+    const u32_ty = ast.TypeExpr{ .span = fn_span, .kind = .{ .name = .{ .text = "u32", .span = fn_span } } };
+
+    var stmts = [_]ast.Stmt{
+        .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .uninit_literal } } },
+    };
+    var decls = [_]ast.Decl{.{ .span = fn_span, .attrs = &.{}, .kind = .{ .fn_decl = .{
+        .name = .{ .text = "synthetic_uninit", .span = fn_span },
+        .abi = null,
+        .params = &.{},
+        .return_type = u32_ty,
+        .body = .{ .span = fn_span, .items = stmts[0..] },
+        .is_const = false,
+    } } }};
+    const module = ast.Module{ .decls = decls[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "synthetic.mc", source);
+    defer reporter.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+
+    const llvm_backend = lower_llvm.mcBackend();
+    try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerFn(llvm_backend.ctx, std.testing.allocator, module, &out, .{
+        .profile = .kernel,
+        .source_path = "synthetic.mc",
+        .reporter = &reporter,
+    }));
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 1), reporter.diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 3), reporter.diagnostics.items[0].span.line);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "uninit_literal") != null);
 }
