@@ -312,6 +312,38 @@ def require_release_artifact_metadata() -> None:
             fail(f"docs/release-process.md does not document release target {target!r}")
 
 
+def require_threat_model_metadata() -> None:
+    path = "docs/threat-model.md"
+    docs = read(path)
+    lower = docs.lower()
+    if "supply-chain compromise of the vendored engines or the toolchain" in lower and "out of scope" in lower:
+        fail(f"{path} must not treat vendored engine/toolchain supply-chain compromise as simply out of scope")
+    for needle in (
+        "## 5. Compiler as attack surface",
+        "external users may run `mcc` on",
+        "untrusted source",
+        "compiler or codegen bugs",
+        "Diagnostics leak source",
+        "Miscompile removes safety checks",
+        "Malicious imports escape the project sandbox",
+        "differential C/LLVM gates",
+        "## 6. Supply-chain sub-model",
+        "Supply-chain compromise of vendored engines",
+        "WAMR, QuickJS, BearSSL",
+        "vendoring review",
+        "CVE/advisory triage",
+        "pinned Zig/LLVM/Docker versions and digests",
+        "GitHub Actions pinned to commit SHAs",
+        "SHA256SUMS",
+        "CycloneDX SBOM",
+        "artifact attestations",
+        "SECURITY.md",
+        "not runtime containment",
+    ):
+        if needle not in docs:
+            fail(f"{path} does not document threat-model requirement {needle!r}")
+
+
 def main() -> None:
     require_workflow_actions_pinned()
 
@@ -380,7 +412,7 @@ def main() -> None:
         '--start "$SEED_START"',
         "--trapping",
         "python3 tools/fuzz/mcfuzz.py corpus",
-        "tools/fuzz/mcfuzz.py shrink",
+        "--shrink-failures",
         "tools/fuzz/corpus/",
     ):
         require_contains(nightly_fuzz_path, needle)
@@ -402,6 +434,7 @@ def main() -> None:
 
     require_nightly_bench_metadata()
     require_release_artifact_metadata()
+    require_threat_model_metadata()
 
     dockerfile = read("Dockerfile")
     require_contains("Dockerfile", f"FROM {EXPECTED_DOCKER_BASE_IMAGE}")
