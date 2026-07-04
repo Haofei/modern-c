@@ -55,6 +55,18 @@ assert_stderr_contains() {
     fi
 }
 
+assert_stderr_not_contains() {
+    local needle="$1"
+    local label="$2"
+    if grep -Fq -- "$needle" "$ERR"; then
+        echo "FAIL: mcc-cli-test — unexpected stderr $label"
+        echo "unexpected substring: $needle"
+        echo "stderr:"
+        cat "$ERR"
+        exit 1
+    fi
+}
+
 assert_stderr_starts_with() {
     local needle="$1"
     local label="$2"
@@ -151,5 +163,23 @@ run_case check "$WORK/ok.mc" --remap-prefix="$WORK=/src"
 assert_rc 1 "invalid remap-prefix for check"
 assert_stdout_empty "invalid remap-prefix for check"
 assert_stderr_contains "usage:" "invalid remap-prefix usage"
+
+MISSING="$WORK/missing-root.mc"
+run_case check "$MISSING"
+assert_rc 1 "missing root input"
+assert_stdout_empty "missing root input"
+assert_stderr_starts_with "error: unable to read input \"$MISSING\": FileNotFound" "missing root input"
+assert_stderr_not_contains "error: FileNotFound" "raw missing root error"
+assert_stderr_not_contains "src/main.zig" "missing root Zig stack trace"
+
+set +e
+printf 'export fn main() -> u32 { return 0; }\n' | "$MCC" check - >"$OUT" 2>"$ERR"
+RC=$?
+set -e
+assert_rc 1 "stdin placeholder input"
+assert_stdout_empty "stdin placeholder input"
+assert_stderr_starts_with 'error: unable to read input "-": FileNotFound' "stdin placeholder input"
+assert_stderr_not_contains "error: FileNotFound" "raw stdin placeholder error"
+assert_stderr_not_contains "src/main.zig" "stdin placeholder Zig stack trace"
 
 echo "PASS: mcc-cli-test — help/version/usage transcripts are stable"

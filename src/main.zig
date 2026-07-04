@@ -162,7 +162,10 @@ fn runMain(init: std.process.Init) !void {
     const is_emit_layout = cli.Options.isEmitLayout(command);
     const is_emit_c_struct = cli.Options.isEmitCStruct(command);
 
-    const root_source = try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024));
+    const root_source = std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024)) catch |err| {
+        std.debug.print("error: unable to read input \"{s}\": {s}\n", .{ path, @errorName(err) });
+        return error.InputReadFailed;
+    };
     defer allocator.free(root_source);
 
     // `fmt` operates on the raw file (not the import-flattened source) and is token-preserving;
@@ -259,6 +262,7 @@ fn runMain(init: std.process.Init) !void {
 fn isExpectedCliFailure(err: anyerror) bool {
     return switch (err) {
         error.InvalidArgs,
+        error.InputReadFailed,
         error.ImportNotFound,
         error.FmtCheckFailed,
         error.LexFailed,
