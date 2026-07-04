@@ -68,6 +68,9 @@ const usage =
     \\  mcc symbols <file.mc>
     \\  mcc list-tests <file.mc>
     \\
+    \\input:
+    \\  Use <file.mc> for normal file input, or - to read MC source from stdin.
+    \\
     \\import fallback for installed layouts (source-loading commands only):
     \\  --std-dir=<dir>       after project-root search misses, resolve import "std/x.mc"
     \\                         as <dir>/x.mc.
@@ -117,12 +120,35 @@ const usage =
 // Generated artifacts (lowered HIR/IR/C, facts, verification reports) go to
 // stdout so they can be redirected with `>`; diagnostics and logs stay on stderr.
 var stdout_io: std.Io = undefined;
+const max_input_bytes = 64 * 1024 * 1024;
 
 fn writeStdout(bytes: []const u8) !void {
     std.Io.File.stdout().writeStreamingAll(stdout_io, bytes) catch |err| switch (err) {
         error.BrokenPipe => return,
         else => return err,
     };
+}
+
+fn readStdinAlloc(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
+    var stdin_reader: std.Io.File.Reader = .initStreaming(std.Io.File.stdin(), io, &.{});
+    return stdin_reader.interface.allocRemaining(allocator, .limited(max_input_bytes)) catch |err| switch (err) {
+        error.ReadFailed => {
+            if (stdin_reader.err) |read_err| return read_err;
+            return error.ReadFailed;
+        },
+        else => |e| return e,
+    };
+}
+
+fn readRootSource(io: std.Io, path: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    if (std.mem.eql(u8, path, "-")) return readStdinAlloc(io, allocator);
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_input_bytes));
+}
+
+fn stdinLoaderRootPath(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
+    var cwd_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const cwd_len = try std.Io.Dir.cwd().realPathFile(io, ".", &cwd_buffer);
+    return std.fs.path.join(allocator, &.{ cwd_buffer[0..cwd_len], "-" });
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -161,8 +187,14 @@ fn runMain(init: std.process.Init) !void {
     };
     const is_emit_layout = cli.Options.isEmitLayout(command);
     const is_emit_c_struct = cli.Options.isEmitCStruct(command);
+    const reads_stdin = std.mem.eql(u8, path, "-");
+    const loader_root_path = if (reads_stdin) stdinLoaderRootPath(init.io, allocator) catch |err| {
+        std.debug.print("error: unable to read input \"{s}\": {s}\n", .{ path, @errorName(err) });
+        return error.InputReadFailed;
+    } else path;
+    defer if (reads_stdin) allocator.free(loader_root_path);
 
-    const root_source = std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024)) catch |err| {
+    const root_source = readRootSource(init.io, path, allocator) catch |err| {
         std.debug.print("error: unable to read input \"{s}\": {s}\n", .{ path, @errorName(err) });
         return error.InputReadFailed;
     };
@@ -193,13 +225,17 @@ fn runMain(init: std.process.Init) !void {
             if (entry.len != 0) try mc_path_entries.append(allocator, entry);
         }
     }
-    const source = try loader.loadCombinedSourceWithBoundariesOptionsReport(allocator, init.io, path, root_source, &boundaries, .{
+    const source = try loader.loadCombinedSourceWithBoundariesOptionsReport(allocator, init.io, loader_root_path, root_source, &boundaries, .{
         .arch = options.arch_flag,
         .platform = options.platform_flag,
         .std_dir = options.std_dir,
         .mc_path = mc_path_entries.items,
     }, &load_diag);
     defer allocator.free(source);
+    if (reads_stdin and boundaries.items.len > 0) {
+        allocator.free(boundaries.items[0].path);
+        boundaries.items[0].path = try allocator.dupe(u8, path);
+    }
     load_diag.source = source;
     load_diag.file_boundaries = boundaries.items;
     if (load_diag.has_errors) {

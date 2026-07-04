@@ -3,6 +3,10 @@
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
+case "$MCC" in
+    /*) ;;
+    *) MCC="$PWD/$MCC" ;;
+esac
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -107,6 +111,7 @@ assert_stdout_contains "mcc build <file.mc> -o <exe>" "--help build command"
 assert_stdout_contains "--remap-prefix=FROM=TO" "--help remap-prefix option"
 assert_stdout_contains "--std-dir=<dir>" "--help installed std-dir option"
 assert_stdout_contains "MC_PATH=dir[:dir...]" "--help MC_PATH fallback"
+assert_stdout_contains "or - to read MC source from stdin" "--help stdin input"
 assert_stdout_contains "exit codes:" "--help exit-code section"
 assert_stderr_empty "--help"
 
@@ -176,10 +181,39 @@ set +e
 printf 'export fn main() -> u32 { return 0; }\n' | "$MCC" check - >"$OUT" 2>"$ERR"
 RC=$?
 set -e
-assert_rc 1 "stdin placeholder input"
-assert_stdout_empty "stdin placeholder input"
-assert_stderr_starts_with 'error: unable to read input "-": FileNotFound' "stdin placeholder input"
-assert_stderr_not_contains "error: FileNotFound" "raw stdin placeholder error"
-assert_stderr_not_contains "src/main.zig" "stdin placeholder Zig stack trace"
+assert_rc 0 "stdin input"
+assert_stdout_empty "stdin input"
+assert_stderr_contains "parsed 1 top-level declarations" "stdin input parse summary"
+
+cat >"$WORK/stdin_lib.mc" <<'MC'
+fn helper() -> u32 {
+    return 7;
+}
+MC
+set +e
+(cd "$WORK" && printf 'import "stdin_lib.mc";\nexport fn main() -> u32 { return helper(); }\n' | "$MCC" check - >"$OUT" 2>"$ERR")
+RC=$?
+set -e
+assert_rc 0 "stdin input with relative import"
+assert_stdout_empty "stdin input with relative import"
+assert_stderr_contains "parsed 2 top-level declarations" "stdin import parse summary"
+
+set +e
+printf 'export fn main() -> u32 { return nope; }\n' | "$MCC" check - >"$OUT" 2>"$ERR"
+RC=$?
+set -e
+assert_rc 1 "stdin diagnostic"
+assert_stdout_empty "stdin diagnostic"
+assert_stderr_contains "-:1:" "stdin diagnostic location"
+assert_stderr_contains "E_UNKNOWN_IDENTIFIER" "stdin diagnostic code"
+assert_stderr_not_contains "src/main.zig" "stdin diagnostic Zig stack trace"
+
+set +e
+"$MCC" check - </dev/null >"$OUT" 2>"$ERR"
+RC=$?
+set -e
+assert_rc 0 "empty stdin input"
+assert_stdout_empty "empty stdin input"
+assert_stderr_contains "parsed 0 top-level declarations" "empty stdin parse summary"
 
 echo "PASS: mcc-cli-test — help/version/usage transcripts are stable"
