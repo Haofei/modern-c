@@ -28,6 +28,10 @@ fn add_scalar(env: u32, x: u32) -> u32 {
     return env + x;
 }
 
+global saved_cb: closure(u32) -> u32;
+
+extern fn extern_accept_closure(cb: closure(u32) -> u32) -> void;
+
 fn accept_bind_and_call() -> u32 {
     var env: Env = .{ .base = 3 };
     let cb: closure(u32) -> u32 = bind(&env, add_env);
@@ -86,4 +90,38 @@ fn reject_return_bound_local_env() -> closure(u32) -> u32 {
     let cb: closure(u32) -> u32 = bind(&env, add_env);
     // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
     return cb;
+}
+
+fn reject_assign_bound_local_env_to_global() -> void {
+    var env: Env = .{ .base = 1 };
+    let cb: closure(u32) -> u32 = bind(&env, add_env);
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    saved_cb = cb;
+}
+
+fn reject_assign_bind_local_env_to_global() -> void {
+    var env: Env = .{ .base = 1 };
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    saved_cb = bind(&env, add_env);
+}
+
+fn reject_store_closure_param_to_global(cb: closure(u32) -> u32) -> void {
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    saved_cb = cb;
+}
+
+fn reject_pass_local_env_closure_to_extern() -> void {
+    var env: Env = .{ .base = 1 };
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    extern_accept_closure(bind(&env, add_env));
+}
+
+fn reject_identity_return_closure_param(cb: closure(u32) -> u32) -> closure(u32) -> u32 {
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return cb;
+}
+
+fn reject_return_through_identity() -> closure(u32) -> u32 {
+    var env: Env = .{ .base = 1 };
+    return reject_identity_return_closure_param(bind(&env, add_env));
 }

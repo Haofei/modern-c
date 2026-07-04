@@ -148,6 +148,7 @@ pub const UnionInfo = struct {
 pub const FunctionInfo = struct {
     params: []const ast.Param,
     return_ty: ?ast.TypeExpr,
+    is_extern: bool = false,
     no_lang_trap: bool = false,
     is_const: bool = false,
     // C2: this function is a sleepable op (`#[may_sleep]`) - calling it from an

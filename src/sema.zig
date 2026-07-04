@@ -824,6 +824,7 @@ pub const Checker = struct {
                     if (!functions.contains(fn_decl.name.text)) functions.put(fn_decl.name.text, .{
                         .params = fn_decl.params,
                         .return_ty = fn_decl.return_type,
+                        .is_extern = decl.kind == .extern_fn,
                         .no_lang_trap = hasNoLangTrap(decl.attrs),
                         .is_const = fn_decl.is_const,
                         .may_sleep = hasMaySleep(decl.attrs),
@@ -1341,7 +1342,9 @@ pub const Checker = struct {
             } else if (scope.contains(param.name.text)) {
                 self.errorCode(param.name.span, "E_DUPLICATE_PARAMETER", "function parameter names must be unique");
             } else {
-                scope.put(param.name.text, .{ .class = classifyTypeCtx(param.ty, sig_ctx), .mutable = false, .ty = param.ty, .origin = .param }) catch {
+                const param_class = classifyTypeCtx(param.ty, sig_ctx);
+                const param_address_origin: AddressOrigin = if (param_class == .closure) .local else .none;
+                scope.put(param.name.text, .{ .class = param_class, .mutable = false, .ty = param.ty, .origin = .param, .address_origin = param_address_origin }) catch {
                     self.oom = true;
                 };
                 // Params are live for the whole body, so a local may not shadow one (G20).
@@ -2440,6 +2443,16 @@ pub const Checker = struct {
         {
             self.errorCode(value.span, "E_BORROW_ESCAPES_SCOPE", "cannot store the address of local storage where it outlives the local's scope (the borrow would dangle)");
         }
+        if (assignmentTargetEscapesFunction(target, ctx)) {
+            if (target_class == .closure) {
+                if (closureLocalAddressRoot(value, ctx)) |span| {
+                    self.errorCode(span, "E_LOCAL_ADDRESS_ESCAPE", "cannot store a closure that captures local storage where it outlives the local's scope");
+                }
+            }
+            if (aggregateLocalAddressRoot(value, ctx)) |span| {
+                self.errorCode(span, "E_LOCAL_ADDRESS_ESCAPE", "cannot store a value that captures local storage where it outlives the local's scope");
+            }
+        }
         if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
@@ -2897,11 +2910,17 @@ pub const Checker = struct {
                     }
                     const source = self.checkExpr(arg, ctx);
                     if (direct_function) |function| {
-                        if (index < function.params.len) self.checkCallArgument(function.params[index].ty, arg, source, ctx);
+                        if (index < function.params.len) {
+                            if (function.is_extern) self.checkClosureArgumentDoesNotEscape(function.params[index].ty, arg, ctx, "cannot pass a closure that captures local storage to an extern function");
+                            self.checkCallArgument(function.params[index].ty, arg, source, ctx);
+                        }
                     }
                     if (fnptr_ty) |fpty| {
                         const sig = fpty.kind.fn_pointer;
-                        if (index < sig.params.len) self.checkCallArgument(sig.params[index], arg, source, ctx);
+                        if (index < sig.params.len) {
+                            self.checkClosureArgumentDoesNotEscape(sig.params[index], arg, ctx, "cannot pass a closure that captures local storage through an indirect function pointer call");
+                            self.checkCallArgument(sig.params[index], arg, source, ctx);
+                        }
                     }
                     if (closure_ty) |cty| {
                         const sig = cty.kind.closure_type;
@@ -4945,6 +4964,13 @@ pub const Checker = struct {
         const secret_checked = target == .secret and self.checkSecretWrapInitializer(target_ty, arg, ctx);
         if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, source)) {
             self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
+        }
+    }
+
+    fn checkClosureArgumentDoesNotEscape(self: *Checker, target_ty: ast.TypeExpr, arg: ast.Expr, ctx: Context, message: []const u8) void {
+        if (classifyTypeCtx(target_ty, ctx) != .closure) return;
+        if (closureLocalAddressRoot(arg, ctx)) |span| {
+            self.errorCode(span, "E_LOCAL_ADDRESS_ESCAPE", message);
         }
     }
 
