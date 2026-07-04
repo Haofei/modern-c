@@ -134,9 +134,9 @@ pub fn emitAtomicInitCall(ctx: EmitContext, call: anytype, locals: ?*std.StringH
 
 pub fn emitAtomicCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     const member = memberCallee(call.callee.*) orelse return false;
-    const payload = atomicLocalPayload(ctx, member.base.*, locals) orelse return false;
     const op = member.name.text;
     if (std.mem.eql(u8, op, "load")) {
+        _ = atomicLocalPayload(ctx, member.base.*, locals) orelse return false;
         const ordering = atomicOrderingArg(call.args, 0);
         if (!isAtomicLoadOrdering(ordering)) return false;
         const order_c = atomicOrderCConstant(ordering) orelse return false;
@@ -147,6 +147,7 @@ pub fn emitAtomicCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashM
     }
     if (std.mem.eql(u8, op, "store")) {
         if (call.args.len < 1) return false;
+        _ = atomicLocalPayload(ctx, member.base.*, locals) orelse return false;
         const ordering = atomicOrderingArg(call.args, 1);
         if (!isAtomicStoreOrdering(ordering)) return false;
         const order_c = atomicOrderCConstant(ordering) orelse return false;
@@ -159,6 +160,7 @@ pub fn emitAtomicCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashM
     }
     if (std.mem.eql(u8, op, "fetch_add") or std.mem.eql(u8, op, "fetch_sub")) {
         if (call.args.len < 1) return false;
+        const payload = atomicLocalPayload(ctx, member.base.*, locals) orelse return false;
         if (!isAtomicIntegerPayload(payload)) return false;
         const ordering = atomicOrderingArg(call.args, 1);
         const order_c = atomicOrderCConstant(ordering) orelse return false;
@@ -171,6 +173,21 @@ pub fn emitAtomicCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashM
         return true;
     }
     return false;
+}
+
+pub fn atomicResultPayload(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+    const member = memberCallee(call.callee.*) orelse return null;
+    const op = member.name.text;
+    if (!std.mem.eql(u8, op, "load") and
+        !std.mem.eql(u8, op, "fetch_add") and
+        !std.mem.eql(u8, op, "fetch_sub"))
+    {
+        return null;
+    }
+
+    const payload = atomicLocalPayload(ctx, member.base.*, locals) orelse return null;
+    if (!std.mem.eql(u8, op, "load") and !isAtomicIntegerPayload(payload)) return null;
+    return payload;
 }
 
 fn emitAtomicAddr(ctx: EmitContext, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !void {

@@ -2053,6 +2053,7 @@ const CEmitter = struct {
 
     fn emitCastSequencedArgTempForCall(ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        if (try self.emitAtomicCastSequencedCallArgTemp(arg, locals, target_ty)) |temp| return temp;
         return self.emitUncheckedAddValueTemp(arg, locals, target_ty, "call_arg");
     }
 
@@ -4346,12 +4347,46 @@ const CEmitter = struct {
 
     fn emitCallSequencedCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
         const call = callExpr(arg) orelse return null;
+        if (try self.emitAtomicResultValueTempFromCall(call, locals)) |temp| return temp;
         if (try lower_c_call.emitBitcastValueTempFromCall(self.sequencedArgContext(), call, locals)) |temp| return temp;
         if (try lower_c_call.emitExternNonNullCallValueTemp(self.sequencedArgContext(), &self.functions, arg, locals)) |temp| return temp;
         if (try lower_c_access.emitRawManyOffsetValueTempFromCall(self.accessEmitContext(), call, locals, target_ty)) |temp| return temp;
         if (try self.emitUncheckedAddValueTempFromCall(call, arg.span, locals, target_ty, "call_arg")) |temp| return temp;
         if (try self.emitNestedSequencedCallValueTemp(call, locals)) |temp| return temp;
         return null;
+    }
+
+    fn emitAtomicCastSequencedCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        const cast = switch (arg.kind) {
+            .cast => |node| node,
+            .grouped => |inner| return try self.emitAtomicCastSequencedCallArgTemp(inner.*, locals, target_ty),
+            else => return null,
+        };
+        const call = callExpr(cast.value.*) orelse return null;
+        const source_temp = (try self.emitAtomicResultValueTempFromCall(call, locals)) orelse return null;
+
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = (({s}){s});\n", .{
+            try self.cTypeFor(target_ty, .typedef_name),
+            temp_name,
+            try self.cTypeFor(cast.ty.*, .typedef_name),
+            source_temp.name,
+        });
+        return .{ .name = temp_name, .ty = target_ty };
+    }
+
+    fn emitAtomicResultValueTempFromCall(self: *CEmitter, call: ast_query.CallExpr, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
+        const return_ty = self.atomicResultReturnTypeForCall(call, locals) orelse return null;
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), temp_name });
+        if (!try lower_c_atomic.emitAtomicCall(self.atomicEmitContext(), call, locals)) return error.UnsupportedCEmission;
+        try self.out.appendSlice(self.allocator, ";\n");
+        return .{ .name = temp_name, .ty = return_ty };
     }
 
     fn emitNestedSequencedCallValueTemp(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
@@ -4583,16 +4618,8 @@ const CEmitter = struct {
     // (`atomic<u64>.fetch_add` -> `u64`), so inferred locals and compound
     // operands do not fall back to the C emitter's default `uint32_t`.
     fn atomicResultReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const member = memberCallee(call.callee.*) orelse return null;
-        if (!std.mem.eql(u8, member.name.text, "load") and
-            !std.mem.eql(u8, member.name.text, "fetch_add") and
-            !std.mem.eql(u8, member.name.text, "fetch_sub"))
-        {
-            return null;
-        }
-        const payload = self.atomicLocalPayload(member.base.*, locals) orelse return null;
-        if (!std.mem.eql(u8, member.name.text, "load") and !lower_c_atomic.isAtomicIntegerPayload(payload)) return null;
-        return simpleNameType(payload, member.name.span);
+        const payload = lower_c_atomic.atomicResultPayload(self.atomicEmitContext(), call, locals) orelse return null;
+        return simpleNameType(payload, call.callee.span);
     }
 
     // `<open-enum expr>.raw()` yields the enum's underlying representation type

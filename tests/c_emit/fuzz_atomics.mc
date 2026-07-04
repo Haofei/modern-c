@@ -5,7 +5,7 @@
 // __atomic_* builtins — so a single thread of well-ordered ops has a deterministic result
 // the two backends must agree on. Entry mode diffs the C and LLVM return value, so a
 // divergence in how either backend lowers an atomic op (operation, order, or the value in a
-// call-arg / inferred-local position) makes the outputs disagree.
+// call-arg / arithmetic-operand / inferred-local position) makes the outputs disagree.
 
 struct Counters {
     a: atomic<u32>,
@@ -53,12 +53,14 @@ export fn atomics_run() -> u32 {
     let f: u32 = c.flag.load(.acquire);
     if f == 0xABCD { acc = acc ^ 0x10000; }
 
-    // entry-mode contract: 1 = pass, 0 = fail (snapshot also catches both-backends-identical miscompiles).
-    if acc != 0x9E30_79BF { return 0; }
-    return 1;
+    // Nested atomic result expressions must lower through payload-typed temporaries
+    // before feeding compound C expressions.
+    let nested_call_arg: u32 = mix(c.a.load(.seq_cst)); // load as a call argument
+    let nested_add: u32 = c.a.fetch_add(2, .acq_rel) + 7; // fetch_add as arithmetic operand, prior 43
+    let nested_cast: u32 = (c.b.fetch_sub(1, .acq_rel) as u32) + c.a.load(.seq_cst); // casted fetch_sub operand: 1 + 45
+    acc = acc ^ nested_call_arg ^ nested_add ^ nested_cast;
 
-    // NOTE (C-backend parity follow-up, tracked in docs/lowering-coverage.md):
-    // nested atomic result expressions still need the same temp-hoisting policy as
-    // MMIO reads. This fixture keeps RMW results in statement-level inferred locals,
-    // which should lower to payload-typed C locals before they feed later expressions.
+    // entry-mode contract: 1 = pass, 0 = fail (snapshot also catches both-backends-identical miscompiles).
+    if acc != 0x7_004C { return 0; }
+    return 1;
 }

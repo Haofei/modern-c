@@ -126,18 +126,5 @@ priority, being adjacent to the known overlay-read miscompile.
 - **Atomics** (`atomicAccess` / order-synchronizes family) — `fuzz-atomics-test`
   (`tests/c_emit/fuzz_atomics.mc`). `atomic<T>` load/store/fetch_add/fetch_sub
   across all five memory orders, 32- and 64-bit, including inferred RMW result
-  locals for u64 and signed payloads. C and LLVM agree.
-
-## C-backend parity follow-ups (found while adding the atomics gate)
-
-The C backend still lacks the expression-position temp-hoisting that LLVM lowering
-effectively gets for nested atomic-result expressions. This is a parity gap with the
-MMIO read path, which already hoists reads in these positions:
-
-1. An atomic result nested directly inside a compound expression (as a call
-   argument or arithmetic operand), e.g. `mix(x.load(.acquire) + y)`.
-
-Fix direction: give atomic reads the same expression-position temp-hoisting the MMIO
-read path already has (`emitMmioRead*` in `src/lower_c.zig`). Until then, write
-atomic results into locals before using them in compound expressions. Inferred locals
-bound directly to atomic RMW results are covered by `fuzz_atomics.mc`.
+  locals for u64 and signed payloads plus nested result expressions in call
+  arguments, arithmetic operands, and casted arithmetic operands. C and LLVM agree.
