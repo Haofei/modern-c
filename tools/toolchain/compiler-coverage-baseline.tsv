@@ -1,4 +1,4 @@
 # source_set	min_files	min_function_labels	max_uncovered_functions
 # Ratchet for `bash tools/toolchain/compiler-coverage.sh --check`.
 # Update only when new uncovered functions are intentional or coverage improves.
-compiler	15	809	13
+compiler	15	809	12
