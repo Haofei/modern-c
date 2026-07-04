@@ -52,6 +52,11 @@ fn accept_context_typed_literal_arithmetic(a: u32) -> u32 {
     return a + 1;
 }
 
+fn reject_binary_operand_larger_than_u128(a: u32) -> u32 {
+    // EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE
+    return a + 340282366920938463463374607431768211456;
+}
+
 fn accept_same_type_comparison(a: i32, b: i32) -> bool {
     return a < b;
 }

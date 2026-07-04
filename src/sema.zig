@@ -5484,8 +5484,13 @@ pub const Checker = struct {
     }
 
     fn checkLiteralOperandAgainstClass(self: *Checker, expr: ast.Expr, target: TypeClass) void {
-        const value = integerLiteralValue(expr) orelse return;
         const bounds = checkedIntBounds(target) orelse return;
+        const value = integerLiteralValue(expr) orelse {
+            if (integerLiteralSyntaxOverflow(expr)) {
+                self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
+            }
+            return;
+        };
         if (value.negative) {
             if (!bounds.signed or value.magnitude > bounds.min_abs) {
                 self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
