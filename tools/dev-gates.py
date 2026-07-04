@@ -146,6 +146,94 @@ RULES: tuple[Rule, ...] = (
         "third-party license checker changes need the license manifest gate",
     ),
     Rule(
+        ("tools/toolchain/lowering-coverage.sh", "tools/toolchain/lowering-coverage-baseline.tsv", "docs/lowering-coverage.md"),
+        ("lowering-coverage",),
+        "lowering coverage ratchet changes need the lowering coverage gate",
+    ),
+    Rule(
+        ("tools/toolchain/compiler-coverage.sh", "tools/toolchain/compiler-coverage-baseline.tsv", "docs/compiler-coverage.md"),
+        ("compiler-coverage",),
+        "compiler coverage ratchet changes need the compiler coverage gate",
+    ),
+    Rule(
+        ("tools/toolchain/lowering-cov-instrument.py",),
+        ("lowering-coverage", "compiler-coverage"),
+        "shared coverage instrumentation changes need both coverage ratchets",
+    ),
+    Rule(
+        ("tools/toolchain/mc-audit.sh",),
+        ("unsafe-audit", "double-fetch-audit", "taint-audit"),
+        "shared MC audit changes need every security audit mode",
+    ),
+    Rule(
+        ("tools/toolchain/unsafe-audit.sh",),
+        (),
+        "unsafe audit shim changes need the shim self-test because the Zig gate calls mc-audit directly",
+        ("bash tools/toolchain/unsafe-audit.sh --self-test 2>&1 | rg '^VIOLATION '",),
+    ),
+    Rule(
+        ("docs/unsafe-boundary.md",),
+        ("unsafe-audit",),
+        "unsafe-boundary docs need the unsafe audit gate",
+    ),
+    Rule(
+        ("tools/toolchain/double-fetch-audit.sh",),
+        (),
+        "double-fetch audit shim changes need the shim self-test because the Zig gate calls mc-audit directly",
+        ("bash tools/toolchain/double-fetch-audit.sh --self-test 2>&1 | rg '^DOUBLE-FETCH '",),
+    ),
+    Rule(
+        ("tools/toolchain/taint-audit.sh",),
+        (),
+        "taint audit shim changes need the shim self-test because the Zig gate calls mc-audit directly",
+        ("bash tools/toolchain/taint-audit.sh --self-test 2>&1 | rg '^TAINT '",),
+    ),
+    Rule(
+        ("tools/check/abi-consistency-test.sh",),
+        ("abi-consistency-test",),
+        "ABI consistency checker changes need the ABI consistency gate",
+    ),
+    Rule(
+        ("tools/check/arch-emit-test.sh",),
+        ("arch-emit-test",),
+        "arch emission checker changes need the arch emission gate",
+    ),
+    Rule(
+        ("docs/std-api.md",),
+        ("std-api-docs-test",),
+        "generated stdlib API docs need the std API docs gate",
+    ),
+    Rule(
+        ("docs/vendoring.md",),
+        ("vendoring-test",),
+        "vendoring process docs need the vendoring provenance gate",
+    ),
+    Rule(
+        ("THIRD-PARTY-LICENSES.md",),
+        ("third-party-licenses-test",),
+        "aggregated third-party license docs need the license manifest gate",
+    ),
+    Rule(
+        ("third_party/*/README.vendored.md",),
+        ("vendoring-test", "third-party-licenses-test"),
+        "vendored dependency metadata changes need provenance and license manifest gates",
+    ),
+    Rule(
+        ("third_party/*/LICENSE", "third_party/*/LICENSE.md", "third_party/*/LICENSE.txt", "third_party/*/COPYING"),
+        ("vendoring-test", "third-party-licenses-test"),
+        "vendored license changes need provenance and license manifest gates",
+    ),
+    Rule(
+        ("tools/toolchain/abi-test.sh", "tests/toolchain/abi_layout.mc"),
+        ("abi-test",),
+        "ABI layout harness changes need the ABI layout gate",
+    ),
+    Rule(
+        ("tools/toolchain/asm-targets-test.sh", "tests/toolchain/asm_targets.mc"),
+        ("asm-targets-test",),
+        "asm target harness changes need the asm target gate",
+    ),
+    Rule(
         (".github/workflows/ci.yml", "Dockerfile", "docker-compose.yml", "tools/preflight.sh"),
         ("preflight", "release-metadata-test", "ci-pass-gates-test"),
         "toolchain and CI changes need pinned-toolchain metadata plus preflight",
@@ -212,6 +300,51 @@ RULES: tuple[Rule, ...] = (
         "LLVM C-object sweep script changes need the C-emission object sweep",
     ),
     Rule(
+        ("tools/mem/heap-bench.sh",),
+        ("heap-bench", "llvm-heap-bench"),
+        "heap benchmark wrapper changes need its C and LLVM benchmark gates",
+    ),
+    Rule(
+        ("tools/proc/sched-bench.sh",),
+        ("sched-bench", "llvm-sched-bench"),
+        "scheduler benchmark wrapper changes need its C and LLVM benchmark gates",
+    ),
+    Rule(
+        ("tools/mem/uaccess-bench.sh",),
+        ("uaccess-bench", "llvm-uaccess-bench"),
+        "uaccess benchmark wrapper changes need its C and LLVM benchmark gates",
+    ),
+    Rule(
+        ("tools/proc/kmain-test.sh",),
+        ("kmain-test", "llvm-kmain-test"),
+        "integrated kernel wrapper changes need its C and LLVM boot gates",
+    ),
+    Rule(
+        ("tools/net/kmain-net-test.sh",),
+        ("kmain-net-test", "llvm-kmain-net-test"),
+        "integrated network kernel wrapper changes need its C and LLVM boot gates",
+    ),
+    Rule(
+        ("tools/arch/aarch64-test.sh",),
+        ("aarch64-test", "llvm-aarch64-test"),
+        "aarch64 wrapper changes need its C and LLVM architecture gates",
+    ),
+    Rule(
+        ("tools/arch/qemu-mmio-test.sh",),
+        ("qemu-test", "llvm-qemu-test"),
+        "typed-MMIO QEMU wrapper changes need its C and LLVM QEMU gates",
+    ),
+    Rule(
+        ("tools/lang/qjs-agent-smoke-test.sh",),
+        ("qjs-agent-smoke-test", "llvm-qjs-agent-smoke-test"),
+        "QuickJS agent smoke wrapper changes need its C and LLVM smoke gates",
+    ),
+    Rule(
+        ("tools/qemu/kernel-boot-lib.sh",),
+        ("preflight", "riscv-qemu-validation"),
+        "shared QEMU boot library changes need toolchain preflight and the RISC-V QEMU validation surrogate",
+    ),
+    Rule(
         ("docs/**/*.md", "docs/*.md", "*.md"),
         (),
         "generic documentation changes need whitespace/patch sanity, not compiler execution",
@@ -252,6 +385,15 @@ RULES: tuple[Rule, ...] = (
         ("kernel/**/*", "std/**/*", "tests/qemu/**/*", "tools/arch/*", "tools/proc/*", "tools/mem/*", "tools/net/*", "tools/fs/*"),
         ("fast", "riscv-qemu-validation"),
         "kernel/std/QEMU changes need host confidence plus the focused RISC-V board surrogate",
+        excludes=(
+            "tools/arch/aarch64-test.sh",
+            "tools/arch/qemu-mmio-test.sh",
+            "tools/proc/kmain-test.sh",
+            "tools/proc/sched-bench.sh",
+            "tools/mem/heap-bench.sh",
+            "tools/mem/uaccess-bench.sh",
+            "tools/net/kmain-net-test.sh",
+        ),
     ),
 )
 

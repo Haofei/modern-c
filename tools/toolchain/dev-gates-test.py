@@ -114,6 +114,53 @@ def main() -> None:
     assert_gates(module, ["tools/toolchain/std-api-docs.py"], ["std-api-docs-test"])
     assert_gates(module, ["tools/toolchain/vendoring-test.py"], ["vendoring-test"])
     assert_gates(module, ["tools/toolchain/third-party-licenses-test.py"], ["third-party-licenses-test"])
+    assert_gates(module, ["tools/toolchain/lowering-coverage.sh"], ["lowering-coverage"])
+    assert_gates(module, ["tools/toolchain/lowering-coverage-baseline.tsv"], ["lowering-coverage"])
+    assert_route(module, ["docs/lowering-coverage.md"], ["lowering-coverage"], ["git diff --check"])
+    assert_gates(module, ["tools/toolchain/compiler-coverage.sh"], ["compiler-coverage"])
+    assert_gates(module, ["tools/toolchain/compiler-coverage-baseline.tsv"], ["compiler-coverage"])
+    assert_route(module, ["docs/compiler-coverage.md"], ["compiler-coverage"], ["git diff --check"])
+    assert_gates(module, ["tools/toolchain/lowering-cov-instrument.py"], ["lowering-coverage", "compiler-coverage"])
+    assert_gates(module, ["tools/toolchain/mc-audit.sh"], ["unsafe-audit", "double-fetch-audit", "taint-audit"])
+    assert_checks(
+        module,
+        ["tools/toolchain/unsafe-audit.sh"],
+        ["bash tools/toolchain/unsafe-audit.sh --self-test 2>&1 | rg '^VIOLATION '"],
+    )
+    assert_route(module, ["docs/unsafe-boundary.md"], ["unsafe-audit"], ["git diff --check"])
+    assert_checks(
+        module,
+        ["tools/toolchain/double-fetch-audit.sh"],
+        ["bash tools/toolchain/double-fetch-audit.sh --self-test 2>&1 | rg '^DOUBLE-FETCH '"],
+    )
+    assert_checks(
+        module,
+        ["tools/toolchain/taint-audit.sh"],
+        ["bash tools/toolchain/taint-audit.sh --self-test 2>&1 | rg '^TAINT '"],
+    )
+    assert_gates(module, ["tools/check/abi-consistency-test.sh"], ["abi-consistency-test"])
+    assert_gates(module, ["tools/check/arch-emit-test.sh"], ["arch-emit-test"])
+    assert_route(module, ["docs/std-api.md"], ["std-api-docs-test"], ["git diff --check"])
+    assert_route(module, ["docs/vendoring.md"], ["vendoring-test"], ["git diff --check"])
+    assert_route(module, ["THIRD-PARTY-LICENSES.md"], ["third-party-licenses-test"], ["git diff --check"])
+    assert_route(
+        module,
+        ["third_party/quickjs/README.vendored.md"],
+        ["vendoring-test", "third-party-licenses-test"],
+        ["git diff --check"],
+    )
+    assert_gates(module, ["third_party/quickjs/LICENSE"], ["vendoring-test", "third-party-licenses-test"])
+    assert_route(
+        module,
+        ["third_party/openlibm/LICENSE.md"],
+        ["vendoring-test", "third-party-licenses-test"],
+        ["git diff --check"],
+    )
+    assert_gates(module, ["third_party/bearssl/LICENSE.txt"], ["vendoring-test", "third-party-licenses-test"])
+    assert_gates(module, ["tools/toolchain/abi-test.sh"], ["abi-test"])
+    assert_gates(module, ["tests/toolchain/abi_layout.mc"], ["abi-test"])
+    assert_gates(module, ["tools/toolchain/asm-targets-test.sh"], ["asm-targets-test"])
+    assert_gates(module, ["tests/toolchain/asm_targets.mc"], ["asm-targets-test"])
     assert_gates(module, ["tools/toolchain/spec-emit-sweep.py"], ["test-lint", "sweep"])
     assert_gates(module, ["tools/toolchain/spec-llvm-sweep.py"], ["test-lint", "llvm-sweep"])
     assert_gates(module, ["tools/toolchain/spec-llvm-obj-sweep.py"], ["test-lint", "llvm-spec-obj-sweep"])
@@ -125,6 +172,19 @@ def main() -> None:
     )
     assert_gates(module, ["tools/toolchain/llvm-c-emit-sweep.py"], ["llvm-c-sweep"])
     assert_gates(module, ["tools/toolchain/llvm-c-obj-sweep.py"], ["llvm-c-obj-sweep"])
+    assert_gates(module, ["tools/mem/heap-bench.sh"], ["heap-bench", "llvm-heap-bench"])
+    assert_gates(module, ["tools/proc/sched-bench.sh"], ["sched-bench", "llvm-sched-bench"])
+    assert_gates(module, ["tools/mem/uaccess-bench.sh"], ["uaccess-bench", "llvm-uaccess-bench"])
+    assert_gates(module, ["tools/proc/kmain-test.sh"], ["kmain-test", "llvm-kmain-test"])
+    assert_gates(module, ["tools/net/kmain-net-test.sh"], ["kmain-net-test", "llvm-kmain-net-test"])
+    assert_gates(module, ["tools/arch/aarch64-test.sh"], ["aarch64-test", "llvm-aarch64-test"])
+    assert_gates(module, ["tools/arch/qemu-mmio-test.sh"], ["qemu-test", "llvm-qemu-test"])
+    assert_gates(
+        module,
+        ["tools/lang/qjs-agent-smoke-test.sh"],
+        ["qjs-agent-smoke-test", "llvm-qjs-agent-smoke-test"],
+    )
+    assert_gates(module, ["tools/qemu/kernel-boot-lib.sh"], ["preflight", "riscv-qemu-validation"])
 
     print("PASS: dev-gates-test - routing contracts are stable")
 
