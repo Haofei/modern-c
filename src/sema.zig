@@ -3242,6 +3242,7 @@ pub const Checker = struct {
                 if (base_class != .c_void_pointer and
                     base_class != .user_ptr and
                     !isMmioRegisterTarget(expr, ctx) and
+                    !isKnownAtomicOperationMember(node, ctx) and
                     !isMaybeUninitOperationMember(node, ctx) and
                     !isResidueOperationMember(node, ctx) and
                     !isEnumRawOperationMember(node, ctx))
@@ -7178,6 +7179,15 @@ fn isAtomicOperationMember(member: anytype, ctx: Context) bool {
     if (isIdentNamed(member.base.*, "atomic")) return std.mem.eql(u8, member.name.text, "init");
     _ = atomicPayloadTypeForValue(member.base.*, ctx) orelse return false;
     return true;
+}
+
+fn isKnownAtomicOperationMember(member: anytype, ctx: Context) bool {
+    if (isIdentNamed(member.base.*, "atomic")) return std.mem.eql(u8, member.name.text, "init");
+    _ = atomicPayloadTypeForValue(member.base.*, ctx) orelse return false;
+    return std.mem.eql(u8, member.name.text, "load") or
+        std.mem.eql(u8, member.name.text, "store") or
+        std.mem.eql(u8, member.name.text, "fetch_add") or
+        std.mem.eql(u8, member.name.text, "fetch_sub");
 }
 
 fn isMaybeUninitOperationMember(member: anytype, ctx: Context) bool {

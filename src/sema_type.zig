@@ -492,6 +492,7 @@ pub fn resultPayloadType(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
 
 pub fn atomicPayloadType(ty: ast.TypeExpr) ?ast.TypeExpr {
     return switch (ty.kind) {
+        .pointer => |node| atomicPayloadType(node.child.*),
         .generic => |node| {
             if (!std.mem.eql(u8, node.base.text, "atomic") or node.args.len != 1) return null;
             return node.args[0];

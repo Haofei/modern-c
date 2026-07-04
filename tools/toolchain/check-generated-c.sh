@@ -29,6 +29,24 @@ for fixture in $fixture_glob; do
         cat "$err" >&2
         exit 1
     fi
+    if [ "$base" = "string_literals" ]; then
+        grep -Fq '"tri\?\?/graph"' "$out" || {
+            echo "FAIL: c-test — string_literals.mc did not escape '?' to avoid C trigraph spelling" >&2
+            exit 1
+        }
+        grep -Fq '"A\000B"' "$out" || {
+            echo "FAIL: c-test — string_literals.mc did not emit canonical NUL escape spelling" >&2
+            exit 1
+        }
+        grep -Fq '.len = 3' "$out" || {
+            echo "FAIL: c-test — string_literals.mc did not preserve decoded byte length for slice literal" >&2
+            exit 1
+        }
+        if grep -Fq '"tri??/graph"' "$out"; then
+            echo "FAIL: c-test — string_literals.mc leaked raw trigraph spelling" >&2
+            exit 1
+        fi
+    fi
     clang -std=c11 -Wall -Wextra -Werror -fsyntax-only "$out"
     pass=$((pass + 1))
 done

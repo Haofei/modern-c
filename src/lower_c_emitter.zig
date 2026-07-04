@@ -3880,14 +3880,58 @@ const CEmitter = struct {
             const ptr_type = try self.pointerTypeForSliceElement(child, mutability);
             const len = ast_query.stringLiteralByteLen(literal) orelse return error.UnsupportedCEmission;
             try self.out.print(self.allocator, "(({s}){{ .ptr = ({s})", .{ slice_name, ptr_type });
-            try self.out.appendSlice(self.allocator, literal);
+            try self.emitCStringLiteral(literal);
             try self.out.print(self.allocator, ", .len = {d} }})", .{len});
             return;
         }
         if (!isStringLiteralTarget(resolved)) return error.UnsupportedCEmission;
         try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(target, .typedef_name)});
-        try self.out.appendSlice(self.allocator, literal);
+        try self.emitCStringLiteral(literal);
         try self.out.appendSlice(self.allocator, ")");
+    }
+
+    fn emitCStringLiteral(self: *CEmitter, literal: []const u8) !void {
+        if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return error.UnsupportedCEmission;
+        try self.out.append(self.allocator, '"');
+        var i: usize = 1;
+        while (i + 1 < literal.len) : (i += 1) {
+            const byte = if (literal[i] == '\\') blk: {
+                i += 1;
+                if (i + 1 >= literal.len) return error.UnsupportedCEmission;
+                break :blk switch (literal[i]) {
+                    '\\' => @as(u8, '\\'),
+                    '\'' => @as(u8, '\''),
+                    '"' => @as(u8, '"'),
+                    '0' => @as(u8, 0),
+                    'n' => @as(u8, '\n'),
+                    'r' => @as(u8, '\r'),
+                    't' => @as(u8, '\t'),
+                    else => return error.UnsupportedCEmission,
+                };
+            } else literal[i];
+            try self.emitCStringByte(byte);
+        }
+        try self.out.append(self.allocator, '"');
+    }
+
+    fn emitCStringByte(self: *CEmitter, byte: u8) !void {
+        switch (byte) {
+            '\\' => try self.out.appendSlice(self.allocator, "\\\\"),
+            '"' => try self.out.appendSlice(self.allocator, "\\\""),
+            '\'' => try self.out.appendSlice(self.allocator, "\\'"),
+            '?' => try self.out.appendSlice(self.allocator, "\\?"),
+            0 => try self.out.appendSlice(self.allocator, "\\000"),
+            '\n' => try self.out.appendSlice(self.allocator, "\\n"),
+            '\r' => try self.out.appendSlice(self.allocator, "\\r"),
+            '\t' => try self.out.appendSlice(self.allocator, "\\t"),
+            32...33, 35...38, 40...62, 64...91, 93...126 => try self.out.append(self.allocator, byte),
+            else => {
+                try self.out.append(self.allocator, '\\');
+                try self.out.append(self.allocator, '0' + ((byte >> 6) & 0x07));
+                try self.out.append(self.allocator, '0' + ((byte >> 3) & 0x07));
+                try self.out.append(self.allocator, '0' + (byte & 0x07));
+            },
+        }
     }
 
     // If `target_ty` is `*dyn Trait`, emit the checked fat-pointer coercion from a `*T`
