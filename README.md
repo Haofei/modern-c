@@ -118,6 +118,17 @@ The repo is bind-mounted live; `.zig-cache` and `zig-out` are container-local vo
 so host (e.g. macOS) artifacts never mix with the Linux build. With the toolchain on
 your `PATH`, the same gates run natively as `zig build <step>`.
 
+For a reduced inner-loop gate set based on the files you changed:
+
+```sh
+tools/dev-gates.py                 # staged + unstaged + untracked changes
+tools/dev-gates.py --base origin/master
+tools/dev-gates.py src/sema.zig tests/spec/no_implicit_conversion.mc
+```
+
+This is a development-time selector. It prints focused gates plus the broader
+confidence and truth gates; `zig build m0` remains the release/production claim.
+
 ### LLVM Support Matrix
 
 | Environment | Qualified LLVM | Support status |

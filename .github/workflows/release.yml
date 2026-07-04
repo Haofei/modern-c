@@ -40,6 +40,13 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: editors/vscode/package-lock.json
+      - name: Install release qualification tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18 llvm-18 qemu-system-arm qemu-system-misc qemu-system-x86
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
 
       - name: Derive release metadata
         id: meta
@@ -66,6 +73,13 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"
+
+      - name: Run release workflow qualification checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          zig build preflight
+          zig build release-metadata-test package-release-test
 
       - name: Build ReleaseSafe release tarballs
         shell: bash

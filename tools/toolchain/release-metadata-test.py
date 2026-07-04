@@ -238,6 +238,13 @@ def require_release_artifact_metadata() -> None:
         "actions/checkout@v4",
         "mlugg/setup-zig@v2",
         f"version: {EXPECTED_ZIG_VERSION}",
+        "Install release qualification tools",
+        f"clang-{EXPECTED_LLVM_MAJOR} lld-{EXPECTED_LLVM_MAJOR} llvm-{EXPECTED_LLVM_MAJOR}",
+        "qemu-system-arm qemu-system-misc qemu-system-x86",
+        f"/usr/lib/llvm-{EXPECTED_LLVM_MAJOR}/bin",
+        "Run release workflow qualification checks",
+        "zig build preflight",
+        "zig build release-metadata-test package-release-test",
         "tools/ci/package-release.py release",
         "--version",
         "--commit \"$GITHUB_SHA\"",
@@ -263,6 +270,10 @@ def require_release_artifact_metadata() -> None:
         fail(f"{workflow_path} must not use ubuntu-latest for release artifacts")
     if "softprops/action-gh-release" in workflow or "ncipollo/release-action" in workflow:
         fail(f"{workflow_path} must use gh release upload instead of a release action")
+    qualification_step = workflow.find("Run release workflow qualification checks")
+    package_step = workflow.find("Build ReleaseSafe release tarballs")
+    if qualification_step < 0 or package_step < 0 or qualification_step > package_step:
+        fail(f"{workflow_path} must run release qualification checks before building release tarballs")
 
     for target in EXPECTED_RELEASE_TARGETS:
         require_contains(workflow_path, target)
@@ -314,6 +325,10 @@ def require_release_artifact_metadata() -> None:
         "release inventory",
         "CycloneDX SBOM",
         "artifact attestations",
+        "publishing path proves",
+        "zig build preflight",
+        "release-metadata-test",
+        "package-release-test",
         "actions/attest",
         "subject-checksums",
         "gh attestation verify",
