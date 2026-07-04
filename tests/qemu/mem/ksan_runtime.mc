@@ -147,7 +147,7 @@ export fn mc_ksan_check(addr: usize, size: usize) -> void {
 }
 
 // Arm the shadow for [base, base+len): everything addressable (clean) to start.
-fn mc_ksan_arm(base: usize, len: usize) -> void {
+fn ksan_arm_shadow(base: usize, len: usize) -> void {
     shadow_arm(base, len, SHADOW_CLEAN);
 }
 
@@ -158,7 +158,7 @@ export fn m_main() -> void {
     put_str("ksan demo booting (M-mode)\n");
 
     // 1. Clean path: alloc/use-in-bounds/free with the shadow armed -> no trap.
-    mc_ksan_arm(pool_base(), POOL_BYTES);
+    ksan_arm_shadow(pool_base(), POOL_BYTES);
     let clean: u32 = ksan_clean(pool_base(), POOL_BYTES);
     if clean == 1 {
         put_str("KASAN-OK\n"); // clean in-bounds use, nothing poisoned was accessed
@@ -171,32 +171,32 @@ export fn m_main() -> void {
 
     if sc == 4 {
         // FIELD: UAF through a STRUCT FIELD (not raw.load): `node.value` of freed memory traps.
-        mc_ksan_arm(pool_base(), POOL_BYTES);
+        ksan_arm_shadow(pool_base(), POOL_BYTES);
         put_str("field-uaf: reading freed node.value (struct-field load)...\n");
         let _u: u32 = ksan_field_uaf(pool_base(), POOL_BYTES);
         put_str("FIELD-UAF-MISSED\n");
     } else if sc == 5 {
         // FIELD_STORE: pointer struct-field STORE to freed memory (documented MISS).
-        mc_ksan_arm(pool_base(), POOL_BYTES);
+        ksan_arm_shadow(pool_base(), POOL_BYTES);
         put_str("field-store: writing freed node.value (struct-field store)...\n");
         let _u: u32 = ksan_field_store(pool_base(), POOL_BYTES);
         put_str("FIELD-STORE-MISSED\n");
     } else if sc == 6 {
         // ARR_LOAD: array-index LOAD of freed memory (through a struct-field array).
-        mc_ksan_arm(pool_base(), POOL_BYTES);
+        ksan_arm_shadow(pool_base(), POOL_BYTES);
         put_str("arr-load: reading freed a.cells[3] (array-index load)...\n");
         let _u: u32 = ksan_arr_load(pool_base(), POOL_BYTES);
         put_str("ARR-LOAD-MISSED\n");
     } else if sc == 7 {
         // ARR_STORE: array-index STORE to freed memory (documented MISS).
-        mc_ksan_arm(pool_base(), POOL_BYTES);
+        ksan_arm_shadow(pool_base(), POOL_BYTES);
         put_str("arr-store: writing freed a.cells[3] (array-index store)...\n");
         let _u: u32 = ksan_arr_store(pool_base(), POOL_BYTES);
         put_str("ARR-STORE-MISSED\n");
     } else if sc == 8 {
         // GLOBAL_LOAD: scalar GLOBAL load. Arm+poison the shadow over &ksan_global, then read.
         let g: usize = ksan_global_address();
-        mc_ksan_arm(g, POOL_BYTES);
+        ksan_arm_shadow(g, POOL_BYTES);
         mc_ksan_poison(g, 4); // poison the 4 bytes of the global
         put_str("global-load: reading poisoned global (mc_race_load)...\n");
         let _u: u32 = ksan_global_load();
@@ -204,33 +204,33 @@ export fn m_main() -> void {
     } else if sc == 9 {
         // GLOBAL_STORE: scalar GLOBAL store. Arm+poison &ksan_global, then write.
         let g: usize = ksan_global_address();
-        mc_ksan_arm(g, POOL_BYTES);
+        ksan_arm_shadow(g, POOL_BYTES);
         mc_ksan_poison(g, 4);
         put_str("global-store: writing poisoned global (mc_race_store)...\n");
         let _u: u32 = ksan_global_store();
         put_str("GLOBAL-STORE-MISSED\n");
     } else if sc == 10 {
         // STACK_LOCAL: stack local access (documented MISS).
-        mc_ksan_arm(pool_base(), POOL_BYTES);
+        ksan_arm_shadow(pool_base(), POOL_BYTES);
         put_str("stack-local: read/write of an uninstrumented stack local...\n");
         let _u: u32 = ksan_stack_local();
         put_str("STACK-LOCAL-MISSED\n");
     } else if sc == 11 {
         // OUTSIDE_POOL: UAF on memory the shadow does NOT cover (documented fail-open). Arm the
         // shadow over the TOP half of the pool; the heap lives in the bottom half (the arg given).
-        mc_ksan_arm(pool_base() + (POOL_BYTES / 2), POOL_BYTES / 2);
+        ksan_arm_shadow(pool_base() + (POOL_BYTES / 2), POOL_BYTES / 2);
         put_str("outside-pool: UAF read on memory outside the armed shadow...\n");
         let _u: u32 = ksan_outside_pool(pool_base(), POOL_BYTES / 2);
         put_str("OUTSIDE-POOL-MISSED\n");
     } else if sc == 3 {
         // OOB: a read one past the user region (a poisoned redzone byte) traps.
-        mc_ksan_arm(pool_base(), POOL_BYTES);
+        ksan_arm_shadow(pool_base(), POOL_BYTES);
         put_str("oob: reading one past allocation...\n");
         let _u: u32 = ksan_oob(pool_base(), POOL_BYTES);
         put_str("OOB-MISSED\n");
     } else {
         // Default (sc == 2): use-after-free — a read of freed (poisoned) memory traps.
-        mc_ksan_arm(pool_base(), POOL_BYTES);
+        ksan_arm_shadow(pool_base(), POOL_BYTES);
         put_str("uaf: reading freed memory...\n");
         let _u: u32 = ksan_uaf(pool_base(), POOL_BYTES);
         put_str("UAF-MISSED\n");

@@ -214,10 +214,24 @@ const atomicPayloadType = sema_type.atomicPayloadType;
 
 fn isCBackendReservedTopLevelName(kind: ast.Decl.Kind, name: []const u8) bool {
     if (isCBackendRuntimeHelperName(name) or isCBackendGeneratedTopLevelValueName(name)) return true;
+    if (!declAllowsReservedCBackendPrefix(kind) and isReservedCBackendPrefixName(name)) return true;
     // Value-level C keywords are sanitized by C emission, but C prelude/header names
     // and nominal declarations still share generated C namespaces.
     if (isValueLevelDecl(kind)) return isCBackendReservedHeaderName(name);
     return isCBackendReservedExactName(name);
+}
+
+fn declAllowsReservedCBackendPrefix(kind: ast.Decl.Kind) bool {
+    return switch (kind) {
+        .extern_fn => true,
+        .fn_decl => |fn_decl| fn_decl.exported,
+        .global_decl => |global| global.exported or global.is_extern,
+        else => false,
+    };
+}
+
+fn isReservedCBackendPrefixName(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "mc_") or std.mem.startsWith(u8, name, "MC_");
 }
 
 fn isCBackendReservedLocalName(name: []const u8) bool {

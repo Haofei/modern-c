@@ -1395,8 +1395,8 @@ class Gen:
             # Semantics-preserving variant: the digest body runs in a non-exported helper that
             # `harness` calls (so it must produce the identical result). Exercises whole-program
             # extraction / call-ABI / inlining differently from the inline body.
-            return (header + "\n".join(decls) + "\nfn mc_meta_body() -> u64 {\n" + body
-                    + "\n}\nexport fn harness() -> u64 {\n    return mc_meta_body();\n}\n")
+            return (header + "\n".join(decls) + "\nfn meta_body() -> u64 {\n" + body
+                    + "\n}\nexport fn harness() -> u64 {\n    return meta_body();\n}\n")
         return header + "\n".join(decls) + "\nexport fn harness() -> u64 {\n" + body + "\n}\n"
 
 

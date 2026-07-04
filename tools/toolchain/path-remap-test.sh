@@ -24,9 +24,20 @@ LOGICAL_ROOT="/mc/release-src"
 REMAPPED_PATH="$LOGICAL_ROOT/project/main.mc"
 C_OUT="$WORK/out.c"
 MAP_OUT="$WORK/out.mcmap"
+C_STDOUT="$WORK/emit-c.stdout"
+MAP_STDOUT="$WORK/emit-map.stdout"
 
-"$MCC" emit-c "$SRC" --remap-prefix="$RAW_ROOT=$LOGICAL_ROOT" >"$C_OUT"
-"$MCC" emit-map "$SRC" --remap-prefix="$RAW_ROOT=$LOGICAL_ROOT" >"$MAP_OUT"
+"$MCC" emit-c "$SRC" --remap-prefix="$RAW_ROOT=$LOGICAL_ROOT" -o "$C_OUT" >"$C_STDOUT"
+"$MCC" emit-map "$SRC" --remap-prefix="$RAW_ROOT=$LOGICAL_ROOT" -o "$MAP_OUT" >"$MAP_STDOUT"
+
+if [ -s "$C_STDOUT" ] || [ -s "$MAP_STDOUT" ]; then
+    echo "FAIL: path-remap-test — -o artifact emission wrote stdout"
+    echo "emit-c stdout:"
+    cat "$C_STDOUT"
+    echo "emit-map stdout:"
+    cat "$MAP_STDOUT"
+    exit 1
+fi
 
 if grep -Fq "$RAW_ROOT" "$C_OUT"; then
     echo "FAIL: path-remap-test — emitted C leaked raw temp source prefix"

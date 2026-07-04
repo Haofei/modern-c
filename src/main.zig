@@ -61,10 +61,10 @@ const usage =
     \\  mcc verify <file.mc> [--checks=all|elide-proven]
     \\  mcc lower-ir <file.mc>
     \\  mcc lower-c <file.mc>
-    \\  mcc emit-c <file.mc> [--profile=kernel|hosted] [--checks=all|elide-proven] [--stub-asm] [--remap-prefix=FROM=TO]
+    \\  mcc emit-c <file.mc> [-o <out.c>] [--profile=kernel|hosted] [--checks=all|elide-proven] [--stub-asm] [--remap-prefix=FROM=TO]
     \\  mcc build <file.mc> -o <exe>
-    \\  mcc emit-map <file.mc> [--profile=kernel|hosted] [--remap-prefix=FROM=TO]
-    \\  mcc emit-llvm <file.mc> [--checks=all|elide-proven] [--stub-asm]
+    \\  mcc emit-map <file.mc> [-o <out.mcmap>] [--profile=kernel|hosted] [--remap-prefix=FROM=TO]
+    \\  mcc emit-llvm <file.mc> [-o <out.ll>] [--checks=all|elide-proven] [--stub-asm]
     \\  mcc emit-layout <file.mc> --structs=A,B,C
     \\  mcc emit-c-struct <file.mc> --structs=A,B,C
     \\  mcc fmt <file.mc> [--check]
@@ -122,7 +122,8 @@ const usage =
 ;
 
 // Generated artifacts (lowered HIR/IR/C, facts, verification reports) go to
-// stdout so they can be redirected with `>`; diagnostics and logs stay on stderr.
+// stdout unless a command-specific output path is provided; diagnostics and logs
+// stay on stderr.
 var stdout_io: std.Io = undefined;
 const max_input_bytes = 64 * 1024 * 1024;
 
@@ -131,6 +132,23 @@ fn writeStdout(bytes: []const u8) !void {
         error.BrokenPipe => return,
         else => return err,
     };
+}
+
+fn writeOutputPath(path: []const u8, bytes: []const u8) !void {
+    const file = std.Io.Dir.cwd().createFile(stdout_io, path, .{ .truncate = true }) catch |err| {
+        std.debug.print("error: unable to write output \"{s}\": {s}\n", .{ path, @errorName(err) });
+        return error.OutputWriteFailed;
+    };
+    defer file.close(stdout_io);
+    file.writeStreamingAll(stdout_io, bytes) catch |err| {
+        std.debug.print("error: unable to write output \"{s}\": {s}\n", .{ path, @errorName(err) });
+        return error.OutputWriteFailed;
+    };
+}
+
+fn writeArtifact(bytes: []const u8, output_path: ?[]const u8) !void {
+    if (output_path) |path| return writeOutputPath(path, bytes);
+    return writeStdout(bytes);
 }
 
 fn readStdinAlloc(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
@@ -287,13 +305,13 @@ fn runMain(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "emit-c")) {
         const remapped_source_path = try options.remappedSourcePath(allocator, path);
         defer if (remapped_source_path) |p| allocator.free(p);
-        try runEmitC(allocator, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm);
+        try runEmitC(allocator, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.output_path);
     } else if (std.mem.eql(u8, command, "emit-map")) {
         const remapped_source_path = try options.remappedSourcePath(allocator, path);
         defer if (remapped_source_path) |p| allocator.free(p);
-        try runEmitMap(allocator, path, remapped_source_path orelse path, source, options.profile);
+        try runEmitMap(allocator, path, remapped_source_path orelse path, source, options.profile, options.output_path);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        try runEmitLlvm(allocator, path, source, options.checks, options.stub_asm, options.targetArch());
+        try runEmitLlvm(allocator, path, source, options.checks, options.stub_asm, options.targetArch(), options.output_path);
     } else if (std.mem.eql(u8, command, "list-tests")) {
         try runListTests(allocator, path, source);
     } else if (is_emit_layout) {
@@ -328,6 +346,7 @@ fn isExpectedCliFailure(err: anyerror) bool {
         error.EmitLlvmFailed,
         error.EmitLayoutFailed,
         error.EmitCStructFailed,
+        error.OutputWriteFailed,
         => true,
         else => false,
     };
@@ -712,7 +731,7 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     try writeStdout(output.items);
 }
 
-fn runEmitC(allocator: std.mem.Allocator, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool) !void {
+fn runEmitC(allocator: std.mem.Allocator, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, output_path: ?[]const u8) !void {
     const optimize = checks.optimize;
     var diag = initReporter(allocator, path, source);
     defer diag.deinit();
@@ -756,10 +775,10 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, artifact_source_path
         },
         else => return err,
     };
-    try writeStdout(output.items);
+    try writeArtifact(output.items, output_path);
 }
 
-fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile) !void {
+fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, output_path: ?[]const u8) !void {
     var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
@@ -793,10 +812,10 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, artifact_source_pa
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try be.emitMap(allocator, module, &output, profile, artifact_source_path);
-    try writeStdout(output.items);
+    try writeArtifact(output.items, output_path);
 }
 
-fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch) !void {
+fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
     const optimize = checks.optimize;
     var diag = initReporter(allocator, path, source);
     defer diag.deinit();
@@ -840,7 +859,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
         },
         else => return err,
     };
-    try writeStdout(output.items);
+    try writeArtifact(output.items, output_path);
 }
 
 fn reportBackendUnsupportedFallback(diag: *diagnostics.Reporter, module: ast.Module, backend_name: []const u8) void {

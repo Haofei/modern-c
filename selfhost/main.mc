@@ -56,7 +56,7 @@ impl Allocator for MallocAlloc {
 
 // Per-file scratch ceiling (1 MiB). Each module file is read INTO g_src, scanned for imports, then
 // copied into the combined buffer; a single file larger than this is rejected. See FILE-INPUT.
-const MC_SRC_CAP: usize = 1048576;
+const SH_SRC_CAP: usize = 1048576;
 global g_src: [1048576]u8;
 
 // ----- P5.4 multi-module loader state (docs/self-host.md (§1)) --------------------------------
@@ -80,15 +80,15 @@ global g_src: [1048576]u8;
 
 // Combined-source ceiling (4 MiB): it holds every distinct module, so it is larger than the
 // per-file cap. A program whose flattened source exceeds this is rejected rather than truncated.
-const MC_CONCAT_CAP: usize = 4194304;
+const SH_CONCAT_CAP: usize = 4194304;
 global g_concat: [4194304]u8;
 global g_concat_len: usize = 0;
 
 // The import-path queue + seen-set. Path strings are packed end-to-end in g_path_buf; g_path_off /
 // g_path_len index them. g_path_count entries are processed in order (indices grow as new imports
 // are discovered), giving a breadth-first flatten.
-const MC_MAX_FILES: usize = 512;
-const MC_PATHBUF_CAP: usize = 131072; // 128 KiB total for all import-path strings
+const SH_MAX_FILES: usize = 512;
+const SH_PATHBUF_CAP: usize = 131072; // 128 KiB total for all import-path strings
 global g_path_off: [512]usize;
 global g_path_len: [512]usize;
 global g_path_buf: [131072]u8;
@@ -97,7 +97,7 @@ global g_path_used: usize = 0;
 
 // The root file's directory prefix (bytes before the last '/', no trailing slash) and a scratch
 // buffer for the NUL-terminated candidate path handed to io_open.
-const MC_PATH_CAP: usize = 4096;
+const SH_PATH_CAP: usize = 4096;
 global g_rootdir: [4096]u8;
 global g_rootdir_len: usize = 0;
 global g_openpath: [4096]u8;
@@ -105,7 +105,7 @@ global g_openpath: [4096]u8;
 // ----- tiny cstr helpers (string literals are `*const u8`; G12) -----
 
 // Length of a NUL-terminated C string (for writing message literals to a Fd).
-fn mc_cstr_len(s: *const u8) -> usize {
+fn sh_cstr_len(s: *const u8) -> usize {
     var n: usize = 0;
     var b: u8 = 0;
     unsafe {
@@ -121,8 +121,8 @@ fn mc_cstr_len(s: *const u8) -> usize {
 }
 
 // Write a NUL-terminated message literal to `fd` (best-effort; ignores the Result).
-fn mc_emsg(fd: Fd, s: *const u8) -> void {
-    let n: usize = mc_cstr_len(s);
+fn sh_emsg(fd: Fd, s: *const u8) -> void {
+    let n: usize = sh_cstr_len(s);
     if let err(e) = io_write(fd, pa(s as usize), n) {}
 }
 
@@ -130,17 +130,17 @@ fn mc_emsg(fd: Fd, s: *const u8) -> void {
 
 // Read the whole file at `path` into g_src, looping over short reads. Returns the byte count read
 // on success; a file that does not fit in g_src is reported as `IoError.ReadFailed`.
-fn mc_read_all(path: *const u8) -> Result<usize, IoError> {
+fn sh_read_all(path: *const u8) -> Result<usize, IoError> {
     let fd: Fd = io_open(path, O_RDONLY, 0)?;
     let base: usize = (&g_src) as usize;
     var total: usize = 0;
     var going: bool = true;
     while going {
-        if total >= MC_SRC_CAP {
+        if total >= SH_SRC_CAP {
             if let err(e) = io_close(fd) {}
             return err(.ReadFailed); // file did not fit in the 1 MiB buffer
         }
-        let got: usize = io_read(fd, pa(base + total), MC_SRC_CAP - total)?;
+        let got: usize = io_read(fd, pa(base + total), SH_SRC_CAP - total)?;
         if got == 0 {
             going = false;
         } else {
@@ -154,14 +154,14 @@ fn mc_read_all(path: *const u8) -> Result<usize, IoError> {
 // ----- P5.4 loader: flatten the import graph by textual concatenation -------------------------
 
 // Store one byte `v` at `base + i` (`base` is a global-array address taken via `... as usize`).
-fn mc_bset(base: usize, i: usize, v: u8) -> void {
+fn sh_bset(base: usize, i: usize, v: u8) -> void {
     unsafe {
         raw.store<u8>(pa(base + i), v);
     }
 }
 
 // Load the byte at `base + i` (used to walk the NUL-terminated argv path).
-fn mc_bget(base: usize, i: usize) -> u8 {
+fn sh_bget(base: usize, i: usize) -> u8 {
     var v: u8 = 0;
     unsafe {
         v = raw.load<u8>(pa(base + i));
@@ -170,7 +170,7 @@ fn mc_bget(base: usize, i: usize) -> u8 {
 }
 
 // A `*const u8` view of the bytes at global-array address `base` (for io_open's path argument).
-fn mc_cptr(base: usize) -> *const u8 {
+fn sh_cptr(base: usize) -> *const u8 {
     var p: *const u8 = raw.ptr<u8>(pa(0));
     unsafe {
         p = raw.ptr<u8>(pa(base));
@@ -181,27 +181,27 @@ fn mc_cptr(base: usize) -> *const u8 {
 // True when `k` (a token-kind ordinal from `token_kind_at`) equals `TokKind` variant `want`. The
 // variant is passed as a param so its enum type is inferred (a bare `TokKind.x` value is not a
 // subset expression); `.raw()` yields the ordinal to compare against.
-fn mc_kind_is(k: u32, want: TokKind) -> bool {
+fn sh_kind_is(k: u32, want: TokKind) -> bool {
     let w: u32 = want.raw();
     return k == w;
 }
 
 // Compute the root file's directory prefix from the NUL-terminated argv path at `argp`: the bytes
 // up to (excluding) the last '/'. No slash -> an empty prefix (the file sits in the cwd).
-fn mc_compute_rootdir(argp: usize) -> void {
+fn sh_compute_rootdir(argp: usize) -> void {
     var i: usize = 0;
     var last: usize = 0;
     var has: bool = false;
-    var b: u8 = mc_bget(argp, 0);
+    var b: u8 = sh_bget(argp, 0);
     while b != 0 {
         if b == 47 { // '/'
             last = i;
             has = true;
         }
         i = i + 1;
-        b = mc_bget(argp, i);
+        b = sh_bget(argp, i);
     }
-    if has && last <= MC_PATH_CAP {
+    if has && last <= SH_PATH_CAP {
         mem_copy(pa((&g_rootdir) as usize), pa(argp), last);
         g_rootdir_len = last;
     } else {
@@ -212,18 +212,18 @@ fn mc_compute_rootdir(argp: usize) -> void {
 // Enqueue import path `g_src[src_off .. src_off+len]` (the string-literal text minus its quotes)
 // unless an equal path is already queued (the queue is also the seen-set — dedup). Returns false
 // (a LOAD ERROR, surfaced by the caller — never a silent drop) when the path is too long to fit the
-// NUL-terminated candidate buffer `g_openpath[MC_PATH_CAP]`, or when the file/pathbuf caps are hit.
-fn mc_queue_path(src_off: usize, len: usize) -> bool {
+// NUL-terminated candidate buffer `g_openpath[SH_PATH_CAP]`, or when the file/pathbuf caps are hit.
+fn sh_queue_path(src_off: usize, len: usize) -> bool {
     if len == 0 {
         return true; // empty import string — nothing to queue, not an error
     }
-    // Per-path length cap (fixes a g_openpath[MC_PATH_CAP] overflow): the path must fit BOTH the
+    // Per-path length cap (fixes a g_openpath[SH_PATH_CAP] overflow): the path must fit BOTH the
     // as-given NUL-terminated form (len + NUL) AND the root-composed form
-    // (rootdir + '/' + rel + NUL) that mc_read_import builds into g_openpath.
-    if len + 1 > MC_PATH_CAP {
+    // (rootdir + '/' + rel + NUL) that sh_read_import builds into g_openpath.
+    if len + 1 > SH_PATH_CAP {
         return false;
     }
-    if g_rootdir_len + 1 + len + 1 > MC_PATH_CAP {
+    if g_rootdir_len + 1 + len + 1 > SH_PATH_CAP {
         return false;
     }
     let rel: []const u8 = mem.as_bytes(&g_src)[src_off..src_off + len];
@@ -235,10 +235,10 @@ fn mc_queue_path(src_off: usize, len: usize) -> bool {
         }
         i = i + 1;
     }
-    if g_path_count >= MC_MAX_FILES {
+    if g_path_count >= SH_MAX_FILES {
         return false; // too many imports — a load error, not a silent omission
     }
-    if g_path_used + len > MC_PATHBUF_CAP {
+    if g_path_used + len > SH_PATHBUF_CAP {
         return false; // import-path buffer exhausted — a load error, not a silent omission
     }
     mem_copy(pa((&g_path_buf) as usize + g_path_used), pa((&g_src) as usize + src_off), len);
@@ -251,7 +251,7 @@ fn mc_queue_path(src_off: usize, len: usize) -> bool {
 
 // Lex the `nread` bytes currently in g_src and enqueue every top-level `import "path";` directive
 // (identifier `import` + string literal + `;` at brace-depth 0), mirroring src/loader.zig's scan.
-fn mc_scan_imports(nread: usize) -> bool {
+fn sh_scan_imports(nread: usize) -> bool {
     var ma: MallocAlloc = .{ .count = 0 };
     var tl: TokenList = token_list_new(&ma);
     let view: []const u8 = mem.as_bytes(&g_src)[0..nread];
@@ -262,22 +262,22 @@ fn mc_scan_imports(nread: usize) -> bool {
     var i: usize = 0;
     while i < n {
         let k: u32 = token_kind_at(&tl, i);
-        if mc_kind_is(k, .l_brace) {
+        if sh_kind_is(k, .l_brace) {
             depth = depth + 1;
-        } else if mc_kind_is(k, .r_brace) {
+        } else if sh_kind_is(k, .r_brace) {
             depth = depth - 1;
-        } else if depth == 0 && mc_kind_is(k, .identifier) {
+        } else if depth == 0 && sh_kind_is(k, .identifier) {
             let st: usize = token_start_at(&tl, i);
             let ln: usize = token_len_at(&tl, i);
             let lex_word: []const u8 = mem.as_bytes(&g_src)[st..st + ln];
             if mem_eql(lex_word, "import") && i + 2 < n {
                 let k1: u32 = token_kind_at(&tl, i + 1);
                 let k2: u32 = token_kind_at(&tl, i + 2);
-                if mc_kind_is(k1, .string_literal) && mc_kind_is(k2, .semicolon) {
+                if sh_kind_is(k1, .string_literal) && sh_kind_is(k2, .semicolon) {
                     let sst: usize = token_start_at(&tl, i + 1);
                     let sln: usize = token_len_at(&tl, i + 1);
                     if sln >= 2 {
-                        if !mc_queue_path(sst + 1, sln - 2) { // strip the surrounding quotes
+                        if !sh_queue_path(sst + 1, sln - 2) { // strip the surrounding quotes
                             okq = false;
                         }
                     }
@@ -294,19 +294,19 @@ fn mc_scan_imports(nread: usize) -> bool {
 
 // Append the `nread` bytes now in g_src to the combined buffer, then a newline separator (so a file
 // with no trailing newline cannot merge tokens with the next). Returns false if it would overflow.
-fn mc_append_concat(nread: usize) -> bool {
-    if g_concat_len + nread + 1 > MC_CONCAT_CAP {
+fn sh_append_concat(nread: usize) -> bool {
+    if g_concat_len + nread + 1 > SH_CONCAT_CAP {
         return false;
     }
     mem_copy(pa((&g_concat) as usize + g_concat_len), pa((&g_src) as usize), nread);
     g_concat_len = g_concat_len + nread;
-    mc_bset((&g_concat) as usize, g_concat_len, 10); // '\n'
+    sh_bset((&g_concat) as usize, g_concat_len, 10); // '\n'
     g_concat_len = g_concat_len + 1;
     return true;
 }
 
 // Read queued import `idx` into g_src, trying `<rootdir>/rel` first, then `rel` as-given.
-fn mc_read_import(idx: usize) -> Result<usize, IoError> {
+fn sh_read_import(idx: usize) -> Result<usize, IoError> {
     let off: usize = g_path_off[idx];
     let len: usize = g_path_len[idx];
     // Candidate 1: root-directory-relative.
@@ -314,50 +314,50 @@ fn mc_read_import(idx: usize) -> Result<usize, IoError> {
         var pos: usize = 0;
         mem_copy(pa((&g_openpath) as usize), pa((&g_rootdir) as usize), g_rootdir_len);
         pos = g_rootdir_len;
-        mc_bset((&g_openpath) as usize, pos, 47); // '/'
+        sh_bset((&g_openpath) as usize, pos, 47); // '/'
         pos = pos + 1;
         mem_copy(pa((&g_openpath) as usize + pos), pa((&g_path_buf) as usize + off), len);
         pos = pos + len;
-        mc_bset((&g_openpath) as usize, pos, 0); // NUL
-        if let ok(v) = mc_read_all(mc_cptr((&g_openpath) as usize)) {
+        sh_bset((&g_openpath) as usize, pos, 0); // NUL
+        if let ok(v) = sh_read_all(sh_cptr((&g_openpath) as usize)) {
             return ok(v);
         }
     }
     // Candidate 2: as-given (cwd / repo-root-relative).
     mem_copy(pa((&g_openpath) as usize), pa((&g_path_buf) as usize + off), len);
-    mc_bset((&g_openpath) as usize, len, 0); // NUL
-    return mc_read_all(mc_cptr((&g_openpath) as usize));
+    sh_bset((&g_openpath) as usize, len, 0); // NUL
+    return sh_read_all(sh_cptr((&g_openpath) as usize));
 }
 
 // Load the whole import graph rooted at the NUL-terminated path `argp` into g_concat. The root is
 // read+scanned+appended first; then each newly-discovered import (breadth-first, deduped) in turn.
 // Returns true on success; false if a file is missing/unreadable or the combined source overflows.
-fn mc_load_all(argp: usize) -> bool {
-    mc_compute_rootdir(argp);
+fn sh_load_all(argp: usize) -> bool {
+    sh_compute_rootdir(argp);
     var nread: usize = 0;
-    if let ok(v) = mc_read_all(mc_cptr(argp)) {
+    if let ok(v) = sh_read_all(sh_cptr(argp)) {
         nread = v;
     } else {
         return false;
     }
-    if !mc_scan_imports(nread) {
+    if !sh_scan_imports(nread) {
         return false; // an import path was too long / too many imports — a load error
     }
-    if !mc_append_concat(nread) {
+    if !sh_append_concat(nread) {
         return false;
     }
     var qi: usize = 0;
     while qi < g_path_count {
         var in_read: usize = 0;
-        if let ok(v) = mc_read_import(qi) {
+        if let ok(v) = sh_read_import(qi) {
             in_read = v;
         } else {
             return false;
         }
-        if !mc_scan_imports(in_read) {
+        if !sh_scan_imports(in_read) {
             return false; // nested import path too long / too many — a load error
         }
-        if !mc_append_concat(in_read) {
+        if !sh_append_concat(in_read) {
             return false;
         }
         qi = qi + 1;
@@ -368,14 +368,14 @@ fn mc_load_all(argp: usize) -> bool {
 // mcc2 entry: `mcc2 input.mc` -> emitted subset C on stdout.
 export fn mc_main() -> i32 {
     if args_count() < 2 {
-        mc_emsg(stderr_fd(), "usage: mcc2 <input.mc>\n");
+        sh_emsg(stderr_fd(), "usage: mcc2 <input.mc>\n");
         return 2;
     }
 
     // Flatten the module's whole import graph into g_concat by textual concatenation.
     let argp: usize = mc_argv(1) as usize;
-    if !mc_load_all(argp) {
-        mc_emsg(stderr_fd(), "mcc2: cannot load input (missing/unreadable import, or combined source too large)\n");
+    if !sh_load_all(argp) {
+        sh_emsg(stderr_fd(), "mcc2: cannot load input (missing/unreadable import, or combined source too large)\n");
         return 3;
     }
 
@@ -393,10 +393,10 @@ export fn mc_main() -> i32 {
     let perr: u32 = sema_parse_err_count(&st);
     let serr: u32 = sema_err_count(&st);
     if perr != 0 {
-        mc_emsg(stderr_fd(), "mcc2: parse errors in input\n");
+        sh_emsg(stderr_fd(), "mcc2: parse errors in input\n");
     }
     if serr != 0 {
-        mc_emsg(stderr_fd(), "mcc2: semantic errors in input\n");
+        sh_emsg(stderr_fd(), "mcc2: semantic errors in input\n");
     }
 
     // Emit from the SAME parsed AST sema built (Phase 0), reading sema's typed facts (Phase 2), then

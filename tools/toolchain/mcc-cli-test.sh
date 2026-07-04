@@ -108,6 +108,9 @@ assert_rc 0 "--help"
 assert_stdout_contains "usage:" "--help usage header"
 assert_stdout_contains "mcc explain E_CODE" "--help explain command"
 assert_stdout_contains "mcc list-tests <file.mc>" "--help list-tests command"
+assert_stdout_contains "mcc emit-c <file.mc> [-o <out.c>]" "--help emit-c output path"
+assert_stdout_contains "mcc emit-map <file.mc> [-o <out.mcmap>]" "--help emit-map output path"
+assert_stdout_contains "mcc emit-llvm <file.mc> [-o <out.ll>]" "--help emit-llvm output path"
 assert_stdout_contains "mcc build <file.mc> -o <exe>" "--help build command"
 assert_stdout_contains "--remap-prefix=FROM=TO" "--help remap-prefix option"
 assert_stdout_contains "--std-dir=<dir>" "--help installed std-dir option"
@@ -171,6 +174,51 @@ assert_stdout_empty "--help with extra arg"
 assert_stderr_contains "usage:" "--help extra-arg usage"
 
 printf 'export fn main() -> u32 { return 0; }\n' >"$WORK/ok.mc"
+run_case emit-c "$WORK/ok.mc" -o "$WORK/ok.c"
+assert_rc 0 "emit-c output path"
+assert_stdout_empty "emit-c output path"
+assert_stderr_empty "emit-c output path"
+if [ ! -s "$WORK/ok.c" ]; then
+    echo "FAIL: mcc-cli-test — emit-c -o did not create output"
+    exit 1
+fi
+if ! grep -Fq "mc-profile: kernel" "$WORK/ok.c"; then
+    echo "FAIL: mcc-cli-test — emit-c -o output does not look like emitted C"
+    cat "$WORK/ok.c"
+    exit 1
+fi
+
+run_case emit-map "$WORK/ok.mc" -o "$WORK/ok.mcmap"
+assert_rc 0 "emit-map output path"
+assert_stdout_empty "emit-map output path"
+assert_stderr_empty "emit-map output path"
+if ! grep -Fq "source_path=" "$WORK/ok.mcmap"; then
+    echo "FAIL: mcc-cli-test — emit-map -o output does not look like an mcmap"
+    cat "$WORK/ok.mcmap"
+    exit 1
+fi
+
+run_case emit-llvm "$WORK/ok.mc" -o "$WORK/ok.ll"
+assert_rc 0 "emit-llvm output path"
+assert_stdout_empty "emit-llvm output path"
+assert_stderr_empty "emit-llvm output path"
+if ! grep -Fq "define" "$WORK/ok.ll"; then
+    echo "FAIL: mcc-cli-test — emit-llvm -o output does not look like LLVM IR"
+    cat "$WORK/ok.ll"
+    exit 1
+fi
+
+run_case emit-c "$WORK/ok.mc" -o
+assert_rc 1 "missing output path"
+assert_stdout_empty "missing output path"
+assert_stderr_contains "usage:" "missing output path usage"
+
+run_case check "$WORK/ok.mc" -o "$WORK/check.c"
+assert_rc 1 "invalid output flag for check"
+assert_stdout_empty "invalid output flag for check"
+assert_stderr_starts_with 'error: option -o is not valid for command `check`' "invalid output flag for check"
+assert_stderr_contains "usage:" "invalid output flag for check usage"
+
 run_case check "$WORK/ok.mc" --check
 assert_rc 1 "invalid check flag"
 assert_stdout_empty "invalid check flag"

@@ -12,6 +12,7 @@ pub const Options = struct {
     arch_flag: ?[]const u8 = null,
     platform_flag: ?[]const u8 = null,
     std_dir: ?[]const u8 = null,
+    output_path: ?[]const u8 = null,
     stub_asm: bool = false,
     remap_prefix: ?PathRemap = null,
 
@@ -28,6 +29,7 @@ pub const Options = struct {
         var saw_platform_flag = false;
         var saw_stub_asm_flag = false;
         var saw_std_dir_flag = false;
+        var saw_output_flag = false;
         var saw_remap_prefix_flag = false;
         var saw_json_flag = false;
 
@@ -57,6 +59,12 @@ pub const Options = struct {
                 const value = flag["--std-dir=".len..];
                 if (value.len == 0) return error.InvalidArgs;
                 opts.std_dir = value;
+            } else if (std.mem.eql(u8, flag, "-o")) {
+                saw_output_flag = true;
+                if (opts.output_path != null) return error.InvalidArgs;
+                const value = args.next() orelse return error.InvalidArgs;
+                if (value.len == 0) return error.InvalidArgs;
+                opts.output_path = value;
             } else if (std.mem.startsWith(u8, flag, "--profile=")) {
                 saw_profile_flag = true;
                 const value = flag["--profile=".len..];
@@ -99,6 +107,7 @@ pub const Options = struct {
             .saw_platform_flag = saw_platform_flag,
             .saw_stub_asm_flag = saw_stub_asm_flag,
             .saw_std_dir_flag = saw_std_dir_flag,
+            .saw_output_flag = saw_output_flag,
             .saw_remap_prefix_flag = saw_remap_prefix_flag,
             .saw_json_flag = saw_json_flag,
         });
@@ -182,12 +191,15 @@ pub const Options = struct {
         saw_platform_flag: bool,
         saw_stub_asm_flag: bool,
         saw_std_dir_flag: bool,
+        saw_output_flag: bool,
         saw_remap_prefix_flag: bool,
         saw_json_flag: bool,
     };
 
     fn validate(self: Options, command: []const u8, seen: SeenFlags) !void {
         const is_c_artifact_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map");
+        const accepts_output_path = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map") or
+            std.mem.eql(u8, command, "emit-llvm");
         const accepts_checks = std.mem.eql(u8, command, "verify") or std.mem.eql(u8, command, "lower-mir") or
             std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-llvm");
         const needs_structs = isEmitLayout(command) or isEmitCStruct(command);
@@ -199,6 +211,7 @@ pub const Options = struct {
         if (seen.saw_arch_flag and !accepts_checks) return invalidOptionForCommand("--arch", command);
         if (seen.saw_platform_flag and !accepts_checks) return invalidOptionForCommand("--platform", command);
         if (seen.saw_std_dir_flag and !isSourceLoadingCommand(command)) return invalidOptionForCommand("--std-dir", command);
+        if (seen.saw_output_flag and !accepts_output_path) return invalidOptionForCommand("-o", command);
         if (seen.saw_remap_prefix_flag and !is_c_artifact_command) return invalidOptionForCommand("--remap-prefix", command);
         if (seen.saw_json_flag and !std.mem.eql(u8, command, "check")) return invalidOptionForCommand("--json", command);
         if (self.checks.csan and (self.checks.ksan or self.checks.msan)) {
