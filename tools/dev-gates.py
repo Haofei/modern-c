@@ -240,6 +240,26 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         (
+            ".github/workflows/nightly-fuzz.yml",
+            ".github/workflows/nightly-bench.yml",
+            "tools/ci/nightly-bench.py",
+            "tools/bench/nightly-baseline.tsv",
+        ),
+        ("release-metadata-test",),
+        "nightly workflow and benchmark metadata changes need the static release metadata gate",
+    ),
+    Rule(
+        ("tools/toolchain/release-safe-install-test.sh",),
+        ("release-safe-install-test",),
+        "ReleaseSafe install harness changes need the ReleaseSafe install gate",
+    ),
+    Rule(
+        ("tools/toolchain/safe-release-parity.sh",),
+        ("safe-release-parity",),
+        "SAFE/RELEASE parity harness changes need the safe release parity gate",
+    ),
+    Rule(
+        (
             ".github/workflows/release.yml",
             "tools/ci/package-release.py",
             "tools/toolchain/package-release-test.py",

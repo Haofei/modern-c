@@ -185,6 +185,36 @@ def main() -> None:
         ["qjs-agent-smoke-test", "llvm-qjs-agent-smoke-test"],
     )
     assert_gates(module, ["tools/qemu/kernel-boot-lib.sh"], ["preflight", "riscv-qemu-validation"])
+    assert_gates(
+        module,
+        [".github/workflows/nightly-fuzz.yml"],
+        ["release-metadata-test"],
+    )
+    assert_gates(
+        module,
+        [".github/workflows/nightly-bench.yml"],
+        ["release-metadata-test"],
+    )
+    assert_gates(
+        module,
+        ["tools/ci/nightly-bench.py"],
+        ["release-metadata-test"],
+    )
+    assert_gates(
+        module,
+        ["tools/bench/nightly-baseline.tsv"],
+        ["release-metadata-test"],
+    )
+    assert_gates(
+        module,
+        ["tools/toolchain/release-safe-install-test.sh"],
+        ["release-safe-install-test"],
+    )
+    assert_gates(
+        module,
+        ["tools/toolchain/safe-release-parity.sh"],
+        ["safe-release-parity"],
+    )
 
     print("PASS: dev-gates-test - routing contracts are stable")
 
