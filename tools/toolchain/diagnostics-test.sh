@@ -81,6 +81,7 @@ import os
 payload = json.loads(os.environ["JSON_OUT"])
 diags = payload.get("diagnostics")
 assert isinstance(diags, list) and len(diags) == 1, payload
+assert diags[0]["code"] == "E_PARSE_EXPECTED_PARAMETER_NAME", diags[0]
 assert "expected parameter name" in diags[0]["message"], diags[0]
 assert payload["error_count"] == 1 and payload["warning_count"] == 0, payload
 PY

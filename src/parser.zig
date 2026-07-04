@@ -1977,8 +1977,14 @@ pub const Parser = struct {
     }
 
     fn fail(self: *Parser, message: []const u8) anyerror {
-        self.reporter.err(self.current.span, "{s}", .{message});
+        self.reporter.err(self.current.span, "{s}: {s}", .{ parseDiagnosticCode(message), message });
         return error.ParseFailed;
+    }
+
+    fn parseDiagnosticCode(message: []const u8) []const u8 {
+        if (std.mem.eql(u8, message, "expected expression")) return "E_PARSE_EXPECTED_EXPRESSION";
+        if (std.mem.eql(u8, message, "expected parameter name")) return "E_PARSE_EXPECTED_PARAMETER_NAME";
+        return "E_PARSE";
     }
 
     fn enterParseDepth(self: *Parser) anyerror!void {

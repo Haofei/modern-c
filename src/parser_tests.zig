@@ -191,7 +191,23 @@ test "parser requires in after for binding" {
     var bad_parser = Parser.init(bad_source, &bad_reporter);
     try std.testing.expectError(error.ParseFailed, bad_parser.parseModule(bad_arena.allocator()));
     try std.testing.expect(bad_reporter.has_errors);
-    try std.testing.expectEqualStrings("expected 'in' after for binding", bad_reporter.diagnostics.items[0].message);
+    // DIAGNOSTIC_UNIT: E_PARSE
+    try std.testing.expectEqualStrings("E_PARSE: expected 'in' after for binding", bad_reporter.diagnostics.items[0].message);
+}
+
+test "parser codes malformed parameter diagnostics" {
+    const source = "fn bad( -> void {}\n";
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_param.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = Parser.init(source, &reporter);
+    try std.testing.expectError(error.ParseFailed, p.parseModule(arena.allocator()));
+    try std.testing.expect(reporter.has_errors);
+    // DIAGNOSTIC_UNIT: E_PARSE_EXPECTED_PARAMETER_NAME
+    try std.testing.expectEqualStrings("E_PARSE_EXPECTED_PARAMETER_NAME: expected parameter name", reporter.diagnostics.items[0].message);
 }
 
 test "parser recovers across top-level declarations" {

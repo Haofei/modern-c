@@ -32,8 +32,8 @@ class Rule:
 RULES: tuple[Rule, ...] = (
     Rule(
         ("src/parser.zig", "src/lexer.zig", "src/loader.zig", "src/diagnostics.zig", "src/main.zig"),
-        ("test", "diagnostics-test", "bad-diagnostics-test"),
-        "front-end and diagnostics changes need unit/spec coverage plus diagnostic transcript locks",
+        ("test", "diagnostics-test", "bad-diagnostics-test", "diagnostic-code-inventory-test"),
+        "front-end and diagnostics changes need unit/spec coverage, transcript locks, and diagnostic-code ownership",
     ),
     Rule(
         ("src/sema*.zig", "src/generic_precheck.zig", "src/monomorphize.zig", "src/sema_*.zig"),
