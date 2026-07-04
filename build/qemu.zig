@@ -60,6 +60,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTestOpts(ctx, "package-release-test", "Smoke-test release packaging metadata and deterministic tarballs without building a release", &.{ "python3", "tools/toolchain/package-release-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "release-safe-install-test", "Build and smoke-test an installed ReleaseSafe compiler", &.{ "bash", "tools/toolchain/release-safe-install-test.sh" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "ci-pass-gates-test", "Check CI PASS assertions are derived from tier definitions", &.{ "python3", "tools/ci/pass-gates.py", "check" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "dev-gates-test", "Check focused development gate routing contracts", &.{ "python3", "tools/toolchain/dev-gates-test.py" }, .{ .install = false });
 
     _ = h.addScriptTest(ctx, "mono-test", "Compile a comptime-param type-generic module, link, and run the specialization", &.{ "bash", "tools/toolchain/mono-test.sh", "zig-out/bin/mcc" });
 

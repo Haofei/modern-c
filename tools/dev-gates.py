@@ -81,6 +81,26 @@ RULES: tuple[Rule, ...] = (
         "build graph changes need tier anti-drift checks; fast is the broad host-only confidence gate",
     ),
     Rule(
+        ("tools/dev-gates.py", "tools/toolchain/dev-gates-test.py"),
+        ("dev-gates-test",),
+        "development gate selector changes need focused routing contract coverage",
+    ),
+    Rule(
+        ("tools/test/contract-lint.py",),
+        ("test-lint",),
+        "fixture contract linter changes need the fixture-contract lint gate",
+    ),
+    Rule(
+        ("tools/toolchain/bad-diagnostics-test.py",),
+        ("bad-diagnostics-test",),
+        "bad diagnostic golden-check changes need the bad diagnostics gate",
+    ),
+    Rule(
+        ("tools/toolchain/diff-backend.sh",),
+        ("diff-backend",),
+        "backend parity harness changes need the differential backend gate",
+    ),
+    Rule(
         (".github/workflows/ci.yml", "Dockerfile", "docker-compose.yml", "tools/preflight.sh"),
         ("preflight", "release-metadata-test", "ci-pass-gates-test"),
         "toolchain and CI changes need pinned-toolchain metadata plus preflight",
@@ -133,8 +153,18 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         ("tools/toolchain/spec_sweep_lib.py",),
-        ("sweep", "llvm-sweep", "llvm-spec-obj-sweep", "llvm-opt-sweep"),
+        ("test-lint", "sweep", "llvm-sweep", "llvm-spec-obj-sweep", "llvm-opt-sweep"),
         "shared spec sweep parsing changes need every spec-backed emit/object/optimizer sweep",
+    ),
+    Rule(
+        ("tools/toolchain/llvm-c-emit-sweep.py",),
+        ("llvm-c-sweep",),
+        "LLVM C-emission sweep script changes need the C-emission LLVM IR sweep",
+    ),
+    Rule(
+        ("tools/toolchain/llvm-c-obj-sweep.py",),
+        ("llvm-c-obj-sweep",),
+        "LLVM C-object sweep script changes need the C-emission object sweep",
     ),
     Rule(
         ("docs/**/*.md", "docs/*.md", "*.md"),
@@ -161,6 +191,7 @@ RULES: tuple[Rule, ...] = (
         ("tests/llvm/*.mc", "tools/toolchain/llvm-*.sh", "tools/toolchain/llvm-c-*.py"),
         ("llvm-test", "llvm-obj-test", "llvm-sweep", "llvm-c-obj-sweep"),
         "LLVM fixtures and scripts need textual, object, and sweep coverage",
+        excludes=("tools/toolchain/llvm-c-*.py",),
     ),
     Rule(
         ("tools/fuzz/*", "tools/fuzz/corpus/*"),

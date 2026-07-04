@@ -413,6 +413,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("release-safe-install-test"));
     // ci-pass-gates-test prevents CI's positive PASS assertions from drifting away from tiers.zig.
     m0_step.dependOn(ctx.cmd("ci-pass-gates-test"));
+    // dev-gates-test keeps focused local gate routing cheap and conservative.
+    m0_step.dependOn(ctx.cmd("dev-gates-test"));
     // mono-test exercises comptime-parameter monomorphization (needs clang).
     m0_step.dependOn(ctx.cmd("mono-test"));
     // reflect-test validates the comptime layout model against the C ABI.
@@ -921,6 +923,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("package-release-test"));
     fast_step.dependOn(ctx.cmd("release-safe-install-test"));
     fast_step.dependOn(ctx.cmd("ci-pass-gates-test"));
+    fast_step.dependOn(ctx.cmd("dev-gates-test"));
     fast_step.dependOn(ctx.cmd("c-test"));
     fast_step.dependOn(ctx.cmd("sweep"));
     fast_step.dependOn(ctx.cmd("diff-backend"));
