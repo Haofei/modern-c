@@ -20,12 +20,12 @@ trait Allocator {
 // Allocate `size` bytes aligned to `align` from `a`. `*mut dyn Allocator`: one
 // {data,vtable} fat pointer over a shared rodata vtable, replacing the former struct of
 // two per-instance closures. Mutable because allocation advances the backend's state.
-export fn alloc_bytes(a: *mut dyn Allocator, size: usize, align: usize) -> PAddr {
+pub fn alloc_bytes(a: *mut dyn Allocator, size: usize, align: usize) -> PAddr {
     return a.alloc(size, align);
 }
 
 // Return an allocation of `size` bytes at `addr` to `a` (no-op for bump allocators).
-export fn free_bytes(a: *mut dyn Allocator, addr: PAddr, size: usize) -> void {
+pub fn free_bytes(a: *mut dyn Allocator, addr: PAddr, size: usize) -> void {
     a.free(addr, size);
 }
 
@@ -41,25 +41,25 @@ export fn free_bytes(a: *mut dyn Allocator, addr: PAddr, size: usize) -> void {
 // argument that could mismatch the one `create` used. The allocator must outlive
 // the handle (it is borrowed, not owned).
 
-move struct Owned<T> {
+pub move struct Owned<T> {
     addr: PAddr,
     allocator: *mut dyn Allocator, // provenance: the allocator that minted `addr`
 }
 
 // Allocate storage for one T from `a` (size/align via reflection on T).
-export fn create(comptime T: type, a: *mut dyn Allocator) -> Owned<T> {
+pub fn create(comptime T: type, a: *mut dyn Allocator) -> Owned<T> {
     return .{ .addr = alloc_bytes(a, sizeof(T), alignof(T)), .allocator = a };
 }
 
 // The backing address — a borrow; does not consume the handle.
-export fn own_addr(comptime T: type, o: *Owned<T>) -> PAddr {
+pub fn own_addr(comptime T: type, o: *Owned<T>) -> PAddr {
     return o.addr;
 }
 
 // Free the storage back to its originating allocator, consuming the linear handle
 // (its end of life). The allocator is taken from the handle, so a resource can
 // never be freed through the wrong owner.
-export fn own_free(comptime T: type, o: Owned<T>) -> void {
+pub fn own_free(comptime T: type, o: Owned<T>) -> void {
     free_bytes(o.allocator, o.addr, sizeof(T));
     unsafe { forget_unchecked(o); } // husk: the storage was already freed above
 }

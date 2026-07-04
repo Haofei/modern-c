@@ -9,7 +9,7 @@
 
 import "std/math.mc";
 
-struct Pool<T, N> {
+pub struct Pool<T, N> {
     slots: [N]T,
     gen: [N]u32, // current generation of each slot
     used: [N]bool,
@@ -20,7 +20,7 @@ struct Pool<T, N> {
 // Opaque (section 31): a PoolRef can only be minted and inspected by its own associated
 // functions below, so outside code cannot forge one with a chosen slot/generation by raw
 // field construction — the generational use-after-free protection rests on that.
-opaque struct PoolRef<T> {
+pub opaque struct PoolRef<T> {
     index: usize,
     gen: u32,
 }
@@ -37,13 +37,13 @@ impl PoolRef {
     }
 }
 
-enum PoolError {
+pub enum PoolError {
     Full,
     StaleHandle, // the slot was freed (or freed + reused) since this handle was issued
     Uninitialized, // the slot is reserved but has not been written yet
 }
 
-export fn pool_init(comptime T: type, comptime N: usize, p: *mut Pool<T, N>) -> void {
+pub fn pool_init(comptime T: type, comptime N: usize, p: *mut Pool<T, N>) -> void {
     var i: usize = 0;
     while i < N {
         p.used[i] = false;
@@ -55,7 +55,7 @@ export fn pool_init(comptime T: type, comptime N: usize, p: *mut Pool<T, N>) -> 
 }
 
 // Reserve a free slot; the handle records the slot's current generation.
-export fn pool_alloc(comptime T: type, comptime N: usize, p: *mut Pool<T, N>) -> Result<PoolRef<T>, PoolError> {
+pub fn pool_alloc(comptime T: type, comptime N: usize, p: *mut Pool<T, N>) -> Result<PoolRef<T>, PoolError> {
     var i: usize = 0;
     while i < N {
         if !p.used[i] {
@@ -71,7 +71,7 @@ export fn pool_alloc(comptime T: type, comptime N: usize, p: *mut Pool<T, N>) ->
 
 // Free a slot, bumping its generation so outstanding handles become stale. A handle to
 // an already-free slot (double free) or a stale generation is StaleHandle.
-export fn pool_free(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: PoolRef<T>) -> Result<bool, PoolError> {
+pub fn pool_free(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: PoolRef<T>) -> Result<bool, PoolError> {
     let index: usize = PoolRef.slot(T, r);
     let gen: u32 = PoolRef.generation(T, r);
     if index >= N {
@@ -94,7 +94,7 @@ export fn pool_free(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: 
 }
 
 // Store a value into the slot behind a live handle (use-after-free caught here).
-export fn pool_set(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: PoolRef<T>, value: T) -> Result<bool, PoolError> {
+pub fn pool_set(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: PoolRef<T>, value: T) -> Result<bool, PoolError> {
     let index: usize = PoolRef.slot(T, r);
     let gen: u32 = PoolRef.generation(T, r);
     if index >= N {
@@ -112,7 +112,7 @@ export fn pool_set(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: P
 }
 
 // Load the value behind a live handle, or StaleHandle if freed / reused.
-export fn pool_load(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: PoolRef<T>) -> Result<T, PoolError> {
+pub fn pool_load(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: PoolRef<T>) -> Result<T, PoolError> {
     let index: usize = PoolRef.slot(T, r);
     let gen: u32 = PoolRef.generation(T, r);
     if index >= N {

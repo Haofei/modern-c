@@ -14,7 +14,7 @@ export fn pool_demo_run() -> u32 {
     var r1: PoolRef<Cell> = uninit;
     switch pool_alloc(Cell, 16, &g_pool) {
         ok(r) => { r1 = r; }
-        err(e) => { pass = 0; }
+        err(e) => { return 0; }
     }
     // Reserved but not initialized yet: loading must fail closed.
     switch pool_load(Cell, 16, &g_pool, r1) {
@@ -48,7 +48,7 @@ export fn pool_demo_run() -> u32 {
     var r2: PoolRef<Cell> = uninit;
     switch pool_alloc(Cell, 16, &g_pool) {
         ok(r) => { r2 = r; }
-        err(e) => { pass = 0; }
+        err(e) => { return 0; }
     }
     switch pool_load(Cell, 16, &g_pool, r1) {
         ok(c) => { pass = 0; }

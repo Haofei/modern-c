@@ -13,8 +13,8 @@ public type declarations, and local types named by public declarations.
 Total modules: **40**.
 Total public functions: **341**.
 Total public constants: **6**.
-Total public type declarations: **11**.
-Total referenced local types: **43**.
+Total public type declarations: **24**.
+Total referenced local types: **31**.
 
 ## Modules
 
@@ -66,99 +66,104 @@ Source: `std/alloc/alloc.mc`
 | Signature | Source |
 |---|---|
 | <code>trait Allocator</code> | `std/alloc/alloc.mc:13` |
-| <code>move struct Owned&lt;T&gt;</code> | `std/alloc/alloc.mc:44` |
+
+### Public types
+
+| Signature | Source |
+|---|---|
+| <code>pub move struct Owned&lt;T&gt;</code> | `std/alloc/alloc.mc:44` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn alloc_bytes(a: *mut dyn Allocator, size: usize, align: usize) -&gt; PAddr</code> | `std/alloc/alloc.mc:23` |
-| <code>export fn free_bytes(a: *mut dyn Allocator, addr: PAddr, size: usize) -&gt; void</code> | `std/alloc/alloc.mc:28` |
-| <code>export fn create(comptime T: type, a: *mut dyn Allocator) -&gt; Owned&lt;T&gt;</code> | `std/alloc/alloc.mc:50` |
-| <code>export fn own_addr(comptime T: type, o: *Owned&lt;T&gt;) -&gt; PAddr</code> | `std/alloc/alloc.mc:55` |
-| <code>export fn own_free(comptime T: type, o: Owned&lt;T&gt;) -&gt; void</code> | `std/alloc/alloc.mc:62` |
+| <code>pub fn alloc_bytes(a: *mut dyn Allocator, size: usize, align: usize) -&gt; PAddr</code> | `std/alloc/alloc.mc:23` |
+| <code>pub fn free_bytes(a: *mut dyn Allocator, addr: PAddr, size: usize) -&gt; void</code> | `std/alloc/alloc.mc:28` |
+| <code>pub fn create(comptime T: type, a: *mut dyn Allocator) -&gt; Owned&lt;T&gt;</code> | `std/alloc/alloc.mc:50` |
+| <code>pub fn own_addr(comptime T: type, o: *Owned&lt;T&gt;) -&gt; PAddr</code> | `std/alloc/alloc.mc:55` |
+| <code>pub fn own_free(comptime T: type, o: Owned&lt;T&gt;) -&gt; void</code> | `std/alloc/alloc.mc:62` |
 
 ## `std/alloc/arena`
 
 Source: `std/alloc/arena.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>move struct Arena</code> | `std/alloc/arena.mc:13` |
-| <code>opaque struct GenRef&lt;T&gt;</code> | `std/alloc/arena.mc:105` |
-| <code>enum ArenaError</code> | `std/alloc/arena.mc:122` |
+| <code>pub move struct Arena</code> | `std/alloc/arena.mc:13` |
+| <code>pub opaque struct GenRef&lt;T&gt;</code> | `std/alloc/arena.mc:105` |
+| <code>pub enum ArenaError</code> | `std/alloc/arena.mc:122` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn arena_init(region: PhysRange) -&gt; Arena</code> | `std/alloc/arena.mc:22` |
-| <code>export fn arena_alloc(a: *mut Arena, size: usize, align: usize) -&gt; PAddr</code> | `std/alloc/arena.mc:29` |
-| <code>export fn arena_reset(a: *mut Arena) -&gt; void</code> | `std/alloc/arena.mc:43` |
-| <code>export fn arena_available(a: *mut Arena) -&gt; usize</code> | `std/alloc/arena.mc:49` |
-| <code>export fn arena_destroy(a: Arena) -&gt; void</code> | `std/alloc/arena.mc:55` |
-| <code>export fn arena_allocator(a: *mut Arena) -&gt; *mut dyn Allocator</code> | `std/alloc/arena.mc:89` |
-| <code>export fn arena_alloc_gen(comptime T: type, a: *mut Arena, size: usize, align: usize) -&gt; GenRef&lt;T&gt;</code> | `std/alloc/arena.mc:129` |
-| <code>export fn arena_resolve(comptime T: type, a: *mut Arena, h: GenRef&lt;T&gt;) -&gt; Result&lt;PAddr, ArenaError&gt;</code> | `std/alloc/arena.mc:144` |
+| <code>pub fn arena_init(region: PhysRange) -&gt; Arena</code> | `std/alloc/arena.mc:22` |
+| <code>pub fn arena_alloc(a: *mut Arena, size: usize, align: usize) -&gt; PAddr</code> | `std/alloc/arena.mc:29` |
+| <code>pub fn arena_reset(a: *mut Arena) -&gt; void</code> | `std/alloc/arena.mc:43` |
+| <code>pub fn arena_available(a: *mut Arena) -&gt; usize</code> | `std/alloc/arena.mc:49` |
+| <code>pub fn arena_destroy(a: Arena) -&gt; void</code> | `std/alloc/arena.mc:55` |
+| <code>pub fn arena_allocator(a: *mut Arena) -&gt; *mut dyn Allocator</code> | `std/alloc/arena.mc:89` |
+| <code>pub fn arena_alloc_gen(comptime T: type, a: *mut Arena, size: usize, align: usize) -&gt; GenRef&lt;T&gt;</code> | `std/alloc/arena.mc:129` |
+| <code>pub fn arena_resolve(comptime T: type, a: *mut Arena, h: GenRef&lt;T&gt;) -&gt; Result&lt;PAddr, ArenaError&gt;</code> | `std/alloc/arena.mc:144` |
 
 ## `std/alloc/dma`
 
 Source: `std/alloc/dma.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>move struct CpuBuffer</code> | `std/alloc/dma.mc:15` |
-| <code>move struct DeviceBuffer</code> | `std/alloc/dma.mc:21` |
-| <code>enum DmaError</code> | `std/alloc/dma.mc:37` |
+| <code>pub move struct CpuBuffer</code> | `std/alloc/dma.mc:15` |
+| <code>pub move struct DeviceBuffer</code> | `std/alloc/dma.mc:21` |
+| <code>pub enum DmaError</code> | `std/alloc/dma.mc:37` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn alloc(len: usize) -&gt; CpuBuffer</code> | `std/alloc/dma.mc:42` |
-| <code>export fn try_alloc(len: usize) -&gt; Result&lt;CpuBuffer, DmaError&gt;</code> | `std/alloc/dma.mc:53` |
-| <code>export fn free(b: CpuBuffer) -&gt; void</code> | `std/alloc/dma.mc:65` |
-| <code>export fn clean_for_device(b: CpuBuffer) -&gt; DeviceBuffer</code> | `std/alloc/dma.mc:75` |
-| <code>export fn invalidate_for_cpu(b: DeviceBuffer) -&gt; CpuBuffer</code> | `std/alloc/dma.mc:86` |
-| <code>export fn device_addr(b: *DeviceBuffer) -&gt; DmaAddr</code> | `std/alloc/dma.mc:96` |
-| <code>export fn cpu_addr(b: *CpuBuffer) -&gt; PAddr</code> | `std/alloc/dma.mc:102` |
-| <code>export fn cpu_len(b: *CpuBuffer) -&gt; usize</code> | `std/alloc/dma.mc:106` |
-| <code>export fn write_u8(b: *CpuBuffer, offset: usize, value: u8) -&gt; void</code> | `std/alloc/dma.mc:131` |
-| <code>export fn read_u8(b: *CpuBuffer, offset: usize) -&gt; u8</code> | `std/alloc/dma.mc:140` |
-| <code>export fn write_be16(b: *CpuBuffer, offset: usize, value: u16) -&gt; void</code> | `std/alloc/dma.mc:149` |
-| <code>export fn read_be16(b: *CpuBuffer, offset: usize) -&gt; u16</code> | `std/alloc/dma.mc:155` |
-| <code>export fn write_be32(b: *CpuBuffer, offset: usize, value: u32) -&gt; void</code> | `std/alloc/dma.mc:161` |
-| <code>export fn read_be32(b: *CpuBuffer, offset: usize) -&gt; u32</code> | `std/alloc/dma.mc:169` |
-| <code>export fn write_le16(b: *CpuBuffer, offset: usize, value: u16) -&gt; void</code> | `std/alloc/dma.mc:179` |
-| <code>export fn write_le32(b: *CpuBuffer, offset: usize, value: u32) -&gt; void</code> | `std/alloc/dma.mc:185` |
-| <code>export fn write_le64(b: *CpuBuffer, offset: usize, value: u64) -&gt; void</code> | `std/alloc/dma.mc:193` |
-| <code>export fn read_le32(b: *CpuBuffer, offset: usize) -&gt; u32</code> | `std/alloc/dma.mc:199` |
+| <code>pub fn alloc(len: usize) -&gt; CpuBuffer</code> | `std/alloc/dma.mc:42` |
+| <code>pub fn try_alloc(len: usize) -&gt; Result&lt;CpuBuffer, DmaError&gt;</code> | `std/alloc/dma.mc:53` |
+| <code>pub fn free(b: CpuBuffer) -&gt; void</code> | `std/alloc/dma.mc:65` |
+| <code>pub fn clean_for_device(b: CpuBuffer) -&gt; DeviceBuffer</code> | `std/alloc/dma.mc:75` |
+| <code>pub fn invalidate_for_cpu(b: DeviceBuffer) -&gt; CpuBuffer</code> | `std/alloc/dma.mc:86` |
+| <code>pub fn device_addr(b: *DeviceBuffer) -&gt; DmaAddr</code> | `std/alloc/dma.mc:96` |
+| <code>pub fn cpu_addr(b: *CpuBuffer) -&gt; PAddr</code> | `std/alloc/dma.mc:102` |
+| <code>pub fn cpu_len(b: *CpuBuffer) -&gt; usize</code> | `std/alloc/dma.mc:106` |
+| <code>pub fn write_u8(b: *CpuBuffer, offset: usize, value: u8) -&gt; void</code> | `std/alloc/dma.mc:131` |
+| <code>pub fn read_u8(b: *CpuBuffer, offset: usize) -&gt; u8</code> | `std/alloc/dma.mc:140` |
+| <code>pub fn write_be16(b: *CpuBuffer, offset: usize, value: u16) -&gt; void</code> | `std/alloc/dma.mc:149` |
+| <code>pub fn read_be16(b: *CpuBuffer, offset: usize) -&gt; u16</code> | `std/alloc/dma.mc:155` |
+| <code>pub fn write_be32(b: *CpuBuffer, offset: usize, value: u32) -&gt; void</code> | `std/alloc/dma.mc:161` |
+| <code>pub fn read_be32(b: *CpuBuffer, offset: usize) -&gt; u32</code> | `std/alloc/dma.mc:169` |
+| <code>pub fn write_le16(b: *CpuBuffer, offset: usize, value: u16) -&gt; void</code> | `std/alloc/dma.mc:179` |
+| <code>pub fn write_le32(b: *CpuBuffer, offset: usize, value: u32) -&gt; void</code> | `std/alloc/dma.mc:185` |
+| <code>pub fn write_le64(b: *CpuBuffer, offset: usize, value: u64) -&gt; void</code> | `std/alloc/dma.mc:193` |
+| <code>pub fn read_le32(b: *CpuBuffer, offset: usize) -&gt; u32</code> | `std/alloc/dma.mc:199` |
 
 ## `std/alloc/pool`
 
 Source: `std/alloc/pool.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct Pool&lt;T, N&gt;</code> | `std/alloc/pool.mc:12` |
-| <code>opaque struct PoolRef&lt;T&gt;</code> | `std/alloc/pool.mc:23` |
-| <code>enum PoolError</code> | `std/alloc/pool.mc:40` |
+| <code>pub struct Pool&lt;T, N&gt;</code> | `std/alloc/pool.mc:12` |
+| <code>pub opaque struct PoolRef&lt;T&gt;</code> | `std/alloc/pool.mc:23` |
+| <code>pub enum PoolError</code> | `std/alloc/pool.mc:40` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn pool_init(comptime T: type, comptime N: usize, p: *mut Pool&lt;T, N&gt;) -&gt; void</code> | `std/alloc/pool.mc:46` |
-| <code>export fn pool_alloc(comptime T: type, comptime N: usize, p: *mut Pool&lt;T, N&gt;) -&gt; Result&lt;PoolRef&lt;T&gt;, PoolError&gt;</code> | `std/alloc/pool.mc:58` |
-| <code>export fn pool_free(comptime T: type, comptime N: usize, p: *mut Pool&lt;T, N&gt;, r: PoolRef&lt;T&gt;) -&gt; Result&lt;bool, PoolError&gt;</code> | `std/alloc/pool.mc:74` |
-| <code>export fn pool_set(comptime T: type, comptime N: usize, p: *mut Pool&lt;T, N&gt;, r: PoolRef&lt;T&gt;, value: T) -&gt; Result&lt;bool, PoolError&gt;</code> | `std/alloc/pool.mc:97` |
-| <code>export fn pool_load(comptime T: type, comptime N: usize, p: *mut Pool&lt;T, N&gt;, r: PoolRef&lt;T&gt;) -&gt; Result&lt;T, PoolError&gt;</code> | `std/alloc/pool.mc:115` |
+| <code>pub fn pool_init(comptime T: type, comptime N: usize, p: *mut Pool&lt;T, N&gt;) -&gt; void</code> | `std/alloc/pool.mc:46` |
+| <code>pub fn pool_alloc(comptime T: type, comptime N: usize, p: *mut Pool&lt;T, N&gt;) -&gt; Result&lt;PoolRef&lt;T&gt;, PoolError&gt;</code> | `std/alloc/pool.mc:58` |
+| <code>pub fn pool_free(comptime T: type, comptime N: usize, p: *mut Pool&lt;T, N&gt;, r: PoolRef&lt;T&gt;) -&gt; Result&lt;bool, PoolError&gt;</code> | `std/alloc/pool.mc:74` |
+| <code>pub fn pool_set(comptime T: type, comptime N: usize, p: *mut Pool&lt;T, N&gt;, r: PoolRef&lt;T&gt;, value: T) -&gt; Result&lt;bool, PoolError&gt;</code> | `std/alloc/pool.mc:97` |
+| <code>pub fn pool_load(comptime T: type, comptime N: usize, p: *mut Pool&lt;T, N&gt;, r: PoolRef&lt;T&gt;) -&gt; Result&lt;T, PoolError&gt;</code> | `std/alloc/pool.mc:115` |
 
 ## `std/ascii`
 
@@ -278,23 +283,24 @@ Source: `std/canary.mc`
 
 Source: `std/collections/arc.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>move struct Arc&lt;T&gt;</code> | `std/collections/arc.mc:25` |
+| <code>pub struct ArcBlock&lt;T&gt;</code> | `std/collections/arc.mc:16` |
+| <code>pub move struct Arc&lt;T&gt;</code> | `std/collections/arc.mc:25` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn arc_new(comptime T: type, a: *mut dyn Allocator, value: T) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:31` |
-| <code>export fn arc_new_uninit(comptime T: type, a: *mut dyn Allocator) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:41` |
-| <code>export fn arc_clone(comptime T: type, h: *Arc&lt;T&gt;) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:50` |
-| <code>export fn arc_get(comptime T: type, h: *Arc&lt;T&gt;) -&gt; *const T</code> | `std/collections/arc.mc:70` |
-| <code>export fn arc_get_mut(comptime T: type, h: *Arc&lt;T&gt;) -&gt; *mut T</code> | `std/collections/arc.mc:83` |
-| <code>export fn arc_count(comptime T: type, h: *Arc&lt;T&gt;) -&gt; u32</code> | `std/collections/arc.mc:92` |
-| <code>export fn arc_drop(comptime T: type, h: Arc&lt;T&gt;) -&gt; bool</code> | `std/collections/arc.mc:100` |
+| <code>pub fn arc_new(comptime T: type, a: *mut dyn Allocator, value: T) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:31` |
+| <code>pub fn arc_new_uninit(comptime T: type, a: *mut dyn Allocator) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:41` |
+| <code>pub fn arc_clone(comptime T: type, h: *Arc&lt;T&gt;) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:50` |
+| <code>pub fn arc_get(comptime T: type, h: *Arc&lt;T&gt;) -&gt; *const T</code> | `std/collections/arc.mc:70` |
+| <code>pub fn arc_get_mut(comptime T: type, h: *Arc&lt;T&gt;) -&gt; *mut T</code> | `std/collections/arc.mc:83` |
+| <code>pub fn arc_count(comptime T: type, h: *Arc&lt;T&gt;) -&gt; u32</code> | `std/collections/arc.mc:92` |
+| <code>pub fn arc_drop(comptime T: type, h: Arc&lt;T&gt;) -&gt; bool</code> | `std/collections/arc.mc:100` |
 
 ## `std/collections/dynarray`
 
@@ -642,36 +648,36 @@ Source: `std/mem.mc`
 
 Source: `std/mmio.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct RegField</code> | `std/mmio.mc:27` |
+| <code>pub struct RegField</code> | `std/mmio.mc:27` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export const fn reg_field(shift: u32, width: u32) -&gt; RegField</code> | `std/mmio.mc:34` |
-| <code>export const fn reg_field_mask(f: RegField) -&gt; u32</code> | `std/mmio.mc:55` |
-| <code>export const fn reg_field_get(reg: u32, f: RegField) -&gt; u32</code> | `std/mmio.mc:60` |
-| <code>export const fn reg_field_set(reg: u32, f: RegField, value: u32) -&gt; u32</code> | `std/mmio.mc:66` |
-| <code>export const fn reg_bit(n: u32) -&gt; u32</code> | `std/mmio.mc:74` |
-| <code>export const fn reg_bit_set(reg: u32, n: u32) -&gt; u32</code> | `std/mmio.mc:81` |
-| <code>export const fn reg_bit_clear(reg: u32, n: u32) -&gt; u32</code> | `std/mmio.mc:85` |
-| <code>export const fn reg_bit_toggle(reg: u32, n: u32) -&gt; u32</code> | `std/mmio.mc:89` |
-| <code>export const fn reg_bit_test(reg: u32, n: u32) -&gt; bool</code> | `std/mmio.mc:93` |
-| <code>export const fn reg_set_bits(reg: u32, mask: u32) -&gt; u32</code> | `std/mmio.mc:99` |
-| <code>export const fn reg_clear_bits(reg: u32, mask: u32) -&gt; u32</code> | `std/mmio.mc:103` |
-| <code>export const fn reg_test_all(reg: u32, mask: u32) -&gt; bool</code> | `std/mmio.mc:108` |
-| <code>export const fn reg_test_any(reg: u32, mask: u32) -&gt; bool</code> | `std/mmio.mc:112` |
-| <code>export fn mmio_write_block(dst: PAddr, src: PAddr, len: usize) -&gt; void</code> | `std/mmio.mc:125` |
-| <code>export fn mmio_read_block(dst: PAddr, src: PAddr, len: usize) -&gt; void</code> | `std/mmio.mc:138` |
-| <code>export fn mmio_write32(reg: PAddr, value: u32) -&gt; void</code> | `std/mmio.mc:152` |
-| <code>export fn mmio_read32(reg: PAddr) -&gt; u32</code> | `std/mmio.mc:159` |
-| <code>export fn mmio_modify_field(reg: PAddr, f: RegField, value: u32) -&gt; void</code> | `std/mmio.mc:170` |
-| <code>export fn mmio_set_bits(reg: PAddr, mask: u32) -&gt; void</code> | `std/mmio.mc:176` |
-| <code>export fn mmio_clear_bits(reg: PAddr, mask: u32) -&gt; void</code> | `std/mmio.mc:182` |
+| <code>pub const fn reg_field(shift: u32, width: u32) -&gt; RegField</code> | `std/mmio.mc:34` |
+| <code>pub const fn reg_field_mask(f: RegField) -&gt; u32</code> | `std/mmio.mc:55` |
+| <code>pub const fn reg_field_get(reg: u32, f: RegField) -&gt; u32</code> | `std/mmio.mc:60` |
+| <code>pub const fn reg_field_set(reg: u32, f: RegField, value: u32) -&gt; u32</code> | `std/mmio.mc:66` |
+| <code>pub const fn reg_bit(n: u32) -&gt; u32</code> | `std/mmio.mc:74` |
+| <code>pub const fn reg_bit_set(reg: u32, n: u32) -&gt; u32</code> | `std/mmio.mc:81` |
+| <code>pub const fn reg_bit_clear(reg: u32, n: u32) -&gt; u32</code> | `std/mmio.mc:85` |
+| <code>pub const fn reg_bit_toggle(reg: u32, n: u32) -&gt; u32</code> | `std/mmio.mc:89` |
+| <code>pub const fn reg_bit_test(reg: u32, n: u32) -&gt; bool</code> | `std/mmio.mc:93` |
+| <code>pub const fn reg_set_bits(reg: u32, mask: u32) -&gt; u32</code> | `std/mmio.mc:99` |
+| <code>pub const fn reg_clear_bits(reg: u32, mask: u32) -&gt; u32</code> | `std/mmio.mc:103` |
+| <code>pub const fn reg_test_all(reg: u32, mask: u32) -&gt; bool</code> | `std/mmio.mc:108` |
+| <code>pub const fn reg_test_any(reg: u32, mask: u32) -&gt; bool</code> | `std/mmio.mc:112` |
+| <code>pub fn mmio_write_block(dst: PAddr, src: PAddr, len: usize) -&gt; void</code> | `std/mmio.mc:125` |
+| <code>pub fn mmio_read_block(dst: PAddr, src: PAddr, len: usize) -&gt; void</code> | `std/mmio.mc:138` |
+| <code>pub fn mmio_write32(reg: PAddr, value: u32) -&gt; void</code> | `std/mmio.mc:152` |
+| <code>pub fn mmio_read32(reg: PAddr) -&gt; u32</code> | `std/mmio.mc:159` |
+| <code>pub fn mmio_modify_field(reg: PAddr, f: RegField, value: u32) -&gt; void</code> | `std/mmio.mc:170` |
+| <code>pub fn mmio_set_bits(reg: PAddr, mask: u32) -&gt; void</code> | `std/mmio.mc:176` |
+| <code>pub fn mmio_clear_bits(reg: PAddr, mask: u32) -&gt; void</code> | `std/mmio.mc:182` |
 
 ## `std/scan`
 

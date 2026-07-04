@@ -13,7 +13,7 @@ import "std/alloc/alloc.mc";
 
 // `value` is first (offset 0) so arc_get can mint a pointer straight from the
 // block address — avoids taking `&blk.value` (which the escape analysis over-rejects).
-struct ArcBlock<T> {
+pub struct ArcBlock<T> {
     value: T,
     count: atomic<u32>,
 }
@@ -22,13 +22,13 @@ struct ArcBlock<T> {
 // `arc_drop` frees the block through that exact allocator with no separate, possibly
 // mismatched, allocator argument. Every clone copies the same provenance. The
 // allocator must outlive every handle (it is borrowed, not owned).
-move struct Arc<T> {
+pub move struct Arc<T> {
     block: PAddr,
     allocator: *mut dyn Allocator, // provenance: the allocator that minted `block`
 }
 
 // Allocate a new refcounted block holding `value`, with one owner.
-export fn arc_new(comptime T: type, a: *mut dyn Allocator, value: T) -> Arc<T> {
+pub fn arc_new(comptime T: type, a: *mut dyn Allocator, value: T) -> Arc<T> {
     let addr: PAddr = alloc_bytes(a, sizeof(ArcBlock<T>), alignof(ArcBlock<T>));
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(addr);
     blk.count.store(1, .release);
@@ -38,7 +38,7 @@ export fn arc_new(comptime T: type, a: *mut dyn Allocator, value: T) -> Arc<T> {
 
 // Allocate a refcounted block with one owner but an *uninitialized* value — the caller
 // fills it via `arc_get_mut` before cloning or publishing it.
-export fn arc_new_uninit(comptime T: type, a: *mut dyn Allocator) -> Arc<T> {
+pub fn arc_new_uninit(comptime T: type, a: *mut dyn Allocator) -> Arc<T> {
     let addr: PAddr = alloc_bytes(a, sizeof(ArcBlock<T>), alignof(ArcBlock<T>));
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(addr);
     blk.count.store(1, .release);
@@ -47,7 +47,7 @@ export fn arc_new_uninit(comptime T: type, a: *mut dyn Allocator) -> Arc<T> {
 
 // Add an owner: bump the count and return another handle to the same block, carrying
 // the same allocator provenance.
-export fn arc_clone(comptime T: type, h: *Arc<T>) -> Arc<T> {
+pub fn arc_clone(comptime T: type, h: *Arc<T>) -> Arc<T> {
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(h.block);
     // Check the saturation cap *before* incrementing, so the count is never wrapped to a
     // bogus value. A plain `fetch_add` would write `0` for one instant when the previous
@@ -67,7 +67,7 @@ export fn arc_clone(comptime T: type, h: *Arc<T>) -> Arc<T> {
 
 // Borrow the shared value immutably (valid while any handle lives). `value` is at
 // the block's base, so the typed pointer is the block address reinterpreted as T.
-export fn arc_get(comptime T: type, h: *Arc<T>) -> *const T {
+pub fn arc_get(comptime T: type, h: *Arc<T>) -> *const T {
     var p: *const T = raw.ptr<T>(0);
     unsafe {
         p = raw.ptr<T>(h.block);
@@ -80,7 +80,7 @@ export fn arc_get(comptime T: type, h: *Arc<T>) -> *const T {
 // `arc_clone` from aliasing the returned `*mut T`. Callers must be in an `unsafe` block and
 // must not clone or publish the handle while the pointer is live (the checker enforces the
 // unsafe context, not the no-aliasing rule).
-export fn arc_get_mut(comptime T: type, h: *Arc<T>) -> *mut T {
+pub fn arc_get_mut(comptime T: type, h: *Arc<T>) -> *mut T {
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(h.block);
     if blk.count.load(.acquire) != 1 {
         unreachable; // mutable access requires unique ownership
@@ -89,7 +89,7 @@ export fn arc_get_mut(comptime T: type, h: *Arc<T>) -> *mut T {
 }
 
 // The current owner count (for tests / debugging).
-export fn arc_count(comptime T: type, h: *Arc<T>) -> u32 {
+pub fn arc_count(comptime T: type, h: *Arc<T>) -> u32 {
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(h.block);
     return blk.count.load(.acquire);
 }
@@ -97,7 +97,7 @@ export fn arc_count(comptime T: type, h: *Arc<T>) -> u32 {
 // Drop an owner, consuming this handle. Frees the block iff it was the last owner;
 // returns whether it freed. The block is reclaimed through the handle's own
 // allocator provenance, so it can never be freed through the wrong allocator.
-export fn arc_drop(comptime T: type, h: Arc<T>) -> bool {
+pub fn arc_drop(comptime T: type, h: Arc<T>) -> bool {
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(h.block);
     let prev: u32 = blk.count.fetch_sub(1, .acq_rel);
     var freed: bool = false;

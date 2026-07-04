@@ -10,7 +10,7 @@ import "std/addr.mc";
 import "std/alloc/alloc.mc";
 import "std/math.mc";
 
-move struct Arena {
+pub move struct Arena {
     base: PAddr,
     next: PAddr, // bump frontier
     end: PAddr,
@@ -19,14 +19,14 @@ move struct Arena {
 
 // Build an arena over a physical region (e.g. a frame range reserved at boot). The
 // region is caller-owned; the arena borrows it and reclaims via reset, not free.
-export fn arena_init(region: PhysRange) -> Arena {
+pub fn arena_init(region: PhysRange) -> Arena {
     let start: PAddr = pr_start(&region);
     return .{ .base = start, .next = start, .end = pr_end(&region), .gen = 0 };
 }
 
 // Bump `size` bytes aligned to `align` (a power of two). Traps if exhausted. Borrows
 // the arena (does not consume it).
-export fn arena_alloc(a: *mut Arena, size: usize, align: usize) -> PAddr {
+pub fn arena_alloc(a: *mut Arena, size: usize, align: usize) -> PAddr {
     let start: PAddr = pa_align_up(a.next, align);
     let next: PAddr = pa_offset(start, size); // checked: traps on overflow
     if pa_lt(a.end, next) {
@@ -40,19 +40,19 @@ export fn arena_alloc(a: *mut Arena, size: usize, align: usize) -> PAddr {
 // generation uses checked addition so it fails closed (traps) on exhaustion rather than
 // wrapping back to a value an old `GenRef` could match — a generational handle must never
 // silently revive after 2^32 resets. This matches std/grant's revoke discipline.
-export fn arena_reset(a: *mut Arena) -> void {
+pub fn arena_reset(a: *mut Arena) -> void {
     a.next = a.base;
     a.gen = a.gen + 1;
 }
 
 // Bytes still available between the bump frontier and the end of the region.
-export fn arena_available(a: *mut Arena) -> usize {
+pub fn arena_available(a: *mut Arena) -> usize {
     return pa_diff(a.next, a.end);
 }
 
 // Consume the linear arena (its end of life). The backing region is the caller's; we
 // only need to consume `a` so the move checker is satisfied (no leak).
-export fn arena_destroy(a: Arena) -> void {
+pub fn arena_destroy(a: Arena) -> void {
     unsafe { forget_unchecked(a); } // consume the linear arena (the backing region is the caller's)
 }
 
@@ -86,7 +86,7 @@ impl Allocator for Arena {
 
 // View the arena as a generic `*mut dyn Allocator` (std/alloc) — the checked coercion
 // synthesizes the shared rodata vtable; the arena itself is the trait object's data.
-export fn arena_allocator(a: *mut Arena) -> *mut dyn Allocator {
+pub fn arena_allocator(a: *mut Arena) -> *mut dyn Allocator {
     return a;
 }
 
@@ -102,7 +102,7 @@ export fn arena_allocator(a: *mut Arena) -> *mut dyn Allocator {
 // functions, so outside code cannot forge one with a chosen address/generation by raw
 // field construction — the use-after-reset protection rests on that. The in-bounds check
 // in `arena_resolve` is kept as belt-and-braces defence in depth.
-opaque struct GenRef<T> {
+pub opaque struct GenRef<T> {
     addr: PAddr,
     gen: u32,
 }
@@ -119,14 +119,14 @@ impl GenRef {
     }
 }
 
-enum ArenaError {
+pub enum ArenaError {
     StaleHandle,  // the handle predates a reset — its memory may have been reused
     ForgedHandle, // the handle's address is outside the arena's allocated region
 }
 
 // Allocate `size` bytes (aligned to `align`) and return a generational handle for a T.
 // `size`/`align` come from the concrete call site (e.g. sizeof(T)/alignof(T)).
-export fn arena_alloc_gen(comptime T: type, a: *mut Arena, size: usize, align: usize) -> GenRef<T> {
+pub fn arena_alloc_gen(comptime T: type, a: *mut Arena, size: usize, align: usize) -> GenRef<T> {
     // A `GenRef<T>` reads `sizeof(T)` bytes at the returned address, so the allocation must
     // hold at least a T and be at least as aligned — otherwise resolving the handle would
     // read past the allocation or at a misaligned address. (`size` may exceed `sizeof(T)`:
@@ -141,7 +141,7 @@ export fn arena_alloc_gen(comptime T: type, a: *mut Arena, size: usize, align: u
 }
 
 // Resolve a handle to its address iff it belongs to the arena's current generation.
-export fn arena_resolve(comptime T: type, a: *mut Arena, h: GenRef<T>) -> Result<PAddr, ArenaError> {
+pub fn arena_resolve(comptime T: type, a: *mut Arena, h: GenRef<T>) -> Result<PAddr, ArenaError> {
     let gen: u32 = GenRef.generation(T, h);
     let addr: PAddr = GenRef.address(T, h);
     if gen != a.gen {

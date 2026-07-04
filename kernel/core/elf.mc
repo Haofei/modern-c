@@ -13,7 +13,7 @@ const ELFCLASS64: u8 = 2;      // e_ident[EI_CLASS]
 const ELFDATA2LSB: u8 = 1;     // e_ident[EI_DATA]
 const PT_LOAD: u32 = 1;        // loadable segment
 
-enum ElfError {
+pub enum ElfError {
     TooSmall,        // buffer shorter than the header
     BadMagic,        // not 0x7F 'E' 'L' 'F'
     UnsupportedClass, // not ELFCLASS64
@@ -21,14 +21,14 @@ enum ElfError {
     BadProgramHeaders, // phoff/phnum/phentsize escape the buffer
 }
 
-struct ElfHeader {
+pub struct ElfHeader {
     entry: u64,
     phoff: u64,
     phnum: u16,
     phentsize: u16,
 }
 
-struct ProgramHeader {
+pub struct ProgramHeader {
     p_type: u32,
     flags: u32,
     offset: u64,
@@ -38,7 +38,7 @@ struct ProgramHeader {
 }
 
 // Parse + validate the ELF64 header (field offsets per the ELF64 spec).
-export fn elf_parse_header(r: *ByteReader) -> Result<ElfHeader, ElfError> {
+pub fn elf_parse_header(r: *ByteReader) -> Result<ElfHeader, ElfError> {
     if br_len(r) < EH_SIZE {
         return err(.TooSmall);
     }
@@ -89,7 +89,7 @@ export fn elf_parse_header(r: *ByteReader) -> Result<ElfHeader, ElfError> {
 }
 
 // Parse the i-th program header. `table_off` = e_phoff, `entsize` = e_phentsize.
-export fn elf_program_header(r: *ByteReader, table_off: usize, entsize: usize, i: usize) -> ProgramHeader {
+pub fn elf_program_header(r: *ByteReader, table_off: usize, entsize: usize, i: usize) -> ProgramHeader {
     let off: usize = table_off + i * entsize;
     return .{
         .p_type = br_le32(r, off + 0),
@@ -101,7 +101,7 @@ export fn elf_program_header(r: *ByteReader, table_off: usize, entsize: usize, i
     };
 }
 
-export fn ph_is_load(p: *ProgramHeader) -> bool {
+pub fn ph_is_load(p: *ProgramHeader) -> bool {
     return p.p_type == PT_LOAD;
 }
 
@@ -114,7 +114,7 @@ export fn ph_is_load(p: *ProgramHeader) -> bool {
 // claims more than the image holds is rejected cleanly (BadProgramHeaders) instead of
 // driving br_copy_to's trapping reads off the end. On success returns the number of
 // bytes copied from the image (filesz) so the loader can advance; err stops the load.
-export fn elf_load_segment(elf: *ByteReader, p: *ProgramHeader, dst: PAddr) -> Result<usize, ElfError> {
+pub fn elf_load_segment(elf: *ByteReader, p: *ProgramHeader, dst: PAddr) -> Result<usize, ElfError> {
     let filesz: usize = p.filesz as usize;
     let memsz: usize = p.memsz as usize;
     let src_off: usize = p.offset as usize;

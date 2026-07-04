@@ -24,14 +24,14 @@ import "std/addr.mc";
 // ===== register bit-fields (pure; fold at comptime) =========================
 
 // A contiguous field occupying bits [shift, shift+width) of a 32-bit register.
-struct RegField {
+pub struct RegField {
     shift: u32,
     width: u32,
 }
 
 // Build a field, trapping on a nonsensical geometry (so a bad `(shift, width)` is a
 // comptime error when the arguments are constant, not a silent wrong mask).
-export const fn reg_field(shift: u32, width: u32) -> RegField {
+pub const fn reg_field(shift: u32, width: u32) -> RegField {
     if width == 0 {
         unreachable; // a zero-width field selects no bits
     }
@@ -52,18 +52,18 @@ const fn field_value_mask(width: u32) -> u32 {
 }
 
 // The field's mask positioned in the register (1s over [shift, shift+width)).
-export const fn reg_field_mask(f: RegField) -> u32 {
+pub const fn reg_field_mask(f: RegField) -> u32 {
     return wrapping_shl_u32(field_value_mask(f.width), f.shift);
 }
 
 // Extract `f`'s value from a register word (right-justified).
-export const fn reg_field_get(reg: u32, f: RegField) -> u32 {
+pub const fn reg_field_get(reg: u32, f: RegField) -> u32 {
     return (reg >> f.shift) & field_value_mask(f.width);
 }
 
 // Return `reg` with field `f` replaced by `value` (value is masked to the field
 // width, so an over-wide value cannot bleed into a neighbouring field).
-export const fn reg_field_set(reg: u32, f: RegField, value: u32) -> u32 {
+pub const fn reg_field_set(reg: u32, f: RegField, value: u32) -> u32 {
     let cleared: u32 = reg & (~reg_field_mask(f));
     let placed: u32 = wrapping_shl_u32(value & field_value_mask(f.width), f.shift);
     return cleared | placed;
@@ -71,45 +71,45 @@ export const fn reg_field_set(reg: u32, f: RegField, value: u32) -> u32 {
 
 // ----- single-bit convenience (bit `n`, 0..31) -----
 
-export const fn reg_bit(n: u32) -> u32 {
+pub const fn reg_bit(n: u32) -> u32 {
     if n >= 32 {
         unreachable;
     }
     return wrapping_shl_u32(1, n);
 }
 
-export const fn reg_bit_set(reg: u32, n: u32) -> u32 {
+pub const fn reg_bit_set(reg: u32, n: u32) -> u32 {
     return reg | reg_bit(n);
 }
 
-export const fn reg_bit_clear(reg: u32, n: u32) -> u32 {
+pub const fn reg_bit_clear(reg: u32, n: u32) -> u32 {
     return reg & (~reg_bit(n));
 }
 
-export const fn reg_bit_toggle(reg: u32, n: u32) -> u32 {
+pub const fn reg_bit_toggle(reg: u32, n: u32) -> u32 {
     return reg ^ reg_bit(n);
 }
 
-export const fn reg_bit_test(reg: u32, n: u32) -> bool {
+pub const fn reg_bit_test(reg: u32, n: u32) -> bool {
     return (reg & reg_bit(n)) != 0;
 }
 
 // ----- whole-mask set/clear/test (a mask names one or more bits at once) -----
 
-export const fn reg_set_bits(reg: u32, mask: u32) -> u32 {
+pub const fn reg_set_bits(reg: u32, mask: u32) -> u32 {
     return reg | mask;
 }
 
-export const fn reg_clear_bits(reg: u32, mask: u32) -> u32 {
+pub const fn reg_clear_bits(reg: u32, mask: u32) -> u32 {
     return reg & (~mask);
 }
 
 // True iff every bit in `mask` is set; `reg_test_any` is true iff at least one is.
-export const fn reg_test_all(reg: u32, mask: u32) -> bool {
+pub const fn reg_test_all(reg: u32, mask: u32) -> bool {
     return (reg & mask) == mask;
 }
 
-export const fn reg_test_any(reg: u32, mask: u32) -> bool {
+pub const fn reg_test_any(reg: u32, mask: u32) -> bool {
     return (reg & mask) != 0;
 }
 
@@ -122,7 +122,7 @@ export const fn reg_test_any(reg: u32, mask: u32) -> bool {
 // by an acquire fence so later loads observe the data the burst brought in.
 
 // Copy `len` bytes from CPU memory `src` into device window `dst`.
-export fn mmio_write_block(dst: PAddr, src: PAddr, len: usize) -> void {
+pub fn mmio_write_block(dst: PAddr, src: PAddr, len: usize) -> void {
     fence.release();
     var i: usize = 0;
     while i < len {
@@ -135,7 +135,7 @@ export fn mmio_write_block(dst: PAddr, src: PAddr, len: usize) -> void {
 }
 
 // Copy `len` bytes from device window `src` into CPU memory `dst`.
-export fn mmio_read_block(dst: PAddr, src: PAddr, len: usize) -> void {
+pub fn mmio_read_block(dst: PAddr, src: PAddr, len: usize) -> void {
     var i: usize = 0;
     while i < len {
         unsafe {
@@ -149,14 +149,14 @@ export fn mmio_read_block(dst: PAddr, src: PAddr, len: usize) -> void {
 
 // Single ordered 32-bit register store/load at a computed address — for a register
 // bank reached by offset (where a static `mmio struct` layout does not fit).
-export fn mmio_write32(reg: PAddr, value: u32) -> void {
+pub fn mmio_write32(reg: PAddr, value: u32) -> void {
     fence.release();
     unsafe {
         raw.store<u32>(reg, value);
     }
 }
 
-export fn mmio_read32(reg: PAddr) -> u32 {
+pub fn mmio_read32(reg: PAddr) -> u32 {
     var value: u32 = 0;
     unsafe {
         value = raw.load<u32>(reg);
@@ -167,19 +167,19 @@ export fn mmio_read32(reg: PAddr) -> u32 {
 
 // Read-modify-write one field of a 32-bit register bank slot, ordered on both
 // edges — the read/modify/write a driver does to flip a control field.
-export fn mmio_modify_field(reg: PAddr, f: RegField, value: u32) -> void {
+pub fn mmio_modify_field(reg: PAddr, f: RegField, value: u32) -> void {
     let current: u32 = mmio_read32(reg);
     mmio_write32(reg, reg_field_set(current, f, value));
 }
 
 // Ordered read-modify-write that sets (OR-in) the bits named by `mask`.
-export fn mmio_set_bits(reg: PAddr, mask: u32) -> void {
+pub fn mmio_set_bits(reg: PAddr, mask: u32) -> void {
     let current: u32 = mmio_read32(reg);
     mmio_write32(reg, reg_set_bits(current, mask));
 }
 
 // Ordered read-modify-write that clears (AND-out) the bits named by `mask`.
-export fn mmio_clear_bits(reg: PAddr, mask: u32) -> void {
+pub fn mmio_clear_bits(reg: PAddr, mask: u32) -> void {
     let current: u32 = mmio_read32(reg);
     mmio_write32(reg, reg_clear_bits(current, mask));
 }
