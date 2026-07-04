@@ -135,6 +135,7 @@ def main() -> None:
     assert_gates(module, ["tools/ci/pass-gates.py"], ["ci-pass-gates-test"])
     assert_gates(module, ["build/tiers.zig"], ["test", "ci-pass-gates-test", "fast"])
     assert_gates(module, ["tools/m0-parallel.sh"], ["test", "ci-pass-gates-test", "fast"])
+    assert_gates(module, ["tools/fast-parallel.sh"], ["test", "ci-pass-gates-test", "fast"])
     assert_gates(module, ["tools/test/contract-lint.py"], ["test-lint"])
     assert_gates(module, ["tools/toolchain/bad-diagnostics-test.py"], ["bad-diagnostics-test"])
     assert_gates(module, ["tools/toolchain/diff-backend.sh"], ["diff-backend"])

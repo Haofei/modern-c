@@ -62,6 +62,8 @@ fn accept_comptime_packed_bits_overlay_reflection() -> void {
         assert(bit_offset(UartLsr, .data_ready) == 0);
         assert(bit_offset(UartLsr, .tx_empty) == 1);
         assert(repr_of(UartLsr) == 1);
+        assert(sizeof(UartLsr) == 1);
+        assert(alignof(UartLsr) == 1);
         assert(field_offset(Word, .u) == 0);
         assert(field_offset(Word, .bytes) == 0);
         assert(alignof(Word) == 4);

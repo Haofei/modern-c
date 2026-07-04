@@ -70,6 +70,10 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i
             if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
             if (env.aliases.get(name.text)) |aliased| return comptimeSizeOf(env, aliased, depth + 1);
             if (env.structs.get(name.text)) |info| return comptimeStructSize(env, info, depth);
+            if (env.packed_bits.get(name.text)) |info| {
+                const repr = info.repr orelse return null;
+                return comptimeSizeOf(env, repr, depth + 1);
+            }
             if (env.overlay_unions.get(name.text)) |info| return comptimeOverlayUnionSize(env, info, depth);
             if (env.tagged_unions.get(name.text)) |info| return comptimeTaggedUnionSize(env, info, depth);
             if (env.enums.get(name.text)) |info| {
@@ -105,6 +109,10 @@ pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?
             if (scalarLayout(name.text)) |layout| return @intCast(layout.alignment);
             if (env.aliases.get(name.text)) |aliased| return comptimeAlignOf(env, aliased, depth + 1);
             if (env.structs.get(name.text)) |info| return comptimeStructAlign(env, info, depth);
+            if (env.packed_bits.get(name.text)) |info| {
+                const repr = info.repr orelse return null;
+                return comptimeAlignOf(env, repr, depth + 1);
+            }
             if (env.overlay_unions.get(name.text)) |info| return comptimeOverlayUnionAlign(env, info, depth);
             if (env.tagged_unions.get(name.text)) |info| return comptimeTaggedUnionAlign(env, info, depth);
             if (env.enums.get(name.text)) |info| {

@@ -86,7 +86,7 @@ RULES: tuple[Rule, ...] = (
         "CI PASS assertion helper changes need the focused CI anti-vacuity contract gate",
     ),
     Rule(
-        ("build.zig", "build/*.zig", "tools/m0-parallel.sh"),
+        ("build.zig", "build/*.zig", "tools/m0-parallel.sh", "tools/fast-parallel.sh"),
         ("test", "ci-pass-gates-test", "fast"),
         "build graph changes need tier anti-drift checks; fast is the broad host-only confidence gate",
     ),
@@ -550,6 +550,7 @@ def main() -> int:
     if gates:
         print("\nConfidence gates:")
         print("  zig build fast")
+        print("  tools/fast-parallel.sh <jobs>  # fast gates in parallel with bounded local fuzz count")
         print("  tools/m0-parallel.sh <jobs>    # broad local milestone check when the slice is large")
 
         print("\nTruth gate:")
