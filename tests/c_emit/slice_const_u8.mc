@@ -26,9 +26,7 @@ export fn slice_const_run() -> u32 {
     if first_of(msg) != 97 { return 0; }
 
     // (2) `[]mut u8` -> `[]const u8` const-narrowing.
-    var buf: [4]u8 = uninit;
-    buf[0] = 5;
-    buf[1] = 6;
+    var buf: [4]u8 = .{ 5, 6, 0, 0 };
     let n: usize = 4;
     let m: []mut u8 = buf[0..n];
     let c1: []const u8 = m;                   // implicit coercion (let)

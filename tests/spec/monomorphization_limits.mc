@@ -9,9 +9,8 @@
 
 fn runaway(comptime N: usize) -> usize {
     var scratch: [N]u8 = uninit;
-    scratch[0] = 0;
     // EXPECT_ERROR: E_MONOMORPHIZATION_LIMIT
-    return scratch[0] as usize + runaway(N + 1);
+    return N + runaway(N + 1);
 }
 
 fn trigger_monomorphization_limit() -> usize {

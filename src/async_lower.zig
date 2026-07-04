@@ -646,10 +646,11 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     }
     try fields.append(arena, .{ .name = id("result"), .ty = result_type });
 
+    const future_fields = try fields.toOwnedSlice(arena);
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .struct_decl = .{
         .name = id(fut_type),
         .abi = null,
-        .fields = try fields.toOwnedSlice(arena),
+        .fields = future_fields,
     } } });
 
     // The set of names that are now `self.*` fields: every param plus every awaited binding. An
@@ -671,17 +672,18 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
         for (b.else_steps.items) |s| if (s.binding) |nm| try field_names.put(nm, {});
     }
 
-    // ---- The constructor `fn f(params) -> f__Fut { var self: f__Fut = uninit; ...; return self; }`
-    // It zeroes state, copies params into their fields, and constructs ONLY child0 (step 0's child)
+    // ---- The constructor `fn f(params) -> f__Fut { var self: f__Fut = .{ ... }; ...; return self; }`
+    // It initializes the future root as a whole value, copies params into their fields, and constructs
+    // ONLY child0 (step 0's child)
     // from the params. Later children are built LAZILY in `poll` at their step's entry transition,
-    // so an awaited call may read an earlier `await` result. Leaving the later `__cN` fields
-    // unwritten is sound: sema def-init tracks only SCALAR `uninit` vars, and each `__cN` is written
-    // (at the transition) before its first poll. ----
+    // so an awaited call may read an earlier `await` result. Lazy fields are explicitly initialized
+    // with typed `uninit` placeholders in the whole literal, then overwritten before their state reads.
+    // ----
     var cbody: std.ArrayList(ast.Stmt) = .empty;
     try cbody.append(arena, .{ .span = zspan, .kind = .{ .var_decl = .{
         .names = try dupIdents(arena, &.{"self"}),
         .ty = try nameType(arena, fut_type),
-        .init = .{ .span = zspan, .kind = .uninit_literal },
+        .init = try initialSelfLiteral(low, future_fields, fd.params),
     } } });
     try cbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr("0")));
     for (fd.params) |p| {
@@ -998,10 +1000,11 @@ fn lowerAsyncLoopFn(
     };
     for (loopw.steps.items) |s| if (s.binding) |nm| try fields.append(arena, .{ .name = id(nm), .ty = s.result_type });
     try fields.append(arena, .{ .name = id("result"), .ty = result_type });
+    const future_fields = try fields.toOwnedSlice(arena);
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .struct_decl = .{
         .name = id(fut_type),
         .abi = null,
-        .fields = try fields.toOwnedSlice(arena),
+        .fields = future_fields,
     } } });
 
     // Captured names now read as `self.*`: params + pre-loop locals + body-awaited bindings.
@@ -1019,13 +1022,14 @@ fn lowerAsyncLoopFn(
     const done_state: usize = B + 2;
     const done_str = try std.fmt.allocPrint(arena, "{d}", .{done_state});
 
-    // ---- Constructor: build NO child eagerly (the first child is built at the loop head); copy
-    // params; REPLAY pre-loop straight-line decls as `self.x = init` stores; zero scalar fields. ----
+    // ---- Constructor: initialize the future root as a whole value but build NO child eagerly (the
+    // first child is built at the loop head); copy params; REPLAY pre-loop straight-line decls as
+    // `self.x = init` stores; zero scalar fields. ----
     var cbody: std.ArrayList(ast.Stmt) = .empty;
     try cbody.append(arena, .{ .span = zspan, .kind = .{ .var_decl = .{
         .names = try dupIdents(arena, &.{"self"}),
         .ty = try nameType(arena, fut_type),
-        .init = .{ .span = zspan, .kind = .uninit_literal },
+        .init = try initialSelfLiteral(low, future_fields, fd.params),
     } } });
     try cbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr("0")));
     for (fd.params) |p| try cbody.append(arena, assignStmt(try selfMember(arena, p.name.text), identExpr(p.name.text)));
@@ -1825,19 +1829,21 @@ fn lowerAsyncGeneralFn(
     // Awaited-binding fields (in state/await order; each unique).
     for (ctx.awaits.items) |ga| if (ga.step.binding) |nm| try fields.append(arena, .{ .name = id(nm), .ty = ga.step.result_type });
     try fields.append(arena, .{ .name = id("result"), .ty = result_type });
+    const future_fields = try fields.toOwnedSlice(arena);
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .struct_decl = .{
         .name = id(fut_type),
         .abi = null,
-        .fields = try fields.toOwnedSlice(arena),
+        .fields = future_fields,
     } } });
 
-    // ---- Constructor: zero state, copy params, replay top-level straight-line decls as stores, zero
-    // scalar fields. Build NO child eagerly (every child is built on its entry edge in `poll`). ----
+    // ---- Constructor: initialize the future root as a whole value, copy params, replay top-level
+    // straight-line decls as stores, zero scalar fields. Build NO child eagerly (every child is built
+    // on its entry edge in `poll`). ----
     var cbody: std.ArrayList(ast.Stmt) = .empty;
     try cbody.append(arena, .{ .span = zspan, .kind = .{ .var_decl = .{
         .names = try dupIdents(arena, &.{"self"}),
         .ty = try nameType(arena, fut_type),
-        .init = .{ .span = zspan, .kind = .uninit_literal },
+        .init = try initialSelfLiteral(low, future_fields, fd.params),
     } } });
     try cbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr("0")));
     for (fd.params) |p| try cbody.append(arena, assignStmt(try selfMember(arena, p.name.text), identExpr(p.name.text)));
@@ -2554,18 +2560,44 @@ fn stmtFormsSelfBorrow(s: ast.Stmt) bool {
     };
 }
 
-// A definite-init zero for a captured SCALAR field, or null for a non-scalar (a `Result`, struct,
-// pointer, …). The constructor zero-inits scalar fields only; non-scalar fields are left unwritten,
-// which is sound because (a) sema def-init tracks only scalar `uninit` vars, not aggregate fields,
-// and (b) the poll state machine overwrites a captured field before it is read. This lets an
-// `async fn` return a `Result<T, E>` (try-await): `self.result = 0` would be a type error, so it is
-// simply not emitted.
+// A definite-init zero for a captured scalar field, or null for fields that need a
+// typed `uninit` placeholder in the constructor's whole-future literal. The poll
+// state machine overwrites those placeholders before their states read them.
 fn zeroFor(low: *Lowerer, ty: ast.TypeExpr) Error!?ast.Expr {
     _ = low;
     const tn = typeName(ty) orelse return null; // non-nominal (Result, pointer, slice, …) -> skip
     if (std.mem.eql(u8, tn, "bool")) return .{ .span = zspan, .kind = .{ .bool_literal = false } };
     if (isScalarIntName(tn)) return intExpr("0");
-    return null; // a struct/aggregate nominal -> not def-init-tracked, skip
+    return null; // aggregate/other nominal -> use an explicit typed `uninit` placeholder
+}
+
+fn uninitExpr() ast.Expr {
+    return .{ .span = zspan, .kind = .uninit_literal };
+}
+
+fn paramInitializer(params: []const ast.Param, field_name: []const u8) ?ast.Expr {
+    for (params) |p| {
+        if (std.mem.eql(u8, p.name.text, field_name)) return identExpr(p.name.text);
+    }
+    return null;
+}
+
+fn initialSelfLiteral(low: *Lowerer, fields: []const ast.Field, params: []const ast.Param) Error!ast.Expr {
+    const arena = low.arena;
+    var literal_fields = try arena.alloc(ast.StructLiteralField, fields.len);
+    for (fields, 0..) |field, i| {
+        const name = field.name.text;
+        const value = if (std.mem.eql(u8, name, "state"))
+            intExpr("0")
+        else if (paramInitializer(params, name)) |param|
+            param
+        else if (try zeroFor(low, field.ty)) |zero|
+            zero
+        else
+            uninitExpr();
+        literal_fields[i] = .{ .name = field.name, .value = value };
+    }
+    return .{ .span = zspan, .kind = .{ .struct_literal = literal_fields } };
 }
 
 // Append `self.<field> = <zero>;` only when the field type has a scalar zero (see zeroFor).

@@ -45,12 +45,12 @@ fn suspend_barrier(p: *mut Slot) -> void {
 
 // which=0: struct arm A (largest). which=1: struct arm B. which=2: scalar arm.
 fn build_and_check(which: u32) -> u32 {
-    var s: Slot = uninit;
     if which == 0 {
-        let pa: *mut ArmA = &s.a;
-        pa.tag = 0x5A;
-        pa.a = 0xDEADBEEFCAFE1234;
-        pa.b = 0x11223344;
+        var s: Slot = .{
+            .b = uninit,
+            .c = uninit,
+            .a = .{ .tag = 0x5A, .a = 0xDEADBEEFCAFE1234, .b = 0x11223344 },
+        };
         suspend_barrier(&s);
         // Reload via a FRESH access to the same arm — the pointer/storage is stable.
         let ra: *mut ArmA = &s.a;
@@ -65,9 +65,11 @@ fn build_and_check(which: u32) -> u32 {
         return 1;
     }
     if which == 1 {
-        let pb: *mut ArmB = &s.b;
-        pb.x = 0xBEEF;
-        pb.y = 0xF00D;
+        var s: Slot = .{
+            .a = uninit,
+            .c = uninit,
+            .b = .{ .x = 0xBEEF, .y = 0xF00D },
+        };
         suspend_barrier(&s);
         let rb: *mut ArmB = &s.b;
         if rb.x != 0xBEEF { return 0; }
@@ -78,8 +80,7 @@ fn build_and_check(which: u32) -> u32 {
         if s.b.y != 0xF00D { return 0; }
         return 1;
     }
-    let pc: *mut u32 = &s.c;
-    pc.* = 0x99887766;
+    var s: Slot = .{ .a = uninit, .b = uninit, .c = 0x99887766 };
     suspend_barrier(&s);
     if s.c != 0x99887766 { return 0; }
     let rc: *mut u32 = &s.c;
@@ -111,13 +112,15 @@ struct Wrap {
 }
 
 fn nested_check() -> u32 {
-    var w: Wrap = uninit;
-    w.lead = 0xAAAAAAAA;
-    w.trail = 0xBBBBBBBB;
-    let pa: *mut ArmA = &w.slot.a;
-    pa.tag = 0x7E;
-    pa.a = 0x0011223344556677;
-    pa.b = 0xCAFEF00D;
+    var w: Wrap = .{
+        .lead = 0xAAAAAAAA,
+        .trail = 0xBBBBBBBB,
+        .slot = .{
+            .b = uninit,
+            .c = uninit,
+            .a = .{ .tag = 0x7E, .a = 0x0011223344556677, .b = 0xCAFEF00D },
+        },
+    };
     suspend_barrier(&w.slot);
     if w.slot.a.tag != 0x7E { return 0; }
     if w.slot.a.a != 0x0011223344556677 { return 0; }

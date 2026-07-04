@@ -127,7 +127,7 @@ fn reject_null_to_nonnull_pointer_assignment() -> *mut u8 {
 }
 
 fn reject_array_to_single_pointer_assignment() -> *mut u8 {
-    var buf: [4]u8 = uninit;
+    var buf: [4]u8 = .{ 0, 0, 0, 0 };
     var p: *mut u8 = &buf[0];
     // EXPECT_ERROR: E_ARRAY_TO_POINTER_DECAY
     p = buf;

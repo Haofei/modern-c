@@ -14,6 +14,7 @@ extern struct Node {
 
 struct Header {
     len: u32,
+    cap: u32,
 }
 
 fn accept_initialized_local() -> u32 {
@@ -134,8 +135,10 @@ fn accept_defer_reads_var_assigned_on_every_exit_edge() -> u32 {
     return x;
 }
 
-// Aggregates initialized with `uninit` are pending until whole assignment or
-// intentional storage use. Direct element/member/value reads before that are rejected.
+// Aggregates initialized with `uninit` are pending until whole assignment. Partial
+// member/index writes and address-taking are storage uses, but they do not prove the
+// whole aggregate initialized. Element/member/value reads before whole assignment are
+// rejected.
 fn reject_read_uninit_array_element() -> u8 {
     var buf: [4]u8 = uninit;
     // EXPECT_ERROR: E_USE_BEFORE_INIT
@@ -154,21 +157,43 @@ fn reject_read_uninit_struct_value() -> Header {
     return h;
 }
 
-fn accept_uninit_array_storage_use_then_read() -> u8 {
+fn reject_uninit_array_partial_write_then_read_same_element() -> u8 {
     var buf: [4]u8 = uninit;
     buf[0] = 7;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
     return buf[0];
 }
 
-fn accept_uninit_struct_storage_use_then_read() -> u32 {
+fn reject_uninit_array_partial_write_then_read_sibling_element() -> u8 {
+    var buf: [4]u8 = uninit;
+    buf[0] = 7;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
+    return buf[1];
+}
+
+fn reject_uninit_struct_partial_write_then_read_same_field() -> u32 {
     var h: Header = uninit;
     h.len = 9;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
     return h.len;
+}
+
+fn reject_uninit_struct_partial_write_then_read_sibling_field() -> u32 {
+    var h: Header = uninit;
+    h.len = 9;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
+    return h.cap;
+}
+
+fn accept_uninit_array_whole_assignment_then_read() -> u8 {
+    var buf: [4]u8 = uninit;
+    buf = .{ 1, 2, 3, 4 };
+    return buf[1];
 }
 
 fn accept_uninit_struct_whole_assignment_then_read() -> u32 {
     var h: Header = uninit;
-    h = .{ .len = 11 };
+    h = .{ .len = 11, .cap = 12 };
     return h.len;
 }
 

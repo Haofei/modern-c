@@ -23,12 +23,8 @@ fn tick_idle() -> void { g_clock = g_clock + 1; }
 global g_open: i32 = 0;
 struct ValFut { deadline: u64, val: i32, held: bool }
 fn mk_val(deadline: u64, val: i32) -> ValFut {
-    var f: ValFut = uninit;
-    f.deadline = deadline;
-    f.val = val;
-    f.held = true;
     g_open = g_open + 1;
-    return f;
+    return .{ .deadline = deadline, .val = val, .held = true };
 }
 impl Future for ValFut {
     fn poll(self: *mut ValFut) -> bool {
@@ -49,14 +45,16 @@ fn ValFut_cancel(self: *mut ValFut) -> void { if self.held { self.held = false; 
 //        return acc; }` ----
 struct sumn__Fut { state: u8, __c0: ValFut, n: i32, d: u64, acc: i32, i: i32, v: i32, result: i32 }
 fn sumn(n: i32, d: u64) -> sumn__Fut {
-    var self: sumn__Fut = uninit;
-    self.state = 0;
-    self.n = n;
-    self.d = d;
-    self.acc = 0;
-    self.i = 0;
-    self.v = 0;
-    self.result = 0;
+    var self: sumn__Fut = .{
+        .state = 0,
+        .__c0 = uninit,
+        .n = n,
+        .d = d,
+        .acc = 0,
+        .i = 0,
+        .v = 0,
+        .result = 0,
+    };
     return self;
 }
 impl Future for sumn__Fut {

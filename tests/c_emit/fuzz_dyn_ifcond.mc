@@ -29,8 +29,8 @@ export fn dyn_ifcond_run() -> u32 {
     var acc: u32 = 0;
 
     // Leaf ready after 2 polls; Wrap forwards. Drive to completion, counting polls.
-    var l: Leaf = uninit; l.ticks = 2;
-    var w: Wrap = uninit; w.inner = &l; w.polls = 0;
+    var l: Leaf = .{ .ticks = 2 };
+    var w: Wrap = .{ .inner = &l, .polls = 0 };
     var done: bool = false;
     while !done { done = Wrap.poll(&w); }
     if w.polls == 3 { acc = acc ^ 0x1; }     // 2 false (ticks 2->1->0) + 1 true

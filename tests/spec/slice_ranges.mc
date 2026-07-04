@@ -10,8 +10,7 @@ fn accept_slice_range_from_slice(buf: []mut u8, n: usize) -> u8 {
 }
 
 fn accept_slice_range_from_array(n: usize) -> u8 {
-    var buf: [4]u8 = uninit;
-    buf[0] = 7;
+    var buf: [4]u8 = .{ 7, 0, 0, 0 };
     let s: []mut u8 = buf[0..n];
     return s[0];
 }

@@ -5,10 +5,7 @@ import "std/task.mc";
 
 struct ValFut { deadline: u64, val: i32 }
 fn mk_val(deadline: u64, val: i32) -> ValFut {
-    var f: ValFut = uninit;
-    f.deadline = deadline;
-    f.val = val;
-    return f;
+    return .{ .deadline = deadline, .val = val };
 }
 impl Future for ValFut {
     fn poll(self: *mut ValFut) -> bool { return self.deadline == 0; }

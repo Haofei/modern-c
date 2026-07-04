@@ -21,10 +21,7 @@ fn tick_idle() -> void { g_clock = g_clock + 1; }
 // leaf: ready at `deadline`, yielding `val`; uniform poll/take_result/cancel ABI.
 struct ValFut { deadline: u64, val: i32 }
 fn mk_val(deadline: u64, val: i32) -> ValFut {
-    var f: ValFut = uninit;
-    f.deadline = deadline;
-    f.val = val;
-    return f;
+    return .{ .deadline = deadline, .val = val };
 }
 impl Future for ValFut {
     fn poll(self: *mut ValFut) -> bool { return g_clock >= self.deadline; }
@@ -55,11 +52,7 @@ export fn async_await_arr_run() -> u32 {
 
     // (1) DIRECT array param: pick element 2 (value 30, ready@2). Wrong-element bugs miss 30.
     g_clock = 0;
-    var fs: [4]ValFut = uninit;
-    fs[0] = mk_val(1, 10);
-    fs[1] = mk_val(1, 20);
-    fs[2] = mk_val(2, 30);
-    fs[3] = mk_val(1, 40);
+    var fs: [4]ValFut = .{ mk_val(1, 10), mk_val(1, 20), mk_val(2, 30), mk_val(1, 40) };
     var pf: await_param_idx__Fut = await_param_idx(fs, 2);
     let a0: bool = await_param_idx__Fut__poll(&pf);   // clock 0: element 2 pending (ready@2)
     tick_idle(); tick_idle();                          // clock 2
@@ -68,11 +61,7 @@ export fn async_await_arr_run() -> u32 {
 
     // (2) STRUCT-FIELD array element via pointer: element 1 (value 55, ready@1), bias +4 -> 59.
     g_clock = 0;
-    var ctx: Ctx = uninit;
-    ctx.arr[0] = mk_val(1, 11);
-    ctx.arr[1] = mk_val(1, 55);
-    ctx.arr[2] = mk_val(1, 99);
-    ctx.bias = 4;
+    var ctx: Ctx = .{ .arr = .{ mk_val(1, 11), mk_val(1, 55), mk_val(1, 99) }, .bias = 4 };
     var bf: await_field_idx__Fut = await_field_idx(&ctx, 1);
     let b0: bool = await_field_idx__Fut__poll(&bf);   // clock 0: pending
     tick_idle();                                       // clock 1
@@ -81,11 +70,7 @@ export fn async_await_arr_run() -> u32 {
 
     // (3) cancel of a still-pending array-element await reclaims the active child (no double-free).
     g_clock = 0;
-    var cfs: [4]ValFut = uninit;
-    cfs[0] = mk_val(9, 1);
-    cfs[1] = mk_val(9, 2);
-    cfs[2] = mk_val(9, 3);
-    cfs[3] = mk_val(9, 4);
+    var cfs: [4]ValFut = .{ mk_val(9, 1), mk_val(9, 2), mk_val(9, 3), mk_val(9, 4) };
     var cf: await_param_idx__Fut = await_param_idx(cfs, 0);
     let c0: bool = await_param_idx__Fut__poll(&cf);   // pending (ready@9)
     await_param_idx__Fut_cancel(&cf);                  // walk active child, mark done

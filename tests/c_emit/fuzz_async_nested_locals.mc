@@ -21,10 +21,7 @@ fn tick_idle() -> void { g_clock = g_clock + 1; }
 // leaf: ready at `deadline`, yielding `val`; uniform poll/take_result/cancel ABI.
 struct ValFut { deadline: u64, val: i32 }
 fn mk_val(deadline: u64, val: i32) -> ValFut {
-    var f: ValFut = uninit;
-    f.deadline = deadline;
-    f.val = val;
-    return f;
+    return .{ .deadline = deadline, .val = val };
 }
 impl Future for ValFut {
     fn poll(self: *mut ValFut) -> bool { return g_clock >= self.deadline; }

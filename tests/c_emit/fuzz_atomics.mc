@@ -19,13 +19,12 @@ fn mix(x: u32) -> u32 {
 }
 
 export fn atomics_run() -> u32 {
-    var c: Counters = uninit;
-
-    // store across orders
-    c.a.store(0, .relaxed);
-    c.b.store(0x1_0000_0000, .release);
-    c.s.store(-9, .release);
-    c.flag.store(0, .seq_cst);
+    var c: Counters = .{
+        .a = atomic.init(0),
+        .b = atomic.init(0x1_0000_0000),
+        .s = atomic.init(-9),
+        .flag = atomic.init(0),
+    };
 
     // fetch_add: relaxed accumulation; prior values captured in inferred locals.
     let r0 = c.a.fetch_add(5, .relaxed);     // returns prior 0

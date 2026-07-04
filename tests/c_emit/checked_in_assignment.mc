@@ -12,7 +12,7 @@ fn field_target(s: S, a: u32, b: u32) -> S {
 }
 
 fn element_target(a: u32, b: u32) -> u32 {
-    var xs: [4]u32 = uninit;
+    var xs: [4]u32 = .{ 0, 0, 0, 0 };
     xs[0] = a + b;
     return xs[0];
 }

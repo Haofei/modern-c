@@ -29,10 +29,7 @@ fn tick_idle() -> void { g_clock = g_clock + 1; }
 // leaf: ready at `deadline`, yielding `val`; uniform poll/take_result/cancel ABI.
 struct ValFut { deadline: u64, val: i32 }
 fn mk_val(deadline: u64, val: i32) -> ValFut {
-    var f: ValFut = uninit;
-    f.deadline = deadline;
-    f.val = val;
-    return f;
+    return .{ .deadline = deadline, .val = val };
 }
 impl Future for ValFut {
     fn poll(self: *mut ValFut) -> bool { return g_clock >= self.deadline; }
@@ -47,9 +44,9 @@ fn ValFut_cancel(self: *mut ValFut) -> void { self.val = 0; }
 struct Ctx   { fut: ValFut }            // carrier A
 struct Other { fut: ValFut, g: i32 }    // carrier B (extra field — distinct type)
 
-fn mk_ctx(d: u64, v: i32) -> Ctx { var c: Ctx = uninit; c.fut = mk_val(d, v); return c; }
+fn mk_ctx(d: u64, v: i32) -> Ctx { return .{ .fut = mk_val(d, v) }; }
 fn mk_other(d: u64, v: i32, g: i32) -> Other {
-    var o: Other = uninit; o.fut = mk_val(d, v); o.g = g; return o;
+    return .{ .fut = mk_val(d, v), .g = g };
 }
 
 // ---- (1) The SAME local name `cx` names carriers of DIFFERENT types in two DISJOINT `if` blocks, each

@@ -20,20 +20,19 @@ fn explicit_grouped_uninit_scalar(value: u32) -> u32 {
 }
 
 fn explicit_uninit_array() -> u8 {
-    var buf: [4]u8 = uninit;
-    buf[0] = 7;
+    var buf: [4]u8 = .{ 7, 0, 0, 0 };
     return buf[0];
 }
 
 // NOTE: the scalar read-before-assign negative case (`var x: u32 = uninit; return x;`) is a
 // compile error (E_USE_BEFORE_INIT), so it lives in the reject corpus, not here:
 //   tests/c_emit/bad/use_before_init_scalar.mc
-// Aggregate uninit reads are rejected too; accepted fixtures must either assign the whole value
-// or use the aggregate as storage before reading.
+// Aggregate uninit reads are rejected too; accepted fixtures must assign the whole value before
+// reading. Partial member/index storage writes stay in the reject corpus.
 
-fn explicit_uninit_array_storage_then_read() -> u8 {
+fn explicit_uninit_array_whole_assign_then_read() -> u8 {
     var buf: [4]u8 = uninit;
-    buf[0] = 9;
+    buf = .{ 9, 0, 0, 0 };
     return buf[0];
 }
 

@@ -5,7 +5,7 @@
 // (self-referential futures need pinning).
 import "std/task.mc";
 struct ValFut { deadline: u64, val: i32 }
-fn mk_val(deadline: u64, val: i32) -> ValFut { var f: ValFut = uninit; f.deadline = deadline; f.val = val; return f; }
+fn mk_val(deadline: u64, val: i32) -> ValFut { return .{ .deadline = deadline, .val = val }; }
 impl Future for ValFut { fn poll(self: *mut ValFut) -> bool { return g_clock >= self.deadline; } fn cancel(self: *mut ValFut) -> void { self.val = 0; } }
 fn ValFut_take_result(self: *mut ValFut) -> i32 { return self.val; }
 fn ValFut_cancel(self: *mut ValFut) -> void { self.val = 0; }

@@ -4,8 +4,7 @@ fn slice_first(buf: []mut u8, n: usize) -> u8 {
 }
 
 fn slice_array(n: usize) -> u8 {
-    var buf: [4]u8 = uninit;
-    buf[0] = 9;
+    var buf: [4]u8 = .{ 9, 0, 0, 0 };
     let s: []mut u8 = buf[0..n];
     return s[0];
 }

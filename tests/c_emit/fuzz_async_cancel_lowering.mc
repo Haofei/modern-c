@@ -32,12 +32,8 @@ fn slot_release() -> void { g_inflight = g_inflight - 1; }
 struct SlotLeaf { ready_at: u64, val: i32, held: bool }
 // the awaited leaf call `await mk(ready_at, val)`: acquires a slot.
 fn mk(ready_at: u64, val: i32) -> SlotLeaf {
-    var f: SlotLeaf = uninit;
-    f.ready_at = ready_at;
-    f.val = val;
-    f.held = true;
     slot_acquire();
-    return f;
+    return .{ .ready_at = ready_at, .val = val, .held = true };
 }
 impl Future for SlotLeaf {
     fn poll(self: *mut SlotLeaf) -> bool {
@@ -56,11 +52,7 @@ fn slotleaf_cancel(f: *mut SlotLeaf) -> void { if f.held { f.held = false; slot_
 // Single await of a leaf; child built eagerly in the constructor (no prior-await dependency).
 struct login__Fut { state: u8, __c0: SlotLeaf, dl: u64, result: i32 }
 fn login(dl: u64) -> login__Fut {
-    var self: login__Fut = uninit;
-    self.state = 0;
-    self.dl = dl;
-    self.__c0 = mk(self.dl, 77);
-    self.result = 0;
+    var self: login__Fut = .{ .state = 0, .__c0 = mk(dl, 77), .dl = dl, .result = 0 };
     return self;
 }
 impl Future for login__Fut {
@@ -87,12 +79,7 @@ fn login__Fut_cancel(self: *mut login__Fut) -> void {
 // dependency — child0 is built eagerly in the constructor from the captured param fields.
 struct fetch__Fut { state: u8, __c0: SlotLeaf, token: i32, df: u64, result: i32 }
 fn fetch(token: i32, df: u64) -> fetch__Fut {
-    var self: fetch__Fut = uninit;
-    self.state = 0;
-    self.token = token;
-    self.df = df;
-    self.__c0 = mk(self.df, self.token + 1000);
-    self.result = 0;
+    var self: fetch__Fut = .{ .state = 0, .__c0 = mk(df, token + 1000), .token = token, .df = df, .result = 0 };
     return self;
 }
 impl Future for fetch__Fut {
@@ -122,13 +109,15 @@ fn fetch__Fut_cancel(self: *mut fetch__Fut) -> void {
 // completes — so `__c1` is built LAZILY at the 0->1 transition, NOT in the constructor.
 struct flow__Fut { state: u8, __c0: login__Fut, __c1: fetch__Fut, dl: u64, df: u64, token: i32, result: i32 }
 fn flow(dl: u64, df: u64) -> flow__Fut {
-    var self: flow__Fut = uninit;
-    self.state = 0;
-    self.dl = dl;
-    self.df = df;
-    self.__c0 = login(self.dl);   // child0 built eagerly (no dependency)
-    self.token = 0;
-    self.result = 0;
+    var self: flow__Fut = .{
+        .state = 0,
+        .__c0 = login(dl),   // child0 built eagerly (no dependency)
+        .__c1 = uninit,
+        .dl = dl,
+        .df = df,
+        .token = 0,
+        .result = 0,
+    };
     // __c1 is intentionally NOT built here — it needs `token`. Built at the 0->1 transition.
     return self;
 }

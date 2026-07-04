@@ -228,24 +228,26 @@ export fn ToolFut_out_len(self: *mut ToolFut) -> u32 {
 // a no-op. `flags` carries the broker delay (TOOL_OP_TIMEOUT) or 0.
 fn tool_begin(p: *mut ToolPump, op: u32, flags: u32, arg: u64,
               in_ptr: usize, in_len: u32, out_ptr: usize, out_cap: u32) -> ToolFut {
-    var f: ToolFut = uninit;
-    f.p = p;
-    f.ready = false;
-    f.cancelled = false;
-    f.status = 0;
-    f.result = 0;
-    f.out_len = 0;
-    f.submit_err = 0;
-    f.id = 0;
+    var f: ToolFut = .{
+        .p = p,
+        .id = 0,
+        .submit_err = 0,
+        .ready = false,
+        .cancelled = false,
+        .status = 0,
+        .result = 0,
+        .out_len = 0,
+    };
 
-    var req: ToolReq = uninit;
-    req.op = op;
-    req.flags = flags;
-    req.arg = arg;
-    req.in_ptr = in_ptr as u64;
-    req.in_len = in_len;
-    req.out_cap = out_cap;
-    req.out_ptr = out_ptr as u64;
+    var req: ToolReq = .{
+        .op = op,
+        .flags = flags,
+        .arg = arg,
+        .in_ptr = in_ptr as u64,
+        .in_len = in_len,
+        .out_cap = out_cap,
+        .out_ptr = out_ptr as u64,
+    };
 
     let r: i64 = (p.submit)((&req) as usize);
     if r < 0 {

@@ -34,12 +34,8 @@ global g_side: u32 = 0;
 global g_open: i32 = 0;            // live leaf slots; must return to 0
 struct ValFut { deadline: u64, val: i32, held: bool }
 fn mk_val(deadline: u64, val: i32) -> ValFut {
-    var f: ValFut = uninit;
-    f.deadline = deadline;
-    f.val = val;
-    f.held = true;
     g_open = g_open + 1;           // acquire a slot
-    return f;
+    return .{ .deadline = deadline, .val = val, .held = true };
 }
 impl Future for ValFut {
     fn poll(self: *mut ValFut) -> bool {

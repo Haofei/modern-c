@@ -23,10 +23,7 @@ fn tick_idle() -> void { g_clock = g_clock + 1; }
 
 struct ValFut { deadline: u64, val: i32 }
 fn mk_val(deadline: u64, val: i32) -> ValFut {
-    var f: ValFut = uninit;
-    f.deadline = deadline;
-    f.val = val;
-    return f;
+    return .{ .deadline = deadline, .val = val };
 }
 impl Future for ValFut {
     fn poll(self: *mut ValFut) -> bool { return g_clock >= self.deadline; }
@@ -70,7 +67,7 @@ async fn gen(d: u64, t: Tok, cond: bool) -> i32 {
 //   resf(ok):  base = await(3); RFut yields ok(40)  -> arm ok  reads x=40 -> base + x = 43.
 //   resf(err): base = await(3); RFut yields err(-9) -> arm err reads e=-9 -> base + e = -6.
 struct RFut { deadline: u64, v: i32 }
-fn mk_r(deadline: u64, v: i32) -> RFut { var f: RFut = uninit; f.deadline = deadline; f.v = v; return f; }
+fn mk_r(deadline: u64, v: i32) -> RFut { return .{ .deadline = deadline, .v = v }; }
 impl Future for RFut { fn poll(self: *mut RFut) -> bool { return g_clock >= self.deadline; } fn cancel(self: *mut RFut) -> void { self.v = 0; } }
 fn RFut_take_result(self: *mut RFut) -> Result<i32, i32> { if self.v < 0 { return err(self.v); } return ok(self.v); }
 fn RFut_cancel(self: *mut RFut) -> void { self.v = 0; }

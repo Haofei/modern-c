@@ -1,6 +1,6 @@
-// Reject fixture (S0.1 definite-init): an aggregate `var x: T = uninit;` may be
-// used as storage, but direct member/index/value reads before assignment or
-// storage use are compile errors.
+// Reject fixture (S0.1 definite-init): an aggregate `var x: T = uninit;`
+// remains pending until whole assignment; member/index/value reads before that
+// are compile errors.
 // EXPECT: E_USE_BEFORE_INIT
 
 struct Header {

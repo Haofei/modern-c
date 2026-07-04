@@ -1442,23 +1442,21 @@ pub const Checker = struct {
     // State is the set of *pending* names: `uninit` vars declared but not yet
     // proven assigned on the current path. A pending name is:
     //   - removed when it is the whole target of an assignment `x = …` (now assigned),
-    //   - for aggregates only, removed when its address is taken (`&x`) or it is
-    //     used through a member/index base — such a use may initialize aggregate
-    //     storage, keeping the pervasive field-fill/out-param idioms accepted,
+    //   - kept pending when only its address/member/index storage is used, because
+    //     the DI pass does not prove that every byte of the aggregate was written,
     //   - reported (E_USE_BEFORE_INIT) when it is read as a plain value.
     //
-    // Aggregates are tracked at the root-storage level only. A member/index assignment
-    // or address-taking operation clears the root as intentional storage use; direct
-    // member/index/value reads before any such use are rejected. Scalars require a
-    // direct assignment edge; taking `&x` creates storage access, not a value.
+    // Aggregates are tracked at the root-storage level only. This pass does not track
+    // per-field/per-element coverage, so a member/index write or address-taking
+    // operation is not enough evidence for later value reads. Scalars and aggregates
+    // both require a direct whole-variable assignment edge to become initialized.
     //
     // Branches (if/else, switch — `if` desugars to a switch on the bool) intersect:
     // a name is assigned after the branch only if assigned on every arm that falls
     // through to the join. A diverging arm (ends in return/break/continue/unreachable)
     // contributes nothing to the join. Loops are conservative: a body assignment is
-    // not guaranteed (the loop may run zero times), so scalar pending state is
-    // restored after the loop — but aggregate storage use inside the body is kept,
-    // and reads inside the body are still checked.
+    // not guaranteed (the loop may run zero times), so pending state is restored
+    // after the loop. Reads inside the body are still checked.
     const DefInitPendingKind = enum {
         scalar,
         aggregate,
@@ -1575,7 +1573,7 @@ pub const Checker = struct {
                 if (decl.init) |init_expr| {
                     if (isUninitLiteral(init_expr)) {
                         // A typed `var x: T = uninit;` becomes pending until definitely
-                        // assigned or used as storage.
+                        // assigned as a whole value.
                         if (decl.ty) |ty| {
                             if (diPendingKindForType(ty, ctx)) |kind| {
                                 for (decl.names) |name| {
@@ -1604,9 +1602,9 @@ pub const Checker = struct {
                         _ = state.remove(id.text);
                     },
                     else => {
-                        // Member/index/deref target: the base is used as storage (address-like);
-                        // clear any pending root var (a partial write we cannot fully track) and
-                        // read the index/base subexpressions.
+                        // Member/index/deref target: this is an address-like storage use.
+                        // It does not prove a pending aggregate is fully initialized; only
+                        // read-check target subexpressions such as indexes and pointers.
                         self.diUseTarget(a.target, state, ctx);
                     },
                 }
@@ -1658,7 +1656,6 @@ pub const Checker = struct {
                 var body_state = self.diCloneState(state);
                 defer body_state.deinit();
                 _ = self.diBlock(l.body, &body_state, ctx);
-                self.diPreserveLoopAggregateStorageUses(state, &body_state);
                 // The loop may run zero times, so control always falls through.
                 return false;
             },
@@ -1741,26 +1738,9 @@ pub const Checker = struct {
         }
     }
 
-    fn diPreserveLoopAggregateStorageUses(self: *Checker, outer: *DefInitState, body: *const DefInitState) void {
-        var cleared: std.ArrayListUnmanaged([]const u8) = .empty;
-        defer cleared.deinit(self.reporter.allocator);
-
-        var it = outer.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.kind != .aggregate) continue;
-            if (body.contains(entry.key_ptr.*)) continue;
-            cleared.append(self.reporter.allocator, entry.key_ptr.*) catch {
-                self.oom = true;
-            };
-        }
-
-        for (cleared.items) |name| {
-            _ = outer.remove(name);
-        }
-    }
-
     // Walk an expression evaluated for its value, reporting a read of any pending var
-    // and clearing aggregate vars whose storage is intentionally used.
+    // before whole assignment. Address-like storage uses are handled separately and
+    // do not prove initialization.
     fn diRead(self: *Checker, expr: ast.Expr, state: *DefInitState, ctx: Context) void {
         switch (expr.kind) {
             .ident => |id| {
@@ -1815,18 +1795,14 @@ pub const Checker = struct {
         }
     }
 
-    // An assignment/address-of target (or a base used as storage). Aggregate storage
-    // use clears a pending root so field-fill and out-param idioms remain accepted.
-    // Scalar address-taking does not manufacture a value; only whole-variable
-    // assignment clears scalar pending state. Index subexpressions are still
-    // read-checked.
+    // An assignment/address-of target (or a base used as storage). Storage use alone
+    // does not manufacture an initialized value: member/index writes may cover only
+    // part of an aggregate, and address-taking/out-param calls have no DI-visible
+    // contract proving that the callee wrote every byte. Only whole-variable
+    // assignment clears pending state. Index subexpressions are still read-checked.
     fn diUseTarget(self: *Checker, target: ast.Expr, state: *DefInitState, ctx: Context) void {
         switch (target.kind) {
-            .ident => |id| {
-                if (state.get(id.text)) |pending| {
-                    if (pending.kind == .aggregate) _ = state.remove(id.text);
-                }
-            },
+            .ident => {},
             .grouped => |inner| self.diUseTarget(inner.*, state, ctx),
             .member => |m| self.diUseTarget(m.base.*, state, ctx),
             .index => |n| {
@@ -6170,9 +6146,9 @@ fn opacityStructNameOf(ty: ast.TypeExpr) ?[]const u8 {
 }
 
 // Definite-init (S0.1) tracks typed `uninit` locals whose whole value can later be
-// read. Scalars are reported on any value read. Aggregates are tracked at the root:
-// whole assignment clears them, and address/member/index storage use clears them so
-// field-fill and out-param idioms remain accepted.
+// read. Scalars and aggregates are reported on any value read before whole assignment.
+// Aggregates are tracked at the root; partial member/index writes and address-taking
+// are not enough proof that the whole aggregate is initialized.
 fn diPendingKindForType(ty: ast.TypeExpr, ctx: Context) ?Checker.DefInitPendingKind {
     const resolved = resolveAliasType(ty, ctx);
     if (maybeUninitPayloadType(resolved) != null) return null;

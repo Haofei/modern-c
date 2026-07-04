@@ -24,12 +24,8 @@ fn tick_idle() -> void { g_clock = g_clock + 1; }
 global g_open: i32 = 0;
 struct ValFut { deadline: u64, val: i32, held: bool }
 fn mk_val(deadline: u64, val: i32) -> ValFut {
-    var f: ValFut = uninit;
-    f.deadline = deadline;
-    f.val = val;
-    f.held = true;
     g_open = g_open + 1;
-    return f;
+    return .{ .deadline = deadline, .val = val, .held = true };
 }
 impl Future for ValFut {
     fn poll(self: *mut ValFut) -> bool {
@@ -62,15 +58,18 @@ struct pick__Fut {
     result: i32,
 }
 fn pick(sel: bool, dt: u64, de: u64) -> pick__Fut {
-    var self: pick__Fut = uninit;
-    self.state = 0;
-    self.sel = sel;
-    self.dt = dt;
-    self.de = de;
-    self.__c0 = mk_val(1, 10);   // pre-branch child built eagerly (no dependency)
-    self.base = 0;
-    self.out = 0;
-    self.result = 0;
+    var self: pick__Fut = .{
+        .state = 0,
+        .__c0 = mk_val(1, 10),   // pre-branch child built eagerly (no dependency)
+        .__cT = uninit,
+        .__cE = uninit,
+        .sel = sel,
+        .dt = dt,
+        .de = de,
+        .base = 0,
+        .out = 0,
+        .result = 0,
+    };
     return self;
 }
 impl Future for pick__Fut {

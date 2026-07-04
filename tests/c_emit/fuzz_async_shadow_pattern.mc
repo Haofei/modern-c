@@ -22,10 +22,7 @@ fn tick_idle() -> void { g_clock = g_clock + 1; }
 // leaf: ready at `deadline`, yielding `val`; uniform poll/take_result/cancel ABI.
 struct ValFut { deadline: u64, val: i32 }
 fn mk_val(deadline: u64, val: i32) -> ValFut {
-    var f: ValFut = uninit;
-    f.deadline = deadline;
-    f.val = val;
-    return f;
+    return .{ .deadline = deadline, .val = val };
 }
 impl Future for ValFut {
     fn poll(self: *mut ValFut) -> bool { return g_clock >= self.deadline; }
@@ -95,9 +92,7 @@ async fn f4(d: u64, op: fn(i32, i32) -> i32, cond: bool) -> i32 {
 // ---- #3 GENERAL path: `await ctx.fut` where `ctx` is an explicitly-typed LOCAL carrier.
 struct Ctx { fut: ValFut }
 fn mk_ctx(d: u64, val: i32) -> Ctx {
-    var c: Ctx = uninit;
-    c.fut = mk_val(d, val);
-    return c;
+    return .{ .fut = mk_val(d, val) };
 }
 //   f5: ctx = mk_ctx(99); v = await ctx.fut = 99; two await-ifs force general; return v = 99.
 async fn f5(d: u64, cond: bool) -> i32 {

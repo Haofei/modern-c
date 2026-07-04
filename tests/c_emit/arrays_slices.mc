@@ -1,6 +1,5 @@
 fn array_first() -> u8 {
-    var buf: [4]u8 = uninit;
-    buf[0] = 7;
+    var buf: [4]u8 = .{ 7, 0, 0, 0 };
     return buf[0];
 }
 

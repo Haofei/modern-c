@@ -23,12 +23,8 @@ fn tick_idle() -> void { g_clock = g_clock + 1; }
 global g_open: i32 = 0;
 struct ValFut { deadline: u64, val: i32, held: bool }
 fn mk_val(deadline: u64, val: i32) -> ValFut {
-    var f: ValFut = uninit;
-    f.deadline = deadline;
-    f.val = val;
-    f.held = true;
     g_open = g_open + 1;
-    return f;
+    return .{ .deadline = deadline, .val = val, .held = true };
 }
 impl Future for ValFut {
     fn poll(self: *mut ValFut) -> bool {
