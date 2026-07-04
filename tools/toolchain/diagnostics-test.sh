@@ -114,6 +114,60 @@ assert diags[0]["code"] == "E_NESTING_TOO_DEEP", diags[0]
 assert payload["error_count"] == 1 and payload["warning_count"] == 0, payload
 PY
 
+perl -e 'my $n=700; print "fn main() -> u32 { return ", "(" x $n, "1", ")" x $n, "; }\n"' >"$WORK/nesting_expr_parens.mc"
+paren_output=""
+if paren_output=$("$MCC" check "$WORK/nesting_expr_parens.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — expression nesting unexpectedly succeeded"
+    exit 1
+fi
+assert_occurrences "$paren_output" "E_NESTING_TOO_DEEP" 1 "expression nesting-too-deep diagnostic"
+assert_not_contains "$paren_output" "src/main.zig" "expression nesting-too-deep Zig stack trace"
+
+perl -e 'my $n=700; print "fn main() -> bool { return ", "!" x $n, "false; }\n"' >"$WORK/nesting_expr_unary.mc"
+unary_output=""
+if unary_output=$("$MCC" check "$WORK/nesting_expr_unary.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — unary nesting unexpectedly succeeded"
+    exit 1
+fi
+assert_occurrences "$unary_output" "E_NESTING_TOO_DEEP" 1 "unary nesting-too-deep diagnostic"
+assert_not_contains "$unary_output" "src/main.zig" "unary nesting-too-deep Zig stack trace"
+
+perl -e 'my $n=700; print "fn nested_blocks() -> void ", "{" x $n, "}" x $n, "\n"' >"$WORK/nesting_blocks.mc"
+blocks_output=""
+if blocks_output=$("$MCC" check "$WORK/nesting_blocks.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — block nesting unexpectedly succeeded"
+    exit 1
+fi
+assert_occurrences "$blocks_output" "E_NESTING_TOO_DEEP" 1 "block nesting-too-deep diagnostic"
+assert_not_contains "$blocks_output" "src/main.zig" "block nesting-too-deep Zig stack trace"
+
+perl -e 'my $n=700; print "fn main(x: u32) -> u32 { return x", " + x" x $n, "; }\n"' >"$WORK/nesting_expr_binary.mc"
+binary_output=""
+if binary_output=$("$MCC" check "$WORK/nesting_expr_binary.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — binary expression nesting unexpectedly succeeded"
+    exit 1
+fi
+assert_occurrences "$binary_output" "E_NESTING_TOO_DEEP" 1 "binary expression nesting-too-deep diagnostic"
+assert_not_contains "$binary_output" "src/main.zig" "binary expression nesting-too-deep Zig stack trace"
+
+perl -e 'my $n=700; print "fn main(x: Node) -> u32 { return x", ".next" x $n, "; }\n"' >"$WORK/nesting_expr_member.mc"
+member_output=""
+if member_output=$("$MCC" check "$WORK/nesting_expr_member.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — member expression nesting unexpectedly succeeded"
+    exit 1
+fi
+assert_occurrences "$member_output" "E_NESTING_TOO_DEEP" 1 "member expression nesting-too-deep diagnostic"
+assert_not_contains "$member_output" "src/main.zig" "member expression nesting-too-deep Zig stack trace"
+
+perl -e 'my $n=700; print "type TooDeepMember = A", ".B" x $n, ";\n"' >"$WORK/nesting_type_member.mc"
+type_member_output=""
+if type_member_output=$("$MCC" check "$WORK/nesting_type_member.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — type member nesting unexpectedly succeeded"
+    exit 1
+fi
+assert_occurrences "$type_member_output" "E_NESTING_TOO_DEEP" 1 "type member nesting-too-deep diagnostic"
+assert_not_contains "$type_member_output" "src/main.zig" "type member nesting-too-deep Zig stack trace"
+
 mono_output=""
 if mono_output=$("$MCC" check tests/spec/monomorphization_limits.mc 2>&1); then
     echo "FAIL: diagnostics-test — monomorphization limit unexpectedly succeeded"

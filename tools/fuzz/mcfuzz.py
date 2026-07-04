@@ -1696,6 +1696,22 @@ def _hostile_frontend_case(seed):
         ("fn hostile() -> u32 { return " + " + ".join("1" for _ in range(width)) + "; }\n").encode(),
     ))
     cases.append((
+        "deep cast chain",
+        ("fn hostile(x: u32) -> u32 { return x" + (" as u32" * depth) + "; }\n").encode(),
+    ))
+    cases.append((
+        "deep postfix member chain",
+        ("fn hostile(x: Node) -> u32 { return x" + (".next" * depth) + "; }\n").encode(),
+    ))
+    cases.append((
+        "deep postfix index chain",
+        ("fn hostile(x: []u32) -> u32 { return x" + ("[0]" * depth) + "; }\n").encode(),
+    ))
+    cases.append((
+        "deep type member chain",
+        ("type Hostile = A" + (".B" * depth) + ";\n").encode(),
+    ))
+    cases.append((
         "invalid bytes in declaration stream",
         b"fn hostile() -> u32 {\n  let x: u32 = 1;\n}\n" + bytes([0, 0x80, 0xFF]) + b"\nfn after() -> void {}\n",
     ))

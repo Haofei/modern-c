@@ -36,6 +36,7 @@ pub const Parser = struct {
     // reserve them against local bindings (prevents a local from shadowing a qualified owner).
     qualified_owners: std.StringHashMap(void) = undefined,
     parse_depth: usize = 0,
+    nesting_too_deep_reported: bool = false,
     had_parse_error: bool = false,
 
     pub fn init(source: []const u8, reporter: *diagnostics.Reporter) Parser {
@@ -1411,8 +1412,10 @@ pub const Parser = struct {
             const end = try self.consumeGenericClose("expected '>' after type arguments");
             ty = .{ .span = joinSpan(base.span, end.span), .kind = .{ .generic = .{ .base = base, .args = try args.toOwnedSlice(self.allocator) } } };
         }
+        var member_depth: usize = 1;
         while (self.match(.dot)) {
             const field = try self.expectSymbol("expected type member");
+            try self.reserveParseWrapperDepth(&member_depth);
             const base_ptr = try ast.makePtr(self.allocator, ty);
             ty = .{ .span = joinSpan(base_ptr.span, field.span), .kind = .{ .member = .{ .base = base_ptr, .field = field } } };
         }
@@ -1429,11 +1432,13 @@ pub const Parser = struct {
         try self.enterParseDepth();
         defer self.leaveParseDepth();
         var lhs = try self.parsePrefix();
+        var expr_depth: usize = 1;
         while (true) {
             lhs = try self.parsePostfix(lhs);
             if (self.current.kind == .identifier and std.mem.eql(u8, self.current.lexeme, "as")) {
                 self.advance();
                 const ty = try ast.makePtr(self.allocator, try self.parseType());
+                try self.reserveParseWrapperDepth(&expr_depth);
                 const value = try ast.makePtr(self.allocator, lhs);
                 lhs = .{ .span = joinSpan(value.span, ty.span), .kind = .{ .cast = .{ .value = value, .ty = ty } } };
                 continue;
@@ -1442,6 +1447,7 @@ pub const Parser = struct {
             if (op.left_bp < min_bp) break;
             self.advance();
             const rhs = try self.parseExpr(op.right_bp);
+            try self.reserveParseWrapperDepth(&expr_depth);
             const left = try ast.makePtr(self.allocator, lhs);
             const right = try ast.makePtr(self.allocator, rhs);
             lhs = .{ .span = joinSpan(left.span, right.span), .kind = .{ .binary = .{ .op = op.op, .left = left, .right = right } } };
@@ -1579,15 +1585,18 @@ pub const Parser = struct {
 
     fn parsePostfix(self: *Parser, input: ast.Expr) anyerror!ast.Expr {
         var expr = input;
+        var wrapper_depth: usize = 1;
         while (true) {
             if (self.current.kind == .less and self.lessStartsGenericCall()) {
                 self.advance();
                 const type_args = try self.finishTypeArgsAfterLess();
                 try self.expect(.l_paren, "expected '(' after generic call type arguments");
+                try self.reserveParseWrapperDepth(&wrapper_depth);
                 expr = try self.finishCall(expr, type_args);
                 continue;
             }
             if (self.match(.l_paren)) {
+                try self.reserveParseWrapperDepth(&wrapper_depth);
                 expr = try self.finishCall(expr, &.{});
                 continue;
             }
@@ -1596,6 +1605,7 @@ pub const Parser = struct {
                 if (self.match(.dot_dot)) {
                     const end_expr = try ast.makePtr(self.allocator, try self.parseExpr(0));
                     const close = try self.expectTok(.r_bracket, "expected ']' after slice range");
+                    try self.reserveParseWrapperDepth(&wrapper_depth);
                     const base = try ast.makePtr(self.allocator, expr);
                     const start_expr = try ast.makePtr(self.allocator, first);
                     expr = .{ .span = joinSpan(base.span, close.span), .kind = .{ .slice = .{ .base = base, .start = start_expr, .end = end_expr } } };
@@ -1603,12 +1613,14 @@ pub const Parser = struct {
                 }
                 const idx = try ast.makePtr(self.allocator, first);
                 const end = try self.expectTok(.r_bracket, "expected ']' after index");
+                try self.reserveParseWrapperDepth(&wrapper_depth);
                 const base = try ast.makePtr(self.allocator, expr);
                 expr = .{ .span = joinSpan(base.span, end.span), .kind = .{ .index = .{ .base = base, .index = idx } } };
                 continue;
             }
             if (self.match(.dot)) {
                 if (self.match(.star)) {
+                    try self.reserveParseWrapperDepth(&wrapper_depth);
                     const base = try ast.makePtr(self.allocator, expr);
                     expr = .{ .span = joinSpan(base.span, self.lxTokenBeforeCurrent()), .kind = .{ .deref = base } };
                     continue;
@@ -1618,6 +1630,7 @@ pub const Parser = struct {
                     const idx_tok = self.current;
                     self.advance();
                     const fname = try std.fmt.allocPrint(self.allocator, "_{s}", .{idx_tok.lexeme});
+                    try self.reserveParseWrapperDepth(&wrapper_depth);
                     const base = try ast.makePtr(self.allocator, expr);
                     expr = .{ .span = joinSpan(base.span, idx_tok.span), .kind = .{ .member = .{ .base = base, .name = .{ .text = fname, .span = idx_tok.span } } } };
                     continue;
@@ -1629,11 +1642,13 @@ pub const Parser = struct {
                     expr = resolved;
                     continue;
                 }
+                try self.reserveParseWrapperDepth(&wrapper_depth);
                 const base = try ast.makePtr(self.allocator, expr);
                 expr = .{ .span = joinSpan(base.span, name.span), .kind = .{ .member = .{ .base = base, .name = name } } };
                 continue;
             }
             if (self.match(.question)) {
+                try self.reserveParseWrapperDepth(&wrapper_depth);
                 const inner = try ast.makePtr(self.allocator, expr);
                 // `EXPR? else MAPPED`: on error, propagate `err(MAPPED)` (in the enclosing
                 // function's error type) instead of the original error.
@@ -1989,14 +2004,26 @@ pub const Parser = struct {
 
     fn enterParseDepth(self: *Parser) anyerror!void {
         if (self.parse_depth >= max_parse_depth) {
-            self.reporter.err(self.current.span, "E_NESTING_TOO_DEEP: nesting too deep", .{});
-            return error.ParseFailed;
+            return self.failNestingTooDeep();
         }
         self.parse_depth += 1;
     }
 
     fn leaveParseDepth(self: *Parser) void {
         self.parse_depth -= 1;
+    }
+
+    fn reserveParseWrapperDepth(self: *Parser, depth: *usize) anyerror!void {
+        if (depth.* >= max_parse_depth) return self.failNestingTooDeep();
+        depth.* += 1;
+    }
+
+    fn failNestingTooDeep(self: *Parser) anyerror {
+        if (!self.nesting_too_deep_reported) {
+            self.nesting_too_deep_reported = true;
+            self.reporter.err(self.current.span, "E_NESTING_TOO_DEEP: nesting too deep", .{});
+        }
+        return error.ParseFailed;
     }
 
     fn previousSpan(self: *Parser, fallback: diagnostics.Span) diagnostics.Span {

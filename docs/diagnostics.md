@@ -137,7 +137,7 @@ Total codes: **220**.
 | `E_MOVE_LOOP_RESOURCE` | cannot consume or reserve an outer linear \`move\` value inside a loop; the loop may run zero or multiple times | `src/sema_move.zig:118` |
 | `E_NAKED_BODY` | a #[naked] function body must be exactly one \`asm\` block (optionally wrapped in one \`unsafe {}\`); there is no frame for locals, statements, or expressions | `src/sema.zig:1394` |
 | `E_NAKED_RETURN` | a #[naked] function must return \`never\` or \`void\`; it cannot synthesize a value return (the asm body owns the calling convention) | `src/sema.zig:1389` |
-| `E_NESTING_TOO_DEEP` | nesting too deep | `src/parser.zig:1992` |
+| `E_NESTING_TOO_DEEP` | nesting too deep | `src/parser.zig:2024` |
 | `E_NEVER_FALLTHROUGH` | function declared -&gt; never can fall off the end | `src/hir.zig:177`<br>`src/mir.zig:560`<br>`src/sema.zig:1435` |
 | `E_NEVER_RETURNS` | function declared -&gt; never cannot return normally | `src/sema.zig:2368`<br>`src/sema.zig:2375` |
 | `E_NEVER_STORAGE` | never is a control-flow type and cannot be used for storage | `src/sema.zig:3369`<br>`src/sema.zig:3535` |
@@ -157,9 +157,9 @@ Total codes: **220**.
 | `E_PACKED_BITS_FIELD_NOT_BOOL` | packed bits fields must be bool | `src/sema.zig:1207` |
 | `E_PACKED_BITS_REPR_NOT_INTEGER` | packed bits representation type must be an integer type | `src/sema.zig:1199` |
 | `E_PADDR_DEREF` | _see source_ | `src/mir_verify_util.zig:168`<br>`src/sema.zig:7173` |
-| `E_PARSE` | _see source_ | `src/parser.zig:1987` |
-| `E_PARSE_EXPECTED_EXPRESSION` | _see source_ | `src/parser.zig:1985` |
-| `E_PARSE_EXPECTED_PARAMETER_NAME` | _see source_ | `src/parser.zig:1986` |
+| `E_PARSE` | _see source_ | `src/parser.zig:2002` |
+| `E_PARSE_EXPECTED_EXPRESSION` | _see source_ | `src/parser.zig:2000` |
+| `E_PARSE_EXPECTED_PARAMETER_NAME` | _see source_ | `src/parser.zig:2001` |
 | `E_PHYS_PTR_DEREF` | _see source_ | `src/mir_verify_util.zig:173`<br>`src/sema.zig:7178` |
 | `E_POINTER_ARITH_SINGLE_OBJECT` | single-object pointers do not support arithmetic | `src/mir_verify_util.zig:161`<br>`src/sema.zig:2849` |
 | `E_POINTER_ORDERING` | optional values support only equality comparisons against null<br>pointer and view values support only equality comparisons | `src/mir_verify_util.zig:162`<br>`src/sema.zig:5613`<br>`src/sema.zig:5629` |
