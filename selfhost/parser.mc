@@ -34,7 +34,7 @@ import "selfhost/lexer.mc";
 // The AST node tag. `open enum ... : u32` (like `TokKind`) so the gate can read ordinals via
 // `.raw()` (closed enums reject `.raw()` and integer casts — gap G21). The ordinals below are
 // the contract the selfhost-parse-test C driver asserts against; keep this order stable.
-open enum NodeKind: u32 {
+pub open enum NodeKind: u32 {
     invalid,          // 0  reserved sentinel at node index 0 ("none")
     module,           // 1  lhs = extra run of decl node indices
     fn_decl,          // 2  main_token = name; lhs = fixed run [exported, params_run, ret_type, body]
@@ -214,7 +214,7 @@ open enum NodeKind: u32 {
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
 // or small inline payloads (0 = none) per the per-kind contract documented on `NodeKind`.
-struct Node {
+pub struct Node {
     kind: NodeKind,
     main_token: u32,
     lhs: u32,
@@ -224,7 +224,7 @@ struct Node {
 // The parser + arena. `tl`/`source` are the lexed input; `tok` is the current token index;
 // `nodes`/`extra` are the flat AST (see the file header). `a` is the backing allocator, held
 // so the list-building temporaries can allocate. Diagnostics are `err_count` + `first_err_tok`.
-struct Parser {
+pub struct Parser {
     tl: TokenList,
     source: []const u8,
     tok: usize,
@@ -1640,6 +1640,9 @@ fn parse_decl(p: *mut Parser) -> u32 {
             return parse_global(p);
         }
     }
+    // `pub` is module visibility only. The selfhost emitter's decl records track external
+    // C/linker export separately, so consume `pub` without setting the `exported` bit.
+    if eat(p, .kw_pub) {}
     // `extern "C" fn NAME(...) -> RET;` — a bodyless C-symbol prototype (P5.8).
     if at(p, .kw_extern) {
         return parse_extern_fn(p);
@@ -1727,7 +1730,7 @@ fn parse_module(p: *mut Parser) -> u32 {
 // Lex + parse `source` into a fresh arena. The returned `Parser` OWNS its token list and node
 // arena (all backed by `a`); free it exactly once with `parser_free`. `source` is borrowed and
 // must outlive the parser (nodes reference it for lexeme recovery).
-export fn parser_run(source: []const u8, a: *mut dyn Allocator) -> Parser {
+pub fn parser_run(source: []const u8, a: *mut dyn Allocator) -> Parser {
     var p: Parser = .{
         .tl = token_list_new(a),
         .source = source,
@@ -1754,56 +1757,56 @@ export fn parser_run(source: []const u8, a: *mut dyn Allocator) -> Parser {
 }
 
 // The module (root) node index.
-export fn parser_root(p: *Parser) -> u32 {
+pub fn parser_root(p: *Parser) -> u32 {
     return p.root;
 }
 
 // Total node count (including the index-0 sentinel).
-export fn parser_node_count(p: *Parser) -> u32 {
+pub fn parser_node_count(p: *Parser) -> u32 {
     return vec_len(Node, &p.nodes) as u32;
 }
 
 // The `NodeKind` ordinal of node `i` (via `.raw()`; matches the `open enum` order above).
-export fn parser_kind_at(p: *Parser, i: u32) -> u32 {
+pub fn parser_kind_at(p: *Parser, i: u32) -> u32 {
     let n: Node = vec_get(Node, &p.nodes, i as usize);
     return n.kind.raw();
 }
 
 // The `main_token` of node `i` (an index into the token stream).
-export fn parser_main_token_at(p: *Parser, i: u32) -> u32 {
+pub fn parser_main_token_at(p: *Parser, i: u32) -> u32 {
     let n: Node = vec_get(Node, &p.nodes, i as usize);
     return n.main_token;
 }
 
 // The `lhs` payload of node `i` (a child node index or inline value; 0 = none).
-export fn parser_lhs_at(p: *Parser, i: u32) -> u32 {
+pub fn parser_lhs_at(p: *Parser, i: u32) -> u32 {
     let n: Node = vec_get(Node, &p.nodes, i as usize);
     return n.lhs;
 }
 
 // The `rhs` payload of node `i` (a child node index or inline value; 0 = none).
-export fn parser_rhs_at(p: *Parser, i: u32) -> u32 {
+pub fn parser_rhs_at(p: *Parser, i: u32) -> u32 {
     let n: Node = vec_get(Node, &p.nodes, i as usize);
     return n.rhs;
 }
 
 // The `extra` array slot at `i` (for walking length-prefixed runs: `extra[run]` = count).
-export fn parser_extra_at(p: *Parser, i: u32) -> u32 {
+pub fn parser_extra_at(p: *Parser, i: u32) -> u32 {
     return vec_get(u32, &p.extra, i as usize);
 }
 
 // Number of parse errors encountered.
-export fn parser_err_count(p: *Parser) -> u32 {
+pub fn parser_err_count(p: *Parser) -> u32 {
     return p.err_count;
 }
 
 // The token index of the first parse error (0 if none).
-export fn parser_first_err_tok(p: *Parser) -> u32 {
+pub fn parser_first_err_tok(p: *Parser) -> u32 {
     return p.first_err_tok;
 }
 
 // Release the arena + token list. Call exactly once when done.
-export fn parser_free(p: *mut Parser) -> void {
+pub fn parser_free(p: *mut Parser) -> void {
     vec_free(Node, &p.nodes);
     vec_free(u32, &p.extra);
     token_list_free(&p.tl);

@@ -30,7 +30,7 @@
 import "std/addr.mc";
 import "std/alloc/alloc.mc";
 
-struct Vec<T> {
+pub struct Vec<T> {
     data: PAddr,               // backing storage; pa(0) while cap == 0
     len: usize,                // number of live elements
     cap: usize,                // element capacity of `data`
@@ -38,12 +38,12 @@ struct Vec<T> {
 }
 
 // A fresh empty vector bound to allocator `a`. No allocation happens until the first push.
-export fn vec_new(comptime T: type, a: *mut dyn Allocator) -> Vec<T> {
+pub fn vec_new(comptime T: type, a: *mut dyn Allocator) -> Vec<T> {
     return .{ .data = pa(0), .len = 0, .cap = 0, .a = a };
 }
 
 // Number of live elements.
-export fn vec_len(comptime T: type, v: *Vec<T>) -> usize {
+pub fn vec_len(comptime T: type, v: *Vec<T>) -> usize {
     return v.len;
 }
 
@@ -77,7 +77,7 @@ fn vec_reserve(comptime T: type, v: *mut Vec<T>, need: usize) -> void {
 }
 
 // Append `x`, growing storage if full. Amortized O(1).
-export fn vec_push(comptime T: type, v: *mut Vec<T>, x: T) -> void {
+pub fn vec_push(comptime T: type, v: *mut Vec<T>, x: T) -> void {
     vec_reserve(T, v, v.len + 1);
     unsafe {
         let p: *mut T = raw.ptr<T>(pa_offset(v.data, v.len * sizeof(T)));
@@ -87,7 +87,7 @@ export fn vec_push(comptime T: type, v: *mut Vec<T>, x: T) -> void {
 }
 
 // Element at `i` (bounds-checked: out of range traps).
-export fn vec_get(comptime T: type, v: *Vec<T>, i: usize) -> T {
+pub fn vec_get(comptime T: type, v: *Vec<T>, i: usize) -> T {
     if i >= v.len {
         unreachable; // index out of bounds
     }
@@ -100,7 +100,7 @@ export fn vec_get(comptime T: type, v: *Vec<T>, i: usize) -> T {
 }
 
 // Overwrite element `i` (bounds-checked).
-export fn vec_set(comptime T: type, v: *mut Vec<T>, i: usize, x: T) -> void {
+pub fn vec_set(comptime T: type, v: *mut Vec<T>, i: usize, x: T) -> void {
     if i >= v.len {
         unreachable; // index out of bounds
     }
@@ -111,7 +111,7 @@ export fn vec_set(comptime T: type, v: *mut Vec<T>, i: usize, x: T) -> void {
 }
 
 // Remove and return the last element (traps if empty).
-export fn vec_pop(comptime T: type, v: *mut Vec<T>) -> T {
+pub fn vec_pop(comptime T: type, v: *mut Vec<T>) -> T {
     if v.len == 0 {
         unreachable; // pop from empty vector
     }
@@ -125,13 +125,13 @@ export fn vec_pop(comptime T: type, v: *mut Vec<T>) -> T {
 }
 
 // Drop all elements (keeps the backing storage for reuse).
-export fn vec_clear(comptime T: type, v: *mut Vec<T>) -> void {
+pub fn vec_clear(comptime T: type, v: *mut Vec<T>) -> void {
     v.len = 0;
 }
 
 // Release the backing storage. Call exactly once; the Vec becomes empty (len==cap==0) and
 // may be reused (a subsequent push re-allocates). A no-op when nothing is allocated.
-export fn vec_free(comptime T: type, v: *mut Vec<T>) -> void {
+pub fn vec_free(comptime T: type, v: *mut Vec<T>) -> void {
     if v.cap != 0 {
         free_bytes(v.a, v.data, v.cap * sizeof(T));
     }

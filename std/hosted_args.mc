@@ -39,13 +39,13 @@ extern "C" fn mc_arg_len(i: i32) -> usize;
 
 // The number of command-line arguments, INCLUDING argv[0] (the program name),
 // exactly like C's `argc`.
-export fn args_count() -> i32 {
+pub fn args_count() -> i32 {
     return mc_argc();
 }
 
 // The length in bytes of argument `i` (excluding the NUL terminator); 0 if `i`
 // is out of range.
-export fn arg_len(i: i32) -> usize {
+pub fn arg_len(i: i32) -> usize {
     return mc_arg_len(i);
 }
 
@@ -53,21 +53,21 @@ export fn arg_len(i: i32) -> usize {
 // trailing NUL is NOT included). Out-of-range `i` yields an empty reader (base 0,
 // length 0), so every read is still bounds-safe. Use `br_len`/`br_u8`/`br_try_u8`
 // from `std/bytes` to inspect it — a read past the argument can never over-run.
-export fn arg(i: i32) -> ByteReader {
+pub fn arg(i: i32) -> ByteReader {
     return byte_reader(pa(mc_argv(i)), mc_arg_len(i));
 }
 
 // Byte `j` of argument `i`, bounds-checked against the argument length (traps via
 // the `ByteReader` on an out-of-range `j`). A convenience for callers that want a
 // single byte without holding the reader.
-export fn arg_byte(i: i32, j: usize) -> u8 {
+pub fn arg_byte(i: i32, j: usize) -> u8 {
     var r: ByteReader = arg(i);
     return br_u8(&r, j);
 }
 
 // True if argument `i` equals the NUL-terminated C string at `expected`
 // (byte-for-byte, same length). Handy for flag matching (e.g. `arg_eq(1, "-o")`).
-export fn arg_eq(i: i32, expected: *const u8) -> bool {
+pub fn arg_eq(i: i32, expected: *const u8) -> bool {
     let n: usize = mc_arg_len(i);
     var r: ByteReader = arg(i);
     var k: usize = 0;

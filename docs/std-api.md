@@ -13,8 +13,8 @@ public type declarations, and local types named by public declarations.
 Total modules: **41**.
 Total public functions: **351**.
 Total public constants: **6**.
-Total public type declarations: **37**.
-Total referenced local types: **24**.
+Total public type declarations: **42**.
+Total referenced local types: **19**.
 
 ## Modules
 
@@ -306,47 +306,47 @@ Source: `std/collections/arc.mc`
 
 Source: `std/collections/dynarray.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct Vec&lt;T&gt;</code> | `std/collections/dynarray.mc:33` |
+| <code>pub struct Vec&lt;T&gt;</code> | `std/collections/dynarray.mc:33` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn vec_new(comptime T: type, a: *mut dyn Allocator) -&gt; Vec&lt;T&gt;</code> | `std/collections/dynarray.mc:41` |
-| <code>export fn vec_len(comptime T: type, v: *Vec&lt;T&gt;) -&gt; usize</code> | `std/collections/dynarray.mc:46` |
-| <code>export fn vec_push(comptime T: type, v: *mut Vec&lt;T&gt;, x: T) -&gt; void</code> | `std/collections/dynarray.mc:80` |
-| <code>export fn vec_get(comptime T: type, v: *Vec&lt;T&gt;, i: usize) -&gt; T</code> | `std/collections/dynarray.mc:90` |
-| <code>export fn vec_set(comptime T: type, v: *mut Vec&lt;T&gt;, i: usize, x: T) -&gt; void</code> | `std/collections/dynarray.mc:103` |
-| <code>export fn vec_pop(comptime T: type, v: *mut Vec&lt;T&gt;) -&gt; T</code> | `std/collections/dynarray.mc:114` |
-| <code>export fn vec_clear(comptime T: type, v: *mut Vec&lt;T&gt;) -&gt; void</code> | `std/collections/dynarray.mc:128` |
-| <code>export fn vec_free(comptime T: type, v: *mut Vec&lt;T&gt;) -&gt; void</code> | `std/collections/dynarray.mc:134` |
+| <code>pub fn vec_new(comptime T: type, a: *mut dyn Allocator) -&gt; Vec&lt;T&gt;</code> | `std/collections/dynarray.mc:41` |
+| <code>pub fn vec_len(comptime T: type, v: *Vec&lt;T&gt;) -&gt; usize</code> | `std/collections/dynarray.mc:46` |
+| <code>pub fn vec_push(comptime T: type, v: *mut Vec&lt;T&gt;, x: T) -&gt; void</code> | `std/collections/dynarray.mc:80` |
+| <code>pub fn vec_get(comptime T: type, v: *Vec&lt;T&gt;, i: usize) -&gt; T</code> | `std/collections/dynarray.mc:90` |
+| <code>pub fn vec_set(comptime T: type, v: *mut Vec&lt;T&gt;, i: usize, x: T) -&gt; void</code> | `std/collections/dynarray.mc:103` |
+| <code>pub fn vec_pop(comptime T: type, v: *mut Vec&lt;T&gt;) -&gt; T</code> | `std/collections/dynarray.mc:114` |
+| <code>pub fn vec_clear(comptime T: type, v: *mut Vec&lt;T&gt;) -&gt; void</code> | `std/collections/dynarray.mc:128` |
+| <code>pub fn vec_free(comptime T: type, v: *mut Vec&lt;T&gt;) -&gt; void</code> | `std/collections/dynarray.mc:134` |
 
 ## `std/collections/hashmap`
 
 Source: `std/collections/hashmap.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct StrHashMap&lt;V&gt;</code> | `std/collections/hashmap.mc:52` |
+| <code>pub struct StrHashMap&lt;V&gt;</code> | `std/collections/hashmap.mc:52` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn strmap_new(comptime V: type, a: *mut dyn Allocator) -&gt; StrHashMap&lt;V&gt;</code> | `std/collections/hashmap.mc:147` |
-| <code>export fn strmap_len(comptime V: type, m: *StrHashMap&lt;V&gt;) -&gt; usize</code> | `std/collections/hashmap.mc:152` |
-| <code>export fn strmap_put(comptime V: type, m: *mut StrHashMap&lt;V&gt;, key: []const u8, val: V) -&gt; void</code> | `std/collections/hashmap.mc:158` |
-| <code>export fn strmap_get(comptime V: type, m: *StrHashMap&lt;V&gt;, key: []const u8) -&gt; ?*mut V</code> | `std/collections/hashmap.mc:177` |
-| <code>export fn strmap_get_or(comptime V: type, m: *StrHashMap&lt;V&gt;, key: []const u8, fallback: V) -&gt; V</code> | `std/collections/hashmap.mc:197` |
-| <code>export fn strmap_contains(comptime V: type, m: *StrHashMap&lt;V&gt;, key: []const u8) -&gt; bool</code> | `std/collections/hashmap.mc:210` |
-| <code>export fn strmap_del(comptime V: type, m: *mut StrHashMap&lt;V&gt;, key: []const u8) -&gt; void</code> | `std/collections/hashmap.mc:224` |
-| <code>export fn strmap_free(comptime V: type, m: *mut StrHashMap&lt;V&gt;) -&gt; void</code> | `std/collections/hashmap.mc:269` |
+| <code>pub fn strmap_new(comptime V: type, a: *mut dyn Allocator) -&gt; StrHashMap&lt;V&gt;</code> | `std/collections/hashmap.mc:147` |
+| <code>pub fn strmap_len(comptime V: type, m: *StrHashMap&lt;V&gt;) -&gt; usize</code> | `std/collections/hashmap.mc:152` |
+| <code>pub fn strmap_put(comptime V: type, m: *mut StrHashMap&lt;V&gt;, key: []const u8, val: V) -&gt; void</code> | `std/collections/hashmap.mc:158` |
+| <code>pub fn strmap_get(comptime V: type, m: *StrHashMap&lt;V&gt;, key: []const u8) -&gt; ?*mut V</code> | `std/collections/hashmap.mc:177` |
+| <code>pub fn strmap_get_or(comptime V: type, m: *StrHashMap&lt;V&gt;, key: []const u8, fallback: V) -&gt; V</code> | `std/collections/hashmap.mc:197` |
+| <code>pub fn strmap_contains(comptime V: type, m: *StrHashMap&lt;V&gt;, key: []const u8) -&gt; bool</code> | `std/collections/hashmap.mc:210` |
+| <code>pub fn strmap_del(comptime V: type, m: *mut StrHashMap&lt;V&gt;, key: []const u8) -&gt; void</code> | `std/collections/hashmap.mc:224` |
+| <code>pub fn strmap_free(comptime V: type, m: *mut StrHashMap&lt;V&gt;) -&gt; void</code> | `std/collections/hashmap.mc:269` |
 
 ## `std/collections/ring`
 
@@ -495,48 +495,48 @@ Source: `std/hosted_args.mc`
 
 | Signature | Source |
 |---|---|
-| <code>export fn args_count() -&gt; i32</code> | `std/hosted_args.mc:42` |
-| <code>export fn arg_len(i: i32) -&gt; usize</code> | `std/hosted_args.mc:48` |
-| <code>export fn arg(i: i32) -&gt; ByteReader</code> | `std/hosted_args.mc:56` |
-| <code>export fn arg_byte(i: i32, j: usize) -&gt; u8</code> | `std/hosted_args.mc:63` |
-| <code>export fn arg_eq(i: i32, expected: *const u8) -&gt; bool</code> | `std/hosted_args.mc:70` |
+| <code>pub fn args_count() -&gt; i32</code> | `std/hosted_args.mc:42` |
+| <code>pub fn arg_len(i: i32) -&gt; usize</code> | `std/hosted_args.mc:48` |
+| <code>pub fn arg(i: i32) -&gt; ByteReader</code> | `std/hosted_args.mc:56` |
+| <code>pub fn arg_byte(i: i32, j: usize) -&gt; u8</code> | `std/hosted_args.mc:63` |
+| <code>pub fn arg_eq(i: i32, expected: *const u8) -&gt; bool</code> | `std/hosted_args.mc:70` |
 
 ## `std/hosted_io`
 
 Source: `std/hosted_io.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct Fd</code> | `std/hosted_io.mc:24` |
-| <code>enum IoError</code> | `std/hosted_io.mc:62` |
+| <code>pub struct Fd</code> | `std/hosted_io.mc:24` |
+| <code>pub enum IoError</code> | `std/hosted_io.mc:62` |
 
 ### Public constants
 
 | Signature | Source |
 |---|---|
-| <code>export const O_RDONLY: i32 = 0;</code> | `std/hosted_io.mc:38` |
-| <code>export const O_WRONLY: i32 = 1;</code> | `std/hosted_io.mc:39` |
-| <code>export const O_RDWR: i32 = 2;</code> | `std/hosted_io.mc:40` |
-| <code>export const O_CREAT: i32 = 64;</code> | `std/hosted_io.mc:41` |
-| <code>export const O_TRUNC: i32 = 512;</code> | `std/hosted_io.mc:42` |
-| <code>export const MODE_0644: i32 = 420;</code> | `std/hosted_io.mc:45` |
+| <code>pub const O_RDONLY: i32 = 0;</code> | `std/hosted_io.mc:38` |
+| <code>pub const O_WRONLY: i32 = 1;</code> | `std/hosted_io.mc:39` |
+| <code>pub const O_RDWR: i32 = 2;</code> | `std/hosted_io.mc:40` |
+| <code>pub const O_CREAT: i32 = 64;</code> | `std/hosted_io.mc:41` |
+| <code>pub const O_TRUNC: i32 = 512;</code> | `std/hosted_io.mc:42` |
+| <code>pub const MODE_0644: i32 = 420;</code> | `std/hosted_io.mc:45` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn fd_raw(f: Fd) -&gt; i32</code> | `std/hosted_io.mc:28` |
-| <code>export fn stdin_fd() -&gt; Fd</code> | `std/hosted_io.mc:32` |
-| <code>export fn stdout_fd() -&gt; Fd</code> | `std/hosted_io.mc:33` |
-| <code>export fn stderr_fd() -&gt; Fd</code> | `std/hosted_io.mc:34` |
-| <code>export fn io_open(path: *const u8, flags: i32, mode: i32) -&gt; Result&lt;Fd, IoError&gt;</code> | `std/hosted_io.mc:88` |
-| <code>export fn io_read(f: Fd, buf: PAddr, n: usize) -&gt; Result&lt;usize, IoError&gt;</code> | `std/hosted_io.mc:100` |
-| <code>export fn io_write(f: Fd, buf: PAddr, n: usize) -&gt; Result&lt;usize, IoError&gt;</code> | `std/hosted_io.mc:115` |
-| <code>export fn io_write_all(f: Fd, buf: PAddr, n: usize) -&gt; Result&lt;usize, IoError&gt;</code> | `std/hosted_io.mc:129` |
-| <code>export fn io_close(f: Fd) -&gt; Result&lt;bool, IoError&gt;</code> | `std/hosted_io.mc:147` |
-| <code>export fn io_printf_f64(f: Fd, fmt: *const u8, value: f64) -&gt; Result&lt;usize, IoError&gt;</code> | `std/hosted_io.mc:159` |
+| <code>pub fn fd_raw(f: Fd) -&gt; i32</code> | `std/hosted_io.mc:28` |
+| <code>pub fn stdin_fd() -&gt; Fd</code> | `std/hosted_io.mc:32` |
+| <code>pub fn stdout_fd() -&gt; Fd</code> | `std/hosted_io.mc:33` |
+| <code>pub fn stderr_fd() -&gt; Fd</code> | `std/hosted_io.mc:34` |
+| <code>pub fn io_open(path: *const u8, flags: i32, mode: i32) -&gt; Result&lt;Fd, IoError&gt;</code> | `std/hosted_io.mc:88` |
+| <code>pub fn io_read(f: Fd, buf: PAddr, n: usize) -&gt; Result&lt;usize, IoError&gt;</code> | `std/hosted_io.mc:100` |
+| <code>pub fn io_write(f: Fd, buf: PAddr, n: usize) -&gt; Result&lt;usize, IoError&gt;</code> | `std/hosted_io.mc:115` |
+| <code>pub fn io_write_all(f: Fd, buf: PAddr, n: usize) -&gt; Result&lt;usize, IoError&gt;</code> | `std/hosted_io.mc:129` |
+| <code>pub fn io_close(f: Fd) -&gt; Result&lt;bool, IoError&gt;</code> | `std/hosted_io.mc:147` |
+| <code>pub fn io_printf_f64(f: Fd, fmt: *const u8, value: f64) -&gt; Result&lt;usize, IoError&gt;</code> | `std/hosted_io.mc:159` |
 
 ## `std/libc`
 
@@ -734,26 +734,26 @@ Source: `std/sort.mc`
 
 Source: `std/strbuf.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct StrBuf</code> | `std/strbuf.mc:30` |
+| <code>pub struct StrBuf</code> | `std/strbuf.mc:30` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn sb_new(a: *mut dyn Allocator) -&gt; StrBuf</code> | `std/strbuf.mc:35` |
-| <code>export fn sb_len(sb: *StrBuf) -&gt; usize</code> | `std/strbuf.mc:40` |
-| <code>export fn sb_byte(sb: *StrBuf, i: usize) -&gt; u8</code> | `std/strbuf.mc:45` |
-| <code>export fn sb_ptr(sb: *StrBuf) -&gt; PAddr</code> | `std/strbuf.mc:52` |
-| <code>export fn sb_put_byte(sb: *mut StrBuf, b: u8) -&gt; void</code> | `std/strbuf.mc:57` |
-| <code>export fn sb_put_str(sb: *mut StrBuf, s: []const u8) -&gt; void</code> | `std/strbuf.mc:62` |
-| <code>export fn sb_put_cstr(sb: *mut StrBuf, s: *const u8) -&gt; void</code> | `std/strbuf.mc:75` |
-| <code>export fn sb_put_u32(sb: *mut StrBuf, n: u32) -&gt; void</code> | `std/strbuf.mc:92` |
-| <code>export fn sb_put_hex_u32(sb: *mut StrBuf, n: u32) -&gt; void</code> | `std/strbuf.mc:115` |
-| <code>export fn sb_free(sb: *mut StrBuf) -&gt; void</code> | `std/strbuf.mc:132` |
+| <code>pub fn sb_new(a: *mut dyn Allocator) -&gt; StrBuf</code> | `std/strbuf.mc:35` |
+| <code>pub fn sb_len(sb: *StrBuf) -&gt; usize</code> | `std/strbuf.mc:40` |
+| <code>pub fn sb_byte(sb: *StrBuf, i: usize) -&gt; u8</code> | `std/strbuf.mc:45` |
+| <code>pub fn sb_ptr(sb: *StrBuf) -&gt; PAddr</code> | `std/strbuf.mc:52` |
+| <code>pub fn sb_put_byte(sb: *mut StrBuf, b: u8) -&gt; void</code> | `std/strbuf.mc:57` |
+| <code>pub fn sb_put_str(sb: *mut StrBuf, s: []const u8) -&gt; void</code> | `std/strbuf.mc:62` |
+| <code>pub fn sb_put_cstr(sb: *mut StrBuf, s: *const u8) -&gt; void</code> | `std/strbuf.mc:75` |
+| <code>pub fn sb_put_u32(sb: *mut StrBuf, n: u32) -&gt; void</code> | `std/strbuf.mc:92` |
+| <code>pub fn sb_put_hex_u32(sb: *mut StrBuf, n: u32) -&gt; void</code> | `std/strbuf.mc:115` |
+| <code>pub fn sb_free(sb: *mut StrBuf) -&gt; void</code> | `std/strbuf.mc:132` |
 
 ## `std/sync/barrier`
 

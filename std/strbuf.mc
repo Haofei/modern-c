@@ -27,39 +27,39 @@
 import "std/collections/dynarray.mc";
 import "std/addr.mc";
 
-struct StrBuf {
+pub struct StrBuf {
     v: Vec<u8>,                // backing byte storage (owns the allocation)
 }
 
 // A fresh empty buffer bound to allocator `a`. No allocation happens until the first put.
-export fn sb_new(a: *mut dyn Allocator) -> StrBuf {
+pub fn sb_new(a: *mut dyn Allocator) -> StrBuf {
     return .{ .v = vec_new(u8, a) };
 }
 
 // Number of bytes appended so far.
-export fn sb_len(sb: *StrBuf) -> usize {
+pub fn sb_len(sb: *StrBuf) -> usize {
     return vec_len(u8, &sb.v);
 }
 
 // The byte at `i` (bounds-checked: out of range traps). The read-back primitive.
-export fn sb_byte(sb: *StrBuf, i: usize) -> u8 {
+pub fn sb_byte(sb: *StrBuf, i: usize) -> u8 {
     return vec_get(u8, &sb.v, i);
 }
 
 // The address of the contiguous backing bytes (pa(0) while nothing has been
 // appended). Paired with `sb_len`, this lets a hosted caller flush the whole
 // buffer in ONE `io_write` instead of one syscall per byte.
-export fn sb_ptr(sb: *StrBuf) -> PAddr {
+pub fn sb_ptr(sb: *StrBuf) -> PAddr {
     return sb.v.data;
 }
 
 // Append one byte, growing storage if full. Amortized O(1).
-export fn sb_put_byte(sb: *mut StrBuf, b: u8) -> void {
+pub fn sb_put_byte(sb: *mut StrBuf, b: u8) -> void {
     vec_push(u8, &sb.v, b);
 }
 
 // Append the bytes of `s` (a `[]const u8`) in order.
-export fn sb_put_str(sb: *mut StrBuf, s: []const u8) -> void {
+pub fn sb_put_str(sb: *mut StrBuf, s: []const u8) -> void {
     var i: usize = 0;
     while i < s.len {
         vec_push(u8, &sb.v, s[i]);
@@ -72,7 +72,7 @@ export fn sb_put_str(sb: *mut StrBuf, s: []const u8) -> void {
 // `*const u8`, NOT `[]const u8` (self-host gap G12), so `sb_put_str("...")` will not compile;
 // `sb_put_cstr(sb, "...")` does. Reads a byte at a time via `raw.load<u8>` off the pointer's
 // address (the same raw-boundary pattern as std/libc `mc_strlen`).
-export fn sb_put_cstr(sb: *mut StrBuf, s: *const u8) -> void {
+pub fn sb_put_cstr(sb: *mut StrBuf, s: *const u8) -> void {
     let base: PAddr = pa(s as usize);
     var i: usize = 0;
     while true {
@@ -89,7 +89,7 @@ export fn sb_put_cstr(sb: *mut StrBuf, s: *const u8) -> void {
 }
 
 // Append `n` in decimal (no leading zeros; "0" for zero).
-export fn sb_put_u32(sb: *mut StrBuf, n: u32) -> void {
+pub fn sb_put_u32(sb: *mut StrBuf, n: u32) -> void {
     if n == 0 {
         vec_push(u8, &sb.v, 48); // '0'
         return;
@@ -112,7 +112,7 @@ export fn sb_put_u32(sb: *mut StrBuf, n: u32) -> void {
 }
 
 // Append `n` as `0x` + 8 fixed-width lowercase hex nibbles, most significant first.
-export fn sb_put_hex_u32(sb: *mut StrBuf, n: u32) -> void {
+pub fn sb_put_hex_u32(sb: *mut StrBuf, n: u32) -> void {
     vec_push(u8, &sb.v, 48);  // '0'
     vec_push(u8, &sb.v, 120); // 'x'
     var s: i32 = 28; // top nibble shift for a 32-bit value
@@ -129,6 +129,6 @@ export fn sb_put_hex_u32(sb: *mut StrBuf, n: u32) -> void {
 
 // Release the backing storage. Call exactly once; the buffer becomes empty and may be
 // reused (a subsequent put re-allocates). A no-op when nothing is allocated.
-export fn sb_free(sb: *mut StrBuf) -> void {
+pub fn sb_free(sb: *mut StrBuf) -> void {
     vec_free(u8, &sb.v);
 }

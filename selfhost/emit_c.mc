@@ -3532,7 +3532,7 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
 // `mcc2` parses the input a SINGLE time instead of once for sema and again for emit. `a` backs the
 // returned StrBuf only. Reads the AST arena read-only (aside from the scratch monomorph/`cur_fn`
 // fields on `p`, which are the emitter's own transient state).
-export fn emit_c_on(p: *mut Parser, facts_addr: usize, a: *mut dyn Allocator) -> StrBuf {
+pub fn emit_c_on(p: *mut Parser, facts_addr: usize, a: *mut dyn Allocator) -> StrBuf {
     p.facts_addr = facts_addr; // arch plan Phase 2: let e_enum_lit read sema's resolution (0 = none)
     var sb: StrBuf = sb_new(a);
     e_module(p, &sb);
@@ -3542,7 +3542,7 @@ export fn emit_c_on(p: *mut Parser, facts_addr: usize, a: *mut dyn Allocator) ->
 // Convenience entry that parses `source` itself, emits, and frees the parse — kept for the standalone
 // emit gates (tests/toolchain/selfhost_emit_user.mc). No sema ran, so there is no fact table (addr 0);
 // enum literals fall back to the name scan. The unified `mcc2` pipeline uses `emit_c_on` with facts.
-export fn emit_c_run(source: []const u8, a: *mut dyn Allocator) -> StrBuf {
+pub fn emit_c_run(source: []const u8, a: *mut dyn Allocator) -> StrBuf {
     var p: Parser = parser_run(source, a);
     var sb: StrBuf = emit_c_on(&p, 0, a);
     parser_free(&p);

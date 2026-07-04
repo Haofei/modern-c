@@ -21,28 +21,28 @@ import "std/addr.mc";
 
 // ----- file descriptor: a typed, opaque wrapper over the POSIX int fd -----
 
-struct Fd {
+pub struct Fd {
     raw: i32,
 }
 
-export fn fd_raw(f: Fd) -> i32 {
+pub fn fd_raw(f: Fd) -> i32 {
     return f.raw;
 }
 // The conventional standard streams.
-export fn stdin_fd() -> Fd { return .{ .raw = 0 }; }
-export fn stdout_fd() -> Fd { return .{ .raw = 1 }; }
-export fn stderr_fd() -> Fd { return .{ .raw = 2 }; }
+pub fn stdin_fd() -> Fd { return .{ .raw = 0 }; }
+pub fn stdout_fd() -> Fd { return .{ .raw = 1 }; }
+pub fn stderr_fd() -> Fd { return .{ .raw = 2 }; }
 
 // ----- open() flags (Linux/glibc values; the hosted target is Linux libc) -----
 
-export const O_RDONLY: i32 = 0;
-export const O_WRONLY: i32 = 1;
-export const O_RDWR:   i32 = 2;
-export const O_CREAT:  i32 = 64;    // 0o100
-export const O_TRUNC:  i32 = 512;   // 0o1000
+pub const O_RDONLY: i32 = 0;
+pub const O_WRONLY: i32 = 1;
+pub const O_RDWR:   i32 = 2;
+pub const O_CREAT:  i32 = 64;    // 0o100
+pub const O_TRUNC:  i32 = 512;   // 0o1000
 
 // Default mode bits (0o644) for files created with O_CREAT.
-export const MODE_0644: i32 = 420;
+pub const MODE_0644: i32 = 420;
 
 // AT_FDCWD: resolve relative paths against the current working directory. Used
 // with `openat` (we bind `openat`, not `open`, because `open` is an MC keyword).
@@ -59,7 +59,7 @@ const AT_FDCWD: i32 = -100;
 // One typed error for every I/O failure. `code` is the raw negative return from
 // the underlying libc call (e.g. -1), preserved so callers can distinguish/log
 // it; the variant names the operation that failed.
-enum IoError {
+pub enum IoError {
     OpenFailed,
     ReadFailed,
     WriteFailed,
@@ -85,7 +85,7 @@ extern "C" fn dprintf(fd: i32, fmt: *const u8, value: f64) -> i32;
 
 // Open `path` with POSIX `flags` (and `mode` for O_CREAT). Returns a typed `Fd`
 // or `IoError.OpenFailed` on failure (raw fd < 0).
-export fn io_open(path: *const u8, flags: i32, mode: i32) -> Result<Fd, IoError> {
+pub fn io_open(path: *const u8, flags: i32, mode: i32) -> Result<Fd, IoError> {
     let r: i32 = openat(AT_FDCWD, path, flags, mode);
     if r < 0 {
         return err(.OpenFailed);
@@ -97,7 +97,7 @@ export fn io_open(path: *const u8, flags: i32, mode: i32) -> Result<Fd, IoError>
 // (0 means end-of-file), or `IoError.ReadFailed` on error (raw < 0). The caller
 // owns `buf` and guarantees it has room for `n` bytes (an unchecked contract,
 // like every raw-buffer boundary in MC).
-export fn io_read(f: Fd, buf: PAddr, n: usize) -> Result<usize, IoError> {
+pub fn io_read(f: Fd, buf: PAddr, n: usize) -> Result<usize, IoError> {
     var p: *mut u8 = raw.ptr<u8>(0);
     unsafe {
         p = raw.ptr<u8>(buf);
@@ -112,7 +112,7 @@ export fn io_read(f: Fd, buf: PAddr, n: usize) -> Result<usize, IoError> {
 // Write `n` bytes from `buf` to `fd`. Returns the number of bytes written, or
 // `IoError.WriteFailed` on error (raw < 0). A short write (returned count < n)
 // is reported as a value, not hidden — the caller decides whether to loop.
-export fn io_write(f: Fd, buf: PAddr, n: usize) -> Result<usize, IoError> {
+pub fn io_write(f: Fd, buf: PAddr, n: usize) -> Result<usize, IoError> {
     var p: *const u8 = raw.ptr<u8>(0);
     unsafe {
         p = raw.ptr<u8>(buf);
@@ -126,7 +126,7 @@ export fn io_write(f: Fd, buf: PAddr, n: usize) -> Result<usize, IoError> {
 
 // Write exactly `n` bytes from `buf` to `fd`, looping over short writes. Returns
 // the total written (== n on success) or the first `IoError.WriteFailed`.
-export fn io_write_all(f: Fd, buf: PAddr, n: usize) -> Result<usize, IoError> {
+pub fn io_write_all(f: Fd, buf: PAddr, n: usize) -> Result<usize, IoError> {
     var done: usize = 0;
     while done < n {
         let w: usize = io_write(f, pa_offset(buf, done), n - done)?;
@@ -144,7 +144,7 @@ fn done_step(w: usize) -> usize {
 }
 
 // Close `fd`. Returns true on success or `IoError.CloseFailed` (raw < 0).
-export fn io_close(f: Fd) -> Result<bool, IoError> {
+pub fn io_close(f: Fd) -> Result<bool, IoError> {
     let r: i32 = close(f.raw);
     if r < 0 {
         return err(.CloseFailed);
@@ -156,7 +156,7 @@ export fn io_close(f: Fd) -> Result<bool, IoError> {
 // exactly one floating conversion, e.g. "%g\n") and write it to `fd`. Returns
 // the number of bytes written or `IoError.FormatFailed` (raw < 0). This is the
 // explicit, fallible analogue of an ambient `printf`.
-export fn io_printf_f64(f: Fd, fmt: *const u8, value: f64) -> Result<usize, IoError> {
+pub fn io_printf_f64(f: Fd, fmt: *const u8, value: f64) -> Result<usize, IoError> {
     let r: i32 = dprintf(f.raw, fmt, value);
     if r < 0 {
         return err(.FormatFailed);

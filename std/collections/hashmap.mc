@@ -49,7 +49,7 @@ struct Entry<V> {
     used: bool,
 }
 
-struct StrHashMap<V> {
+pub struct StrHashMap<V> {
     slots: PAddr,          // array of Entry<V>; pa(0) while cap == 0
     len: usize,            // number of live entries
     cap: usize,            // slot capacity (0 until the first put)
@@ -144,18 +144,18 @@ fn strmap_grow(comptime V: type, m: *mut StrHashMap<V>) -> void {
 }
 
 // A fresh empty map bound to allocator `a`. No allocation happens until the first put.
-export fn strmap_new(comptime V: type, a: *mut dyn Allocator) -> StrHashMap<V> {
+pub fn strmap_new(comptime V: type, a: *mut dyn Allocator) -> StrHashMap<V> {
     return .{ .slots = pa(0), .len = 0, .cap = 0, .a = a };
 }
 
 // Number of live entries.
-export fn strmap_len(comptime V: type, m: *StrHashMap<V>) -> usize {
+pub fn strmap_len(comptime V: type, m: *StrHashMap<V>) -> usize {
     return m.len;
 }
 
 // Insert or overwrite: bind `key` to `val`. On a new key the table grows first if inserting
 // would exceed the ~0.75 load factor. The key slice is stored by reference (borrowed).
-export fn strmap_put(comptime V: type, m: *mut StrHashMap<V>, key: []const u8, val: V) -> void {
+pub fn strmap_put(comptime V: type, m: *mut StrHashMap<V>, key: []const u8, val: V) -> void {
     // Grow when (len + 1) / cap would exceed 3/4, written as a cross-multiply to avoid floats.
     // Also grows from cap == 0 on the first put ((0 + 1) * 4 > 0).
     if (m.len + 1) * 4 > m.cap * 3 {
@@ -174,7 +174,7 @@ export fn strmap_put(comptime V: type, m: *mut StrHashMap<V>, key: []const u8, v
 // A pointer to the value bound to `key`, or `null` if absent. The pointer is into the map's
 // storage: valid until the next grow-triggering `strmap_put`. The pointer form (not a by-value
 // `?V`) is intentional — it allows in-place update; see the module header and the GAP note.
-export fn strmap_get(comptime V: type, m: *StrHashMap<V>, key: []const u8) -> ?*mut V {
+pub fn strmap_get(comptime V: type, m: *StrHashMap<V>, key: []const u8) -> ?*mut V {
     if m.cap == 0 {
         return null;
     }
@@ -194,7 +194,7 @@ export fn strmap_get(comptime V: type, m: *StrHashMap<V>, key: []const u8) -> ?*
 
 // The value bound to `key`, or `fallback` if absent — a by-value read that complements the
 // pointer-returning `strmap_get`. `V` is copied out, so the result is independent of later mutation.
-export fn strmap_get_or(comptime V: type, m: *StrHashMap<V>, key: []const u8, fallback: V) -> V {
+pub fn strmap_get_or(comptime V: type, m: *StrHashMap<V>, key: []const u8, fallback: V) -> V {
     if m.cap == 0 {
         return fallback;
     }
@@ -207,7 +207,7 @@ export fn strmap_get_or(comptime V: type, m: *StrHashMap<V>, key: []const u8, fa
 }
 
 // Whether `key` is present.
-export fn strmap_contains(comptime V: type, m: *StrHashMap<V>, key: []const u8) -> bool {
+pub fn strmap_contains(comptime V: type, m: *StrHashMap<V>, key: []const u8) -> bool {
     if m.cap == 0 {
         return false;
     }
@@ -221,7 +221,7 @@ export fn strmap_contains(comptime V: type, m: *StrHashMap<V>, key: []const u8) 
 // unreachable through the new hole is shifted back to fill it. This keeps probe chains gap-free, so
 // `strmap_probe`/`get`/`contains` need no tombstone handling. Borrowed key bytes are not freed (the
 // map never owned them). O(cluster length). `V` must be COPYABLE (entries are moved by raw copy).
-export fn strmap_del(comptime V: type, m: *mut StrHashMap<V>, key: []const u8) -> void {
+pub fn strmap_del(comptime V: type, m: *mut StrHashMap<V>, key: []const u8) -> void {
     if m.cap == 0 {
         return;
     }
@@ -266,7 +266,7 @@ export fn strmap_del(comptime V: type, m: *mut StrHashMap<V>, key: []const u8) -
 // Release the backing slot array. Call exactly once; the map becomes empty (len == cap == 0)
 // and may be reused (a subsequent put re-allocates). A no-op when nothing is allocated. Borrowed
 // key bytes are the caller's to free (this map never owned them).
-export fn strmap_free(comptime V: type, m: *mut StrHashMap<V>) -> void {
+pub fn strmap_free(comptime V: type, m: *mut StrHashMap<V>) -> void {
     if m.cap != 0 {
         free_bytes(m.a, m.slots, m.cap * sizeof(Entry<V>));
     }

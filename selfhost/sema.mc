@@ -41,7 +41,7 @@ import "selfhost/parser.mc";
 // The type lattice for the checked subset. `open enum ... : u32` so `.raw()` yields the ordinal
 // (used for the contiguous-numeric range test and the gate's first-error code). Numeric kinds
 // (`int_lit` .. `isize_`, ordinals 4..14) are kept contiguous so "is numeric" is a range check.
-open enum SmKind: u32 {
+pub open enum SmKind: u32 {
     unknown,   // 0  error / unresolved
     void_,     // 1
     bool_,     // 2
@@ -76,7 +76,7 @@ open enum SmKind: u32 {
 
 // The first-error code surfaced to the gate (an `open enum` so `.raw()` gives the ordinal the C
 // driver asserts). Ordinals are the sema-test contract; keep the order stable.
-open enum SmErr: u32 {
+pub open enum SmErr: u32 {
     none,             // 0
     unknown_name,     // 1
     arg_count,        // 2
@@ -102,7 +102,7 @@ open enum SmErr: u32 {
 }
 
 // A resolved type. Copyable (all scalar fields), so it stores freely in `Vec`/`StrHashMap`.
-struct SmType {
+pub struct SmType {
     kind: SmKind,
     ptr_depth: u32,
     nstart: usize, // named type (or array element type): source byte offset of the identifier
@@ -118,7 +118,7 @@ struct SmType {
 // `param_count` is the DECLARED arity (comptime param included), which the call's arg count must
 // match. Generic-fn bodies ARE checked leniently (arch Phase 6): the type param is abstract, so only
 // name-resolution + arity are enforced (type-shaped diagnostics suppressed — see sm_err lenient mode).
-struct SmSig {
+pub struct SmSig {
     ret: SmType,
     param_start: u32,
     param_count: u32,
@@ -129,7 +129,7 @@ struct SmSig {
 }
 
 // One struct field: its name (recovered by lexeme offsets, like a named `SmType`) + resolved type.
-struct SmField {
+pub struct SmField {
     nstart: usize,
     nlen: usize,
     ty: SmType,
@@ -138,7 +138,7 @@ struct SmField {
 // A collected struct definition: a `(start, count)` window into `SmState.fields`. P5.5: a GENERIC
 // struct (`struct S<T> {..}`) sets `is_generic = 1`; a struct literal targeting it only has its
 // field NAMES checked (field-type matching is skipped, since the field type may be the abstract T).
-struct SmStruct {
+pub struct SmStruct {
     field_start: u32,
     field_count: u32,
     is_generic: u32,
@@ -148,7 +148,7 @@ struct SmStruct {
 // return type. Enough to type a dynamic-dispatch call `d.m(..)` (whose result is this return type).
 // Trait method BODIES do not exist (they are bodyless signatures); impl method bodies ARE checked
 // (arch Phase 5, `sm_check_impls`) — the `self: *mut TYPE` receiver is an ordinary pointer param.
-struct SmTraitMethod {
+pub struct SmTraitMethod {
     tr_nstart: usize,
     tr_nlen: usize,
     m_nstart: usize,
@@ -157,14 +157,14 @@ struct SmTraitMethod {
 }
 
 // One enum variant: its name (recovered by lexeme offsets, like a named `SmType`).
-struct SmEVar {
+pub struct SmEVar {
     nstart: usize,
     nlen: usize,
 }
 
 // A collected enum definition: a `(start, count)` window into `SmState.evariants` plus the repr
 // integer kind (the type `.raw()` yields; defaults to `u32_` when the enum omits `: TYPE`).
-struct SmEnum {
+pub struct SmEnum {
     variant_start: u32,
     variant_count: u32,
     repr: SmKind,
@@ -178,7 +178,7 @@ struct SmEnum {
 // Replaces the fn-wide `locals`/`muts` StrHashMaps + the manual `strmap_del`: bindings live on a stack
 // (`SmState.binds`), a block/`if let` records the stack length on entry and truncates back on exit, and
 // a name resolves by scanning from the TOP (nearest binding wins — correct lexical scoping/shadowing).
-struct Binding {
+pub struct Binding {
     name: []const u8,
     ty: SmType,
     is_mut: bool,
@@ -190,7 +190,7 @@ struct Binding {
 //   ty   — resolved type of an EXPRESSION node (kind `.unknown` until Phase 3 fills it)
 //   decl — a resolution target as (node_id + 1), 0 = none. Phase 2: an `enum_lit`'s target `enum_decl`.
 //   flags— small bitset reserved for Phase 3 (is_slice_base / is_ptr_base / needs_dyn_coerce).
-struct Fact {
+pub struct Fact {
     ty: SmType,
     decl: u32,
     flags: u32,
@@ -199,7 +199,7 @@ struct Fact {
 // The analyzer state + owned inputs. `p` OWNS the parser arena (see selfhost/parser.mc); free the
 // whole thing exactly once with `sema_free`. `fns`/`sigs`/`ptypes` are the pass-1 symbol table;
 // `binds` is the per-function lexical scope stack (arch Phase 4); `cur_ret` is the fn being checked.
-struct SmState {
+pub struct SmState {
     p: Parser,
     fns: StrHashMap<u32>,      // name -> sig_index (absence via strmap_contains)
     sigs: Vec<SmSig>,
@@ -2330,7 +2330,7 @@ fn sm_check_impls(s: *mut SmState, root: u32) -> void {
 // Lex + parse + type-check `source`. The returned `SmState` OWNS its parser arena and symbol
 // tables (all backed by `a`); free it exactly once with `sema_free`. `source` is borrowed and
 // must outlive the state (types reference it for named-type lexeme comparison).
-export fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
+pub fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
     var s: SmState = .{
         .p = parser_run(source, a),
         .fns = strmap_new(u32, a),
@@ -2362,29 +2362,29 @@ export fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
 }
 
 // Number of semantic errors found (parse errors are separate; see `sema_parse_err_count`).
-export fn sema_err_count(s: *SmState) -> u32 {
+pub fn sema_err_count(s: *SmState) -> u32 {
     return s.err_count;
 }
 
 // The first semantic error's code ordinal (0 = none; see `SmErr`).
-export fn sema_first_err(s: *SmState) -> u32 {
+pub fn sema_first_err(s: *SmState) -> u32 {
     return s.first_err.raw();
 }
 
 // Number of PARSE errors (so a gate can separate malformed input from type errors).
-export fn sema_parse_err_count(s: *SmState) -> u32 {
+pub fn sema_parse_err_count(s: *SmState) -> u32 {
     return parser_err_count(&s.p);
 }
 
 // Borrow the parser (and its AST arena) that sema already built (arch plan Phase 0). Lets the caller
 // hand sema's SINGLE parse straight to `emit_c_on` instead of re-parsing the source. Valid until
 // `sema_free`; do not free through it.
-export fn sema_parser(s: *mut SmState) -> *mut Parser {
+pub fn sema_parser(s: *mut SmState) -> *mut Parser {
     return &s.p;
 }
 
 // Release the parser arena and all symbol tables. Call exactly once when done.
-export fn sema_free(s: *mut SmState) -> void {
+pub fn sema_free(s: *mut SmState) -> void {
     vec_free(Binding, &s.binds);
     strmap_free(SmType, &s.globals);
     strmap_free(u32, &s.structs);
@@ -2404,20 +2404,20 @@ export fn sema_free(s: *mut SmState) -> void {
 
 // Borrow the per-node fact table sema built (arch plan Phase 1). Handed to `emit_c_on` so emit reads
 // resolved facts (enum targets, expr types) rather than re-deriving them. Valid until `sema_free`.
-export fn sema_facts(s: *mut SmState) -> *mut Vec<Fact> {
+pub fn sema_facts(s: *mut SmState) -> *mut Vec<Fact> {
     return &s.facts;
 }
 
 // The raw address (usize) of the fact table — the address-of-field form (like main.mc's
 // `(&global) as usize`) so emit can stash it on the Parser and reconstruct a `*mut Vec<Fact>` with
 // `raw.ptr` without threading the table through every emit function. Valid until `sema_free`.
-export fn sema_facts_addr(s: *mut SmState) -> usize {
+pub fn sema_facts_addr(s: *mut SmState) -> usize {
     return (&s.facts) as usize;
 }
 
 // The resolution target recorded for `node` as an AST node id, or 0 if none (arch plan Phase 1/2).
 // A caller (emit) uses this to resolve e.g. an `enum_lit` to its `enum_decl` without a name scan.
-export fn sema_fact_decl(facts: *Vec<Fact>, node: u32) -> u32 {
+pub fn sema_fact_decl(facts: *Vec<Fact>, node: u32) -> u32 {
     if node >= vec_len(Fact, facts) as u32 {
         return 0;
     }
@@ -2431,7 +2431,7 @@ export fn sema_fact_decl(facts: *Vec<Fact>, node: u32) -> u32 {
 // The resolved TYPE recorded for expression `node` (arch plan Phase 3), or an `unknown` type when no
 // fact was recorded (out of range, or a node sema never typed). Emit reads this to classify a base as
 // slice/pointer/trait-object; an `unknown` result means "fall back to the AST re-derivation".
-export fn sema_fact_ty(facts: *Vec<Fact>, node: u32) -> SmType {
+pub fn sema_fact_ty(facts: *Vec<Fact>, node: u32) -> SmType {
     if node >= vec_len(Fact, facts) as u32 {
         return .{ .kind = .unknown, .ptr_depth = 0, .nstart = 0, .nlen = 0, .arr_len = 0, .elem = .unknown };
     }

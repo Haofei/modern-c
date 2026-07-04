@@ -31,7 +31,7 @@ import "std/collections/dynarray.mc";
 // The complete token set, in the SAME ORDER as src/token.zig's `Kind` enum so that the
 // ordinals match the reference (the gate asserts against them). Declared `open enum ... : u32`
 // so `.raw()` can extract the ordinal (closed enums reject both `.raw()` and integer casts).
-open enum TokKind: u32 {
+pub open enum TokKind: u32 {
     eof,
     invalid,
     identifier,
@@ -585,12 +585,12 @@ const TOKEN_STRIDE: usize = 5;
 
 // A growable token store backed by one `Vec<usize>` (see the GAP note above). Layout per
 // token: [kind_ordinal, start, len, line, col]. Copyable; free with `token_list_free`.
-struct TokenList {
+pub struct TokenList {
     data: Vec<usize>,
 }
 
 // A fresh empty token store bound to allocator `a` (borrowed; must outlive the list).
-export fn token_list_new(a: *mut dyn Allocator) -> TokenList {
+pub fn token_list_new(a: *mut dyn Allocator) -> TokenList {
     return .{ .data = vec_new(usize, a) };
 }
 
@@ -604,43 +604,43 @@ fn push_token(tl: *mut TokenList, t: Token) -> void {
 }
 
 // Number of tokens stored (including the trailing eof once lexing has run).
-export fn token_count(tl: *TokenList) -> usize {
+pub fn token_count(tl: *TokenList) -> usize {
     return vec_len(usize, &tl.data) / TOKEN_STRIDE;
 }
 
 // The kind ordinal of token `i` (matches `TokKind`'s `.raw()` value / src/token.zig order).
-export fn token_kind_at(tl: *TokenList, i: usize) -> u32 {
+pub fn token_kind_at(tl: *TokenList, i: usize) -> u32 {
     return vec_get(usize, &tl.data, i * TOKEN_STRIDE) as u32;
 }
 
 // The byte length of token `i` (its lexeme is `source[start .. start+len]`).
-export fn token_len_at(tl: *TokenList, i: usize) -> usize {
+pub fn token_len_at(tl: *TokenList, i: usize) -> usize {
     return vec_get(usize, &tl.data, i * TOKEN_STRIDE + 2);
 }
 
 // The byte start offset of token `i`.
-export fn token_start_at(tl: *TokenList, i: usize) -> usize {
+pub fn token_start_at(tl: *TokenList, i: usize) -> usize {
     return vec_get(usize, &tl.data, i * TOKEN_STRIDE + 1);
 }
 
 // The 1-based source line of token `i`.
-export fn token_line_at(tl: *TokenList, i: usize) -> usize {
+pub fn token_line_at(tl: *TokenList, i: usize) -> usize {
     return vec_get(usize, &tl.data, i * TOKEN_STRIDE + 3);
 }
 
 // The 1-based source column of token `i`.
-export fn token_col_at(tl: *TokenList, i: usize) -> usize {
+pub fn token_col_at(tl: *TokenList, i: usize) -> usize {
     return vec_get(usize, &tl.data, i * TOKEN_STRIDE + 4);
 }
 
 // Release the backing storage. Call exactly once when done.
-export fn token_list_free(tl: *mut TokenList) -> void {
+pub fn token_list_free(tl: *mut TokenList) -> void {
     vec_free(usize, &tl.data);
 }
 
 // Lex `source` into `out`, appending one token per lexical unit and a trailing `.eof`.
 // `out` is a caller-owned `TokenList` (the caller supplies the allocator and frees it).
-export fn lex(source: []const u8, out: *mut TokenList) -> void {
+pub fn lex(source: []const u8, out: *mut TokenList) -> void {
     var lx: Lexer = .{ .source = source, .index = 0, .line = 1, .col = 1 };
     while true {
         let t: Token = next_token(&lx);
