@@ -69,7 +69,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## Tier 0 — Foundations & obvious gaps (cheap, do first)
 
-- [x] **S0.1 — Definite-initialization analysis** *(DONE `40c6cc7`; plain uninit-vars already required init — FOUND+CLOSED the gap: reading a `var x=uninit` scalar before assign-on-all-paths is now `E_USE_BEFORE_INIT` (flow-sensitive, branch/loop aware). Scalar-only to avoid false positives on the aggregate fill idiom. R3 boundary: taking `&x` clears the pending flag (to support the `init(&x)` idiom), so ANY read of `x` after `&x` is taken is accepted — not just a read laundered through the alias, but a direct `let p=&x; return x;` with `x` never assigned (the address-of unconditionally clears the init-pending flag); soundly closing it needs escape/init tracking (T1.3))* — reading `uninit` before assignment is a
+- [x] **S0.1 — Definite-initialization analysis** *(DONE `40c6cc7`; plain uninit-vars already required init — FOUND+CLOSED the gap: reading a `var x=uninit` scalar before assign-on-all-paths is now `E_USE_BEFORE_INIT` (flow-sensitive, branch/loop aware). Scalar address-taking no longer clears the pending flag: `let p=&x; return x;` rejects unless `x` is assigned on all paths. Aggregate storage-use remains conservative to avoid false positives on field-fill/out-param idioms.)* — reading `uninit` before assignment is a
   **compile error**, flow-sensitive. **Where:** sema (`src/hir.zig`). **Test:** `fuzz-failclosed`
   + fixtures; no false positives on the `var x:T=uninit; … x=v;` idiom. **Prior art:** Zig/Rust
   definite-assignment; KMSAN (dynamic counterpart, D2.2). **Depends:** none.

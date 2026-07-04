@@ -53,6 +53,20 @@ fn reject_read_uninit_scalar_before_assign() -> u32 {
     return x;
 }
 
+fn reject_read_uninit_scalar_after_address_taken() -> u32 {
+    var x: u32 = uninit;
+    let p: *u32 = &x;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
+    return x;
+}
+
+fn accept_uninit_scalar_address_taken_then_assigned() -> u32 {
+    var x: u32 = uninit;
+    let p: *u32 = &x;
+    x = 5;
+    return x;
+}
+
 fn accept_uninit_scalar_assigned_before_read() -> u32 {
     var x: u32 = uninit;
     x = 5;

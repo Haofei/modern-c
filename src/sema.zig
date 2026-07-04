@@ -1439,15 +1439,15 @@ pub const Checker = struct {
     // State is the set of *pending* names: `uninit` vars declared but not yet
     // proven assigned on the current path. A pending name is:
     //   - removed when it is the whole target of an assignment `x = …` (now assigned),
-    //   - removed when its address is taken (`&x`) or it is used through a member /
-    //     index / deref base — such a use may initialize it, so we conservatively
-    //     treat the var as assigned (this is what keeps the pervasive
-    //     `var x: T = uninit; init(&x); use(x)` idiom accepted),
+    //   - for aggregates only, removed when its address is taken (`&x`) or it is
+    //     used through a member/index base — such a use may initialize aggregate
+    //     storage, keeping the pervasive field-fill/out-param idioms accepted,
     //   - reported (E_USE_BEFORE_INIT) when it is read as a plain value.
     //
     // Aggregates are tracked at the root-storage level only. A member/index assignment
     // or address-taking operation clears the root as intentional storage use; direct
-    // member/index/value reads before any such use are rejected.
+    // member/index/value reads before any such use are rejected. Scalars require a
+    // direct assignment edge; taking `&x` creates storage access, not a value.
     //
     // Branches (if/else, switch — `if` desugars to a switch on the bool) intersect:
     // a name is assigned after the branch only if assigned on every arm that falls
@@ -1757,13 +1757,13 @@ pub const Checker = struct {
     }
 
     // Walk an expression evaluated for its value, reporting a read of any pending var
-    // and clearing vars whose address is taken (an address-of use may initialize them).
+    // and clearing aggregate vars whose storage is intentionally used.
     fn diRead(self: *Checker, expr: ast.Expr, state: *DefInitState, ctx: Context) void {
         switch (expr.kind) {
             .ident => |id| {
                 if (state.get(id.text)) |pending| {
                     _ = pending;
-                    self.errorCode(expr.span, "E_USE_BEFORE_INIT", "variable initialized with `uninit` is read before it is assigned or used as storage on all paths");
+                    self.errorCode(expr.span, "E_USE_BEFORE_INIT", "variable initialized with `uninit` is read before it is definitely initialized on all paths");
                 }
             },
             .address_of => |inner| self.diUseTarget(inner.*, state, ctx),
@@ -1812,14 +1812,17 @@ pub const Checker = struct {
         }
     }
 
-    // An assignment/address-of target (or a base used as storage). A pending var whose
-    // address or storage is used this way may be initialized through that reference, so
-    // it is cleared (conservatively assigned) rather than reported as a read. Index
-    // subexpressions are still read-checked.
+    // An assignment/address-of target (or a base used as storage). Aggregate storage
+    // use clears a pending root so field-fill and out-param idioms remain accepted.
+    // Scalar address-taking does not manufacture a value; only whole-variable
+    // assignment clears scalar pending state. Index subexpressions are still
+    // read-checked.
     fn diUseTarget(self: *Checker, target: ast.Expr, state: *DefInitState, ctx: Context) void {
         switch (target.kind) {
             .ident => |id| {
-                _ = state.remove(id.text);
+                if (state.get(id.text)) |pending| {
+                    if (pending.kind == .aggregate) _ = state.remove(id.text);
+                }
             },
             .grouped => |inner| self.diUseTarget(inner.*, state, ctx),
             .member => |m| self.diUseTarget(m.base.*, state, ctx),
