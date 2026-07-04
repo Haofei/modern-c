@@ -60,6 +60,11 @@ def main() -> None:
         ["src/layout.zig"],
         ["test", "diagnostics-reference-test", "diagnostic-code-inventory-test"],
     )
+    assert_gates(
+        module,
+        ["src/diagnostic_explain.zig"],
+        ["mcc-cli-test", "diagnostics-reference-test", "diagnostic-code-inventory-test"],
+    )
     assert_gates(module, ["src/sema_tests.zig"], ["test"])
     assert_gates(
         module,
@@ -88,7 +93,7 @@ def main() -> None:
     assert_route(
         module,
         ["docs/diagnostics.md"],
-        ["diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test"],
+        ["diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "mcc-cli-test"],
         ["git diff --check"],
     )
     assert_route(

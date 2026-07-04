@@ -34,7 +34,12 @@ RULES: tuple[Rule, ...] = (
         ("src/*.zig",),
         ("test", "diagnostics-reference-test", "diagnostic-code-inventory-test"),
         "production source changes need unit/spec coverage plus generated diagnostic reference and code ownership checks",
-        excludes=("src/*_tests.zig",),
+        excludes=("src/*_tests.zig", "src/diagnostic_explain.zig"),
+    ),
+    Rule(
+        ("src/diagnostic_explain.zig",),
+        ("mcc-cli-test", "diagnostics-reference-test", "diagnostic-code-inventory-test"),
+        "diagnostic explain changes need installed CLI behavior plus generated diagnostic reference and code ownership checks",
     ),
     Rule(
         ("src/parser.zig", "src/lexer.zig", "src/loader.zig", "src/diagnostics.zig", "src/main.zig"),
@@ -281,8 +286,8 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         ("tools/toolchain/diagnostics-reference.py", "tools/toolchain/diagnostic-code-inventory.py", "docs/diagnostics.md", "docs/diagnostic-code-inventory.md"),
-        ("diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test"),
-        "diagnostic inventory changes need generated reference and ownership checks",
+        ("diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "mcc-cli-test"),
+        "diagnostic inventory changes need generated reference, ownership checks, and the installed explain CLI smoke",
     ),
     Rule(
         ("tools/toolchain/spec-*-sweep.py", "tools/toolchain/llvm-opt-sweep.py"),
