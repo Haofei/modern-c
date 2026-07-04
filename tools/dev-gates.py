@@ -101,6 +101,51 @@ RULES: tuple[Rule, ...] = (
         "backend parity harness changes need the differential backend gate",
     ),
     Rule(
+        ("tools/toolchain/diagnostics-test.sh",),
+        ("diagnostics-test",),
+        "diagnostics transcript harness changes need the diagnostics gate",
+    ),
+    Rule(
+        ("tools/toolchain/mcc-cli-test.sh",),
+        ("mcc-cli-test",),
+        "CLI behavior harness changes need the CLI gate",
+    ),
+    Rule(
+        ("tools/toolchain/install-layout-test.sh",),
+        ("install-layout-test",),
+        "install-layout harness changes need the install layout gate",
+    ),
+    Rule(
+        ("tools/toolchain/path-remap-test.sh",),
+        ("path-remap-test",),
+        "path remap harness changes need the reproducible path gate",
+    ),
+    Rule(
+        ("tools/toolchain/fmt-test.sh",),
+        ("fmt-test",),
+        "formatter harness changes need the formatter gate",
+    ),
+    Rule(
+        ("tools/toolchain/mcc-symbols-test.sh",),
+        ("mcc-symbols-test",),
+        "symbol index harness changes need the symbols gate",
+    ),
+    Rule(
+        ("tools/toolchain/std-api-docs.py",),
+        ("std-api-docs-test",),
+        "stdlib API docs checker changes need the std API docs gate",
+    ),
+    Rule(
+        ("tools/toolchain/vendoring-test.py",),
+        ("vendoring-test",),
+        "vendoring provenance checker changes need the vendoring gate",
+    ),
+    Rule(
+        ("tools/toolchain/third-party-licenses-test.py",),
+        ("third-party-licenses-test",),
+        "third-party license checker changes need the license manifest gate",
+    ),
+    Rule(
         (".github/workflows/ci.yml", "Dockerfile", "docker-compose.yml", "tools/preflight.sh"),
         ("preflight", "release-metadata-test", "ci-pass-gates-test"),
         "toolchain and CI changes need pinned-toolchain metadata plus preflight",
