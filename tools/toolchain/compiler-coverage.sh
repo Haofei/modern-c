@@ -14,8 +14,9 @@
 #   src/async_lower.zig
 #
 # The files are instrumented in an isolated temporary checkout by default, then an
-# instrumented mcc is built and driven through frontend-heavy existing checks. Raw
-# uncovered lists are written to zig-out/compiler-cov.
+# instrumented mcc is built and driven through frontend-heavy existing checks plus
+# deterministic optimized verify/lower-mir invocations. Raw uncovered lists are
+# written to zig-out/compiler-cov.
 set -euo pipefail
 
 SRC_ROOT="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
@@ -158,6 +159,41 @@ while IFS=$'\t' read -r name fixture mode spec flags desc; do
 done < "$MANIFEST"
 echo "folded $nfix host manifest fixtures as check invocations"
 
+# Optimized frontend paths are not reachable through `check`: proof helpers for
+# bounds/slice/division elision run when verify/lower-mir builds MIR with
+# --optimize. Keep this corpus tiny and deterministic, using existing opt fixtures
+# that avoid backend and QEMU dependencies.
+nopt_verify=0
+nopt_verify_neg=0
+nopt_lower_mir=0
+
+OPT_BOUNDS="tests/toolchain/opt_bounds.mc"
+OPT_BOUNDS_NEG="tests/toolchain/opt_bounds_neg.mc"
+OPT_GUARD="tests/toolchain/opt_guard.mc"
+
+if [ -f "$OPT_BOUNDS" ]; then
+    "$WRAPPER" verify "$OPT_BOUNDS" --optimize >/dev/null
+    nopt_verify=$((nopt_verify + 1))
+    "$WRAPPER" lower-mir "$OPT_BOUNDS" --optimize >/dev/null
+    nopt_lower_mir=$((nopt_lower_mir + 1))
+fi
+
+if [ -f "$OPT_BOUNDS_NEG" ]; then
+    # This negative fixture is intentionally rejected even under --optimize, but
+    # still covers frontend proof attempts before the expected diagnostic.
+    "$WRAPPER" verify "$OPT_BOUNDS_NEG" --optimize >/dev/null 2>&1 || true
+    nopt_verify_neg=$((nopt_verify_neg + 1))
+    "$WRAPPER" lower-mir "$OPT_BOUNDS_NEG" --optimize >/dev/null
+    nopt_lower_mir=$((nopt_lower_mir + 1))
+fi
+
+if [ -f "$OPT_GUARD" ]; then
+    "$WRAPPER" lower-mir "$OPT_GUARD" --optimize >/dev/null
+    nopt_lower_mir=$((nopt_lower_mir + 1))
+fi
+
+echo "folded $nopt_verify optimized verify fixtures, $nopt_verify_neg expected-failing optimized verify fixtures, and $nopt_lower_mir optimized lower-mir fixtures"
+
 cat "$OUTDIR"/cov/* 2>/dev/null | sort -u > "$OUTDIR/covered.txt"
 sort -u "$OUTDIR/universe_compiler.txt" > "$OUTDIR/universe_compiler.sorted"
 comm -23 "$OUTDIR/universe_compiler.sorted" "$OUTDIR/covered.txt" > "$OUTDIR/uncovered_compiler.txt"
@@ -176,6 +212,7 @@ echo
 echo "================= COMPILER-COVERAGE REPORT (function-level) ================="
 echo "source set: parser.zig, sema*.zig excluding tests, monomorphize.zig, generic_precheck.zig, async_lower.zig"
 echo "corpus: $nspec spec fixtures + $ncemit c_emit fixtures + $nfix host manifest fixtures as check invocations"
+echo "        + $nopt_verify optimized verify fixtures + $nopt_verify_neg expected-failing optimized verify fixtures + $nopt_lower_mir optimized lower-mir fixtures"
 echo
 printf "  compiler frontend : %d/%d functions covered (%s)  - %d UNCOVERED\n" "$cov" "$uni" "$(pct "$cov" "$uni")" "$unc"
 echo
