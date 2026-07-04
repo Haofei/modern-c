@@ -14,6 +14,7 @@ import time
 
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SERVER = os.path.join(HERE, "tools", "lsp", "mc-lsp.py")
+BUILD_ZIG_ZON = os.path.join(HERE, "build.zig.zon")
 
 BAD = (
     "#[no_lang_trap]\n"
@@ -128,9 +129,19 @@ def wait_for_file(path, label, timeout=5.0):
     raise SystemExit(f"FAIL: lsp-test — timed out waiting for {label}")
 
 
+def build_zig_zon_version():
+    with open(BUILD_ZIG_ZON, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith(".version"):
+                return line.split('"', 2)[1]
+    raise SystemExit("FAIL: lsp-test — build.zig.zon missing .version")
+
+
 def main():
     mcc = sys.argv[1] if len(sys.argv) > 1 else "mcc"
     mcc = os.path.abspath(mcc)
+    expected_server_version = build_zig_zon_version()
 
     workdir = tempfile.mkdtemp(prefix="lsp_test_")
     counter_path = os.path.join(workdir, "check.count")
@@ -196,6 +207,11 @@ def main():
         init = read_message(proc.stdout)
         assert init.get("id") == 1 and "result" in init, f"bad initialize result: {init}"
         caps = init["result"]["capabilities"]
+        server_info = init["result"].get("serverInfo", {})
+        assert server_info.get("name") == "mc-lsp", f"expected mc-lsp serverInfo name, got {server_info}"
+        assert server_info.get("version") == expected_server_version, (
+            f"expected serverInfo version {expected_server_version}, got {server_info}"
+        )
         assert caps.get("textDocumentSync") == 1, f"expected Full textDocumentSync, got {caps}"
         assert caps.get("documentFormattingProvider"), f"expected formatting capability, got {caps}"
         assert caps.get("documentSymbolProvider"), f"expected documentSymbol capability, got {caps}"

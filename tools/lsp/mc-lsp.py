@@ -43,7 +43,10 @@ import threading
 # never matches.
 DIAG_RE = re.compile(r"^(?P<path>.+?):(?P<line>\d+):(?P<col>\d+):\s*error:\s*(?P<rest>.*)$")
 CODE_RE = re.compile(r"^(E_[A-Z0-9_]+):\s*(.*)$")
+VERSION_RE = re.compile(r'^\s*\.version\s*=\s*"([^"]+)"\s*,?\s*$')
 
+HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BUILD_ZIG_ZON = os.path.join(HERE, "build.zig.zon")
 MCC = os.environ.get("MCC", "mcc")
 DIAGNOSTIC_DEBOUNCE_MS = int(os.environ.get("MC_LSP_DIAGNOSTIC_DEBOUNCE_MS", "150"))
 DIAGNOSTIC_DEBOUNCE_SECONDS = max(DIAGNOSTIC_DEBOUNCE_MS, 0) / 1000.0
@@ -52,6 +55,18 @@ WRITE_LOCK = threading.RLock()
 
 def log(*a):
     print("[mc-lsp]", *a, file=sys.stderr, flush=True)
+
+
+def server_version():
+    try:
+        with open(BUILD_ZIG_ZON, encoding="utf-8") as f:
+            for line in f:
+                match = VERSION_RE.match(line)
+                if match:
+                    return match.group(1)
+    except OSError:
+        pass
+    return "0.0.0-dev"
 
 
 # ---- JSON-RPC framing over stdio -----------------------------------------------------------
@@ -986,7 +1001,7 @@ def main():
                             "workspaceDiagnostics": False,
                         },
                     },
-                    "serverInfo": {"name": "mc-lsp", "version": "0.6.0"},
+                    "serverInfo": {"name": "mc-lsp", "version": server_version()},
                 },
             })
         elif method == "initialized":
