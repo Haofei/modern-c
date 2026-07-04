@@ -4580,7 +4580,7 @@ const CEmitter = struct {
     }
 
     fn nullableReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
-        return lower_c_infer.nullableReturnTypeForExpr(&self.functions, expr);
+        return lower_c_infer.nullableReturnTypeForExpr(self.inferTypeContext(), expr);
     }
 
     fn callReturnTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {

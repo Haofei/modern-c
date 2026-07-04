@@ -213,13 +213,13 @@ fn binaryOpProducesBool(op: ast.BinaryOp) bool {
     };
 }
 
-pub fn nullableReturnTypeForExpr(functions: *const std.StringHashMap(FnInfo), expr: ast.Expr) ?ast.TypeExpr {
+pub fn nullableReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |node| blk: {
-            const ret_ty = callReturnType(functions, node) orelse break :blk null;
-            break :blk if (ret_ty.kind == .nullable) ret_ty else null;
+            const ret_ty = callReturnType(ctx.functions, node) orelse break :blk null;
+            break :blk if (resolveAliasType(ctx, ret_ty).kind == .nullable) ret_ty else null;
         },
-        .grouped => |inner| nullableReturnTypeForExpr(functions, inner.*),
+        .grouped => |inner| nullableReturnTypeForExpr(ctx, inner.*),
         else => null,
     };
 }
@@ -258,9 +258,10 @@ pub fn taggedUnionTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
     return if (ctx.tagged_unions.contains(type_name)) ty else null;
 }
 
-pub fn resultReturnTypeForCall(functions: *const std.StringHashMap(FnInfo), call: anytype) ?ast.TypeExpr {
-    const ret_ty = callReturnType(functions, call) orelse return null;
-    return if (resultPayloadTypeForTag(ret_ty, "ok") != null and resultPayloadTypeForTag(ret_ty, "err") != null) ret_ty else null;
+pub fn resultReturnTypeForCall(ctx: TypeQueryContext, call: anytype) ?ast.TypeExpr {
+    const ret_ty = callReturnType(ctx.functions, call) orelse return null;
+    const resolved = resolveAliasType(ctx, ret_ty);
+    return if (resultPayloadTypeForTag(resolved, "ok") != null and resultPayloadTypeForTag(resolved, "err") != null) ret_ty else null;
 }
 
 pub fn resultTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -270,7 +271,7 @@ pub fn resultTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: *std.Str
             const info = locals.get(ident.text) orelse break :blk null;
             break :blk info.result_ty;
         },
-        .call => |node| resultReturnTypeForCall(ctx.functions, node),
+        .call => |node| resultReturnTypeForCall(ctx, node),
         .grouped => |inner| resultTypeForExpr(ctx, inner.*, locals),
         else => null,
     };
@@ -278,7 +279,8 @@ pub fn resultTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: *std.Str
 
 pub fn resultTypeFromSourceExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     const ty = operandEmitType(ctx, expr, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, expr, locals) orelse return null;
-    return if (resultPayloadTypeForTag(ty, "ok") != null and resultPayloadTypeForTag(ty, "err") != null) ty else null;
+    const resolved = resolveAliasType(ctx, ty);
+    return if (resultPayloadTypeForTag(resolved, "ok") != null and resultPayloadTypeForTag(resolved, "err") != null) ty else null;
 }
 
 pub fn assumeNoaliasReturnTypeForCall(ctx: TypeQueryContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {

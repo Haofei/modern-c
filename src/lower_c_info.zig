@@ -259,7 +259,8 @@ pub fn globalElementInfoFromType(ctx: Context, ty: ast.TypeExpr) anyerror!Global
 }
 
 pub fn nullableInnerCType(ctx: Context, ty: ast.TypeExpr) anyerror!?[]const u8 {
-    return switch (ty.kind) {
+    const resolved_ty = resolveAliasType(ctx, ty);
+    return switch (resolved_ty.kind) {
         .pointer, .raw_many_pointer, .dyn_trait => try cTypeFor(ctx, ty),
         // A value optional's payload: a named value type (scalar/struct/enum/address).
         // `c_void` is only ever a pointer payload, handled above.
@@ -288,7 +289,8 @@ pub fn nullableInnerCTypeForExpr(ctx: Context, expr: ast.Expr, locals: *std.Stri
 }
 
 pub fn nullableInnerCTypeForType(ctx: Context, ty: ast.TypeExpr) anyerror!?[]const u8 {
-    return switch (ty.kind) {
+    const resolved_ty = resolveAliasType(ctx, ty);
+    return switch (resolved_ty.kind) {
         .nullable => |child| try nullableInnerCType(ctx, child.*),
         .qualified => |node| try nullableInnerCTypeForType(ctx, node.child.*),
         else => null,

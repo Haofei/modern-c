@@ -611,13 +611,14 @@ fn materializeNullableSubject(ctx: EmitContext, expr: ast.Expr, locals: *std.Str
     const nullable_ty = ctx.nullable_type_for_expr(ctx.emit_ctx, expr, locals) orelse return null;
     const inner_c_type = try ctx.nullable_inner_c_type_for_type(ctx.emit_ctx, nullable_ty) orelse return null;
     const temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, expr, locals, nullable_ty);
-    try locals.put(temp.name, try ctx.local_info_from_type(ctx.emit_ctx, nullable_ty));
+    const temp_info = try ctx.local_info_from_type(ctx.emit_ctx, nullable_ty);
+    try locals.put(temp.name, temp_info);
     return .{
         .name = temp.name,
         .inner_c_type = inner_c_type,
         .is_dyn = isDynCTypeName(inner_c_type),
-        .inner_ty = nullableInnerTypeExpr(nullable_ty),
-        .is_value_opt = nullablePayloadIsValueOptional(nullable_ty),
+        .inner_ty = if (temp_info.source_ty) |st| nullableInnerTypeExpr(st) else nullableInnerTypeExpr(nullable_ty),
+        .is_value_opt = nullablePayloadIsValueOptional(temp_info.source_ty orelse nullable_ty),
     };
 }
 
