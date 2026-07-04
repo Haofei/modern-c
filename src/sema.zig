@@ -676,7 +676,10 @@ pub const Checker = struct {
                 if (std.mem.eql(u8, name.text, root_name)) return true;
                 const target = type_aliases.get(name.text) orelse return false;
                 if (visiting.contains(name.text)) return true;
-                visiting.put(name.text, {}) catch return false;
+                visiting.put(name.text, {}) catch {
+                    self.oom = true;
+                    return false;
+                };
                 defer _ = visiting.remove(name.text);
                 return self.typeExprHasAliasCycle(root_name, target, type_aliases, visiting);
             },
@@ -4210,7 +4213,9 @@ pub const Checker = struct {
             if (asmIsGenericConstraint(name)) continue;
             if (used.contains(name)) {
                 self.errorCode(span, "E_ASM_REGISTER_CONFLICT", "inline-asm binds the same register to more than one operand");
-            } else used.put(name, {}) catch {};
+            } else used.put(name, {}) catch {
+                self.oom = true;
+            };
         }
         for (asm_stmt.inputs) |input| {
             const name = asmUnquote(input.reg);
@@ -4218,7 +4223,9 @@ pub const Checker = struct {
             if (asmIsGenericConstraint(name)) continue;
             if (used.contains(name)) {
                 self.errorCode(span, "E_ASM_REGISTER_CONFLICT", "inline-asm binds the same register to more than one operand");
-            } else used.put(name, {}) catch {};
+            } else used.put(name, {}) catch {
+                self.oom = true;
+            };
         }
         // A clobber may not name a register an operand already holds, and a non-pseudo,
         // non-generic clobber participates in architecture unification too.
@@ -4247,7 +4254,9 @@ pub const Checker = struct {
             if (seen.get(override)) |prev| {
                 self.reporter.err(name_ident.span, "E_DUPLICATE_BACKEND_NAME: backend symbol \"{s}\" is assigned to both `{s}` and `{s}`", .{ override, prev.text, name_ident.text });
             } else {
-                seen.put(override, name_ident) catch {};
+                seen.put(override, name_ident) catch {
+                    self.oom = true;
+                };
             }
         }
     }

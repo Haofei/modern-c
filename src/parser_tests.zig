@@ -72,6 +72,44 @@ test "parser accepts qualified generic type arguments" {
     try std.testing.expectEqualStrings("u8", qualifier.child.kind.name.text);
 }
 
+test "qualified expression resolution OOM does not fall back to member access" {
+    const source =
+        \\module M {
+        \\    fn f() -> u32 { return 1; }
+        \\}
+        \\
+        \\fn main() -> u32 {
+        \\    return M.f();
+        \\}
+    ;
+
+    var saw_oom = false;
+    for (0..128) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+        var arena = std.heap.ArenaAllocator.init(failing.allocator());
+        defer arena.deinit();
+
+        var reporter = diagnostics.Reporter.init(std.testing.allocator, "qualified_oom.mc", source);
+        defer reporter.deinit();
+
+        var p = Parser.init(source, &reporter);
+        const parsed = p.parseModule(arena.allocator());
+        if (parsed) |module| {
+            defer module.deinit(arena.allocator());
+            try std.testing.expect(!reporter.has_errors);
+
+            const main_fn = module.decls[1].kind.fn_decl;
+            const ret_expr = main_fn.body.?.items[0].kind.@"return".?;
+            const callee = ret_expr.kind.call.callee.*;
+            try std.testing.expectEqualStrings("M__f", callee.kind.ident.text);
+        } else |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            saw_oom = true;
+        }
+    }
+    try std.testing.expect(saw_oom);
+}
+
 test "parser distinguishes relational operators from generic calls" {
     const source =
         \\fn compare(a: u32, b: u32) -> bool { return a < b; }

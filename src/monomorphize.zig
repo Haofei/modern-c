@@ -197,7 +197,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
             .global_decl => |g| {
                 if (g.is_const) {
                     if (g.init) |init_expr| {
-                        if (foldIntConst(&const_fns, &int_consts, init_expr)) |value| {
+                        if (try foldIntConst(&const_fns, &int_consts, init_expr)) |value| {
                             try int_consts.put(g.name.text, value);
                         }
                     }
@@ -285,7 +285,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
             // A bound-failed instantiation already reported E_TRAIT_NOT_SATISFIED; emit an
             // `unreachable`-only body so the call resolves but the real body (which would
             // reference a missing `Type__method`) cannot spill a deep-body cascade.
-            if (inst.bound_failed or inst.limit_failed) spec.body = unreachableBody(arena, inst.decl.name.span);
+            if (inst.bound_failed or inst.limit_failed) spec.body = try unreachableBody(arena, inst.decl.name.span);
             try out.append(arena, .{ .span = inst.decl.name.span, .attrs = inst.attrs, .kind = .{ .fn_decl = spec } });
         }
     }
@@ -336,9 +336,9 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
 
 // A `{ return unreachable; }` body for a bound-failed specialization. `unreachable`
 // is a diverging expression in MC, so it type-checks as any return type.
-fn unreachableBody(arena: std.mem.Allocator, span: ast.Span) ast.Block {
+fn unreachableBody(arena: std.mem.Allocator, span: ast.Span) !ast.Block {
     const unreachable_expr = ast.Expr{ .span = span, .kind = .{ .unreachable_expr = {} } };
-    const items = arena.alloc(ast.Stmt, 1) catch return .{ .span = span, .items = &.{} };
+    const items = try arena.alloc(ast.Stmt, 1);
     items[0] = .{ .span = span, .kind = .{ .@"return" = unreachable_expr } };
     return .{ .span = span, .items = items };
 }
@@ -801,7 +801,10 @@ fn reportMonomorphizationLimit(rw: *Rewriter, span: ast.Span, kind: []const u8, 
 }
 
 fn foldConst(rw: *Rewriter, expr: ast.Expr) ?i128 {
-    return foldIntConst(rw.const_fns, rw.int_consts, expr);
+    return foldIntConst(rw.const_fns, rw.int_consts, expr) catch {
+        rw.oom = true;
+        return null;
+    };
 }
 
 // Fold `expr` to an integer at comptime, resolving module const-fn calls and integer
@@ -811,7 +814,7 @@ fn foldIntConst(
     const_fns: *const std.StringHashMap(ast.FnDecl),
     int_consts: *const std.StringHashMap(i128),
     expr: ast.Expr,
-) ?i128 {
+) std.mem.Allocator.Error!?i128 {
     var fb_arena: ?std.heap.ArenaAllocator = null;
     defer if (fb_arena) |*a| a.deinit();
     const fold_alloc = eval.tryFoldScratch() orelse blk: {
@@ -823,9 +826,11 @@ fn foldIntConst(
     scope.funcs = const_fns;
     var it = int_consts.iterator();
     while (it.next()) |entry| {
-        scope.bindings.put(entry.key_ptr.*, .{ .int = entry.value_ptr.* }) catch return null;
+        try scope.bind(entry.key_ptr.*, .{ .int = entry.value_ptr.* });
     }
-    return switch (eval.foldComptimeExpr(&scope, expr)) {
+    const folded = eval.foldComptimeExpr(&scope, expr);
+    if (scope.hasOom()) return error.OutOfMemory;
+    return switch (folded) {
         .value => |v| switch (v) {
             .int => |n| n,
             else => null,

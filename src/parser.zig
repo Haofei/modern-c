@@ -234,12 +234,12 @@ pub const Parser = struct {
     // If `base` is a bare identifier `Owner` and `Owner.name` is a registered qualified symbol
     // (impl associated function, module function, or module constant), return an identifier
     // expression for the mangled free symbol `Owner__name`.
-    fn resolveQualified(self: *Parser, base: ast.Expr, name: ast.Ident) ?ast.Expr {
+    fn resolveQualified(self: *Parser, base: ast.Expr, name: ast.Ident) !?ast.Expr {
         const owner = switch (base.kind) {
             .ident => |id| id,
             else => return null,
         };
-        const key = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ owner.text, name.text }) catch return null;
+        const key = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ owner.text, name.text });
         const mangled = self.impl_methods.get(key) orelse return null;
         const span = joinSpan(base.span, name.span);
         return ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = mangled, .span = span } } };
@@ -1625,7 +1625,7 @@ pub const Parser = struct {
                 const name = try self.expectSymbol("expected member name");
                 // Qualified symbol access `Owner.name` (impl associated function / module
                 // function / module constant) -> the mangled free symbol `Owner__name`.
-                if (self.resolveQualified(expr, name)) |resolved| {
+                if (try self.resolveQualified(expr, name)) |resolved| {
                     expr = resolved;
                     continue;
                 }

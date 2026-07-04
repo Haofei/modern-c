@@ -128,6 +128,113 @@ test "allocation failure across parse monomorphize and sema never reports clean 
     }
 }
 
+test "allocation failure while checking type alias cycles fails closed" {
+    const source =
+        \\type A = B;
+        \\type B = A;
+        \\
+        \\fn main() -> void {}
+    ;
+
+    var parse_reporter = diagnostics.Reporter.init(std.testing.allocator, "alias_cycle_oom.mc", source);
+    defer parse_reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseWithAllocator(source, arena.allocator(), &parse_reporter);
+    try std.testing.expect(!parse_reporter.has_errors);
+
+    var saw_oom = false;
+    for (0..128) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+        var reporter = diagnostics.Reporter.init(failing.allocator(), "alias_cycle_oom.mc", source);
+        defer reporter.deinit();
+
+        var checker = sema.Checker.init(&reporter);
+        checker.checkModule(module);
+
+        try std.testing.expect(reporter.has_errors or checker.oom);
+        if (checker.oom) saw_oom = true;
+    }
+    try std.testing.expect(saw_oom);
+}
+
+test "allocation failure while tracking asm register conflicts fails closed" {
+    const source =
+        \\fn reject_asm_register_conflict(x: u64) -> u64 {
+        \\    var out_val: u64 = 0;
+        \\    #[unsafe_contract(precise_asm)] {
+        \\        unsafe {
+        \\            asm precise volatile {
+        \\                "nop"
+        \\                out("rax") out_val: u64,
+        \\                in("rax") x: u64
+        \\            }
+        \\        }
+        \\    }
+        \\    return out_val;
+        \\}
+    ;
+
+    var parse_reporter = diagnostics.Reporter.init(std.testing.allocator, "asm_conflict_oom.mc", source);
+    defer parse_reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseWithAllocator(source, arena.allocator(), &parse_reporter);
+    try std.testing.expect(!parse_reporter.has_errors);
+
+    var saw_oom = false;
+    for (0..128) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+        var reporter = diagnostics.Reporter.init(failing.allocator(), "asm_conflict_oom.mc", source);
+        defer reporter.deinit();
+
+        var checker = sema.Checker.init(&reporter);
+        checker.checkModule(module);
+
+        try std.testing.expect(reporter.has_errors or checker.oom);
+        if (checker.oom) saw_oom = true;
+    }
+    try std.testing.expect(saw_oom);
+}
+
+test "allocation failure while tracking backend name collisions fails closed" {
+    const source =
+        \\#[backend_name("mc_fixture_collision")]
+        \\fn first_backend_name() -> u32 {
+        \\    return 1;
+        \\}
+        \\
+        \\#[backend_name("mc_fixture_collision")]
+        \\fn second_backend_name() -> u32 {
+        \\    return 2;
+        \\}
+    ;
+
+    var parse_reporter = diagnostics.Reporter.init(std.testing.allocator, "backend_name_oom.mc", source);
+    defer parse_reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseWithAllocator(source, arena.allocator(), &parse_reporter);
+    try std.testing.expect(!parse_reporter.has_errors);
+
+    var saw_oom = false;
+    for (0..128) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+        var reporter = diagnostics.Reporter.init(failing.allocator(), "backend_name_oom.mc", source);
+        defer reporter.deinit();
+
+        var checker = sema.Checker.init(&reporter);
+        checker.checkModule(module);
+
+        try std.testing.expect(reporter.has_errors or checker.oom);
+        if (checker.oom) saw_oom = true;
+    }
+    try std.testing.expect(saw_oom);
+}
+
 test "rejects nested MMIO register field assignment" {
     const source =
         \\packed bits UartLsr: u8 {
