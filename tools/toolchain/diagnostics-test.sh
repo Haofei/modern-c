@@ -33,6 +33,86 @@ assert_not_contains() {
     fi
 }
 
+assert_occurrences() {
+    local haystack="$1"
+    local needle="$2"
+    local expected="$3"
+    local label="$4"
+    local actual
+    actual=$(HAYSTACK="$haystack" NEEDLE="$needle" python3 - <<'PY'
+import os
+
+print(os.environ["HAYSTACK"].count(os.environ["NEEDLE"]))
+PY
+)
+    if [ "$actual" != "$expected" ]; then
+        echo "FAIL: diagnostics-test — unexpected occurrence count for $label"
+        echo "expected $expected occurrence(s) of: $needle"
+        echo "actual count: $actual"
+        echo "actual output:"
+        printf '%s\n' "$haystack"
+        exit 1
+    fi
+}
+
+cat >"$WORK/parse_error.mc" <<'MC'
+export fn main( -> u32 {
+    return 0;
+}
+MC
+
+parse_output=""
+if parse_output=$("$MCC" check "$WORK/parse_error.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — parse error unexpectedly succeeded"
+    exit 1
+fi
+assert_occurrences "$parse_output" "expected parameter name" 1 "text parse diagnostic"
+assert_not_contains "$parse_output" "src/main.zig" "parse error Zig stack trace"
+
+parse_json=""
+if parse_json=$("$MCC" check "$WORK/parse_error.mc" --json); then
+    echo "FAIL: diagnostics-test — parse error JSON unexpectedly succeeded"
+    exit 1
+fi
+JSON_OUT="$parse_json" python3 - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["JSON_OUT"])
+diags = payload.get("diagnostics")
+assert isinstance(diags, list) and len(diags) == 1, payload
+assert "expected parameter name" in diags[0]["message"], diags[0]
+assert payload["error_count"] == 1 and payload["warning_count"] == 0, payload
+PY
+
+cat >"$WORK/nesting_too_deep.mc" <<'MC'
+fn nesting_too_deep(p: ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????u32) -> void;
+MC
+
+nesting_output=""
+if nesting_output=$("$MCC" check "$WORK/nesting_too_deep.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — nesting-too-deep unexpectedly succeeded"
+    exit 1
+fi
+assert_occurrences "$nesting_output" "E_NESTING_TOO_DEEP" 1 "text nesting-too-deep diagnostic"
+assert_not_contains "$nesting_output" "src/main.zig" "nesting-too-deep Zig stack trace"
+
+nesting_json=""
+if nesting_json=$("$MCC" check "$WORK/nesting_too_deep.mc" --json); then
+    echo "FAIL: diagnostics-test — nesting-too-deep JSON unexpectedly succeeded"
+    exit 1
+fi
+JSON_OUT="$nesting_json" python3 - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["JSON_OUT"])
+diags = payload.get("diagnostics")
+assert isinstance(diags, list) and len(diags) == 1, payload
+assert diags[0]["code"] == "E_NESTING_TOO_DEEP", diags[0]
+assert payload["error_count"] == 1 and payload["warning_count"] == 0, payload
+PY
+
 cat >"$WORK/root_missing.mc" <<'MC'
 
 // line marker

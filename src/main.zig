@@ -462,7 +462,7 @@ fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = parseModuleOrReportMode(source, parse_allocator, &diag, !json_diagnostics) catch |err| {
+    const module = parseModuleOrReportMode(source, parse_allocator, &diag, false) catch |err| {
         if (diag.has_errors) {
             try emitCheckDiagnostics(allocator, &diag, json_diagnostics);
         }
