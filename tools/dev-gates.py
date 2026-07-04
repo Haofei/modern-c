@@ -31,6 +31,12 @@ class Rule:
 
 RULES: tuple[Rule, ...] = (
     Rule(
+        ("src/*.zig",),
+        ("diagnostics-reference-test", "diagnostic-code-inventory-test"),
+        "production source changes can add/move emitted E_* diagnostics and must keep the generated reference and ownership inventory current",
+        excludes=("src/*_tests.zig",),
+    ),
+    Rule(
         ("src/parser.zig", "src/lexer.zig", "src/loader.zig", "src/diagnostics.zig", "src/main.zig"),
         ("test", "diagnostics-test", "bad-diagnostics-test", "diagnostics-reference-test", "diagnostic-code-inventory-test"),
         "front-end and diagnostics changes need unit/spec coverage, transcript locks, generated diagnostic reference, and code ownership",
