@@ -6,9 +6,11 @@
 
 fn add(a: u32, b: u32) -> u32 { return a + b; }
 fn negate(a: u32) -> u32 { return 0 - a; }
+fn sum2(xs: [2]u32) -> u32 { return xs[0] + xs[1]; }
 
 global default_op: fn(u32, u32) -> u32 = add;
 global default_ops: [2]fn(u32, u32) -> u32 = .{ add, add };
+global default_sum2: fn([2]u32) -> u32 = sum2;
 
 // A function-pointer parameter (callback) called with the right arity/types.
 fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 {
@@ -68,6 +70,9 @@ fn reject_wrong_signature_function() -> u32 {
 
 // EXPECT_ERROR: E_FN_POINTER_SIGNATURE_MISMATCH
 global reject_wrong_signature_global: fn(u32, u32) -> u32 = negate;
+
+// EXPECT_ERROR: E_FN_POINTER_SIGNATURE_MISMATCH
+global reject_wrong_signature_array_len: fn([3]u32) -> u32 = sum2;
 
 fn reject_wrong_signature_array() -> void {
     let ops: [1]fn(u32, u32) -> u32 = .{
