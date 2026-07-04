@@ -34,6 +34,45 @@ test "monomorphize.cloneType substitutes a comptime parameter in an array length
     try testing.expectEqualStrings("u8", cloned.kind.array.child.kind.name.text);
 }
 
+test "monomorphize detects comptime parameter in block array length" {
+    const source =
+        \\fn block_len_size(comptime N: usize) -> usize {
+        \\    return sizeof([{ return N; }]u8);
+        \\}
+        \\
+        \\fn accept_block_len_reflection() -> usize {
+        \\    return block_len_size(4);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(testing.allocator, "block_len_size.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    try testing.expect(!reporter.has_errors);
+
+    const specialized = try monomorphize.transformReport(arena.allocator(), module, &reporter);
+    try testing.expect(!reporter.has_errors);
+
+    var saw_specialized = false;
+    var saw_template = false;
+    for (specialized.decls) |decl| {
+        if (decl.kind != .fn_decl) continue;
+        const fn_decl = decl.kind.fn_decl;
+        if (std.mem.eql(u8, fn_decl.name.text, "block_len_size")) saw_template = true;
+        if (std.mem.eql(u8, fn_decl.name.text, "block_len_size__4")) {
+            saw_specialized = true;
+            try testing.expectEqual(@as(usize, 0), fn_decl.params.len);
+        }
+    }
+    try testing.expect(!saw_template);
+    try testing.expect(saw_specialized);
+}
+
 test "monomorphize total specialization cap reports a focused diagnostic" {
     try testing.expectEqual(@as(usize, 128), monomorphize.default_max_monomorphization_depth);
     try testing.expectEqual(@as(usize, 4096), monomorphize.default_max_monomorphization_instances);

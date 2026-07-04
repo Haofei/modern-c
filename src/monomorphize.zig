@@ -479,8 +479,51 @@ fn exprMentionsIdent(expr: ast.Expr, name: []const u8) bool {
         .index => |n| exprMentionsIdent(n.base.*, name) or exprMentionsIdent(n.index.*, name),
         .member => |n| exprMentionsIdent(n.base.*, name),
         .cast => |n| exprMentionsIdent(n.value.*, name),
+        .block => |block| blockExprMentionsIdent(block, name),
         else => false,
     };
+}
+
+fn blockExprMentionsIdent(block: ast.Block, name: []const u8) bool {
+    for (block.items) |stmt| {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| if (local.init) |expr| {
+                if (exprMentionsIdent(expr, name)) return true;
+            },
+            .loop => |loop| {
+                if (loop.iterable) |expr| if (exprMentionsIdent(expr, name)) return true;
+                if (blockExprMentionsIdent(loop.body, name)) return true;
+            },
+            .block, .unsafe_block, .comptime_block => |inner| if (blockExprMentionsIdent(inner, name)) return true,
+            .contract_block => |node| if (blockExprMentionsIdent(node.block, name)) return true,
+            .if_let => |node| {
+                if (exprMentionsIdent(node.value, name)) return true;
+                if (blockExprMentionsIdent(node.then_block, name)) return true;
+                if (node.else_block) |inner| if (blockExprMentionsIdent(inner, name)) return true;
+            },
+            .@"switch" => |node| {
+                if (exprMentionsIdent(node.subject, name)) return true;
+                for (node.arms) |arm| {
+                    for (arm.patterns) |pattern| {
+                        if (pattern.kind == .literal and exprMentionsIdent(pattern.kind.literal, name)) return true;
+                    }
+                    switch (arm.body) {
+                        .block => |inner| if (blockExprMentionsIdent(inner, name)) return true,
+                        .expr => |expr| if (exprMentionsIdent(expr, name)) return true,
+                    }
+                }
+            },
+            .@"return" => |maybe| if (maybe) |expr| {
+                if (exprMentionsIdent(expr, name)) return true;
+            },
+            .@"defer", .assert, .expr => |expr| if (exprMentionsIdent(expr, name)) return true,
+            .assignment => |node| {
+                if (exprMentionsIdent(node.target, name) or exprMentionsIdent(node.value, name)) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn exprTypeMentions(expr: ast.Expr, name: []const u8) bool {

@@ -48,8 +48,18 @@ pub fn parseArrayLenWithReflect(expr: ast.Expr, funcs: ?*const std.StringHashMap
             };
         },
         .call, .ident => comptimeUsizeValueWithReflect(expr, funcs, globals, reflect, reflect_ctx),
+        .block => |block| parseArrayLenBlock(block, funcs, globals, reflect, reflect_ctx),
         else => null,
     };
+}
+
+fn parseArrayLenBlock(block: ast.Block, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
+    if (block.items.len != 1) return null;
+    const returned = switch (block.items[0].kind) {
+        .@"return" => |maybe| maybe orelse return null,
+        else => return null,
+    };
+    return parseArrayLenWithReflect(returned, funcs, globals, reflect, reflect_ctx);
 }
 
 // Fold a comptime expression to a usize using the const-fn evaluator. A
