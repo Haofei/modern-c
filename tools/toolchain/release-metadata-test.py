@@ -64,6 +64,7 @@ EXPECTED_RELEASE_PATHS = (
     "THIRD-PARTY-LICENSES.md",
 )
 EXPECTED_PACKAGE_RELEASE_TEST = "package-release-test"
+EXPECTED_RELEASE_SAFE_INSTALL_TEST = "release-safe-install-test"
 PINNED_ACTION_REF_RE = re.compile(r"^[0-9a-f]{40}$")
 WORKFLOW_USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?([^'\"\s#]+)")
 
@@ -244,7 +245,7 @@ def require_release_artifact_metadata() -> None:
         f"/usr/lib/llvm-{EXPECTED_LLVM_MAJOR}/bin",
         "Run release workflow qualification checks",
         "zig build preflight",
-        "zig build release-metadata-test package-release-test",
+        "zig build release-metadata-test package-release-test release-safe-install-test",
         "tools/ci/package-release.py release",
         "--version",
         "--commit \"$GITHUB_SHA\"",
@@ -306,10 +307,16 @@ def require_release_artifact_metadata() -> None:
         qemu,
     ):
         fail("build/qemu.zig does not register package-release-test as an install=false script test")
+    if not re.search(
+        r'addScriptTestOpts\(ctx,\s*"release-safe-install-test"[^;]*"tools/toolchain/release-safe-install-test\.sh"[^;]*\.install = false',
+        qemu,
+    ):
+        fail("build/qemu.zig does not register release-safe-install-test as an install=false script test")
     tiers = read("build/tiers.zig")
-    for tier in ("m0_step", "fast_step", "c0_step"):
-        if f'{tier}.dependOn(ctx.cmd("{EXPECTED_PACKAGE_RELEASE_TEST}"))' not in tiers:
-            fail(f"build/tiers.zig does not wire {EXPECTED_PACKAGE_RELEASE_TEST} into {tier}")
+    for gate in (EXPECTED_PACKAGE_RELEASE_TEST, EXPECTED_RELEASE_SAFE_INSTALL_TEST):
+        for tier in ("m0_step", "fast_step", "c0_step"):
+            if f'{tier}.dependOn(ctx.cmd("{gate}"))' not in tiers:
+                fail(f"build/tiers.zig does not wire {gate} into {tier}")
     if "mcc build" in workflow or "mcc build" in packager:
         fail("release artifact workflow must not implement or invoke `mcc build`")
 
@@ -329,6 +336,7 @@ def require_release_artifact_metadata() -> None:
         "zig build preflight",
         "release-metadata-test",
         "package-release-test",
+        "release-safe-install-test",
         "actions/attest",
         "subject-checksums",
         "gh attestation verify",

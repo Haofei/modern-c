@@ -44,9 +44,10 @@ Before tagging a release:
 9. Run a manual dry run of `.github/workflows/release.yml` for the candidate
    version. The workflow builds with Zig 0.16.0, `-Doptimize=ReleaseSafe`, and
    `-Dversion=<version>` via `tools/ci/package-release.py`. The release workflow
-   also runs `zig build preflight` plus the `release-metadata-test` and
-   `package-release-test` build steps before building artifacts, so the publishing path proves
-   its own pinned toolchain and release invariants.
+   also runs `zig build preflight` plus the `release-metadata-test`,
+   `package-release-test`, and `release-safe-install-test` build steps before
+   building artifacts, so the publishing path proves its own pinned toolchain
+   and release invariants.
 10. Confirm the dry-run workflow artifact contains tarballs for
    `x86_64-linux-musl`, `aarch64-linux-musl`, `x86_64-macos`, and
    `aarch64-macos`.

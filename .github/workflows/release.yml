@@ -79,7 +79,7 @@ jobs:
         run: |
           set -euo pipefail
           zig build preflight
-          zig build release-metadata-test package-release-test
+          zig build release-metadata-test package-release-test release-safe-install-test
 
       - name: Build ReleaseSafe release tarballs
         shell: bash
