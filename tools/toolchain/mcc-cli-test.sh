@@ -106,6 +106,7 @@ assert_stderr_empty() {
 run_case --help
 assert_rc 0 "--help"
 assert_stdout_contains "usage:" "--help usage header"
+assert_stdout_contains "mcc explain E_CODE" "--help explain command"
 assert_stdout_contains "mcc list-tests <file.mc>" "--help list-tests command"
 assert_stdout_contains "mcc build <file.mc> -o <exe>" "--help build command"
 assert_stdout_contains "--remap-prefix=FROM=TO" "--help remap-prefix option"
@@ -129,6 +130,30 @@ if ! grep -Eq '^mcc 0\.7\.0-dev$' "$OUT"; then
     exit 1
 fi
 assert_stderr_empty "--version"
+
+run_case explain E_UNKNOWN_IDENTIFIER
+assert_rc 0 "explain known diagnostic"
+assert_stdout_contains "E_UNKNOWN_IDENTIFIER" "explain known diagnostic code"
+assert_stdout_contains "messages:" "explain known diagnostic messages"
+assert_stdout_contains "unknown identifier" "explain known diagnostic message"
+assert_stdout_contains "sources:" "explain known diagnostic sources"
+assert_stdout_contains "src/sema.zig" "explain known diagnostic source"
+assert_stderr_empty "explain known diagnostic"
+
+run_case explain E_NOT_A_REAL_CODE
+assert_rc 1 "explain unknown diagnostic"
+assert_stdout_empty "explain unknown diagnostic"
+assert_stderr_starts_with "error: unknown diagnostic code: E_NOT_A_REAL_CODE" "explain unknown diagnostic"
+
+run_case explain
+assert_rc 1 "explain missing code"
+assert_stdout_empty "explain missing code"
+assert_stderr_contains "usage:" "explain missing code usage"
+
+run_case explain E_UNKNOWN_IDENTIFIER extra
+assert_rc 1 "explain extra arg"
+assert_stdout_empty "explain extra arg"
+assert_stderr_contains "usage:" "explain extra arg usage"
 
 run_case
 assert_rc 1 "missing command"

@@ -5,6 +5,7 @@ const backend = @import("backend.zig");
 const build_options = @import("build_options");
 const cli = @import("cli.zig");
 const diagnostics = @import("diagnostics.zig");
+const diagnostic_explain = @import("diagnostic_explain.zig");
 const eval = @import("eval.zig");
 const eval_tests = @import("eval_tests.zig");
 const fmt = @import("fmt.zig");
@@ -49,6 +50,7 @@ const usage =
     \\  mcc --help
     \\  mcc --version
     \\  mcc help
+    \\  mcc explain E_CODE
     \\  mcc lex <file.mc>
     \\  mcc check <file.mc> [--json]
     \\  mcc run-trap <file.mc>
@@ -110,6 +112,7 @@ const usage =
     \\  mcc check <file.mc> --json
     \\                         print {"diagnostics":[...]} JSON to stdout. Text diagnostics
     \\                         remain the default and stay on stderr.
+    \\  mcc explain E_CODE     print the embedded diagnostic reference entry for a code.
     \\
     \\exit codes:
     \\  0   success, --help, --version
@@ -180,6 +183,12 @@ fn runMain(init: std.process.Init) !void {
     if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "version")) {
         if (args.next() != null) return failUsage();
         try writeStdout("mcc " ++ build_options.version ++ "\n");
+        return;
+    }
+    if (std.mem.eql(u8, command, "explain")) {
+        const code = args.next() orelse return failUsage();
+        if (args.next() != null) return failUsage();
+        try runExplain(allocator, code);
         return;
     }
     const path = args.next() orelse return failUsage();
@@ -299,6 +308,7 @@ fn runMain(init: std.process.Init) !void {
 fn isExpectedCliFailure(err: anyerror) bool {
     return switch (err) {
         error.InvalidArgs,
+        error.ExplainFailed,
         error.InputReadFailed,
         error.ImportNotFound,
         error.FmtCheckFailed,
@@ -321,6 +331,15 @@ fn isExpectedCliFailure(err: anyerror) bool {
         => true,
         else => false,
     };
+}
+
+fn runExplain(allocator: std.mem.Allocator, code: []const u8) !void {
+    const text = try diagnostic_explain.explain(allocator, code) orelse {
+        std.debug.print("error: unknown diagnostic code: {s}\n", .{code});
+        return error.ExplainFailed;
+    };
+    defer allocator.free(text);
+    try writeStdout(text);
 }
 
 fn runLowerHir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {

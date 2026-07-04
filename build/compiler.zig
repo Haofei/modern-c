@@ -19,6 +19,9 @@ pub fn build(b: *std.Build) h.Ctx {
         .optimize = optimize,
     });
     root_module.addOptions("build_options", options);
+    root_module.addAnonymousImport("diagnostics_reference_md", .{
+        .root_source_file = b.path("docs/diagnostics.md"),
+    });
 
     const exe = b.addExecutable(.{
         .name = "mcc-real",
