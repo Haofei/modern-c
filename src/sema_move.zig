@@ -792,13 +792,42 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
         },
         .binary => |b| {
             moveConsume(self, b.left.*, state, aliases);
-            moveConsume(self, b.right.*, state, aliases);
+            switch (b.op) {
+                .logical_and, .logical_or => moveConsumeShortCircuitRhs(self, b.right.*, state, aliases),
+                else => moveConsume(self, b.right.*, state, aliases),
+            }
         },
         .unary => |u| moveConsume(self, u.expr.*, state, aliases),
         .struct_literal => |fields| for (fields) |f| moveConsume(self, f.value, state, aliases),
         .array_literal => |items| for (items) |item| moveConsume(self, item, state, aliases),
         else => {},
     }
+}
+
+fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    var rhs_state = cloneMoveState(self, state);
+    defer rhs_state.deinit();
+    moveConsume(self, rhs, &rhs_state, aliases);
+
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const after = rhs_state.get(entry.key_ptr.*) orelse continue;
+        const before = entry.value_ptr.*;
+        if (before.live != after.live or before.deferred != after.deferred or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow)) {
+            self.errorCode(rhs.span, "E_MOVE_BRANCH_MISMATCH", "cannot consume, reserve, or escape an outer linear `move` value only on one side of a short-circuit expression");
+            entry.value_ptr.live = false;
+            entry.value_ptr.deferred = false;
+            entry.value_ptr.escaped_borrow = null;
+        }
+    }
+}
+
+fn sameMaybeSpan(left: ?diagnostics.Span, right: ?diagnostics.Span) bool {
+    if (left == null and right == null) return true;
+    if (left == null or right == null) return false;
+    const l = left.?;
+    const r = right.?;
+    return l.offset == r.offset and l.len == r.len and l.line == r.line and l.column == r.column;
 }
 
 // ----- place sensitivity: track a `move` field moved out of its aggregate -----

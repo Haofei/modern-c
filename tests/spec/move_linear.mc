@@ -130,6 +130,38 @@ fn accept_while_condition_borrows(flag: bool) -> u32 {
     return consume(t);
 }
 
+fn reject_logical_and_rhs_consumes(flag: bool) -> u32 {
+    let t: Token = make();
+    if flag && consume(t) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+        return 1;
+    }
+    return 0;
+}
+
+fn reject_logical_or_rhs_consumes(flag: bool) -> u32 {
+    let t: Token = make();
+    if flag || consume(t) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+        return 1;
+    }
+    return 0;
+}
+
+fn accept_logical_left_consumes(flag: bool) -> u32 {
+    let t: Token = make();
+    if consume(t) != 0 && flag {
+        return 1;
+    }
+    return 0;
+}
+
+fn accept_logical_rhs_borrows(flag: bool) -> u32 {
+    let t: Token = make();
+    if flag && peek(&t) != 0 {
+        return consume(t);
+    }
+    return consume(t);
+}
+
 // A loop-body-local move value that is live when `break` exits the iteration leaks
 // on that edge — the iteration ends without consuming it.
 fn reject_loop_break_leak(flag: bool) -> u32 {

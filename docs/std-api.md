@@ -10,11 +10,11 @@ python3 tools/toolchain/std-api-docs.py --write
 The extractor is static: it records `export fn` signatures, exported constants,
 exported type declarations, and local types named by exported declarations.
 
-Total modules: **41**.
-Total exported functions: **353**.
+Total modules: **40**.
+Total exported functions: **341**.
 Total exported constants: **6**.
 Total exported type declarations: **0**.
-Total referenced local types: **56**.
+Total referenced local types: **54**.
 
 ## Modules
 
@@ -42,7 +42,6 @@ Source: `std/addr.mc`
 | <code>export fn pa_lt(a: PAddr, b: PAddr) -&gt; bool</code> | `std/addr.mc:71` |
 | <code>export fn pa_le(a: PAddr, b: PAddr) -&gt; bool</code> | `std/addr.mc:74` |
 | <code>export fn pa_eq(a: PAddr, b: PAddr) -&gt; bool</code> | `std/addr.mc:77` |
-| <code>export fn phys_range(start: PAddr, len: usize) -&gt; PhysRange</code> | `std/addr.mc:89` |
 | <code>export fn pr_start(r: *PhysRange) -&gt; PAddr</code> | `std/addr.mc:93` |
 | <code>export fn pr_end(r: *PhysRange) -&gt; PAddr</code> | `std/addr.mc:97` |
 | <code>export fn pr_len(r: *PhysRange) -&gt; usize</code> | `std/addr.mc:101` |
@@ -398,14 +397,14 @@ Source: `std/collections/vec.mc`
 | Signature | Source |
 |---|---|
 | <code>export fn f32x4_splat(x: f32) -&gt; [4]f32</code> | `std/collections/vec.mc:11` |
-| <code>export fn f32x4_load(base: PAddr) -&gt; [4]f32</code> | `std/collections/vec.mc:20` |
-| <code>export fn f32x4_store(base: PAddr, values: [4]f32) -&gt; void</code> | `std/collections/vec.mc:31` |
-| <code>export fn f32x4_add(a: [4]f32, b: [4]f32) -&gt; [4]f32</code> | `std/collections/vec.mc:40` |
-| <code>export fn f32x4_mul(a: [4]f32, b: [4]f32) -&gt; [4]f32</code> | `std/collections/vec.mc:49` |
-| <code>export fn f32x4_max(a: [4]f32, b: [4]f32) -&gt; [4]f32</code> | `std/collections/vec.mc:58` |
-| <code>export fn f32x4_sum(values: [4]f32) -&gt; f32</code> | `std/collections/vec.mc:67` |
-| <code>export fn f32x4_to_bits(values: [4]f32) -&gt; [4]u32</code> | `std/collections/vec.mc:71` |
-| <code>export fn f32x4_from_bits(values: [4]u32) -&gt; [4]f32</code> | `std/collections/vec.mc:80` |
+| <code>export fn f32x4_load(base: PAddr) -&gt; [4]f32</code> | `std/collections/vec.mc:15` |
+| <code>export fn f32x4_store(base: PAddr, values: [4]f32) -&gt; void</code> | `std/collections/vec.mc:26` |
+| <code>export fn f32x4_add(a: [4]f32, b: [4]f32) -&gt; [4]f32</code> | `std/collections/vec.mc:35` |
+| <code>export fn f32x4_mul(a: [4]f32, b: [4]f32) -&gt; [4]f32</code> | `std/collections/vec.mc:39` |
+| <code>export fn f32x4_max(a: [4]f32, b: [4]f32) -&gt; [4]f32</code> | `std/collections/vec.mc:48` |
+| <code>export fn f32x4_sum(values: [4]f32) -&gt; f32</code> | `std/collections/vec.mc:57` |
+| <code>export fn f32x4_to_bits(values: [4]f32) -&gt; [4]u32</code> | `std/collections/vec.mc:61` |
+| <code>export fn f32x4_from_bits(values: [4]u32) -&gt; [4]f32</code> | `std/collections/vec.mc:70` |
 
 ## `std/core`
 
@@ -452,18 +451,11 @@ Source: `std/endian.mc`
 
 Source: `std/fmt/fmt.mc`
 
-### Referenced local types
-
-| Signature | Source |
-|---|---|
-| <code>extern struct U32Decimal</code> | `std/fmt/fmt.mc:15` |
-
 ### Exported functions
 
 | Signature | Source |
 |---|---|
 | <code>export const fn digit_char(d: u32) -&gt; u8</code> | `std/fmt/fmt.mc:21` |
-| <code>export const fn format_u32(value: u32) -&gt; U32Decimal</code> | `std/fmt/fmt.mc:26` |
 
 ## `std/grant`
 
@@ -680,31 +672,6 @@ Source: `std/mmio.mc`
 | <code>export fn mmio_modify_field(reg: PAddr, f: RegField, value: u32) -&gt; void</code> | `std/mmio.mc:170` |
 | <code>export fn mmio_set_bits(reg: PAddr, mask: u32) -&gt; void</code> | `std/mmio.mc:176` |
 | <code>export fn mmio_clear_bits(reg: PAddr, mask: u32) -&gt; void</code> | `std/mmio.mc:182` |
-
-## `std/rights`
-
-Source: `std/rights.mc`
-
-### Referenced local types
-
-| Signature | Source |
-|---|---|
-| <code>opaque struct Rights</code> | `std/rights.mc:34` |
-
-### Exported functions
-
-| Signature | Source |
-|---|---|
-| <code>export fn rights_none() -&gt; Rights</code> | `std/rights.mc:94` |
-| <code>export fn rights_grant(bits: u32) -&gt; Rights</code> | `std/rights.mc:102` |
-| <code>export fn rights_single(b: u32) -&gt; Rights</code> | `std/rights.mc:107` |
-| <code>export fn rights_attenuate(r: Rights, keep: Rights) -&gt; Rights</code> | `std/rights.mc:114` |
-| <code>export fn rights_attenuate_mask(r: Rights, keep_bits: u32) -&gt; Rights</code> | `std/rights.mc:120` |
-| <code>export fn rights_without(r: Rights, b: u32) -&gt; Rights</code> | `std/rights.mc:125` |
-| <code>export fn rights_allows(r: Rights, b: u32) -&gt; bool</code> | `std/rights.mc:130` |
-| <code>export fn rights_subset_of(child: Rights, parent: Rights) -&gt; bool</code> | `std/rights.mc:137` |
-| <code>export fn rights_is_empty(r: Rights) -&gt; bool</code> | `std/rights.mc:142` |
-| <code>export fn rights_eq(a: Rights, b: Rights) -&gt; bool</code> | `std/rights.mc:147` |
 
 ## `std/scan`
 
