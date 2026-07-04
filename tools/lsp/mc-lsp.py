@@ -13,9 +13,10 @@ is the single source of truth; the server only drives `mcc` subcommands and tran
   - Document symbols — `textDocument/documentSymbol` reuses `mcc emit-map`'s per-declaration
                    rows as a file outline.
   - Navigation    — hover (type + kind), go-to-definition, find-references, document-highlight,
-                   rename, semantic tokens, completion (identifiers in scope + keywords/types),
-                   signature help, workspace symbols, and call hierarchy, all driven by
-                   `mcc symbols` (a JSON index of definitions + references with spans).
+                   rename, semantic tokens, completion (identifiers in scope + keywords/types
+                   plus field members after `.`), signature help, workspace symbols, and call
+                   hierarchy, all driven by `mcc symbols` (a JSON index of definitions,
+                   references, and fields with spans).
   - Pull diagnostics — answers the LSP 3.17 `textDocument/diagnostic` request in addition to
                    pushing `publishDiagnostics`.
 
@@ -475,9 +476,9 @@ def get_index(uri, text):
         return cached[1]
     rc, out, err, _ = run_on_temp(uri_to_path(uri), text, ["symbols"])
     try:
-        index = json.loads(out) if rc != 127 and out else {"defs": [], "refs": []}
+        index = json.loads(out) if rc != 127 and out else {"defs": [], "refs": [], "fields": []}
     except (json.JSONDecodeError, ValueError):
-        index = {"defs": [], "refs": []}
+        index = {"defs": [], "refs": [], "fields": []}
     _index_cache[uri] = (text, index)
     return index
 
@@ -861,8 +862,113 @@ MC_PRIMITIVES = [
 ]
 COMPLETION_KIND = {  # LSP CompletionItemKind
     "function": 3, "global": 6, "constant": 21, "local": 6, "local_mut": 6, "param": 6,
-    "struct": 22, "enum": 13, "type_alias": 7,
+    "struct": 22, "enum": 13, "type_alias": 7, "field": 5,
 }
+
+
+def utf16_to_py_index(s, character):
+    used = 0
+    for i, ch in enumerate(s):
+        width = 2 if ord(ch) > 0xFFFF else 1
+        if used + width > character:
+            return i
+        used += width
+        if used == character:
+            return i + 1
+    return len(s)
+
+
+MEMBER_COMPLETION_RE = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)?$"
+)
+IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def member_context(text, position):
+    lines = text.split("\n")
+    if position["line"] < 0 or position["line"] >= len(lines):
+        return None
+    line = lines[position["line"]]
+    prefix = line[:utf16_to_py_index(line, position["character"])]
+    match = MEMBER_COMPLETION_RE.search(prefix)
+    if not match:
+        return None
+    chain = [part.strip() for part in match.group(1).split(".")]
+    if not chain or not all(IDENT_RE.match(part) for part in chain):
+        return None
+    return chain, match.group(2) or ""
+
+
+def visible_value_defs(index, position):
+    cursor_line = position["line"] + 1
+    out = {}
+    for d in index.get("defs", []):
+        if d["kind"] in ("global", "constant"):
+            out.setdefault(d["name"], d)
+
+    enc = enclosing_function(index, cursor_line)
+    if enc:
+        func_line = enc["span"]["line"]
+        next_line = min([d["span"]["line"] for d in _function_defs(index)
+                         if d["span"]["line"] > func_line], default=10 ** 9)
+        for d in index.get("defs", []):
+            if (d["kind"] in ("param", "local", "local_mut")
+                    and func_line <= d["span"]["line"] <= cursor_line
+                    and d["span"]["line"] < next_line):
+                out[d["name"]] = d
+    return out
+
+
+def type_aliases(index):
+    return {d["name"]: d["type"] for d in index.get("defs", []) if d["kind"] == "type_alias"}
+
+
+def normalize_type_name(ty, aliases):
+    seen = set()
+    current = ty.strip()
+    while current and current not in seen:
+        seen.add(current)
+        changed = False
+        for prefix in ("mut ", "const "):
+            if current.startswith(prefix):
+                current = current[len(prefix):].strip()
+                changed = True
+        while current.startswith("?"):
+            current = current[1:].strip()
+            changed = True
+        while current.startswith("*"):
+            current = current[1:].strip()
+            changed = True
+            for prefix in ("mut ", "const "):
+                if current.startswith(prefix):
+                    current = current[len(prefix):].strip()
+        base = current.split("<", 1)[0].strip()
+        if base in aliases:
+            current = aliases[base].strip()
+            changed = True
+            continue
+        if not changed:
+            return base
+    return current.split("<", 1)[0].strip()
+
+
+def fields_for_owner(index, owner):
+    return [f for f in index.get("fields", []) if f.get("owner") == owner]
+
+
+def resolve_member_chain_type(index, position, chain):
+    visible = visible_value_defs(index, position)
+    current = visible.get(chain[0])
+    if not current:
+        return None
+    aliases = type_aliases(index)
+    ty = normalize_type_name(current.get("type", "?"), aliases)
+    for field_name in chain[1:]:
+        field = next((f for f in fields_for_owner(index, ty) if f.get("name") == field_name), None)
+        if not field:
+            return None
+        ty = normalize_type_name(field.get("type", "?"), aliases)
+    return ty
 
 
 def completion(uri, text, position):
@@ -878,6 +984,18 @@ def completion(uri, text, position):
         if detail:
             it["detail"] = detail
         items.append(it)
+
+    member = member_context(text, position)
+    if member:
+        chain, prefix = member
+        owner = resolve_member_chain_type(index, position, chain)
+        if owner:
+            for field in fields_for_owner(index, owner):
+                label = field.get("name", "")
+                if label.startswith(prefix):
+                    add(label, COMPLETION_KIND["field"], field.get("type"))
+            return {"isIncomplete": False, "items": items}
+        return {"isIncomplete": False, "items": []}
 
     # Top-level declarations are always in scope.
     for d in index.get("defs", []):
@@ -1034,7 +1152,7 @@ def main():
                         },
                         "workspaceSymbolProvider": True,
                         "callHierarchyProvider": True,
-                        "completionProvider": {"triggerCharacters": []},
+                        "completionProvider": {"triggerCharacters": ["."]},
                         "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
                         "diagnosticProvider": {  # LSP 3.17 pull model (in addition to push)
                             "interFileDependencies": False,

@@ -1,16 +1,17 @@
 // `mcc symbols <file>` — a JSON symbol index for the language server.
 //
 // Walks the parsed AST and resolves every identifier occurrence by lexical scope (params and
-// locals in the enclosing function, then module-level functions/globals/types), emitting two
-// lists: `defs` (every declaration: functions, globals, params, locals, types, with a
-// stringified type) and `refs` (every identifier use, with the span of the declaration it
-// resolves to). The language server turns this into go-to-definition, find-references,
-// document-highlight, rename, hover, and semantic tokens — all from one CLI call.
+// locals in the enclosing function, then module-level functions/globals/types), emitting
+// `defs` (every declaration: functions, globals, params, locals, types, with a stringified
+// type), `refs` (every identifier use, with the span of the declaration it resolves to), and
+// `fields` (aggregate fields keyed by owning type). The language server turns this into
+// go-to-definition, find-references, document-highlight, rename, hover, semantic tokens, and
+// completion — all from one CLI call.
 //
 // This is a deliberately self-contained best-effort pass: it does not perturb sema and does
-// not do full type inference. An identifier that does not resolve (a builtin, a struct field
-// after `.`, an inferred local's exact type) is simply omitted or typed `"?"` — the worst case
-// is "no navigation here", never a wrong jump. Types come from the declared `TypeExpr`.
+// not do full type inference. An identifier that does not resolve (a builtin or an inferred
+// local's exact type) is simply omitted or typed `"?"` — the worst case is "no navigation
+// here", never a wrong jump. Types come from the declared `TypeExpr`.
 
 const std = @import("std");
 const ast = @import("ast.zig");
@@ -39,6 +40,14 @@ const Ref = struct {
     def: Span,
 };
 
+const FieldInfo = struct {
+    owner: []const u8,
+    owner_kind: []const u8,
+    name: []const u8,
+    ty: []const u8,
+    span: Span,
+};
+
 const Local = struct {
     name: []const u8,
     info: DefInfo,
@@ -49,10 +58,22 @@ const Builder = struct {
     globals: std.StringHashMap(DefInfo),
     defs: std.ArrayList(Def),
     refs: std.ArrayList(Ref),
+    fields: std.ArrayList(FieldInfo),
     frames: std.ArrayList(std.ArrayList(Local)),
 
     fn addDef(self: *Builder, name: ast.Ident, kind: []const u8, ty: []const u8) !void {
         try self.defs.append(self.arena, .{ .name = name.text, .kind = kind, .ty = ty, .span = name.span });
+    }
+
+    fn addField(self: *Builder, owner: ast.Ident, owner_kind: []const u8, field: ast.Field) !void {
+        const ty = try renderType(self.arena, field.ty);
+        try self.fields.append(self.arena, .{
+            .owner = owner.text,
+            .owner_kind = owner_kind,
+            .name = field.name.text,
+            .ty = ty,
+            .span = field.name.span,
+        });
     }
 
     fn resolve(self: *Builder, name: []const u8) ?DefInfo {
@@ -367,11 +388,20 @@ fn collectDecl(b: *Builder, decl: ast.Decl) !void {
             try b.addDef(t.name, "type_alias", ty);
             try b.globals.put(t.name.text, .{ .span = t.name.span, .kind = "type_alias", .ty = ty });
         },
-        .struct_decl => |s| try collectType(b, s.name, "struct"),
+        .struct_decl => |s| {
+            try collectType(b, s.name, "struct");
+            if (!s.is_opaque) try collectFields(b, s.name, "struct", s.fields);
+        },
         .enum_decl => |e| try collectType(b, e.name, "enum"),
         .union_decl => |u| try collectType(b, u.name, "union"),
-        .packed_bits_decl => |p| try collectType(b, p.name, "packed_bits"),
-        .overlay_union_decl => |o| try collectType(b, o.name, "overlay_union"),
+        .packed_bits_decl => |p| {
+            try collectType(b, p.name, "packed_bits");
+            try collectFields(b, p.name, "packed_bits", p.fields);
+        },
+        .overlay_union_decl => |o| {
+            try collectType(b, o.name, "overlay_union");
+            try collectFields(b, o.name, "overlay_union", o.fields);
+        },
         .opaque_decl => |n| try collectType(b, n, "opaque"),
         // Trait / impl-trait declarations carry no backend symbol of their own: the
         // trait is a signature set, and an `impl Trait for Type` desugars its methods
@@ -384,6 +414,10 @@ fn collectDecl(b: *Builder, decl: ast.Decl) !void {
 fn collectType(b: *Builder, name: ast.Ident, kind: []const u8) !void {
     try b.addDef(name, kind, kind);
     try b.globals.put(name.text, .{ .span = name.span, .kind = kind, .ty = kind });
+}
+
+fn collectFields(b: *Builder, owner: ast.Ident, owner_kind: []const u8, fields: []const ast.Field) !void {
+    for (fields) |field| try b.addField(owner, owner_kind, field);
 }
 
 // Pass 2: walk each declaration's body and type references, emitting param/local defs + refs.
@@ -455,6 +489,7 @@ pub fn emitJson(allocator: std.mem.Allocator, module: ast.Module, out: *std.Arra
         .globals = std.StringHashMap(DefInfo).init(a),
         .defs = .empty,
         .refs = .empty,
+        .fields = .empty,
         .frames = .empty,
     };
 
@@ -493,6 +528,21 @@ pub fn emitJson(allocator: std.mem.Allocator, module: ast.Module, out: *std.Arra
         try w.span(out, allocator, r.span);
         try out.appendSlice(allocator, ",\"def\":");
         try w.span(out, allocator, r.def);
+        try out.append(allocator, '}');
+    }
+    try out.appendSlice(allocator, "],\"fields\":[");
+    for (b.fields.items, 0..) |f, i| {
+        if (i > 0) try out.append(allocator, ',');
+        try out.appendSlice(allocator, "{\"owner\":");
+        try writeJsonString(out, allocator, f.owner);
+        try out.appendSlice(allocator, ",\"owner_kind\":");
+        try writeJsonString(out, allocator, f.owner_kind);
+        try out.appendSlice(allocator, ",\"name\":");
+        try writeJsonString(out, allocator, f.name);
+        try out.appendSlice(allocator, ",\"type\":");
+        try writeJsonString(out, allocator, f.ty);
+        try out.appendSlice(allocator, ",\"span\":");
+        try w.span(out, allocator, f.span);
         try out.append(allocator, '}');
     }
     try out.appendSlice(allocator, "]}\n");

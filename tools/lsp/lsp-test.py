@@ -51,6 +51,17 @@ NAV = (
     "    return target(5);\n"        # target ref (5,11)
     "}\n"
 )
+MEMBER = (
+    "struct Point {\n"
+    "    x: u32,\n"
+    "    y: u32,\n"
+    "}\n"
+    "\n"
+    "fn shift(p: Point) -> u32 {\n"
+    "    let unrelated: u32 = 0;\n"
+    "    return p.x;\n"
+    "}\n"
+)
 
 
 def utf16_len(s):
@@ -64,6 +75,12 @@ def pos_of(text, line_idx, substr, occurrence=0):
     for _ in range(occurrence + 1):
         col = line.index(substr, col + 1)
     return {"line": line_idx, "character": col}
+
+
+def pos_after(text, line_idx, substr, occurrence=0):
+    pos = pos_of(text, line_idx, substr, occurrence)
+    pos["character"] += len(substr)
+    return pos
 
 
 def frame(payload):
@@ -227,6 +244,8 @@ def main():
         assert caps.get("textDocumentSync") == 1, f"expected Full textDocumentSync, got {caps}"
         assert caps.get("documentFormattingProvider"), f"expected formatting capability, got {caps}"
         assert caps.get("documentSymbolProvider"), f"expected documentSymbol capability, got {caps}"
+        triggers = caps.get("completionProvider", {}).get("triggerCharacters", [])
+        assert "." in triggers, f"expected dot completion trigger, got {triggers}"
 
         proc.stdin.write(frame({"jsonrpc": "2.0", "method": "initialized", "params": {}}))
 
@@ -440,6 +459,29 @@ def main():
         if "caller" not in labels2:
             raise SystemExit(f"FAIL: lsp-test — completion in caller() missing 'caller': {sorted(labels2)[:20]}")
 
+        # member completion after `p.` should return fields from Point, not unrelated locals.
+        member_path = os.path.join(workdir, "member.mc")
+        with open(member_path, "w") as f:
+            f.write(MEMBER)
+        member_uri = "file://" + member_path
+        did_open(proc, member_uri, MEMBER)
+        diagnostics_for(proc, member_uri)
+        member_td = {"textDocument": {"uri": member_uri}}
+        dot_comp = request(proc, 35, "textDocument/completion",
+                           {**member_td, "position": pos_after(MEMBER, 7, "p.")})
+        dot_labels = {i["label"] for i in (dot_comp or {}).get("items", [])}
+        for want in ("x", "y"):
+            if want not in dot_labels:
+                raise SystemExit(f"FAIL: lsp-test — member completion missing Point.{want}: {sorted(dot_labels)}")
+        for leak in ("p", "shift", "unrelated", "return", "u32"):
+            if leak in dot_labels:
+                raise SystemExit(f"FAIL: lsp-test — member completion leaked non-field '{leak}': {sorted(dot_labels)}")
+        prefix_comp = request(proc, 36, "textDocument/completion",
+                              {**member_td, "position": pos_after(MEMBER, 7, "p.x")})
+        prefix_labels = {i["label"] for i in (prefix_comp or {}).get("items", [])}
+        if prefix_labels != {"x"}:
+            raise SystemExit(f"FAIL: lsp-test — member prefix completion should only return x, got {sorted(prefix_labels)}")
+
         proc.stdin.write(frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": {}}))
         proc.stdin.flush()
         shut = read_message(proc.stdout)
@@ -454,7 +496,7 @@ def main():
     print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, debounced didChange, "
           "in-flight cancellation, pull), "
           "documentSymbol outline, `mcc fmt` formatting, UTF-16 positions, hover/definition/"
-          "references/highlight/rename/semantic-tokens, completion, signature help, workspace "
+          "references/highlight/rename/semantic-tokens, identifier/member completion, signature help, workspace "
           "symbols, and call hierarchy all verified")
 
 
