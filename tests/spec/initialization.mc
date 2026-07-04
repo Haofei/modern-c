@@ -170,11 +170,52 @@ fn accept_uninit_array_partial_write_then_read_same_dynamic_element() -> u8 {
     return buf[i];
 }
 
+fn accept_uninit_array_partial_write_same_const_element_both_branches(c: bool) -> u8 {
+    var buf: [4]u8 = uninit;
+    if c {
+        buf[0] = 1;
+    } else {
+        buf[0] = 2;
+    }
+    return buf[0];
+}
+
+fn accept_uninit_array_partial_write_same_dynamic_element_both_branches(c: bool) -> u8 {
+    var buf: [4]u8 = uninit;
+    let i: usize = 2;
+    if c {
+        buf[i] = 1;
+    } else {
+        buf[i] = 2;
+    }
+    return buf[i];
+}
+
+fn reject_uninit_array_partial_write_element_one_branch_only(c: bool) -> u8 {
+    var buf: [4]u8 = uninit;
+    if c {
+        buf[0] = 1;
+    } else {
+        takes_u32(0);
+    }
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
+    return buf[0];
+}
+
 fn reject_uninit_array_dynamic_element_after_index_assignment() -> u8 {
     var buf: [4]u8 = uninit;
     var i: usize = 2;
     buf[i] = 9;
     i = 1;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
+    return buf[i];
+}
+
+fn reject_uninit_array_dynamic_element_after_block_expr_call() -> u8 {
+    var buf: [4]u8 = uninit;
+    let i: usize = 2;
+    buf[i] = 9;
+    let ignored: u32 = { takes_u32(0); };
     // EXPECT_ERROR: E_USE_BEFORE_INIT
     return buf[i];
 }

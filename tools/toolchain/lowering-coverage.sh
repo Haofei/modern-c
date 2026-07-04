@@ -152,6 +152,11 @@ run_one() {
     MC_LOWER_COV="$OUTDIR/cov/l_$i.txt"    "$MCC" emit-llvm "$mc"                  >/dev/null 2>&1 || true
 }
 
+run_cov_cmd() {
+    i=$((i+1))
+    MC_LOWER_COV="$OUTDIR/cov/cmd_$i.txt" "$@" >/dev/null 2>&1 || true
+}
+
 # --- 3a. diff-backend host fixtures ------------------------------------------------------
 MANIFEST="tools/lib/host-tests.tsv"
 nfix=0
@@ -163,7 +168,64 @@ while IFS=$'\t' read -r name fixture mode spec flags desc; do
 done < "$MANIFEST"
 echo "folded $nfix host fixtures"
 
-# --- 3b. a batch of mcfuzz-generated programs --------------------------------------------
+# --- 3b. backend artifact commands and targeted edge fixtures -----------------------------
+# The host manifest is optimized for differential execution, not command/artifact coverage.
+# Keep this deterministic and small: it exercises CLI artifact entry points plus lowering
+# feature families that are intentionally absent from host-runnable C programs.
+nedge=0
+if [ -f tests/c_emit/struct.mc ]; then
+    run_cov_cmd "$MCC" lower-c tests/c_emit/struct.mc
+    run_cov_cmd "$MCC" emit-map tests/c_emit/struct.mc --profile=kernel
+    run_cov_cmd "$MCC" emit-map tests/c_emit/struct.mc --profile=hosted
+    run_cov_cmd "$MCC" emit-layout tests/c_emit/struct.mc --structs=Pair,Packet
+    run_cov_cmd "$MCC" emit-c-struct tests/c_emit/struct.mc --structs=Pair,Packet
+    nedge=$((nedge+5))
+fi
+
+for fixture in tests/llvm/*.mc; do
+    [ -f "$fixture" ] || continue
+    run_one "$fixture"
+    nedge=$((nedge+1))
+done
+
+for fixture in \
+    tests/c_emit/asm.mc \
+    tests/c_emit/precise_asm.mc \
+    tests/c_emit/closure_typing_shapes.mc \
+    tests/c_emit/global_closure.mc \
+    tests/c_emit/nullability.mc \
+    tests/c_emit/result.mc \
+    tests/c_emit/try_in_expressions.mc \
+    tests/c_emit/try_propagation.mc \
+    tests/c_emit/reflection.mc \
+    tests/c_emit/packed_bits_overlay.mc \
+    tests/c_emit/packed_overlay.mc \
+    tests/c_emit/byte_views.mc \
+    tests/c_emit/array_literals.mc \
+    tests/c_emit/array_values.mc \
+    tests/c_emit/assignment_targets.mc \
+    tests/c_emit/assignment_values.mc \
+    tests/c_emit/vector_lanes.mc \
+    tests/toolchain/reflect.mc \
+    tests/toolchain/abi_layout.mc \
+    tests/qemu/lang/closure_demo.mc \
+    tests/qemu/lang/vararg_demo.mc \
+    tests/qemu/arch/vararg_runtime.mc
+do
+    [ -f "$fixture" ] || continue
+    run_one "$fixture"
+    nedge=$((nedge+1))
+done
+
+if [ -f tests/toolchain/asm_targets.mc ]; then
+    for arch in riscv64 x86_64 aarch64; do
+        run_cov_cmd "$MCC" emit-llvm tests/toolchain/asm_targets.mc --arch="$arch" --stub-asm
+        nedge=$((nedge+1))
+    done
+fi
+echo "folded $nedge targeted lowering edge probes"
+
+# --- 3c. a batch of mcfuzz-generated programs --------------------------------------------
 nfuzz=0
 seed=1
 while [ "$nfuzz" -lt "$FUZZ_N" ]; do
@@ -196,7 +258,8 @@ uni_l=$(wc -l < "$OUTDIR/universe_lower_llvm.sorted");  unc_l=$(wc -l < "$OUTDIR
 
 echo
 echo "================= LOWERING-COVERAGE REPORT (function-level) ================="
-echo "corpus: $nfix host fixtures + $nfuzz mcfuzz programs, each through emit-c (kernel+hosted) and emit-llvm"
+echo "corpus: $nfix host fixtures + $nedge targeted edge probes + $nfuzz mcfuzz programs"
+echo "        host fixtures and mcfuzz programs run through emit-c (kernel+hosted) and emit-llvm"
 echo
 printf "  lower_c*.zig    : %d/%d functions covered (%s)  — %d UNCOVERED\n" "$cov_c" "$uni_c" "$(pct "$cov_c" "$uni_c")" "$unc_c"
 printf "  lower_llvm*.zig : %d/%d functions covered (%s)  — %d UNCOVERED\n" "$cov_l" "$uni_l" "$(pct "$cov_l" "$uni_l")" "$unc_l"
