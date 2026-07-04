@@ -61,7 +61,7 @@ pub const Lexer = struct {
             '"' => self.string(start),
             '\'' => self.char(start),
             else => blk: {
-                self.reporter.err(self.spanFrom(start), "unexpected byte '{c}'", .{c});
+                self.reporter.err(self.spanFrom(start), "E_LEX_UNEXPECTED_BYTE: unexpected byte '{c}'", .{c});
                 break :blk self.make(.invalid, start);
             },
         };
@@ -90,7 +90,7 @@ pub const Lexer = struct {
                     }
                     _ = self.advance();
                 } else {
-                    self.reporter.err(self.spanFrom(start), "unterminated block comment", .{});
+                    self.reporter.err(self.spanFrom(start), "E_LEX_UNTERMINATED_BLOCK_COMMENT: unterminated block comment", .{});
                 }
                 continue;
             }
@@ -208,9 +208,9 @@ pub const Lexer = struct {
 
         if (invalid) {
             if (is_float) {
-                self.reporter.err(self.spanFrom(start), "invalid float literal", .{});
+                self.reporter.err(self.spanFrom(start), "E_LEX_INVALID_FLOAT_LITERAL: invalid float literal", .{});
             } else {
-                self.reporter.err(self.spanFrom(start), "invalid integer literal", .{});
+                self.reporter.err(self.spanFrom(start), "E_LEX_INVALID_INTEGER_LITERAL: invalid integer literal", .{});
             }
         }
         return self.make(if (is_float) .float_literal else .integer_literal, start);
@@ -219,7 +219,7 @@ pub const Lexer = struct {
     fn string(self: *Lexer, start: Mark) token.Token {
         while (!self.isAtEnd() and self.peek() != '"') {
             if (self.peek() == '\n') {
-                self.reporter.err(self.spanFrom(start), "unterminated string literal", .{});
+                self.reporter.err(self.spanFrom(start), "E_LEX_UNTERMINATED_STRING_LITERAL: unterminated string literal", .{});
                 return self.make(.invalid, start);
             }
             if (self.peek() == '\\') {
@@ -230,7 +230,7 @@ pub const Lexer = struct {
             _ = self.advance();
         }
         if (self.isAtEnd()) {
-            self.reporter.err(self.spanFrom(start), "unterminated string literal", .{});
+            self.reporter.err(self.spanFrom(start), "E_LEX_UNTERMINATED_STRING_LITERAL: unterminated string literal", .{});
             return self.make(.invalid, start);
         }
         _ = self.advance();
@@ -241,7 +241,7 @@ pub const Lexer = struct {
         var units: usize = 0;
         while (!self.isAtEnd() and self.peek() != '\'') {
             if (self.peek() == '\n') {
-                self.reporter.err(self.spanFrom(start), "unterminated char literal", .{});
+                self.reporter.err(self.spanFrom(start), "E_LEX_UNTERMINATED_CHAR_LITERAL: unterminated char literal", .{});
                 return self.make(.invalid, start);
             }
             if (self.peek() == '\\') {
@@ -254,17 +254,17 @@ pub const Lexer = struct {
             units += 1;
         }
         if (self.isAtEnd()) {
-            self.reporter.err(self.spanFrom(start), "unterminated char literal", .{});
+            self.reporter.err(self.spanFrom(start), "E_LEX_UNTERMINATED_CHAR_LITERAL: unterminated char literal", .{});
             return self.make(.invalid, start);
         }
         _ = self.advance();
-        if (units != 1) self.reporter.err(self.spanFrom(start), "invalid char literal", .{});
+        if (units != 1) self.reporter.err(self.spanFrom(start), "E_LEX_INVALID_CHAR_LITERAL: invalid char literal", .{});
         return self.make(.char_literal, start);
     }
 
     fn consumeEscape(self: *Lexer, start: Mark) bool {
         if (self.isAtEnd()) {
-            self.reporter.err(self.spanFrom(start), "unterminated escape sequence", .{});
+            self.reporter.err(self.spanFrom(start), "E_LEX_UNTERMINATED_ESCAPE_SEQUENCE: unterminated escape sequence", .{});
             return false;
         }
 
@@ -275,7 +275,7 @@ pub const Lexer = struct {
             },
             else => {
                 _ = self.advance();
-                self.reporter.err(self.spanFrom(start), "invalid escape sequence", .{});
+                self.reporter.err(self.spanFrom(start), "E_LEX_INVALID_ESCAPE_SEQUENCE: invalid escape sequence", .{});
                 return true;
             },
         }

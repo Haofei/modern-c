@@ -6,6 +6,25 @@ const token = @import("token.zig");
 
 const Lexer = lexer.Lexer;
 
+fn lexAll(reporter: *diagnostics.Reporter) void {
+    var lx = Lexer.init(reporter.source, reporter);
+    while (lx.next().kind != .eof) {}
+}
+
+fn expectDiagnosticCode(source: []const u8, code: []const u8) !void {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "test.mc", source);
+    defer reporter.deinit();
+    lexAll(&reporter);
+
+    try std.testing.expect(reporter.has_errors);
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.startsWith(u8, diag.message, code)) return;
+    }
+    std.debug.print("missing diagnostic code {s}; got:\n", .{code});
+    for (reporter.diagnostics.items) |diag| std.debug.print("  {s}\n", .{diag.message});
+    return error.MissingDiagnosticCode;
+}
+
 test "lexer recognizes checked arithmetic snippet" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "test.mc", "let z = x + y;");
     defer reporter.deinit();
@@ -70,13 +89,42 @@ test "lexer recognizes MC literal and operator forms" {
 test "lexer reports diagnostic positions" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "test.mc", "let x = 1abc;\nlet y = \"unterminated\n");
     defer reporter.deinit();
-    var lx = Lexer.init(reporter.source, &reporter);
-
-    while (lx.next().kind != .eof) {}
+    lexAll(&reporter);
 
     try std.testing.expect(reporter.has_errors);
     try std.testing.expect(reporter.diagnostics.items.len >= 2);
+    try std.testing.expect(std.mem.startsWith(u8, reporter.diagnostics.items[0].message, "E_LEX_INVALID_INTEGER_LITERAL"));
     try std.testing.expectEqual(@as(usize, 1), reporter.diagnostics.items[0].span.line);
     try std.testing.expectEqual(@as(usize, 9), reporter.diagnostics.items[0].span.column);
+    try std.testing.expect(std.mem.startsWith(u8, reporter.diagnostics.items[1].message, "E_LEX_UNTERMINATED_STRING_LITERAL"));
     try std.testing.expectEqual(@as(usize, 2), reporter.diagnostics.items[1].span.line);
+}
+
+test "lexer diagnostic codes are stable" {
+    // DIAGNOSTIC_UNIT: E_LEX_UNEXPECTED_BYTE
+    try expectDiagnosticCode("$", "E_LEX_UNEXPECTED_BYTE");
+
+    // DIAGNOSTIC_UNIT: E_LEX_UNTERMINATED_BLOCK_COMMENT
+    try expectDiagnosticCode("/* open", "E_LEX_UNTERMINATED_BLOCK_COMMENT");
+
+    // DIAGNOSTIC_UNIT: E_LEX_INVALID_INTEGER_LITERAL
+    try expectDiagnosticCode("let x = 1abc;", "E_LEX_INVALID_INTEGER_LITERAL");
+
+    // DIAGNOSTIC_UNIT: E_LEX_INVALID_FLOAT_LITERAL
+    try expectDiagnosticCode("let x = 1.2_;", "E_LEX_INVALID_FLOAT_LITERAL");
+
+    // DIAGNOSTIC_UNIT: E_LEX_UNTERMINATED_STRING_LITERAL
+    try expectDiagnosticCode("\"open", "E_LEX_UNTERMINATED_STRING_LITERAL");
+
+    // DIAGNOSTIC_UNIT: E_LEX_UNTERMINATED_CHAR_LITERAL
+    try expectDiagnosticCode("'x", "E_LEX_UNTERMINATED_CHAR_LITERAL");
+
+    // DIAGNOSTIC_UNIT: E_LEX_INVALID_CHAR_LITERAL
+    try expectDiagnosticCode("'xy'", "E_LEX_INVALID_CHAR_LITERAL");
+
+    // DIAGNOSTIC_UNIT: E_LEX_UNTERMINATED_ESCAPE_SEQUENCE
+    try expectDiagnosticCode("\"\\", "E_LEX_UNTERMINATED_ESCAPE_SEQUENCE");
+
+    // DIAGNOSTIC_UNIT: E_LEX_INVALID_ESCAPE_SEQUENCE
+    try expectDiagnosticCode("\"\\q\"", "E_LEX_INVALID_ESCAPE_SEQUENCE");
 }
