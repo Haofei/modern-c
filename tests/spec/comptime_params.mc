@@ -36,6 +36,10 @@ fn layout_box_alignment(comptime T: type) -> usize {
     return alignof(LayoutBox<T>);
 }
 
+fn block_len_size(comptime N: usize) -> usize {
+    return sizeof([{ return N; }]u8);
+}
+
 const fn require_four_byte_type(comptime T: type) -> usize {
     comptime {
         assert(sizeof(T) == 4);
@@ -53,6 +57,10 @@ fn accept_plain_comptime_param() -> usize {
 
 fn accept_generic_reflection_layout() -> usize {
     return layout_box_size(u32) + layout_box_alignment(u32);
+}
+
+fn accept_block_len_reflection() -> usize {
+    return block_len_size(4);
 }
 
 fn accept_type_param_comptime_assert() -> usize {
