@@ -17,6 +17,8 @@ wrap<u64>, this is a small *framework*:
         backend should never emit for safe MC);
       * roundtrip    — format generated source, re-check it, prove formatter idempotence, and
         assert formatting preserves the lexed token stream and emitted C.
+      * trapsite     — for trapping programs, instrument backend trap helpers and assert C/LLVM
+        agree on the same logical trap kind or the same non-trap output.
 
 Everything stays trap-free by construction (wrapping.add, masked shifts, modular conversions,
 float ops that yield inf/NaN rather than trapping), so a difference is always a real bug, never
@@ -29,7 +31,7 @@ Usage:
         [--triage-dir DIR] [--shrink-failures]
         oracle: differential (default) | sanitize | robust | failclosed | determinism |
                 pipeline | artifacts | roundtrip | metamorphic | optlevel | floatbits |
-                reference
+                reference | trapsite
 """
 import argparse
 import json
@@ -50,10 +52,19 @@ ROOT = HERE
 while ROOT != "/" and not os.path.exists(os.path.join(ROOT, "build.zig")):
     ROOT = os.path.dirname(ROOT)
 
+TRAP_KINDS = ("Assert", "Bounds", "DivideByZero", "IntegerOverflow",
+              "InvalidRepresentation", "InvalidShift", "NullUnwrap", "Unreachable")
+TRAPSITE_EXIT_BASE = 40
+TRAPSITE_CODE_TO_KIND = {TRAPSITE_EXIT_BASE + i + 1: k for i, k in enumerate(TRAP_KINDS)}
+
 TRAP_STUBS = "\n".join(
     "void mc_trap_%s(void){__builtin_trap();}" % t
-    for t in ("Assert", "Bounds", "DivideByZero", "IntegerOverflow",
-              "InvalidRepresentation", "InvalidShift", "NullUnwrap", "Unreachable")
+    for t in TRAP_KINDS
+) + "\n"
+
+TRAPSITE_STUBS = "#include <stdlib.h>\n" + "\n".join(
+    "void mc_trap_%s(void){exit(%d);}" % (t, TRAPSITE_EXIT_BASE + i + 1)
+    for i, t in enumerate(TRAP_KINDS)
 ) + "\n"
 
 DRIVER = ('#include <stdint.h>\n#include <stdio.h>\n'
@@ -1215,13 +1226,24 @@ def _first_error(text):
     return next((l.strip() for l in text.splitlines() if "error:" in l), text.strip()[:120])
 
 
-def _emit_c_obj(mcc, clang, src_path, obj, extra=()):
+def _emit_c_text(mcc, src_path):
     p1 = subprocess.run([mcc, "emit-c", src_path], capture_output=True)
     if p1.returncode != 0:
-        return p1.stderr.decode("utf-8", "replace")
+        return (None, p1.stderr.decode("utf-8", "replace"))
+    return (p1.stdout.decode("utf-8", "replace"), None)
+
+
+def _compile_c_text_obj(clang, c_text, obj, extra=()):
     p2 = subprocess.run([clang, "-std=c11", "-w", *extra, "-c", "-x", "c", "-", "-o", obj],
-                        input=p1.stdout, capture_output=True)
+                        input=c_text.encode(), capture_output=True)
     return None if p2.returncode == 0 else p2.stderr.decode("utf-8", "replace")
+
+
+def _emit_c_obj(mcc, clang, src_path, obj, extra=()):
+    c_text, err = _emit_c_text(mcc, src_path)
+    if err is not None:
+        return err
+    return _compile_c_text_obj(clang, c_text, obj, extra=extra)
 
 
 def oracle_differential(env, seed, src_path, work):
@@ -1262,6 +1284,82 @@ def _differential_compare(env, src_path, work):
         return "BACKEND DIVERGENCE (one trapped, one did not): C=(rc=%d) LLVM=(rc=%d)" % (co.returncode, lo.returncode)
     if c_ok and co.stdout != lo.stdout:
         return "BACKEND DIVERGENCE (output): C=%r LLVM=%r" % (co.stdout.strip(), lo.stdout.strip())
+    return None
+
+
+def _instrument_c_trap_helpers(c_text):
+    """Rewrite only the temp-file C trap helpers into deterministic exit-code reporters."""
+    if "#include <stdlib.h>" not in c_text:
+        anchor = "#include <limits.h>\n"
+        if anchor in c_text:
+            c_text = c_text.replace(anchor, anchor + "#include <stdlib.h>\n", 1)
+        else:
+            c_text = "#include <stdlib.h>\n" + c_text
+    missing = []
+    for code, kind in sorted(TRAPSITE_CODE_TO_KIND.items()):
+        pattern = re.compile(
+            r"(MC_NORETURN\s+MC_UNUSED\s+static\s+inline\s+void\s+mc_trap_%s\s*"
+            r"\(\s*void\s*\)\s*\{\s*)__builtin_trap\s*\(\s*\)\s*;\s*\}" % re.escape(kind),
+            re.S,
+        )
+
+        def repl(match, code=code):
+            return match.group(1) + "exit(%d);\n}" % code
+
+        c_text, n = pattern.subn(repl, c_text, count=1)
+        if n != 1:
+            missing.append(kind)
+    if missing:
+        return (None, "TRAPSITE instrumentation failed: missing C helper(s) %s" % ", ".join(missing))
+    return (c_text, None)
+
+
+def _trapsite_outcome(proc):
+    if proc.returncode == 0:
+        return "ok:" + proc.stdout.decode("utf-8", "replace").strip()
+    kind = TRAPSITE_CODE_TO_KIND.get(proc.returncode)
+    if kind is not None:
+        return "trap:" + kind
+    return "status:%d" % proc.returncode
+
+
+def oracle_trapsite(env, seed, src_path, work):
+    """Instrument dynamic trap helpers and assert C/LLVM agree on trap kind or normal output."""
+    c_obj, l_obj = os.path.join(work, "c_trapsite.o"), os.path.join(work, "l_trapsite.o")
+    c_text, err = _emit_c_text(env["mcc"], src_path)
+    if err is not None:
+        if subprocess.run([env["mcc"], "emit-llvm", src_path], capture_output=True).returncode != 0:
+            return None
+        return "C backend emit failed (LLVM accepted): %s" % _first_error(err)
+    c_inst, err = _instrument_c_trap_helpers(c_text)
+    if err is not None:
+        return err
+    err = _compile_c_text_obj(env["clang"], c_inst, c_obj)
+    if err is not None:
+        if subprocess.run([env["mcc"], "emit-llvm", src_path], capture_output=True).returncode != 0:
+            return None
+        return "C backend instrumented compile failed (LLVM accepted): %s" % _first_error(err)
+
+    p = subprocess.run(["bash", os.path.join(ROOT, "tools/toolchain/mcc-llvm-cc.sh"), src_path, "-o", l_obj],
+                       capture_output=True, env={**os.environ, "MCC": env["mcc"], "LLC": env["llc"]})
+    if p.returncode != 0:
+        return "LLVM backend emit/compile failed"
+
+    drv, ts = os.path.join(work, "d.c"), os.path.join(work, "trapsite_stubs.c")
+    open(drv, "w").write(DRIVER)
+    open(ts, "w").write(TRAPSITE_STUBS)
+    link = env["link_flags"]
+    c_app, l_app = os.path.join(work, "c_trapsite_exe"), os.path.join(work, "l_trapsite_exe")
+    if subprocess.run([env["clang"], *link, "-w", drv, c_obj, "-lm", "-o", c_app], capture_output=True).returncode != 0:
+        return "C trapsite link failed"
+    if subprocess.run([env["clang"], *link, "-w", drv, ts, l_obj, "-lm", "-o", l_app], capture_output=True).returncode != 0:
+        return "LLVM trapsite link failed"
+
+    co = subprocess.run([c_app], capture_output=True)
+    lo = subprocess.run([l_app], capture_output=True)
+    c_norm, l_norm = _trapsite_outcome(co), _trapsite_outcome(lo)
+    if c_norm != l_norm:
+        return "TRAPSITE DIVERGENCE: C=%s LLVM=%s" % (c_norm, l_norm)
     return None
 
 
@@ -1928,16 +2026,17 @@ ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize,
            "artifacts": oracle_artifacts,
            "roundtrip": oracle_roundtrip,
            "metamorphic": oracle_metamorphic, "optlevel": oracle_optlevel,
-           "floatbits": oracle_floatbits, "reference": oracle_reference}
+           "floatbits": oracle_floatbits, "reference": oracle_reference,
+           "trapsite": oracle_trapsite}
 
 
 def _oracle_needs_clang(name, cmd):
     return cmd == "corpus" or name in ("differential", "sanitize", "metamorphic",
-                                       "optlevel", "floatbits", "reference")
+                                       "optlevel", "floatbits", "reference", "trapsite")
 
 
 def _oracle_needs_llc(name, cmd):
-    return cmd == "corpus" or name in ("differential", "floatbits")
+    return cmd == "corpus" or name in ("differential", "floatbits", "trapsite")
 
 
 def oracle_on_source(env, oracle, source, seed=0):
@@ -2005,6 +2104,9 @@ def finding_signature(finding, oracle_name=None):
     if m:
         subtype = re.sub(r"[^a-z0-9]+", "-", m.group(1).lower()).strip("-")
         return "divergence:backend:%s" % subtype
+
+    if body.startswith("TRAPSITE DIVERGENCE:"):
+        return "divergence:trapsite"
 
     m = re.search(r"\bmcc ([A-Za-z0-9_-]+) CRASHED \(signal ([0-9]+)\)", body)
     if m:
@@ -2201,7 +2303,7 @@ def main():
     r.add_argument("--count", type=int, default=int(os.environ.get("COUNT", "300")))
     r.add_argument("--start", type=int, default=1)
     r.add_argument("--oracle", choices=list(ORACLES), default="differential")
-    r.add_argument("--trapping", action="store_true", help="emit checked arithmetic that may trap (differential only)")
+    r.add_argument("--trapping", action="store_true", help="emit checked arithmetic that may trap")
     r.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", os.cpu_count() or 4)))
     r.add_argument("--mcc", default=os.environ.get("MCC", "zig-out/bin/mcc"))
     r.add_argument("--triage-dir", help="write failure triage artifacts under DIR")
@@ -2362,6 +2464,7 @@ def main():
         "artifacts": "facts/lower-mir/lower-ir/emit-map cross-artifact invariants hold",
         "roundtrip": "fmt output checks, is idempotent, preserves tokens, and lowers identically",
         "reference": "compiled output matches the independent Python interpreter",
+        "trapsite": "C and LLVM agree on trap kind or normal output",
     }.get(args.oracle, "no findings")
     mode = " (trapping)" if args.trapping else ""
     print("PASS: mcfuzz/%s%s — %s over %d programs (seeds %d..%d)"

@@ -11,6 +11,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "fuzz-trap", "mcfuzz: trap-consistency — generated programs that may trap must trap on both backends together", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--trapping", "--mcc", "zig-out/bin/mcc" });
 
+    _ = h.addScriptTest(ctx, "fuzz-trapsite", "mcfuzz: trap-site agreement — trapping programs must report the same C/LLVM trap kind or output", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "trapsite", "--trapping", "--mcc", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "fuzz-robust", "mcfuzz: robustness — mcc check must never crash/hang on mutated input", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "robust", "--mcc", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "fuzz-failclosed", "mcfuzz: fail-closed soundness — mcc check must reject ill-typed programs", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "failclosed", "--mcc", "zig-out/bin/mcc" });

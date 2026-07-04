@@ -34,6 +34,9 @@ jobs:
           - name: trap
             oracle: differential
             extra_args: "--trapping"
+          - name: trapsite
+            oracle: trapsite
+            extra_args: "--trapping"
           - name: robust
             oracle: robust
             extra_args: ""

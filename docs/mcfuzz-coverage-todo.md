@@ -10,9 +10,9 @@ The single biggest blind spot: **every value-oracle compares the two backends ag
 each other** (differential, pipeline, sanitize, determinism all assume C≡LLVM ⇒ correct).
 (**Update:** the independent oracles below — E1 reference interpreter and E2 metamorphic
 — are now **implemented** as build steps (`fuzz-reference` / `fuzz-metamorphic`) and,
-alongside `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-artifacts`, and `fuzz-corpus`,
-are wired into both `m0` and `fast` in `build/tiers.zig`. The remaining backlog is
-generator surface, where the differential oracles still apply.)
+alongside `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-artifacts`, `fuzz-corpus`, and
+`fuzz-trapsite`, are wired into both `m0` and `fast` in `build/tiers.zig`. The remaining
+backlog is generator surface, where the differential oracles still apply.)
 
 They share the entire frontend, MIR verifier, and constant-folder, so a bug *there* is
 invisible to all of them. The >512-block verifier bug was only caught because `pipeline`
@@ -37,12 +37,15 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 9. ~~**E4** artifact consistency oracle~~ — **DONE / expanding** (`oracle_artifacts`,
    build step `fuzz-artifacts`): facts, lower-MIR, lower-IR, and emit-map are parsed as real
    artifacts and checked for trap-edge and source-map invariants.
-10. **A1** `Result<T,E>` + `?` propagation.
-11. **A2** tagged unions with payload.
-12. **A6** fold `move`/`defer` into mcfuzz (today only in `mcgen_move`).
-13. **A3 → A5** optionals → pointers → slices (unlocks **E5** memory-safety oracle).
-14. **A7** f32 (blocked on double-literal-suffix fix).
-15. Remaining infra/oracles (E5, E8, F-series except F5) and the high-effort type features
+10. ~~**E8** trap-location/trap-kind agreement~~ — **DONE / expanding** (`oracle_trapsite`,
+    build step `fuzz-trapsite`): trapping programs must agree on normalized `ok`, trap kind, or
+    unexpected status.
+11. **A1** `Result<T,E>` + `?` propagation.
+12. **A2** tagged unions with payload.
+13. **A6** fold `move`/`defer` into mcfuzz (today only in `mcgen_move`).
+14. **A3 → A5** optionals → pointers → slices (unlocks **E5** memory-safety oracle).
+15. **A7** f32 (blocked on double-literal-suffix fix).
+16. Remaining infra/oracles (E5, F-series except F5) and the high-effort type features
     (A8 generics, A9 closures, D5 multi-module).
 
 ---
@@ -133,7 +136,7 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 | E5 | Memory-safety oracle (ASan over pointer/slice programs) | Med | Depends on A4/A5 |
 | E6 | Round-trip / idempotence (re-parse, re-lower → stable) | Done / expanding | `fuzz-roundtrip`, gated by `m0`/`fast`; generated and formatted source both check, `fmt(fmt(src)) == fmt(src)`, stripped token streams match, and emitted C matches after source-location normalization. |
 | E7 | Crash-bucketing & auto-minimization of findings | Done / expanding | `mcfuzz.py run` prints root-cause bucket summaries on failure, can write `--triage-dir` JSONL findings, and `--shrink-failures` opt-in minimizes the first finding per signature. |
-| E8 | Trap-location agreement (same logical trap site) | Med | Stronger than "both trap" |
+| E8 | Trap-location/trap-kind agreement | Done / expanding | `fuzz-trapsite`, gated by `m0`/`fast`; generated trapping programs run through both backends with trap helpers instrumented in temp artifacts, and normalized outcomes must agree as `ok:<stdout>`, `trap:<Kind>`, or `status:<rc>`. |
 
 ## F. Methodology / infrastructure
 
@@ -213,10 +216,24 @@ core oracle family plus `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `
   trap edge; and validate core `.mcmap` structure, positive source spans, source-origin paths,
   the exported `harness` function row, and MIR function references.
 
-**Current tally: 19 coverage items + 5 promoted oracles (metamorphic, optlevel, reference,
+**Tally after E4: 19 coverage items + 5 promoted oracles (metamorphic, optlevel, reference,
 roundtrip, artifacts) + 3 real C-backend bugs found & fixed. The original core oracle family plus
 `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-corpus`, `fuzz-reference`,
 `fuzz-roundtrip`, and `fuzz-artifacts` now gate both `m0` and `fast`.**
+
+### Done 2026-07-04 (E8 trapsite agreement)
+
+- **E8** trap-location/trap-kind agreement oracle (`fuzz-trapsite`): for generated trapping
+  programs, the fuzzer compiles both C and LLVM backends with instrumented trap helpers. The C
+  backend's emitted temp C has `mc_trap_<Kind>()` helper bodies rewritten to deterministic
+  `exit(<code>)`; the LLVM backend links strong C definitions over the weak IR trap helpers.
+  Runs normalize to `ok:<stdout>`, `trap:<Kind>`, or `status:<rc>` and mismatches are findings.
+
+**Current tally: 19 coverage items + 6 promoted oracles (metamorphic, optlevel, reference,
+roundtrip, artifacts, trapsite) + 3 real C-backend bugs found & fixed. The original core oracle
+family plus `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-corpus`,
+`fuzz-reference`, `fuzz-roundtrip`, `fuzz-artifacts`, and `fuzz-trapsite` now gate both `m0`
+and `fast`.**
 
 ### Blocked by missing backend support (can't be generated into runnable programs)
 
@@ -238,5 +255,5 @@ roundtrip, artifacts) + 3 real C-backend bugs found & fixed. The original core o
   absence of the oracle.
 - **D5** multi-module — needs an import/module system (no such surface today).
 - **F1** coverage-guided — blocked by subprocess speed (needs persistent/in-process harness).
-- Misc lower-value: C6/C7 (mostly covered), D3/D6, E5/E7/E8, F2–F7, A10 (usize already
+- Misc lower-value: C6/C7 (mostly covered), D3/D6, E5/E7, F2–F7, A10 (usize already
   generated)/A12 (depends on A2/A5).
