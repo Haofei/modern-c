@@ -1330,7 +1330,7 @@ pub const Checker = struct {
                 };
             }
         }
-        const sig_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases, .type_params = &type_params, .comptime_params = &comptime_params };
+        const sig_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases, .type_params = &type_params, .trait_bounds = fn_decl.bounds, .comptime_params = &comptime_params };
         if (abi_boundary) self.checkExternExportStructAbi(fn_decl, sig_ctx);
 
         for (fn_decl.params) |param| {
@@ -1401,6 +1401,7 @@ pub const Checker = struct {
                 .const_fns = self.const_fns,
                 .const_globals = self.const_globals,
                 .type_params = &type_params,
+                .trait_bounds = fn_decl.bounds,
                 .comptime_params = &comptime_params,
                 .trait_decls = self.trait_decls,
             };
@@ -3107,6 +3108,7 @@ pub const Checker = struct {
                 self.errorCode(ident.span, "E_UNKNOWN_FUNCTION", "unknown function");
             },
             .member => |node| {
+                if (self.checkGenericTypeParamMemberCallee(node, ctx)) return;
                 if (isAtomicOperationMember(node, ctx)) return;
                 if (isDmaOperationMember(node, ctx)) return;
                 if (isTypeStaticMember(node, ctx)) return;
@@ -3116,6 +3118,33 @@ pub const Checker = struct {
             .grouped => |inner| self.checkCallCallee(inner.*, ctx),
             else => _ = self.checkExpr(callee, ctx),
         }
+    }
+
+    fn checkGenericTypeParamMemberCallee(self: *Checker, member: anytype, ctx: Context) bool {
+        const base_ident = switch (member.base.*.kind) {
+            .ident => |id| id,
+            .grouped => |inner| switch (inner.kind) {
+                .ident => |id| id,
+                else => return false,
+            },
+            else => return false,
+        };
+        const type_params = ctx.type_params orelse return false;
+        if (!type_params.contains(base_ident.text)) return false;
+
+        if (self.genericTypeParamBoundDeclaresMember(base_ident.text, member.name.text, ctx)) return true;
+        self.errorCode(member.name.span, "E_TRAIT_BOUND_MEMBER", "generic type-parameter member calls require a `where` bound whose trait declares that member");
+        return true;
+    }
+
+    fn genericTypeParamBoundDeclaresMember(self: *Checker, type_param: []const u8, member_name: []const u8, ctx: Context) bool {
+        const trait_decls = ctx.trait_decls orelse self.trait_decls orelse return false;
+        for (ctx.trait_bounds) |bound| {
+            if (!std.mem.eql(u8, bound.type_param.text, type_param)) continue;
+            const trait = trait_decls.get(bound.trait_name.text) orelse continue;
+            if (findTraitMethod(trait.methods, member_name) != null) return true;
+        }
+        return false;
     }
 
     fn checkType(self: *Checker, ty: ast.TypeExpr, mode: TypeMode, ctx: Context) void {

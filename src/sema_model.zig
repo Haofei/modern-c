@@ -54,6 +54,10 @@ pub const Context = struct {
     // Names of the current function's `comptime T: type` type parameters
     // (user-defined generics, section 22); valid as type names in its body.
     type_params: ?*const std.StringHashMap(void) = null,
+    // `where T: Trait` bounds on the current function's comptime type parameters.
+    // Used during generic-template precheck to validate `T.method(...)` calls
+    // before an unused template can be dropped by monomorphization.
+    trait_bounds: []const ast.TraitBound = &.{},
     // Names of the current function's non-type `comptime` parameters. Expressions
     // derived from these are compile-time constants once a generic caller is
     // instantiated, even if the template precheck cannot fold their concrete value.
