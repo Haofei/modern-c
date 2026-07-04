@@ -124,10 +124,13 @@ For a reduced inner-loop gate set based on the files you changed:
 tools/dev-gates.py                 # staged + unstaged + untracked changes
 tools/dev-gates.py --base origin/master
 tools/dev-gates.py src/sema.zig tests/spec/no_implicit_conversion.mc
+tools/dev-gates.py --run           # execute only the focused checks/gates above
 ```
 
 This is a development-time selector. It prints focused gates plus the broader
-confidence and truth gates; `zig build m0` remains the release/production claim.
+confidence and truth gates. Use `--run` for the edit/test loop, `tools/fast-parallel.sh`
+for broad local confidence before pushing a substantial slice, and `zig build m0`
+for a release/production claim.
 
 ### LLVM Support Matrix
 

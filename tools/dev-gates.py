@@ -87,8 +87,8 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         ("build.zig", "build/*.zig", "tools/m0-parallel.sh", "tools/fast-parallel.sh"),
-        ("test", "ci-pass-gates-test", "fast"),
-        "build graph changes need tier anti-drift checks; fast is the broad host-only confidence gate",
+        ("fast",),
+        "build graph changes need the broad host-only confidence gate, which includes unit/spec and tier anti-drift checks",
     ),
     Rule(
         ("tools/dev-gates.py", "tools/toolchain/dev-gates-test.py"),
@@ -516,12 +516,35 @@ def select_gates(paths: list[str]) -> tuple[list[str], list[str], list[str]]:
     return gates, checks, reasons
 
 
+def focused_run_commands(gates: list[str], checks: list[str]) -> list[str]:
+    commands = list(checks)
+    if gates:
+        commands.append("zig build " + " ".join(gates) + " --summary all")
+    return commands
+
+
+def run_focused_commands(commands: list[str]) -> int:
+    if not commands:
+        print("\nNo focused checks to run.")
+        return 0
+
+    print("\nRunning focused checks:")
+    for command in commands:
+        print(f"  $ {command}")
+        result = subprocess.run(command, cwd=ROOT, shell=True)
+        if result.returncode != 0:
+            print(f"FAILED: {command}", file=sys.stderr)
+            return result.returncode
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Recommend focused gates for changed files")
     parser.add_argument("--base", help="compare base...HEAD, for example origin/master")
     parser.add_argument("--staged", action="store_true", help="include staged changes")
     parser.add_argument("--unstaged", action="store_true", help="include unstaged and untracked changes")
     parser.add_argument("--all", action="store_true", help="include staged, unstaged, and untracked changes")
+    parser.add_argument("--run", action="store_true", help="run the focused checks and zig build gates selected for these changes")
     parser.add_argument("paths", nargs="*", help="explicit paths to classify instead of reading git")
     args = parser.parse_args()
 
@@ -558,6 +581,9 @@ def main() -> int:
     else:
         print("\nConfidence gates:")
         print("  none for checks-only changes")
+
+    if args.run:
+        return run_focused_commands(focused_run_commands(gates, checks))
     return 0
 
 

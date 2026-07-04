@@ -127,15 +127,21 @@ def main() -> None:
         ["test", "diagnostics-reference-test", "diagnostic-code-inventory-test"],
         ["git diff --check"],
     )
+    commands = module.focused_run_commands(
+        ["test", "diagnostics-reference-test"],
+        ["git diff --check"],
+    )
+    if commands != ["git diff --check", "zig build test diagnostics-reference-test --summary all"]:
+        fail(f"focused run commands {commands!r}, expected shell checks then zig build gates")
     assert_gates(module, ["tests/spec/value_optionals.mc"], ["test", "sweep", "llvm-sweep"])
     assert_gates(module, ["tests/spec/nullability.mc"], ["test"])
     assert_gates(module, ["tests/spec/does-not-exist.mc"], ["test"])
     assert_gates(module, ["tools/dev-gates.py"], ["dev-gates-test"])
     assert_gates(module, ["tools/toolchain/dev-gates-test.py"], ["dev-gates-test"])
     assert_gates(module, ["tools/ci/pass-gates.py"], ["ci-pass-gates-test"])
-    assert_gates(module, ["build/tiers.zig"], ["test", "ci-pass-gates-test", "fast"])
-    assert_gates(module, ["tools/m0-parallel.sh"], ["test", "ci-pass-gates-test", "fast"])
-    assert_gates(module, ["tools/fast-parallel.sh"], ["test", "ci-pass-gates-test", "fast"])
+    assert_gates(module, ["build/tiers.zig"], ["fast"])
+    assert_gates(module, ["tools/m0-parallel.sh"], ["fast"])
+    assert_gates(module, ["tools/fast-parallel.sh"], ["fast"])
     assert_gates(module, ["tools/test/contract-lint.py"], ["test-lint"])
     assert_gates(module, ["tools/toolchain/bad-diagnostics-test.py"], ["bad-diagnostics-test"])
     assert_gates(module, ["tools/toolchain/diff-backend.sh"], ["diff-backend"])
