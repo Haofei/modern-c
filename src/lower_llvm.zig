@@ -492,7 +492,7 @@ const LlvmEmitter = struct {
                     .fields = packed_bits.fields,
                 }),
                 .struct_decl => |struct_decl| {
-                    if (struct_decl.type_params.len != 0) return error.UnsupportedLlvmEmission;
+                    if (struct_decl.type_params.len != 0) continue;
                     if (struct_decl.abi) |abi| {
                         if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
                     }
@@ -504,7 +504,7 @@ const LlvmEmitter = struct {
     }
 
     fn collectStruct(self: *LlvmEmitter, struct_decl: ast.StructDecl) !void {
-        if (struct_decl.type_params.len != 0) return error.UnsupportedLlvmEmission;
+        if (struct_decl.type_params.len != 0) return;
         if (struct_decl.abi) |abi| {
             if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
         }

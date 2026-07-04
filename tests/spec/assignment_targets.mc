@@ -5,7 +5,6 @@
 // SPEC: check=E_INVALID_ASSIGNMENT_TARGET,E_NO_IMPLICIT_CONVERSION,E_NO_IMPLICIT_POINTER_CONVERSION,E_RETURN_TYPE_MISMATCH,E_UNKNOWN_STRUCT_FIELD
 
 fn source_value() -> u32;
-fn make_packet() -> Packet;
 fn make_mut_u8_slice() -> []mut u8;
 fn make_mut_u32_pointer() -> *mut u32;
 
@@ -24,6 +23,12 @@ fn accept_grouped_identifier_assignment() -> u32 {
 extern struct Packet {
     value: u32,
     ptr: *mut u8,
+}
+
+global packet_byte: u8 = 0;
+
+fn make_packet() -> Packet {
+    return .{ .value = 0, .ptr = &packet_byte };
 }
 
 struct PlainPacket {

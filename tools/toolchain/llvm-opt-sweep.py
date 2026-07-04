@@ -68,6 +68,7 @@ OUT_OF_SCOPE = {
     "soundness_orphan_impl_reject.mc": "orphan-impl reject fixture (phase=sema; owned by spec_tests.zig)",
     "traits_effect_sleep_in_atomic.mc": "effect-typed callees are EXPECT_ERROR-stripped, leaving dangling refs (phase=parse,sema; owned by spec_tests.zig)",
     "traits_orphan_opaque_reject.mc": "pure compile_error fixture; residue cannot be chunk-isolated after EXPECT_ERROR stripping (phase=sema; owned by spec_tests.zig)",
+    "type_arg_and_trivial_drop_reject.mc": "pure compile_error fixture; stripping rejected declarations leaves only an unspecialized comptime-type helper template (phase=parse,sema; owned by spec_tests.zig)",
 }
 
 

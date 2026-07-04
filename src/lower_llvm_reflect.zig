@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const array_len = @import("array_len.zig");
 const eval = @import("eval.zig");
 const type_layout = @import("layout.zig");
 const lower_llvm_model = @import("lower_llvm_model.zig");
@@ -19,7 +20,6 @@ const isOpaqueAddressGenericName = lower_llvm_type.isOpaqueAddressGenericName;
 const isPayloadDomainGenericName = lower_llvm_type.isPayloadDomainGenericName;
 const isPointerLikeType = lower_llvm_type.isPointerLikeType;
 const libraryScalarLlvmType = lower_llvm_type.libraryScalarLlvmType;
-const literalArrayLenValue = lower_llvm_type.literalArrayLenValue;
 const reflectionCallKind = lower_llvm_query.reflectionCallKind;
 const reflectionFieldName = ast_query.reflectionFieldName;
 const scalarLayout = type_layout.scalarLayout;
@@ -70,7 +70,7 @@ pub fn reflectionTypeArg(node: anytype) ?ast.TypeExpr {
 }
 
 pub fn arrayLenValue(env: *const ReflectEnv, expr: ast.Expr) ?u64 {
-    if (literalArrayLenValue(expr)) |len| return len;
+    if (array_len.parseArrayLenWithReflect(expr, env.const_fns, env.const_globals, comptimeReflectThunk, @constCast(env))) |len| return @intCast(len);
     var fb_arena: ?std.heap.ArenaAllocator = null;
     defer if (fb_arena) |*a| a.deinit();
     const fold_alloc = eval.tryFoldScratch() orelse blk: {
