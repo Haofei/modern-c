@@ -355,6 +355,33 @@ def require_threat_model_metadata() -> None:
             fail(f"{path} does not document threat-model requirement {needle!r}")
 
 
+def require_llvm_support_matrix() -> None:
+    path = "README.md"
+    readme = read(path)
+    for needle in (
+        "### LLVM Support Matrix",
+        "Linux CI/dev container",
+        f"Ubuntu 24.04 packages for LLVM {EXPECTED_LLVM_MAJOR}",
+        f"`clang-{EXPECTED_LLVM_MAJOR}`, `lld-{EXPECTED_LLVM_MAJOR}`, `llvm-{EXPECTED_LLVM_MAJOR}`",
+        "Release qualification path",
+        f"`MC_LLVM_MAJOR={EXPECTED_LLVM_MAJOR}`",
+        "macOS host gate",
+        f"Homebrew `llvm@{EXPECTED_LLVM_MAJOR}` on `macos-15`",
+        "Host/fast qualification path",
+        "Native local",
+        f"`MC_LLVM_MAJOR={EXPECTED_LLVM_MAJOR} zig build preflight`",
+        "Other LLVM majors",
+        "Unqualified until the major is added to CI, Docker, preflight, and this matrix",
+        "LLVM backend wrappers intentionally resolve",
+        "`clang`, `ld.lld`, `llvm-as`, `llc`",
+        f"qualified LLVM {EXPECTED_LLVM_MAJOR} toolchain",
+        f"`clang` from LLVM {EXPECTED_LLVM_MAJOR}",
+        f"LLVM {EXPECTED_LLVM_MAJOR} tools: `llvm-as`, `llc`, `opt`, `llvm-dwarfdump`",
+    ):
+        if needle not in readme:
+            fail(f"{path} does not document LLVM support-matrix requirement {needle!r}")
+
+
 def main() -> None:
     require_workflow_actions_pinned()
 
@@ -446,6 +473,7 @@ def main() -> None:
     require_nightly_bench_metadata()
     require_release_artifact_metadata()
     require_threat_model_metadata()
+    require_llvm_support_matrix()
 
     dockerfile = read("Dockerfile")
     require_contains("Dockerfile", f"FROM {EXPECTED_DOCKER_BASE_IMAGE}")

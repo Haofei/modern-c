@@ -118,6 +118,19 @@ The repo is bind-mounted live; `.zig-cache` and `zig-out` are container-local vo
 so host (e.g. macOS) artifacts never mix with the Linux build. With the toolchain on
 your `PATH`, the same gates run natively as `zig build <step>`.
 
+### LLVM Support Matrix
+
+| Environment | Qualified LLVM | Support status |
+| --- | --- | --- |
+| Linux CI/dev container | Ubuntu 24.04 packages for LLVM 18 (`clang-18`, `lld-18`, `llvm-18`) | Release qualification path; `zig build preflight` must pass with `MC_LLVM_MAJOR=18`. |
+| macOS host gate | Homebrew `llvm@18` on `macos-15` | Host/fast qualification path; the workflow places `llvm@18` first on `PATH`. |
+| Native local | LLVM 18 tools selected on `PATH` | Supported when `MC_LLVM_MAJOR=18 zig build preflight` passes. |
+| Other LLVM majors | Any non-18 LLVM toolchain | Unqualified until the major is added to CI, Docker, preflight, and this matrix. |
+
+LLVM backend wrappers intentionally resolve `clang`, `ld.lld`, `llvm-as`, `llc`,
+and `opt` from `PATH`. For supported runs, those unversioned tool names must
+resolve to the qualified LLVM 18 toolchain.
+
 ## Backend Coverage
 
 ### C Backend
@@ -228,8 +241,8 @@ zig build run-llvm-ushell
 Required for normal development:
 
 - Zig `0.16.0`
-- `clang`
-- LLVM tools: `llvm-as`, `llc`, `opt`, `llvm-dwarfdump`
+- `clang` from LLVM 18
+- LLVM 18 tools: `llvm-as`, `llc`, `opt`, `llvm-dwarfdump`
 - Python 3
 
 Required for QEMU gates:
