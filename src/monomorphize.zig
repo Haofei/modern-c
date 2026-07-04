@@ -60,6 +60,17 @@ const TypeGenericInfo = struct {
     // The generic decl's attributes (e.g. `#[irq_context]`), carried onto each
     // specialization so effect/context checks survive monomorphization.
     attrs: []ast.Attr = &.{},
+    is_pub: bool = false,
+};
+
+const GenericStructInfo = struct {
+    decl: ast.StructDecl,
+    is_pub: bool = false,
+};
+
+const GenericUnionInfo = struct {
+    decl: ast.UnionDecl,
+    is_pub: bool = false,
 };
 
 const Instance = struct {
@@ -67,6 +78,7 @@ const Instance = struct {
     subst: Subst,
     mangled: []const u8,
     attrs: []ast.Attr = &.{},
+    is_pub: bool = false,
     depth: usize = 0,
     generated: bool = false,
     // A `where T: Trait` bound was unsatisfied for this instantiation (already reported
@@ -81,6 +93,7 @@ const StructInstance = struct {
     decl: ast.StructDecl,
     subst: Subst,
     mangled: []const u8,
+    is_pub: bool = false,
     depth: usize = 0,
     generated: bool = false,
     limit_failed: bool = false,
@@ -90,6 +103,7 @@ const UnionInstance = struct {
     decl: ast.UnionDecl,
     subst: Subst,
     mangled: []const u8,
+    is_pub: bool = false,
     depth: usize = 0,
     generated: bool = false,
     limit_failed: bool = false,
@@ -112,12 +126,12 @@ const Rewriter = struct {
     // The maps dedup by mangled name; the lists drive the worklist passes.
     instances: *std.StringHashMap(*Instance),
     inst_list: *std.ArrayList(*Instance),
-    generic_structs: *const std.StringHashMap(ast.StructDecl),
+    generic_structs: *const std.StringHashMap(GenericStructInfo),
     struct_instances: *std.StringHashMap(*StructInstance),
     struct_list: *std.ArrayList(*StructInstance),
     // Generic tagged unions, parallel to the struct machinery: each concrete use
     // `Opt<u32>` monomorphizes to a distinct non-generic tagged union `Opt__u32`.
-    generic_unions: *const std.StringHashMap(ast.UnionDecl),
+    generic_unions: *const std.StringHashMap(GenericUnionInfo),
     union_instances: *std.StringHashMap(*UnionInstance),
     union_list: *std.ArrayList(*UnionInstance),
     // Module-level integer `const`s, so a const can be used as a const-generic argument
@@ -152,8 +166,8 @@ pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?
 pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagnostics.Reporter, options: Options) !ast.Module {
     var type_generic = std.StringHashMap(TypeGenericInfo).init(arena);
     var const_fns = std.StringHashMap(ast.FnDecl).init(arena);
-    var generic_structs = std.StringHashMap(ast.StructDecl).init(arena);
-    var generic_unions = std.StringHashMap(ast.UnionDecl).init(arena);
+    var generic_structs = std.StringHashMap(GenericStructInfo).init(arena);
+    var generic_unions = std.StringHashMap(GenericUnionInfo).init(arena);
     var int_consts = std.StringHashMap(i128).init(arena);
     var field_types = std.StringHashMap(std.StringHashMap(ast.TypeExpr)).init(arena);
     var fn_names = std.StringHashMap(void).init(arena);
@@ -175,11 +189,11 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
             .fn_decl => |fn_decl| {
                 if (fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) try const_fns.put(fn_decl.name.text, fn_decl);
                 if (try typeGenericParams(arena, fn_decl)) |params| {
-                    try type_generic.put(fn_decl.name.text, .{ .decl = fn_decl, .comptime_params = params, .attrs = decl.attrs });
+                    try type_generic.put(fn_decl.name.text, .{ .decl = fn_decl, .comptime_params = params, .attrs = decl.attrs, .is_pub = decl.is_pub });
                 }
             },
             .struct_decl => |sd| {
-                if (sd.type_params.len > 0) try generic_structs.put(sd.name.text, sd);
+                if (sd.type_params.len > 0) try generic_structs.put(sd.name.text, .{ .decl = sd, .is_pub = decl.is_pub });
                 try collectFieldTypes(arena, &field_types, sd.name.text, sd.fields);
             },
             .packed_bits_decl => |pb| {
@@ -189,7 +203,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                 try collectFieldTypes(arena, &field_types, ou.name.text, ou.fields);
             },
             .union_decl => |u| {
-                if (u.type_params.len > 0) try generic_unions.put(u.name.text, u);
+                if (u.type_params.len > 0) try generic_unions.put(u.name.text, .{ .decl = u, .is_pub = decl.is_pub });
                 try collectUnionCaseTypes(arena, &field_types, u);
             },
             // Record integer module consts (folded against earlier ones), so they can be
@@ -246,20 +260,27 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
         switch (decl.kind) {
             .fn_decl => |fn_decl| {
                 if (type_generic.contains(fn_decl.name.text)) continue; // dropped; replaced by instances
-                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .kind = .{ .fn_decl = try cloneFnDeclCtx(&ctx, fn_decl) } });
+                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .is_pub = decl.is_pub, .kind = .{ .fn_decl = try cloneFnDeclCtx(&ctx, fn_decl) } });
             },
             .struct_decl => |sd| {
                 if (sd.type_params.len > 0) continue; // generic; replaced by instances
-                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .kind = .{ .struct_decl = try cloneStructDeclCtx(&ctx, sd) } });
+                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .is_pub = decl.is_pub, .kind = .{ .struct_decl = try cloneStructDeclCtx(&ctx, sd) } });
             },
             .union_decl => |u| {
                 if (u.type_params.len > 0) continue; // generic; replaced by instances
-                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .kind = .{ .union_decl = try cloneUnionDeclCtx(&ctx, u) } });
+                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .is_pub = decl.is_pub, .kind = .{ .union_decl = try cloneUnionDeclCtx(&ctx, u) } });
             },
             .global_decl => |g| {
                 const ty = if (g.ty) |t| try cloneType(&ctx, t) else null;
                 const init = if (g.init) |init_expr| try cloneExprCtx(&ctx, init_expr) else null;
-                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .kind = .{ .global_decl = .{ .name = g.name, .ty = ty, .init = init, .is_const = g.is_const } } });
+                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .is_pub = decl.is_pub, .kind = .{ .global_decl = .{
+                    .name = g.name,
+                    .ty = ty,
+                    .init = init,
+                    .is_const = g.is_const,
+                    .is_extern = g.is_extern,
+                    .exported = g.exported,
+                } } });
             },
             else => try out.append(arena, decl),
         }
@@ -286,7 +307,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
             // `unreachable`-only body so the call resolves but the real body (which would
             // reference a missing `Type__method`) cannot spill a deep-body cascade.
             if (inst.bound_failed or inst.limit_failed) spec.body = try unreachableBody(arena, inst.decl.name.span);
-            try out.append(arena, .{ .span = inst.decl.name.span, .attrs = inst.attrs, .kind = .{ .fn_decl = spec } });
+            try out.append(arena, .{ .span = inst.decl.name.span, .attrs = inst.attrs, .is_pub = inst.is_pub, .kind = .{ .fn_decl = spec } });
         }
     }
     if (rewriter.oom) return error.OutOfMemory;
@@ -311,7 +332,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                 spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
                 spec.type_params = &.{};
                 if (inst.limit_failed) spec.fields = &.{};
-                try out.append(arena, .{ .span = inst.decl.name.span, .attrs = &.{}, .kind = .{ .struct_decl = spec } });
+                try out.append(arena, .{ .span = inst.decl.name.span, .attrs = &.{}, .is_pub = inst.is_pub, .kind = .{ .struct_decl = spec } });
             }
             while (ui < union_list.items.len) : (ui += 1) {
                 const inst = union_list.items[ui];
@@ -325,7 +346,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                 spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
                 spec.type_params = &.{};
                 if (inst.limit_failed) spec.cases = &.{};
-                try out.append(arena, .{ .span = inst.decl.name.span, .attrs = &.{}, .kind = .{ .union_decl = spec } });
+                try out.append(arena, .{ .span = inst.decl.name.span, .attrs = &.{}, .is_pub = inst.is_pub, .kind = .{ .union_decl = spec } });
             }
         }
     }
@@ -753,6 +774,7 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
             .subst = subst,
             .mangled = mangled_name,
             .attrs = info.attrs,
+            .is_pub = info.is_pub,
             .depth = depth,
             .bound_failed = bound_failed,
             .limit_failed = limit_failed,
@@ -911,11 +933,11 @@ pub fn cloneType(ctx: *const CloneCtx, ty: ast.TypeExpr) anyerror!ast.TypeExpr {
             // Rewrite a use of a generic struct `Name<Arg, …>` to its
             // monomorphized name `Name__Arg…`, collecting the instantiation.
             if (ctx.rewrite) |rw| {
-                if (rw.generic_structs.get(node.base.text)) |sd| {
-                    if (try rewriteGenericStruct(ctx, rw, sd, node)) |name| break :blk ast.TypeExpr.Kind{ .name = .{ .text = name, .span = node.base.span } };
+                if (rw.generic_structs.get(node.base.text)) |info| {
+                    if (try rewriteGenericStruct(ctx, rw, info, node)) |name| break :blk ast.TypeExpr.Kind{ .name = .{ .text = name, .span = node.base.span } };
                 }
-                if (rw.generic_unions.get(node.base.text)) |ud| {
-                    if (try rewriteGenericUnion(ctx, rw, ud, node)) |name| break :blk ast.TypeExpr.Kind{ .name = .{ .text = name, .span = node.base.span } };
+                if (rw.generic_unions.get(node.base.text)) |info| {
+                    if (try rewriteGenericUnion(ctx, rw, info, node)) |name| break :blk ast.TypeExpr.Kind{ .name = .{ .text = name, .span = node.base.span } };
                 }
             }
             break :blk .{ .generic = .{ .base = node.base, .args = try cloneTypeSlice(ctx, node.args) } };
@@ -980,7 +1002,8 @@ fn instantiateGeneric(ctx: *const CloneCtx, rw: *Rewriter, base: []const u8, typ
     return .{ .name = try mangled.toOwnedSlice(rw.arena), .subst = subst };
 }
 
-fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, sd: ast.StructDecl, node: anytype) anyerror!?[]const u8 {
+fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, info: GenericStructInfo, node: anytype) anyerror!?[]const u8 {
+    const sd = info.decl;
     const key = (try instantiateGeneric(ctx, rw, sd.name.text, sd.type_params, node)) orelse return null;
     if (!rw.struct_instances.contains(key.name)) {
         const depth = rw.current_depth + 1;
@@ -989,7 +1012,7 @@ fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, sd: ast.StructDecl,
             rw.oom = true;
             return key.name;
         };
-        si.* = .{ .decl = sd, .subst = key.subst, .mangled = key.name, .depth = depth, .limit_failed = limit_failed };
+        si.* = .{ .decl = sd, .subst = key.subst, .mangled = key.name, .is_pub = info.is_pub, .depth = depth, .limit_failed = limit_failed };
         rw.struct_instances.put(key.name, si) catch {
             rw.oom = true;
         };
@@ -1002,7 +1025,8 @@ fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, sd: ast.StructDecl,
 
 // Collect (if new) and name the monomorphization of a generic tagged-union use
 // `Opt<u32>` → `Opt__u32`, mirroring rewriteGenericStruct.
-fn rewriteGenericUnion(ctx: *const CloneCtx, rw: *Rewriter, ud: ast.UnionDecl, node: anytype) anyerror!?[]const u8 {
+fn rewriteGenericUnion(ctx: *const CloneCtx, rw: *Rewriter, info: GenericUnionInfo, node: anytype) anyerror!?[]const u8 {
+    const ud = info.decl;
     const key = (try instantiateGeneric(ctx, rw, ud.name.text, ud.type_params, node)) orelse return null;
     if (!rw.union_instances.contains(key.name)) {
         const depth = rw.current_depth + 1;
@@ -1011,7 +1035,7 @@ fn rewriteGenericUnion(ctx: *const CloneCtx, rw: *Rewriter, ud: ast.UnionDecl, n
             rw.oom = true;
             return key.name;
         };
-        ui.* = .{ .decl = ud, .subst = key.subst, .mangled = key.name, .depth = depth, .limit_failed = limit_failed };
+        ui.* = .{ .decl = ud, .subst = key.subst, .mangled = key.name, .is_pub = info.is_pub, .depth = depth, .limit_failed = limit_failed };
         rw.union_instances.put(key.name, ui) catch {
             rw.oom = true;
         };

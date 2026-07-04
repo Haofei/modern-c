@@ -24,3 +24,15 @@ fn internal_sum(p: Point) -> u32 {
 pub fn point_sum(p: Point) -> u32 {
     return internal_sum(p);
 }
+
+pub struct Box<T> {
+    value: T,
+}
+
+pub fn box_make(comptime T: type, value: T) -> Box<T> {
+    return .{ .value = value };
+}
+
+pub fn box_value(comptime T: type, b: *Box<T>) -> T {
+    return b.value;
+}

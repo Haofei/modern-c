@@ -13,8 +13,8 @@ public type declarations, and local types named by public declarations.
 Total modules: **40**.
 Total public functions: **341**.
 Total public constants: **6**.
-Total public type declarations: **2**.
-Total referenced local types: **52**.
+Total public type declarations: **8**.
+Total referenced local types: **46**.
 
 ## Modules
 
@@ -199,39 +199,39 @@ Source: `std/bits.mc`
 
 Source: `std/bytes.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct ByteReader</code> | `std/bytes.mc:28` |
-| <code>enum BytesError</code> | `std/bytes.mc:35` |
-| <code>struct ByteWriter</code> | `std/bytes.mc:214` |
+| <code>pub struct ByteReader</code> | `std/bytes.mc:28` |
+| <code>pub enum BytesError</code> | `std/bytes.mc:35` |
+| <code>pub struct ByteWriter</code> | `std/bytes.mc:214` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn byte_reader(base: PAddr, len: usize) -&gt; ByteReader</code> | `std/bytes.mc:39` |
-| <code>export fn br_len(r: *ByteReader) -&gt; usize</code> | `std/bytes.mc:43` |
-| <code>export fn br_has(r: *ByteReader, off: usize, n: usize) -&gt; bool</code> | `std/bytes.mc:48` |
-| <code>export fn br_u8(r: *ByteReader, off: usize) -&gt; u8</code> | `std/bytes.mc:62` |
-| <code>export fn br_le16(r: *ByteReader, off: usize) -&gt; u16</code> | `std/bytes.mc:69` |
-| <code>export fn br_le32(r: *ByteReader, off: usize) -&gt; u32</code> | `std/bytes.mc:75` |
-| <code>export fn br_le64(r: *ByteReader, off: usize) -&gt; u64</code> | `std/bytes.mc:83` |
-| <code>export fn br_be16(r: *ByteReader, off: usize) -&gt; u16</code> | `std/bytes.mc:89` |
-| <code>export fn br_be32(r: *ByteReader, off: usize) -&gt; u32</code> | `std/bytes.mc:95` |
-| <code>export fn br_try_u8(r: *ByteReader, off: usize) -&gt; Result&lt;u8, BytesError&gt;</code> | `std/bytes.mc:118` |
-| <code>export fn br_try_be16(r: *ByteReader, off: usize) -&gt; Result&lt;u16, BytesError&gt;</code> | `std/bytes.mc:125` |
-| <code>export fn br_try_be32(r: *ByteReader, off: usize) -&gt; Result&lt;u32, BytesError&gt;</code> | `std/bytes.mc:134` |
-| <code>export fn br_try_le16(r: *ByteReader, off: usize) -&gt; Result&lt;u16, BytesError&gt;</code> | `std/bytes.mc:145` |
-| <code>export fn br_try_le32(r: *ByteReader, off: usize) -&gt; Result&lt;u32, BytesError&gt;</code> | `std/bytes.mc:154` |
-| <code>export fn br_try_le64(r: *ByteReader, off: usize) -&gt; Result&lt;u64, BytesError&gt;</code> | `std/bytes.mc:165` |
-| <code>export fn br_validate_len(r: *ByteReader, off: usize, claimed: usize) -&gt; Result&lt;usize, BytesError&gt;</code> | `std/bytes.mc:191` |
-| <code>export fn br_copy_to(r: *ByteReader, off: usize, dst: PAddr, n: usize) -&gt; void</code> | `std/bytes.mc:201` |
-| <code>export fn byte_writer(base: PAddr, len: usize) -&gt; ByteWriter</code> | `std/bytes.mc:219` |
-| <code>export fn bw_u8(w: *ByteWriter, off: usize, value: u8) -&gt; void</code> | `std/bytes.mc:233` |
-| <code>export fn bw_be16(w: *ByteWriter, off: usize, value: u16) -&gt; void</code> | `std/bytes.mc:240` |
-| <code>export fn bw_be32(w: *ByteWriter, off: usize, value: u32) -&gt; void</code> | `std/bytes.mc:246` |
+| <code>pub fn byte_reader(base: PAddr, len: usize) -&gt; ByteReader</code> | `std/bytes.mc:39` |
+| <code>pub fn br_len(r: *ByteReader) -&gt; usize</code> | `std/bytes.mc:43` |
+| <code>pub fn br_has(r: *ByteReader, off: usize, n: usize) -&gt; bool</code> | `std/bytes.mc:48` |
+| <code>pub fn br_u8(r: *ByteReader, off: usize) -&gt; u8</code> | `std/bytes.mc:62` |
+| <code>pub fn br_le16(r: *ByteReader, off: usize) -&gt; u16</code> | `std/bytes.mc:69` |
+| <code>pub fn br_le32(r: *ByteReader, off: usize) -&gt; u32</code> | `std/bytes.mc:75` |
+| <code>pub fn br_le64(r: *ByteReader, off: usize) -&gt; u64</code> | `std/bytes.mc:83` |
+| <code>pub fn br_be16(r: *ByteReader, off: usize) -&gt; u16</code> | `std/bytes.mc:89` |
+| <code>pub fn br_be32(r: *ByteReader, off: usize) -&gt; u32</code> | `std/bytes.mc:95` |
+| <code>pub fn br_try_u8(r: *ByteReader, off: usize) -&gt; Result&lt;u8, BytesError&gt;</code> | `std/bytes.mc:118` |
+| <code>pub fn br_try_be16(r: *ByteReader, off: usize) -&gt; Result&lt;u16, BytesError&gt;</code> | `std/bytes.mc:125` |
+| <code>pub fn br_try_be32(r: *ByteReader, off: usize) -&gt; Result&lt;u32, BytesError&gt;</code> | `std/bytes.mc:134` |
+| <code>pub fn br_try_le16(r: *ByteReader, off: usize) -&gt; Result&lt;u16, BytesError&gt;</code> | `std/bytes.mc:145` |
+| <code>pub fn br_try_le32(r: *ByteReader, off: usize) -&gt; Result&lt;u32, BytesError&gt;</code> | `std/bytes.mc:154` |
+| <code>pub fn br_try_le64(r: *ByteReader, off: usize) -&gt; Result&lt;u64, BytesError&gt;</code> | `std/bytes.mc:165` |
+| <code>pub fn br_validate_len(r: *ByteReader, off: usize, claimed: usize) -&gt; Result&lt;usize, BytesError&gt;</code> | `std/bytes.mc:191` |
+| <code>pub fn br_copy_to(r: *ByteReader, off: usize, dst: PAddr, n: usize) -&gt; void</code> | `std/bytes.mc:201` |
+| <code>pub fn byte_writer(base: PAddr, len: usize) -&gt; ByteWriter</code> | `std/bytes.mc:219` |
+| <code>pub fn bw_u8(w: *ByteWriter, off: usize, value: u8) -&gt; void</code> | `std/bytes.mc:233` |
+| <code>pub fn bw_be16(w: *ByteWriter, off: usize, value: u16) -&gt; void</code> | `std/bytes.mc:240` |
+| <code>pub fn bw_be32(w: *ByteWriter, off: usize, value: u32) -&gt; void</code> | `std/bytes.mc:246` |
 
 ## `std/byteview`
 
@@ -368,25 +368,25 @@ Source: `std/collections/ring.mc`
 
 Source: `std/collections/slotmap.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct SlotMap&lt;T, N&gt;</code> | `std/collections/slotmap.mc:15` |
-| <code>enum SlotError</code> | `std/collections/slotmap.mc:21` |
+| <code>pub struct SlotMap&lt;T, N&gt;</code> | `std/collections/slotmap.mc:15` |
+| <code>pub enum SlotError</code> | `std/collections/slotmap.mc:21` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn slotmap_init(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;) -&gt; void</code> | `std/collections/slotmap.mc:26` |
-| <code>export fn slotmap_alloc(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;) -&gt; Result&lt;usize, SlotError&gt;</code> | `std/collections/slotmap.mc:36` |
-| <code>export fn slotmap_alloc_at(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;, h: usize) -&gt; Result&lt;usize, SlotError&gt;</code> | `std/collections/slotmap.mc:52` |
-| <code>export fn slotmap_live(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;, h: usize) -&gt; bool</code> | `std/collections/slotmap.mc:64` |
-| <code>export fn slotmap_set(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;, h: usize, value: T) -&gt; Result&lt;bool, SlotError&gt;</code> | `std/collections/slotmap.mc:72` |
-| <code>export fn slotmap_get(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;, h: usize) -&gt; Result&lt;T, SlotError&gt;</code> | `std/collections/slotmap.mc:81` |
-| <code>export fn slotmap_free(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;, h: usize) -&gt; Result&lt;bool, SlotError&gt;</code> | `std/collections/slotmap.mc:89` |
-| <code>export fn slotmap_count(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;) -&gt; usize</code> | `std/collections/slotmap.mc:98` |
+| <code>pub fn slotmap_init(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;) -&gt; void</code> | `std/collections/slotmap.mc:26` |
+| <code>pub fn slotmap_alloc(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;) -&gt; Result&lt;usize, SlotError&gt;</code> | `std/collections/slotmap.mc:36` |
+| <code>pub fn slotmap_alloc_at(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;, h: usize) -&gt; Result&lt;usize, SlotError&gt;</code> | `std/collections/slotmap.mc:52` |
+| <code>pub fn slotmap_live(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;, h: usize) -&gt; bool</code> | `std/collections/slotmap.mc:64` |
+| <code>pub fn slotmap_set(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;, h: usize, value: T) -&gt; Result&lt;bool, SlotError&gt;</code> | `std/collections/slotmap.mc:72` |
+| <code>pub fn slotmap_get(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;, h: usize) -&gt; Result&lt;T, SlotError&gt;</code> | `std/collections/slotmap.mc:81` |
+| <code>pub fn slotmap_free(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;, h: usize) -&gt; Result&lt;bool, SlotError&gt;</code> | `std/collections/slotmap.mc:89` |
+| <code>pub fn slotmap_count(comptime T: type, comptime N: usize, m: *mut SlotMap&lt;T, N&gt;) -&gt; usize</code> | `std/collections/slotmap.mc:98` |
 
 ## `std/collections/vec`
 
@@ -548,24 +548,24 @@ Source: `std/libc.mc`
 
 Source: `std/mask.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct Mask32</code> | `std/mask.mc:8` |
+| <code>pub struct Mask32</code> | `std/mask.mc:8` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn mask32_zero() -&gt; Mask32</code> | `std/mask.mc:12` |
-| <code>export fn mask32_from(bits: u32) -&gt; Mask32</code> | `std/mask.mc:15` |
-| <code>export fn mask32_raw(m: *mut Mask32) -&gt; u32</code> | `std/mask.mc:18` |
-| <code>export fn mask32_set(m: *mut Mask32, b: u32) -&gt; void</code> | `std/mask.mc:23` |
-| <code>export fn mask32_clear(m: *mut Mask32, b: u32) -&gt; void</code> | `std/mask.mc:29` |
-| <code>export fn mask32_contains(m: *mut Mask32, b: u32) -&gt; bool</code> | `std/mask.mc:34` |
-| <code>export fn mask32_is_empty(m: *mut Mask32) -&gt; bool</code> | `std/mask.mc:41` |
-| <code>export fn mask32_take_first(m: *mut Mask32) -&gt; u32</code> | `std/mask.mc:46` |
+| <code>pub fn mask32_zero() -&gt; Mask32</code> | `std/mask.mc:12` |
+| <code>pub fn mask32_from(bits: u32) -&gt; Mask32</code> | `std/mask.mc:15` |
+| <code>pub fn mask32_raw(m: *mut Mask32) -&gt; u32</code> | `std/mask.mc:18` |
+| <code>pub fn mask32_set(m: *mut Mask32, b: u32) -&gt; void</code> | `std/mask.mc:23` |
+| <code>pub fn mask32_clear(m: *mut Mask32, b: u32) -&gt; void</code> | `std/mask.mc:29` |
+| <code>pub fn mask32_contains(m: *mut Mask32, b: u32) -&gt; bool</code> | `std/mask.mc:34` |
+| <code>pub fn mask32_is_empty(m: *mut Mask32) -&gt; bool</code> | `std/mask.mc:41` |
+| <code>pub fn mask32_take_first(m: *mut Mask32) -&gt; u32</code> | `std/mask.mc:46` |
 
 ## `std/math`
 

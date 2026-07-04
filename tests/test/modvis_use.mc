@@ -16,3 +16,10 @@ export fn uses_public_type() -> u32 {
     assert(point_sum(p) == 7);
     return 1;
 }
+
+#[test]
+export fn uses_public_generic_api() -> u32 {
+    var b: Box<u32> = box_make(u32, 11);
+    assert(box_value(u32, &b) == 11);
+    return 1;
+}

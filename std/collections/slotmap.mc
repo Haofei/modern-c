@@ -12,18 +12,18 @@
 // invalid after free — detecting stale references across reuse — use `std/pool`, whose
 // generation counter makes a reused slot reject the old handle.
 
-struct SlotMap<T, N> {
+pub struct SlotMap<T, N> {
     slots: [N]T,
     used: [N]bool,
     count: usize,
 }
 
-enum SlotError {
+pub enum SlotError {
     Full,
     BadHandle, // out of range, or the slot is currently free (see the ABA note above)
 }
 
-export fn slotmap_init(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>) -> void {
+pub fn slotmap_init(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>) -> void {
     var i: usize = 0;
     while i < N {
         m.used[i] = false;
@@ -33,7 +33,7 @@ export fn slotmap_init(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N
 }
 
 // Reserve the lowest free slot; returns its handle (index).
-export fn slotmap_alloc(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>) -> Result<usize, SlotError> {
+pub fn slotmap_alloc(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>) -> Result<usize, SlotError> {
     var i: usize = 0;
     while i < N {
         if !m.used[i] {
@@ -49,7 +49,7 @@ export fn slotmap_alloc(comptime T: type, comptime N: usize, m: *mut SlotMap<T, 
 // Reserve a SPECIFIC slot by index — for rebuilding a table at fixed handles, e.g. fork fd
 // inheritance, where the child must keep the parent's exact fd numbers (including gaps).
 // BadHandle if the index is out of range; Full if that slot is already in use.
-export fn slotmap_alloc_at(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>, h: usize) -> Result<usize, SlotError> {
+pub fn slotmap_alloc_at(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>, h: usize) -> Result<usize, SlotError> {
     if h >= N {
         return err(.BadHandle);
     }
@@ -61,7 +61,7 @@ export fn slotmap_alloc_at(comptime T: type, comptime N: usize, m: *mut SlotMap<
     return ok(h);
 }
 
-export fn slotmap_live(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>, h: usize) -> bool {
+pub fn slotmap_live(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>, h: usize) -> bool {
     if h >= N {
         return false;
     }
@@ -69,7 +69,7 @@ export fn slotmap_live(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N
 }
 
 // Store a value into a live slot.
-export fn slotmap_set(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>, h: usize, value: T) -> Result<bool, SlotError> {
+pub fn slotmap_set(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>, h: usize, value: T) -> Result<bool, SlotError> {
     if !slotmap_live(T, N, m, h) {
         return err(.BadHandle);
     }
@@ -78,7 +78,7 @@ export fn slotmap_set(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>
 }
 
 // Load the value behind a live handle (use-after-free caught here).
-export fn slotmap_get(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>, h: usize) -> Result<T, SlotError> {
+pub fn slotmap_get(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>, h: usize) -> Result<T, SlotError> {
     if !slotmap_live(T, N, m, h) {
         return err(.BadHandle);
     }
@@ -86,7 +86,7 @@ export fn slotmap_get(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>
 }
 
 // Release a slot; the handle becomes BadHandle (double-free is also BadHandle).
-export fn slotmap_free(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>, h: usize) -> Result<bool, SlotError> {
+pub fn slotmap_free(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>, h: usize) -> Result<bool, SlotError> {
     if !slotmap_live(T, N, m, h) {
         return err(.BadHandle);
     }
@@ -95,6 +95,6 @@ export fn slotmap_free(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N
     return ok(true);
 }
 
-export fn slotmap_count(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>) -> usize {
+pub fn slotmap_count(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>) -> usize {
     return m.count;
 }
