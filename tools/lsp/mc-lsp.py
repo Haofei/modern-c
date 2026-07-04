@@ -13,10 +13,11 @@ is the single source of truth; the server only drives `mcc` subcommands and tran
   - Document symbols — `textDocument/documentSymbol` reuses `mcc emit-map`'s per-declaration
                    rows as a file outline.
   - Navigation    — hover (type + kind), go-to-definition, find-references, document-highlight,
-                   rename, semantic tokens, completion (identifiers in scope + keywords/types
-                   plus field members after `.`), signature help, workspace symbols, and call
-                   hierarchy, all driven by `mcc symbols` (a JSON index of definitions,
-                   references, and fields with spans).
+                   rename, semantic tokens, completion (identifiers in scope + keywords/types,
+                   field members after `.`, and type-filtered values in typed contexts),
+                   signature help, workspace symbols, and call hierarchy, all driven by
+                   `mcc symbols` (a JSON index of definitions, references, and fields with
+                   spans).
   - Pull diagnostics — answers the LSP 3.17 `textDocument/diagnostic` request in addition to
                    pushing `publishDiagnostics`.
 
@@ -848,8 +849,10 @@ def outgoing_calls(uri, text, item):
 # ---- completion (textDocument/completion) --------------------------------------------------
 # Offers the identifiers visible at the cursor — every top-level declaration, plus the params
 # and locals of the enclosing function declared at or before the cursor — together with the MC
-# keywords and primitive types. Scope is approximated from the symbol index's declaration lines
-# (functions do not nest); over-inclusion is harmless for completion.
+# keywords and primitive types. In typed value contexts (`let x: T =`, `return`, simple
+# assignment, and simple call arguments), candidates are narrowed to values compatible with the
+# expected type. Scope is approximated from the symbol index's declaration lines (functions do
+# not nest); over-inclusion is harmless for untyped completion.
 MC_KEYWORDS = [
     "fn", "let", "var", "const", "struct", "enum", "union", "type", "closure", "return", "if",
     "else", "switch", "match", "for", "while", "break", "continue", "defer", "unsafe", "comptime",
@@ -971,6 +974,117 @@ def resolve_member_chain_type(index, position, chain):
     return ty
 
 
+def function_return_type(ty):
+    parsed = parse_fn_type(ty)
+    if parsed is None:
+        return None
+    return parsed[1] or None
+
+
+def type_matches(candidate, expected, aliases):
+    cand = normalize_type_name(candidate, aliases)
+    exp = normalize_type_name(expected, aliases)
+    if not cand or not exp or cand == "?" or exp == "?":
+        return False
+    return cand == exp
+
+
+def simple_call_expected_type(index, prefix):
+    depth, open_idx = 0, -1
+    for i in range(len(prefix) - 1, -1, -1):
+        c = prefix[i]
+        if c == ")":
+            depth += 1
+        elif c == "(":
+            if depth == 0:
+                open_idx = i
+                break
+            depth -= 1
+    if open_idx < 0:
+        return None
+
+    k = open_idx
+    while k > 0 and (prefix[k - 1].isalnum() or prefix[k - 1] == "_"):
+        k -= 1
+    callee = prefix[k:open_idx]
+    if not callee:
+        return None
+
+    depth, active = 0, 0
+    for c in prefix[open_idx + 1:]:
+        if c in "(<[":
+            depth += 1
+        elif c in ")>]":
+            depth -= 1
+        elif c == "," and depth == 0:
+            active += 1
+
+    fn = next((d for d in index.get("defs", [])
+               if d["name"] == callee and d["kind"] == "function"), None)
+    if not fn:
+        return None
+    parsed = parse_fn_type(fn["type"])
+    if parsed is None:
+        return None
+    params, _ = parsed
+    return params[active] if active < len(params) else None
+
+
+LET_INIT_RE = re.compile(r"\b(?:let|var)\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*([^=;]+)=\s*$")
+ASSIGN_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*$")
+
+
+def expected_type_context(index, text, position):
+    lines = text.split("\n")
+    if position["line"] < 0 or position["line"] >= len(lines):
+        return None
+    line = lines[position["line"]]
+    prefix = line[:utf16_to_py_index(line, position["character"])]
+
+    call_expected = simple_call_expected_type(index, prefix)
+    if call_expected:
+        return call_expected
+
+    let_match = LET_INIT_RE.search(prefix)
+    if let_match:
+        return let_match.group(1).strip()
+
+    stripped = prefix.strip()
+    if stripped == "return" or stripped.startswith("return "):
+        enc = enclosing_function(index, position["line"] + 1)
+        if enc:
+            return function_return_type(enc.get("type", ""))
+
+    assign_match = ASSIGN_RE.search(prefix)
+    if assign_match and not re.search(r"[=!<>]=\s*$", prefix):
+        target = visible_value_defs(index, position).get(assign_match.group(1))
+        if target:
+            return target.get("type")
+    return None
+
+
+def add_type_filtered_completion(index, position, expected, add):
+    aliases = type_aliases(index)
+
+    for d in visible_value_defs(index, position).values():
+        if type_matches(d.get("type", "?"), expected, aliases):
+            add(d["name"], COMPLETION_KIND[d["kind"]], d["type"])
+
+    for d in index.get("defs", []):
+        if d["kind"] != "function":
+            continue
+        ret = function_return_type(d.get("type", ""))
+        if ret and type_matches(ret, expected, aliases):
+            add(d["name"], COMPLETION_KIND["function"], d["type"])
+
+    normalized_expected = normalize_type_name(expected, aliases)
+    if normalized_expected == "bool":
+        add("true", 12, "bool")
+        add("false", 12, "bool")
+    if expected.strip().startswith("?"):
+        add("null", 12, expected.strip())
+
+
 def completion(uri, text, position):
     index = get_index(uri, text)
     items = []
@@ -996,6 +1110,11 @@ def completion(uri, text, position):
                     add(label, COMPLETION_KIND["field"], field.get("type"))
             return {"isIncomplete": False, "items": items}
         return {"isIncomplete": False, "items": []}
+
+    expected = expected_type_context(index, text, position)
+    if expected:
+        add_type_filtered_completion(index, position, expected, add)
+        return {"isIncomplete": False, "items": items}
 
     # Top-level declarations are always in scope.
     for d in index.get("defs", []):

@@ -62,6 +62,24 @@ MEMBER = (
     "    return p.x;\n"
     "}\n"
 )
+TYPE_FILTER = (
+    "fn takes(n: u32, ok: bool) -> u32 {\n"
+    "    return n;\n"
+    "}\n"
+    "\n"
+    "fn make_u32() -> u32 {\n"
+    "    return 7;\n"
+    "}\n"
+    "\n"
+    "fn choose(good: u32, flag: bool) -> u32 {\n"
+    "    let wrong: bool = false;\n"
+    "    var slot: u32 = 0;\n"
+    "    let init: u32 = good;\n"
+    "    slot = good;\n"
+    "    takes(good, flag);\n"
+    "    return good;\n"
+    "}\n"
+)
 
 
 def utf16_len(s):
@@ -482,6 +500,54 @@ def main():
         if prefix_labels != {"x"}:
             raise SystemExit(f"FAIL: lsp-test — member prefix completion should only return x, got {sorted(prefix_labels)}")
 
+        # Type-filtered completion in typed value contexts should keep compatible values and
+        # compatible-return functions, while filtering incompatible visible locals.
+        tf_path = os.path.join(workdir, "type_filter.mc")
+        with open(tf_path, "w") as f:
+            f.write(TYPE_FILTER)
+        tf_uri = "file://" + tf_path
+        did_open(proc, tf_uri, TYPE_FILTER)
+        diagnostics_for(proc, tf_uri)
+        tf_td = {"textDocument": {"uri": tf_uri}}
+
+        return_comp = request(proc, 37, "textDocument/completion",
+                              {**tf_td, "position": pos_after(TYPE_FILTER, 14, "return ")})
+        return_labels = {i["label"] for i in (return_comp or {}).get("items", [])}
+        for want in ("good", "slot", "init", "make_u32"):
+            if want not in return_labels:
+                raise SystemExit(f"FAIL: lsp-test — return type-filter missing '{want}': {sorted(return_labels)}")
+        for leak in ("flag", "wrong", "return", "u32"):
+            if leak in return_labels:
+                raise SystemExit(f"FAIL: lsp-test — return type-filter leaked '{leak}': {sorted(return_labels)}")
+
+        init_comp = request(proc, 38, "textDocument/completion",
+                            {**tf_td, "position": pos_after(TYPE_FILTER, 11, "let init: u32 = ")})
+        init_labels = {i["label"] for i in (init_comp or {}).get("items", [])}
+        if "good" not in init_labels or "wrong" in init_labels:
+            raise SystemExit(f"FAIL: lsp-test — typed initializer filter wrong: {sorted(init_labels)}")
+
+        assign_comp = request(proc, 39, "textDocument/completion",
+                              {**tf_td, "position": pos_after(TYPE_FILTER, 12, "slot = ")})
+        assign_labels = {i["label"] for i in (assign_comp or {}).get("items", [])}
+        if "good" not in assign_labels or "wrong" in assign_labels:
+            raise SystemExit(f"FAIL: lsp-test — assignment type-filter wrong: {sorted(assign_labels)}")
+
+        arg0_comp = request(proc, 40, "textDocument/completion",
+                            {**tf_td, "position": pos_after(TYPE_FILTER, 13, "takes(")})
+        arg0_labels = {i["label"] for i in (arg0_comp or {}).get("items", [])}
+        if "good" not in arg0_labels or "flag" in arg0_labels:
+            raise SystemExit(f"FAIL: lsp-test — first call-arg type-filter wrong: {sorted(arg0_labels)}")
+
+        arg1_comp = request(proc, 41, "textDocument/completion",
+                            {**tf_td, "position": pos_after(TYPE_FILTER, 13, "takes(good, ")})
+        arg1_labels = {i["label"] for i in (arg1_comp or {}).get("items", [])}
+        for want in ("flag", "wrong", "true", "false"):
+            if want not in arg1_labels:
+                raise SystemExit(f"FAIL: lsp-test — bool call-arg type-filter missing '{want}': {sorted(arg1_labels)}")
+        for leak in ("good", "slot", "init", "u32"):
+            if leak in arg1_labels:
+                raise SystemExit(f"FAIL: lsp-test — bool call-arg type-filter leaked '{leak}': {sorted(arg1_labels)}")
+
         proc.stdin.write(frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": {}}))
         proc.stdin.flush()
         shut = read_message(proc.stdout)
@@ -496,7 +562,7 @@ def main():
     print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, debounced didChange, "
           "in-flight cancellation, pull), "
           "documentSymbol outline, `mcc fmt` formatting, UTF-16 positions, hover/definition/"
-          "references/highlight/rename/semantic-tokens, identifier/member completion, signature help, workspace "
+          "references/highlight/rename/semantic-tokens, identifier/member/type-filtered completion, signature help, workspace "
           "symbols, and call hierarchy all verified")
 
 
