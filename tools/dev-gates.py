@@ -184,9 +184,9 @@ def spec_fixture_gates(path: str) -> tuple[list[str], list[str]]:
                 if "lower-c" in phases:
                     gates.append("sweep")
                     reasons.append("lower-c spec fixtures need the spec emit-C sweep, not the tests/c_emit c-test corpus")
-                if "llvm" in phases:
+                if "lower-ir" in phases or "llvm" in phases:
                     gates.append("llvm-sweep")
-                    reasons.append("LLVM spec fixtures need the spec LLVM IR sweep")
+                    reasons.append("lower-ir/LLVM spec fixtures need the spec LLVM IR sweep")
                 return gates, reasons
     except OSError:
         pass

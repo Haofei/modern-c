@@ -19,8 +19,9 @@ const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
 const lower_c_tests = @import("lower_c_tests.zig");
 // Lowering-coverage instrumentation (hardening V3.2). Zero-cost unless the
-// `MC_LOWER_COV` env var is set; `tools/toolchain/lowering-coverage.sh` injects the
-// per-function `lower_cov.hit(...)` probes into the two backend files at build time.
+// `MC_LOWER_COV` env var is set; `tools/toolchain/lowering-coverage.sh` injects
+// per-function `lower_cov.hit(...)` probes into split lower_c*/lower_llvm* modules
+// in an isolated temporary checkout before building the instrumented compiler.
 const lower_cov = @import("lower_cov.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const lower_llvm_tests = @import("lower_llvm_tests.zig");
