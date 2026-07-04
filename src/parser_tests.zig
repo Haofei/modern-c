@@ -297,3 +297,65 @@ test "parser rejects excessive else-if nesting with diagnostic" {
     try std.testing.expect(reporter.has_errors);
     try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_NESTING_TOO_DEEP") != null);
 }
+
+test "parser rejects excessive pointer type nesting with diagnostic" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+
+    try source.appendSlice(std.testing.allocator, "type TooDeepPtr = ");
+    for (0..300) |_| try source.appendSlice(std.testing.allocator, "*const ");
+    try source.appendSlice(std.testing.allocator, "u8;\n");
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "too_deep_type.mc", source.items);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = Parser.init(source.items, &reporter);
+    try std.testing.expectError(error.ParseFailed, p.parseModule(arena.allocator()));
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_NESTING_TOO_DEEP") != null);
+}
+
+test "parser rejects excessive nested blocks with diagnostic" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+
+    try source.appendSlice(std.testing.allocator, "fn too_deep_blocks() -> void {");
+    for (0..300) |_| try source.appendSlice(std.testing.allocator, " {");
+    try source.appendSlice(std.testing.allocator, " return;");
+    for (0..300) |_| try source.append(std.testing.allocator, '}');
+    try source.appendSlice(std.testing.allocator, " }\n");
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "too_deep_blocks.mc", source.items);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = Parser.init(source.items, &reporter);
+    try std.testing.expectError(error.ParseFailed, p.parseModule(arena.allocator()));
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_NESTING_TOO_DEEP") != null);
+}
+
+test "parser rejects excessive prefix expression nesting with diagnostic" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+
+    try source.appendSlice(std.testing.allocator, "fn too_deep_prefix(x: u32) -> u32 { return ");
+    for (0..300) |_| try source.append(std.testing.allocator, '~');
+    try source.appendSlice(std.testing.allocator, "x; }\n");
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "too_deep_prefix.mc", source.items);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = Parser.init(source.items, &reporter);
+    try std.testing.expectError(error.ParseFailed, p.parseModule(arena.allocator()));
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_NESTING_TOO_DEEP") != null);
+}
