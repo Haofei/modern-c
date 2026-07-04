@@ -145,10 +145,6 @@ const Rewriter = struct {
     oom: bool = false,
 };
 
-pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
-    return transformReport(arena, module, null);
-}
-
 pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagnostics.Reporter) !ast.Module {
     return transformReportOptions(arena, module, reporter, .{});
 }
@@ -549,11 +545,6 @@ fn cloneFnDeclSignatureCtx(ctx: *const CloneCtx, fn_decl: ast.FnDecl) !ast.FnDec
         .bounds = fn_decl.bounds,
         .is_async = fn_decl.is_async,
     };
-}
-
-pub fn cloneExpr(arena: std.mem.Allocator, expr: ast.Expr, subst: *const Subst) !ast.Expr {
-    var ctx = CloneCtx{ .arena = arena, .subst = subst };
-    return cloneExprCtx(&ctx, expr);
 }
 
 fn cloneExprCtx(ctx: *const CloneCtx, expr: ast.Expr) anyerror!ast.Expr {
@@ -1051,7 +1042,7 @@ fn cloneSwitch(ctx: *const CloneCtx, node: ast.Switch) anyerror!ast.Switch {
     var arms = try ctx.arena.alloc(ast.SwitchArm, node.arms.len);
     for (node.arms, 0..) |arm, i| {
         arms[i] = .{
-            .patterns = arm.patterns,
+            .patterns = try clonePatterns(ctx, arm.patterns),
             .body = switch (arm.body) {
                 .block => |b| .{ .block = try cloneBlock(ctx, b) },
                 .expr => |e| .{ .expr = try cloneExprCtx(ctx, e) },
@@ -1064,6 +1055,20 @@ fn cloneSwitch(ctx: *const CloneCtx, node: ast.Switch) anyerror!ast.Switch {
         };
     }
     return .{ .subject = try cloneExprCtx(ctx, node.subject), .arms = arms };
+}
+
+fn clonePatterns(ctx: *const CloneCtx, patterns: []const ast.Pattern) anyerror![]ast.Pattern {
+    var out = try ctx.arena.alloc(ast.Pattern, patterns.len);
+    for (patterns, 0..) |pattern, i| {
+        out[i] = .{
+            .span = pattern.span,
+            .kind = switch (pattern.kind) {
+                .literal => |expr| .{ .literal = try cloneExprCtx(ctx, expr) },
+                else => pattern.kind,
+            },
+        };
+    }
+    return out;
 }
 
 fn clonePtr(ctx: *const CloneCtx, expr: ast.Expr) anyerror!*ast.Expr {
