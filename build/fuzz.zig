@@ -2,7 +2,8 @@ const std = @import("std");
 const h = @import("helpers.zig");
 
 // The mcfuzz oracle family (generation, trap consistency, robustness, fail-closed,
-// determinism, full-pipeline, and the metamorphic/optlevel/floatbits/reference/corpus oracles).
+// determinism, full-pipeline, round-trip/idempotence, and the
+// metamorphic/optlevel/floatbits/reference/corpus oracles).
 pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "fuzz", "mcfuzz: type-directed differential fuzzer over the full scalar type system (C vs LLVM)", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--mcc", "zig-out/bin/mcc" });
 
@@ -17,6 +18,8 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "fuzz-determinism", "mcfuzz: emit-c/emit-llvm must be byte-deterministic", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "determinism", "--mcc", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "fuzz-pipeline", "mcfuzz: every lowering/verify stage must succeed on a check-accepted program", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "pipeline", "--mcc", "zig-out/bin/mcc" });
+
+    _ = h.addScriptTest(ctx, "fuzz-roundtrip", "mcfuzz: generated source must format/check idempotently while preserving tokens and lowering", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "roundtrip", "--mcc", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "fuzz-metamorphic", "mcfuzz: a semantics-preserving source transform must not change the result", &.{ "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "metamorphic", "--mcc", "zig-out/bin/mcc" });
 

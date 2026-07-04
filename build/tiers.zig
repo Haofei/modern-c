@@ -107,6 +107,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("fuzz-failclosed"));
     m0_step.dependOn(ctx.cmd("fuzz-determinism"));
     m0_step.dependOn(ctx.cmd("fuzz-pipeline"));
+    m0_step.dependOn(ctx.cmd("fuzz-roundtrip"));
     m0_step.dependOn(ctx.cmd("fuzz-metamorphic"));
     m0_step.dependOn(ctx.cmd("fuzz-optlevel"));
     m0_step.dependOn(ctx.cmd("fuzz-floatbits"));
@@ -889,9 +890,10 @@ pub fn register(ctx: *h.Ctx) void {
     // the compiler/spec unit suite, the emit-C sweep, the C-vs-LLVM differential
     // and move-resource checks, and the type-directed fuzz family (generation,
     // trap consistency, checker robustness, fail-closed soundness, emit
-    // determinism, full-pipeline lowering, metamorphic and independent-reference
-    // semantics, opt-level stability, finite-float bit equality, and corpus
-    // replay). It deliberately omits the QEMU boot tests and the env-fragile
+    // determinism, full-pipeline lowering, round-trip/idempotence,
+    // metamorphic and independent-reference semantics, opt-level stability,
+    // finite-float bit equality, and corpus replay). It deliberately omits the
+    // QEMU boot tests and the env-fragile
     // gates (LLVM-IR sweeps needing `llvm-as`, the ASan/UBSan sanitize pass, and
     // the riscv-assembler paths) — run `m0` for those. Pair it with `-j`
     // oversubscription (e.g. `zig build fast -j28`).
@@ -920,6 +922,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("fuzz-failclosed"));
     fast_step.dependOn(ctx.cmd("fuzz-determinism"));
     fast_step.dependOn(ctx.cmd("fuzz-pipeline"));
+    fast_step.dependOn(ctx.cmd("fuzz-roundtrip"));
     fast_step.dependOn(ctx.cmd("fuzz-metamorphic"));
     fast_step.dependOn(ctx.cmd("fuzz-optlevel"));
     fast_step.dependOn(ctx.cmd("fuzz-floatbits"));

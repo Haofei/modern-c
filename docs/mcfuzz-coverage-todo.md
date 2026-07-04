@@ -30,12 +30,16 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 7. ~~**E1** reference interpreter~~ — **DONE** (`tools/fuzz/mcref.py` + `oracle_reference`,
    build step `fuzz-reference`): an independent Python interpreter evaluates the same AST and
    the compiled output must match it — sees the shared-frontend bug class.
-8. **A1** `Result<T,E>` + `?` propagation.
-9. **A2** tagged unions with payload.
-10. **A6** fold `move`/`defer` into mcfuzz (today only in `mcgen_move`).
-11. **A3 → A5** optionals → pointers → slices (unlocks **E5** memory-safety oracle).
-12. **A7** f32 (blocked on double-literal-suffix fix).
-13. Remaining infra/oracles (E3–E8, F-series) and the high-effort type features
+8. ~~**E6** round-trip/idempotence oracle~~ — **DONE** (`oracle_roundtrip`, build step
+   `fuzz-roundtrip`): generated source and formatted source both check, formatting is
+   idempotent, preserves the stripped token stream, and emits the same C after source-location
+   normalization.
+9. **A1** `Result<T,E>` + `?` propagation.
+10. **A2** tagged unions with payload.
+11. **A6** fold `move`/`defer` into mcfuzz (today only in `mcgen_move`).
+12. **A3 → A5** optionals → pointers → slices (unlocks **E5** memory-safety oracle).
+13. **A7** f32 (blocked on double-literal-suffix fix).
+14. Remaining infra/oracles (E3–E5, E7–E8, F-series) and the high-effort type features
     (A8 generics, A9 closures, D5 multi-module).
 
 ---
@@ -124,7 +128,7 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 | E3 | Optimization-level differential | Done / expanding | `fuzz-optlevel`, gated by `m0`/`fast`; keep widening the generated surface. |
 | E4 | Independent oracles on `facts`/`emit-map`/`lower-hir/-mir/-ir` | Med | Today only verify-hir/verify/emit-c/emit-llvm asserted |
 | E5 | Memory-safety oracle (ASan over pointer/slice programs) | Med | Depends on A4/A5 |
-| E6 | Round-trip / idempotence (re-parse, re-lower → stable) | Med | Printer/parser asymmetries |
+| E6 | Round-trip / idempotence (re-parse, re-lower → stable) | Done / expanding | `fuzz-roundtrip`, gated by `m0`/`fast`; generated and formatted source both check, `fmt(fmt(src)) == fmt(src)`, stripped token streams match, and emitted C matches after source-location normalization. |
 | E7 | Crash-bucketing & auto-minimization of findings | Med | Triage QoL |
 | E8 | Trap-location agreement (same logical trap site) | Med | Stronger than "both trap" |
 
@@ -151,7 +155,8 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 - In-place aggregate mutation (`s.f =`, `a[i] =`, nested).
 - `sat<uN>` saturating domain.
 - Boundary-directed integer literals (→ found & fixed the INT64_MIN C-backend bug).
-- Seven oracles: differential, fuzz-trap, sanitize, robust, failclosed, determinism, pipeline.
+- Eight oracles: differential, fuzz-trap, sanitize, robust, failclosed, determinism, pipeline,
+  roundtrip.
 
 ### Done 2026-06-14 (this pass)
 
@@ -189,6 +194,18 @@ C-backend bugs found & fixed (INT64_MIN, narrow wrap-mul UB, f32 double-rounding
 core oracle family plus `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-corpus`, and
 `fuzz-reference` now gate both `m0` and `fast`.**
 
+### Done 2026-07-04
+
+- **E6** round-trip/idempotence oracle (`fuzz-roundtrip`): generated source and formatted source
+  both check; `fmt(fmt(src)) == fmt(src)`; formatting preserves the position-stripped `mcc lex`
+  token stream; and generated vs formatted source emit the same C after normalizing source-location
+  directives.
+
+**Current tally: 19 coverage items + 4 promoted oracles (metamorphic, optlevel, reference,
+roundtrip) + 3 real C-backend bugs found & fixed. The original core oracle family plus
+`fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-corpus`, `fuzz-reference`, and
+`fuzz-roundtrip` now gate both `m0` and `fast`.**
+
 ### Blocked by missing backend support (can't be generated into runnable programs)
 
 - **A2** tagged unions with payload — **not runtime-lowerable**: even the spec's own
@@ -209,5 +226,5 @@ core oracle family plus `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `
   absence of the oracle.
 - **D5** multi-module — needs an import/module system (no such surface today).
 - **F1** coverage-guided — blocked by subprocess speed (needs persistent/in-process harness).
-- Misc lower-value: C6/C7 (mostly covered), D3/D6, E4/E5/E6/E7/E8, F2–F7, A10 (usize already
+- Misc lower-value: C6/C7 (mostly covered), D3/D6, E4/E5/E7/E8, F2–F7, A10 (usize already
   generated)/A12 (depends on A2/A5).

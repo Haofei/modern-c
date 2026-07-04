@@ -14,7 +14,9 @@ wrap<u64>, this is a small *framework*:
       * differential — compile through BOTH backends, run, assert identical output (codegen /
         evaluation-order / ABI divergences);
       * sanitize     — compile the emitted C with UBSan and run (undefined behavior the C
-        backend should never emit for safe MC).
+        backend should never emit for safe MC);
+      * roundtrip    — format generated source, re-check it, prove formatter idempotence, and
+        assert formatting preserves the lexed token stream and emitted C.
 
 Everything stays trap-free by construction (wrapping.add, masked shifts, modular conversions,
 float ops that yield inf/NaN rather than trapping), so a difference is always a real bug, never
@@ -24,7 +26,8 @@ the type model + generator handlers; new checks plug in as new oracles.
 Usage:
   tools/fuzz/mcfuzz.py gen <seed>                       # print one program
   tools/fuzz/mcfuzz.py run [--count N] [--oracle X] [--start S] [--jobs J] [--mcc PATH]
-        oracle: differential (default) | sanitize
+        oracle: differential (default) | sanitize | robust | failclosed | determinism |
+                pipeline | roundtrip | metamorphic | optlevel | floatbits | reference
 """
 import argparse
 import os
@@ -1480,6 +1483,114 @@ def oracle_pipeline(env, seed, src_path, work):
     return None
 
 
+def _run_mcc(env, stage, src_path, timeout=20):
+    try:
+        return subprocess.run([env["mcc"], stage, src_path], capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _stripped_lex_stream(env, src_path):
+    """Lex `src_path` and strip source positions, mirroring tools/toolchain/fmt-test.sh."""
+    r = _run_mcc(env, "lex", src_path)
+    if r is None:
+        return (False, b"", "mcc lex HANGS")
+    if r.returncode < 0:
+        return (False, b"", "mcc lex CRASHED (signal %d)" % -r.returncode)
+    out = r.stderr if r.stderr else r.stdout
+    text = out.decode("utf-8", "replace")
+    stripped = "\n".join(re.sub(r"^.*?:[0-9]+:[0-9]+:\s*", "", line) for line in text.splitlines())
+    if r.returncode != 0:
+        return (False, stripped.encode(), "mcc lex rejected source: %s" % _first_error(text))
+    return (True, stripped.encode(), "")
+
+
+def _check_file(env, src_path, label):
+    r = _run_mcc(env, "check", src_path)
+    if r is None:
+        return "mcc check HANGS on %s" % label
+    if r.returncode < 0:
+        return "mcc check CRASHED (signal %d) on %s" % (-r.returncode, label)
+    if r.returncode != 0:
+        err = r.stderr.decode("utf-8", "replace")
+        return "mcc check rejected %s: %s" % (label, _first_error(err))
+    return None
+
+
+def _emit_c_bytes(env, src_path, label):
+    r = _run_mcc(env, "emit-c", src_path)
+    if r is None:
+        return (False, b"", "mcc emit-c HANGS on %s" % label)
+    if r.returncode < 0:
+        return (False, b"", "mcc emit-c CRASHED (signal %d) on %s" % (-r.returncode, label))
+    if r.returncode != 0:
+        err = r.stderr.decode("utf-8", "replace")
+        return (False, r.stdout, "mcc emit-c rejected %s: %s" % (label, _first_error(err)))
+    return (True, r.stdout, "")
+
+
+def _roundtrip_c_body(c_bytes):
+    """Drop source-location directives that necessarily name different temporary files."""
+    text = c_bytes.decode("utf-8", "replace")
+    return "\n".join(line for line in text.splitlines() if not line.startswith("#line ")).encode()
+
+
+def oracle_roundtrip(env, seed, src_path, work):
+    """Round-trip/idempotence oracle (E6): exercise the real parser/formatter pipeline on each
+    generated program. The original source must check; its formatted form must check; formatting
+    must be byte-idempotent; formatting must preserve the position-stripped `mcc lex` token
+    stream; and source-insensitive lowering is sampled by comparing emitted C for original vs
+    formatted source with source-location directives normalized away."""
+    err = _check_file(env, src_path, "generated source")
+    if err is not None:
+        return err
+
+    fmt1 = os.path.join(work, "p.fmt.mc")
+    fmt2 = os.path.join(work, "p.fmt2.mc")
+    r1 = _run_mcc(env, "fmt", src_path)
+    if r1 is None:
+        return "mcc fmt HANGS on generated source"
+    if r1.returncode < 0:
+        return "mcc fmt CRASHED (signal %d) on generated source" % -r1.returncode
+    if r1.returncode != 0:
+        return "mcc fmt rejected generated source: %s" % _first_error(r1.stderr.decode("utf-8", "replace"))
+    open(fmt1, "wb").write(r1.stdout)
+
+    err = _check_file(env, fmt1, "formatted source")
+    if err is not None:
+        return err
+
+    r2 = _run_mcc(env, "fmt", fmt1)
+    if r2 is None:
+        return "mcc fmt HANGS re-formatting generated source"
+    if r2.returncode < 0:
+        return "mcc fmt CRASHED (signal %d) re-formatting generated source" % -r2.returncode
+    if r2.returncode != 0:
+        return "mcc fmt rejected its own output: %s" % _first_error(r2.stderr.decode("utf-8", "replace"))
+    open(fmt2, "wb").write(r2.stdout)
+    if r2.stdout != r1.stdout:
+        return "ROUNDTRIP IDEMPOTENCE: fmt(fmt(src)) != fmt(src)"
+
+    ok_a, toks_a, msg_a = _stripped_lex_stream(env, src_path)
+    if not ok_a:
+        return msg_a
+    ok_b, toks_b, msg_b = _stripped_lex_stream(env, fmt1)
+    if not ok_b:
+        return msg_b
+    if toks_a != toks_b:
+        return "ROUNDTRIP TOKEN DIVERGENCE: formatting changed the position-stripped token stream"
+
+    ok_c, c_a, msg_c = _emit_c_bytes(env, src_path, "generated source")
+    ok_f, c_b, msg_f = _emit_c_bytes(env, fmt1, "formatted source")
+    if not ok_c:
+        return msg_c
+    if not ok_f:
+        return msg_f
+    if _roundtrip_c_body(c_a) != _roundtrip_c_body(c_b):
+        return "ROUNDTRIP LOWERING DIVERGENCE: generated and formatted source emit different C"
+    return None
+
+
 def _compile_run_c(env, src_path, work, tag, opt=None):
     """Emit C, compile (optionally at an -O level), link with the driver, run. Returns
     (returncode, stdout) or None if the emit/compile/link failed (a different oracle's concern)."""
@@ -1600,8 +1711,18 @@ def oracle_reference(env, seed, src_path, work):
 ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize,
            "robust": oracle_robust, "failclosed": oracle_failclosed,
            "determinism": oracle_determinism, "pipeline": oracle_pipeline,
+           "roundtrip": oracle_roundtrip,
            "metamorphic": oracle_metamorphic, "optlevel": oracle_optlevel,
            "floatbits": oracle_floatbits, "reference": oracle_reference}
+
+
+def _oracle_needs_clang(name, cmd):
+    return cmd == "corpus" or name in ("differential", "sanitize", "metamorphic",
+                                       "optlevel", "floatbits", "reference")
+
+
+def _oracle_needs_llc(name, cmd):
+    return cmd == "corpus" or name in ("differential", "floatbits")
 
 
 def oracle_on_source(env, oracle, source):
@@ -1721,9 +1842,10 @@ def main():
         return 0
 
     import shutil
-    if not shutil.which(os.environ.get("CLANG", "clang")):
+    oracle_name = getattr(args, "oracle", "differential")
+    if _oracle_needs_clang(oracle_name, args.cmd) and not shutil.which(os.environ.get("CLANG", "clang")):
         print("SKIP: mcfuzz (clang not found)"); return 0
-    if not shutil.which(os.environ.get("LLC", "llc")):
+    if _oracle_needs_llc(oracle_name, args.cmd) and not shutil.which(os.environ.get("LLC", "llc")):
         print("SKIP: mcfuzz (llc not found)"); return 0
     env = {
         "mcc": args.mcc, "clang": os.environ.get("CLANG", "clang"), "llc": os.environ.get("LLC", "llc"),
@@ -1814,6 +1936,7 @@ def main():
         "failclosed": "mcc check rejected every ill-typed program (no soundness hole)",
         "determinism": "emit-c/emit-llvm are byte-deterministic",
         "pipeline": "every lowering/verify stage succeeds on check-accepted programs",
+        "roundtrip": "fmt output checks, is idempotent, preserves tokens, and lowers identically",
         "reference": "compiled output matches the independent Python interpreter",
     }.get(args.oracle, "no findings")
     mode = " (trapping)" if args.trapping else ""
