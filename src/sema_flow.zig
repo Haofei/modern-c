@@ -2,7 +2,6 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
-const sema_builtin = @import("sema_builtin.zig");
 const sema_model = @import("sema_model.zig");
 
 const EnumInfo = sema_model.EnumInfo;
@@ -11,111 +10,6 @@ const boolLiteralValue = ast_query.boolLiteralValue;
 const exprIsIdentNamed = ast_query.exprIsIdentNamed;
 const resultIfLetHandlesLocal = ast_query.resultIfLetHandlesLocal;
 const resultSwitchHandlesLocal = ast_query.resultSwitchHandlesLocal;
-
-pub fn blockContainsTry(block: ast.Block) bool {
-    for (block.items) |stmt| {
-        if (stmtContainsTry(stmt)) return true;
-    }
-    return false;
-}
-
-pub fn stmtContainsTry(stmt: ast.Stmt) bool {
-    return switch (stmt.kind) {
-        .let_decl, .var_decl => |local| if (local.init) |expr| exprContainsTry(expr) else false,
-        .loop => |node| (if (node.iterable) |iterable| exprContainsTry(iterable) else false) or blockContainsTry(node.body),
-        .if_let => |node| exprContainsTry(node.value) or blockContainsTry(node.then_block) or
-            (if (node.else_block) |else_block| blockContainsTry(else_block) else false),
-        .@"switch" => |node| switchContainsTry(node),
-        .unsafe_block, .comptime_block, .block => |block| blockContainsTry(block),
-        .contract_block => |contract| blockContainsTry(contract.block),
-        .@"return" => |maybe| if (maybe) |expr| exprContainsTry(expr) else false,
-        .@"break", .@"continue" => false,
-        .@"defer", .expr, .assert => |expr| exprContainsTry(expr),
-        .assignment => |node| exprContainsTry(node.target) or exprContainsTry(node.value),
-        .asm_stmt => false,
-    };
-}
-
-pub fn switchContainsTry(node: ast.Switch) bool {
-    if (exprContainsTry(node.subject)) return true;
-    for (node.arms) |arm| {
-        const body_contains_try = switch (arm.body) {
-            .block => |block| blockContainsTry(block),
-            .expr => |expr| exprContainsTry(expr),
-        };
-        if (body_contains_try) return true;
-    }
-    return false;
-}
-
-pub fn exprContainsTry(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .try_expr => true,
-        .grouped, .address_of, .deref => |inner| exprContainsTry(inner.*),
-        .block => |block| blockContainsTry(block),
-        .unary => |node| exprContainsTry(node.expr.*),
-        .binary => |node| exprContainsTry(node.left.*) or exprContainsTry(node.right.*),
-        .cast => |node| exprContainsTry(node.value.*),
-        .call => |node| callContainsTry(node),
-        .index => |node| exprContainsTry(node.base.*) or exprContainsTry(node.index.*),
-        .member => |node| exprContainsTry(node.base.*),
-        else => false,
-    };
-}
-
-pub fn callContainsTry(node: anytype) bool {
-    if (exprContainsTry(node.callee.*)) return true;
-    for (node.args) |arg| {
-        if (exprContainsTry(arg)) return true;
-    }
-    return false;
-}
-
-pub fn stmtTerminatesNormally(stmt: ast.Stmt) bool {
-    return switch (stmt.kind) {
-        .@"return", .@"break", .@"continue", .asm_stmt => true,
-        .expr => |expr| exprTerminatesNormally(expr),
-        .block, .unsafe_block, .comptime_block => |block| blockTerminatesNormally(block),
-        .contract_block => |contract| blockTerminatesNormally(contract.block),
-        .if_let => |node| node.else_block != null and
-            blockTerminatesNormally(node.then_block) and
-            blockTerminatesNormally(node.else_block.?),
-        .@"switch" => |node| switchTerminatesNormally(node),
-        else => false,
-    };
-}
-
-pub fn blockTerminatesNormally(block: ast.Block) bool {
-    for (block.items) |stmt| {
-        if (stmtTerminatesNormally(stmt)) return true;
-    }
-    return false;
-}
-
-pub fn switchTerminatesNormally(node: ast.Switch) bool {
-    var has_wildcard = false;
-    for (node.arms) |arm| {
-        for (arm.patterns) |pattern| {
-            if (pattern.kind == .wildcard) has_wildcard = true;
-        }
-        const body_terminates = switch (arm.body) {
-            .block => |block| blockTerminatesNormally(block),
-            .expr => |expr| exprTerminatesNormally(expr),
-        };
-        if (!body_terminates) return false;
-    }
-    return has_wildcard;
-}
-
-pub fn exprTerminatesNormally(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .unreachable_expr => true,
-        .grouped => |inner| exprTerminatesNormally(inner.*),
-        .call => |node| sema_builtin.isTrapCall(node.callee.*),
-        .block => |block| blockTerminatesNormally(block),
-        else => false,
-    };
-}
 
 pub fn resultLocalHandledLater(name: []const u8, stmts: []const ast.Stmt) bool {
     for (stmts) |stmt| {
