@@ -59,6 +59,7 @@ const usage =
     \\  mcc lower-ir <file.mc>
     \\  mcc lower-c <file.mc>
     \\  mcc emit-c <file.mc> [--profile=kernel|hosted] [--checks=all|elide-proven] [--stub-asm] [--remap-prefix=FROM=TO]
+    \\  mcc build <file.mc> -o <exe>
     \\  mcc emit-map <file.mc> [--profile=kernel|hosted] [--remap-prefix=FROM=TO]
     \\  mcc emit-llvm <file.mc> [--checks=all|elide-proven] [--stub-asm]
     \\  mcc emit-layout <file.mc> --structs=A,B,C

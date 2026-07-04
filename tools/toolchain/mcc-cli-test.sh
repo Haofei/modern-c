@@ -77,6 +77,7 @@ run_case --help
 assert_rc 0 "--help"
 assert_stdout_contains "usage:" "--help usage header"
 assert_stdout_contains "mcc list-tests <file.mc>" "--help list-tests command"
+assert_stdout_contains "mcc build <file.mc> -o <exe>" "--help build command"
 assert_stdout_contains "--remap-prefix=FROM=TO" "--help remap-prefix option"
 assert_stdout_contains "--std-dir=<dir>" "--help installed std-dir option"
 assert_stdout_contains "MC_PATH=dir[:dir...]" "--help MC_PATH fallback"
