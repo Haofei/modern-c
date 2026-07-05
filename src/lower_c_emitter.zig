@@ -3393,7 +3393,8 @@ const CEmitter = struct {
     }
 
     fn ordinaryStorePreHookName(self: *const CEmitter) ?[]const u8 {
-        if (self.ksan and !self.msan) return "mc_ksan_check";
+        if (self.msan) return "mc_ksan_store";
+        if (self.ksan) return "mc_ksan_check";
         return null;
     }
 
@@ -3428,8 +3429,8 @@ const CEmitter = struct {
 
     // Emit an assignment LHS (a store target / lvalue). Identical to emitExpr but with the
     // field-LOAD shadow hook suppressed: wrapping an lvalue in a `(hook(...), lv)` comma
-    // expression would make it non-assignable. KASAN store checks for member/index lvalues are
-    // emitted through a temporary pointer by emitOrdinaryHookedAssignmentStmt.
+    // expression would make it non-assignable. Store hooks for member/index lvalues are emitted
+    // through a temporary pointer by emitOrdinaryHookedAssignmentStmt.
     fn emitAssignTarget(self: *CEmitter, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const prev = self.suppress_load_hook;
         self.suppress_load_hook = true;

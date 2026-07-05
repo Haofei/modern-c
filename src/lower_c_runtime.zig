@@ -283,14 +283,13 @@ pub fn appendMemoryAccessHelpers(
         "";
     const race_store_pre: []const u8 = if (csan)
         ""
+    else if (msan)
+        "    mc_ksan_store((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
     else if (ksan and !msan)
         "    mc_ksan_check((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
     else
         "";
-    const race_store_post: []const u8 = if (msan)
-        "    mc_ksan_store((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
-    else
-        "";
+    const race_store_post: []const u8 = "";
     try out.print(
         allocator,
         "#define MC_DEFINE_RACE_SCALAR(NAME, TYPE) \\\n" ++
@@ -329,14 +328,13 @@ pub fn appendMemoryAccessHelpers(
     // The four profiles differ only in which shadow hook brackets the volatile access.
     const store_pre: []const u8 = if (csan)
         "    mc_csan_write((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \\\n"
+    else if (msan)
+        "    mc_ksan_store((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \\\n"
     else if (ksan and !msan)
         "    mc_ksan_check((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \\\n"
     else
         "";
-    const store_post: []const u8 = if (msan)
-        "    mc_ksan_store((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \\\n"
-    else
-        "";
+    const store_post: []const u8 = "";
     const load_pre: []const u8 = if (csan)
         "    mc_csan_read((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \\\n"
     else if (ksan)
@@ -345,8 +343,9 @@ pub fn appendMemoryAccessHelpers(
         "";
     const profile_comment: []const u8 = if (msan)
         \\/* mc-checks: msan (KMSAN uninit-heap-use detection on the ksan shadow, D2.2).
-        \\   raw.store marks bytes initialized via mc_ksan_store; raw.load traps in
-        \\   mc_ksan_check if the bytes are still uninit (or freed/redzone-poisoned). */
+        \\   raw.store calls mc_ksan_store before the write; that hook rejects poison/freed
+        \\   bytes, tolerates UNINIT/CLEAN bytes, and marks the range initialized. raw.load
+        \\   traps in mc_ksan_check if the bytes are still uninit or freed/redzone-poisoned. */
         \\
     else if (ksan)
         \\/* mc-checks: ksan (KASAN shadow-memory access instrumentation, D2.1).

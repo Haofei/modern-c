@@ -109,7 +109,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   allocations, trap on poisoned access. **Where:** an emit profile/instrument pass + shadow runtime
   + heap hooks. **Test:** a QEMU boot demo triggering UAF + OOB → trap → `KASAN-OK` (mirror the
   `*-test.sh`/`m0` wiring). **Prior art:** **Linux KASAN**, ASan. **Depends:** none.
-- [x] **D2.2 — KMSAN-style uninit-use detection** *(DONE `13197f9`; 3-state shadow (clean/uninit/poison) under `--checks=msan`; load of never-written heap byte traps, both backends. Coverage (R3): raw deref + globals + global-field/array + pointer-field LOADs of armed-pool heap (`2b8ded9`); still missed: pointer/local field stores, local array, stack. Under `--checks=msan` a write THROUGH a freed pointer is not caught (use `ksan`). No origin tracking)* — shadow-track
+- [x] **D2.2 — KMSAN-style uninit-use detection** *(DONE `13197f9`; 3-state shadow (clean/uninit/poison) under `--checks=msan`; load of never-written heap byte traps, both backends. Coverage (R3): raw deref + globals + global-field/array + pointer-field LOADs of armed-pool heap (`2b8ded9`); store hook now rejects poison/freed bytes while still allowing first writes to UNINIT allocation bytes and marking them clean, including existing raw/member/index/global store instrumentation. Still missed: stack locals and MMIO; no origin tracking)* — shadow-track
   initialized-ness; trap on use of uninit (dynamic complement to S0.1). **Where:** instrument +
   shadow. **Test:** QEMU demo reads uninit heap → trap. **Prior art:** **Linux KMSAN**, MSan.
   **Depends:** D2.1.

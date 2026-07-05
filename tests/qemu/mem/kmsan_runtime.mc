@@ -6,11 +6,12 @@
 //   SHADOW_UNINIT (0xAA) — addressable but NEVER WRITTEN since allocation: uninitialized use.
 //   SHADOW_POISON (0xFF) — freed / redzone / not-yet-allocated: UAF/OOB.
 //
-// The MC compiler, under `--checks=msan`, wraps every raw.store with mc_ksan_check THEN
-// mc_ksan_store, and every raw.load with mc_ksan_check. mc_ksan_store marks the written bytes
-// CLEAN (initialized); mc_ksan_check traps if any covered shadow byte is NOT CLEAN (UNINIT under
-// KMSAN, or POISON). So a load of a freshly-allocated, never-written byte hits UNINIT and traps
-// BEFORE the dereference. kmsan_alloc is a bump allocator that marks the returned region UNINIT.
+// The MC compiler, under `--checks=msan`, wraps every raw.store with mc_ksan_store and every
+// raw.load with mc_ksan_check. mc_ksan_store traps on POISON (freed/redzone) but allows UNINIT
+// first writes and marks the written bytes CLEAN (initialized); mc_ksan_check traps if any
+// covered shadow byte is NOT CLEAN (UNINIT under KMSAN, or POISON). So a load of a freshly-
+// allocated, never-written byte hits UNINIT and traps BEFORE the dereference. kmsan_alloc is a
+// bump allocator that marks the returned region UNINIT.
 //
 // Built UN-instrumented (no MC_CHECKS): its own shadow reads/writes must never recurse through
 // the hooks. It DEFINES mc_ksan_check / mc_ksan_store (the compiler yields its weak stubs to
@@ -109,9 +110,26 @@ fn shadow_set(addr: usize, size: usize, val: u8) -> void {
     }
 }
 
-// KMSAN init-tracking hook the compiler emits AFTER each raw.store: mark exactly the written
-// bytes initialized (CLEAN). Byte-exact, so a sub-word store cleans only the bytes it wrote.
+// KMSAN store hook the compiler emits BEFORE each raw.store: reject POISON-only states (freed /
+// redzone), then mark exactly the written bytes initialized (CLEAN). UNINIT is allowed here
+// because a first write to allocated memory is what initializes it.
 export fn mc_ksan_store(addr: usize, size: usize) -> void {
+    if shadow_armed == 0 || size == 0 {
+        return;
+    }
+    if addr < shadow_base || addr >= shadow_end {
+        return;
+    }
+    var hi: usize = addr + size;
+    if hi > shadow_end { hi = shadow_end; }
+    var i: usize = addr - shadow_base;
+    let last: usize = hi - 1 - shadow_base;
+    while i <= last && i < POOL_BYTES {
+        if shadow_ld(i) == SHADOW_POISON {
+            unreachable; // freed/redzone store -> M-mode trap -> KMSAN-DETECTED
+        }
+        i = i + 1;
+    }
     shadow_set(addr, size, SHADOW_CLEAN);
 }
 
@@ -183,9 +201,8 @@ export fn m_main() -> void {
         let _u: u32 = kmsan_global_load();
         put_str("GLOBAL-LOAD-MISSED\n");
     } else if sc == 5 {
-        // FREED_WRITE: freed-WRITE under msan (doc claims NOT caught — the store path uses
-        // mc_ksan_store only, no mc_ksan_check). Poison [p,p+8) then write it -> expected NOT
-        // to trap (a documented MISS).
+        // FREED_WRITE: poison [p,p+8), then write it. mc_ksan_store rejects POISON before
+        // marking clean, so this must trap without reaching the miss marker.
         kmsan_arm(pool_base(), POOL_BYTES);
         let p: usize = pool_base();
         shadow_set(p, 8, SHADOW_POISON); // simulate a freed/poisoned block

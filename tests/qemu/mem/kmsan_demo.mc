@@ -1,7 +1,8 @@
 // QEMU boot demo for KMSAN-style uninitialized-HEAP-memory-use detection (D2.2).
 //
 // Built on the D2.1 ksan shadow. Compiled with `--checks=msan`, so every raw.store in
-// this file is wrapped by the compiler with `mc_ksan_store(addr, size)` (which marks the
+// this file is wrapped by the compiler with `mc_ksan_store(addr, size)` (which rejects
+// freed/redzone poison, allows first writes to UNINIT allocation bytes, and marks the
 // written bytes initialized in the shadow), and every raw.load is wrapped with
 // `mc_ksan_check(addr, size)` (which, under the msan runtime, traps if the bytes are still
 // UNINIT — never written since allocation — as well as freed/redzone-poisoned).
@@ -97,14 +98,13 @@ export fn kmsan_global_load() -> u32 {
     return kmsan_global; // mc_race_load_u32 -> mc_ksan_check -> trap if UNINIT/poisoned
 }
 
-// ---- freed-WRITE under msan (doc claims NOT caught: raw.store pre-checks with mc_ksan_store
-//      only, NOT mc_ksan_check, so a write to freed/poisoned memory is waved through) ----
+// ---- freed-WRITE under msan (raw.store calls mc_ksan_store before the write; the hook
+//      allows UNINIT first writes but traps on freed/redzone POISON) ----
 export fn kmsan_freed_write(p: usize) -> u32 {
     // The runtime poisons [p, p+8) (simulating a freed block) before calling this. Under msan,
-    // the store path is `mc_ksan_store(addr,size); *addr = v;` — no mc_ksan_check — so this
-    // write to poisoned memory does NOT trap.
+    // the store path calls mc_ksan_store before the write, so this traps on POISON.
     unsafe {
-        raw.store<u8>(pa(p), 0x55); // freed-write; expected to be MISSED under msan
+        raw.store<u8>(pa(p), 0x55); // freed-write; expected to be DETECTED under msan
     }
-    return 1; // reached iff the freed write was waved through (expected)
+    return 1; // reached iff the freed write was missed
 }

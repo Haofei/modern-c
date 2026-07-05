@@ -4,10 +4,11 @@
 #
 # Lowers tests/qemu/mem/kmsan_demo.mc through the selected backend WITH the KMSAN profile
 # (`--checks=msan`, via MC_CHECKS=msan), so the compiler wraps every raw.store with
-# `mc_ksan_store(addr,size)` (marks bytes initialized) and every raw.load with
-# `mc_ksan_check(addr,size)` (traps on a still-uninit, or freed/redzone, byte). Links it with
+# `mc_ksan_store(addr,size)` (traps on poison/freed bytes, allows UNINIT first writes, and marks
+# bytes initialized) and every raw.load with `mc_ksan_check(addr,size)` (traps on a still-uninit,
+# or freed/redzone, byte). Links it with
 # the bare M-mode KMSAN shadow runtime (kernel/arch/riscv64/kmsan_runtime.c), which hands out
-# allocations marked UNINIT, into a riscv64 image and boots it under QEMU in two scenarios:
+# allocations marked UNINIT, into a riscv64 image and boots it under QEMU in these scenarios:
 #   1. clean  : alloc, WRITE every byte (each store marks it initialized), then READ -> all
 #               initialized shadow, nothing traps -> KMSAN-OK
 #   2. uninit : alloc, then READ a never-written byte -> its shadow is still UNINIT ->
@@ -15,8 +16,8 @@
 #
 # This is the dynamic, through-pointer complement to S0.1's static use-of-uninitialized check.
 #
-# PASS requires KMSAN-OK (clean path) AND KMSAN-DETECTED (the init-state shadow check actually
-# fired on a real uninitialized read) AND no *-MISSED line.
+# PASS requires KMSAN-OK (clean path) AND KMSAN-DETECTED (the shadow check actually fired on
+# each bad read/write) AND no *-MISSED line.
 #
 # Usage: tools/mem/kmsan-test.sh <path-to-mcc> [c|llvm]
 # Skips (exit 0) when the riscv toolchain or QEMU is unavailable.
@@ -75,8 +76,8 @@ UNINIT="$(run_scenario 2 uninit)"
 # DETECT-claimed (must trap): pointer struct-field LOAD of UNINIT, scalar global LOAD of poison.
 FLOAD="$(run_scenario 3 fload)"
 GLOAD="$(run_scenario 4 gload)"
-# MISS-claimed (documented gap — recorded, not gated): freed-WRITE under msan (the store path
-# uses mc_ksan_store only, no mc_ksan_check, so a write to freed/poisoned memory is not caught).
+# DETECT-claimed: freed-WRITE under msan. The store path uses mc_ksan_store, which rejects
+# poisoned/freed bytes while still allowing UNINIT first writes.
 FWRITE="$(run_scenario 5 fwrite)"
 
 echo "--- clean (write-before-read) scenario UART ---"
@@ -87,7 +88,7 @@ echo "--- struct-field UNINIT LOAD scenario UART ---"
 printf '%s\n' "$FLOAD"
 echo "--- global poisoned LOAD scenario UART ---"
 printf '%s\n' "$GLOAD"
-echo "--- [MISS-expected] freed-write-under-msan scenario UART ---"
+echo "--- freed-write-under-msan scenario UART ---"
 printf '%s\n' "$FWRITE"
 echo "-----------------------------------------------"
 
@@ -111,16 +112,10 @@ detect() { # haystack tag
 detect "$UNINIT" "uninitialized read"
 detect "$FLOAD" "struct-field UNINIT load"
 detect "$GLOAD" "global poisoned load"
-# Documented MISS — confirm the freed-write under msan is NOT caught (reached its marker).
-if printf '%s' "$FWRITE" | grep -q "KMSAN-DETECTED"; then
-    echo "NOTE: $TEST_NAME — freed-write-under-msan now TRAPS (was a documented MISS) — coverage improved"
-fi
-if ! printf '%s' "$FWRITE" | grep -q "FREED-WRITE-MISSED"; then
-    echo "FAIL: $TEST_NAME — freed-write scenario did not reach its documented-MISS marker; harness broken"; fail=1
-fi
+detect "$FWRITE" "freed write"
 
 if [ "$fail" -eq 0 ]; then
-    echo "PASS: $TEST_NAME — $BACKEND backend: write-before-read clean path (KMSAN-OK); uninitialized-use detection VERIFIED under QEMU on the raw.load, struct-field LOAD, and scalar global LOAD paths (KMSAN-DETECTED, gate-asserted); and the documented gap confirmed — a freed-WRITE under msan is NOT caught (the store path marks-init without a pre-check), reaching FREED-WRITE-MISSED with no trap"
+    echo "PASS: $TEST_NAME — $BACKEND backend: write-before-read clean path (KMSAN-OK); uninitialized-use detection VERIFIED under QEMU on the raw.load, struct-field LOAD, and scalar global LOAD paths; freed-WRITE under msan is also KMSAN-DETECTED while UNINIT first writes remain allowed"
     exit 0
 fi
 exit 1

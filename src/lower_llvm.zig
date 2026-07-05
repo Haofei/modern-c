@@ -431,9 +431,9 @@ const LlvmEmitter = struct {
     // `call void @mc_ksan_check(i64 addr, i64 size)` before the volatile access, so a
     // poisoned (freed/redzone) access traps at access time. Default false = no hook call.
     ksan: bool = false,
-    // KMSAN profile (D2.2, implies ksan): raw.store additionally calls @mc_ksan_store after
-    // the volatile store to mark the bytes initialized; raw.store then skips the pre-store
-    // check (writing uninit memory is how it gets initialized).
+    // KMSAN profile (D2.2, implies ksan): raw.store calls @mc_ksan_store before the volatile
+    // store. The runtime hook rejects poison/freed bytes, tolerates UNINIT/CLEAN bytes, and
+    // marks the range initialized before the write.
     msan: bool = false,
     // KCSAN profile (D2.3): when true, each unsynchronized raw.store/raw.load brackets the
     // volatile access with a `call void @mc_csan_write/@mc_csan_read(i64 addr, i64 size)`
@@ -2160,20 +2160,18 @@ const LlvmEmitter = struct {
             }
             // KASAN (D2.1): consult the shadow before the store — a poisoned (freed/
             // redzone) target traps in mc_ksan_check. Scalar size == llvmAlignOf here.
-            // KASAN (D2.1) pre-store check (write to freed/redzone traps). Under the msan
-            // profile (D2.2) the store does NOT pre-check: writing uninitialized memory is how
-            // it gets initialized, so a pre-store uninit check would false-positive on the first
-            // write. (Trade-off: a write through a freed pointer is not caught under msan.)
-            if (self.ksan and !self.msan) try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
+            // KMSAN (D2.2): call mc_ksan_store before the write. The hook must not reject
+            // UNINIT bytes because first writes initialize them, but it does reject POISON.
+            if (self.msan) {
+                try self.out.print(self.allocator, "  call void @mc_ksan_store(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
+            } else if (self.ksan) {
+                try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
+            }
             // KCSAN (D2.3): bracket the unsynchronized store with a write watchpoint hook so a
             // concurrent access lands inside the watch window. Mirrors the C backend's csan path.
             if (self.csan) try self.out.print(self.allocator, "  call void @mc_csan_write(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
             try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
-            // KMSAN (D2.2): after the store, mark the written bytes initialized in the shadow,
-            // so a later load of these exact bytes is no longer uninit. Bytes never stored to
-            // remain uninit and trap on load. Same size as the access (scalar == llvmAlignOf).
-            if (self.msan) try self.out.print(self.allocator, "  call void @mc_ksan_store(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
             return true;
         }
         if (self.mmioAccessInfo(call)) |info| {
@@ -2954,21 +2952,23 @@ const LlvmEmitter = struct {
     // hooks expect; size matches the access (scalar == llvmAlignOf, same as the C `sizeof`).
     // Default builds emit nothing (all three flags false), keeping codegen byte-identical.
     //   - ksan (non-msan): pre-load + pre-store mc_ksan_check (poisoned/freed/redzone traps).
-    //   - msan:            pre-load mc_ksan_check (+ uninit trap) + POST-store mc_ksan_store.
+    //   - msan:            pre-load mc_ksan_check (+ uninit trap) + PRE-store mc_ksan_store
+    //                      (poison/freed trap; UNINIT first writes become CLEAN).
     //   - csan:            NO watchpoint hook. This is the SYNCHRONIZED (global / mc_race_*,
     //     relaxed-atomic) access class — a "marked atomic" in the KCSAN model, which does NOT
     //     participate in the unsynchronized-watchpoint conflict check. Hooking it (as a prior
     //     version did, mirroring the C `mc_race_*` macro) made a synchronized-vs-synchronized
     //     global access FALSE-POSITIVE as a race. Only the genuinely-unsynchronized raw path
     //     (emitRawLoad/emitRawStore) sets a csan watchpoint. Mirrors the C backend fix.
-    // `phase` is .load_pre, .store_pre, or .store_post — store_post is the msan init-mark.
+    // `phase` is .load_pre, .store_pre, or .store_post. MSAN uses store_pre for init-marking
+    // because mc_ksan_store also rejects poison/freed bytes before the actual write.
     fn emitOrdinaryShadowHook(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr, phase: enum { load_pre, store_pre, store_post }) !void {
         if (!self.ksan and !self.msan and !self.csan) return;
         const size = self.llvmAlignOf(ty);
         const hook: ?[]const u8 = switch (phase) {
             .load_pre => if (self.ksan) "mc_ksan_check" else null,
-            .store_pre => if (self.ksan and !self.msan) "mc_ksan_check" else null,
-            .store_post => if (self.msan) "mc_ksan_store" else null,
+            .store_pre => if (self.msan) "mc_ksan_store" else if (self.ksan) "mc_ksan_check" else null,
+            .store_post => null,
         };
         const name = hook orelse return;
         const addr = try self.nextTemp();
