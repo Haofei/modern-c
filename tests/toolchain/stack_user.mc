@@ -3,8 +3,8 @@
 import "std/collections/stack.mc";
 
 export fn stack_top_two_sum(a: u32, b: u32, c: u32) -> u32 {
-    var s: Stack<u32> = uninit;
-    s.len = 0;
+    // Whole-value init (definite-init S0.1: a member write alone does not initialize).
+    let s: Stack<u32> = .{ .items = .{ 0, 0, 0, 0, 0, 0, 0, 0 }, .len = 0 };
     let s1: Stack<u32> = push(u32, s, a);
     let s2: Stack<u32> = push(u32, s1, b);
     let s3: Stack<u32> = push(u32, s2, c);

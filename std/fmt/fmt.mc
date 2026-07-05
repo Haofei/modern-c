@@ -24,7 +24,9 @@ export const fn digit_char(d: u32) -> u8 {
 
 // Render `value` as decimal ASCII digits (most significant first).
 const fn format_u32(value: u32) -> U32Decimal {
-    var tmp: [10]u8 = uninit;
+    // Whole-value init (definite-init S0.1: element-wise loop writes do not count);
+    // only tmp[0..count] is ever read back.
+    var tmp: [10]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     var n: u32 = value;
     var count: usize = 0;
     // Extract digits least-significant first (always at least one for 0).
@@ -37,8 +39,9 @@ const fn format_u32(value: u32) -> U32Decimal {
             false => {},
         }
     }
-    // Reverse into the result so the most significant digit comes first.
-    var out: [10]u8 = uninit;
+    // Reverse into the result so the most significant digit comes first. Zero-init:
+    // the return literal reads `out` whole, and digits past `len` are never consumed.
+    var out: [10]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     var i: usize = 0;
     while i < count {
         out[i] = tmp[count - 1 - i];

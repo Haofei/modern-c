@@ -98,7 +98,7 @@ export fn copy_to_user(us: *UserSpace, dst: UserPtr<u8>, src: PAddr, len: usize)
 // taken, the user pages may change freely; the decision is made against the frozen
 // copy. The companion lint `tools/toolchain/double-fetch-audit.sh` flags code that
 // copies the same `UserPtr` in twice — the pattern this type makes unnecessary.
-struct UserSnapshot<T> {
+pub struct UserSnapshot<T> {
     value: T,
 }
 
@@ -106,29 +106,43 @@ struct UserSnapshot<T> {
 // an immutable kernel snapshot. Callers MUST make every decision against `.value`
 // and MUST NOT re-fetch `src` — one fetch, one truth. On any validation failure
 // nothing is copied and the snapshot is never returned (fail closed).
-export fn fetch_user(comptime T: type, us: *UserSpace, src: UserPtr<T>) -> Result<UserSnapshot<T>, UaccessError> {
-    var snap: UserSnapshot<T> = uninit; // .value is fully overwritten by the copy below, or never returned
+pub fn fetch_user(comptime T: type, us: *UserSpace, src: UserPtr<T>) -> Result<UserSnapshot<T>, UaccessError> {
+    var snap: UserSnapshot<T> = uninit; // storage only: filled through `dst`, whole-read via `filled` below
     let dst: PAddr = pa((&snap.value) as usize);
     // Re-tag UserPtr<T> -> UserPtr<u8> for the byte-wise copy: stays within the
     // UserPtr class (the round-trips through usize); the audited uaccess boundary.
     var src_bytes: UserPtr<u8> = uninit;
     unsafe { src_bytes = (src as usize) as UserPtr<u8>; }
     switch copy_from_user(us, dst, src_bytes, sizeof(T)) {
-        ok(v) => { return ok(snap); }
+        ok(v) => {
+            // The copy filled `.value` through `dst` — a raw-address write definite-init
+            // (S0.1) cannot see — so return one whole typed re-read of the snapshot rather
+            // than the `uninit`-tracked variable. Still exactly one user fetch.
+            unsafe {
+                let filled: *UserSnapshot<T> = raw.ptr<UserSnapshot<T>>(pa((&snap) as usize));
+                return ok(filled.*);
+            }
+        }
         err(e) => { return err(e); }
     }
 }
 
 // Page-table-aware single-fetch snapshot: copy one `T` in through the process page
 // table exactly once. Same contract as `fetch_user`: use `.value`, never re-fetch.
-export fn fetch_user_pt(comptime T: type, uas: *UserAddrSpace, src: UserPtr<T>) -> Result<UserSnapshot<T>, UaccessError> {
-    var snap: UserSnapshot<T> = uninit;
+pub fn fetch_user_pt(comptime T: type, uas: *UserAddrSpace, src: UserPtr<T>) -> Result<UserSnapshot<T>, UaccessError> {
+    var snap: UserSnapshot<T> = uninit; // storage only: filled through `dst`, whole-read via `filled` below
     let dst: PAddr = pa((&snap.value) as usize);
     // Re-tag UserPtr<T> -> UserPtr<u8> for the byte-wise copy (audited uaccess boundary).
     var src_bytes: UserPtr<u8> = uninit;
     unsafe { src_bytes = (src as usize) as UserPtr<u8>; }
     switch copy_from_user_pt(uas, dst, src_bytes, sizeof(T)) {
-        ok(v) => { return ok(snap); }
+        ok(v) => {
+            // Same S0.1 shape as fetch_user: whole typed re-read of the copy-filled storage.
+            unsafe {
+                let filled: *UserSnapshot<T> = raw.ptr<UserSnapshot<T>>(pa((&snap) as usize));
+                return ok(filled.*);
+            }
+        }
         err(e) => { return err(e); }
     }
 }
@@ -156,7 +170,7 @@ export fn fetch_user_pt(comptime T: type, uas: *UserAddrSpace, src: UserPtr<T>) 
 // untrusted value with `t.raw` (that is `E_PRIVATE_FIELD`), nor construct one with a
 // struct literal `.{ .raw = X }` — so the taint discipline is structural, not a
 // convention the validators could be bypassed around.
-opaque struct Tainted<T> {
+pub opaque struct Tainted<T> {
     raw: T, // private: read it ONLY through checked_len/checked_index/validate_bound
 }
 
@@ -205,19 +219,19 @@ impl Tainted {
 
 // Public wrappers: the names/call shapes stay `taint`/`checked_len`/… so existing callers
 // are unchanged, but the only code that can name `.raw` is the `impl Tainted` above.
-export fn taint(comptime T: type, snap: UserSnapshot<T>) -> Tainted<T> {
+pub fn taint(comptime T: type, snap: UserSnapshot<T>) -> Tainted<T> {
     return Tainted.of(T, snap);
 }
 
-export fn checked_len(comptime T: type, t: Tainted<T>, limit: T) -> Result<T, UaccessError> {
+pub fn checked_len(comptime T: type, t: Tainted<T>, limit: T) -> Result<T, UaccessError> {
     return Tainted.checked_len(T, t, limit);
 }
 
-export fn checked_index(comptime T: type, t: Tainted<T>, limit: T) -> Result<T, UaccessError> {
+pub fn checked_index(comptime T: type, t: Tainted<T>, limit: T) -> Result<T, UaccessError> {
     return Tainted.checked_index(T, t, limit);
 }
 
-export fn validate_bound(comptime T: type, t: Tainted<T>, lo: T, hi: T) -> Result<T, UaccessError> {
+pub fn validate_bound(comptime T: type, t: Tainted<T>, lo: T, hi: T) -> Result<T, UaccessError> {
     return Tainted.validate_bound(T, t, lo, hi);
 }
 
