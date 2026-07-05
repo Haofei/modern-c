@@ -2788,7 +2788,7 @@ pub const Checker = struct {
                     self.errorCode(expr.span, "E_UNSIGNED_NEGATION", "unsigned checked integers do not support unary '-'");
                 }
                 if (node.op == .neg) {
-                    self.checkUnaryNegOperand(expr.span, inner);
+                    self.checkUnaryNegOperand(expr.span, node.expr.*, inner, ctx);
                 }
                 if (node.op == .bit_not and isCheckedSigned(inner)) {
                     self.errorCode(expr.span, "E_BITWISE_SIGNED_OPERAND", "bitwise operations are not defined on signed checked integers");
@@ -2806,10 +2806,10 @@ pub const Checker = struct {
                     self.errorCode(expr.span, "E_BITWISE_ARITH_DOMAIN_OPERAND", "bitwise operations are not defined on this arithmetic domain");
                 }
                 if (node.op == .bit_not) {
-                    self.checkUnaryBitwiseOperand(expr.span, inner);
+                    self.checkUnaryBitwiseOperand(expr.span, node.expr.*, inner, ctx);
                 }
                 if (node.op == .logical_not) {
-                    if (!isConditionType(inner)) {
+                    if (!isConditionType(inner) or isKnownNominalValueOperand(node.expr.*, inner, ctx)) {
                         self.errorCode(expr.span, "E_BOOL_OPERATOR_OPERAND", "boolean operators are defined only for bool operands");
                     }
                     return .bool;
@@ -2826,7 +2826,7 @@ pub const Checker = struct {
                     self.errorCode(expr.span, "E_ARITH_POLICY_MIX", "arithmetic domains do not implicitly mix");
                 }
                 if (isArithmeticBinary(node.op)) {
-                    self.checkArithmeticOperatorOperands(expr.span, left, right);
+                    self.checkArithmeticOperatorOperands(expr.span, node.left.*, left, node.right.*, right, ctx);
                 }
                 if ((isArithmeticBinary(node.op) or isComparisonBinary(node.op))) {
                     self.checkFloatBinaryOperands(expr.span, left, right);
@@ -2858,7 +2858,7 @@ pub const Checker = struct {
                 }
                 if (isComparisonBinary(node.op)) {
                     self.checkPointerComparison(expr.span, node.op, node.left.*, left, node.right.*, right, ctx);
-                    self.checkComparisonOperatorOperands(expr.span, node.op, left, right, ctx.in_unsafe);
+                    self.checkComparisonOperatorOperands(expr.span, node.op, node.left.*, left, node.right.*, right, ctx);
                 }
                 if (isPointerArithmeticBinary(node.op) and (isSingleObjectPointerLike(left) or isSingleObjectPointerLike(right))) {
                     self.errorCode(expr.span, "E_POINTER_ARITH_SINGLE_OBJECT", "single-object pointers do not support arithmetic");
@@ -2887,10 +2887,13 @@ pub const Checker = struct {
                     self.errorCode(expr.span, "E_BITWISE_ARITH_DOMAIN_OPERAND", "bitwise operations are not defined on this arithmetic domain");
                 }
                 if (isBitwiseBinary(node.op)) {
-                    self.checkBitwiseOperatorOperands(expr.span, left, right);
+                    self.checkBitwiseOperatorOperands(expr.span, node.left.*, left, node.right.*, right, ctx);
                 }
                 if (isLogicalBinary(node.op)) {
-                    if (!isConditionType(left) or !isConditionType(right)) {
+                    if (!isConditionType(left) or !isConditionType(right) or
+                        isKnownNominalValueOperand(node.left.*, left, ctx) or
+                        isKnownNominalValueOperand(node.right.*, right, ctx))
+                    {
                         self.errorCode(expr.span, "E_BOOL_OPERATOR_OPERAND", "boolean operators are defined only for bool operands");
                     }
                     return .bool;
@@ -5713,15 +5716,23 @@ pub const Checker = struct {
         self.errorCode(span, "E_NO_IMPLICIT_INTEGER_PROMOTION", "integer arithmetic requires matching types or an explicit conversion");
     }
 
-    fn checkUnaryNegOperand(self: *Checker, span: diagnostics.Span, operand: TypeClass) void {
+    fn checkUnaryNegOperand(self: *Checker, span: diagnostics.Span, operand_expr: ast.Expr, operand: TypeClass, ctx: Context) void {
         if (isCheckedUnsigned(operand)) return;
+        if (isKnownNominalValueOperand(operand_expr, operand, ctx)) {
+            self.errorCode(span, "E_OPERATOR_OPERAND", "unary '-' requires a signed integer, floating-point, or arithmetic-domain operand");
+            return;
+        }
         if (isDiagnosticNeutralOperand(operand) or isCheckedSigned(operand) or isArithmeticDomain(operand) or isFloatish(operand) or operand == .int_literal) return;
         self.errorCode(span, "E_OPERATOR_OPERAND", "unary '-' requires a signed integer, floating-point, or arithmetic-domain operand");
     }
 
-    fn checkUnaryBitwiseOperand(self: *Checker, span: diagnostics.Span, operand: TypeClass) void {
+    fn checkUnaryBitwiseOperand(self: *Checker, span: diagnostics.Span, operand_expr: ast.Expr, operand: TypeClass, ctx: Context) void {
         if (isAddressClass(operand)) return;
         if (isCheckedSigned(operand) or operand == .bool or isPointerLike(operand) or isForbiddenBitwisePolicy(operand)) return;
+        if (isKnownNominalValueOperand(operand_expr, operand, ctx)) {
+            self.errorCode(span, "E_OPERATOR_OPERAND", "bitwise operators require unsigned integer or wrapping operands");
+            return;
+        }
         if (isBitwiseOperand(operand)) return;
         self.errorCode(span, "E_OPERATOR_OPERAND", "bitwise operators require unsigned integer or wrapping operands");
     }
@@ -5738,32 +5749,70 @@ pub const Checker = struct {
         self.errorCode(span, "E_NO_IMPLICIT_CONVERSION", "floating-point and non-floating-point operands do not implicitly mix");
     }
 
-    fn checkArithmeticOperatorOperands(self: *Checker, span: diagnostics.Span, left: TypeClass, right: TypeClass) void {
+    fn checkArithmeticOperatorOperands(self: *Checker, span: diagnostics.Span, left_expr: ast.Expr, left: TypeClass, right_expr: ast.Expr, right: TypeClass, ctx: Context) void {
         if (isAddressClass(left) or isAddressClass(right)) return;
         if (isSingleObjectPointerLike(left) or isSingleObjectPointerLike(right)) return;
+        if (isKnownNominalValueOperand(left_expr, left, ctx) or isKnownNominalValueOperand(right_expr, right, ctx)) {
+            self.errorCode(span, "E_OPERATOR_OPERAND", "arithmetic operators require integer or arithmetic-domain operands");
+            return;
+        }
         if (!isArithmeticOperand(left) or !isArithmeticOperand(right)) {
             self.errorCode(span, "E_OPERATOR_OPERAND", "arithmetic operators require integer or arithmetic-domain operands");
         }
     }
 
-    fn checkBitwiseOperatorOperands(self: *Checker, span: diagnostics.Span, left: TypeClass, right: TypeClass) void {
+    fn checkBitwiseOperatorOperands(self: *Checker, span: diagnostics.Span, left_expr: ast.Expr, left: TypeClass, right_expr: ast.Expr, right: TypeClass, ctx: Context) void {
         if (isAddressClass(left) or isAddressClass(right)) return;
         if (isCheckedSigned(left) or isCheckedSigned(right)) return;
         if (left == .bool or right == .bool) return;
         if (isPointerLike(left) or isPointerLike(right)) return;
         if (isForbiddenBitwisePolicy(left) or isForbiddenBitwisePolicy(right)) return;
+        if (isKnownNominalValueOperand(left_expr, left, ctx) or isKnownNominalValueOperand(right_expr, right, ctx)) {
+            self.errorCode(span, "E_OPERATOR_OPERAND", "bitwise operators require unsigned integer or wrapping operands");
+            return;
+        }
         if (!isBitwiseOperand(left) or !isBitwiseOperand(right)) {
             self.errorCode(span, "E_OPERATOR_OPERAND", "bitwise operators require unsigned integer or wrapping operands");
         }
     }
 
-    fn checkComparisonOperatorOperands(self: *Checker, span: diagnostics.Span, op: ast.BinaryOp, left: TypeClass, right: TypeClass, in_unsafe: bool) void {
+    fn isKnownNominalValueOperand(expr: ast.Expr, class: TypeClass, ctx: Context) bool {
+        if (class != .unknown) return false;
+        const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return false;
+        return knownNominalValueType(ty, ctx, true);
+    }
+
+    fn isKnownNonEnumNominalValueOperand(expr: ast.Expr, class: TypeClass, ctx: Context) bool {
+        if (class != .unknown) return false;
+        const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return false;
+        return knownNominalValueType(ty, ctx, false);
+    }
+
+    fn knownNominalValueType(ty: ast.TypeExpr, ctx: Context, include_enums: bool) bool {
+        const resolved = resolveAliasType(ty, ctx);
+        const name = typeName(resolved) orelse return false;
+        if (ctx.type_params) |type_params| {
+            if (type_params.contains(name)) return false;
+        }
+        if (ctx.structs) |structs| if (structs.contains(name)) return true;
+        if (ctx.packed_bits) |packed_bits| if (packed_bits.contains(name)) return true;
+        if (ctx.overlay_unions) |overlay_unions| if (overlay_unions.contains(name)) return true;
+        if (ctx.tagged_unions) |tagged_unions| if (tagged_unions.contains(name)) return true;
+        if (include_enums) if (ctx.enums) |enums| if (enums.contains(name)) return true;
+        return false;
+    }
+
+    fn checkComparisonOperatorOperands(self: *Checker, span: diagnostics.Span, op: ast.BinaryOp, left_expr: ast.Expr, left: TypeClass, right_expr: ast.Expr, right: TypeClass, ctx: Context) void {
         if (isAddressClass(left) or isAddressClass(right)) return;
         if (op == .eq or op == .ne) {
+            if (isKnownNonEnumNominalValueOperand(left_expr, left, ctx) or isKnownNonEnumNominalValueOperand(right_expr, right, ctx)) {
+                self.errorCode(span, "E_OPERATOR_OPERAND", "equality operators require comparable operands");
+                return;
+            }
             if (equalityOperandsCompatible(left, right)) return;
             // Inside `unsafe`, a bool may be compared against a bare integer literal (`b != 0`,
             // `b != 1`) — bool models a 0/1 value. A C-compat escape hatch for generated code.
-            if (in_unsafe and ((left == .bool and right == .int_literal) or (left == .int_literal and right == .bool))) return;
+            if (ctx.in_unsafe and ((left == .bool and right == .int_literal) or (left == .int_literal and right == .bool))) return;
             self.errorCode(span, "E_OPERATOR_OPERAND", "equality operators require comparable operands");
             return;
         }
@@ -5771,6 +5820,10 @@ pub const Checker = struct {
         if (isDiagnosticNeutralOperand(left) or isDiagnosticNeutralOperand(right)) return;
         if (isForbiddenOrderingDomain(left) or isForbiddenOrderingDomain(right)) {
             self.errorCode(span, "E_ORDERED_ARITH_DOMAIN_OPERAND", "ordered comparisons are not defined on wrap, serial, or counter arithmetic domains");
+            return;
+        }
+        if (isKnownNominalValueOperand(left_expr, left, ctx) or isKnownNominalValueOperand(right_expr, right, ctx)) {
+            self.errorCode(span, "E_OPERATOR_OPERAND", "ordered comparisons require integer or arithmetic-domain operands");
             return;
         }
         if (isOrderedComparisonOperand(left) and isOrderedComparisonOperand(right)) return;
