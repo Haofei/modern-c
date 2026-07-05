@@ -10,6 +10,8 @@ import "kernel/core/elf_loader.mc";
 import "kernel/arch/riscv64/paging.mc";
 import "kernel/core/heap.mc";
 import "kernel/core/ledger.mc";     // unified resource ledger: enforces the per-agent memory grow cap
+import "kernel/core/ota.mc";
+import "kernel/core/production_ops.mc";
 import "kernel/core/syscall.mc";
 import "kernel/core/uaccess.mc";
 import "kernel/core/console.mc";
@@ -164,6 +166,21 @@ const LS_BADELF: u32 = 1;   // LoadError.BadElf — header / program-header tabl
 const LS_TOOMANY: u32 = 2;  // LoadError.TooManyPages — a segment exceeds MAX_SEGMENT_PAGES
 const LS_NOFRAME: u32 = 3;  // LoadError.NoFrame — heap exhausted (root, leaf, or interior table)
 const LS_BADSEG: u32 = 4;   // LoadError.BadSegment — absurd/overlapping vaddr/memsz/filesz
+const LS_BUNDLE_BADMAGIC: u32 = 5;
+const LS_BUNDLE_BADKIND: u32 = 6;
+const LS_BUNDLE_BADABI: u32 = 7;
+const LS_BUNDLE_BADVERSION: u32 = 8;
+const LS_BUNDLE_BADSIG: u32 = 9;
+const LS_BUNDLE_WRONGKEY: u32 = 10;
+const LS_BUNDLE_HASH: u32 = 11;
+
+const AGENT_BUNDLE_ABI: u32 = 1;
+const AGENT_BUNDLE_MIN_VERSION: u64 = 1;
+const AGENT_BUNDLE_MAX_VERSION: u64 = 1_000_000;
+const AGENT_BUNDLE_DEFAULT_VERSION: u64 = 10;
+const AGENT_BUNDLE_POLICY_VERSION: u64 = 41;
+const AGENT_BUNDLE_TRUSTED_KEY: u32 = 7;
+const AGENT_BUNDLE_SIG_LEN: usize = 256;
 
 global g_heap: Heap;
 global g_pt: PageTable;
@@ -665,7 +682,7 @@ fn net_submit(req: *ToolReq) -> u64 {
 //   -E_AGAIN  all completion slots are active (back-pressure, retryable)
 fn sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
     // Copy the request struct in as a single kernel-owned snapshot.
-    var req: ToolReq = uninit;
+    var req: ToolReq = .{ .op = 0, .flags = 0, .arg = 0, .in_ptr = 0, .in_len = 0, .out_cap = 0, .out_ptr = 0 };
     let rsz: usize = sizeof(ToolReq);
     switch copy_from_user_pt(&g_uas, pa((&req) as usize), uptr(req_ptr as usize), rsz) {
         ok(v) => {}
@@ -1007,6 +1024,42 @@ export fn mc_syscall(number: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
 // class in g_load_status (readable via app_build_status), so a loader failure is no longer
 // collapsed indistinguishably to 0. Every allocation here is fallible: a hostile image cannot
 // trap the kernel, only produce a typed status.
+fn app_bundle_error_status(e: BundleError) -> u32 {
+    switch e {
+        .BadMagic => { return LS_BUNDLE_BADMAGIC; }
+        .BadKind => { return LS_BUNDLE_BADKIND; }
+        .BadAbi => { return LS_BUNDLE_BADABI; }
+        .BadVersion => { return LS_BUNDLE_BADVERSION; }
+        .BadSignature => { return LS_BUNDLE_BADSIG; }
+        .WrongKey => { return LS_BUNDLE_WRONGKEY; }
+    }
+}
+
+export fn app_build_agent_bundle(image_base: usize, image_len: usize, region_base: usize, region_len: usize, h: *BundleHeader, sig: SignatureStatus) -> u64 {
+    g_load_status = LS_OK;
+
+    switch bundle_validate_kind(h, .Agent, AGENT_BUNDLE_ABI, AGENT_BUNDLE_MIN_VERSION, AGENT_BUNDLE_MAX_VERSION, AGENT_BUNDLE_TRUSTED_KEY, sig) {
+        ok(v) => {}
+        err(e) => {
+            g_load_status = app_bundle_error_status(e);
+            return 0;
+        }
+    }
+
+    let actual_hash: u64 = ota_hash_bytes(image_base, image_len);
+    if !bundle_image_hash_matches(h, actual_hash) {
+        g_load_status = LS_BUNDLE_HASH;
+        return 0;
+    }
+
+    return app_build(image_base, image_len, region_base, region_len);
+}
+
+export fn app_build_agent_admitted(image_base: usize, image_len: usize, region_base: usize, region_len: usize, expected_hash: u64) -> u64 {
+    var h: BundleHeader = bundle_header_init(.Agent, AGENT_BUNDLE_DEFAULT_VERSION, AGENT_BUNDLE_ABI, AGENT_BUNDLE_POLICY_VERSION, AGENT_BUNDLE_TRUSTED_KEY, expected_hash, AGENT_BUNDLE_SIG_LEN);
+    return app_build_agent_bundle(image_base, image_len, region_base, region_len, &h, .Valid);
+}
+
 export fn app_build(image_base: usize, image_len: usize, region_base: usize, region_len: usize) -> u64 {
     g_load_status = LS_OK;
     g_heap = heap_new(phys_range(pa(region_base), region_len));

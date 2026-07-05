@@ -22,7 +22,7 @@ import "kernel/arch/active/paging.mc"; // arch-selection seam (R0b); --arch pick
 const UA_PAGE_SIZE: usize = 4096;
 
 // The half-open user-accessible region [base, limit).
-struct UserSpace {
+pub struct UserSpace {
     base: usize,
     limit: usize,
 }
@@ -35,7 +35,7 @@ enum UaccessError {
     NotWritable,     // a destination page is not writable (no PTE_W)
 }
 
-export fn user_space(base: usize, limit: usize) -> UserSpace {
+pub fn user_space(base: usize, limit: usize) -> UserSpace {
     return .{ .base = base, .limit = limit };
 }
 
@@ -227,13 +227,13 @@ export fn validate_bound(comptime T: type, t: Tainted<T>, lo: T, hi: T) -> Resul
 // bound. Copies translate each user VA through `pt` and check PTE_U plus the access
 // direction's permission, so unmapped holes and kernel-only pages in the middle of a
 // range are caught — something a numeric range check cannot do.
-struct UserAddrSpace {
+pub struct UserAddrSpace {
     pt: *PageTable,
     base: usize,
     limit: usize,
 }
 
-export fn user_addr_space(pt: *PageTable, base: usize, limit: usize) -> UserAddrSpace {
+pub fn user_addr_space(pt: *PageTable, base: usize, limit: usize) -> UserAddrSpace {
     return .{ .pt = pt, .base = base, .limit = limit };
 }
 

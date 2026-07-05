@@ -19,10 +19,10 @@ const PTES_PER_TABLE: usize = 512;
 const SV39_PPN_MASK: u64 = 0x0000_0FFF_FFFF_FFFF; // 44-bit PPN field
 
 const PTE_V: u64 = 1;   // valid
-const PTE_R: u64 = 2;   // readable
-const PTE_W: u64 = 4;   // writable
-const PTE_X: u64 = 8;   // executable
-const PTE_U: u64 = 16;  // user-accessible
+pub const PTE_R: u64 = 2;   // readable
+pub const PTE_W: u64 = 4;   // writable
+pub const PTE_X: u64 = 8;   // executable
+pub const PTE_U: u64 = 16;  // user-accessible
 
 // The index into the table at `level` (0..2) for virtual address `a`.
 fn vpn(a: VAddr, level: u32) -> usize {
@@ -95,7 +95,7 @@ fn try_alloc_table(h: *mut Heap) -> Result<PAddr, HeapError> {
     }
 }
 
-struct PageTable {
+pub struct PageTable {
     root: PAddr,
 }
 
@@ -106,7 +106,7 @@ export fn page_table_root(pt: *PageTable) -> PAddr {
 
 // Create an empty page table (one zeroed root frame). Traps on heap exhaustion — for the
 // boot/init paths where a fresh heap that cannot yield one root frame is a kernel bug.
-export fn page_table_new(h: *mut Heap) -> PageTable {
+pub fn page_table_new(h: *mut Heap) -> PageTable {
     return .{ .root = alloc_table(h) };
 }
 
@@ -126,7 +126,7 @@ export fn page_table_try_new(h: *mut Heap) -> Result<PageTable, HeapError> {
 // satp encoding never leaks into architecture-independent code. The MODE constant is a local
 // `let` (not a module-level const) so this arch file adds no `SATP_SV39` symbol that would
 // collide with the demo runtimes that still define their own while paging.mc is included.
-export fn riscv_aspace_of(pt: *PageTable) -> AddressSpace {
+pub fn riscv_aspace_of(pt: *PageTable) -> AddressSpace {
     let satp_sv39: u64 = 0x8000_0000_0000_0000; // MODE = 8 (Sv39) in bits 63:60
     return AddressSpace.from_root(satp_sv39 | ((pa_value(page_table_root(pt)) >> 12) as u64));
 }

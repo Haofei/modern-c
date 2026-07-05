@@ -105,8 +105,8 @@ def main() -> None:
     )
     assert_gates(
         module,
-        ["kernel/core/production_ops.mc", "tests/qemu/lang/qjs_confined_runtime.mc"],
-        ["production-ops-test", "signed-boot-test", "app-run-test", "qjs-confined-test"],
+        ["kernel/core/production_ops.mc", "tests/qemu/proc/production_ops_demo.mc", "tests/qemu/lang/qjs_confined_runtime.mc", "tests/qemu/arch/qjs_smode_demo.mc"],
+        ["production-ops-test", "signed-boot-test", "app-run-test", "qjs-confined-test", "qjs-smode-confined-test"],
     )
     assert_checks(module, ["docs/compiler-production-readiness.md"], ["git diff --check"])
     docs_only = subprocess.run(

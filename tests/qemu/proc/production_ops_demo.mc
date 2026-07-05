@@ -17,6 +17,21 @@ export fn production_ops_run() -> u32 {
         ok(v) => {}
         err(e) => { pass = 0; }
     }
+    switch bundle_validate_kind(&agent, .Agent, 1, 8, 12, 7, .Valid) {
+        ok(v) => {}
+        err(e) => { pass = 0; }
+    }
+    switch bundle_validate_kind(&agent, .Kernel, 1, 8, 12, 7, .Valid) {
+        ok(v) => { pass = 0; }
+        err(e) => {
+            switch e {
+                .BadKind => {}
+                _ => { pass = 0; }
+            }
+        }
+    }
+    if !bundle_image_hash_matches(&agent, 0xAA55) { pass = 0; }
+    if bundle_image_hash_matches(&agent, 0x55AA) { pass = 0; }
     agent.signature_len = 0;
     switch bundle_validate(&agent, 1, 8, 12, 7, .Missing) {
         ok(v) => { pass = 0; }

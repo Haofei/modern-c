@@ -71,10 +71,20 @@ bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
     -o "$WORK/agent.elf"
 
 # ---- 2. Embed the agent ELF + build the kernel (loader/ABI/confinement) ----
+APP_HASH="$(python3 - "$WORK/agent.elf" <<'PY'
+import pathlib
+import sys
+h = 0x811c9dc5
+for b in pathlib.Path(sys.argv[1]).read_bytes():
+    h = ((h ^ b) * 0x01000193) & 0xffffffff
+print(h)
+PY
+)"
 {
     printf 'const unsigned char app_image[] = {'
     od -An -v -tx1 "$WORK/agent.elf" | tr -s ' ' '\n' | grep -v '^$' | sed 's/^/0x/; s/$/,/' | tr '\n' ' '
     printf '};\nconst unsigned int app_image_len = %s;\n' "$(wc -c < "$WORK/agent.elf")"
+    printf 'const unsigned long long app_image_hash = %sULL;\n' "$APP_HASH"
 } >"$WORK/app_image.c"
 
 # §0 ingress: embed the PURE-JS agent into the KERNEL and serve it via SYS_READ. The host ELF

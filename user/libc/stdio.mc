@@ -29,24 +29,15 @@ struct Sink {
     chunk: [SINK_CHUNK]u8,
 }
 
+global g_sink_zero_chunk: [SINK_CHUNK]u8;
+global g_digits_zero: [24]u8;
+
 fn sink_buffer(buf: usize, cap: usize) -> Sink {
-    var s: Sink = uninit;
-    s.buf = buf;
-    s.cap = cap;
-    s.count = 0;
-    s.to_console = 0;
-    s.chunk_len = 0;
-    return s;
+    return .{ .buf = buf, .cap = cap, .count = 0, .to_console = 0, .chunk_len = 0, .chunk = g_sink_zero_chunk };
 }
 
 fn sink_console() -> Sink {
-    var s: Sink = uninit;
-    s.buf = 0;
-    s.cap = 0;
-    s.count = 0;
-    s.to_console = 1;
-    s.chunk_len = 0;
-    return s;
+    return .{ .buf = 0, .cap = 0, .count = 0, .to_console = 1, .chunk_len = 0, .chunk = g_sink_zero_chunk };
 }
 
 fn sink_flush(s: *mut Sink) -> void {
@@ -104,7 +95,7 @@ fn digit_char(v: u32, upper: u8) -> u8 {
 
 // Format an unsigned magnitude with sign/prefix/precision/width/justification.
 fn emit_int(s: *mut Sink, mag_in: u64, negative: u8, base: u32, upper: u8, f: Flags, width: usize, prec: i32) -> void {
-    var digits: [24]u8 = uninit;
+    var digits: [24]u8 = g_digits_zero;
     var ndig: usize = 0;
     var mag: u64 = mag_in;
     if mag == 0 {

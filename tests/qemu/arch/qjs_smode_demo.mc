@@ -57,11 +57,7 @@ fn page_table_from_satp(satp: u64) -> PageTable {
     return .{ .root = pa(root_pa) };
 }
 
-// Build the agent's isolated S-mode space: load the QuickJS ELF + ABI via app_build (reused),
-// then add the supervisor-only kernel gigapage so the kernel survives satp activation. Returns
-// the satp, or 0 on a load failure (app_build_status() carries the typed cause).
-export fn qjs_smode_build(image_base: usize, image_len: usize, region_base: usize, region_len: usize) -> u64 {
-    let satp: u64 = app_build(image_base, image_len, region_base, region_len);
+fn qjs_smode_finish_build(satp: u64) -> u64 {
     if satp == 0 {
         return 0; // loader failure — caller prints app_build_status()
     }
@@ -86,6 +82,19 @@ export fn qjs_smode_build(image_base: usize, image_len: usize, region_base: usiz
         vslot = vslot + 1;
     }
     return satp;
+}
+
+// Build the agent's isolated S-mode space: load the QuickJS ELF + ABI via app_build (reused),
+// then add the supervisor-only kernel gigapage so the kernel survives satp activation. Returns
+// the satp, or 0 on a load failure (app_build_status() carries the typed cause).
+export fn qjs_smode_build(image_base: usize, image_len: usize, region_base: usize, region_len: usize) -> u64 {
+    return qjs_smode_finish_build(app_build(image_base, image_len, region_base, region_len));
+}
+
+// Production-shaped S-mode agent startup: require the same signed-bundle admission as the
+// M-mode confined runtime before adding the supervisor-only S-mode mappings.
+export fn qjs_smode_build_admitted(image_base: usize, image_len: usize, region_base: usize, region_len: usize, expected_hash: u64) -> u64 {
+    return qjs_smode_finish_build(app_build_agent_admitted(image_base, image_len, region_base, region_len, expected_hash));
 }
 
 // Confinement proof (S-mode form): the kernel VA is mapped (so the S-mode trap path keeps

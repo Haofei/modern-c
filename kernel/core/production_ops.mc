@@ -53,6 +53,29 @@ pub fn bundle_header_init(kind: BundleKind, version: u64, abi_version: u32, poli
     };
 }
 
+fn bundle_kind_matches(actual: BundleKind, expected: BundleKind) -> bool {
+    switch expected {
+        .Kernel => {
+            switch actual {
+                .Kernel => { return true; }
+                _ => { return false; }
+            }
+        }
+        .Policy => {
+            switch actual {
+                .Policy => { return true; }
+                _ => { return false; }
+            }
+        }
+        .Agent => {
+            switch actual {
+                .Agent => { return true; }
+                _ => { return false; }
+            }
+        }
+    }
+}
+
 pub fn bundle_validate(h: *BundleHeader, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, sig: SignatureStatus) -> Result<bool, BundleError> {
     if h.magic != BUNDLE_MAGIC {
         return err(.BadMagic);
@@ -78,6 +101,20 @@ pub fn bundle_validate(h: *BundleHeader, expected_abi: u32, min_version: u64, ma
         .Bad => { return err(.BadSignature); }
         .WrongKey => { return err(.WrongKey); }
     }
+}
+
+pub fn bundle_validate_kind(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, sig: SignatureStatus) -> Result<bool, BundleError> {
+    if h.magic != BUNDLE_MAGIC {
+        return err(.BadMagic);
+    }
+    if !bundle_kind_matches(h.kind, expected_kind) {
+        return err(.BadKind);
+    }
+    return bundle_validate(h, expected_abi, min_version, max_version, trusted_key_id, sig);
+}
+
+pub fn bundle_image_hash_matches(h: *BundleHeader, expected_hash: u64) -> bool {
+    return h.image_hash == expected_hash;
 }
 
 pub enum SlotState {

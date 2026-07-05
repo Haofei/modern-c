@@ -15,17 +15,18 @@ const RT_KERNEL_VA: usize = 0x8000_0000;
 const RT_PAGE: usize = 4096;
 const RT_REGION_LEN: usize = 16 * 1024 * 1024; // 16 MiB usable
 
-// The embedded agent ELF, emitted by the harness as `const unsigned char app_image[]` +
-// `const unsigned int app_image_len`. We only need the base address + the length.
+// The embedded agent ELF, emitted by the harness as `const unsigned char app_image[]`,
+// `const unsigned int app_image_len`, and an independently-computed `app_image_hash`.
 extern global app_image: u8;
 extern global app_image_len: u32;
+extern global app_image_hash: u64;
 
 // Shared bring-up: _start + mc_halt (context_runtime.c); trap vector + enter_user
 // (usermode_runtime.c); ELF load + isolated-space build + confinement checks (app_run_demo.mc).
 extern fn mc_halt() -> void;
 extern fn usermode_setup() -> void;
 extern fn enter_user(entry: usize, user_sp: usize) -> void;
-extern fn app_build(image_base: usize, image_len: usize, region_base: usize, region_len: usize) -> u64;
+extern fn app_build_agent_admitted(image_base: usize, image_len: usize, region_base: usize, region_len: usize, expected_hash: u64) -> u64;
 extern fn app_build_status() -> u32;
 extern fn app_entry() -> u64;
 extern fn app_kernel_unmapped(kernel_va: usize) -> u32;
@@ -52,7 +53,14 @@ fn print_load_status(s: u32) -> void {
     else { if s == 2 { uputs("APP-LOAD-FAIL: TooManyPages\n"); }
     else { if s == 3 { uputs("APP-LOAD-FAIL: NoFrame\n"); }
     else { if s == 4 { uputs("APP-LOAD-FAIL: BadSegment\n"); }
-    else { uputs("APP-LOAD-FAIL: unknown\n"); } } } }
+    else { if s == 5 { uputs("APP-LOAD-FAIL: BundleBadMagic\n"); }
+    else { if s == 6 { uputs("APP-LOAD-FAIL: BundleBadKind\n"); }
+    else { if s == 7 { uputs("APP-LOAD-FAIL: BundleBadAbi\n"); }
+    else { if s == 8 { uputs("APP-LOAD-FAIL: BundleBadVersion\n"); }
+    else { if s == 9 { uputs("APP-LOAD-FAIL: BundleBadSignature\n"); }
+    else { if s == 10 { uputs("APP-LOAD-FAIL: BundleWrongKey\n"); }
+    else { if s == 11 { uputs("APP-LOAD-FAIL: BundleHashMismatch\n"); }
+    else { uputs("APP-LOAD-FAIL: unknown\n"); } } } } } } } } } } }
 }
 
 // Activate the agent's isolated address space. M-mode ignores satp for its own fetches, so
@@ -76,9 +84,22 @@ export fn test_main() -> void {
 
     let image_base: usize = (&app_image) as usize;
     let image_len: usize = app_image_len as usize;
+    let expected_hash: u64 = app_image_hash;
     let region: usize = page_align((&g_region[0]) as usize);
 
-    let satp: u64 = app_build(image_base, image_len, region, RT_REGION_LEN);
+    let bad_satp: u64 = app_build_agent_admitted(image_base, image_len, region, RT_REGION_LEN, expected_hash ^ 1);
+    if bad_satp != 0 {
+        uputs("APP-ADMISSION-PROOF: hash mismatch accepted\n");
+        mc_halt();
+    }
+    if app_build_status() != 11 {
+        uputs("APP-ADMISSION-PROOF: wrong rejection status\n");
+        print_load_status(app_build_status());
+        mc_halt();
+    }
+    uputs("APP-ADMISSION-PROOF: hash mismatch rejected\n");
+
+    let satp: u64 = app_build_agent_admitted(image_base, image_len, region, RT_REGION_LEN, expected_hash);
     if satp == 0 {
         print_load_status(app_build_status());
         mc_halt();
