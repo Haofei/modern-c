@@ -5734,6 +5734,10 @@ const LlvmEmitter = struct {
                         self.localPointerArrayAliasBaseHasAnyGlobalPointerProvenance(node.base.*)),
             .call => |call| if (isAssumeNoaliasCall(call) and call.args.len == 2)
                 self.pointerExprHasGlobalStorageProvenance(call.args[0])
+            else if (self.rawManyOffsetCallInfo(call)) |info|
+                call.args.len == 1 and
+                    self.localArrayConstIndexValue(call.args[0]) == 0 and
+                    self.pointerExprHasGlobalStorageProvenance(info.base)
             else if (self.directCallName(call.callee.*)) |callee|
                 self.global_pointer_return_fns.contains(callee)
             else

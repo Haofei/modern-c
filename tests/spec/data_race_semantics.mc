@@ -33,6 +33,8 @@ struct PointerArrayHolder3 {
 global shared_pair: SharedPair;
 global shared_values: [4]u32;
 
+extern fn external_raw_many_pointer() -> [*]mut u32;
+
 fn local_non_racing_access() -> u32 {
     var local: u32 = 1;
     local = local + 1;
@@ -71,6 +73,41 @@ fn possibly_racing_pointer_load() -> u32 {
 fn possibly_racing_direct_address_deref_load() -> u32 {
     // EXPECT: lower-llvm emits unordered atomic load for direct address-of global deref.
     return (&shared_counter).*;
+}
+
+fn possibly_racing_raw_many_offset_zero_pointer_load() -> u32 {
+    unsafe {
+        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        let q: [*]mut u32 = p.offset(0);
+        // EXPECT: lower-llvm emits unordered atomic load through a raw-many zero offset that preserves already-proven global storage.
+        return q.*;
+    }
+}
+
+fn raw_many_offset_one_pointer_stays_plain() -> u32 {
+    unsafe {
+        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        let q: [*]mut u32 = p.offset(1);
+        // EXPECT: lower-llvm keeps nonzero raw-many pointer offsets plain.
+        return q.*;
+    }
+}
+
+fn raw_many_offset_dynamic_pointer_stays_plain(i: usize) -> u32 {
+    unsafe {
+        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        let q: [*]mut u32 = p.offset(i);
+        // EXPECT: lower-llvm keeps dynamic raw-many pointer offsets plain.
+        return q.*;
+    }
+}
+
+fn raw_many_offset_unknown_pointer_stays_plain() -> u32 {
+    unsafe {
+        let q: [*]mut u32 = external_raw_many_pointer().offset(0);
+        // EXPECT: lower-llvm keeps unknown call-produced raw-many pointers plain, even at zero offset.
+        return q.*;
+    }
 }
 
 fn returned_global_pointer() -> *mut u32 {

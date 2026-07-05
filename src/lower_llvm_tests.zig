@@ -98,6 +98,32 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(address_deref_body, "load atomic i32, ptr @shared_counter unordered, align 4");
     try expectNotContains(address_deref_body, "load i32, ptr @shared_counter");
 
+    const raw_many_offset_zero_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_raw_many_offset_zero_pointer_load");
+    try expectContains(raw_many_offset_zero_body, "store ptr @shared_counter, ptr %p.addr.");
+    try expectContains(raw_many_offset_zero_body, "getelementptr i32, ptr %");
+    try expectContains(raw_many_offset_zero_body, ", i64 0");
+    try expectContains(raw_many_offset_zero_body, "load atomic i32, ptr %");
+    try expectContains(raw_many_offset_zero_body, " unordered, align 4");
+    try expectNotContains(raw_many_offset_zero_body, "load i32, ptr %");
+
+    const raw_many_offset_one_body = try llvmFunctionBody(output.items, "define internal i32 @raw_many_offset_one_pointer_stays_plain");
+    try expectContains(raw_many_offset_one_body, "store ptr @shared_counter, ptr %p.addr.");
+    try expectContains(raw_many_offset_one_body, ", i64 1");
+    try expectContains(raw_many_offset_one_body, "load i32, ptr %");
+    try expectNotContains(raw_many_offset_one_body, " atomic ");
+
+    const raw_many_offset_dynamic_body = try llvmFunctionBody(output.items, "define internal i32 @raw_many_offset_dynamic_pointer_stays_plain");
+    try expectContains(raw_many_offset_dynamic_body, "store ptr @shared_counter, ptr %p.addr.");
+    try expectContains(raw_many_offset_dynamic_body, "getelementptr i32, ptr %");
+    try expectContains(raw_many_offset_dynamic_body, "load i32, ptr %");
+    try expectNotContains(raw_many_offset_dynamic_body, " atomic ");
+
+    const raw_many_offset_unknown_body = try llvmFunctionBody(output.items, "define internal i32 @raw_many_offset_unknown_pointer_stays_plain");
+    try expectContains(raw_many_offset_unknown_body, "call ptr @external_raw_many_pointer()");
+    try expectContains(raw_many_offset_unknown_body, ", i64 0");
+    try expectContains(raw_many_offset_unknown_body, "load i32, ptr %");
+    try expectNotContains(raw_many_offset_unknown_body, " atomic ");
+
     const returned_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_returned_pointer_load");
     try expectContains(returned_pointer_body, "call ptr @returned_global_pointer()");
     try expectContains(returned_pointer_body, "load atomic i32, ptr %");
