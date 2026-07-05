@@ -1438,6 +1438,45 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
         \\    external_raw_many_pointer();
         \\    return gp.*;
         \\}
+        \\
+        \\fn pointer_fact_raw_many_zero_load() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = p.offset(0);
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
+        \\fn pointer_fact_raw_many_zero_store(x: u32) -> void {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = p.offset(0);
+        \\        q.* = x;
+        \\    }
+        \\}
+        \\
+        \\fn pointer_fact_raw_many_nonzero_stays_plain() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = p.offset(1);
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
+        \\fn pointer_fact_raw_many_dynamic_stays_plain(i: usize) -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = p.offset(i);
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
+        \\fn pointer_fact_raw_many_unknown_stays_plain() -> u32 {
+        \\    unsafe {
+        \\        let q: [*]mut u32 = external_raw_many_pointer().offset(0);
+        \\        return q.*;
+        \\    }
+        \\}
     ;
 
     var parsed = try test_support.parseModule("emit_c_pointer_provenance.mc", source);
@@ -1463,6 +1502,26 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
     const invalidated_return = std.mem.indexOfPos(u8, output.items, invalidated_pos, "return *gp;") orelse return error.TestExpectedEqual;
     const invalidated_slice = output.items[invalidated_pos..invalidated_return];
     try expectNotContains(invalidated_slice, "mc_race_load_u32(gp)");
+
+    const raw_many_zero_load_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_zero_load(void)");
+    try expectContains(raw_many_zero_load_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_zero_load subject=q provenance=global_storage reason=none source=");
+    try expectContains(raw_many_zero_load_body, "return ((uint32_t)mc_race_load_u32(q));");
+
+    const raw_many_zero_store_body = try cFunctionBody(output.items, "static void pointer_fact_raw_many_zero_store(uint32_t x)");
+    try expectContains(raw_many_zero_store_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_zero_store subject=q provenance=global_storage reason=none source=");
+    try expectContains(raw_many_zero_store_body, "mc_race_store_u32(q, (uint32_t)x);");
+
+    const raw_many_nonzero_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_nonzero_stays_plain(void)");
+    try expectContains(raw_many_nonzero_body, "return *q;");
+    try expectNotContains(raw_many_nonzero_body, "mc_race_load_u32(q)");
+
+    const raw_many_dynamic_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_dynamic_stays_plain(uintptr_t i)");
+    try expectContains(raw_many_dynamic_body, "return *q;");
+    try expectNotContains(raw_many_dynamic_body, "mc_race_load_u32(q)");
+
+    const raw_many_unknown_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_unknown_stays_plain(void)");
+    try expectContains(raw_many_unknown_body, "return *q;");
+    try expectNotContains(raw_many_unknown_body, "mc_race_load_u32(q)");
 
     var mir_dump: std.ArrayList(u8) = .empty;
     defer mir_dump.deinit(std.testing.allocator);

@@ -23,6 +23,22 @@ fn clearPointerProvenanceFactsForFunction(module_mir: *mir.Module, name: []const
     return error.TestUnexpectedResult;
 }
 
+fn clearPointerProvenanceFactsForFunctionSubject(module_mir: *mir.Module, name: []const u8, subject: []const u8) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        var retained: std.ArrayList(mir.PointerProvenanceFact) = .empty;
+        errdefer retained.deinit(module_mir.allocator);
+        for (function.pointer_provenance_facts) |fact| {
+            if (std.mem.eql(u8, fact.subject, subject)) continue;
+            try retained.append(module_mir.allocator, fact);
+        }
+        module_mir.allocator.free(function.pointer_provenance_facts);
+        function.pointer_provenance_facts = try retained.toOwnedSlice(module_mir.allocator);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn appendLlvmTestWithoutPointerProvenanceFacts(source_name: []const u8, source: []const u8, function_names: []const []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();
@@ -32,6 +48,17 @@ fn appendLlvmTestWithoutPointerProvenanceFacts(source_name: []const u8, source: 
     for (function_names) |function_name| {
         try clearPointerProvenanceFactsForFunction(&module_mir, function_name);
     }
+
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, output, source_name, .{}, false, .riscv64, null);
+}
+
+fn appendLlvmTestWithoutPointerProvenanceFactsForSubject(source_name: []const u8, source: []const u8, function_name: []const u8, subject: []const u8, output: *std.ArrayList(u8)) !void {
+    var parsed = try test_support.parseModule(source_name, source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearPointerProvenanceFactsForFunctionSubject(&module_mir, function_name, subject);
 
     try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, output, source_name, .{}, false, .riscv64, null);
 }
@@ -130,6 +157,7 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
 
     const raw_many_offset_zero_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_raw_many_offset_zero_pointer_load");
     try expectContains(raw_many_offset_zero_body, "store ptr @shared_counter, ptr %p.addr.");
+    try expectContains(raw_many_offset_zero_body, "; mir pointer_provenance consumed fn=possibly_racing_raw_many_offset_zero_pointer_load subject=q provenance=global_storage reason=none");
     try expectContains(raw_many_offset_zero_body, "getelementptr i32, ptr %");
     try expectContains(raw_many_offset_zero_body, ", i64 0");
     try expectContains(raw_many_offset_zero_body, "load atomic i32, ptr %");
@@ -938,6 +966,53 @@ test "LLVM direct pointer locals require MIR provenance facts" {
     const assignment_body = try llvmFunctionBody(output.items, "define internal i32 @direct_assignment_requires_mir_fact");
     try expectContains(assignment_body, "store ptr @shared_counter, ptr %p.addr.");
     try expectNotContains(assignment_body, "; mir pointer_provenance consumed");
+    try expectContains(assignment_body, "load i32, ptr %");
+    try expectNotContains(assignment_body, " atomic ");
+}
+
+test "LLVM raw-many zero direct local requires MIR provenance fact" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn raw_many_zero_requires_mir_fact() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = p.offset(0);
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
+        \\fn raw_many_zero_assignment_requires_mir_fact() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        var q: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        q = p.offset(0);
+        \\        return q.*;
+        \\    }
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_raw_many_zero_missing_pointer_provenance.mc", source, "raw_many_zero_requires_mir_fact", "q", &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @raw_many_zero_requires_mir_fact");
+    try expectContains(body, "; mir pointer_provenance consumed fn=raw_many_zero_requires_mir_fact subject=p provenance=global_storage reason=none");
+    try expectNotContains(body, "; mir pointer_provenance consumed fn=raw_many_zero_requires_mir_fact subject=q");
+    try expectContains(body, "getelementptr i32, ptr %");
+    try expectContains(body, ", i64 0");
+    try expectContains(body, "load i32, ptr %");
+    try expectNotContains(body, " atomic ");
+
+    var assignment_output: std.ArrayList(u8) = .empty;
+    defer assignment_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_raw_many_zero_missing_pointer_provenance.mc", source, "raw_many_zero_assignment_requires_mir_fact", "q", &assignment_output);
+
+    const assignment_body = try llvmFunctionBody(assignment_output.items, "define internal i32 @raw_many_zero_assignment_requires_mir_fact");
+    try expectContains(assignment_body, "; mir pointer_provenance consumed fn=raw_many_zero_assignment_requires_mir_fact subject=p provenance=global_storage reason=none");
+    try expectNotContains(assignment_body, "; mir pointer_provenance consumed fn=raw_many_zero_assignment_requires_mir_fact subject=q");
+    try expectContains(assignment_body, "getelementptr i32, ptr %");
+    try expectContains(assignment_body, ", i64 0");
     try expectContains(assignment_body, "load i32, ptr %");
     try expectNotContains(assignment_body, " atomic ");
 }

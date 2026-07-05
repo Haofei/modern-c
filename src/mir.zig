@@ -24,6 +24,7 @@ const isWrapPreservingBinary = ast_query.isWrapPreservingBinary;
 const reduceCallKind = ast_query.reduceCallKind;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
+const memberCallee = ast_query.memberCallee;
 
 // Numeric-literal and integer-bounds primitives shared with `sema.zig` and `lower_c.zig`
 // (see `numeric.zig`); aliased here so the existing call sites read unchanged.
@@ -789,6 +790,8 @@ const LivePointerProvenance = struct {
     subject: []const u8,
     element_index: ?usize,
     pointer_shape: PointerShape,
+    provenance: PointerProvenance,
+    storage: ?[]const u8,
 };
 
 const DirectPointerProvenance = struct {
@@ -2256,8 +2259,9 @@ const FunctionBuilder = struct {
                     }
                 }
                 if (instr_kind == .unchecked_assume) try self.addRangeFactForUncheckedCall(callee_name, node.args, expr.span);
-                if (instr_kind == .call) try self.recordPointerProvenanceCallInvalidation(.call, expr.span);
-                if (instr_kind == .indirect_call) try self.recordPointerProvenanceCallInvalidation(.indirect_call, expr.span);
+                const preserves_pointer_provenance = self.ptrOffsetReceiverType(node.callee.*) != null;
+                if (!preserves_pointer_provenance and instr_kind == .call) try self.recordPointerProvenanceCallInvalidation(.call, expr.span);
+                if (!preserves_pointer_provenance and instr_kind == .indirect_call) try self.recordPointerProvenanceCallInvalidation(.indirect_call, expr.span);
                 if (isTrapCall(node.callee.*)) try self.addTrapEdge(.ExplicitTrap, .explicit_trap, expr.span);
                 if (isUnwrapCall(node.callee.*)) try self.addTrapEdge(.Unwrap, .unwrap, expr.span);
                 // Conversion/domain builtins have precise trap behaviour: `trap_from`
@@ -2751,7 +2755,7 @@ const FunctionBuilder = struct {
 
     fn recordPointerProvenanceForLocalInitializer(self: *FunctionBuilder, names: []ast.Ident, ty_expr: ?ast.TypeExpr, value_ty: ValueType, initializer: ast.Expr) !void {
         if (pointerShapeFromValueType(value_ty)) |shape| {
-            const provenance = self.directAddressProvenance(initializer) orelse return;
+            const provenance = self.directPointerProvenance(initializer) orelse return;
             for (names) |name| try self.appendPointerProvenanceFact(name.text, null, provenance, shape, .none, initializer.span);
             return;
         }
@@ -2770,7 +2774,7 @@ const FunctionBuilder = struct {
         if (assignmentTargetIdentName(target)) |target_name| {
             const target_ty = self.typeForAssignmentTarget(target);
             if (pointerShapeFromValueType(target_ty)) |shape| {
-                if (self.directAddressProvenance(value)) |provenance| {
+                if (self.directPointerProvenance(value)) |provenance| {
                     try self.appendPointerProvenanceFact(target_name, null, provenance, shape, .reassignment, value.span);
                 } else {
                     try self.appendUnknownPointerProvenanceFact(target_name, null, shape, .reassignment, span);
@@ -2860,7 +2864,7 @@ const FunctionBuilder = struct {
             .invalidation_policy = .invalidate_on_mutation_escape_or_call,
             .source = .{ .line = span.line, .column = span.column },
         });
-        try self.setLivePointerProvenance(subject, element_index, shape);
+        try self.setLivePointerProvenance(subject, element_index, shape, provenance);
     }
 
     fn appendUnknownPointerProvenanceFact(self: *FunctionBuilder, subject: []const u8, element_index: ?usize, shape: PointerShape, reason: PointerProvenanceInvalidationReason, span: ast.Span) !void {
@@ -2881,12 +2885,14 @@ const FunctionBuilder = struct {
         try self.appendUnknownPointerProvenanceFact(subject, element_index, shape, reason, span);
     }
 
-    fn setLivePointerProvenance(self: *FunctionBuilder, subject: []const u8, element_index: ?usize, shape: PointerShape) !void {
+    fn setLivePointerProvenance(self: *FunctionBuilder, subject: []const u8, element_index: ?usize, shape: PointerShape, provenance: DirectPointerProvenance) !void {
         self.clearLivePointerProvenance(subject, element_index);
         try self.live_pointer_provenance.append(self.allocator, .{
             .subject = subject,
             .element_index = element_index,
             .pointer_shape = shape,
+            .provenance = provenance.kind,
+            .storage = provenance.storage,
         });
     }
 
@@ -2910,6 +2916,54 @@ const FunctionBuilder = struct {
             .address_of => |inner| self.directAddressTargetProvenance(inner.*),
             else => null,
         };
+    }
+
+    fn directPointerProvenance(self: *FunctionBuilder, expr: ast.Expr) ?DirectPointerProvenance {
+        return self.directAddressProvenance(expr) orelse self.rawManyZeroOffsetProvenance(expr);
+    }
+
+    fn rawManyZeroOffsetProvenance(self: *FunctionBuilder, expr: ast.Expr) ?DirectPointerProvenance {
+        return switch (expr.kind) {
+            .grouped => |inner| self.rawManyZeroOffsetProvenance(inner.*),
+            .cast => |node| self.rawManyZeroOffsetProvenance(node.value.*),
+            .call => |call| blk: {
+                if (call.type_args.len != 0 or call.args.len != 1) break :blk null;
+                const member = memberCallee(call.callee.*) orelse break :blk null;
+                if (!std.mem.eql(u8, member.name.text, "offset")) break :blk null;
+                const offset = integerLiteralValue(call.args[0]) orelse break :blk null;
+                if (offset.negative or offset.magnitude != 0) break :blk null;
+                const base_name = self.directRawManyOffsetBaseLocalName(member.base.*) orelse break :blk null;
+                const live = self.livePointerProvenanceForDirectLocal(base_name) orelse break :blk null;
+                if (live.pointer_shape.kind != .raw_many or live.provenance != .global_storage) break :blk null;
+                const storage = live.storage orelse break :blk null;
+                break :blk .{ .kind = live.provenance, .storage = storage };
+            },
+            else => null,
+        };
+    }
+
+    fn directRawManyOffsetBaseLocalName(self: *FunctionBuilder, expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directRawManyOffsetBaseLocalName(inner.*),
+            .ident => |ident| blk: {
+                const ty = self.local_types.get(ident.text) orelse break :blk null;
+                const shape = pointerShapeFromValueType(ty) orelse break :blk null;
+                if (shape.kind != .raw_many) break :blk null;
+                break :blk ident.text;
+            },
+            else => null,
+        };
+    }
+
+    fn livePointerProvenanceForDirectLocal(self: *FunctionBuilder, subject: []const u8) ?LivePointerProvenance {
+        var index = self.live_pointer_provenance.items.len;
+        while (index > 0) {
+            index -= 1;
+            const live = self.live_pointer_provenance.items[index];
+            if (live.element_index != null) continue;
+            if (std.mem.eql(u8, live.subject, subject)) return live;
+        }
+        return null;
     }
 
     fn directAddressTargetProvenance(self: *FunctionBuilder, expr: ast.Expr) ?DirectPointerProvenance {

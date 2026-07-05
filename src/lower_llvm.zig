@@ -5730,13 +5730,43 @@ const LlvmEmitter = struct {
     }
 
     fn mirPointerProvenanceCoversDirectLocalUpdate(self: *LlvmEmitter, ty: ast.TypeExpr, expr: ast.Expr) bool {
-        return self.isPointerLikeType(ty) and self.directMirAddressProvenanceExpr(expr);
+        return self.isPointerLikeType(ty) and
+            (self.directMirAddressProvenanceExpr(expr) or self.directMirRawManyZeroOffsetExpr(expr));
+    }
+
+    fn directMirRawManyZeroOffsetExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directMirRawManyZeroOffsetExpr(inner.*),
+            .cast => |node| self.directMirRawManyZeroOffsetExpr(node.value.*),
+            .call => |call| blk: {
+                if (call.type_args.len != 0 or call.args.len != 1) break :blk false;
+                const member = memberExpr(call.callee.*) orelse break :blk false;
+                if (!std.mem.eql(u8, member.name.text, "offset")) break :blk false;
+                if (self.localArrayConstIndexValue(call.args[0]) != 0) break :blk false;
+                const base_name = self.directRawManyLocalName(member.base.*) orelse break :blk false;
+                _ = base_name;
+                break :blk true;
+            },
+            else => false,
+        };
+    }
+
+    fn directRawManyLocalName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directRawManyLocalName(inner.*),
+            .ident => |ident| blk: {
+                const ty = self.local_types.get(ident.text) orelse break :blk null;
+                if (self.resolveAliasType(ty).kind != .raw_many_pointer) break :blk null;
+                break :blk ident.text;
+            },
+            else => null,
+        };
     }
 
     fn applyMirPointerProvenanceForLocalInitializer(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
         if (self.isPointerLikeType(ty)) {
             const matched = try self.applyMirPointerProvenanceFactsAtSource(name, null, init.span);
-            if (!matched and self.directMirAddressProvenanceExpr(init)) _ = self.global_pointer_locals.remove(name);
+            if (!matched and (self.directMirAddressProvenanceExpr(init) or self.directMirRawManyZeroOffsetExpr(init))) _ = self.global_pointer_locals.remove(name);
             return;
         }
         if (self.fixedLocalPointerArrayElementType(ty) == null) return;
@@ -5753,7 +5783,7 @@ const LlvmEmitter = struct {
         if (self.isPointerLikeType(ty)) {
             const matched_value = try self.applyMirPointerProvenanceFactsAtSource(name, null, value_expr.span);
             _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span);
-            if (!matched_value and self.directMirAddressProvenanceExpr(value_expr)) _ = self.global_pointer_locals.remove(name);
+            if (!matched_value and (self.directMirAddressProvenanceExpr(value_expr) or self.directMirRawManyZeroOffsetExpr(value_expr))) _ = self.global_pointer_locals.remove(name);
             return;
         }
         if (self.fixedLocalPointerArrayElementType(ty) == null) return;

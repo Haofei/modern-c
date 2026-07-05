@@ -374,6 +374,7 @@ pub fn derefPointeeType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
             const resolved = resolveAliasType(ctx, ty);
             break :blk switch (resolved.kind) {
                 .pointer => |p| p.child.*,
+                .raw_many_pointer => |p| p.child.*,
                 else => null,
             };
         },

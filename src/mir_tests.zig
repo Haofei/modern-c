@@ -1236,6 +1236,80 @@ test "MIR pointer provenance facts fail closed on reassignment dynamic writes ca
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=dynamic_index_write") != null);
 }
 
+test "MIR records narrow raw-many zero offset pointer provenance facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\extern fn external_raw_many_pointer() -> [*]mut u32;
+        \\
+        \\fn touch() {}
+        \\
+        \\fn raw_many_zero_fact() {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = p.offset(0);
+        \\    }
+        \\}
+        \\
+        \\fn raw_many_zero_assignment_fact() {
+        \\    unsafe {
+        \\        var local: u32 = 1;
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        var q: [*]mut u32 = (&local) as [*]mut u32;
+        \\        q = p.offset(0);
+        \\    }
+        \\}
+        \\
+        \\fn raw_many_zero_fail_closed(i: usize) {
+        \\    unsafe {
+        \\        var local: u32 = 1;
+        \\        let global_p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let local_p: [*]mut u32 = (&local) as [*]mut u32;
+        \\        var q: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        q = global_p.offset(1);
+        \\        q = global_p.offset(i);
+        \\        q = local_p.offset(0);
+        \\        q = external_raw_many_pointer().offset(0);
+        \\        touch();
+        \\        q = global_p.offset(0);
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_raw_many_zero_pointer_provenance.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const zero_fn = functionByName(typed_mir, "raw_many_zero_fact").?;
+    try std.testing.expect(hasPointerProvenanceFact(zero_fn, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(zero_fn, "q", null, .global_storage, .none, "shared_counter"));
+
+    const assignment_fn = functionByName(typed_mir, "raw_many_zero_assignment_fact").?;
+    try std.testing.expect(hasPointerProvenanceFact(assignment_fn, "q", null, .global_storage, .reassignment, "shared_counter"));
+
+    const fail_closed_fn = functionByName(typed_mir, "raw_many_zero_fail_closed").?;
+    try std.testing.expect(hasPointerProvenanceFact(fail_closed_fn, "global_p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(fail_closed_fn, "local_p", null, .local_storage, .none, "local"));
+    try std.testing.expectEqual(@as(usize, 1), countPointerProvenanceFacts(fail_closed_fn, "q", .global_storage));
+    try std.testing.expectEqual(@as(usize, 5), countPointerProvenanceFacts(fail_closed_fn, "q", .unknown));
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, module, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_assignment_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fail_closed subject=q element=none provenance=unknown storage=none pointer_kind=raw_many") != null);
+}
+
 test "MIR range facts are top-level and no_overflow operations are known" {
     const source =
         \\struct Counter {
