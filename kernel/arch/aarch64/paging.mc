@@ -157,7 +157,7 @@ export fn page_table_root(pt: *PageTable) -> PAddr {
 
 // Create an empty page table (one zeroed L0 frame). Traps on heap exhaustion — for boot/init
 // paths where a fresh heap that cannot yield one root frame is a kernel bug.
-export fn page_table_new(h: *mut Heap) -> PageTable {
+pub fn page_table_new(h: *mut Heap) -> PageTable {
     return .{ .root = alloc_table(h) };
 }
 
@@ -173,7 +173,7 @@ export fn page_table_try_new(h: *mut Heap) -> Result<PageTable, HeapError> {
 // Encode this page table's root as a portable `AddressSpace` handle. On AArch64 TTBR0_EL1 is
 // the physical address of the L0 table (low bits 0; ASID unused here), so the handle carries
 // the raw root address. This is the one place the aarch64 TTBR layout lives.
-export fn aarch64_aspace_of(pt: *PageTable) -> AddressSpace {
+pub fn aarch64_aspace_of(pt: *PageTable) -> AddressSpace {
     return AddressSpace.from_root(pa_value(page_table_root(pt)) as u64);
 }
 

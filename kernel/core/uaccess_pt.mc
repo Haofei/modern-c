@@ -37,7 +37,7 @@ struct UserAddrSpace {
     limit: usize,
 }
 
-export fn user_addr_space(pt: *PageTable, base: usize, limit: usize) -> UserAddrSpace {
+pub fn user_addr_space(pt: *PageTable, base: usize, limit: usize) -> UserAddrSpace {
     return .{ .pt = pt, .base = base, .limit = limit };
 }
 
