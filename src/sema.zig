@@ -970,7 +970,12 @@ pub const Checker = struct {
             .union_decl => |union_decl| self.checkTaggedUnion(union_decl, type_ctx),
             .packed_bits_decl => |packed_bits_decl| self.checkPackedBits(packed_bits_decl, type_ctx),
             .overlay_union_decl => |overlay_union_decl| self.checkOverlayUnion(overlay_union_decl, type_ctx),
-            .type_alias => |alias| self.checkType(alias.ty, .normal, type_ctx),
+            .type_alias => |alias| {
+                self.checkType(alias.ty, .normal, type_ctx);
+                if (self.typeIsMoveArray(alias.ty, type_aliases)) {
+                    self.errorCode(alias.ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable (element moves need place analysis); hold the resources behind pointers or in a `move` container instead");
+                }
+            },
             .opaque_decl => {},
             // Trait / impl-trait conformance checks run as their own pass (checkTraits);
             // the impl methods themselves are ordinary `Type__m` fn_decls checked above.
@@ -979,6 +984,9 @@ pub const Checker = struct {
                 const type_error_count = self.reporter.diagnostics.items.len;
                 if (global.ty) |ty| {
                     self.checkType(ty, .storage, type_ctx);
+                    if (self.typeIsMoveArray(ty, type_aliases)) {
+                        self.errorCode(ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable (element moves need place analysis); hold the resources behind pointers or in a `move` container instead");
+                    }
                 } else {
                     self.errorCode(global.name.span, "E_GLOBAL_REQUIRES_TYPE", "global declarations require an explicit storage type");
                     return;
@@ -1141,8 +1149,17 @@ pub const Checker = struct {
     // leaked) — including a generic container monomorphized over a move type, e.g.
     // `Pool<Token, N>`'s `[N]Token` or `Arc<Token>`'s embedded value.
     pub fn typeEmbedsMoveByValue(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        return self.typeEmbedsMoveByValueDepth(ty, aliases, 0);
+    }
+
+    fn typeEmbedsMoveByValueDepth(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        if (depth >= 64) return false;
         switch (ty.kind) {
-            .name => return self.isMoveTypeName(ty, aliases),
+            .name => |n| {
+                if (self.isMoveTypeName(ty, aliases)) return true;
+                if (aliases.get(n.text)) |target| return self.typeEmbedsMoveByValueDepth(target, aliases, depth + 1);
+                return false;
+            },
             .generic => |g| {
                 if (self.isMoveTypeName(ty, aliases)) return true; // a `move` generic (Arc<T>, …)
                 // A built-in generic that stores its type arguments by value (e.g. Result<T,E>)
@@ -1151,14 +1168,14 @@ pub const Checker = struct {
                 // directly, and a move field in a non-`move` struct is rejected there.)
                 if (genericHoldsArgsByValue(g.base.text)) {
                     for (g.args) |arg| {
-                        if (self.typeEmbedsMoveByValue(arg, aliases)) return true;
+                        if (self.typeEmbedsMoveByValueDepth(arg, aliases, depth + 1)) return true;
                     }
                 }
                 return false;
             },
-            .array => |node| return self.typeEmbedsMoveByValue(node.child.*, aliases),
-            .qualified => |node| return self.typeEmbedsMoveByValue(node.child.*, aliases),
-            .nullable => |child| return self.typeEmbedsMoveByValue(child.*, aliases),
+            .array => |node| return self.typeEmbedsMoveByValueDepth(node.child.*, aliases, depth + 1),
+            .qualified => |node| return self.typeEmbedsMoveByValueDepth(node.child.*, aliases, depth + 1),
+            .nullable => |child| return self.typeEmbedsMoveByValueDepth(child.*, aliases, depth + 1),
             else => return false, // pointers, slices, fn/closure types: not by-value
         }
     }
@@ -1167,10 +1184,19 @@ pub const Checker = struct {
     // embeds a `move` resource. Such a binding can't be tracked yet — element moves need the
     // place model — so it is rejected rather than silently allowed to duplicate/leak.
     pub fn typeIsMoveArray(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        return self.typeIsMoveArrayDepth(ty, aliases, 0);
+    }
+
+    fn typeIsMoveArrayDepth(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        if (depth >= 64) return false;
         switch (ty.kind) {
-            .array => |node| return self.typeEmbedsMoveByValue(node.child.*, aliases),
-            .qualified => |node| return self.typeIsMoveArray(node.child.*, aliases),
-            .nullable => |child| return self.typeIsMoveArray(child.*, aliases),
+            .name => |n| {
+                const target = aliases.get(n.text) orelse return false;
+                return self.typeIsMoveArrayDepth(target, aliases, depth + 1);
+            },
+            .array => |node| return self.typeEmbedsMoveByValueDepth(node.child.*, aliases, depth + 1),
+            .qualified => |node| return self.typeIsMoveArrayDepth(node.child.*, aliases, depth + 1),
+            .nullable => |child| return self.typeIsMoveArrayDepth(child.*, aliases, depth + 1),
             else => return false,
         }
     }
@@ -1362,6 +1388,9 @@ pub const Checker = struct {
 
         for (fn_decl.params) |param| {
             self.checkType(param.ty, .storage, sig_ctx);
+            if (self.typeIsMoveArray(param.ty, type_aliases)) {
+                self.errorCode(param.ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable (element moves need place analysis); pass the resources behind pointers or in a `move` container instead");
+            }
             if (isCBackendReservedLocalName(param.name.text)) {
                 self.errorCode(param.name.span, "E_RESERVED_C_IDENTIFIER", "parameter name is reserved by the C backend or C headers; choose a different source name");
             } else if (self.isQualifiedOwner(param.name.text)) {
@@ -1384,6 +1413,9 @@ pub const Checker = struct {
         const return_kind = if (fn_decl.return_type) |ty| classifyTypeCtx(ty, sig_ctx) else TypeClass.void;
         const returns_never = if (fn_decl.return_type) |ty| blk: {
             self.checkType(ty, .return_type, sig_ctx);
+            if (self.typeIsMoveArray(ty, type_aliases)) {
+                self.errorCode(ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable as a function return value (element moves need place analysis); return resources behind pointers or in a `move` container instead");
+            }
             break :blk isTypeName(ty, "never");
         } else false;
         const returns_void = if (fn_decl.return_type) |ty| isTypeName(ty, "void") else false;

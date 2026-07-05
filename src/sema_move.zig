@@ -27,7 +27,7 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
     }
     for (fn_decl.params) |param| {
         if (self.typeIsMoveArray(param.ty, aliases)) {
-            self.errorCode(param.name.span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable (element moves need place analysis); pass the resources behind pointers or in a `move` container instead");
+            continue;
         } else if (self.typeEmbedsMoveByValue(param.ty, aliases)) {
             state.put(param.name.text, .{ .live = true, .span = param.name.span, .ty = param.ty }) catch {
                 self.oom = true;
