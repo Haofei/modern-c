@@ -605,6 +605,7 @@ pub const Checker = struct {
             if (self.generic_template_precheck and !self.shouldCheckGenericTemplateDecl(decl)) continue;
             self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
         }
+        self.checkBoundedCallCycles(module, &functions);
 
         // Definite-initialization pass (S0.1). A scalar `var x: T = uninit;`
         // must be definitely assigned on every control-flow path before it is
@@ -848,6 +849,7 @@ pub const Checker = struct {
                         .is_const = fn_decl.is_const,
                         .may_sleep = hasMaySleep(decl.attrs),
                         .irq_context = hasIrqContext(decl.attrs),
+                        .bounded = hasBoundedContext(decl.attrs),
                         .error_from = error_from.hasAttr(decl.attrs),
                     }) catch {
                         self.oom = true;
@@ -4137,9 +4139,8 @@ pub const Checker = struct {
     // (false positives on genuinely-bounded but unrecognized shapes), which is
     // why the whole check is opt-in via the attribute.
     //
-    // Recursion: DIRECT self-recursion (the function calls itself by name) from a
-    // bounded-context function is E_UNBOUNDED_RECURSION. Mutual/indirect recursion
-    // is NOT covered.
+    // Recursion: direct self-recursion is rejected here. Mutual direct-call cycles
+    // among bounded-context functions are rejected by checkBoundedCallCycles.
     fn checkTermination(self: *Checker, fn_name: []const u8, body: ast.Block) void {
         self.checkTerminationBlock(fn_name, body);
     }
@@ -4189,8 +4190,10 @@ pub const Checker = struct {
         switch (expr.kind) {
             .call => |c| {
                 // Direct self-recursion: callee is the bare name of this function.
-                if (c.callee.kind == .ident and std.mem.eql(u8, c.callee.kind.ident.text, fn_name)) {
-                    self.errorCode(expr.span, "E_UNBOUNDED_RECURSION", "direct recursion from a bounded/IRQ-context function (a kernel must not recurse unboundedly in interrupt/atomic context)");
+                if (calleeIdentName(c.callee.*)) |callee_name| {
+                    if (std.mem.eql(u8, callee_name, fn_name)) {
+                        self.errorCode(expr.span, "E_UNBOUNDED_RECURSION", "direct recursion from a bounded/IRQ-context function (a kernel must not recurse unboundedly in interrupt/atomic context)");
+                    }
                 }
                 self.checkTerminationExpr(fn_name, c.callee.*);
                 for (c.args) |arg| self.checkTerminationExpr(fn_name, arg);
@@ -4219,6 +4222,177 @@ pub const Checker = struct {
             },
             .array_literal => |items| for (items) |it| self.checkTerminationExpr(fn_name, it),
             .struct_literal => |fields| for (fields) |f| self.checkTerminationExpr(fn_name, f.value),
+            else => {},
+        }
+    }
+
+    const BoundedCallEdge = struct {
+        callee: []const u8,
+        span: diagnostics.Span,
+    };
+
+    fn checkBoundedCallCycles(self: *Checker, module: ast.Module, functions: *const std.StringHashMap(FunctionInfo)) void {
+        var graph = std.StringHashMap([]BoundedCallEdge).init(self.reporter.allocator);
+        defer {
+            var it = graph.iterator();
+            while (it.next()) |entry| self.reporter.allocator.free(entry.value_ptr.*);
+            graph.deinit();
+        }
+
+        for (module.decls) |decl| {
+            const fn_decl = switch (decl.kind) {
+                .fn_decl => |node| node,
+                else => continue,
+            };
+            const info = functions.get(fn_decl.name.text) orelse continue;
+            if (!info.bounded) continue;
+            const body = fn_decl.body orelse continue;
+
+            var edges: std.ArrayList(BoundedCallEdge) = .empty;
+            self.collectBoundedDirectCallsBlock(fn_decl.name.text, body, functions, &edges);
+            const owned_edges = edges.toOwnedSlice(self.reporter.allocator) catch {
+                edges.deinit(self.reporter.allocator);
+                self.oom = true;
+                continue;
+            };
+            graph.put(fn_decl.name.text, owned_edges) catch {
+                self.reporter.allocator.free(owned_edges);
+                self.oom = true;
+                continue;
+            };
+        }
+
+        var colors = std.StringHashMap(u8).init(self.reporter.allocator);
+        defer colors.deinit();
+        for (module.decls) |decl| {
+            const fn_decl = switch (decl.kind) {
+                .fn_decl => |node| node,
+                else => continue,
+            };
+            const info = functions.get(fn_decl.name.text) orelse continue;
+            if (!info.bounded or fn_decl.body == null) continue;
+            if (self.generic_template_precheck and !self.shouldCheckGenericTemplateDecl(decl)) continue;
+            self.visitBoundedCallCycle(fn_decl.name.text, &graph, &colors);
+        }
+    }
+
+    fn visitBoundedCallCycle(self: *Checker, name: []const u8, graph: *const std.StringHashMap([]BoundedCallEdge), colors: *std.StringHashMap(u8)) void {
+        switch (colors.get(name) orelse 0) {
+            1, 2 => return,
+            else => {},
+        }
+        colors.put(name, 1) catch {
+            self.oom = true;
+            return;
+        };
+        if (graph.get(name)) |edges| {
+            for (edges) |edge| {
+                switch (colors.get(edge.callee) orelse 0) {
+                    1 => self.errorCode(edge.span, "E_UNBOUNDED_RECURSION", "recursive direct-call cycle among bounded/IRQ-context functions (no decreasing metric is proven)"),
+                    2 => {},
+                    else => self.visitBoundedCallCycle(edge.callee, graph, colors),
+                }
+            }
+        }
+        colors.put(name, 2) catch {
+            self.oom = true;
+        };
+    }
+
+    fn collectBoundedDirectCallsBlock(self: *Checker, owner: []const u8, block: ast.Block, functions: *const std.StringHashMap(FunctionInfo), edges: *std.ArrayList(BoundedCallEdge)) void {
+        for (block.items) |stmt| self.collectBoundedDirectCallsStmt(owner, stmt, functions, edges);
+    }
+
+    fn collectBoundedDirectCallsStmt(self: *Checker, owner: []const u8, stmt: ast.Stmt, functions: *const std.StringHashMap(FunctionInfo), edges: *std.ArrayList(BoundedCallEdge)) void {
+        switch (stmt.kind) {
+            .loop => |loop| {
+                if (loop.iterable) |iterable| self.collectBoundedDirectCallsExpr(owner, iterable, functions, edges);
+                self.collectBoundedDirectCallsBlock(owner, loop.body, functions, edges);
+            },
+            .if_let => |node| {
+                self.collectBoundedDirectCallsPattern(owner, node.pattern, functions, edges);
+                self.collectBoundedDirectCallsExpr(owner, node.value, functions, edges);
+                self.collectBoundedDirectCallsBlock(owner, node.then_block, functions, edges);
+                if (node.else_block) |eb| self.collectBoundedDirectCallsBlock(owner, eb, functions, edges);
+            },
+            .@"switch" => |node| {
+                self.collectBoundedDirectCallsExpr(owner, node.subject, functions, edges);
+                for (node.arms) |arm| {
+                    for (arm.patterns) |pattern| self.collectBoundedDirectCallsPattern(owner, pattern, functions, edges);
+                    switch (arm.body) {
+                        .block => |b| self.collectBoundedDirectCallsBlock(owner, b, functions, edges),
+                        .expr => |e| self.collectBoundedDirectCallsExpr(owner, e, functions, edges),
+                    }
+                }
+            },
+            .unsafe_block, .comptime_block, .block => |b| self.collectBoundedDirectCallsBlock(owner, b, functions, edges),
+            .contract_block => |cb| self.collectBoundedDirectCallsBlock(owner, cb.block, functions, edges),
+            .@"return" => |maybe| {
+                if (maybe) |e| self.collectBoundedDirectCallsExpr(owner, e, functions, edges);
+            },
+            .@"defer" => |e| self.collectBoundedDirectCallsExpr(owner, e, functions, edges),
+            .assert => |e| self.collectBoundedDirectCallsExpr(owner, e, functions, edges),
+            .assignment => |a| {
+                self.collectBoundedDirectCallsExpr(owner, a.target, functions, edges);
+                self.collectBoundedDirectCallsExpr(owner, a.value, functions, edges);
+            },
+            .expr => |e| self.collectBoundedDirectCallsExpr(owner, e, functions, edges),
+            .let_decl, .var_decl => |local| {
+                if (local.init) |e| self.collectBoundedDirectCallsExpr(owner, e, functions, edges);
+            },
+            .asm_stmt => |asm_stmt| {
+                for (asm_stmt.inputs) |input| self.collectBoundedDirectCallsExpr(owner, input.value, functions, edges);
+            },
+            .@"break", .@"continue" => {},
+        }
+    }
+
+    fn collectBoundedDirectCallsPattern(self: *Checker, owner: []const u8, pattern: ast.Pattern, functions: *const std.StringHashMap(FunctionInfo), edges: *std.ArrayList(BoundedCallEdge)) void {
+        switch (pattern.kind) {
+            .literal => |expr| self.collectBoundedDirectCallsExpr(owner, expr, functions, edges),
+            .wildcard, .bind, .tag, .tag_bind => {},
+        }
+    }
+
+    fn collectBoundedDirectCallsExpr(self: *Checker, owner: []const u8, expr: ast.Expr, functions: *const std.StringHashMap(FunctionInfo), edges: *std.ArrayList(BoundedCallEdge)) void {
+        switch (expr.kind) {
+            .call => |node| {
+                if (calleeIdentName(node.callee.*)) |callee| {
+                    if (!std.mem.eql(u8, callee, owner)) {
+                        if (functions.get(callee)) |info| {
+                            if (info.bounded) edges.append(self.reporter.allocator, .{ .callee = callee, .span = expr.span }) catch {
+                                self.oom = true;
+                            };
+                        }
+                    }
+                }
+                self.collectBoundedDirectCallsExpr(owner, node.callee.*, functions, edges);
+                for (node.args) |arg| self.collectBoundedDirectCallsExpr(owner, arg, functions, edges);
+            },
+            .block => |b| self.collectBoundedDirectCallsBlock(owner, b, functions, edges),
+            .grouped, .address_of, .deref, .await_expr => |inner| self.collectBoundedDirectCallsExpr(owner, inner.*, functions, edges),
+            .unary => |u| self.collectBoundedDirectCallsExpr(owner, u.expr.*, functions, edges),
+            .binary => |b| {
+                self.collectBoundedDirectCallsExpr(owner, b.left.*, functions, edges);
+                self.collectBoundedDirectCallsExpr(owner, b.right.*, functions, edges);
+            },
+            .cast => |c| self.collectBoundedDirectCallsExpr(owner, c.value.*, functions, edges),
+            .index => |i| {
+                self.collectBoundedDirectCallsExpr(owner, i.base.*, functions, edges);
+                self.collectBoundedDirectCallsExpr(owner, i.index.*, functions, edges);
+            },
+            .slice => |s| {
+                self.collectBoundedDirectCallsExpr(owner, s.base.*, functions, edges);
+                self.collectBoundedDirectCallsExpr(owner, s.start.*, functions, edges);
+                self.collectBoundedDirectCallsExpr(owner, s.end.*, functions, edges);
+            },
+            .member => |m| self.collectBoundedDirectCallsExpr(owner, m.base.*, functions, edges),
+            .try_expr => |t| {
+                self.collectBoundedDirectCallsExpr(owner, t.operand.*, functions, edges);
+                if (t.mapped) |m| self.collectBoundedDirectCallsExpr(owner, m.*, functions, edges);
+            },
+            .array_literal => |items| for (items) |it| self.collectBoundedDirectCallsExpr(owner, it, functions, edges),
+            .struct_literal => |fields| for (fields) |f| self.collectBoundedDirectCallsExpr(owner, f.value, functions, edges),
             else => {},
         }
     }

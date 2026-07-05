@@ -96,8 +96,60 @@ fn recurse(n: u32) -> u32 {
     return recurse(n);
 }
 
+// REJECTED: a two-node direct-call cycle among bounded functions has no
+// statically-proven decreasing metric.
+#[bounded]
+fn bounded_cycle_a(n: u32) -> u32 {
+    return bounded_cycle_b(n);
+}
+
+#[bounded]
+fn bounded_cycle_b(n: u32) -> u32 {
+    // EXPECT_ERROR: E_UNBOUNDED_RECURSION
+    return bounded_cycle_a(n);
+}
+
+// REJECTED: pure IRQ-context functions are bounded too, so an IRQ-only mutual
+// cycle is rejected without weakening IRQ call discipline.
+#[irq_context]
+fn irq_cycle_a(n: u32) -> u32 {
+    return irq_cycle_b(n);
+}
+
+#[irq_context]
+fn irq_cycle_b(n: u32) -> u32 {
+    return irq_cycle_c(n);
+}
+
+#[irq_context]
+fn irq_cycle_c(n: u32) -> u32 {
+    // EXPECT_ERROR: E_UNBOUNDED_RECURSION
+    return irq_cycle_a(n);
+}
+
+// ACCEPTED: an IRQ-context function may call an acyclic IRQ-safe helper.
+#[irq_context]
+fn irq_helper(n: u32) -> u32 {
+    return n;
+}
+
+#[irq_context]
+fn irq_uses_helper(n: u32) -> u32 {
+    return irq_helper(n);
+}
+
 // ACCEPTED: an ordinary (unmarked) function is unconstrained — opt-in only.
 fn ordinary_spin() -> void {
     while true {
     }
+}
+
+// ACCEPTED: ordinary unmarked mutual recursion is outside the bounded
+// termination contract.
+fn ordinary_mutual_a(n: u32) -> u32 {
+    return ordinary_mutual_b(n);
+}
+
+fn ordinary_mutual_b(n: u32) -> u32 {
+    return ordinary_mutual_a(n);
 }
