@@ -2875,15 +2875,18 @@ const CEmitter = struct {
     }
 
     fn emitDefaultAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
-        try self.writeIndent();
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.writeIndent();
             try appendGlobalStorePrefix(self.allocator, self.out, target);
             // Pass the global's type as the value target, so a struct-literal value
             // (`g = .{ … }`) lowers to a typed compound literal like the non-global
             // path; scalars/pointers are unaffected by the extra type hint.
             try self.emitExprWithTarget(assignment.value, locals, simpleNameType(target.info.type_name, assignment.value.span));
             try appendGlobalStoreSuffix(self.allocator, self.out, target);
+        } else if (try self.emitOrdinaryHookedAssignmentStmt(assignment.target, assignment.value, locals)) {
+            return;
         } else {
+            try self.writeIndent();
             try self.emitAssignTarget(assignment.target, locals);
             try self.out.appendSlice(self.allocator, " = ");
             try self.emitExprWithTarget(assignment.value, locals, self.operandEmitType(assignment.target, locals));
@@ -3389,11 +3392,44 @@ const CEmitter = struct {
         return null;
     }
 
+    fn ordinaryStorePreHookName(self: *const CEmitter) ?[]const u8 {
+        if (self.ksan and !self.msan) return "mc_ksan_check";
+        return null;
+    }
+
+    fn emitOrdinaryHookedAssignmentStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
+        const hook = self.ordinaryStorePreHookName() orelse return false;
+        if (!ordinaryStoreHookTarget(target)) return false;
+        const target_ty = self.operandEmitType(target, locals) orelse return false;
+        const target_c_ty = try self.cTypeFor(target_ty, .typedef_name);
+        const ptr_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_storep{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} *{s} = &(", .{ target_c_ty, ptr_temp });
+        try self.emitAddressOperand(target, locals);
+        try self.out.appendSlice(self.allocator, ");\n");
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s}((uintptr_t){s}, (uintptr_t)sizeof(*{s}));\n", .{ hook, ptr_temp, ptr_temp });
+        try self.writeIndent();
+        try self.out.print(self.allocator, "*{s} = ", .{ptr_temp});
+        try self.emitExprWithTarget(value, locals, target_ty);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn ordinaryStoreHookTarget(target: ast.Expr) bool {
+        return switch (target.kind) {
+            .member, .index => true,
+            .grouped => |inner| ordinaryStoreHookTarget(inner.*),
+            else => false,
+        };
+    }
+
     // Emit an assignment LHS (a store target / lvalue). Identical to emitExpr but with the
     // field-LOAD shadow hook suppressed: wrapping an lvalue in a `(hook(...), lv)` comma
-    // expression would make it non-assignable. (Pointer/local field STORES are therefore
-    // uninstrumented on this path — at parity with the LLVM backend, which hooks only GLOBAL
-    // field/array stores.)
+    // expression would make it non-assignable. KASAN store checks for member/index lvalues are
+    // emitted through a temporary pointer by emitOrdinaryHookedAssignmentStmt.
     fn emitAssignTarget(self: *CEmitter, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const prev = self.suppress_load_hook;
         self.suppress_load_hook = true;

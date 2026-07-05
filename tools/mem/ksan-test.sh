@@ -82,10 +82,11 @@ GSTORE="$(run_scenario 9 gstore)"
 # Struct-field array LOAD (`a.cells[3]`): DETECTS on both backends. C wraps the `.cells`
 # member load with mc_ksan_check over the whole array; LLVM hooks the precise element load.
 ARRLOAD="$(run_scenario 6 arrload)"
-# MISS-claimed paths (documented gaps — must NOT trap; recorded, not gated as failures):
-#   pointer struct-field STORE, array-index STORE, stack local, access outside the armed pool.
+# Store-side coverage: member/index stores now pre-check the destination before writing.
 FSTORE="$(run_scenario 5 fstore)"
 ARRSTORE="$(run_scenario 7 arrstore)"
+# MISS-claimed paths (documented gaps — must NOT trap; recorded, not gated as failures):
+#   stack local, access outside the armed pool.
 STACK="$(run_scenario 10 stack)"
 OUTSIDE="$(run_scenario 11 outside)"
 
@@ -101,9 +102,9 @@ echo "--- global STORE scenario UART ---"
 printf '%s\n' "$GSTORE"
 echo "--- array-index LOAD scenario UART ---"
 printf '%s\n' "$ARRLOAD"
-echo "--- [MISS-expected] field STORE scenario UART ---"
+echo "--- field STORE scenario UART ---"
 printf '%s\n' "$FSTORE"
-echo "--- [MISS-expected] array STORE scenario UART ---"
+echo "--- array STORE scenario UART ---"
 printf '%s\n' "$ARRSTORE"
 echo "--- [MISS-expected] stack local scenario UART ---"
 printf '%s\n' "$STACK"
@@ -145,14 +146,14 @@ check "$FIELD" "struct-field-uaf"
 check "$GLOAD" "global-load"
 check "$GSTORE" "global-store"
 check "$ARRLOAD" "array-field-load"
+check "$FSTORE" "field-store"
+check "$ARRSTORE" "array-store"
 # Record the verified MISS paths (don't fail the gate on a known, documented gap).
-check_miss "$FSTORE" "field-store" "FIELD-STORE-MISSED"
-check_miss "$ARRSTORE" "array-store" "ARR-STORE-MISSED"
 check_miss "$STACK" "stack-local" "STACK-LOCAL-MISSED"
 check_miss "$OUTSIDE" "outside-pool" "OUTSIDE-POOL-MISSED"
 
 if [ "$fail" -eq 0 ]; then
-    echo "PASS: $TEST_NAME — $BACKEND backend: KASAN clean path (KASAN-OK); access-time detection VERIFIED under QEMU on the raw.load UAF, raw.load OOB, struct-field UAF LOAD, scalar global LOAD, scalar global STORE, and struct-field array LOAD paths (all KASAN-DETECTED, gate-asserted); and the documented coverage GAPS confirmed as still-missing (pointer field STORE, array-index STORE, stack local, access outside the armed pool — all reached their *-MISSED markers, no trap)"
+    echo "PASS: $TEST_NAME — $BACKEND backend: KASAN clean path (KASAN-OK); access-time detection VERIFIED under QEMU on the raw.load UAF, raw.load OOB, struct-field UAF LOAD, scalar global LOAD, scalar global STORE, struct-field array LOAD, pointer field STORE, and array-index STORE paths (all KASAN-DETECTED, gate-asserted); and the documented coverage GAPS confirmed as still-missing (stack local and access outside the armed pool reached their *-MISSED markers, no trap)"
     exit 0
 fi
 exit 1

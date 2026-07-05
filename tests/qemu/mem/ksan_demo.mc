@@ -126,8 +126,8 @@ export fn ksan_field_uaf(region: usize, len: usize) -> u32 {
 // trap/no-trap facts.
 // =====================================================================================
 
-// ---- pointer struct-field STORE to freed memory (doc claims MISS: emitAssignTarget
-//      suppresses the load hook, and there is no store hook on the field path) ----
+// ---- pointer struct-field STORE to freed memory (doc claims DETECT: member stores
+//      pre-check the destination before writing) ----
 export fn ksan_field_store(region: usize, len: usize) -> u32 {
     var h: Heap = heap_new_ksan(phys_range(pa(region), len));
     let n: usize = 64;
@@ -135,9 +135,9 @@ export fn ksan_field_store(region: usize, len: usize) -> u32 {
     heap_free(&h, p, n); // poison the block
     unsafe {
         let node: *Node = raw.ptr<Node>(pa_value(p));
-        node.value = 0xCAFE; // STRUCT-FIELD store of freed memory
+        node.value = 0xCAFE; // STRUCT-FIELD store of freed memory -> mc_ksan_check traps
     }
-    return 1; // reached iff the store was NOT instrumented (a MISS)
+    return 1; // unreachable if detection works
 }
 
 // ---- array-index LOAD of freed memory through a struct-field array (doc claims DETECT) ----
@@ -157,7 +157,7 @@ export fn ksan_arr_load(region: usize, len: usize) -> u32 {
     return v; // unreachable if detection works
 }
 
-// ---- array-index STORE to freed memory (doc claims MISS) ----
+// ---- array-index STORE to freed memory (doc claims DETECT) ----
 export fn ksan_arr_store(region: usize, len: usize) -> u32 {
     var h: Heap = heap_new_ksan(phys_range(pa(region), len));
     let n: usize = 64;
@@ -165,9 +165,9 @@ export fn ksan_arr_store(region: usize, len: usize) -> u32 {
     heap_free(&h, p, n); // poison the block
     unsafe {
         let a: *Arr = raw.ptr<Arr>(pa_value(p));
-        a.cells[3] = 0xBEEF; // ARRAY-INDEX store of freed memory
+        a.cells[3] = 0xBEEF; // ARRAY-INDEX store of freed memory -> mc_ksan_check traps
     }
-    return 1; // reached iff the array store was NOT instrumented (a MISS)
+    return 1; // unreachable if detection works
 }
 
 // ---- scalar GLOBAL load (doc claims DETECT: a scalar global read lowers to mc_race_load_*,

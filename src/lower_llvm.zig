@@ -2121,9 +2121,8 @@ const LlvmEmitter = struct {
                 const element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
                 const ptr = try self.emitIndexAddress(node);
                 const value = try self.emitExpr(value_expr, element_ty);
-                // Global array element store: instrument to match the C `mc_race_store_<T>`.
                 const is_global = self.indexBaseIsGlobal(node);
-                if (is_global) try self.emitOrdinaryShadowHook(ptr, element_ty, .store_pre);
+                try self.emitOrdinaryShadowHook(ptr, element_ty, .store_pre);
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(element_ty), value, ptr, try self.debugCallSuffix() });
                 if (is_global) try self.emitOrdinaryShadowHook(ptr, element_ty, .store_post);
                 break :blk true;
@@ -2258,9 +2257,8 @@ const LlvmEmitter = struct {
                 const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
                 const ptr = try self.emitMemberAddress(node);
                 const value = try self.emitExpr(value_expr, field.ty);
-                // Global struct-field store: instrument to match the C `mc_race_store_<T>`.
                 const field_global = self.memberBaseIsGlobal(node);
-                if (field_global) try self.emitOrdinaryShadowHook(ptr, field.ty, .store_pre);
+                try self.emitOrdinaryShadowHook(ptr, field.ty, .store_pre);
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(field.ty), value, ptr, try self.debugCallSuffix() });
                 if (field_global) try self.emitOrdinaryShadowHook(ptr, field.ty, .store_post);
                 break :blk true;
@@ -2949,12 +2947,11 @@ const LlvmEmitter = struct {
     // Splice the sanitizer shadow hook before/after an ordinary (non-raw) scalar access. Used
     // at the access classes that have a parity-matched hook on the C backend:
     //   - a struct-FIELD load (emitMemberAccess) — C wraps the same load in a comma expression;
+    //   - member/index stores — C emits a pre-store check statement before assigning the lvalue;
     //   - a scalar-GLOBAL load (emitIdent) and store (emitAssignment) — C instruments these
     //     inside the `mc_race_load_<T>`/`mc_race_store_<T>` macro body.
     // Here the address is the GEP/global `ptr` SSA value, which we `ptrtoint` to the i64 the
     // hooks expect; size matches the access (scalar == llvmAlignOf, same as the C `sizeof`).
-    // (Array-index and pointer/local field STORES are intentionally NOT hooked, to stay byte-
-    // for-byte at parity with the C backend, which does not instrument those — see the report.)
     // Default builds emit nothing (all three flags false), keeping codegen byte-identical.
     //   - ksan (non-msan): pre-load + pre-store mc_ksan_check (poisoned/freed/redzone traps).
     //   - msan:            pre-load mc_ksan_check (+ uninit trap) + POST-store mc_ksan_store.
@@ -2980,8 +2977,8 @@ const LlvmEmitter = struct {
     }
 
     // True when an index expression's base is a (non-local) global array. The C backend
-    // instruments global array-element accesses via `mc_race_load_<T>` / `mc_race_store_<T>`,
-    // whose macro body is hook-instrumented; pointer/local direct array elements stay plain.
+    // instruments global array-element loads via `mc_race_load_<T>`, whose macro body is
+    // hook-instrumented; stores are hooked directly in emitIndexAssignment.
     fn indexBaseIsGlobal(self: *LlvmEmitter, node: anytype) bool {
         const base = switch (node.base.*.kind) {
             .ident => |ident| ident,
@@ -3012,9 +3009,8 @@ const LlvmEmitter = struct {
     }
 
     // True when a member expression's base is a (non-local) global struct. The C backend
-    // routes a global struct-field STORE through `mc_race_store_<T>` (hook-instrumented) but a
-    // pointer/local field store through a plain access; we match that — instrument the field
-    // store hook only for a global base.
+    // routes a global struct-field LOAD through `mc_race_load_<T>`; stores are hooked directly
+    // in emitMemberAssignment.
     fn memberBaseIsGlobal(self: *LlvmEmitter, node: anytype) bool {
         const base = switch (node.base.*.kind) {
             .ident => |ident| ident,

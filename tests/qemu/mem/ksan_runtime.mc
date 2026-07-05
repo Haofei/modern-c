@@ -176,7 +176,8 @@ export fn m_main() -> void {
         let _u: u32 = ksan_field_uaf(pool_base(), POOL_BYTES);
         put_str("FIELD-UAF-MISSED\n");
     } else if sc == 5 {
-        // FIELD_STORE: pointer struct-field STORE to freed memory (documented MISS).
+        // FIELD_STORE: pointer struct-field STORE to freed memory. KASAN should trap
+        // before the write; if it returns, the store path is uninstrumented.
         ksan_arm_shadow(pool_base(), POOL_BYTES);
         put_str("field-store: writing freed node.value (struct-field store)...\n");
         let _u: u32 = ksan_field_store(pool_base(), POOL_BYTES);
@@ -188,7 +189,8 @@ export fn m_main() -> void {
         let _u: u32 = ksan_arr_load(pool_base(), POOL_BYTES);
         put_str("ARR-LOAD-MISSED\n");
     } else if sc == 7 {
-        // ARR_STORE: array-index STORE to freed memory (documented MISS).
+        // ARR_STORE: array-index STORE to freed memory. KASAN should trap before
+        // the write; if it returns, the store path is uninstrumented.
         ksan_arm_shadow(pool_base(), POOL_BYTES);
         put_str("arr-store: writing freed a.cells[3] (array-index store)...\n");
         let _u: u32 = ksan_arr_store(pool_base(), POOL_BYTES);
