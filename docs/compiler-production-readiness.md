@@ -1,7 +1,7 @@
 # Production readiness: the MC compiler (`mcc`)
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
-Current ledger: **updated 2026-07-05, based on `9ca762fc`**.
+Current ledger: **updated 2026-07-05, based on `4990226c`**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -27,6 +27,7 @@ Current ledger: **updated 2026-07-05, based on `9ca762fc`**.
 | Async control-flow spec matches implementation | The spec no longer claims completed E3a/E3b/E3c async forms are reserved. | `b4650dab docs: sync async control-flow spec`; `zig build test`. |
 | KASAN/KMSAN store-side sanitizer gaps are closed | Sanitizer modes catch freed/uninitialized heap state on stores as well as loads. | `5b25e328`, `ba8b8de9`. |
 | LLVM direct global race lowering is no longer UB-bearing | Direct global scalar, struct-field, and array-element accesses now lower to unordered LLVM atomics instead of plain `load`/`store`. | `9ca762fc Lower racing globals to unordered LLVM atomics`; `llvm-as` on `data_race_semantics` IR. |
+| Spec C/LLVM sweep gates are green for in-scope fixtures | Mixed accept/reject fixtures no longer leave dangling references after reject stripping, so backend sweeps catch real regressions instead of fixture-shape noise. | `4990226c Split mixed spec sweep fixtures`; `JOBS=8 tools/toolchain/spec-emit-sweep.py zig-out/bin/mcc tests/spec`; `JOBS=8 tools/toolchain/spec-llvm-sweep.py zig-out/bin/mcc tests/spec`. |
 
 ### In Progress
 
@@ -39,7 +40,6 @@ Current ledger: **updated 2026-07-05, based on `9ca762fc`**.
 | Item | Why it remains | First next step |
 |---|---|---|
 | Pointer-mediated shared-memory race lowering | Direct globals are being fixed, but `gp.*` where `gp` points at global storage still lowers through ordinary pointer paths. | Decide whether to conservatively unordered-atomic all non-local scalar derefs or add provenance tracking. |
-| Spec sweep gates are red for two mixed fixtures | `spec-emit-sweep.py` and LLVM sweep fail on `bounded_loop.mc` and `generic_instantiation_operator_check.mc` after reject-stripping leaves dangling references. | Split fixtures or add precise allowlist reasons in the sweep harness. |
 | Parser recovery / multiple parse errors | Parser still stops at the first syntax error. | Add declaration/statement resync and golden diagnostics. |
 | Rich diagnostic output | Diagnostics are now cleaner, but source snippets, notes, structured JSON coverage, and full LSP consumption remain incomplete. | Extend `Diagnostic` with code/notes/related spans and add renderer tests. |
 | Typed semantic fact table / typed MIR | Backends still re-derive too much from raw AST, which is the root drift class. | Start a design slice that records sema facts once and consumes them in both backends. |
