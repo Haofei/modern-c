@@ -153,8 +153,29 @@ def main() -> None:
     assert_gates(
         module,
         ["tools/fuzz/mcfuzz.py"],
-        ["diff-fuzz", "fuzz-async", "fuzz-robust", "fuzz-reference", "fuzz-corpus"],
+        [
+            "fuzz",
+            "fuzz-async",
+            "fuzz-sanitize",
+            "fuzz-asan",
+            "fuzz-trap",
+            "fuzz-trapsite",
+            "fuzz-robust",
+            "fuzz-failclosed",
+            "fuzz-determinism",
+            "fuzz-pipeline",
+            "fuzz-artifacts",
+            "fuzz-roundtrip",
+            "fuzz-metamorphic",
+            "fuzz-optlevel",
+            "fuzz-floatbits",
+            "fuzz-reference",
+            "fuzz-corpus",
+        ],
     )
+    assert_gates(module, ["tools/fuzz/mcref.py"], ["fuzz-reference"])
+    assert_gates(module, ["tools/fuzz/corpus/wrap_u16_mul.mc"], ["fuzz-corpus"])
+    assert_gates(module, ["tools/fuzz/parser-fuzz.sh"], ["parser-fuzz-test"])
     assert_gates(module, ["tools/toolchain/diagnostics-test.sh"], ["diagnostics-test"])
     assert_gates(module, ["tools/toolchain/mcc-cli-test.sh"], ["mcc-cli-test"])
     assert_gates(module, ["tools/toolchain/install-layout-test.sh"], ["install-layout-test"])
