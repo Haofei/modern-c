@@ -3470,15 +3470,30 @@ async fn flow(...) -> Data {
 
 v0 supports `await` in:
 - **straight-line** code — `let x = await e;` … then ordinary statements;
-- **`if`/`else`** — each branch is its own state range joining a common continuation; only the
-  taken branch's child future is constructed;
+- **boolean `if`/`else`** — each branch is its own state range joining a common continuation; only
+  the taken branch's child future is constructed;
 - **`while` loops** — the state machine carries a back-edge to the loop head; the loop
   index/condition survive suspension as captured fields.
 
-Reserved (rejected `E_ASYNC_BRANCH_UNSUPPORTED` / `E_ASYNC_LOOP_UNSUPPORTED`): a `for` loop
-containing `await`; `break`/`continue`/`return` inside an await-bearing loop body; mixing an
-await-bearing loop and an await-bearing `if`/`else` in one function; and `await` nested more than
-one control-flow level deep.
+These constructs may be nested and sequenced in one `async fn`: an await-bearing `if` may appear
+inside an await-bearing `while`, a leading await may precede an await-bearing branch or loop, and
+multiple await-bearing branches/loops may appear in source order. `return` is allowed inside an
+await-bearing branch or loop body. Unlabeled `break` and `continue` are allowed inside an
+await-bearing `while` and target that loop's exit or next-iteration edge.
+
+The general lowering is deliberately structured, not arbitrary CFG recovery. It supports suspend
+points introduced by `let x = await e;`, boolean `if`/`else`, and `while` loops, including those
+forms nested or sequenced as above. A `for` loop containing `await` remains reserved and is rejected
+(`E_ASYNC_LOOP_UNSUPPORTED` on the legacy loop path, or `E_ASYNC_GENERAL_UNSUPPORTED` on the general
+structured-CFG path). Labeled `break`/`continue` in an await-bearing loop are also reserved
+(`E_ASYNC_GENERAL_UNSUPPORTED`).
+
+The awaited expression's future type must be resolvable by the pre-sema transform. Supported forms
+are a call (`g(args)` or the parsed static UFCS form), parenthesized supported forms, a struct-field
+future whose base type is known syntactically, and an array element whose array element future type is
+known syntactically. Awaiting a `*dyn Future`, an inferred local of future type, a block expression,
+or any other expression whose future type is not syntactically known is reserved
+(`E_ASYNC_AWAIT_UNRESOLVED`).
 
 ## 33.5 Cancellation and Drop
 
@@ -3514,14 +3529,18 @@ path forms no `Result`, takes no indirect call, and runs in bounded loops; secti
 |---|---|
 | `E_AWAIT_OUTSIDE_ASYNC` | `await` used outside an `async fn` |
 | `E_ASYNC_FORBIDDEN_CONTEXT` | `async fn` in `#[irq_context]` / `#[atomic_context]` / `#[bounded]` |
-| `E_ASYNC_BRANCH_UNSUPPORTED` | a branch shape outside the v0 `if`/`else` scope (section 33.4) |
-| `E_ASYNC_LOOP_UNSUPPORTED` | a loop shape outside the v0 `while` scope (section 33.4) |
+| `E_ASYNC_BRANCH_UNSUPPORTED` | a legacy branch fast-path shape requires an explicit, single-binding pre-branch local or otherwise must use the general supported forms (section 33.4) |
+| `E_ASYNC_LOOP_UNSUPPORTED` | a legacy loop fast-path shape requires an explicit, single-binding pre-loop local and a `while`; `for` with `await` is unsupported (section 33.4) |
+| `E_ASYNC_GENERAL_UNSUPPORTED` | an await-bearing construct outside the structured-CFG forms, including `for` with `await` and labeled loop control (section 33.4) |
+| `E_ASYNC_AWAIT_UNRESOLVED` | `await e` where `e`'s future type is not syntactically resolvable by the pre-sema transform |
 | `E_ASYNC_BORROW_ACROSS_AWAIT` | a reference to a captured local/parameter spans an `await` (section 33.6) |
 
 **Conformance.** The generated state machine must lower identically on both backends. The
 hand-lowered acceptance targets (`fuzz-async-lowering`, `-branch-lowering`, `-loop-lowering`,
 `-cancel-lowering`) pin the required shape; the real-syntax `fuzz-async-syntax`, `fuzz-async-ufcs`,
-and `fuzz-async-safe-borrow` gates verify the transform's output against it — all in the
+`fuzz-async-return-inregion`, `fuzz-async-loop-breakcont`, `fuzz-async-nested-await`,
+`fuzz-async-multi-construct`, `fuzz-async-nested-locals`, `fuzz-async-switch-pattern-sema`, and
+`fuzz-async-safe-borrow` gates verify the transform's output against it — all in the
 diff-backend corpus (annex). The runtime is exercised under QEMU by `async-test` (park/wake),
 `async-irq-test` (IRQ-backed completion), `async-cancel-test` (slot reclamation on drop), and
 `async-pollmany-test` (vectored drain). The roadmap for the reserved features (`race`/`select`,
