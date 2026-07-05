@@ -1,7 +1,7 @@
 # Production readiness: the MC compiler (`mcc`)
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
-Current ledger: **updated 2026-07-05, based on `b4650dab`**.
+Current ledger: **updated 2026-07-05, based on `9ca762fc`**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -26,12 +26,13 @@ Current ledger: **updated 2026-07-05, based on `b4650dab`**.
 | `cstr` is implemented and documented | The normative FFI string type now exists across sema, MIR, C, and LLVM lowering. | `1f5c0274 Implement cstr FFI type`; `7278d844 docs: sync cstr FFI status`. |
 | Async control-flow spec matches implementation | The spec no longer claims completed E3a/E3b/E3c async forms are reserved. | `b4650dab docs: sync async control-flow spec`; `zig build test`. |
 | KASAN/KMSAN store-side sanitizer gaps are closed | Sanitizer modes catch freed/uninitialized heap state on stores as well as loads. | `5b25e328`, `ba8b8de9`. |
+| LLVM direct global race lowering is no longer UB-bearing | Direct global scalar, struct-field, and array-element accesses now lower to unordered LLVM atomics instead of plain `load`/`store`. | `9ca762fc Lower racing globals to unordered LLVM atomics`; `llvm-as` on `data_race_semantics` IR. |
 
 ### In Progress
 
 | Item | Current state | Next evidence needed |
 |---|---|---|
-| LLVM ordinary data-race lowering for direct globals | Worker commit `96b9b6b5` in `/tmp/modern-c-llvm-race-globals` lowers direct global scalar, global field, and global array element accesses to unordered LLVM atomics. Not yet reviewed or merged. | Review diff, run `zig build test`, `zig build`, direct `emit-llvm`/`llvm-as` probes, then cherry-pick and push if clean. |
+| None currently assigned | The last assigned implementation slice was merged into `master`. | Pick the next pending item, create a detached worktree, and delegate a bounded slice. |
 
 ### Pending
 
