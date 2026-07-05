@@ -2405,6 +2405,7 @@ const LlvmEmitter = struct {
                 try self.emitOrdinaryStore(element_ty, try self.llvmType(element_ty), value, ptr, is_global);
                 if (is_global) try self.emitOrdinaryShadowHook(ptr, element_ty, .store_post);
                 try self.updateLocalArrayPointerElementProvenanceFromAssignment(target, element_ty, value_expr);
+                try self.updateAggregateArrayPointerElementProvenanceFromAssignment(target, element_ty, value_expr);
                 break :blk true;
             },
             .grouped => |inner| try self.emitIndexAssignment(inner.*, value_expr),
@@ -3348,7 +3349,7 @@ const LlvmEmitter = struct {
         if (std.mem.eql(u8, existing_path, field_path)) return true;
         return existing_path.len > field_path.len and
             std.mem.eql(u8, existing_path[0..field_path.len], field_path) and
-            existing_path[field_path.len] == '.';
+            (existing_path[field_path.len] == '.' or existing_path[field_path.len] == '[');
     }
 
     fn deinitOwnedStringVoidMap(self: *LlvmEmitter, map: *std.StringHashMap(void)) void {
@@ -3561,6 +3562,10 @@ const LlvmEmitter = struct {
         return try std.fmt.allocPrint(self.scratch.allocator(), "{s}.{s}", .{ prefix, field_name });
     }
 
+    fn aggregatePointerArrayElementPath(self: *LlvmEmitter, array_path: []const u8, index: u64) ![]const u8 {
+        return try std.fmt.allocPrint(self.scratch.allocator(), "{s}[{d}]", .{ array_path, index });
+    }
+
     fn directLocalAggregateMemberPath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
         return switch (expr.kind) {
             .grouped => |inner| self.directLocalAggregateMemberPath(inner.*),
@@ -3579,6 +3584,40 @@ const LlvmEmitter = struct {
             },
             else => null,
         };
+    }
+
+    fn directLocalAggregateArrayElementPath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directLocalAggregateArrayElementPath(inner.*),
+            .index => |node| blk: {
+                const base_path = self.directLocalAggregateMemberPath(node.base.*) orelse break :blk null;
+                const base_ty = self.resolveAliasType(self.exprType(node.base.*) orelse break :blk null);
+                const array = switch (base_ty.kind) {
+                    .array => |array| array,
+                    else => break :blk null,
+                };
+                if (!self.isPointerLikeType(array.child.*)) break :blk null;
+                const index = self.localArrayConstIndexValue(node.index.*) orelse break :blk null;
+                const len = self.arrayLenValue(array.len) orelse break :blk null;
+                if (index >= len) break :blk null;
+                break :blk .{
+                    .local_name = base_path.local_name,
+                    .field_path = self.aggregatePointerArrayElementPath(base_path.field_path, index) catch break :blk null,
+                };
+            },
+            else => null,
+        };
+    }
+
+    fn directLocalAggregateArrayBasePath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
+        const path = self.directLocalAggregateMemberPath(expr) orelse return null;
+        const base_ty = self.resolveAliasType(self.exprType(expr) orelse return null);
+        const array = switch (base_ty.kind) {
+            .array => |array| array,
+            else => return null,
+        };
+        if (!self.isPointerLikeType(array.child.*)) return null;
+        return path;
     }
 
     fn aggregatePointerAliasMemberPath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
@@ -3732,11 +3771,37 @@ const LlvmEmitter = struct {
                 try self.setAggregatePointerFieldProvenance(local_name, field_path, self.pointerExprHasGlobalStorageProvenance(value_expr));
                 continue;
             }
+            if (try self.updateAggregateArrayPointerElementProvenanceFromLiteral(local_name, field_path, field.ty, value_expr)) continue;
             const nested_struct_decl = self.structDeclForType(field.ty) orelse continue;
             if (nested_struct_decl.is_c_union) continue;
             const nested_fields = self.structLiteralFields(value_expr) orelse continue;
             try self.updateAggregatePointerFieldProvenanceFromStructLiteral(local_name, nested_struct_decl, nested_fields, field_path);
         }
+    }
+
+    fn updateAggregateArrayPointerElementProvenanceFromLiteral(
+        self: *LlvmEmitter,
+        local_name: []const u8,
+        array_path: []const u8,
+        array_ty: ast.TypeExpr,
+        init: ast.Expr,
+    ) !bool {
+        const resolved_ty = self.resolveAliasType(array_ty);
+        const array = switch (resolved_ty.kind) {
+            .array => |array| array,
+            else => return false,
+        };
+        if (!self.isPointerLikeType(array.child.*)) return false;
+
+        self.clearAggregatePointerFieldsForLocalPath(local_name, array_path);
+        const items = self.arrayLiteralItems(init) orelse return true;
+        const len = self.arrayLenValue(array.len) orelse return true;
+        if (items.len != len) return true;
+        for (items, 0..) |item, index| {
+            const element_path = try self.aggregatePointerArrayElementPath(array_path, @intCast(index));
+            try self.setAggregatePointerFieldProvenance(local_name, element_path, self.pointerExprHasGlobalStorageProvenance(item));
+        }
+        return true;
     }
 
     fn updateAggregatePointerFieldProvenanceFromAssignment(
@@ -3751,6 +3816,8 @@ const LlvmEmitter = struct {
             try self.setAggregatePointerFieldProvenance(target_path.local_name, target_path.field_path, self.pointerExprHasGlobalStorageProvenance(value_expr));
             return;
         }
+
+        if (try self.updateAggregateArrayPointerElementProvenanceFromLiteral(target_path.local_name, target_path.field_path, field_ty, value_expr)) return;
 
         const struct_decl = self.structDeclForType(field_ty) orelse return;
         self.clearAggregatePointerFieldsForLocalPath(target_path.local_name, target_path.field_path);
@@ -3813,6 +3880,25 @@ const LlvmEmitter = struct {
             return;
         };
         try self.setLocalArrayPointerElementProvenance(path.local_name, index, self.pointerExprHasGlobalStorageProvenance(value_expr));
+    }
+
+    fn updateAggregateArrayPointerElementProvenanceFromAssignment(self: *LlvmEmitter, target: ast.Expr, element_ty: ast.TypeExpr, value_expr: ast.Expr) !void {
+        const node = switch (target.kind) {
+            .index => |node| node,
+            .grouped => |inner| return self.updateAggregateArrayPointerElementProvenanceFromAssignment(inner.*, element_ty, value_expr),
+            else => return,
+        };
+        const array_path = self.directLocalAggregateArrayBasePath(node.base.*) orelse return;
+        if (!self.isPointerLikeType(element_ty)) return;
+        if (self.localArrayConstIndexValue(node.index.*) == null) {
+            self.clearAggregatePointerFieldsForLocalPath(array_path.local_name, array_path.field_path);
+            return;
+        }
+        const element_path = self.directLocalAggregateArrayElementPath(target) orelse {
+            self.clearAggregatePointerFieldsForLocalPath(array_path.local_name, array_path.field_path);
+            return;
+        };
+        try self.setAggregatePointerFieldProvenance(element_path.local_name, element_path.field_path, self.pointerExprHasGlobalStorageProvenance(value_expr));
     }
 
     fn directGlobalStorageRoot(self: *LlvmEmitter, expr: ast.Expr) bool {
@@ -3937,7 +4023,9 @@ const LlvmEmitter = struct {
                 self.localAggregateFieldHasGlobalPointerProvenance(path.local_name, path.field_path)
             else
                 false,
-            .index => if (self.directLocalArrayElementPath(expr)) |path|
+            .index => if (self.directLocalAggregateArrayElementPath(expr)) |path|
+                self.localAggregateFieldHasGlobalPointerProvenance(path.local_name, path.field_path)
+            else if (self.directLocalArrayElementPath(expr)) |path|
                 self.localArrayElementHasGlobalPointerProvenance(path.local_name, path.index)
             else
                 false,

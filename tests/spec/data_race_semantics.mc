@@ -20,6 +20,11 @@ struct OuterHolder {
     tag: u32,
 }
 
+struct PointerArrayHolder {
+    ptrs: [2]*mut u32,
+    tag: u32,
+}
+
 global shared_pair: SharedPair;
 global shared_values: [4]u32;
 
@@ -268,6 +273,46 @@ fn aggregate_exported_return_pointer_field_stays_plain() -> u32 {
     let holder: PointerHolder = .{ .ptr = exported_global_pointer(), .tag = 11 };
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm keeps aggregate pointer field derefs plain when the field source is exported-return ambiguity.
+    return p.*;
+}
+
+fn aggregate_array_global_pointer_element_load() -> u32 {
+    let holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 17 };
+    let p: *mut u32 = holder.ptrs[0];
+    // EXPECT: lower-llvm emits unordered atomic load through a local aggregate array element proven to hold visible global storage.
+    return p.*;
+}
+
+fn aggregate_array_assigned_global_pointer_element_load() -> u32 {
+    var local: u32 = 20;
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &local, &local }, .tag = 18 };
+    holder.ptrs[0] = &shared_counter;
+    let p: *mut u32 = holder.ptrs[0];
+    // EXPECT: lower-llvm emits unordered atomic load after direct constant-index aggregate array element assignment to visible global storage.
+    return p.*;
+}
+
+fn aggregate_array_stack_pointer_element_stays_plain() -> u32 {
+    var local: u32 = 21;
+    let holder: PointerArrayHolder = .{ .ptrs = .{ &local, &local }, .tag = 19 };
+    let p: *mut u32 = holder.ptrs[0];
+    // EXPECT: lower-llvm keeps stack-backed aggregate array pointer element derefs plain.
+    return p.*;
+}
+
+fn aggregate_array_dynamic_index_pointer_element_stays_plain(index: usize) -> u32 {
+    let holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 20 };
+    let p: *mut u32 = holder.ptrs[index];
+    // EXPECT: lower-llvm keeps dynamic-index aggregate array pointer element derefs plain.
+    return p.*;
+}
+
+fn aggregate_array_dynamic_assignment_clears_pointer_element_fact(index: usize) -> u32 {
+    var local: u32 = 22;
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 21 };
+    holder.ptrs[index] = &local;
+    let p: *mut u32 = holder.ptrs[0];
+    // EXPECT: lower-llvm keeps aggregate array pointer element derefs plain after unknown dynamic-index assignment.
     return p.*;
 }
 
