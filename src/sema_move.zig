@@ -8,6 +8,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
 
 const sema = @import("sema.zig");
@@ -241,6 +242,9 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                     markBorrowEscape(self, decl.init.?, decl.names[0].span, state);
                 }
             }
+            if (decl.names.len > 0 and decl.init != null) {
+                markBorrowEscapeCapturedCallResult(self, decl.init.?, decl.names[0].span, state, aliases);
+            }
             return false;
         },
         .@"return" => |maybe| {
@@ -283,6 +287,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                         }
                     }
                     moveConsume(self, a.value, state, aliases);
+                    markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
                     if (was_alias) {
                         // Re-derive the alias from the RHS: `p = &t2` keeps `p` a borrow
                         // (live=false) now aliasing `t2`, so it does not leak at exit and
@@ -319,6 +324,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                         }
                     }
                     moveConsume(self, a.value, state, aliases);
+                    markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
                     if (key_opt) |key| {
                         _ = state.remove(key); // the field now holds a fresh live resource
                     }
@@ -333,6 +339,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                     // `.ident` arm above — tracked precisely by the stale-alias mechanism —
                     // and is deliberately NOT routed here.)
                     markBorrowEscape(self, a.value, a.target.span, state);
+                    markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
                     moveConsume(self, a.value, state, aliases);
                 },
             }
@@ -1103,6 +1110,113 @@ pub fn markBorrowEscapeCallArg(self: *Checker, arg: ast.Expr, escape_span: diagn
         // borrow (or the ptr-to-int round-trip already handled at its decl); not escaped here.
         else => {},
     }
+}
+
+// T1.3 residual: `let h = mkHolder(&t)` stores a direct call's returned aggregate locally.
+// If the return type can contain pointer-like storage, the callee may have copied an argument
+// borrow into that returned value. Unlike a pointer return (`let q = id(&t)`), there is no
+// scalar alias local to track precisely, so conservatively mark the borrowed move root escaped.
+pub fn markBorrowEscapeCapturedCallResult(self: *Checker, value: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    const ctx = self.move_ctx orelse return;
+    const call = switch (value.kind) {
+        .call => |c| c,
+        .grouped => |inner| return markBorrowEscapeCapturedCallResult(self, inner.*, escape_span, state, aliases),
+        .cast => |c| return markBorrowEscapeCapturedCallResult(self, c.value.*, escape_span, state, aliases),
+        else => return,
+    };
+    if (spine.isDropCall(call.callee.*) or spine.isForgetUncheckedCall(call.callee.*)) return;
+    const ret_ty = spine.directCallReturnType(call.callee.*, ctx.*) orelse return;
+    if (spine.isPointerLike(spine.classifyTypeCtx(ret_ty, ctx.*))) return;
+    if (!typeCanCarryBorrowInStoredValue(ret_ty, ctx.*, aliases, 0)) return;
+
+    for (call.args) |arg| markBorrowEscapeCapturedCallArg(arg, escape_span, state);
+}
+
+fn markBorrowEscapeCapturedCallArg(arg: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+    switch (arg.kind) {
+        .grouped => |inner| return markBorrowEscapeCapturedCallArg(inner.*, escape_span, state),
+        .struct_literal => |fields| {
+            for (fields) |field| markBorrowEscapeCapturedCallArg(field.value, escape_span, state);
+            return;
+        },
+        .array_literal => |items| {
+            for (items) |item| markBorrowEscapeCapturedCallArg(item, escape_span, state);
+            return;
+        },
+        else => {},
+    }
+
+    const root = spine.borrowedMoveRoot(arg, state) orelse blk: {
+        if (spine.aliasReferentOf(arg, state)) |referent| {
+            if (state.contains(referent)) break :blk referent;
+        }
+        return;
+    };
+    if (state.getPtr(root)) |slot| {
+        if (slot.live and slot.alias_of == null and slot.escaped_borrow == null) {
+            slot.escaped_borrow = escape_span;
+        }
+    }
+}
+
+fn typeCanCarryBorrowInStoredValue(ty: ast.TypeExpr, ctx: Context, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+    if (depth > 64) return false;
+    switch (ty.kind) {
+        .name => |name| {
+            if (aliases.get(name.text)) |target| {
+                if (ast_query.typeName(target)) |target_name| {
+                    if (!std.mem.eql(u8, target_name, name.text)) {
+                        if (typeCanCarryBorrowInStoredValue(target, ctx, aliases, depth + 1)) return true;
+                    }
+                } else if (typeCanCarryBorrowInStoredValue(target, ctx, aliases, depth + 1)) return true;
+            }
+            if (ctx.structs) |structs| {
+                if (structs.get(name.text)) |info| return layoutFieldsCanCarryBorrow(info.fields, ctx, aliases, depth + 1);
+            }
+            if (ctx.packed_bits) |packed_bits| {
+                if (packed_bits.get(name.text)) |info| return layoutFieldsCanCarryBorrow(info.fields, ctx, aliases, depth + 1);
+            }
+            if (ctx.overlay_unions) |overlay_unions| {
+                if (overlay_unions.get(name.text)) |info| return layoutFieldsCanCarryBorrow(info.fields, ctx, aliases, depth + 1);
+            }
+            if (ctx.tagged_unions) |tagged_unions| {
+                if (tagged_unions.get(name.text)) |info| {
+                    var it = info.cases.valueIterator();
+                    while (it.next()) |case_ty| {
+                        if (case_ty.*) |payload_ty| {
+                            if (typeCanCarryBorrowInStoredValue(payload_ty, ctx, aliases, depth + 1)) return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        },
+        .pointer, .raw_many_pointer, .slice, .closure_type, .dyn_trait => return true,
+        .array => |node| return typeCanCarryBorrowInStoredValue(node.child.*, ctx, aliases, depth + 1),
+        .nullable => |child| return typeCanCarryBorrowInStoredValue(child.*, ctx, aliases, depth + 1),
+        .qualified => |node| return typeCanCarryBorrowInStoredValue(node.child.*, ctx, aliases, depth + 1),
+        .generic => |node| {
+            if (!std.mem.eql(u8, node.base.text, "Result") and
+                !std.mem.eql(u8, node.base.text, "MaybeUninit") and
+                !std.mem.eql(u8, node.base.text, "atomic"))
+            {
+                return false;
+            }
+            for (node.args) |arg| {
+                if (typeCanCarryBorrowInStoredValue(arg, ctx, aliases, depth + 1)) return true;
+            }
+            return false;
+        },
+        else => return false,
+    }
+}
+
+fn layoutFieldsCanCarryBorrow(fields: std.StringHashMap(ast.TypeExpr), ctx: Context, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+    var it = fields.valueIterator();
+    while (it.next()) |field_ty| {
+        if (typeCanCarryBorrowInStoredValue(field_ty.*, ctx, aliases, depth + 1)) return true;
+    }
+    return false;
 }
 
 // Gap #2 [interprocedural borrow laundering] — conservative rejection, precise variant.

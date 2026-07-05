@@ -39,6 +39,13 @@ fn cn(t: T) -> u32 {       // consumes (moves) t
 fn pk(p: *T) -> u32 {      // reads through a borrow
     return p.v;
 }
+fn mkHolder(p: *T) -> Holder {
+    return .{ .p = p };
+}
+fn chooseReader(p: *T) -> fn(*T) -> u32 {
+    let x: u32 = p.v;
+    return pk;
+}
 extern fn rd(p: *u32) -> u32;    // reads through a sub-place borrow
 extern fn id(p: *T) -> *T;       // returns the borrow it was given (laundering channel)
 fn sink(h: Holder) -> void {       // takes an aggregate by value (call-arg escape channel)
@@ -226,6 +233,26 @@ fn reject_call_arg_array() -> u32 {
     return cn(t);
 }
 
+// 16. borrow hidden in a direct CALL RESULT aggregate (`let h = mkHolder(&t)`). The returned
+// Holder is stored locally and may carry the `&t` argument borrow in aggregate memory, so the
+// later move of t must be refused. A bare scalar call arg (`pk(&t)`) remains transient and is
+// covered by the accepted pattern below.
+fn reject_call_result_aggregate_decl() -> u32 {
+    let t: T = mk();
+    let h: Holder = mkHolder(&t);
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return cn(t);
+}
+
+// 17. same channel through assignment into an existing aggregate variable.
+fn reject_call_result_aggregate_assignment() -> u32 {
+    let t: T = mk();
+    var h: Holder = uninit;
+    h = mkHolder(&t);
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return cn(t);
+}
+
 // ---------------------------------------------------------------------------
 // ACCEPTED patterns (must compile clean — these are NOT bugs)
 // ---------------------------------------------------------------------------
@@ -276,6 +303,15 @@ fn accept_nested_struct_field_used_before_move() -> u32 {
 fn accept_bare_borrow_call_arg() -> u32 {
     let t: T = mk();
     let x: u32 = pk(&t);          // &t is a bare arg — transient, does not escape
+    return cn(t) + x;
+}
+
+// a direct call that returns a plain function pointer cannot store the `&t` argument in
+// aggregate memory. It behaves like the scalar bare-borrow call above, not like mkHolder(&t).
+fn accept_fn_pointer_call_result() -> u32 {
+    let t: T = mk();
+    let reader: fn(*T) -> u32 = chooseReader(&t);
+    let x: u32 = reader(&t);
     return cn(t) + x;
 }
 
