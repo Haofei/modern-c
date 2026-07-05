@@ -2454,7 +2454,7 @@ const LlvmEmitter = struct {
             else
                 error.UnsupportedLlvmEmission,
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
-            .call => |call| try self.emitCall(call, expected_ty),
+            .call => |call| try self.emitCall(call, expected_ty, expr.span),
             .array_literal => |items| try self.emitArrayLiteralValue(expected_ty, items),
             .struct_literal => |fields| if (self.packedBitsInfoForType(expected_ty)) |info|
                 try self.emitPackedBitsLiteralValue(info, fields)
@@ -2691,7 +2691,7 @@ const LlvmEmitter = struct {
         switch (stmt.kind) {
             .let_decl => |local| try self.emitLocalDecl(local),
             .var_decl => |local| try self.emitLocalDecl(local),
-            .assignment => |node| try self.emitAssignment(node.target, node.value),
+            .assignment => |node| try self.emitAssignment(node.target, node.value, stmt.span),
             .@"defer" => |expr| try self.defer_stack.append(self.allocator, expr),
             .loop => |node| {
                 if (try self.emitLoop(node, ret_ty)) return true;
@@ -3003,17 +3003,17 @@ const LlvmEmitter = struct {
                 // A `va.*` intrinsic as a statement (`va.end(&ap);`): route through emitCall,
                 // which emits the call/instruction; any result (none for va.end) is discarded.
                 if (vaCallMember(call.callee.*) != null) {
-                    _ = try self.emitCall(call, simpleType(expr.span, "void"));
+                    _ = try self.emitCall(call, simpleType(expr.span, "void"), expr.span);
                     return;
                 }
                 if (self.callReturnType(call)) |ret_ty| {
                     // A `void` or `-> never` call statement produces no value, so it is emitted
                     // without a result name (a named void instruction is invalid LLVM).
                     if (typeNameEql(ret_ty, "void") or typeNameEql(ret_ty, "never")) {
-                        try self.emitVoidStatementCall(call);
+                        try self.emitVoidStatementCall(call, expr.span);
                         return;
                     }
-                    _ = try self.emitCall(call, ret_ty);
+                    _ = try self.emitCall(call, ret_ty, expr.span);
                     return;
                 }
                 self.reportUnsupported(expr.span, "call statement");
@@ -3393,6 +3393,7 @@ const LlvmEmitter = struct {
         try self.updateAggregatePointerFieldProvenanceFromInit(name, ty, init);
         try self.updateLocalArrayPointerElementProvenanceFromInit(name, ty, init);
         try self.updateLocalSlicePointerElementProvenanceFromInit(name, ty, init);
+        try self.applyMirPointerProvenanceForLocalInitializer(name, ty, init);
         try self.emitDebugDeclare(name, ty, ptr, local.names[0].span, null);
         // `var ap: va_list = va.start();` — the slot IS the va_list cursor storage; initialize
         // it in place with llvm.va_start (it has no value to store).
@@ -3426,8 +3427,8 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
     }
 
-    fn emitAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !void {
-        if (try self.emitIndexAssignment(target, value_expr)) return;
+    fn emitAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr, span: ast.Span) !void {
+        if (try self.emitIndexAssignment(target, value_expr, span)) return;
         if (try self.emitMemberAssignment(target, value_expr)) return;
         if (assignmentIdent(target)) |ident| {
             if (self.local_slots.get(ident.text)) |slot| {
@@ -3448,6 +3449,7 @@ const LlvmEmitter = struct {
                 try self.updateAggregatePointerFieldProvenanceFromInit(ident.text, slot.ty, value_expr);
                 try self.updateLocalArrayPointerElementProvenanceFromInit(ident.text, slot.ty, value_expr);
                 try self.updateLocalSlicePointerElementProvenanceFromInit(ident.text, slot.ty, value_expr);
+                try self.applyMirPointerProvenanceForAssignment(ident.text, slot.ty, value_expr, span);
                 return;
             }
             if (self.global_types.get(ident.text)) |ty| {
@@ -3479,7 +3481,7 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn emitIndexAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {
+    fn emitIndexAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr, span: ast.Span) !bool {
         return switch (target.kind) {
             .index => |node| blk: {
                 if (overlayMemberFromIndexBase(node.base.*)) |member| {
@@ -3501,9 +3503,10 @@ const LlvmEmitter = struct {
                 try self.updateLocalArrayPointerElementProvenanceFromAssignment(target, element_ty, value_expr);
                 try self.updateAggregateArrayPointerElementProvenanceFromAssignment(target, element_ty, value_expr);
                 self.invalidateLocalSlicePointerElementProvenanceFromAssignment(target);
+                try self.applyMirPointerProvenanceForIndexAssignment(target, value_expr, span);
                 break :blk true;
             },
-            .grouped => |inner| try self.emitIndexAssignment(inner.*, value_expr),
+            .grouped => |inner| try self.emitIndexAssignment(inner.*, value_expr, span),
             else => false,
         };
     }
@@ -5587,6 +5590,193 @@ const LlvmEmitter = struct {
         try self.setAggregatePointerFieldProvenance(element_path.local_name, element_path.field_path, self.pointerExprHasGlobalStorageProvenance(value_expr));
     }
 
+    fn currentMirFunction(self: *LlvmEmitter) ?*const mir.Function {
+        const function_name = self.current_function orelse return null;
+        for (self.mir_module.functions) |*function| {
+            if (std.mem.eql(u8, function.name, function_name)) return function;
+        }
+        return null;
+    }
+
+    fn mirSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
+        return span.line == source.line and span.column == source.column;
+    }
+
+    fn mirPointerFactIsLiveGlobal(fact: mir.PointerProvenanceFact) bool {
+        if (fact.provenance != .global_storage) return false;
+        return switch (fact.invalidation_reason) {
+            .none, .reassignment => true,
+            .dynamic_index_write, .call, .indirect_call, .address_escape => false,
+        };
+    }
+
+    fn mirFactSubjectSupportedNow(self: *LlvmEmitter, fact: mir.PointerProvenanceFact) bool {
+        const ty = self.local_types.get(fact.subject) orelse return false;
+        if (fact.element_index != null) return self.fixedLocalPointerArrayElementType(ty) != null;
+        return self.isPointerLikeType(ty) or self.fixedLocalPointerArrayElementType(ty) != null;
+    }
+
+    fn fixedLocalPointerArrayElementType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+        const resolved_ty = self.resolveAliasType(ty);
+        const array = switch (resolved_ty.kind) {
+            .array => |array| array,
+            else => return null,
+        };
+        if (!self.isPointerLikeType(array.child.*)) return null;
+        if (self.arrayLenValue(array.len) == null) return null;
+        return array.child.*;
+    }
+
+    fn emitMirPointerProvenanceConsumedComment(self: *LlvmEmitter, fact: mir.PointerProvenanceFact) !void {
+        const fn_name = self.current_function orelse return;
+        if (fact.element_index) |index| {
+            try self.out.print(self.allocator, "  ; mir pointer_provenance consumed fn={s} subject={s} element={d} provenance={s} reason={s} source={d}:{d}\n", .{
+                fn_name,
+                fact.subject,
+                index,
+                @tagName(fact.provenance),
+                @tagName(fact.invalidation_reason),
+                fact.source.line,
+                fact.source.column,
+            });
+        } else {
+            try self.out.print(self.allocator, "  ; mir pointer_provenance consumed fn={s} subject={s} provenance={s} reason={s} source={d}:{d}\n", .{
+                fn_name,
+                fact.subject,
+                @tagName(fact.provenance),
+                @tagName(fact.invalidation_reason),
+                fact.source.line,
+                fact.source.column,
+            });
+        }
+    }
+
+    fn applyMirPointerProvenanceFact(self: *LlvmEmitter, fact: mir.PointerProvenanceFact) !void {
+        if (!self.mirFactSubjectSupportedNow(fact)) return;
+        try self.emitMirPointerProvenanceConsumedComment(fact);
+        const live_global = mirPointerFactIsLiveGlobal(fact);
+        if (fact.element_index) |index| {
+            try self.setLocalArrayPointerElementProvenance(fact.subject, @intCast(index), live_global);
+            return;
+        }
+        if (self.fixedLocalPointerArrayElementType(self.local_types.get(fact.subject) orelse return) != null) {
+            self.clearLocalArrayPointerElementsForLocal(fact.subject);
+            return;
+        }
+        if (live_global) {
+            try self.global_pointer_locals.put(fact.subject, {});
+        } else {
+            _ = self.global_pointer_locals.remove(fact.subject);
+        }
+    }
+
+    fn applyMirPointerProvenanceInvalidationsAtCall(self: *LlvmEmitter, span: ast.Span) void {
+        const function = self.currentMirFunction() orelse return;
+        for (function.pointer_provenance_facts) |fact| {
+            if (!mirSourceMatches(span, fact.source)) continue;
+            switch (fact.invalidation_reason) {
+                .call, .indirect_call => {},
+                else => continue,
+            }
+            if (!self.mirFactSubjectSupportedNow(fact)) continue;
+            if (fact.element_index != null) {
+                self.clearLocalArrayPointerElementsForLocal(fact.subject);
+            } else if (self.fixedLocalPointerArrayElementType(self.local_types.get(fact.subject) orelse continue) != null) {
+                self.clearLocalArrayPointerElementsForLocal(fact.subject);
+            } else {
+                _ = self.global_pointer_locals.remove(fact.subject);
+            }
+        }
+    }
+
+    fn applyMirPointerProvenanceFactsAtSource(self: *LlvmEmitter, subject: []const u8, element_index: ?usize, span: ast.Span) !bool {
+        const function = self.currentMirFunction() orelse return false;
+        var matched = false;
+        for (function.pointer_provenance_facts) |fact| {
+            if (!std.mem.eql(u8, fact.subject, subject)) continue;
+            if (element_index) |wanted| {
+                if (fact.element_index == null or fact.element_index.? != wanted) continue;
+            } else if (fact.element_index != null) {
+                continue;
+            }
+            if (!mirSourceMatches(span, fact.source)) continue;
+            matched = true;
+            try self.applyMirPointerProvenanceFact(fact);
+        }
+        return matched;
+    }
+
+    fn directMirAddressProvenanceExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directMirAddressProvenanceExpr(inner.*),
+            .cast => |node| self.directMirAddressProvenanceExpr(node.value.*),
+            .address_of => |inner| self.directMirAddressProvenanceTarget(inner.*),
+            else => false,
+        };
+    }
+
+    fn directMirAddressProvenanceTarget(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directMirAddressProvenanceTarget(inner.*),
+            .ident => |ident| self.global_types.contains(ident.text) or self.local_types.contains(ident.text),
+            else => false,
+        };
+    }
+
+    fn applyMirPointerProvenanceForLocalInitializer(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
+        if (self.isPointerLikeType(ty)) {
+            const matched = try self.applyMirPointerProvenanceFactsAtSource(name, null, init.span);
+            if (!matched and self.directMirAddressProvenanceExpr(init)) _ = self.global_pointer_locals.remove(name);
+            return;
+        }
+        if (self.fixedLocalPointerArrayElementType(ty) == null) return;
+        const items = self.arrayLiteralItems(init) orelse return;
+        for (items, 0..) |item, index| {
+            const matched = try self.applyMirPointerProvenanceFactsAtSource(name, index, item.span);
+            if (!matched and self.directMirAddressProvenanceExpr(item)) {
+                try self.setLocalArrayPointerElementProvenance(name, @intCast(index), false);
+            }
+        }
+    }
+
+    fn applyMirPointerProvenanceForAssignment(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, value_expr: ast.Expr, span: ast.Span) !void {
+        if (self.isPointerLikeType(ty)) {
+            const matched_value = try self.applyMirPointerProvenanceFactsAtSource(name, null, value_expr.span);
+            _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span);
+            if (!matched_value and self.directMirAddressProvenanceExpr(value_expr)) _ = self.global_pointer_locals.remove(name);
+            return;
+        }
+        if (self.fixedLocalPointerArrayElementType(ty) == null) return;
+        _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span);
+        const items = self.arrayLiteralItems(value_expr) orelse return;
+        for (items, 0..) |item, index| {
+            const matched = try self.applyMirPointerProvenanceFactsAtSource(name, index, item.span);
+            if (!matched and self.directMirAddressProvenanceExpr(item)) {
+                try self.setLocalArrayPointerElementProvenance(name, @intCast(index), false);
+            }
+        }
+    }
+
+    fn applyMirPointerProvenanceForIndexAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr, span: ast.Span) !void {
+        const path = self.directLocalArrayElementPath(target) orelse {
+            const node = switch (target.kind) {
+                .index => |node| node,
+                .grouped => |inner| return self.applyMirPointerProvenanceForIndexAssignment(inner.*, value_expr, span),
+                else => return,
+            };
+            if (self.directLocalArrayBaseName(node.base.*)) |local_name| {
+                _ = try self.applyMirPointerProvenanceFactsAtSource(local_name, null, span);
+            }
+            return;
+        };
+        const matched_value = try self.applyMirPointerProvenanceFactsAtSource(path.local_name, path.index, value_expr.span);
+        _ = try self.applyMirPointerProvenanceFactsAtSource(path.local_name, path.index, span);
+        _ = try self.applyMirPointerProvenanceFactsAtSource(path.local_name, null, span);
+        if (!matched_value and self.directMirAddressProvenanceExpr(value_expr)) {
+            try self.setLocalArrayPointerElementProvenance(path.local_name, path.index, false);
+        }
+    }
+
     fn directGlobalStorageRoot(self: *LlvmEmitter, expr: ast.Expr) bool {
         return switch (expr.kind) {
             .ident => |ident| !self.local_slots.contains(ident.text) and !self.local_types.contains(ident.text) and self.global_types.contains(ident.text),
@@ -6059,7 +6249,8 @@ const LlvmEmitter = struct {
         return value;
     }
 
-    fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
+    fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr, span: ast.Span) ![]const u8 {
+        defer self.applyMirPointerProvenanceInvalidationsAtCall(span);
         defer self.local_slice_global_pointer_arrays.clearRetainingCapacity();
         defer self.local_slice_pointer_array_ranges.clearRetainingCapacity();
         defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
@@ -6577,7 +6768,8 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
     }
 
-    fn emitVoidStatementCall(self: *LlvmEmitter, call: anytype) !void {
+    fn emitVoidStatementCall(self: *LlvmEmitter, call: anytype, span: ast.Span) !void {
+        defer self.applyMirPointerProvenanceInvalidationsAtCall(span);
         defer self.local_slice_global_pointer_arrays.clearRetainingCapacity();
         defer self.local_slice_pointer_array_ranges.clearRetainingCapacity();
         defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);

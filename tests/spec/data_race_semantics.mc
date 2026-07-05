@@ -70,6 +70,13 @@ fn possibly_racing_pointer_load() -> u32 {
     return gp.*;
 }
 
+fn pointer_global_invalidated_by_call_stays_plain() -> u32 {
+    let gp: *mut u32 = &shared_counter;
+    external_raw_many_pointer();
+    // EXPECT: lower-llvm keeps a direct pointer-local deref plain after MIR call invalidation clears the global-storage fact.
+    return gp.*;
+}
+
 fn possibly_racing_direct_address_deref_load() -> u32 {
     // EXPECT: lower-llvm emits unordered atomic load for direct address-of global deref.
     return (&shared_counter).*;

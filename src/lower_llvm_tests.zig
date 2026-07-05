@@ -90,9 +90,16 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
 
     const pointer_load_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_pointer_load");
     try expectContains(pointer_load_body, "store ptr @shared_counter, ptr %gp.addr.");
+    try expectContains(pointer_load_body, "; mir pointer_provenance consumed fn=possibly_racing_pointer_load subject=gp provenance=global_storage reason=none");
     try expectContains(pointer_load_body, "load atomic i32, ptr %");
     try expectContains(pointer_load_body, " unordered, align 4");
     try expectNotContains(pointer_load_body, "load i32, ptr %");
+
+    const pointer_call_invalidated_body = try llvmFunctionBody(output.items, "define internal i32 @pointer_global_invalidated_by_call_stays_plain");
+    try expectContains(pointer_call_invalidated_body, "; mir pointer_provenance consumed fn=pointer_global_invalidated_by_call_stays_plain subject=gp provenance=global_storage reason=none");
+    try expectContains(pointer_call_invalidated_body, "call ptr @external_raw_many_pointer()");
+    try expectContains(pointer_call_invalidated_body, "load i32, ptr %");
+    try expectNotContains(pointer_call_invalidated_body, " atomic ");
 
     const address_deref_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_direct_address_deref_load");
     try expectContains(address_deref_body, "load atomic i32, ptr @shared_counter unordered, align 4");
@@ -172,6 +179,7 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
 
     const local_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @local_pointer_deref_stays_plain");
     try expectContains(local_pointer_body, "store i32 6, ptr %");
+    try expectContains(local_pointer_body, "; mir pointer_provenance consumed fn=local_pointer_deref_stays_plain subject=lp provenance=local_storage reason=none");
     try expectContains(local_pointer_body, "load i32, ptr %");
     try expectNotContains(local_pointer_body, " atomic ");
 
@@ -661,17 +669,20 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
 
     const array_global_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @array_global_pointer_element_load");
     try expectContains(array_global_pointer_body, "store ptr @shared_counter, ptr %");
+    try expectContains(array_global_pointer_body, "; mir pointer_provenance consumed fn=array_global_pointer_element_load subject=ptrs element=0 provenance=global_storage reason=none");
     try expectContains(array_global_pointer_body, "load atomic i32, ptr %");
     try expectContains(array_global_pointer_body, " unordered, align 4");
     try expectNotContains(array_global_pointer_body, "load i32, ptr %p.addr.");
 
     const array_assigned_global_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @array_assigned_global_pointer_element_load");
     try expectContains(array_assigned_global_pointer_body, "store ptr @shared_counter, ptr %");
+    try expectContains(array_assigned_global_pointer_body, "; mir pointer_provenance consumed fn=array_assigned_global_pointer_element_load subject=ptrs element=0 provenance=global_storage reason=reassignment");
     try expectContains(array_assigned_global_pointer_body, "load atomic i32, ptr %");
     try expectContains(array_assigned_global_pointer_body, " unordered, align 4");
     try expectNotContains(array_assigned_global_pointer_body, "load i32, ptr %p.addr.");
 
     const array_stack_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @array_stack_pointer_element_stays_plain");
+    try expectContains(array_stack_pointer_body, "; mir pointer_provenance consumed fn=array_stack_pointer_element_stays_plain subject=ptrs element=0 provenance=local_storage reason=none");
     try expectContains(array_stack_pointer_body, "load i32, ptr %");
     try expectNotContains(array_stack_pointer_body, " atomic ");
 
@@ -697,6 +708,7 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
 
     const array_dynamic_assignment_body = try llvmFunctionBody(output.items, "define internal i32 @array_dynamic_assignment_clears_pointer_element_fact");
     try expectContains(array_dynamic_assignment_body, "store ptr @shared_counter, ptr %");
+    try expectContains(array_dynamic_assignment_body, "; mir pointer_provenance consumed fn=array_dynamic_assignment_clears_pointer_element_fact subject=ptrs provenance=unknown reason=dynamic_index_write");
     try expectContains(array_dynamic_assignment_body, "load i32, ptr %");
     try expectNotContains(array_dynamic_assignment_body, " atomic ");
 
