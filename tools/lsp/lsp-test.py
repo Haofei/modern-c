@@ -192,6 +192,7 @@ def main():
 
     workdir = tempfile.mkdtemp(prefix="lsp_test_")
     counter_path = os.path.join(workdir, "check.count")
+    emit_map_counter_path = os.path.join(workdir, "emit-map.count")
     slow_started_path = os.path.join(workdir, "slow-check.started")
     slow_killed_path = os.path.join(workdir, "slow-check.killed")
     wrapper_path = os.path.join(workdir, "mcc-wrapper.py")
@@ -227,12 +228,16 @@ def main():
             "        write_marker(path_from_env('MC_LSP_TEST_SLOW_STARTED'), str(os.getpid()))\n"
             "        while True:\n"
             "            time.sleep(0.05)\n"
+            "elif len(sys.argv) > 1 and sys.argv[1] == 'emit-map':\n"
+            "    with open(os.environ['MC_LSP_TEST_EMIT_MAP_COUNTER'], 'a') as count_file:\n"
+            "        count_file.write('1\\n')\n"
             "proc = subprocess.run([os.environ['MC_LSP_TEST_REAL_MCC']] + sys.argv[1:])\n"
             "sys.exit(proc.returncode)\n"
         )
     os.chmod(wrapper_path, 0o755)
     env = dict(os.environ, MCC=wrapper_path, MC_LSP_DIAGNOSTIC_DEBOUNCE_MS="50",
                MC_LSP_TEST_REAL_MCC=mcc, MC_LSP_TEST_CHECK_COUNTER=counter_path,
+               MC_LSP_TEST_EMIT_MAP_COUNTER=emit_map_counter_path,
                MC_LSP_TEST_SLOW_STARTED=slow_started_path,
                MC_LSP_TEST_SLOW_KILLED=slow_killed_path)
 
@@ -279,6 +284,14 @@ def main():
         d = next(d for d in diags if d.get("code") == EXPECTED_CODE)
         assert d.get("source") == "mcc", f"diagnostic source should be 'mcc': {d}"
         assert d["range"]["start"]["line"] == 2, f"E_NO_LANG_TRAP_EDGE should be on line 3 (0-based 2): {d}"
+        checks_after_push = check_count(counter_path)
+        for rid in (101, 102):
+            rep = request(proc, rid, "textDocument/diagnostic", {"textDocument": {"uri": bad_uri}})
+            if EXPECTED_CODE not in [d.get("code") for d in rep.get("items", [])]:
+                raise SystemExit(f"FAIL: lsp-test — cached pull diagnostics missed {EXPECTED_CODE}: {rep}")
+        cached_pull_checks = check_count(counter_path) - checks_after_push
+        if cached_pull_checks != 0:
+            raise SystemExit(f"FAIL: lsp-test — unchanged pull diagnostics should reuse cache, ran {cached_pull_checks} check(s)")
 
         # Structured compiler notes should survive JSON -> LSP as related information.
         mono_path = os.path.join(workdir, "mono.mc")
@@ -304,10 +317,14 @@ def main():
             raise SystemExit(f"FAIL: lsp-test — clean document produced diagnostics: {good_diags}")
 
         # didChange the good document to introduce the same error -> diagnostic reappears.
+        checks_before_change = check_count(counter_path)
         did_change(proc, good_uri, 2, BAD)
         changed = diagnostics_for(proc, good_uri)
         if EXPECTED_CODE not in [d.get("code") for d in changed]:
             raise SystemExit(f"FAIL: lsp-test — didChange did not re-diagnose: {[d.get('code') for d in changed]}")
+        changed_checks = check_count(counter_path) - checks_before_change
+        if changed_checks != 1:
+            raise SystemExit(f"FAIL: lsp-test — didChange should invalidate diagnostic cache and run one check, ran {changed_checks}")
 
         # Rapid didChange bursts should publish diagnostics for the final text, not a stale edit.
         rapid_path = os.path.join(workdir, "rapid.mc")
@@ -349,6 +366,7 @@ def main():
         sym_uri = "file://" + sym_path
         did_open(proc, sym_uri, GOOD)
         diagnostics_for(proc, sym_uri)
+        maps_before_symbols = check_count(emit_map_counter_path)
         symbols = request(proc, 10, "textDocument/documentSymbol", {"textDocument": {"uri": sym_uri}})
         names = [s.get("name") for s in (symbols or [])]
         if "add_nums" not in names:
@@ -356,6 +374,12 @@ def main():
         ok_sym = next(s for s in symbols if s["name"] == "add_nums")
         if ok_sym.get("kind") != 12:  # SymbolKind.Function
             raise SystemExit(f"FAIL: lsp-test — 'add_nums' symbol kind should be Function(12): {ok_sym}")
+        symbols_again = request(proc, 42, "textDocument/documentSymbol", {"textDocument": {"uri": sym_uri}})
+        if symbols_again != symbols:
+            raise SystemExit(f"FAIL: lsp-test — cached documentSymbol response changed: {symbols_again}")
+        symbol_maps = check_count(emit_map_counter_path) - maps_before_symbols
+        if symbol_maps != 1:
+            raise SystemExit(f"FAIL: lsp-test — unchanged documentSymbol should run emit-map once, ran {symbol_maps}")
 
         # --- formatting (via `mcc fmt`) ------------------------------------------------------
         fmt_path = os.path.join(workdir, "fmt.mc")

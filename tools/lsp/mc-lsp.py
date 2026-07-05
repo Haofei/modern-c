@@ -28,6 +28,7 @@ Usage (configured as the language server for `.mc` files in an editor):
     MCC=/path/to/mcc python3 tools/lsp/mc-lsp.py
 The `MCC` environment variable (or --mcc) selects the compiler binary; default `mcc` on PATH.
 """
+import copy
 import json
 import os
 import re
@@ -359,15 +360,27 @@ def _diagnostics_from_json(out, tmp, text_lines):
 
 def run_diagnostics(uri, text, cancel_handle=None):
     """Run `mcc check` on `text` and return diagnostics, or None when cancelled."""
+    if cancel_handle is not None and cancel_handle.is_canceled():
+        return None
+    cached = _diagnostics_cache.get(uri)
+    if cached and cached[0] == text:
+        return copy.deepcopy(cached[1])
     result = run_diagnostic_on_temp(uri_to_path(uri), text, cancel_handle)
     if result is None:
         return None
     rc, out, err, tmp = result
     if rc == 127:
-        return []
+        if cancel_handle is not None and cancel_handle.is_canceled():
+            return None
+        diags = []
+        _diagnostics_cache[uri] = (text, copy.deepcopy(diags))
+        return diags
     text_lines = text.split("\n")
     json_diags = _diagnostics_from_json(out, tmp, text_lines)
     if json_diags is not None:
+        if cancel_handle is not None and cancel_handle.is_canceled():
+            return None
+        _diagnostics_cache[uri] = (text, copy.deepcopy(json_diags))
         return json_diags
     diags = []
     seen = set()
@@ -394,6 +407,9 @@ def run_diagnostics(uri, text, cancel_handle=None):
         if code:
             diag["code"] = code
         diags.append(diag)
+    if cancel_handle is not None and cancel_handle.is_canceled():
+        return None
+    _diagnostics_cache[uri] = (text, copy.deepcopy(diags))
     return diags
 
 
@@ -431,8 +447,12 @@ ROW_COL_RE = re.compile(r"source_column=(\d+)")
 
 
 def document_symbols(uri, text):
+    cached = _document_symbol_cache.get(uri)
+    if cached and cached[0] == text:
+        return copy.deepcopy(cached[1])
     rc, out, err, tmp = run_on_temp(uri_to_path(uri), text, ["emit-map"])
     if rc != 0:
+        _document_symbol_cache[uri] = (text, [])
         return []
     text_lines = text.split("\n")
     syms = []
@@ -463,12 +483,21 @@ def document_symbols(uri, text):
             "range": rng,
             "selectionRange": rng,
         })
+    _document_symbol_cache[uri] = (text, copy.deepcopy(syms))
     return syms
 
 
 # ---- symbol index (the `mcc symbols` JSON) -------------------------------------------------
 # Cached per-document so a hover/definition/reference burst reuses one compiler call.
 _index_cache = {}  # uri -> (text, index)
+_diagnostics_cache = {}  # uri -> (text, diagnostics)
+_document_symbol_cache = {}  # uri -> (text, document symbols)
+
+
+def invalidate_document_caches(uri):
+    _index_cache.pop(uri, None)
+    _diagnostics_cache.pop(uri, None)
+    _document_symbol_cache.pop(uri, None)
 
 
 def get_index(uri, text):
@@ -1176,7 +1205,7 @@ def main():
         with state_lock:
             docs[uri] = text
             doc_versions[uri] = next_doc_version(uri)
-            _index_cache.pop(uri, None)
+            invalidate_document_caches(uri)
 
     def get_doc_text(uri):
         with state_lock:
@@ -1304,7 +1333,7 @@ def main():
                 cancel_pending_diagnostics_locked(uri)
                 docs.pop(uri, None)
                 doc_versions.pop(uri, None)
-                _index_cache.pop(uri, None)
+                invalidate_document_caches(uri)
         elif method == "textDocument/formatting":
             uri = msg["params"]["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
