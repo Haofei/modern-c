@@ -858,7 +858,7 @@ per §Method.
 
 | Item | Why | Effort |
 |---|---|---|
-| Typed fact table: sema resolves once, backends consume (mcc2's proven pattern) | Kills the drift class (root cause #1); prerequisite for parallel + incremental; retires per-backend inference | L |
+| Typed fact table: sema resolves once, backends consume (mcc2's proven pattern) | Design slice complete in [`typed-semantic-facts.md`](typed-semantic-facts.md); next work is Phase 1 inventory + first narrow typed fact migration. Kills the drift class (root cause #1); prerequisite for parallel + incremental; retires per-backend inference | L |
 | Generic-body pre-instantiation checking (placeholder instantiation honoring bounds) | Library-grade generics | M-L |
 | CFG/place-based move checker (planned in-code) | Closes the lexical-analysis corner cases for good | L |
 | Parser error recovery (statement/decl resync) | Multi-error UX | L |
@@ -906,6 +906,7 @@ Reasonable to defer, but say so in user-facing docs:
 | [`todo.md`](todo.md) | Repo-wide roadmap; its P2 "tooling polish" row is expanded and superseded for the compiler by this doc. |
 | [`test-architecture.md`](test-architecture.md) | Fixture contracts and gate layers this doc's roadmap extends. |
 | [`lowering-coverage.md`](lowering-coverage.md) | The coverage instrument §5.3 says must be re-pointed; its headline numbers are stale. |
+| [`typed-semantic-facts.md`](typed-semantic-facts.md) | Phase 4 design artifact for the typed fact table / typed MIR bucket; defines invariants, implementation phases, first migration candidates, and acceptance gates. |
 | [`c-ub-matrix.md`](c-ub-matrix.md), [`unsafe-boundary.md`](unsafe-boundary.md) | Verified-in-code UB handling cited under strengths. |
 | [`mcfuzz-coverage-todo.md`](mcfuzz-coverage-todo.md) | Fuzzer backlog; §5.6 promotes its own "gate or note must change" item. |
 | [`threat-model.md`](threat-model.md), [`security-review.md`](security-review.md) | Kernel-scoped today; §5.7 asks for compiler + supply-chain coverage. |
