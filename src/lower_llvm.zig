@@ -1139,6 +1139,14 @@ const LlvmEmitter = struct {
         }
     }
 
+    fn reportUnsupportedIfNone(self: *LlvmEmitter, span: ast.Span, construct: []const u8) void {
+        if (self.reporter) |reporter| {
+            if (!reporter.has_errors) {
+                reporter.err(self.diagnosticSpan(span), "E_BACKEND_UNSUPPORTED: LLVM backend does not yet support {s}", .{construct});
+            }
+        }
+    }
+
     fn diagnosticSpan(self: *LlvmEmitter, span: ast.Span) ast.Span {
         if (isSourceSpan(span)) return span;
         if (self.current_debug_span) |current| {
@@ -1153,6 +1161,16 @@ const LlvmEmitter = struct {
     }
 
     fn emitExpr(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) anyerror![]const u8 {
+        return self.emitExprInner(expr, expected_ty) catch |err| switch (err) {
+            error.UnsupportedLlvmEmission => {
+                self.reportUnsupportedIfNone(expr.span, @tagName(expr.kind));
+                return err;
+            },
+            else => return err,
+        };
+    }
+
+    fn emitExprInner(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) anyerror![]const u8 {
         // Tier 2 coercion: a `*T` value -> `*dyn Trait` builds the fat pointer
         // { data = <ptr>, vtable = @__vt_T_Trait } (the only safe path to a `*dyn`).
         // This runs UNIFORMLY wherever `expected_ty` is threaded — let-init, return,
@@ -1402,97 +1420,109 @@ const LlvmEmitter = struct {
             if (isSourceSpan(stmt.span)) self.current_debug_span = stmt.span;
             defer self.current_debug_span = old_debug_span;
 
-            switch (stmt.kind) {
-                .let_decl => |local| try self.emitLocalDecl(local),
-                .var_decl => |local| try self.emitLocalDecl(local),
-                .assignment => |node| try self.emitAssignment(node.target, node.value),
-                .@"defer" => |expr| try self.defer_stack.append(self.allocator, expr),
-                .loop => |node| {
-                    if (try self.emitLoop(node, ret_ty)) return true;
+            const terminated = self.emitStmt(stmt, ret_ty) catch |err| switch (err) {
+                error.UnsupportedLlvmEmission => {
+                    self.reportUnsupportedIfNone(stmt.span, @tagName(stmt.kind));
+                    return err;
                 },
-                .block => |node| {
-                    if (try self.emitScopedBlock(node, ret_ty)) return true;
-                },
-                .comptime_block => {},
-                .unsafe_block => |node| {
-                    if (try self.emitScopedBlock(node, ret_ty)) return true;
-                },
-                .contract_block => |node| {
-                    if (try self.emitScopedBlock(node.block, ret_ty)) return true;
-                },
-                .assert => |expr| try self.emitAssert(expr),
-                .@"return" => |maybe_expr| {
-                    if (maybe_expr) |expr| {
-                        if (try self.emitNeverExpr(expr)) return true;
-                    }
-                    if (typeNameEql(ret_ty, "void")) {
-                        if (maybe_expr) |expr| switch (expr.kind) {
-                            .void_literal => {},
-                            .grouped => |inner| if ((inner.*).kind != .void_literal) return error.UnsupportedLlvmEmission,
-                            else => return error.UnsupportedLlvmEmission,
-                        };
-                        try self.emitDeferredCleanupsFrom(0, ret_ty);
-                        try self.emitReturnVoid(stmt.span);
-                    } else if (typeNameEql(ret_ty, "never")) {
-                        return error.UnsupportedLlvmEmission;
-                    } else {
-                        const expr = maybe_expr orelse return error.UnsupportedLlvmEmission;
-                        const value = try self.emitExpr(expr, ret_ty);
-                        try self.emitDeferredCleanupsFrom(0, ret_ty);
-                        try self.emitReturnValue(ret_ty, value, stmt.span);
-                    }
-                    return true;
-                },
-                .@"switch" => |node| {
-                    if (try self.emitNullableSwitch(node, ret_ty)) |terminated| {
-                        if (terminated) return true;
-                        continue;
-                    }
-                    if (try self.emitResultSwitch(node, ret_ty)) |terminated| {
-                        if (terminated) return true;
-                        continue;
-                    }
-                    if (try self.emitTaggedUnionSwitch(node, ret_ty)) |terminated| {
-                        if (terminated) return true;
-                        continue;
-                    }
-                    if (try self.emitScalarSwitch(node, ret_ty)) |terminated| {
-                        if (terminated) return true;
-                        continue;
-                    }
-                    self.reportUnsupported(stmt.span, "switch statement");
-                    return error.UnsupportedLlvmEmission;
-                },
-                .if_let => |node| {
-                    if (try self.emitResultIfLet(node, ret_ty)) return true;
-                    if (try self.emitNullableIfLet(node, ret_ty)) return true;
-                },
-                .@"break" => |target| {
-                    const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
-                    try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
-                    self.defer_stack.items.len = labels.cleanup_start;
-                    try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.break_label, try self.debugCallSuffix() });
-                    return true;
-                },
-                .@"continue" => |target| {
-                    const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
-                    try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
-                    self.defer_stack.items.len = labels.cleanup_start;
-                    try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.continue_label, try self.debugCallSuffix() });
-                    return true;
-                },
-                .expr => |expr| {
-                    try self.emitExprStatement(expr);
-                    // A diverging statement (`trap(...)`, `unreachable`, a `-> never` call) emits
-                    // its own `unreachable` terminator, so the block ends here — even if the
-                    // function returns a value, this path does not fall through.
-                    if (self.exprStatementDiverges(expr)) return true;
-                },
-                .asm_stmt => |asm_stmt| try self.emitAsmStmt(asm_stmt),
-            }
+                else => return err,
+            };
+            if (terminated) return true;
         }
         try self.emitDeferredCleanupsFrom(defer_start, ret_ty);
         self.defer_stack.items.len = defer_start;
+        return false;
+    }
+
+    fn emitStmt(self: *LlvmEmitter, stmt: ast.Stmt, ret_ty: ast.TypeExpr) anyerror!bool {
+        switch (stmt.kind) {
+            .let_decl => |local| try self.emitLocalDecl(local),
+            .var_decl => |local| try self.emitLocalDecl(local),
+            .assignment => |node| try self.emitAssignment(node.target, node.value),
+            .@"defer" => |expr| try self.defer_stack.append(self.allocator, expr),
+            .loop => |node| {
+                if (try self.emitLoop(node, ret_ty)) return true;
+            },
+            .block => |node| {
+                if (try self.emitScopedBlock(node, ret_ty)) return true;
+            },
+            .comptime_block => {},
+            .unsafe_block => |node| {
+                if (try self.emitScopedBlock(node, ret_ty)) return true;
+            },
+            .contract_block => |node| {
+                if (try self.emitScopedBlock(node.block, ret_ty)) return true;
+            },
+            .assert => |expr| try self.emitAssert(expr),
+            .@"return" => |maybe_expr| {
+                if (maybe_expr) |expr| {
+                    if (try self.emitNeverExpr(expr)) return true;
+                }
+                if (typeNameEql(ret_ty, "void")) {
+                    if (maybe_expr) |expr| switch (expr.kind) {
+                        .void_literal => {},
+                        .grouped => |inner| if ((inner.*).kind != .void_literal) return error.UnsupportedLlvmEmission,
+                        else => return error.UnsupportedLlvmEmission,
+                    };
+                    try self.emitDeferredCleanupsFrom(0, ret_ty);
+                    try self.emitReturnVoid(stmt.span);
+                } else if (typeNameEql(ret_ty, "never")) {
+                    return error.UnsupportedLlvmEmission;
+                } else {
+                    const expr = maybe_expr orelse return error.UnsupportedLlvmEmission;
+                    const value = try self.emitExpr(expr, ret_ty);
+                    try self.emitDeferredCleanupsFrom(0, ret_ty);
+                    try self.emitReturnValue(ret_ty, value, stmt.span);
+                }
+                return true;
+            },
+            .@"switch" => |node| {
+                if (try self.emitNullableSwitch(node, ret_ty)) |terminated| {
+                    if (terminated) return true;
+                    return false;
+                }
+                if (try self.emitResultSwitch(node, ret_ty)) |terminated| {
+                    if (terminated) return true;
+                    return false;
+                }
+                if (try self.emitTaggedUnionSwitch(node, ret_ty)) |terminated| {
+                    if (terminated) return true;
+                    return false;
+                }
+                if (try self.emitScalarSwitch(node, ret_ty)) |terminated| {
+                    if (terminated) return true;
+                    return false;
+                }
+                self.reportUnsupported(stmt.span, "switch statement");
+                return error.UnsupportedLlvmEmission;
+            },
+            .if_let => |node| {
+                if (try self.emitResultIfLet(node, ret_ty)) return true;
+                if (try self.emitNullableIfLet(node, ret_ty)) return true;
+            },
+            .@"break" => |target| {
+                const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
+                try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
+                self.defer_stack.items.len = labels.cleanup_start;
+                try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.break_label, try self.debugCallSuffix() });
+                return true;
+            },
+            .@"continue" => |target| {
+                const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
+                try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
+                self.defer_stack.items.len = labels.cleanup_start;
+                try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.continue_label, try self.debugCallSuffix() });
+                return true;
+            },
+            .expr => |expr| {
+                try self.emitExprStatement(expr);
+                // A diverging statement (`trap(...)`, `unreachable`, a `-> never` call) emits
+                // its own `unreachable` terminator, so the block ends here — even if the
+                // function returns a value, this path does not fall through.
+                if (self.exprStatementDiverges(expr)) return true;
+            },
+            .asm_stmt => |asm_stmt| try self.emitAsmStmt(asm_stmt),
+        }
         return false;
     }
 
@@ -1633,7 +1663,17 @@ const LlvmEmitter = struct {
         return text.toOwnedSlice(self.scratch.allocator());
     }
 
-    fn emitExprStatement(self: *LlvmEmitter, expr: ast.Expr) !void {
+    fn emitExprStatement(self: *LlvmEmitter, expr: ast.Expr) anyerror!void {
+        self.emitExprStatementInner(expr) catch |err| switch (err) {
+            error.UnsupportedLlvmEmission => {
+                self.reportUnsupportedIfNone(expr.span, @tagName(expr.kind));
+                return err;
+            },
+            else => return err,
+        };
+    }
+
+    fn emitExprStatementInner(self: *LlvmEmitter, expr: ast.Expr) anyerror!void {
         switch (expr.kind) {
             .unreachable_expr => {
                 _ = try self.emitNeverExpr(expr);

@@ -23,6 +23,7 @@ class Fixture:
 
 
 EMIT_LLVM_BAD_FIXTURES = (
+    "tests/llvm/bad/unsupported_opaque_asm_operands_after_supported_stmt.mc",
     "tests/c_emit/bad/export_struct_param_by_value.mc",
     "tests/c_emit/bad/export_struct_return_by_value.mc",
     "tests/c_emit/bad/extern_struct_param_by_value.mc",
