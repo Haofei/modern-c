@@ -970,6 +970,98 @@ test "LLVM direct pointer locals require MIR provenance facts" {
     try expectNotContains(assignment_body, " atomic ");
 }
 
+test "LLVM direct pointer-local copies require MIR destination provenance facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn pointer_copy_requires_mir_fact() -> u32 {
+        \\    let p: *mut u32 = &shared_counter;
+        \\    let q: *mut u32 = p;
+        \\    return q.*;
+        \\}
+        \\
+        \\fn pointer_copy_assignment_requires_mir_fact() -> u32 {
+        \\    let p: *mut u32 = &shared_counter;
+        \\    var q: *mut u32 = &shared_counter;
+        \\    q = p;
+        \\    return q.*;
+        \\}
+        \\
+        \\fn raw_many_copy_requires_mir_fact() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = p;
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
+        \\fn raw_many_copy_assignment_requires_mir_fact() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        var q: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        q = p;
+        \\        return q.*;
+        \\    }
+        \\}
+    ;
+
+    var normal_output: std.ArrayList(u8) = .empty;
+    defer normal_output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_pointer_copy_provenance.mc", source, &normal_output);
+
+    const normal_body = try llvmFunctionBody(normal_output.items, "define internal i32 @pointer_copy_requires_mir_fact");
+    try expectContains(normal_body, "; mir pointer_provenance consumed fn=pointer_copy_requires_mir_fact subject=p provenance=global_storage reason=none");
+    try expectContains(normal_body, "; mir pointer_provenance consumed fn=pointer_copy_requires_mir_fact subject=q provenance=global_storage reason=none");
+    try expectContains(normal_body, "load atomic i32, ptr %");
+    try expectContains(normal_body, " unordered, align 4");
+
+    const normal_assignment_body = try llvmFunctionBody(normal_output.items, "define internal i32 @pointer_copy_assignment_requires_mir_fact");
+    try expectContains(normal_assignment_body, "; mir pointer_provenance consumed fn=pointer_copy_assignment_requires_mir_fact subject=p provenance=global_storage reason=none");
+    try expectContains(normal_assignment_body, "; mir pointer_provenance consumed fn=pointer_copy_assignment_requires_mir_fact subject=q provenance=global_storage reason=reassignment");
+    try expectContains(normal_assignment_body, "load atomic i32, ptr %");
+    try expectContains(normal_assignment_body, " unordered, align 4");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_pointer_copy_missing_provenance.mc", source, "pointer_copy_requires_mir_fact", "q", &missing_output);
+
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @pointer_copy_requires_mir_fact");
+    try expectContains(missing_body, "; mir pointer_provenance consumed fn=pointer_copy_requires_mir_fact subject=p provenance=global_storage reason=none");
+    try expectNotContains(missing_body, "; mir pointer_provenance consumed fn=pointer_copy_requires_mir_fact subject=q");
+    try expectContains(missing_body, "load i32, ptr %");
+    try expectNotContains(missing_body, " atomic ");
+
+    var missing_assignment_output: std.ArrayList(u8) = .empty;
+    defer missing_assignment_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_pointer_copy_missing_provenance.mc", source, "pointer_copy_assignment_requires_mir_fact", "q", &missing_assignment_output);
+
+    const missing_assignment_body = try llvmFunctionBody(missing_assignment_output.items, "define internal i32 @pointer_copy_assignment_requires_mir_fact");
+    try expectContains(missing_assignment_body, "; mir pointer_provenance consumed fn=pointer_copy_assignment_requires_mir_fact subject=p provenance=global_storage reason=none");
+    try expectNotContains(missing_assignment_body, "; mir pointer_provenance consumed fn=pointer_copy_assignment_requires_mir_fact subject=q");
+    try expectContains(missing_assignment_body, "load i32, ptr %");
+    try expectNotContains(missing_assignment_body, " atomic ");
+
+    var missing_raw_output: std.ArrayList(u8) = .empty;
+    defer missing_raw_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_pointer_copy_missing_provenance.mc", source, "raw_many_copy_requires_mir_fact", "q", &missing_raw_output);
+
+    const missing_raw_body = try llvmFunctionBody(missing_raw_output.items, "define internal i32 @raw_many_copy_requires_mir_fact");
+    try expectContains(missing_raw_body, "; mir pointer_provenance consumed fn=raw_many_copy_requires_mir_fact subject=p provenance=global_storage reason=none");
+    try expectNotContains(missing_raw_body, "; mir pointer_provenance consumed fn=raw_many_copy_requires_mir_fact subject=q");
+    try expectContains(missing_raw_body, "load i32, ptr %");
+    try expectNotContains(missing_raw_body, " atomic ");
+
+    var missing_raw_assignment_output: std.ArrayList(u8) = .empty;
+    defer missing_raw_assignment_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_pointer_copy_missing_provenance.mc", source, "raw_many_copy_assignment_requires_mir_fact", "q", &missing_raw_assignment_output);
+
+    const missing_raw_assignment_body = try llvmFunctionBody(missing_raw_assignment_output.items, "define internal i32 @raw_many_copy_assignment_requires_mir_fact");
+    try expectContains(missing_raw_assignment_body, "; mir pointer_provenance consumed fn=raw_many_copy_assignment_requires_mir_fact subject=p provenance=global_storage reason=none");
+    try expectNotContains(missing_raw_assignment_body, "; mir pointer_provenance consumed fn=raw_many_copy_assignment_requires_mir_fact subject=q");
+    try expectContains(missing_raw_assignment_body, "load i32, ptr %");
+    try expectNotContains(missing_raw_assignment_body, " atomic ");
+}
+
 test "LLVM raw-many zero direct local requires MIR provenance fact" {
     const source =
         \\global shared_counter: u32 = 0;

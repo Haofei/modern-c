@@ -2755,8 +2755,10 @@ const FunctionBuilder = struct {
 
     fn recordPointerProvenanceForLocalInitializer(self: *FunctionBuilder, names: []ast.Ident, ty_expr: ?ast.TypeExpr, value_ty: ValueType, initializer: ast.Expr) !void {
         if (pointerShapeFromValueType(value_ty)) |shape| {
-            const provenance = self.directPointerProvenance(initializer) orelse return;
-            for (names) |name| try self.appendPointerProvenanceFact(name.text, null, provenance, shape, .none, initializer.span);
+            for (names) |name| {
+                const provenance = self.directPointerProvenance(initializer, shape, name.text) orelse continue;
+                try self.appendPointerProvenanceFact(name.text, null, provenance, shape, .none, initializer.span);
+            }
             return;
         }
         const array_ty = ty_expr orelse return;
@@ -2774,7 +2776,7 @@ const FunctionBuilder = struct {
         if (assignmentTargetIdentName(target)) |target_name| {
             const target_ty = self.typeForAssignmentTarget(target);
             if (pointerShapeFromValueType(target_ty)) |shape| {
-                if (self.directPointerProvenance(value)) |provenance| {
+                if (self.directPointerProvenance(value, shape, target_name)) |provenance| {
                     try self.appendPointerProvenanceFact(target_name, null, provenance, shape, .reassignment, value.span);
                 } else {
                     try self.appendUnknownPointerProvenanceFact(target_name, null, shape, .reassignment, span);
@@ -2918,14 +2920,17 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn directPointerProvenance(self: *FunctionBuilder, expr: ast.Expr) ?DirectPointerProvenance {
-        return self.directAddressProvenance(expr) orelse self.rawManyZeroOffsetProvenance(expr);
+    fn directPointerProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape, target_subject: ?[]const u8) ?DirectPointerProvenance {
+        return self.directAddressProvenance(expr) orelse
+            self.rawManyZeroOffsetProvenance(expr, target_shape) orelse
+            self.directLocalPointerCopyProvenance(expr, target_shape, target_subject);
     }
 
-    fn rawManyZeroOffsetProvenance(self: *FunctionBuilder, expr: ast.Expr) ?DirectPointerProvenance {
+    fn rawManyZeroOffsetProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape) ?DirectPointerProvenance {
+        if (target_shape.kind != .raw_many) return null;
         return switch (expr.kind) {
-            .grouped => |inner| self.rawManyZeroOffsetProvenance(inner.*),
-            .cast => |node| self.rawManyZeroOffsetProvenance(node.value.*),
+            .grouped => |inner| self.rawManyZeroOffsetProvenance(inner.*, target_shape),
+            .cast => |node| self.rawManyZeroOffsetProvenance(node.value.*, target_shape),
             .call => |call| blk: {
                 if (call.type_args.len != 0 or call.args.len != 1) break :blk null;
                 const member = memberCallee(call.callee.*) orelse break :blk null;
@@ -2935,8 +2940,34 @@ const FunctionBuilder = struct {
                 const base_name = self.directRawManyOffsetBaseLocalName(member.base.*) orelse break :blk null;
                 const live = self.livePointerProvenanceForDirectLocal(base_name) orelse break :blk null;
                 if (live.pointer_shape.kind != .raw_many or live.provenance != .global_storage) break :blk null;
+                if (!samePointerShape(live.pointer_shape, target_shape)) break :blk null;
                 const storage = live.storage orelse break :blk null;
                 break :blk .{ .kind = live.provenance, .storage = storage };
+            },
+            else => null,
+        };
+    }
+
+    fn directLocalPointerCopyProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape, target_subject: ?[]const u8) ?DirectPointerProvenance {
+        const base_name = self.directLocalPointerCopyBaseName(expr) orelse return null;
+        if (target_subject) |subject| {
+            if (std.mem.eql(u8, subject, base_name)) return null;
+        }
+        const live = self.livePointerProvenanceForDirectLocal(base_name) orelse return null;
+        if (live.provenance != .global_storage) return null;
+        if (!samePointerShape(live.pointer_shape, target_shape)) return null;
+        const storage = live.storage orelse return null;
+        return .{ .kind = live.provenance, .storage = storage };
+    }
+
+    fn directLocalPointerCopyBaseName(self: *FunctionBuilder, expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directLocalPointerCopyBaseName(inner.*),
+            .cast => |node| self.directLocalPointerCopyBaseName(node.value.*),
+            .ident => |ident| blk: {
+                const ty = self.local_types.get(ident.text) orelse break :blk null;
+                _ = pointerShapeFromValueType(ty) orelse break :blk null;
+                break :blk ident.text;
             },
             else => null,
         };

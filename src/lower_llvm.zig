@@ -5731,7 +5731,9 @@ const LlvmEmitter = struct {
 
     fn mirPointerProvenanceCoversDirectLocalUpdate(self: *LlvmEmitter, ty: ast.TypeExpr, expr: ast.Expr) bool {
         return self.isPointerLikeType(ty) and
-            (self.directMirAddressProvenanceExpr(expr) or self.directMirRawManyZeroOffsetExpr(expr));
+            (self.directMirAddressProvenanceExpr(expr) or
+                self.directMirRawManyZeroOffsetExpr(expr) or
+                self.directMirPointerLocalCopyExpr(expr));
     }
 
     fn directMirRawManyZeroOffsetExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
@@ -5763,10 +5765,24 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn directMirPointerLocalCopyExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directMirPointerLocalCopyExpr(inner.*),
+            .cast => |node| self.directMirPointerLocalCopyExpr(node.value.*),
+            .ident => |ident| blk: {
+                const ty = self.local_types.get(ident.text) orelse break :blk false;
+                break :blk self.isPointerLikeType(ty);
+            },
+            else => false,
+        };
+    }
+
     fn applyMirPointerProvenanceForLocalInitializer(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
         if (self.isPointerLikeType(ty)) {
             const matched = try self.applyMirPointerProvenanceFactsAtSource(name, null, init.span);
-            if (!matched and (self.directMirAddressProvenanceExpr(init) or self.directMirRawManyZeroOffsetExpr(init))) _ = self.global_pointer_locals.remove(name);
+            if (!matched and (self.directMirAddressProvenanceExpr(init) or
+                self.directMirRawManyZeroOffsetExpr(init) or
+                self.directMirPointerLocalCopyExpr(init))) _ = self.global_pointer_locals.remove(name);
             return;
         }
         if (self.fixedLocalPointerArrayElementType(ty) == null) return;
@@ -5783,7 +5799,9 @@ const LlvmEmitter = struct {
         if (self.isPointerLikeType(ty)) {
             const matched_value = try self.applyMirPointerProvenanceFactsAtSource(name, null, value_expr.span);
             _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span);
-            if (!matched_value and (self.directMirAddressProvenanceExpr(value_expr) or self.directMirRawManyZeroOffsetExpr(value_expr))) _ = self.global_pointer_locals.remove(name);
+            if (!matched_value and (self.directMirAddressProvenanceExpr(value_expr) or
+                self.directMirRawManyZeroOffsetExpr(value_expr) or
+                self.directMirPointerLocalCopyExpr(value_expr))) _ = self.global_pointer_locals.remove(name);
             return;
         }
         if (self.fixedLocalPointerArrayElementType(ty) == null) return;

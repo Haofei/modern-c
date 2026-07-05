@@ -1420,11 +1420,31 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
         \\    gp.* = x;
         \\}
         \\
+        \\fn pointer_fact_copy_load() -> u32 {
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    let copy: *mut u32 = gp;
+        \\    return copy.*;
+        \\}
+        \\
+        \\fn pointer_fact_copy_store(x: u32) -> void {
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    var copy: *mut u32 = &shared_counter;
+        \\    copy = gp;
+        \\    copy.* = x;
+        \\}
+        \\
         \\fn pointer_fact_local_storage_stays_plain() -> u32 {
         \\    var local: u32 = 5;
         \\    let lp: *mut u32 = &local;
         \\    lp.* = 6;
         \\    return lp.*;
+        \\}
+        \\
+        \\fn pointer_fact_local_copy_stays_plain() -> u32 {
+        \\    var local: u32 = 7;
+        \\    let lp: *mut u32 = &local;
+        \\    let copy: *mut u32 = lp;
+        \\    return copy.*;
         \\}
         \\
         \\fn pointer_fact_unknown_assignment_stays_plain() -> u32 {
@@ -1452,6 +1472,14 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
         \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
         \\        let q: [*]mut u32 = p.offset(0);
         \\        q.* = x;
+        \\    }
+        \\}
+        \\
+        \\fn pointer_fact_raw_many_copy_load() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = p;
+        \\        return q.*;
         \\    }
         \\}
         \\
@@ -1490,9 +1518,16 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
     try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(gp));");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_global_store subject=gp provenance=global_storage reason=none source=");
     try expectContains(output.items, "mc_race_store_u32(gp, (uint32_t)x);");
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_copy_load subject=copy provenance=global_storage reason=none source=");
+    try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(copy));");
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_copy_store subject=copy provenance=global_storage reason=reassignment source=");
+    try expectContains(output.items, "mc_race_store_u32(copy, (uint32_t)x);");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_local_storage_stays_plain subject=lp provenance=local_storage reason=none source=");
     try expectContains(output.items, "*lp = 6;");
     try expectContains(output.items, "return *lp;");
+    const local_copy_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_local_copy_stays_plain(void)");
+    try expectContains(local_copy_body, "return *copy;");
+    try expectNotContains(local_copy_body, "mc_race_load_u32(copy)");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_unknown_assignment_stays_plain subject=gp provenance=global_storage reason=none source=");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_unknown_assignment_stays_plain subject=gp provenance=unknown reason=reassignment source=");
     try expectContains(output.items, "return *gp;");
@@ -1510,6 +1545,10 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
     const raw_many_zero_store_body = try cFunctionBody(output.items, "static void pointer_fact_raw_many_zero_store(uint32_t x)");
     try expectContains(raw_many_zero_store_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_zero_store subject=q provenance=global_storage reason=none source=");
     try expectContains(raw_many_zero_store_body, "mc_race_store_u32(q, (uint32_t)x);");
+
+    const raw_many_copy_load_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_copy_load(void)");
+    try expectContains(raw_many_copy_load_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_copy_load subject=q provenance=global_storage reason=none source=");
+    try expectContains(raw_many_copy_load_body, "return ((uint32_t)mc_race_load_u32(q));");
 
     const raw_many_nonzero_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_nonzero_stays_plain(void)");
     try expectContains(raw_many_nonzero_body, "return *q;");

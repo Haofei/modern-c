@@ -4864,6 +4864,20 @@ const CEmitter = struct {
         };
     }
 
+    fn directMirPointerLocalCopyExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        const local_set = locals orelse return false;
+        return switch (expr.kind) {
+            .grouped => |inner| self.directMirPointerLocalCopyExpr(inner.*, locals),
+            .cast => |node| self.directMirPointerLocalCopyExpr(node.value.*, locals),
+            .ident => |ident| blk: {
+                const info = local_set.get(ident.text) orelse break :blk false;
+                const ty = info.source_ty orelse break :blk false;
+                break :blk isPointerLikeGlobalType(self.resolveAliasType(ty));
+            },
+            else => false,
+        };
+    }
+
     fn applyMirPointerProvenanceForLocalInitializer(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         if (isPointerLikeGlobalType(self.resolveAliasType(ty))) {
             const matched = try self.applyMirPointerProvenanceFactsAtSource(name, null, initializer.span, locals);
@@ -4875,6 +4889,8 @@ const CEmitter = struct {
                         _ = self.mir_global_pointer_locals.remove(name);
                     }
                 } else if (self.directMirAddressProvenanceExpr(initializer, locals)) {
+                    _ = self.mir_global_pointer_locals.remove(name);
+                } else if (self.directMirPointerLocalCopyExpr(initializer, locals)) {
                     _ = self.mir_global_pointer_locals.remove(name);
                 }
             }
@@ -4913,6 +4929,8 @@ const CEmitter = struct {
                         _ = self.mir_global_pointer_locals.remove(name);
                     }
                 } else if (self.directMirAddressProvenanceExpr(value, locals)) {
+                    _ = self.mir_global_pointer_locals.remove(name);
+                } else if (self.directMirPointerLocalCopyExpr(value, locals)) {
                     _ = self.mir_global_pointer_locals.remove(name);
                 }
             }

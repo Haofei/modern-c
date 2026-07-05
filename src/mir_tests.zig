@@ -1236,6 +1236,65 @@ test "MIR pointer provenance facts fail closed on reassignment dynamic writes ca
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=dynamic_index_write") != null);
 }
 
+test "MIR records direct pointer-local copy provenance facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn touch() {}
+        \\
+        \\fn pointer_local_copy_fact() {
+        \\    let p: *mut u32 = &shared_counter;
+        \\    let q: *mut u32 = p;
+        \\    var r: *mut u32 = &shared_counter;
+        \\    r = p;
+        \\}
+        \\
+        \\fn pointer_local_copy_fail_closed() {
+        \\    var local: u32 = 1;
+        \\    let lp: *mut u32 = &local;
+        \\    let local_copy: *mut u32 = lp;
+        \\    var p: *mut u32 = &shared_counter;
+        \\    p = p;
+        \\    let self_invalidated_copy: *mut u32 = p;
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    touch();
+        \\    let call_invalidated_copy: *mut u32 = gp;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_pointer_copy_provenance.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const copy_fn = functionByName(typed_mir, "pointer_local_copy_fact").?;
+    try std.testing.expect(hasPointerProvenanceFact(copy_fn, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(copy_fn, "q", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(copy_fn, "r", null, .global_storage, .reassignment, "shared_counter"));
+
+    const fail_closed_fn = functionByName(typed_mir, "pointer_local_copy_fail_closed").?;
+    try std.testing.expect(hasPointerProvenanceFact(fail_closed_fn, "lp", null, .local_storage, .none, "local"));
+    try std.testing.expectEqual(@as(usize, 0), countPointerProvenanceFacts(fail_closed_fn, "local_copy", .global_storage));
+    try std.testing.expect(hasPointerProvenanceFact(fail_closed_fn, "p", null, .unknown, .reassignment, null));
+    try std.testing.expectEqual(@as(usize, 0), countPointerProvenanceFacts(fail_closed_fn, "self_invalidated_copy", .global_storage));
+    try std.testing.expect(hasPointerProvenanceFact(fail_closed_fn, "gp", null, .unknown, .call, null));
+    try std.testing.expectEqual(@as(usize, 0), countPointerProvenanceFacts(fail_closed_fn, "call_invalidated_copy", .global_storage));
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, module, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=single") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=r element=none provenance=global_storage storage=shared_counter pointer_kind=single") != null);
+}
+
 test "MIR records narrow raw-many zero offset pointer provenance facts" {
     const source =
         \\global shared_counter: u32 = 0;
@@ -1247,6 +1306,7 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
         \\fn raw_many_zero_fact() {
         \\    unsafe {
         \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let copy: [*]mut u32 = p;
         \\        let q: [*]mut u32 = p.offset(0);
         \\    }
         \\}
@@ -1256,6 +1316,7 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
         \\        var local: u32 = 1;
         \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
         \\        var q: [*]mut u32 = (&local) as [*]mut u32;
+        \\        q = p;
         \\        q = p.offset(0);
         \\    }
         \\}
@@ -1291,6 +1352,7 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
 
     const zero_fn = functionByName(typed_mir, "raw_many_zero_fact").?;
     try std.testing.expect(hasPointerProvenanceFact(zero_fn, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(zero_fn, "copy", null, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(zero_fn, "q", null, .global_storage, .none, "shared_counter"));
 
     const assignment_fn = functionByName(typed_mir, "raw_many_zero_assignment_fact").?;
