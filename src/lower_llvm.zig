@@ -4618,7 +4618,7 @@ const LlvmEmitter = struct {
         if (!self.isPointerLikeType(array.child.*)) return null;
         const len = self.arrayLenValue(array.len) orelse return null;
         const start = self.localArrayConstIndexValue(node.start.*) orelse return null;
-        const end = self.localArrayConstIndexValue(node.end.*) orelse return null;
+        const end = self.localArrayConstIndexValue(node.end.*) orelse len;
         if (start >= end or end > len) return null;
         if (!self.localArrayRangeAnyElementHasGlobalPointerProvenance(array_name, start, end)) return null;
         return .{ .name = array_name, .range = .{ .start = start, .end = end } };
@@ -4651,7 +4651,7 @@ const LlvmEmitter = struct {
         if (!self.isPointerLikeType(array.child.*)) return null;
         const len = self.arrayLenValue(array.len) orelse return null;
         const start = self.localArrayConstIndexValue(node.start.*) orelse return null;
-        const end = self.localArrayConstIndexValue(node.end.*) orelse return null;
+        const end = self.localArrayConstIndexValue(node.end.*) orelse len;
         if (start >= end or end > len) return null;
         if (!self.localAggregateArrayRangeAnyElementHasGlobalPointerProvenance(path.local_name, path.field_path, start, end)) return null;
         return .{ .path = path, .range = .{ .start = start, .end = end } };

@@ -702,6 +702,27 @@ fn aggregate_slice_partial_range_all_local_stays_plain(index: usize) -> u32 {
     return p.*;
 }
 
+fn aggregate_slice_dynamic_end_pointer_elements_load(index: usize, end: usize) -> u32 {
+    var a: u32 = 59;
+    var b: u32 = 60;
+    let holder: PointerArrayHolder3 = .{ .ptrs = .{ &a, &shared_counter, &b }, .tag = 56 };
+    let s: []mut *mut u32 = holder.ptrs[1..end];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a constant-start dynamic-end aggregate pointer-array field slice when any possible backing element is proven global-backed.
+    return p.*;
+}
+
+fn aggregate_pointer_alias_slice_dynamic_end_pointer_elements_load(index: usize, end: usize) -> u32 {
+    var a: u32 = 61;
+    var b: u32 = 62;
+    var holder: PointerArrayHolder3 = .{ .ptrs = .{ &a, &shared_counter, &b }, .tag = 57 };
+    let hp: *mut PointerArrayHolder3 = &holder;
+    let s: []mut *mut u32 = hp.ptrs[1..end];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a constant-start dynamic-end aggregate pointer-alias slice when any possible backing element is proven global-backed.
+    return p.*;
+}
+
 fn aggregate_slice_backing_array_assignment_clears_fact(index: usize) -> u32 {
     var local: u32 = 37;
     var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 42 };
@@ -940,6 +961,47 @@ fn slice_partial_range_all_local_stays_plain(index: usize) -> u32 {
     let s: []mut *mut u32 = ptrs[1..3];
     let p: *mut u32 = s[index];
     // EXPECT: lower-llvm keeps all-local partial local pointer slices plain.
+    return p.*;
+}
+
+fn slice_dynamic_end_partial_pointer_elements_load(index: usize, end: usize) -> u32 {
+    var a: u32 = 61;
+    var b: u32 = 62;
+    let ptrs: [3]*mut u32 = .{ &a, &shared_counter, &b };
+    let s: []mut *mut u32 = ptrs[1..end];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a constant-start dynamic-end local pointer slice when any possible backing element is proven global-backed.
+    return p.*;
+}
+
+fn slice_dynamic_end_constant_global_element_load(end: usize) -> u32 {
+    var a: u32 = 63;
+    var b: u32 = 64;
+    let ptrs: [3]*mut u32 = .{ &a, &shared_counter, &b };
+    let s: []mut *mut u32 = ptrs[1..end];
+    let p: *mut u32 = s[0];
+    // EXPECT: lower-llvm maps constant-index dynamic-end local slices to the backing global-backed element.
+    return p.*;
+}
+
+fn slice_dynamic_end_constant_stack_element_stays_plain(end: usize) -> u32 {
+    var a: u32 = 65;
+    var b: u32 = 66;
+    let ptrs: [3]*mut u32 = .{ &a, &b, &shared_counter };
+    let s: []mut *mut u32 = ptrs[1..end];
+    let p: *mut u32 = s[0];
+    // EXPECT: lower-llvm maps constant-index dynamic-end local slices to the backing stack-backed element.
+    return p.*;
+}
+
+fn slice_dynamic_end_all_local_stays_plain(index: usize, end: usize) -> u32 {
+    var a: u32 = 67;
+    var b: u32 = 68;
+    var c: u32 = 69;
+    let ptrs: [3]*mut u32 = .{ &a, &b, &c };
+    let s: []mut *mut u32 = ptrs[1..end];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps all-local constant-start dynamic-end local pointer slices plain.
     return p.*;
 }
 
