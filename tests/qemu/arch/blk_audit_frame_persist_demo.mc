@@ -7,7 +7,7 @@
 // (count, seq, from/to/tag/size) plus the frame metadata (policy_version, boot_epoch).
 //
 // This exercises the real production path end-to-end: the generic BlockDevice trait
-// (kernel/fs/blockdev.mc) over the virtio-blk adapter (kernel/drivers/virtio/virtio_blk_blockdev.mc)
+// (kernel/fs/blockdev.mc) over the virtio-blk adapter (impl BlockDevice for BlkDevice in kernel/drivers/virtio/virtio_blk.mc)
 // driving the block-backed audit-frame API (kernel/core/block_persistent_audit.mc:
 // block_persistent_audit_capture / _count / _get / _policy_version / _boot_epoch), draining a
 // real kernel/core/ipc_trace.mc IpcTrace.
@@ -21,7 +21,6 @@
 import "tests/qemu/lib/test_report.mc";
 import "kernel/arch/riscv64/sbi_virtio_probe.mc";
 import "kernel/drivers/virtio/virtio_blk.mc";
-import "kernel/drivers/virtio/virtio_blk_blockdev.mc";
 import "kernel/core/block_persistent_audit.mc";
 import "kernel/core/ipc_trace.mc";
 import "kernel/fs/blockdev.mc";
