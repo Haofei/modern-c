@@ -24,14 +24,14 @@ import "std/addr.mc";
 
 // A [base, base+size) physical range, kept as plain u64s so the struct is
 // ABI-trivial to return by value and copy across the boot seam.
-struct MemRange {
+pub struct MemRange {
     base: u64,
     size: u64,
 }
 
 // The normalized firmware contract. Architecture-neutral by construction: every
 // field is a plain scalar / MemRange, nothing arch-specific leaks in.
-struct BootInfo {
+pub struct BootInfo {
     boot_cpu_id: u64,        // the hart/CPU id the firmware booted us on
     fdt_pointer: u64,        // raw physical address of the device tree (0 if none)
     memory: MemRange,        // primary usable RAM range from /memory
@@ -64,7 +64,7 @@ fn bootinfo_zero() -> BootInfo {
 // zeroed BootInfo (mem_found=false) rather than trusting garbage. Otherwise the
 // blob length is taken from the FDT header's totalsize, and every field is filled
 // by the existing kernel/core/fdt.mc walkers. Pure MC, no `unsafe`.
-export fn bootinfo_from_fdt(dtb: PAddr, boot_cpu_id: u64) -> BootInfo {
+pub fn bootinfo_from_fdt(dtb: PAddr, boot_cpu_id: u64) -> BootInfo {
     // An 8-byte window reaches magic@0 and totalsize@4; that's all we need to
     // validate the header and learn the true blob length.
     if !fdt_valid(dtb, 8) {

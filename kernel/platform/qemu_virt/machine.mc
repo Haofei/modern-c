@@ -9,14 +9,14 @@
 import "kernel/net/ethernet.mc";
 import "kernel/net/packet.mc";
 
-struct Machine {
+pub struct Machine {
     our_ip: Ipv4Addr,
     gateway_ip: Ipv4Addr,
     our_mac: MacAddr,
 }
 
 // The default QEMU `virt` slirp network: gateway 10.0.2.2, guest 10.0.2.15.
-export fn qemu_virt() -> Machine {
+pub fn qemu_virt() -> Machine {
     return .{
         .our_ip = ipv4(10, 0, 2, 15),
         .gateway_ip = ipv4(10, 0, 2, 2),

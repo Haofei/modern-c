@@ -6,20 +6,20 @@
 // DTBs, and the existing kernel FDT path is the right source of truth for UART,
 // interrupt controller, storage, and network resources.
 
-enum RiscvBoardId {
+pub enum RiscvBoardId {
     StarFiveVisionFive2,
 }
 
-enum RiscvBootChain {
+pub enum RiscvBootChain {
     OpenSbiSMode,
 }
 
-enum BoardResourceSource {
+pub enum BoardResourceSource {
     FixedProfile,
     DeviceTree,
 }
 
-struct RiscvBoardProfile {
+pub struct RiscvBoardProfile {
     board: RiscvBoardId,
     boot_chain: RiscvBootChain,
     hart_count: u32,
@@ -34,35 +34,35 @@ struct RiscvBoardProfile {
     requires_fdt: bool,
 }
 
-export fn selected_riscv_board() -> RiscvBoardId {
+pub fn selected_riscv_board() -> RiscvBoardId {
     return .StarFiveVisionFive2;
 }
 
-export fn selected_riscv_board_name() -> *const u8 {
+pub fn selected_riscv_board_name() -> *const u8 {
     return "StarFive VisionFive 2";
 }
 
-export fn selected_riscv_soc_compatible() -> *const u8 {
+pub fn selected_riscv_soc_compatible() -> *const u8 {
     return "starfive,jh7110";
 }
 
-export fn selected_riscv_board_compatible_v12a() -> *const u8 {
+pub fn selected_riscv_board_compatible_v12a() -> *const u8 {
     return "starfive,visionfive-2-v1.2a";
 }
 
-export fn selected_riscv_board_compatible_v13b() -> *const u8 {
+pub fn selected_riscv_board_compatible_v13b() -> *const u8 {
     return "starfive,visionfive-2-v1.3b";
 }
 
-export fn selected_riscv_dtb_v12a() -> *const u8 {
+pub fn selected_riscv_dtb_v12a() -> *const u8 {
     return "starfive/jh7110-starfive-visionfive-2-v1.2a.dtb";
 }
 
-export fn selected_riscv_dtb_v13b() -> *const u8 {
+pub fn selected_riscv_dtb_v13b() -> *const u8 {
     return "starfive/jh7110-starfive-visionfive-2-v1.3b.dtb";
 }
 
-export fn selected_riscv_profile() -> RiscvBoardProfile {
+pub fn selected_riscv_profile() -> RiscvBoardProfile {
     return .{
         .board = .StarFiveVisionFive2,
         .boot_chain = .OpenSbiSMode,
@@ -79,6 +79,6 @@ export fn selected_riscv_profile() -> RiscvBoardProfile {
     };
 }
 
-export fn selected_riscv_profile_ready_for_static_resources() -> bool {
+pub fn selected_riscv_profile_ready_for_static_resources() -> bool {
     return false;
 }

@@ -215,7 +215,19 @@ export fn s_entry(_hartid: u64, _dtb: u64) -> void {
         while true {}
     }
 
-    var ev: AsyncEvents = uninit;
+    var ev: AsyncEvents = .{
+        .count = 0,
+        .ev = .{
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+        },
+    };
     var tx_done: i32 = 0;
     var rx_len: usize = 0;
     var got_tx: bool = false;

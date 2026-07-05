@@ -10,30 +10,30 @@ import "kernel/drivers/irq/plic.mc";
 
 const SCAUSE_S_EXT: u64 = 0x8000_0000_0000_0009;
 
-struct SModePlic {
+pub struct SModePlic {
     base: usize,
     ctx: PlicContext,
 }
 
 #[irq_context]
-export fn smode_plic_for_hart(base: usize, hart: u32) -> SModePlic {
+pub fn smode_plic_for_hart(base: usize, hart: u32) -> SModePlic {
     return .{ .base = base, .ctx = plic_s_context(hart) };
 }
 
-export fn smode_plic_is_external(scause: u64) -> bool {
+pub fn smode_plic_is_external(scause: u64) -> bool {
     return scause == SCAUSE_S_EXT;
 }
 
-export fn smode_plic_enable_line(d: SModePlic, line: u32, prio: u32, threshold: u32) -> void {
+pub fn smode_plic_enable_line(d: SModePlic, line: u32, prio: u32, threshold: u32) -> void {
     setup_line_in_context(d.base, d.ctx, line, prio, threshold);
 }
 
 #[irq_context]
-export fn smode_plic_claim(d: SModePlic) -> u32 {
+pub fn smode_plic_claim(d: SModePlic) -> u32 {
     return claim_context(d.base, d.ctx);
 }
 
 #[irq_context]
-export fn smode_plic_complete(d: SModePlic, line: u32) -> void {
+pub fn smode_plic_complete(d: SModePlic, line: u32) -> void {
     complete_context(d.base, d.ctx, line);
 }

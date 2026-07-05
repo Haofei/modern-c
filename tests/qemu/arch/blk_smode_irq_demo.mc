@@ -150,7 +150,19 @@ export fn s_entry(_hartid: u64, _dtb: u64) -> void {
         while true {}
     }
 
-    var ev: AsyncEvents = uninit;
+    var ev: AsyncEvents = .{
+        .count = 0,
+        .ev = .{
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+            .{ .id = 0, .result = 0 },
+        },
+    };
     var nready: usize = 0;
     var guard: u32 = 0;
     while nready == 0 && guard < 4 {

@@ -15,17 +15,17 @@ const PLIC_CONTEXT_STRIDE: usize = 0x1000;
 const PLIC_THRESHOLD_OFFSET: usize = 0;
 const PLIC_CLAIM_OFFSET: usize = 4;
 
-struct PlicContext {
+pub struct PlicContext {
     id: u32,
 }
 
 #[irq_context]
-export fn plic_m_context(hart: u32) -> PlicContext {
+pub fn plic_m_context(hart: u32) -> PlicContext {
     return .{ .id = hart * 2 };
 }
 
 #[irq_context]
-export fn plic_s_context(hart: u32) -> PlicContext {
+pub fn plic_s_context(hart: u32) -> PlicContext {
     return .{ .id = hart * 2 + 1 };
 }
 
@@ -95,44 +95,44 @@ fn plic_complete_raw(base: usize, ctx: PlicContext, line: u32) -> void {
 // token across interrupt entries. They still centralize the PLIC context math so
 // demos and future S-mode drivers do not open-code context-1 addresses.
 
-export fn setup_line_in_context(base: usize, ctx: PlicContext, line: u32, prio: u32, threshold: u32) -> void {
+pub fn setup_line_in_context(base: usize, ctx: PlicContext, line: u32, prio: u32, threshold: u32) -> void {
     plic_set_priority(base, line, prio);
     plic_set_threshold(base, ctx, threshold);
     plic_enable_line(base, ctx, line);
 }
 
 #[irq_context]
-export fn claim_context(base: usize, ctx: PlicContext) -> u32 {
+pub fn claim_context(base: usize, ctx: PlicContext) -> u32 {
     return plic_claim(base, ctx);
 }
 
 #[irq_context]
-export fn complete_context(base: usize, ctx: PlicContext, line: u32) -> void {
+pub fn complete_context(base: usize, ctx: PlicContext, line: u32) -> void {
     plic_complete_raw(base, ctx, line);
 }
 
 // ----- IRQ line typestate -----
 
-struct Unclaimed {}
-struct Enabled {}
-struct Pending {}
+pub struct Unclaimed {}
+pub struct Enabled {}
+pub struct Pending {}
 
-move struct IrqLine<State> {
+pub move struct IrqLine<State> {
     line: u32,
 }
 
 // Take ownership of an interrupt line number.
-export fn claim_line(line: u32) -> IrqLine<Unclaimed> {
+pub fn claim_line(line: u32) -> IrqLine<Unclaimed> {
     return .{ .line = line };
 }
 
 // Enable the line in the PLIC (priority > 0, threshold 0, enable bit).
-export fn enable(base: usize, l: IrqLine<Unclaimed>) -> IrqLine<Enabled> {
+pub fn enable(base: usize, l: IrqLine<Unclaimed>) -> IrqLine<Enabled> {
     return enable_in_context(base, plic_m_context(0), l);
 }
 
 // Enable the line in an explicit PLIC context.
-export fn enable_in_context(base: usize, ctx: PlicContext, l: IrqLine<Unclaimed>) -> IrqLine<Enabled> {
+pub fn enable_in_context(base: usize, ctx: PlicContext, l: IrqLine<Unclaimed>) -> IrqLine<Enabled> {
     let line: u32 = l.line;
     plic_set_priority(base, line, 1);
     plic_set_threshold(base, ctx, 0);
@@ -151,12 +151,12 @@ export fn enable_in_context(base: usize, ctx: PlicContext, l: IrqLine<Unclaimed>
 // IRQ/atomic context — the sema rule forbids it from calling any `#[may_sleep]`
 // op (heap alloc, mutex_lock, sched_yield). It only touches PLIC registers.
 #[irq_context]
-export fn claim_if_pending(base: usize, l: IrqLine<Enabled>) -> IrqLine<Pending> {
+pub fn claim_if_pending(base: usize, l: IrqLine<Enabled>) -> IrqLine<Pending> {
     return claim_if_pending_in_context(base, plic_m_context(0), l);
 }
 
 #[irq_context]
-export fn claim_if_pending_in_context(base: usize, ctx: PlicContext, l: IrqLine<Enabled>) -> IrqLine<Pending> {
+pub fn claim_if_pending_in_context(base: usize, ctx: PlicContext, l: IrqLine<Enabled>) -> IrqLine<Pending> {
     let line: u32 = l.line;
     let claimed: u32 = plic_claim(base, ctx);
     if claimed != line {
@@ -167,11 +167,11 @@ export fn claim_if_pending_in_context(base: usize, ctx: PlicContext, l: IrqLine<
 }
 
 // Acknowledge a pending interrupt (PLIC complete). Only a Pending line.
-export fn complete(base: usize, l: IrqLine<Pending>) -> IrqLine<Enabled> {
+pub fn complete(base: usize, l: IrqLine<Pending>) -> IrqLine<Enabled> {
     return complete_in_context(base, plic_m_context(0), l);
 }
 
-export fn complete_in_context(base: usize, ctx: PlicContext, l: IrqLine<Pending>) -> IrqLine<Enabled> {
+pub fn complete_in_context(base: usize, ctx: PlicContext, l: IrqLine<Pending>) -> IrqLine<Enabled> {
     let line: u32 = l.line;
     plic_complete_raw(base, ctx, line);
     unsafe { forget_unchecked(l); }
@@ -180,11 +180,11 @@ export fn complete_in_context(base: usize, ctx: PlicContext, l: IrqLine<Pending>
 
 // Release the line: actually mask it in the PLIC (clear the enable bit and zero
 // its priority) before retiring the token.
-export fn release(base: usize, l: IrqLine<Enabled>) -> void {
+pub fn release(base: usize, l: IrqLine<Enabled>) -> void {
     release_in_context(base, plic_m_context(0), l);
 }
 
-export fn release_in_context(base: usize, ctx: PlicContext, l: IrqLine<Enabled>) -> void {
+pub fn release_in_context(base: usize, ctx: PlicContext, l: IrqLine<Enabled>) -> void {
     plic_disable_line(base, ctx, l.line);
     unsafe { forget_unchecked(l); }
 }

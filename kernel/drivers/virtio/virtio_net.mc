@@ -33,7 +33,7 @@ const IO_TIMEOUT_TICKS: u64 = 10_000_000; // ~1s at the CLINT's 10 MHz (real-tim
 
 // The driver's recoverable failure modes — a typed error instead of a lossy
 // `bool` (the caller learns *why* it failed). Success carries a placeholder `true`.
-enum NetError {
+pub enum NetError {
     DeviceInitFailed, // virtio handshake / feature negotiation failed
     QueueUnavailable, // a virtqueue could not be set up
     ArpFailed,        // no usable ARP reply from the gateway
@@ -45,7 +45,7 @@ enum NetError {
 // into one handle. The net stack (ARP/IPv4/ICMP) never sees these — it works on
 // cpu-owned buffers — so this stays the boundary between transport/queue and
 // protocol.
-struct NetDevice {
+pub struct NetDevice {
     regs: MmioPtr<VirtioMmio>,
     rxq: *mut Virtq,
     txq: *mut Virtq,
@@ -84,7 +84,7 @@ fn nic_fault_reset(dev: *NetDevice) -> void {
 
 // Bring the card up: require VERSION_1, set up both queues, go live, and post the
 // initial RX buffers.
-export fn nic_init(dev: *NetDevice) -> Result<bool, NetError> {
+pub fn nic_init(dev: *NetDevice) -> Result<bool, NetError> {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let rxq: *mut Virtq = dev.rxq;
     let txq: *mut Virtq = dev.txq;
@@ -112,7 +112,7 @@ export fn nic_init(dev: *NetDevice) -> Result<bool, NetError> {
 }
 
 // Send a broadcast ARP request for `target_ip` and reclaim the TX buffer.
-export fn nic_send_arp(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_ip: u32) -> bool {
+pub fn nic_send_arp(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_ip: u32) -> bool {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let txq: *mut Virtq = dev.txq;
     var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
@@ -150,7 +150,7 @@ export fn nic_send_arp(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_i
 // DMA cycle. `total_len` documents the framed byte count (NET_HDR_LEN + Ethernet
 // payload); the whole allocation is submitted. Consumes `cpu`. Returns false on a
 // full queue or a device fault/timeout.
-export fn nic_tx_frame(dev: *NetDevice, cpu: CpuBuffer, total_len: usize) -> bool {
+pub fn nic_tx_frame(dev: *NetDevice, cpu: CpuBuffer, total_len: usize) -> bool {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let txq: *mut Virtq = dev.txq;
     let _ignored: usize = total_len;
@@ -165,7 +165,7 @@ export fn nic_tx_frame(dev: *NetDevice, cpu: CpuBuffer, total_len: usize) -> boo
 
 // Poll the RX queue once. Returns the sender IP of a received ARP reply, or 0 if
 // nothing was received (or it was not an ARP reply). Refills the consumed buffer.
-export fn nic_poll_arp(dev: *NetDevice) -> u32 {
+pub fn nic_poll_arp(dev: *NetDevice) -> u32 {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let rxq: *mut Virtq = dev.rxq;
     if !vq_has_used(rxq) {
@@ -332,7 +332,7 @@ fn tx_wait_reclaim(dev: *NetDevice) -> bool {
 
 // Ping the gateway: ARP for its MAC, send an ICMP echo request, await the reply.
 // The full Ethernet/IPv4/ICMP path over real virtio-net DMA.
-export fn nic_ping_gateway(dev: *NetDevice, src_mac: *MacAddr, src_ip: Ipv4Addr, gw_ip: Ipv4Addr) -> Result<bool, NetError> {
+pub fn nic_ping_gateway(dev: *NetDevice, src_mac: *MacAddr, src_ip: Ipv4Addr, gw_ip: Ipv4Addr) -> Result<bool, NetError> {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let txq: *mut Virtq = dev.txq;
     // 1. Resolve the gateway's hardware address.
@@ -380,7 +380,7 @@ export fn nic_ping_gateway(dev: *NetDevice, src_mac: *MacAddr, src_ip: Ipv4Addr,
 }
 
 // Resolve `target_ip`'s hardware address via ARP (send a request, await the reply).
-export fn nic_arp_resolve(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_ip: u32) -> Result<MacAddr, NetError> {
+pub fn nic_arp_resolve(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_ip: u32) -> Result<MacAddr, NetError> {
     if !nic_send_arp(dev, src_mac, src_ip, target_ip) {
         return err(.ArpFailed);
     }
@@ -398,7 +398,7 @@ export fn nic_arp_resolve(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, targe
 // virtio-net header) into `dst`; returns its length (0 on timeout). The decoupled
 // real-RX primitive: the caller routes the bytes onward (e.g. to net_rx_deliver),
 // keeping the driver independent of the protocol layers.
-export fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
+pub fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let rxq: *mut Virtq = dev.rxq;
     let start: Ticks = read_ticks();
@@ -474,7 +474,7 @@ fn send_icmp_reply(dev: *NetDevice, src_mac: *MacAddr, our_ip: u32, dst_mac: *Ma
 // Serve one inbound frame: answer an ARP request or an ICMP echo request aimed at
 // our address. Returns true if a reply was sent. This is what makes the guest
 // answerable to a host `ping` (host→guest needs a tap netdev to exercise).
-export fn nic_serve_once(dev: *NetDevice, src_mac: *MacAddr, our_ip: Ipv4Addr) -> bool {
+pub fn nic_serve_once(dev: *NetDevice, src_mac: *MacAddr, our_ip: Ipv4Addr) -> bool {
     var rx: RxFrame = rx_receive(dev);
     if !rx.valid {
         return false;
@@ -499,7 +499,7 @@ export fn nic_serve_once(dev: *NetDevice, src_mac: *MacAddr, our_ip: Ipv4Addr) -
 // refill and a TX reply; with the platform's one-shot bump DMA pool (net_runtime),
 // sustained serving eventually exhausts it. A recycling DMA allocator (a free list
 // in `mc_dma_free`) is the next step for an unbounded event loop.
-export fn nic_serve(dev: *NetDevice, src_mac: *MacAddr, our_ip: Ipv4Addr, rounds: u32) -> u32 {
+pub fn nic_serve(dev: *NetDevice, src_mac: *MacAddr, our_ip: Ipv4Addr, rounds: u32) -> u32 {
     var served: u32 = 0;
     var i: u32 = 0;
     while i < rounds {

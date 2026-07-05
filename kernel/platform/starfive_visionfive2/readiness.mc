@@ -11,7 +11,7 @@ import "kernel/core/bootinfo.mc";
 import "kernel/platform/starfive_visionfive2/profile.mc";
 import "std/addr.mc";
 
-enum VisionFive2ReadinessCode {
+pub enum VisionFive2ReadinessCode {
     Ready,
     StaticProfileUnexpected,
     MissingFdt,
@@ -21,7 +21,7 @@ enum VisionFive2ReadinessCode {
     MissingStorageOrNetwork,
 }
 
-struct VisionFive2Readiness {
+pub struct VisionFive2Readiness {
     ready: bool,
     code: VisionFive2ReadinessCode,
     boot_cpu_id: u64,
@@ -43,7 +43,7 @@ fn readiness_result(bi: BootInfo, code: VisionFive2ReadinessCode, ready: bool) -
     };
 }
 
-export fn visionfive2_readiness_from_bootinfo(bi: BootInfo) -> VisionFive2Readiness {
+pub fn visionfive2_readiness_from_bootinfo(bi: BootInfo) -> VisionFive2Readiness {
     let profile: RiscvBoardProfile = selected_riscv_profile();
     if selected_riscv_profile_ready_for_static_resources() {
         return readiness_result(bi, .StaticProfileUnexpected, false);
@@ -72,7 +72,7 @@ export fn visionfive2_readiness_from_bootinfo(bi: BootInfo) -> VisionFive2Readin
     return readiness_result(bi, .Ready, true);
 }
 
-export fn visionfive2_qemu_surrogate_readiness(dtb: PAddr, boot_cpu_id: u64) -> VisionFive2Readiness {
+pub fn visionfive2_qemu_surrogate_readiness(dtb: PAddr, boot_cpu_id: u64) -> VisionFive2Readiness {
     let bi: BootInfo = bootinfo_from_fdt(dtb, boot_cpu_id);
     return visionfive2_readiness_from_bootinfo(bi);
 }
