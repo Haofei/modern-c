@@ -610,6 +610,52 @@ fn array_dynamic_assignment_clears_pointer_element_fact(index: usize) -> u32 {
     return dynamic_p.* + constant_p.*;
 }
 
+fn pointer_to_array_dynamic_index_all_global_pointer_elements_load(index: usize) -> u32 {
+    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+    let pa: *mut [2]*mut u32 = &ptrs;
+    let p: *mut u32 = pa.*[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a local pointer-to-array when every possible backing element is proven global-backed.
+    return p.*;
+}
+
+fn pointer_to_array_stack_pointer_elements_stays_plain(index: usize) -> u32 {
+    var local: u32 = 21;
+    var ptrs: [2]*mut u32 = .{ &local, &local };
+    let pa: *mut [2]*mut u32 = &ptrs;
+    let p: *mut u32 = pa.*[index];
+    // EXPECT: lower-llvm keeps stack-backed local pointer-to-array element derefs plain.
+    return p.*;
+}
+
+fn pointer_to_array_partial_pointer_elements_stays_plain(index: usize) -> u32 {
+    var local: u32 = 22;
+    var ptrs: [2]*mut u32 = .{ &shared_counter, &local };
+    let pa: *mut [2]*mut u32 = &ptrs;
+    let p: *mut u32 = pa.*[index];
+    // EXPECT: lower-llvm keeps local pointer-to-array derefs plain when only some possible backing elements hold visible global storage.
+    return p.*;
+}
+
+fn pointer_to_array_reassigned_pointer_stays_plain(index: usize) -> u32 {
+    var local: u32 = 23;
+    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+    var other: [2]*mut u32 = .{ &local, &local };
+    var pa: *mut [2]*mut u32 = &ptrs;
+    pa = &other;
+    let p: *mut u32 = pa.*[index];
+    // EXPECT: lower-llvm keeps local pointer-to-array derefs plain after the pointer-to-array local is reassigned.
+    return p.*;
+}
+
+fn pointer_to_array_backing_array_write_clears_fact(index: usize) -> u32 {
+    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+    let pa: *mut [2]*mut u32 = &ptrs;
+    ptrs[0] = &shared_counter;
+    let p: *mut u32 = pa.*[index];
+    // EXPECT: lower-llvm keeps local pointer-to-array derefs plain after a direct backing array write.
+    return p.*;
+}
+
 fn slice_global_pointer_element_load(index: usize) -> u32 {
     let ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
     let s: []mut *mut u32 = ptrs[0..2];

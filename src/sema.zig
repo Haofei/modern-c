@@ -4951,6 +4951,7 @@ pub const Checker = struct {
 
     fn checkArrayDecayInitializer(self: *Checker, target: TypeClass, initializer: TypeClass, expr: ast.Expr) bool {
         if (initializer != .array) return false;
+        if (addressOfOperand(expr) != null) return false;
         if (isPointerLike(target)) {
             self.errorCode(expr.span, "E_ARRAY_TO_POINTER_DECAY", "arrays do not implicitly decay to pointers");
             return true;
