@@ -64,6 +64,7 @@ fi
 echo "[fast-parallel] ${#GATES[@]} gates, outer -P $OUTER_JOBS, inner JOBS=$JOBS, COUNT=$COUNT $( [ -s "$TIMES" ] && echo '(LPT-ordered)' )"
 
 S=$(date +%s)
+set +e
 printf '%s\n' "${GATES[@]}" | xargs -P "$OUTER_JOBS" -I{} bash -c '
     g="$1"
     if zig build "$g" >".wamr-cache/fastp-logs/$g.log" 2>&1; then
@@ -72,11 +73,23 @@ printf '%s\n' "${GATES[@]}" | xargs -P "$OUTER_JOBS" -I{} bash -c '
         echo "FAIL $g"
     fi
 ' _ {} | tee "$OUT/summary.txt"
+pipe_status=("${PIPESTATUS[@]}")
+xargs_rc=${pipe_status[0]}
+tee_rc=${pipe_status[1]}
+set -e
 E=$(date +%s)
 
 pass=$(awk '/^PASS / { n++ } END { print n + 0 }' "$OUT/summary.txt")
 fail=$(awk '/^FAIL / { n++ } END { print n + 0 }' "$OUT/summary.txt")
 echo "[fast-parallel] parallel pass: PASS=$pass FAIL=$fail wall=$((E - S))s (outer -P $OUTER_JOBS, inner JOBS=$JOBS, COUNT=$COUNT)"
+if [ "$tee_rc" -ne 0 ]; then
+    echo "[fast-parallel] tee failed with status $tee_rc"
+    exit "$tee_rc"
+fi
+if [ "$xargs_rc" -ne 0 ] && [ "$fail" -eq 0 ]; then
+    echo "[fast-parallel] xargs failed with status $xargs_rc before reporting a failed gate"
+    exit "$xargs_rc"
+fi
 
 FAILED=()
 while IFS= read -r gate; do
@@ -96,5 +109,5 @@ if [ "${#FAILED[@]}" -gt 0 ]; then
 fi
 
 EE=$(date +%s)
-echo "[fast-parallel] DONE real_failures=$real_fail total_wall=$((EE - S))s"
+echo "[fast-parallel] DONE real_failures=$real_fail xargs_status=$xargs_rc total_wall=$((EE - S))s"
 [ "$real_fail" -eq 0 ] || exit 1
