@@ -18,13 +18,13 @@
 const STACK_CANARY: u64 = 0xC0DE_FACE_DEAD_BEEF;
 
 // A guard word to embed at a frame boundary.
-struct StackGuard {
+pub struct StackGuard {
     magic: u64,
 }
 
 // Arm a fresh guard with the canary magic. Place the returned value at the top of the
 // frame (declare it before the buffers it protects).
-export fn guard_new() -> StackGuard {
+pub fn guard_new() -> StackGuard {
     return .{ .magic = STACK_CANARY };
 }
 
