@@ -291,6 +291,17 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(aggregate_return_mixed_if_body, "load i32, ptr %");
     try expectNotContains(aggregate_return_mixed_if_body, " atomic ");
 
+    const aggregate_return_branch_local_if_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_branch_local_if_pointer_field_load");
+    try expectContains(aggregate_return_branch_local_if_body, "call { ptr, i32 } @returned_pointer_holder_via_branch_local_if(");
+    try expectContains(aggregate_return_branch_local_if_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_return_branch_local_if_body, " unordered, align 4");
+    try expectNotContains(aggregate_return_branch_local_if_body, "load i32, ptr %p.addr.");
+
+    const aggregate_return_mixed_branch_local_if_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_mixed_branch_local_if_pointer_field_stays_plain");
+    try expectContains(aggregate_return_mixed_branch_local_if_body, "call { ptr, i32 } @returned_pointer_holder_via_mixed_branch_local_if(");
+    try expectContains(aggregate_return_mixed_branch_local_if_body, "load i32, ptr %");
+    try expectNotContains(aggregate_return_mixed_branch_local_if_body, " atomic ");
+
     const aggregate_exported_return_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_exported_return_pointer_field_stays_plain");
     try expectContains(aggregate_exported_return_body, "call ptr @exported_global_pointer()");
     try expectContains(aggregate_exported_return_body, "load i32, ptr %");
