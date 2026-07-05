@@ -3402,6 +3402,16 @@ const CEmitter = struct {
     }
 
     fn emitExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        self.emitExprInner(expr, locals) catch |err| switch (err) {
+            error.UnsupportedCEmission => {
+                self.reportUnsupportedIfNone(expr.span, @tagName(expr.kind));
+                return err;
+            },
+            else => return err,
+        };
+    }
+
+    fn emitExprInner(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         switch (expr.kind) {
             .ident => |ident| try self.emitIdentExpr(ident, locals),
             .int_literal, .float_literal, .char_literal, .bool_literal, .null_literal, .void_literal => try self.emitScalarLiteralExpr(expr),
@@ -3441,6 +3451,14 @@ const CEmitter = struct {
         self.reportUnsupported(expr.span, @tagName(expr.kind));
         try self.out.print(self.allocator, "/* unsupported expr: {s} */0", .{@tagName(expr.kind)});
         return error.UnsupportedCEmission;
+    }
+
+    fn reportUnsupportedIfNone(self: *CEmitter, span: ast.Span, construct: []const u8) void {
+        if (self.reporter) |reporter| {
+            if (!reporter.has_errors) {
+                reporter.err(span, "E_BACKEND_UNSUPPORTED: C backend does not yet support {s}", .{construct});
+            }
+        }
     }
 
     fn emitIdentExpr(self: *CEmitter, ident: ast.Ident, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
@@ -3721,6 +3739,16 @@ const CEmitter = struct {
     }
 
     fn emitExprWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
+        self.emitExprWithTargetInner(expr, locals, target_ty) catch |err| switch (err) {
+            error.UnsupportedCEmission => {
+                self.reportUnsupportedIfNone(expr.span, @tagName(expr.kind));
+                return err;
+            },
+            else => return err,
+        };
+    }
+
+    fn emitExprWithTargetInner(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
         if (try self.emitValueOptionalCoercion(expr, locals, target_ty)) return;
         if (try self.emitTargetPreludeExpr(expr, locals, target_ty)) return;
         switch (expr.kind) {
