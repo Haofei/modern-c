@@ -3702,6 +3702,51 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn aggregatePointerAliasArrayElementPath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
+        return switch (expr.kind) {
+            .grouped => |inner| self.aggregatePointerAliasArrayElementPath(inner.*),
+            .index => |node| blk: {
+                const base_path = self.aggregatePointerAliasMemberPath(node.base.*) orelse break :blk null;
+                const base_ty = self.resolveAliasType(self.exprType(node.base.*) orelse break :blk null);
+                const array = switch (base_ty.kind) {
+                    .array => |array| array,
+                    else => break :blk null,
+                };
+                if (!self.isPointerLikeType(array.child.*)) break :blk null;
+                const index = self.localArrayConstIndexValue(node.index.*) orelse break :blk null;
+                const len = self.arrayLenValue(array.len) orelse break :blk null;
+                if (index >= len) break :blk null;
+                break :blk .{
+                    .local_name = base_path.local_name,
+                    .field_path = self.aggregatePointerArrayElementPath(base_path.field_path, index) catch break :blk null,
+                };
+            },
+            else => null,
+        };
+    }
+
+    fn aggregatePointerAliasArrayBasePath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
+        const path = self.aggregatePointerAliasMemberPath(expr) orelse return null;
+        const base_ty = self.resolveAliasType(self.exprType(expr) orelse return null);
+        const array = switch (base_ty.kind) {
+            .array => |array| array,
+            else => return null,
+        };
+        if (!self.isPointerLikeType(array.child.*)) return null;
+        return path;
+    }
+
+    fn aggregatePointerAliasArrayBaseHasCompleteGlobalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+        const path = self.aggregatePointerAliasArrayBasePath(expr) orelse return false;
+        const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
+        const array = switch (base_ty.kind) {
+            .array => |array| array,
+            else => return false,
+        };
+        const len = self.arrayLenValue(array.len) orelse return false;
+        return self.localAggregateArrayAllElementsHaveGlobalPointerProvenance(path.local_name, path.field_path, len);
+    }
+
     fn directLocalAggregateAssignmentPath(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) !?AggregatePointerFieldPath {
         const base_ty = self.exprType(base) orelse return null;
         if (self.resolveAliasType(base_ty).kind == .pointer) return null;
@@ -4099,11 +4144,14 @@ const LlvmEmitter = struct {
                 false,
             .index => |node| if (self.directLocalAggregateArrayElementPath(expr)) |path|
                 self.localAggregateFieldHasGlobalPointerProvenance(path.local_name, path.field_path)
+            else if (self.aggregatePointerAliasArrayElementPath(expr)) |path|
+                self.localAggregateFieldHasGlobalPointerProvenance(path.local_name, path.field_path)
             else if (self.directLocalArrayElementPath(expr)) |path|
                 self.localArrayElementHasGlobalPointerProvenance(path.local_name, path.index)
             else
                 self.localArrayConstIndexValue(node.index.*) == null and
                     (self.directLocalAggregateArrayBaseHasCompleteGlobalPointerProvenance(node.base.*) or
+                        self.aggregatePointerAliasArrayBaseHasCompleteGlobalPointerProvenance(node.base.*) or
                         self.directLocalArrayBaseHasCompleteGlobalPointerProvenance(node.base.*)),
             .call => |call| if (isAssumeNoaliasCall(call) and call.args.len == 2)
                 self.pointerExprHasGlobalStorageProvenance(call.args[0])

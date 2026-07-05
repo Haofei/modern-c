@@ -335,6 +335,58 @@ fn aggregate_array_dynamic_assignment_clears_pointer_element_fact(index: usize) 
     return dynamic_p.* + constant_p.*;
 }
 
+fn aggregate_pointer_alias_array_global_pointer_element_load() -> u32 {
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 24 };
+    let hp: *mut PointerArrayHolder = &holder;
+    let p: *mut u32 = hp.ptrs[0];
+    // EXPECT: lower-llvm emits unordered atomic load through a local aggregate pointer alias to a proven array element.
+    return p.*;
+}
+
+fn aggregate_pointer_alias_array_dynamic_index_all_global_pointer_elements_load(index: usize) -> u32 {
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 25 };
+    let hp: *mut PointerArrayHolder = &holder;
+    let p: *mut u32 = hp.ptrs[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a dynamic-index aggregate pointer alias array element when every possible element is proven global-backed.
+    return p.*;
+}
+
+fn aggregate_pointer_alias_array_stack_pointer_element_stays_plain() -> u32 {
+    var local: u32 = 25;
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &local, &local }, .tag = 26 };
+    let hp: *mut PointerArrayHolder = &holder;
+    let p: *mut u32 = hp.ptrs[0];
+    // EXPECT: lower-llvm keeps stack-backed aggregate pointer alias array element derefs plain.
+    return p.*;
+}
+
+fn aggregate_pointer_alias_array_dynamic_index_partial_pointer_elements_stays_plain(index: usize) -> u32 {
+    var local: u32 = 26;
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &local }, .tag = 27 };
+    let hp: *mut PointerArrayHolder = &holder;
+    let p: *mut u32 = hp.ptrs[index];
+    // EXPECT: lower-llvm keeps dynamic-index aggregate pointer alias array element derefs plain when only some possible elements hold visible global storage.
+    return p.*;
+}
+
+extern "C" fn external_pointer_array_holder() -> *mut PointerArrayHolder;
+
+fn aggregate_pointer_alias_array_returned_unknown_stays_plain() -> u32 {
+    let hp: *mut PointerArrayHolder = external_pointer_array_holder();
+    let p: *mut u32 = hp.ptrs[0];
+    // EXPECT: lower-llvm keeps aggregate pointer alias array elements through returned/external aggregate pointers plain.
+    return p.*;
+}
+
+fn aggregate_pointer_alias_array_reassigned_unknown_stays_plain() -> u32 {
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 28 };
+    var hp: *mut PointerArrayHolder = &holder;
+    hp = external_pointer_array_holder();
+    let p: *mut u32 = hp.ptrs[0];
+    // EXPECT: lower-llvm clears aggregate pointer alias array element facts after reassignment to an unknown aggregate pointer.
+    return p.*;
+}
+
 fn array_global_pointer_element_load() -> u32 {
     let ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
     let p: *mut u32 = ptrs[0];
