@@ -9,6 +9,8 @@ const ContractRegion = mir.ContractRegion;
 const Function = mir.Function;
 const Instruction = mir.Instruction;
 const Module = mir.Module;
+const PointerProvenance = mir.PointerProvenance;
+const PointerProvenanceInvalidationReason = mir.PointerProvenanceInvalidationReason;
 const RangeFact = mir.RangeFact;
 const TrapEdge = mir.TrapEdge;
 const TrapKind = mir.TrapKind;
@@ -34,6 +36,30 @@ fn countTrapEdges(function: mir.Function, kind: mir.TrapKind) usize {
     var count: usize = 0;
     for (function.trap_edges) |edge| {
         if (edge.kind == kind) count += 1;
+    }
+    return count;
+}
+
+fn hasPointerProvenanceFact(function: mir.Function, subject: []const u8, element_index: ?usize, provenance: PointerProvenance, reason: PointerProvenanceInvalidationReason, storage: ?[]const u8) bool {
+    for (function.pointer_provenance_facts) |fact| {
+        if (!std.mem.eql(u8, fact.subject, subject)) continue;
+        if (fact.element_index != element_index) continue;
+        if (fact.provenance != provenance) continue;
+        if (fact.invalidation_reason != reason) continue;
+        if (storage) |expected_storage| {
+            if (fact.storage == null or !std.mem.eql(u8, fact.storage.?, expected_storage)) continue;
+        } else if (fact.storage != null) {
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
+fn countPointerProvenanceFacts(function: mir.Function, subject: []const u8, provenance: PointerProvenance) usize {
+    var count: usize = 0;
+    for (function.pointer_provenance_facts) |fact| {
+        if (std.mem.eql(u8, fact.subject, subject) and fact.provenance == provenance) count += 1;
     }
     return count;
 }
@@ -964,6 +990,7 @@ test "MIR verifier rejects malformed CFG structure" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -1003,6 +1030,7 @@ test "MIR verifier rejects block id mismatch in CFG" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -1056,6 +1084,7 @@ test "MIR verifier rejects fallthrough successors and trap kind mismatch" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -1106,6 +1135,105 @@ test "MIR records no_overflow range facts for unchecked add contract" {
     defer facts.deinit(std.testing.allocator);
     try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accumulate pass=range finding=no_overflow_range target=sum op=add left=sum right=b") != null);
+}
+
+test "MIR records typed pointer provenance facts for direct globals and pointer arrays" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn direct_pointer_and_array() {
+        \\    var local: u32 = 1;
+        \\    let p: *mut u32 = &shared_counter;
+        \\    var q: *mut u32 = &local;
+        \\    var ptrs: [2]*mut u32 = .{ &local, &shared_counter };
+        \\    ptrs[0] = &shared_counter;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_pointer_provenance.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const function = functionByName(typed_mir, "direct_pointer_and_array").?;
+    try std.testing.expect(hasPointerProvenanceFact(function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "q", null, .local_storage, .none, "local"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "ptrs", 0, .local_storage, .none, "local"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "ptrs", 1, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "ptrs", 0, .global_storage, .reassignment, "shared_counter"));
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, module, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=direct_pointer_and_array return=void no_lang_trap=false irq_context=false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "pointer_provenance_facts=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=p element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=ptrs element=0 provenance=global_storage storage=shared_counter") != null);
+}
+
+test "MIR pointer provenance facts fail closed on reassignment dynamic writes calls and address escape" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn touch() {}
+        \\
+        \\fn invalidations(index: usize) {
+        \\    var local: u32 = 1;
+        \\    var p: *mut u32 = &shared_counter;
+        \\    p = p;
+        \\    p = &shared_counter;
+        \\    touch();
+        \\    var q: *mut u32 = &shared_counter;
+        \\    let qp: *mut *mut u32 = &q;
+        \\    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+        \\    ptrs[index] = &local;
+        \\}
+        \\
+        \\fn absent_computed_pointer() {
+        \\    var local: u32 = 2;
+        \\    let ptrs: [2]*mut u32 = .{ &shared_counter, &local };
+        \\    let p: *mut u32 = ptrs[0];
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_pointer_provenance_invalid.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const invalidations_fn = functionByName(typed_mir, "invalidations").?;
+    try std.testing.expect(hasPointerProvenanceFact(invalidations_fn, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(invalidations_fn, "p", null, .unknown, .reassignment, null));
+    try std.testing.expect(hasPointerProvenanceFact(invalidations_fn, "p", null, .unknown, .call, null));
+    try std.testing.expect(hasPointerProvenanceFact(invalidations_fn, "q", null, .unknown, .address_escape, null));
+    try std.testing.expect(hasPointerProvenanceFact(invalidations_fn, "ptrs", null, .unknown, .dynamic_index_write, null));
+
+    const absent_fn = functionByName(typed_mir, "absent_computed_pointer").?;
+    try std.testing.expectEqual(@as(usize, 0), countPointerProvenanceFacts(absent_fn, "p", .global_storage));
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, module, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=invalidations subject=p element=none provenance=unknown storage=none") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=call") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=address_escape") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=dynamic_index_write") != null);
 }
 
 test "MIR range facts are top-level and no_overflow operations are known" {
@@ -1792,6 +1920,7 @@ test "MIR verifier rejects missing representation check" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -1826,6 +1955,7 @@ test "MIR verifier rejects missing representation check on indirect call" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -1859,6 +1989,7 @@ test "MIR verifier rejects missing representation check on typed load" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -1906,6 +2037,7 @@ test "MIR verifier requires representation checks to dominate sensitive returns"
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -1950,6 +2082,7 @@ test "MIR verifier rejects representation return when one predecessor lacks chec
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -1997,6 +2130,7 @@ test "MIR verifier matches representation identity across predecessor paths" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2043,6 +2177,7 @@ test "MIR verifier rejects predecessor representation check for wrong identity" 
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2079,6 +2214,7 @@ test "MIR verifier requires representation checks to dominate non-return typed u
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2112,6 +2248,7 @@ test "MIR verifier rejects missing representation check on non-return typed use"
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2148,6 +2285,7 @@ test "MIR verifier rejects representation check for the wrong value identity" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
             .elided_bounds = &.{},
         },
     };

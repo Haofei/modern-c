@@ -214,6 +214,36 @@ pub const SourcePoint = struct {
     column: usize,
 };
 
+pub const PointerProvenance = enum {
+    global_storage,
+    local_storage,
+    unknown,
+};
+
+pub const PointerProvenanceInvalidationReason = enum {
+    none,
+    reassignment,
+    dynamic_index_write,
+    call,
+    indirect_call,
+    address_escape,
+};
+
+pub const PointerProvenanceInvalidationPolicy = enum {
+    invalidate_on_mutation_escape_or_call,
+};
+
+pub const PointerProvenanceFact = struct {
+    subject: []const u8,
+    element_index: ?usize,
+    storage: ?[]const u8,
+    provenance: PointerProvenance,
+    pointer_shape: PointerShape,
+    invalidation_reason: PointerProvenanceInvalidationReason,
+    invalidation_policy: PointerProvenanceInvalidationPolicy,
+    source: SourcePoint,
+};
+
 pub const Block = struct {
     id: usize,
     kind: []const u8,
@@ -231,6 +261,7 @@ pub const Function = struct {
     trap_edges: []TrapEdge,
     contract_regions: []ContractRegion,
     range_facts: []RangeFact,
+    pointer_provenance_facts: []PointerProvenanceFact,
     // OPT (annex E): operand source points of checks the optimizer proved dead and elided
     // (`--optimize`) - a constant in-range array index's `Bounds` check, or an unsigned
     // division by a non-zero literal's `DivideByZero` check. Source points are unique per
@@ -253,6 +284,7 @@ pub const Module = struct {
             self.allocator.free(function.trap_edges);
             self.allocator.free(function.contract_regions);
             self.allocator.free(function.range_facts);
+            self.allocator.free(function.pointer_provenance_facts);
             self.allocator.free(function.elided_bounds);
         }
         self.allocator.free(self.functions);

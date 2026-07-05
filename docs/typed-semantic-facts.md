@@ -133,6 +133,10 @@ surfaces unless a backend is listed as consuming the in-memory MIR data directly
 
 ### Phase 2: add a typed fact table for one narrow fact family
 
+Status: complete for the narrow MIR pointer/global provenance table described
+below. This phase does not migrate backend consumption and does not close the
+typed-facts bucket.
+
 Introduce the table without migrating every fact. The first family should be
 small enough to verify end-to-end.
 
@@ -142,8 +146,30 @@ race-provenance fixes. Start with a narrow subset:
 
 - direct global address provenance for pointer-like locals initialized from
   `&global`;
-- direct local pointer-array element provenance for constant-index elements;
-- invalidation on reassignment, dynamic-index write, address escape, and call.
+- direct local fixed pointer-array element provenance for array literal elements
+  and constant-index assignments initialized from visible `&global` or `&local`
+  address expressions;
+- invalidation/unknown facts on pointer reassignment, whole-array reassignment,
+  dynamic-index write, address escape, direct call, and indirect call.
+
+Implemented shape:
+
+- `src/mir_model.zig` defines `PointerProvenanceFact` with typed
+  `PointerProvenance` (`global_storage`, `local_storage`, `unknown`),
+  typed invalidation reason/policy enums, source point, subject local, optional
+  element index, optional storage object, and `PointerShape`.
+- `Function.pointer_provenance_facts` owns the typed fact slice alongside
+  existing `range_facts` and `elided_bounds`.
+- `src/mir.zig` produces facts while building MIR from sema-visible AST/MIR
+  inputs. It deliberately recognizes only direct address expressions and direct
+  fixed pointer-array places; computed values, dynamic reads, unsupported paths,
+  or stale facts do not produce `global_storage`.
+- `appendDumpOpt` prints stable `mir pointer_provenance_fact ...` rows and the
+  function summary includes `pointer_provenance_facts=N`.
+- `src/mir_tests.zig` covers direct fact creation, local-storage facts,
+  constant-index array assignment, reassignment invalidation, dynamic-index
+  write invalidation, call invalidation, address-escape invalidation, absent
+  computed-pointer facts, and dump text.
 
 Alternative first migration: bounds/range check elision, because both backends
 already consume `elided_bounds`. This is lower risk, but it proves less about
@@ -151,9 +177,12 @@ retiring duplicated backend AST inference.
 
 Gate:
 
-- typed fact constructors are called from the sema/MIR path;
-- `lower-mir` or `mcc facts` prints a stable textual view of the same typed facts;
-- unit tests cover fact creation and invalidation, including absent-fact cases.
+- typed fact constructors are called from the sema/MIR path: done for this
+  pointer/global provenance subset;
+- `lower-mir` or `mcc facts` prints a stable textual view of the same typed facts:
+  done through `lower-mir` / `appendDumpOpt`;
+- unit tests cover fact creation and invalidation, including absent-fact cases:
+  done in `src/mir_tests.zig`.
 
 ### Phase 3: migrate one backend inference class
 
@@ -210,12 +239,14 @@ Initial fact:
 
 ```zig
 pub const PointerProvenanceFact = struct {
-    key: FactKey,
     provenance: enum { global_storage, local_storage, unknown },
     pointer_shape: PointerShape,
-    object: ObjectId,
-    element: ?ElementPath,
-    invalidates_on: InvalidationSet,
+    subject: LocalId,
+    storage: ?ObjectId,
+    element_index: ?usize,
+    source: SourcePoint,
+    invalidation_reason: enum { none, reassignment, dynamic_index_write, call, indirect_call, address_escape },
+    invalidation_policy: enum { invalidate_on_mutation_escape_or_call },
 };
 ```
 
@@ -239,6 +270,10 @@ Backend gates:
   an unsupported subcase with source context;
 - both artifact tests print the same fact id/source point for the same source
   operation.
+
+These backend gates remain Phase 3/4 work. Current production backends still use
+their existing inference paths and must fail closed when this typed fact family is
+absent or not yet consumed.
 
 ## Non-goals
 
