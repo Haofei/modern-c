@@ -1,7 +1,7 @@
 # Production readiness: the MC compiler (`mcc`)
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
-Current ledger: **updated 2026-07-05, based on parser recovery evidence in this worktree**.
+Current ledger: **updated 2026-07-05, based on `7d705b12`**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -15,7 +15,7 @@ Current ledger: **updated 2026-07-05, based on parser recovery evidence in this 
 | Item | Why it matters | Evidence |
 |---|---|---|
 | Parser nesting is bounded | Deep input now produces a diagnostic instead of a compiler crash. | `E_NESTING_TOO_DEEP`; direct deep-paren probe rejects cleanly. |
-| Parser recovery reports multiple parse errors across scoped bodies | Top-level declarations, block statements, module/impl/trait members, and aggregate fields now resync inside the enclosing syntax body; parse-failed modules still abort before sema, avoiding misleading semantic follow-on errors. | `tests/spec/parser_statement_recovery.mc`; `tests/spec/parser_declaration_recovery.mc`; direct `mcc check` emits multiple parse diagnostics without orphan-brace noise. |
+| Parser recovery reports multiple parse errors across scoped bodies | Top-level declarations, block statements, module/impl/trait members, and aggregate fields now resync inside the enclosing syntax body; parse-failed modules still abort before sema, avoiding misleading semantic follow-on errors. | `7d705b12 Improve parser declaration recovery`; `tests/spec/parser_statement_recovery.mc`; `tests/spec/parser_declaration_recovery.mc`; direct `mcc check` emits multiple parse diagnostics without orphan-brace noise. |
 | Missing imports and cross-file diagnostics are actionable | Users see the failing import path or imported file/line instead of root-file noise or raw Zig traces. | `E_IMPORT_NOT_FOUND` probe; imported `lib.mc` diagnostic points at `lib.mc`. |
 | Expected diagnostic failures no longer print Zig error-return traces | Normal user errors no longer look like compiler ICEs. | Unknown identifier probe prints only the MC diagnostic. |
 | Monomorphization has limits and generic body prechecks | Polymorphic recursion and invalid instantiated operators fail loudly instead of hanging or reaching backend emission. | `E_MONOMORPHIZATION_LIMIT`; `38eff033 Validate generic instantiation operators in sema`. |
