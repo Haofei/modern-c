@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 
 
 ROOT = Path(__file__).resolve().parents[1]
+HOST_TESTS = ROOT / "tools/lib/host-tests.tsv"
 
 
 @dataclass(frozen=True)
@@ -270,14 +271,21 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         (
-            ".github/workflows/release.yml",
-            "tools/ci/package-release.py",
-            "tools/toolchain/package-release-test.py",
-            "tools/toolchain/release-metadata-test.py",
             "docs/release-process.md",
             "SECURITY.md",
             "STABILITY.md",
             "CHANGELOG.md",
+        ),
+        ("release-metadata-test",),
+        "release/security/stability prose changes need metadata consistency, not release packaging or editor artifact checks",
+        ("git diff --check",),
+    ),
+    Rule(
+        (
+            ".github/workflows/release.yml",
+            "tools/ci/package-release.py",
+            "tools/toolchain/package-release-test.py",
+            "tools/toolchain/release-metadata-test.py",
             "build.zig.zon",
             ".zigversion",
         ),
@@ -413,10 +421,65 @@ RULES: tuple[Rule, ...] = (
         "host C fixtures are cross-backend parity surface",
     ),
     Rule(
-        ("tests/llvm/*.mc", "tools/toolchain/llvm-*.sh", "tools/toolchain/llvm-c-*.py"),
+        ("tests/llvm/*.mc",),
+        ("llvm-test", "llvm-obj-test"),
+        "LLVM backend fixtures need the textual and object LLVM fixture gates",
+    ),
+    Rule(
+        ("tools/toolchain/llvm-test.sh",),
+        ("llvm-test",),
+        "LLVM textual harness changes need the textual LLVM fixture gate",
+    ),
+    Rule(
+        ("tools/toolchain/llvm-obj-test.sh",),
+        ("llvm-obj-test",),
+        "LLVM object harness changes need the LLVM object fixture gate",
+    ),
+    Rule(
+        ("tools/toolchain/llvm-debug-test.sh",),
+        ("llvm-debug-test",),
+        "LLVM debug harness changes need the DWARF/source-line mapping gate",
+    ),
+    Rule(
+        ("tools/toolchain/llvm-std-test.sh",),
+        ("llvm-std-test",),
+        "LLVM std harness changes need the LLVM stdlib gate",
+    ),
+    Rule(
+        ("tools/toolchain/llvm-toolchain-test.sh",),
+        ("llvm-toolchain-test",),
+        "LLVM toolchain harness changes need the LLVM toolchain gate",
+    ),
+    Rule(
+        ("tools/toolchain/llvm-runtime-test.sh",),
+        ("llvm-runtime-test",),
+        "LLVM runtime harness changes need the LLVM runtime gate",
+    ),
+    Rule(
+        ("tools/toolchain/llvm-demo-test.sh",),
+        ("llvm-demo-test",),
+        "LLVM demo harness changes need the LLVM demo gate",
+    ),
+    Rule(
+        ("tools/toolchain/llvm-kernel-test.sh",),
+        ("llvm-kernel-test",),
+        "LLVM kernel harness changes need the LLVM kernel gate",
+    ),
+    Rule(
+        ("tools/toolchain/llvm-*.sh",),
         ("llvm-test", "llvm-obj-test", "llvm-sweep", "llvm-c-obj-sweep"),
-        "LLVM fixtures and scripts need textual, object, and sweep coverage",
-        excludes=("tools/toolchain/llvm-c-*.py",),
+        "unclassified LLVM harness changes keep the conservative textual, object, and sweep coverage",
+        excludes=(
+            "tools/toolchain/llvm-test.sh",
+            "tools/toolchain/llvm-obj-test.sh",
+            "tools/toolchain/llvm-debug-test.sh",
+            "tools/toolchain/llvm-std-test.sh",
+            "tools/toolchain/llvm-toolchain-test.sh",
+            "tools/toolchain/llvm-runtime-test.sh",
+            "tools/toolchain/llvm-demo-test.sh",
+            "tools/toolchain/llvm-kernel-test.sh",
+            "tools/toolchain/llvm-c-*.py",
+        ),
     ),
     Rule(
         ("tools/fuzz/mcfuzz.py",),
@@ -457,9 +520,14 @@ RULES: tuple[Rule, ...] = (
         "parser fuzz wrapper changes need the parser fuzz host gate",
     ),
     Rule(
-        ("tools/lsp/*", "editors/vscode/*", "editors/vscode/**/*"),
-        ("lsp-test", "editor-client-test"),
-        "editor/LSP changes need protocol and extension packaging checks",
+        ("tools/lsp/*",),
+        ("lsp-test",),
+        "LSP server changes need protocol-level language-server checks",
+    ),
+    Rule(
+        ("editors/vscode/*", "editors/vscode/**/*"),
+        ("editor-client-test",),
+        "VS Code extension changes need editor client packaging and grammar checks",
     ),
     Rule(
         ("kernel/**/*", "std/**/*", "tests/qemu/**/*", "tools/arch/*", "tools/proc/*", "tools/mem/*", "tools/net/*", "tools/fs/*"),
@@ -515,6 +583,34 @@ def matches(path: str, pattern: str) -> bool:
     return fnmatch.fnmatch(path, pattern)
 
 
+def host_manifest_gates(path: str) -> tuple[list[str], list[str]]:
+    """Return the exact host-test gate for a qemu fixture or bespoke driver."""
+    if not (path.startswith("tests/qemu/") or path.startswith("tools/lib/host-drivers/")):
+        return [], []
+    # production_ops_demo is intentionally routed with its surrounding signed-agent
+    # admission smoke gates, not only its host-harness row.
+    if path == "tests/qemu/proc/production_ops_demo.mc":
+        return [], []
+    try:
+        with HOST_TESTS.open("r", encoding="utf-8") as manifest:
+            for line in manifest:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                fields = stripped.split("\t")
+                if len(fields) < 3:
+                    continue
+                name, fixture, mode = fields[:3]
+                driver = f"tools/lib/host-drivers/{name}.c"
+                if fixture == path or (mode == "driver" and driver == path):
+                    return [name], [
+                        f"{path} is owned by tools/lib/host-tests.tsv row {name}; run the exact host-harness gate instead of broad kernel/QEMU confidence tiers",
+                    ]
+    except OSError:
+        pass
+    return [], []
+
+
 def spec_fixture_gates(path: str) -> tuple[list[str], list[str]]:
     gates = ["test"]
     reasons = ["spec fixture metadata and inline EXPECT contracts are checked by compiler unit/spec tests"]
@@ -554,6 +650,17 @@ def select_gates(paths: list[str]) -> tuple[list[str], list[str], list[str]]:
                     seen_gates.add(gate)
                     gates.append(gate)
             for reason in spec_reasons:
+                if reason not in seen_reasons:
+                    seen_reasons.add(reason)
+                    reasons.append(reason)
+            continue
+        host_gates, host_reasons = host_manifest_gates(path)
+        if host_gates:
+            for gate in host_gates:
+                if gate not in seen_gates:
+                    seen_gates.add(gate)
+                    gates.append(gate)
+            for reason in host_reasons:
                 if reason not in seen_reasons:
                     seen_reasons.add(reason)
                     reasons.append(reason)

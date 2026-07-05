@@ -126,6 +126,9 @@ def main() -> None:
         ["diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "mcc-cli-test"],
         ["git diff --check"],
     )
+    assert_route(module, ["docs/release-process.md"], ["release-metadata-test"], ["git diff --check"])
+    assert_route(module, ["CHANGELOG.md"], ["release-metadata-test"], ["git diff --check"])
+    assert_gates(module, [".github/workflows/release.yml"], ["release-metadata-test", "package-release-test", "editor-client-test"])
     assert_route(
         module,
         ["README.md", "src/ast.zig"],
@@ -176,6 +179,15 @@ def main() -> None:
     assert_gates(module, ["tools/fuzz/mcref.py"], ["fuzz-reference"])
     assert_gates(module, ["tools/fuzz/corpus/wrap_u16_mul.mc"], ["fuzz-corpus"])
     assert_gates(module, ["tools/fuzz/parser-fuzz.sh"], ["parser-fuzz-test"])
+    assert_gates(module, ["tests/qemu/net/parser_fuzz_demo.mc"], ["parser-fuzz-test"])
+    assert_gates(module, ["tools/lib/host-drivers/parser-fuzz-test.c"], ["parser-fuzz-test"])
+    assert_gates(module, ["tests/qemu/proc/agent_abi_demo.mc"], ["agent-abi-test"])
+    assert_gates(module, ["tests/qemu/proc/bundle_fuzz_demo.mc"], ["bundle-fuzz-test"])
+    assert_gates(
+        module,
+        ["tests/qemu/proc/production_ops_demo.mc"],
+        ["production-ops-test", "signed-boot-test", "app-run-test", "qjs-confined-test", "qjs-smode-confined-test"],
+    )
     assert_gates(module, ["tools/toolchain/diagnostics-test.sh"], ["diagnostics-test"])
     assert_gates(module, ["tools/toolchain/mcc-cli-test.sh"], ["mcc-cli-test"])
     assert_gates(module, ["tools/toolchain/install-layout-test.sh"], ["install-layout-test"])
@@ -232,6 +244,22 @@ def main() -> None:
     assert_gates(module, ["tests/toolchain/abi_layout.mc"], ["abi-test"])
     assert_gates(module, ["tools/toolchain/asm-targets-test.sh"], ["asm-targets-test"])
     assert_gates(module, ["tests/toolchain/asm_targets.mc"], ["asm-targets-test"])
+    assert_gates(module, ["tests/llvm/basic.mc"], ["llvm-test", "llvm-obj-test"])
+    assert_gates(module, ["tools/toolchain/llvm-test.sh"], ["llvm-test"])
+    assert_gates(module, ["tools/toolchain/llvm-obj-test.sh"], ["llvm-obj-test"])
+    assert_gates(module, ["tools/toolchain/llvm-debug-test.sh"], ["llvm-debug-test"])
+    assert_gates(module, ["tools/toolchain/llvm-std-test.sh"], ["llvm-std-test"])
+    assert_gates(module, ["tools/toolchain/llvm-toolchain-test.sh"], ["llvm-toolchain-test"])
+    assert_gates(module, ["tools/toolchain/llvm-runtime-test.sh"], ["llvm-runtime-test"])
+    assert_gates(module, ["tools/toolchain/llvm-demo-test.sh"], ["llvm-demo-test"])
+    assert_gates(module, ["tools/toolchain/llvm-kernel-test.sh"], ["llvm-kernel-test"])
+    assert_gates(
+        module,
+        ["tools/toolchain/llvm-new-harness.sh"],
+        ["llvm-test", "llvm-obj-test", "llvm-sweep", "llvm-c-obj-sweep"],
+    )
+    assert_gates(module, ["tools/lsp/mc-lsp.py"], ["lsp-test"])
+    assert_gates(module, ["editors/vscode/package.json"], ["editor-client-test"])
     assert_gates(module, ["tools/toolchain/spec-emit-sweep.py"], ["test-lint", "sweep"])
     assert_gates(module, ["tools/toolchain/spec-llvm-sweep.py"], ["test-lint", "llvm-sweep"])
     assert_gates(module, ["tools/toolchain/spec-llvm-obj-sweep.py"], ["test-lint", "llvm-spec-obj-sweep"])
