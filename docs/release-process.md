@@ -115,6 +115,36 @@ The current target set is:
 - `x86_64-macos`
 - `aarch64-macos`
 
+## Publication Controls Audit
+
+External publication-control evidence is audited with:
+
+```sh
+bash tools/toolchain/release-publication-audit.sh
+```
+
+The audit is read-only and uses `gh` list/API calls only. It verifies:
+
+- branch protection for the target branch;
+- recent `release.yml` workflow-run evidence;
+- existing GitHub Release publication evidence.
+
+By default it audits `Haofei/modern-c`, branch `master`, workflow `release.yml`.
+Override those targets when auditing a fork or renamed workflow:
+
+```sh
+MC_RELEASE_AUDIT_REPO=owner/repo \
+MC_RELEASE_AUDIT_BRANCH=main \
+MC_RELEASE_AUDIT_WORKFLOW=release.yml \
+bash tools/toolchain/release-publication-audit.sh
+```
+
+The script prints `PASS`, `FAIL`, and `PENDING` lines and exits nonzero unless
+every external evidence check is present. A nonzero result is expected before the
+repository has branch protection, successful release workflow evidence, and a
+published GitHub Release. It does not enable protection, dispatch workflows,
+create releases, or upload assets.
+
 ## Not Yet Implemented
 
 - Private security advisory intake.
