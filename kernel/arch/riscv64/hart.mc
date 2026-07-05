@@ -19,12 +19,12 @@ move struct Hart<State> {
 }
 
 // Claim the boot hart (called once from the entry path).
-export fn boot_hart(id: u32) -> Hart<Boot> {
+fn boot_hart(id: u32) -> Hart<Boot> {
     return .{ .id = id };
 }
 
 // Install the machine trap vector. Only a Boot hart can.
-export fn install_trap_vector(h: Hart<Boot>, vector: usize) -> Hart<TrapReady> {
+fn install_trap_vector(h: Hart<Boot>, vector: usize) -> Hart<TrapReady> {
     let id: u32 = h.id;
     write_trap_vector(vector);
     unsafe { forget_unchecked(h); }
@@ -33,7 +33,7 @@ export fn install_trap_vector(h: Hart<Boot>, vector: usize) -> Hart<TrapReady> {
 
 // Enable interrupts — only once the trap vector is in place. Unmasks the timer
 // source and sets the global enable, so a trap can now fire.
-export fn enable_interrupts(h: Hart<TrapReady>) -> Hart<IrqsOn> {
+fn enable_interrupts(h: Hart<TrapReady>) -> Hart<IrqsOn> {
     let id: u32 = h.id;
     enable_timer_interrupt();
     enable_interrupts_global();
@@ -42,7 +42,7 @@ export fn enable_interrupts(h: Hart<TrapReady>) -> Hart<IrqsOn> {
 }
 
 // Mask interrupts again, returning to the TrapReady state.
-export fn disable_interrupts(h: Hart<IrqsOn>) -> Hart<TrapReady> {
+fn disable_interrupts(h: Hart<IrqsOn>) -> Hart<TrapReady> {
     let id: u32 = h.id;
     disable_interrupts_global();
     unsafe { forget_unchecked(h); }
