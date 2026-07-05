@@ -13,6 +13,29 @@ fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.Arra
     try lower_llvm.appendLlvm(std.testing.allocator, parsed.module, output);
 }
 
+fn clearPointerProvenanceFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        module_mir.allocator.free(function.pointer_provenance_facts);
+        function.pointer_provenance_facts = try module_mir.allocator.alloc(mir.PointerProvenanceFact, 0);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn appendLlvmTestWithoutPointerProvenanceFacts(source_name: []const u8, source: []const u8, function_names: []const []const u8, output: *std.ArrayList(u8)) !void {
+    var parsed = try test_support.parseModule(source_name, source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    for (function_names) |function_name| {
+        try clearPointerProvenanceFactsForFunction(&module_mir, function_name);
+    }
+
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, output, source_name, .{}, false, .riscv64, null);
+}
+
 fn llvmFunctionBody(output: []const u8, signature_prefix: []const u8) ![]const u8 {
     const start = std.mem.indexOf(u8, output, signature_prefix) orelse return error.TestUnexpectedResult;
     const body_end = std.mem.indexOf(u8, output[start..], "\n}\n\n") orelse return error.TestUnexpectedResult;
@@ -879,6 +902,44 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(array_load_body, "load atomic i32, ptr %");
     try expectContains(array_load_body, " unordered, align 4");
     try expectNotContains(array_load_body, "load i32, ptr %");
+}
+
+test "LLVM direct pointer locals require MIR provenance facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn direct_initializer_requires_mir_fact() -> u32 {
+        \\    let p: *mut u32 = &shared_counter;
+        \\    return p.*;
+        \\}
+        \\
+        \\fn direct_assignment_requires_mir_fact() -> u32 {
+        \\    var local: u32 = 1;
+        \\    var p: *mut u32 = &local;
+        \\    p = &shared_counter;
+        \\    return p.*;
+        \\}
+    ;
+    const cleared = [_][]const u8{
+        "direct_initializer_requires_mir_fact",
+        "direct_assignment_requires_mir_fact",
+    };
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFacts("llvm_missing_pointer_provenance.mc", source, &cleared, &output);
+
+    const initializer_body = try llvmFunctionBody(output.items, "define internal i32 @direct_initializer_requires_mir_fact");
+    try expectContains(initializer_body, "store ptr @shared_counter, ptr %p.addr.");
+    try expectNotContains(initializer_body, "; mir pointer_provenance consumed");
+    try expectContains(initializer_body, "load i32, ptr %");
+    try expectNotContains(initializer_body, " atomic ");
+
+    const assignment_body = try llvmFunctionBody(output.items, "define internal i32 @direct_assignment_requires_mir_fact");
+    try expectContains(assignment_body, "store ptr @shared_counter, ptr %p.addr.");
+    try expectNotContains(assignment_body, "; mir pointer_provenance consumed");
+    try expectContains(assignment_body, "load i32, ptr %");
+    try expectNotContains(assignment_body, " atomic ");
 }
 
 test "LLVM ordinary bool global accesses use byte-sized atomics" {

@@ -3387,7 +3387,11 @@ const LlvmEmitter = struct {
         try self.emitAlloca(ptr, llvm_ty);
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
-        try self.updatePointerGlobalProvenance(name, ty, init);
+        // MIR owns direct address provenance for pointer locals; keep LLVM inference for
+        // broader fallback shapes such as copies, returned pointers, params, and aggregates.
+        if (!self.mirPointerProvenanceCoversDirectLocalUpdate(ty, init)) {
+            try self.updatePointerGlobalProvenance(name, ty, init);
+        }
         try self.updateAggregatePointerAliasProvenance(name, ty, init);
         try self.updateLocalPointerArrayAliasProvenanceFromInit(name, ty, init);
         try self.updateAggregatePointerFieldProvenanceFromInit(name, ty, init);
@@ -3441,7 +3445,9 @@ const LlvmEmitter = struct {
                 const llvm_ty = try self.llvmType(slot.ty);
                 const value = try self.emitExpr(value_expr, slot.ty);
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, slot.ptr, try self.debugCallSuffix() });
-                try self.updatePointerGlobalProvenance(ident.text, slot.ty, value_expr);
+                if (!self.mirPointerProvenanceCoversDirectLocalUpdate(slot.ty, value_expr)) {
+                    try self.updatePointerGlobalProvenance(ident.text, slot.ty, value_expr);
+                }
                 _ = self.local_aggregate_pointer_aliases.remove(ident.text);
                 _ = self.local_pointer_array_aliases.remove(ident.text);
                 self.clearLocalSlicesBackedByArray(ident.text);
@@ -5721,6 +5727,10 @@ const LlvmEmitter = struct {
             .ident => |ident| self.global_types.contains(ident.text) or self.local_types.contains(ident.text),
             else => false,
         };
+    }
+
+    fn mirPointerProvenanceCoversDirectLocalUpdate(self: *LlvmEmitter, ty: ast.TypeExpr, expr: ast.Expr) bool {
+        return self.isPointerLikeType(ty) and self.directMirAddressProvenanceExpr(expr);
     }
 
     fn applyMirPointerProvenanceForLocalInitializer(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
