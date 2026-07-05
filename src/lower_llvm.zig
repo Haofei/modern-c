@@ -181,6 +181,31 @@ const DebugBasicType = struct {
     encoding: []const u8,
 };
 
+const LocalSlicePointerArrayRange = struct {
+    start: u64,
+    end: u64,
+};
+
+const AggregatePointerFieldPath = struct {
+    local_name: []const u8,
+    field_path: []const u8,
+};
+
+const LocalArrayPointerElementPath = struct {
+    local_name: []const u8,
+    index: u64,
+};
+
+const LocalSlicePointerArrayBase = struct {
+    name: []const u8,
+    range: LocalSlicePointerArrayRange,
+};
+
+const LocalSliceAggregatePointerArrayBase = struct {
+    path: AggregatePointerFieldPath,
+    range: LocalSlicePointerArrayRange,
+};
+
 /// Construct the `Backend` registry entry for the LLVM backend. The LLVM
 /// backend is profile-agnostic and has no source-map artifact.
 pub fn mcBackend() backend_mod.Backend {
@@ -272,6 +297,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
         .aggregate_global_pointer_fields = std.StringHashMap(void).init(allocator),
         .local_array_global_pointer_elements = std.StringHashMap(void).init(allocator),
         .local_slice_global_pointer_arrays = std.StringHashMap([]const u8).init(allocator),
+        .local_slice_pointer_array_ranges = std.StringHashMap(LocalSlicePointerArrayRange).init(allocator),
         .local_slice_aggregate_pointer_array_fields = std.StringHashMap([]const u8).init(allocator),
         .global_pointer_return_fns = std.StringHashMap(void).init(allocator),
         .global_pointer_params = std.StringHashMap(void).init(allocator),
@@ -421,6 +447,7 @@ const LlvmEmitter = struct {
     aggregate_global_pointer_fields: std.StringHashMap(void) = undefined,
     local_array_global_pointer_elements: std.StringHashMap(void) = undefined,
     local_slice_global_pointer_arrays: std.StringHashMap([]const u8) = undefined,
+    local_slice_pointer_array_ranges: std.StringHashMap(LocalSlicePointerArrayRange) = undefined,
     local_slice_aggregate_pointer_array_fields: std.StringHashMap([]const u8) = undefined,
     global_pointer_return_fns: std.StringHashMap(void) = undefined,
     global_pointer_params: std.StringHashMap(void) = undefined,
@@ -501,6 +528,7 @@ const LlvmEmitter = struct {
         self.deinitOwnedStringVoidMap(&self.aggregate_global_pointer_fields);
         self.deinitOwnedStringVoidMap(&self.local_array_global_pointer_elements);
         self.local_slice_global_pointer_arrays.deinit();
+        self.local_slice_pointer_array_ranges.deinit();
         self.deinitOwnedStringValueMap(&self.local_slice_aggregate_pointer_array_fields);
         {
             var it = self.global_pointer_params.keyIterator();
@@ -1306,6 +1334,7 @@ const LlvmEmitter = struct {
         self.clearAggregateGlobalPointerFields();
         self.clearLocalArrayGlobalPointerElements();
         self.local_slice_global_pointer_arrays.clearRetainingCapacity();
+        self.local_slice_pointer_array_ranges.clearRetainingCapacity();
         self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
         self.defer_stack.clearRetainingCapacity();
         for (fn_decl.params, 0..) |param, i| {
@@ -1831,6 +1860,11 @@ const LlvmEmitter = struct {
         var local_slice_it = self.local_slice_global_pointer_arrays.iterator();
         while (local_slice_it.next()) |entry| try saved_local_slice_global_pointer_arrays.put(entry.key_ptr.*, entry.value_ptr.*);
 
+        var saved_local_slice_pointer_array_ranges = std.StringHashMap(LocalSlicePointerArrayRange).init(self.allocator);
+        errdefer if (!restore_installed) saved_local_slice_pointer_array_ranges.deinit();
+        var local_slice_range_it = self.local_slice_pointer_array_ranges.iterator();
+        while (local_slice_range_it.next()) |entry| try saved_local_slice_pointer_array_ranges.put(entry.key_ptr.*, entry.value_ptr.*);
+
         var saved_local_slice_aggregate_pointer_array_fields = try self.cloneOwnedStringValueMap(&self.local_slice_aggregate_pointer_array_fields);
         errdefer if (!restore_installed) self.deinitOwnedStringValueMap(&saved_local_slice_aggregate_pointer_array_fields);
 
@@ -1844,6 +1878,7 @@ const LlvmEmitter = struct {
             self.deinitOwnedStringVoidMap(&self.aggregate_global_pointer_fields);
             self.deinitOwnedStringVoidMap(&self.local_array_global_pointer_elements);
             self.local_slice_global_pointer_arrays.deinit();
+            self.local_slice_pointer_array_ranges.deinit();
             self.deinitOwnedStringValueMap(&self.local_slice_aggregate_pointer_array_fields);
             self.local_types = saved_types;
             self.local_slots = saved_slots;
@@ -1853,6 +1888,7 @@ const LlvmEmitter = struct {
             self.aggregate_global_pointer_fields = saved_aggregate_global_pointer_fields;
             self.local_array_global_pointer_elements = saved_local_array_global_pointer_elements;
             self.local_slice_global_pointer_arrays = saved_local_slice_global_pointer_arrays;
+            self.local_slice_pointer_array_ranges = saved_local_slice_pointer_array_ranges;
             self.local_slice_aggregate_pointer_array_fields = saved_local_slice_aggregate_pointer_array_fields;
         }
 
@@ -2179,6 +2215,7 @@ const LlvmEmitter = struct {
         const old_aggregate_pointer_alias = self.local_aggregate_pointer_aliases.fetchRemove(binding.text);
         const old_pointer_array_alias = self.local_pointer_array_aliases.fetchRemove(binding.text);
         const old_slice_global_pointer_array = self.local_slice_global_pointer_arrays.fetchRemove(binding.text);
+        const old_slice_pointer_array_range = self.local_slice_pointer_array_ranges.fetchRemove(binding.text);
         const old_slice_aggregate_pointer_array_field = self.local_slice_aggregate_pointer_array_fields.fetchRemove(binding.text);
         var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(binding.text);
         var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(binding.text);
@@ -2188,6 +2225,7 @@ const LlvmEmitter = struct {
         defer restoreLocal(&self.local_aggregate_pointer_aliases, binding.text, old_aggregate_pointer_alias) catch {};
         defer restoreLocal(&self.local_pointer_array_aliases, binding.text, old_pointer_array_alias) catch {};
         defer restoreLocal(&self.local_slice_global_pointer_arrays, binding.text, old_slice_global_pointer_array) catch {};
+        defer restoreLocal(&self.local_slice_pointer_array_ranges, binding.text, old_slice_pointer_array_range) catch {};
         defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, binding.text, old_slice_aggregate_pointer_array_field) catch {};
         defer self.restoreAggregatePointerFieldsForLocal(binding.text, &old_aggregate_pointer_fields) catch {};
         defer self.restoreLocalArrayPointerElementsForLocal(binding.text, &old_local_array_pointer_elements) catch {};
@@ -2257,6 +2295,7 @@ const LlvmEmitter = struct {
         const old_aggregate_pointer_alias = self.local_aggregate_pointer_aliases.fetchRemove(tag_bind.binding.text);
         const old_pointer_array_alias = self.local_pointer_array_aliases.fetchRemove(tag_bind.binding.text);
         const old_slice_global_pointer_array = self.local_slice_global_pointer_arrays.fetchRemove(tag_bind.binding.text);
+        const old_slice_pointer_array_range = self.local_slice_pointer_array_ranges.fetchRemove(tag_bind.binding.text);
         const old_slice_aggregate_pointer_array_field = self.local_slice_aggregate_pointer_array_fields.fetchRemove(tag_bind.binding.text);
         var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(tag_bind.binding.text);
         var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(tag_bind.binding.text);
@@ -2266,6 +2305,7 @@ const LlvmEmitter = struct {
         defer restoreLocal(&self.local_aggregate_pointer_aliases, tag_bind.binding.text, old_aggregate_pointer_alias) catch {};
         defer restoreLocal(&self.local_pointer_array_aliases, tag_bind.binding.text, old_pointer_array_alias) catch {};
         defer restoreLocal(&self.local_slice_global_pointer_arrays, tag_bind.binding.text, old_slice_global_pointer_array) catch {};
+        defer restoreLocal(&self.local_slice_pointer_array_ranges, tag_bind.binding.text, old_slice_pointer_array_range) catch {};
         defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, tag_bind.binding.text, old_slice_aggregate_pointer_array_field) catch {};
         defer self.restoreAggregatePointerFieldsForLocal(tag_bind.binding.text, &old_aggregate_pointer_fields) catch {};
         defer self.restoreLocalArrayPointerElementsForLocal(tag_bind.binding.text, &old_local_array_pointer_elements) catch {};
@@ -2674,6 +2714,7 @@ const LlvmEmitter = struct {
         const old_aggregate_pointer_alias = self.local_aggregate_pointer_aliases.fetchRemove(binding.text);
         const old_pointer_array_alias = self.local_pointer_array_aliases.fetchRemove(binding.text);
         const old_slice_global_pointer_array = self.local_slice_global_pointer_arrays.fetchRemove(binding.text);
+        const old_slice_pointer_array_range = self.local_slice_pointer_array_ranges.fetchRemove(binding.text);
         const old_slice_aggregate_pointer_array_field = self.local_slice_aggregate_pointer_array_fields.fetchRemove(binding.text);
         var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(binding.text);
         var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(binding.text);
@@ -2683,6 +2724,7 @@ const LlvmEmitter = struct {
         defer restoreLocal(&self.local_aggregate_pointer_aliases, binding.text, old_aggregate_pointer_alias) catch {};
         defer restoreLocal(&self.local_pointer_array_aliases, binding.text, old_pointer_array_alias) catch {};
         defer restoreLocal(&self.local_slice_global_pointer_arrays, binding.text, old_slice_global_pointer_array) catch {};
+        defer restoreLocal(&self.local_slice_pointer_array_ranges, binding.text, old_slice_pointer_array_range) catch {};
         defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, binding.text, old_slice_aggregate_pointer_array_field) catch {};
         defer self.restoreAggregatePointerFieldsForLocal(binding.text, &old_aggregate_pointer_fields) catch {};
         defer self.restoreLocalArrayPointerElementsForLocal(binding.text, &old_local_array_pointer_elements) catch {};
@@ -2789,6 +2831,7 @@ const LlvmEmitter = struct {
         const old_aggregate_pointer_alias = self.local_aggregate_pointer_aliases.fetchRemove(bind.text);
         const old_pointer_array_alias = self.local_pointer_array_aliases.fetchRemove(bind.text);
         const old_slice_global_pointer_array = self.local_slice_global_pointer_arrays.fetchRemove(bind.text);
+        const old_slice_pointer_array_range = self.local_slice_pointer_array_ranges.fetchRemove(bind.text);
         const old_slice_aggregate_pointer_array_field = self.local_slice_aggregate_pointer_array_fields.fetchRemove(bind.text);
         var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(bind.text);
         var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(bind.text);
@@ -2798,6 +2841,7 @@ const LlvmEmitter = struct {
         defer restoreLocal(&self.local_aggregate_pointer_aliases, bind.text, old_aggregate_pointer_alias) catch {};
         defer restoreLocal(&self.local_pointer_array_aliases, bind.text, old_pointer_array_alias) catch {};
         defer restoreLocal(&self.local_slice_global_pointer_arrays, bind.text, old_slice_global_pointer_array) catch {};
+        defer restoreLocal(&self.local_slice_pointer_array_ranges, bind.text, old_slice_pointer_array_range) catch {};
         defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, bind.text, old_slice_aggregate_pointer_array_field) catch {};
         defer self.restoreAggregatePointerFieldsForLocal(bind.text, &old_aggregate_pointer_fields) catch {};
         defer self.restoreLocalArrayPointerElementsForLocal(bind.text, &old_local_array_pointer_elements) catch {};
@@ -2901,6 +2945,7 @@ const LlvmEmitter = struct {
             const old_aggregate_pointer_alias = self.local_aggregate_pointer_aliases.fetchRemove(bind.text);
             const old_pointer_array_alias = self.local_pointer_array_aliases.fetchRemove(bind.text);
             const old_slice_global_pointer_array = self.local_slice_global_pointer_arrays.fetchRemove(bind.text);
+            const old_slice_pointer_array_range = self.local_slice_pointer_array_ranges.fetchRemove(bind.text);
             const old_slice_aggregate_pointer_array_field = self.local_slice_aggregate_pointer_array_fields.fetchRemove(bind.text);
             var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(bind.text);
             var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(bind.text);
@@ -2910,6 +2955,7 @@ const LlvmEmitter = struct {
             defer restoreLocal(&self.local_aggregate_pointer_aliases, bind.text, old_aggregate_pointer_alias) catch {};
             defer restoreLocal(&self.local_pointer_array_aliases, bind.text, old_pointer_array_alias) catch {};
             defer restoreLocal(&self.local_slice_global_pointer_arrays, bind.text, old_slice_global_pointer_array) catch {};
+            defer restoreLocal(&self.local_slice_pointer_array_ranges, bind.text, old_slice_pointer_array_range) catch {};
             defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, bind.text, old_slice_aggregate_pointer_array_field) catch {};
             defer self.restoreAggregatePointerFieldsForLocal(bind.text, &old_aggregate_pointer_fields) catch {};
             defer self.restoreLocalArrayPointerElementsForLocal(bind.text, &old_local_array_pointer_elements) catch {};
@@ -3008,6 +3054,7 @@ const LlvmEmitter = struct {
             const old_aggregate_pointer_alias = self.local_aggregate_pointer_aliases.fetchRemove(binding.binding.text);
             const old_pointer_array_alias = self.local_pointer_array_aliases.fetchRemove(binding.binding.text);
             const old_slice_global_pointer_array = self.local_slice_global_pointer_arrays.fetchRemove(binding.binding.text);
+            const old_slice_pointer_array_range = self.local_slice_pointer_array_ranges.fetchRemove(binding.binding.text);
             const old_slice_aggregate_pointer_array_field = self.local_slice_aggregate_pointer_array_fields.fetchRemove(binding.binding.text);
             var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(binding.binding.text);
             var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(binding.binding.text);
@@ -3017,6 +3064,7 @@ const LlvmEmitter = struct {
             defer restoreLocal(&self.local_aggregate_pointer_aliases, binding.binding.text, old_aggregate_pointer_alias) catch {};
             defer restoreLocal(&self.local_pointer_array_aliases, binding.binding.text, old_pointer_array_alias) catch {};
             defer restoreLocal(&self.local_slice_global_pointer_arrays, binding.binding.text, old_slice_global_pointer_array) catch {};
+            defer restoreLocal(&self.local_slice_pointer_array_ranges, binding.binding.text, old_slice_pointer_array_range) catch {};
             defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, binding.binding.text, old_slice_aggregate_pointer_array_field) catch {};
             defer self.restoreAggregatePointerFieldsForLocal(binding.binding.text, &old_aggregate_pointer_fields) catch {};
             defer self.restoreLocalArrayPointerElementsForLocal(binding.binding.text, &old_local_array_pointer_elements) catch {};
@@ -3413,16 +3461,6 @@ const LlvmEmitter = struct {
         return !self.isAggregateType(ty);
     }
 
-    const AggregatePointerFieldPath = struct {
-        local_name: []const u8,
-        field_path: []const u8,
-    };
-
-    const LocalArrayPointerElementPath = struct {
-        local_name: []const u8,
-        index: u64,
-    };
-
     fn aggregatePointerFieldKey(self: *LlvmEmitter, local_name: []const u8, field_path: []const u8) ![]const u8 {
         return try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ local_name, field_path });
     }
@@ -3527,6 +3565,7 @@ const LlvmEmitter = struct {
 
     fn clearLocalSliceGlobalPointerArray(self: *LlvmEmitter, slice_name: []const u8) void {
         _ = self.local_slice_global_pointer_arrays.remove(slice_name);
+        _ = self.local_slice_pointer_array_ranges.remove(slice_name);
         if (self.local_slice_aggregate_pointer_array_fields.fetchRemove(slice_name)) |entry| {
             self.allocator.free(entry.value);
         }
@@ -3601,11 +3640,14 @@ const LlvmEmitter = struct {
 
     fn localSliceElementHasGlobalPointerProvenance(self: *LlvmEmitter, slice_name: []const u8, index: u64) bool {
         const backing_name = self.local_slice_global_pointer_arrays.get(slice_name) orelse return false;
+        const range = self.local_slice_pointer_array_ranges.get(slice_name) orelse return false;
+        if (index >= range.end - range.start) return false;
+        const backing_index = range.start + index;
         if (self.local_slice_aggregate_pointer_array_fields.get(slice_name)) |field_path| {
-            const element_path = self.aggregatePointerArrayElementPath(field_path, index) catch return false;
+            const element_path = self.aggregatePointerArrayElementPath(field_path, backing_index) catch return false;
             return self.localAggregateFieldHasGlobalPointerProvenance(backing_name, element_path);
         }
-        return self.localArrayElementHasGlobalPointerProvenance(backing_name, index);
+        return self.localArrayElementHasGlobalPointerProvenance(backing_name, backing_index);
     }
 
     fn saveAndRemoveLocalArrayPointerElementsForLocal(self: *LlvmEmitter, local_name: []const u8) !std.StringHashMap(void) {
@@ -3682,6 +3724,15 @@ const LlvmEmitter = struct {
         if (len == 0) return false;
         var index: u64 = 0;
         while (index < len) : (index += 1) {
+            if (self.localArrayElementHasGlobalPointerProvenance(local_name, index)) return true;
+        }
+        return false;
+    }
+
+    fn localArrayRangeAnyElementHasGlobalPointerProvenance(self: *LlvmEmitter, local_name: []const u8, start: u64, end: u64) bool {
+        if (start >= end) return false;
+        var index = start;
+        while (index < end) : (index += 1) {
             if (self.localArrayElementHasGlobalPointerProvenance(local_name, index)) return true;
         }
         return false;
@@ -3806,6 +3857,16 @@ const LlvmEmitter = struct {
         if (len == 0) return false;
         var index: u64 = 0;
         while (index < len) : (index += 1) {
+            const element_path = self.aggregatePointerArrayElementPath(array_path, index) catch return false;
+            if (self.localAggregateFieldHasGlobalPointerProvenance(local_name, element_path)) return true;
+        }
+        return false;
+    }
+
+    fn localAggregateArrayRangeAnyElementHasGlobalPointerProvenance(self: *LlvmEmitter, local_name: []const u8, array_path: []const u8, start: u64, end: u64) bool {
+        if (start >= end) return false;
+        var index = start;
+        while (index < end) : (index += 1) {
             const element_path = self.aggregatePointerArrayElementPath(array_path, index) catch return false;
             if (self.localAggregateFieldHasGlobalPointerProvenance(local_name, element_path)) return true;
         }
@@ -4168,7 +4229,7 @@ const LlvmEmitter = struct {
         try self.local_slice_aggregate_pointer_array_fields.put(slice_name, owned_path);
     }
 
-    fn directFullLocalArraySliceBaseName(self: *LlvmEmitter, ty: ast.TypeExpr, init: ast.Expr) ?[]const u8 {
+    fn directLocalArraySliceBase(self: *LlvmEmitter, ty: ast.TypeExpr, init: ast.Expr) ?LocalSlicePointerArrayBase {
         const resolved_ty = self.resolveAliasType(ty);
         const slice_ty = switch (resolved_ty.kind) {
             .slice => |slice| slice,
@@ -4194,12 +4255,12 @@ const LlvmEmitter = struct {
         const len = self.arrayLenValue(array.len) orelse return null;
         const start = self.localArrayConstIndexValue(node.start.*) orelse return null;
         const end = self.localArrayConstIndexValue(node.end.*) orelse return null;
-        if (start != 0 or end != len) return null;
-        if (!self.localArrayAnyElementHasGlobalPointerProvenance(array_name, len)) return null;
-        return array_name;
+        if (start >= end or end > len) return null;
+        if (!self.localArrayRangeAnyElementHasGlobalPointerProvenance(array_name, start, end)) return null;
+        return .{ .name = array_name, .range = .{ .start = start, .end = end } };
     }
 
-    fn directFullLocalAggregateArraySliceBasePath(self: *LlvmEmitter, ty: ast.TypeExpr, init: ast.Expr) ?AggregatePointerFieldPath {
+    fn directLocalAggregateArraySliceBase(self: *LlvmEmitter, ty: ast.TypeExpr, init: ast.Expr) ?LocalSliceAggregatePointerArrayBase {
         const resolved_ty = self.resolveAliasType(ty);
         const slice_ty = switch (resolved_ty.kind) {
             .slice => |slice| slice,
@@ -4227,20 +4288,22 @@ const LlvmEmitter = struct {
         const len = self.arrayLenValue(array.len) orelse return null;
         const start = self.localArrayConstIndexValue(node.start.*) orelse return null;
         const end = self.localArrayConstIndexValue(node.end.*) orelse return null;
-        if (start != 0 or end != len) return null;
-        if (!self.localAggregateArrayAnyElementHasGlobalPointerProvenance(path.local_name, path.field_path, len)) return null;
-        return path;
+        if (start >= end or end > len) return null;
+        if (!self.localAggregateArrayRangeAnyElementHasGlobalPointerProvenance(path.local_name, path.field_path, start, end)) return null;
+        return .{ .path = path, .range = .{ .start = start, .end = end } };
     }
 
     fn updateLocalSlicePointerElementProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
         self.clearLocalSliceGlobalPointerArray(local_name);
-        if (self.directFullLocalArraySliceBaseName(ty, init)) |array_name| {
-            try self.local_slice_global_pointer_arrays.put(local_name, array_name);
+        if (self.directLocalArraySliceBase(ty, init)) |base| {
+            try self.local_slice_global_pointer_arrays.put(local_name, base.name);
+            try self.local_slice_pointer_array_ranges.put(local_name, base.range);
             return;
         }
-        if (self.directFullLocalAggregateArraySliceBasePath(ty, init)) |path| {
-            try self.local_slice_global_pointer_arrays.put(local_name, path.local_name);
-            try self.setLocalSliceAggregatePointerArrayField(local_name, path.field_path);
+        if (self.directLocalAggregateArraySliceBase(ty, init)) |base| {
+            try self.local_slice_global_pointer_arrays.put(local_name, base.path.local_name);
+            try self.local_slice_pointer_array_ranges.put(local_name, base.range);
+            try self.setLocalSliceAggregatePointerArrayField(local_name, base.path.field_path);
         }
     }
 
@@ -4945,6 +5008,7 @@ const LlvmEmitter = struct {
 
     fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
         defer self.local_slice_global_pointer_arrays.clearRetainingCapacity();
+        defer self.local_slice_pointer_array_ranges.clearRetainingCapacity();
         defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
         defer self.local_pointer_array_aliases.clearRetainingCapacity();
         if (isDropCall(call.callee.*)) return error.UnsupportedLlvmEmission;
@@ -5462,6 +5526,7 @@ const LlvmEmitter = struct {
 
     fn emitVoidStatementCall(self: *LlvmEmitter, call: anytype) !void {
         defer self.local_slice_global_pointer_arrays.clearRetainingCapacity();
+        defer self.local_slice_pointer_array_ranges.clearRetainingCapacity();
         defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
         defer self.local_pointer_array_aliases.clearRetainingCapacity();
         if (self.directCallName(call.callee.*)) |callee| {

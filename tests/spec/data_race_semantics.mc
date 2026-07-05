@@ -565,11 +565,51 @@ fn aggregate_slice_partial_constant_stack_element_stays_plain() -> u32 {
     return p.*;
 }
 
-fn aggregate_slice_partial_range_stays_plain(index: usize) -> u32 {
-    let holder: PointerArrayHolder3 = .{ .ptrs = .{ &shared_counter, &shared_counter, &shared_counter }, .tag = 41 };
+fn aggregate_slice_partial_range_pointer_elements_load(index: usize) -> u32 {
+    var local: u32 = 52;
+    let holder: PointerArrayHolder3 = .{ .ptrs = .{ &local, &shared_counter, &local }, .tag = 41 };
     let s: []mut *mut u32 = holder.ptrs[0..2];
     let p: *mut u32 = s[index];
-    // EXPECT: lower-llvm keeps partial aggregate pointer-array field slices plain even when every included element is global-backed.
+    // EXPECT: lower-llvm emits unordered atomic load through a constant partial-range aggregate pointer-array field slice when any included backing element is proven global-backed.
+    return p.*;
+}
+
+fn aggregate_pointer_alias_slice_partial_range_pointer_elements_load(index: usize) -> u32 {
+    var local: u32 = 53;
+    var holder: PointerArrayHolder3 = .{ .ptrs = .{ &local, &shared_counter, &local }, .tag = 52 };
+    let hp: *mut PointerArrayHolder3 = &holder;
+    let s: []mut *mut u32 = hp.ptrs[1..3];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a constant partial-range aggregate pointer-alias slice when any included backing element is proven global-backed.
+    return p.*;
+}
+
+fn aggregate_slice_partial_range_constant_global_element_load() -> u32 {
+    var local: u32 = 54;
+    let holder: PointerArrayHolder3 = .{ .ptrs = .{ &local, &shared_counter, &local }, .tag = 53 };
+    let s: []mut *mut u32 = holder.ptrs[1..3];
+    let p: *mut u32 = s[0];
+    // EXPECT: lower-llvm maps constant-index partial aggregate slices to the backing global-backed element.
+    return p.*;
+}
+
+fn aggregate_slice_partial_range_constant_stack_element_stays_plain() -> u32 {
+    var local: u32 = 55;
+    let holder: PointerArrayHolder3 = .{ .ptrs = .{ &local, &shared_counter, &local }, .tag = 54 };
+    let s: []mut *mut u32 = holder.ptrs[1..3];
+    let p: *mut u32 = s[1];
+    // EXPECT: lower-llvm maps constant-index partial aggregate slices to the backing stack-backed element.
+    return p.*;
+}
+
+fn aggregate_slice_partial_range_all_local_stays_plain(index: usize) -> u32 {
+    var a: u32 = 56;
+    var b: u32 = 57;
+    var c: u32 = 58;
+    let holder: PointerArrayHolder3 = .{ .ptrs = .{ &a, &b, &c }, .tag = 55 };
+    let s: []mut *mut u32 = holder.ptrs[1..3];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps all-local partial aggregate pointer-array field slices plain.
     return p.*;
 }
 
@@ -770,6 +810,47 @@ fn slice_partial_constant_stack_element_stays_plain() -> u32 {
     let s: []mut *mut u32 = ptrs[0..2];
     let p: *mut u32 = s[1];
     // EXPECT: lower-llvm keeps constant-index local slice provenance exact for stack-backed elements.
+    return p.*;
+}
+
+fn slice_partial_range_pointer_elements_load(index: usize) -> u32 {
+    var a: u32 = 52;
+    var b: u32 = 53;
+    let ptrs: [3]*mut u32 = .{ &a, &shared_counter, &b };
+    let s: []mut *mut u32 = ptrs[1..3];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a constant partial-range local pointer slice when any included backing element is proven global-backed.
+    return p.*;
+}
+
+fn slice_partial_range_constant_global_element_load() -> u32 {
+    var a: u32 = 54;
+    var b: u32 = 55;
+    let ptrs: [3]*mut u32 = .{ &a, &shared_counter, &b };
+    let s: []mut *mut u32 = ptrs[1..3];
+    let p: *mut u32 = s[0];
+    // EXPECT: lower-llvm maps constant-index partial local slices to the backing global-backed element.
+    return p.*;
+}
+
+fn slice_partial_range_constant_stack_element_stays_plain() -> u32 {
+    var a: u32 = 56;
+    var b: u32 = 57;
+    let ptrs: [3]*mut u32 = .{ &a, &shared_counter, &b };
+    let s: []mut *mut u32 = ptrs[1..3];
+    let p: *mut u32 = s[1];
+    // EXPECT: lower-llvm maps constant-index partial local slices to the backing stack-backed element.
+    return p.*;
+}
+
+fn slice_partial_range_all_local_stays_plain(index: usize) -> u32 {
+    var a: u32 = 58;
+    var b: u32 = 59;
+    var c: u32 = 60;
+    let ptrs: [3]*mut u32 = .{ &a, &b, &c };
+    let s: []mut *mut u32 = ptrs[1..3];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps all-local partial local pointer slices plain.
     return p.*;
 }
 

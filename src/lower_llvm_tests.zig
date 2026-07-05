@@ -378,10 +378,32 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(aggregate_slice_partial_constant_stack_body, "load i32, ptr %");
     try expectNotContains(aggregate_slice_partial_constant_stack_body, " atomic ");
 
-    const aggregate_slice_partial_range_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_slice_partial_range_stays_plain");
+    const aggregate_slice_partial_range_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_slice_partial_range_pointer_elements_load");
     try expectContains(aggregate_slice_partial_range_body, "store ptr @shared_counter, ptr %");
-    try expectContains(aggregate_slice_partial_range_body, "load i32, ptr %");
-    try expectNotContains(aggregate_slice_partial_range_body, " atomic ");
+    try expectContains(aggregate_slice_partial_range_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_slice_partial_range_body, " unordered, align 4");
+    try expectNotContains(aggregate_slice_partial_range_body, "load i32, ptr %p.addr.");
+
+    const aggregate_pointer_alias_slice_partial_range_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_slice_partial_range_pointer_elements_load");
+    try expectContains(aggregate_pointer_alias_slice_partial_range_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_slice_partial_range_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_pointer_alias_slice_partial_range_body, " unordered, align 4");
+    try expectNotContains(aggregate_pointer_alias_slice_partial_range_body, "load i32, ptr %p.addr.");
+
+    const aggregate_slice_partial_range_constant_global_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_slice_partial_range_constant_global_element_load");
+    try expectContains(aggregate_slice_partial_range_constant_global_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_slice_partial_range_constant_global_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_slice_partial_range_constant_global_body, " unordered, align 4");
+    try expectNotContains(aggregate_slice_partial_range_constant_global_body, "load i32, ptr %p.addr.");
+
+    const aggregate_slice_partial_range_constant_stack_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_slice_partial_range_constant_stack_element_stays_plain");
+    try expectContains(aggregate_slice_partial_range_constant_stack_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_slice_partial_range_constant_stack_body, "load i32, ptr %");
+    try expectNotContains(aggregate_slice_partial_range_constant_stack_body, " atomic ");
+
+    const aggregate_slice_partial_range_all_local_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_slice_partial_range_all_local_stays_plain");
+    try expectContains(aggregate_slice_partial_range_all_local_body, "load i32, ptr %");
+    try expectNotContains(aggregate_slice_partial_range_all_local_body, " atomic ");
 
     const aggregate_slice_backing_assignment_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_slice_backing_array_assignment_clears_fact");
     try expectContains(aggregate_slice_backing_assignment_body, "store ptr @shared_counter, ptr %");
@@ -497,6 +519,27 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(slice_partial_constant_stack_body, "store ptr @shared_counter, ptr %");
     try expectContains(slice_partial_constant_stack_body, "load i32, ptr %");
     try expectNotContains(slice_partial_constant_stack_body, " atomic ");
+
+    const slice_partial_range_body = try llvmFunctionBody(output.items, "define internal i32 @slice_partial_range_pointer_elements_load");
+    try expectContains(slice_partial_range_body, "store ptr @shared_counter, ptr %");
+    try expectContains(slice_partial_range_body, "load atomic i32, ptr %");
+    try expectContains(slice_partial_range_body, " unordered, align 4");
+    try expectNotContains(slice_partial_range_body, "load i32, ptr %p.addr.");
+
+    const slice_partial_range_constant_global_body = try llvmFunctionBody(output.items, "define internal i32 @slice_partial_range_constant_global_element_load");
+    try expectContains(slice_partial_range_constant_global_body, "store ptr @shared_counter, ptr %");
+    try expectContains(slice_partial_range_constant_global_body, "load atomic i32, ptr %");
+    try expectContains(slice_partial_range_constant_global_body, " unordered, align 4");
+    try expectNotContains(slice_partial_range_constant_global_body, "load i32, ptr %p.addr.");
+
+    const slice_partial_range_constant_stack_body = try llvmFunctionBody(output.items, "define internal i32 @slice_partial_range_constant_stack_element_stays_plain");
+    try expectContains(slice_partial_range_constant_stack_body, "store ptr @shared_counter, ptr %");
+    try expectContains(slice_partial_range_constant_stack_body, "load i32, ptr %");
+    try expectNotContains(slice_partial_range_constant_stack_body, " atomic ");
+
+    const slice_partial_range_all_local_body = try llvmFunctionBody(output.items, "define internal i32 @slice_partial_range_all_local_stays_plain");
+    try expectContains(slice_partial_range_all_local_body, "load i32, ptr %");
+    try expectNotContains(slice_partial_range_all_local_body, " atomic ");
 
     const slice_backing_assignment_body = try llvmFunctionBody(output.items, "define internal i32 @slice_backing_array_assignment_clears_fact");
     try expectContains(slice_backing_assignment_body, "store ptr @shared_counter, ptr %");
