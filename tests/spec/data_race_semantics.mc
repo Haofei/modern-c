@@ -35,6 +35,32 @@ fn possibly_racing_load() -> u32 {
     return shared_counter;
 }
 
+fn possibly_racing_pointer_store(x: u32) -> void {
+    let gp: *mut u32 = &shared_counter;
+    let copy: *mut u32 = gp;
+    // EXPECT: lower-llvm emits unordered atomic store through a pointer proven to name global storage.
+    copy.* = x;
+}
+
+fn possibly_racing_pointer_load() -> u32 {
+    let gp: *mut u32 = &shared_counter;
+    // EXPECT: lower-llvm emits unordered atomic load through a pointer proven to name global storage.
+    return gp.*;
+}
+
+fn possibly_racing_direct_address_deref_load() -> u32 {
+    // EXPECT: lower-llvm emits unordered atomic load for direct address-of global deref.
+    return (&shared_counter).*;
+}
+
+fn local_pointer_deref_stays_plain() -> u32 {
+    var local: u32 = 5;
+    let lp: *mut u32 = &local;
+    lp.* = 6;
+    // EXPECT: lower-llvm keeps stack pointer derefs plain.
+    return lp.*;
+}
+
 fn possibly_racing_field_store(x: u32) -> void {
     // EXPECT: lower-c emits mc_race_store_u32(&shared_pair.value, value) rather than a plain C field store.
     shared_pair.value = x;

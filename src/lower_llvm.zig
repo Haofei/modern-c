@@ -265,6 +265,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
         .global_initializers = std.StringHashMap(ast.Expr).init(allocator),
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
+        .global_pointer_locals = std.StringHashMap(void).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
         .defer_stack = std.ArrayList(ast.Expr).empty,
         .string_literals = std.ArrayList(StringLiteralGlobal).empty,
@@ -404,6 +405,7 @@ const LlvmEmitter = struct {
     global_initializers: std.StringHashMap(ast.Expr) = undefined,
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
+    global_pointer_locals: std.StringHashMap(void) = undefined,
     // While a function body is being emitted, `entry_allocas` collects every `alloca`
     // so they land at the TOP of the entry block (the LLVM rule: an alloca in a non-entry
     // block — e.g. a loop body — is a DYNAMIC stack allocation that grows the stack every
@@ -475,6 +477,7 @@ const LlvmEmitter = struct {
         self.global_initializers.deinit();
         self.local_types.deinit();
         self.local_slots.deinit();
+        self.global_pointer_locals.deinit();
         self.loop_stack.deinit(self.allocator);
         self.defer_stack.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
@@ -1078,6 +1081,7 @@ const LlvmEmitter = struct {
         self.trap_index = 0;
         self.local_types.clearRetainingCapacity();
         self.local_slots.clearRetainingCapacity();
+        self.global_pointer_locals.clearRetainingCapacity();
         self.defer_stack.clearRetainingCapacity();
         for (fn_decl.params, 0..) |param, i| {
             try self.local_types.put(param.name.text, param.ty);
@@ -1571,12 +1575,19 @@ const LlvmEmitter = struct {
         var slot_it = self.local_slots.iterator();
         while (slot_it.next()) |entry| try saved_slots.put(entry.key_ptr.*, entry.value_ptr.*);
 
+        var saved_global_pointer_locals = std.StringHashMap(void).init(self.allocator);
+        errdefer if (!restore_installed) saved_global_pointer_locals.deinit();
+        var global_pointer_it = self.global_pointer_locals.iterator();
+        while (global_pointer_it.next()) |entry| try saved_global_pointer_locals.put(entry.key_ptr.*, {});
+
         restore_installed = true;
         defer {
             self.local_types.deinit();
             self.local_slots.deinit();
+            self.global_pointer_locals.deinit();
             self.local_types = saved_types;
             self.local_slots = saved_slots;
+            self.global_pointer_locals = saved_global_pointer_locals;
         }
 
         return try self.emitBlock(block, ret_ty);
@@ -1898,8 +1909,10 @@ const LlvmEmitter = struct {
 
         const old_type = self.local_types.fetchRemove(binding.text);
         const old_slot = self.local_slots.fetchRemove(binding.text);
+        const old_global_pointer = self.global_pointer_locals.fetchRemove(binding.text);
         defer restoreLocal(&self.local_types, binding.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
+        defer restoreLocal(&self.global_pointer_locals, binding.text, old_global_pointer) catch {};
 
         const binding_ptr = try self.nextBindingPtr(binding.text);
         const binding_value = if (is_value_opt) blk: {
@@ -1916,6 +1929,7 @@ const LlvmEmitter = struct {
 
         _ = self.local_types.remove(binding.text);
         _ = self.local_slots.remove(binding.text);
+        _ = self.global_pointer_locals.remove(binding.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{else_label});
         const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
@@ -1956,8 +1970,10 @@ const LlvmEmitter = struct {
 
         const old_type = self.local_types.fetchRemove(tag_bind.binding.text);
         const old_slot = self.local_slots.fetchRemove(tag_bind.binding.text);
+        const old_global_pointer = self.global_pointer_locals.fetchRemove(tag_bind.binding.text);
         defer restoreLocal(&self.local_types, tag_bind.binding.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, tag_bind.binding.text, old_slot) catch {};
+        defer restoreLocal(&self.global_pointer_locals, tag_bind.binding.text, old_global_pointer) catch {};
 
         const binding_ptr = try self.nextBindingPtr(tag_bind.binding.text);
         const payload = try self.nextTemp();
@@ -1971,6 +1987,7 @@ const LlvmEmitter = struct {
 
         _ = self.local_types.remove(tag_bind.binding.text);
         _ = self.local_slots.remove(tag_bind.binding.text);
+        _ = self.global_pointer_locals.remove(tag_bind.binding.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{else_label});
         const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
@@ -2033,6 +2050,7 @@ const LlvmEmitter = struct {
         try self.emitAlloca(ptr, llvm_ty);
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
+        try self.updatePointerGlobalProvenance(name, ty, init);
         try self.emitDebugDeclare(name, ty, ptr, local.names[0].span, null);
         // `var ap: va_list = va.start();` — the slot IS the va_list cursor storage; initialize
         // it in place with llvm.va_start (it has no value to store).
@@ -2080,6 +2098,7 @@ const LlvmEmitter = struct {
                 const llvm_ty = try self.llvmType(slot.ty);
                 const value = try self.emitExpr(value_expr, slot.ty);
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, slot.ptr, try self.debugCallSuffix() });
+                try self.updatePointerGlobalProvenance(ident.text, slot.ty, value_expr);
                 return;
             }
             if (self.global_types.get(ident.text)) |ty| {
@@ -2098,7 +2117,10 @@ const LlvmEmitter = struct {
             const llvm_ty = try self.llvmType(pointee_ty);
             const ptr = try self.emitExpr(ptr_expr, try self.pointerTypeFor(pointee_ty));
             const value = try self.emitExpr(value_expr, pointee_ty);
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
+            const use_atomic = self.pointerExprHasGlobalStorageProvenance(ptr_expr);
+            if (use_atomic) try self.emitOrdinaryShadowHook(ptr, pointee_ty, .store_pre);
+            try self.emitOrdinaryStore(pointee_ty, llvm_ty, value, ptr, use_atomic);
+            if (use_atomic) try self.emitOrdinaryShadowHook(ptr, pointee_ty, .store_post);
             return;
         }
         return error.UnsupportedLlvmEmission;
@@ -2324,8 +2346,10 @@ const LlvmEmitter = struct {
 
         const old_type = self.local_types.fetchRemove(binding.text);
         const old_slot = self.local_slots.fetchRemove(binding.text);
+        const old_global_pointer = self.global_pointer_locals.fetchRemove(binding.text);
         defer restoreLocal(&self.local_types, binding.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
+        defer restoreLocal(&self.global_pointer_locals, binding.text, old_global_pointer) catch {};
         try self.local_types.put(binding.text, element_ty);
         try self.local_slots.put(binding.text, .{ .ty = element_ty, .ptr = binding_ptr });
 
@@ -2425,8 +2449,10 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "{s}:\n", .{some_label});
         const old_type = self.local_types.fetchRemove(bind.text);
         const old_slot = self.local_slots.fetchRemove(bind.text);
+        const old_global_pointer = self.global_pointer_locals.fetchRemove(bind.text);
         defer restoreLocal(&self.local_types, bind.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
+        defer restoreLocal(&self.global_pointer_locals, bind.text, old_global_pointer) catch {};
 
         const binding_ptr = try self.nextBindingPtr(bind.text);
         try self.emitAllocaStore(binding_ptr, try self.llvmType(inner_ty), subject);
@@ -2517,8 +2543,10 @@ const LlvmEmitter = struct {
         if (binding) |bind| {
             const old_type = self.local_types.fetchRemove(bind.text);
             const old_slot = self.local_slots.fetchRemove(bind.text);
+            const old_global_pointer = self.global_pointer_locals.fetchRemove(bind.text);
             defer restoreLocal(&self.local_types, bind.text, old_type) catch {};
             defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
+            defer restoreLocal(&self.global_pointer_locals, bind.text, old_global_pointer) catch {};
 
             const binding_ptr = try self.nextBindingPtr(bind.text);
             const payload = try self.nextTemp();
@@ -2610,8 +2638,10 @@ const LlvmEmitter = struct {
             const payload_ty = case.ty orelse return error.UnsupportedLlvmEmission;
             const old_type = self.local_types.fetchRemove(binding.binding.text);
             const old_slot = self.local_slots.fetchRemove(binding.binding.text);
+            const old_global_pointer = self.global_pointer_locals.fetchRemove(binding.binding.text);
             defer restoreLocal(&self.local_types, binding.binding.text, old_type) catch {};
             defer restoreLocal(&self.local_slots, binding.binding.text, old_slot) catch {};
+            defer restoreLocal(&self.global_pointer_locals, binding.binding.text, old_global_pointer) catch {};
 
             const binding_ptr = try self.nextBindingPtr(binding.binding.text);
             const payload = try self.taggedUnionLoadPayload(subject_ptr, subject_ty, payload_ty);
@@ -2868,9 +2898,9 @@ const LlvmEmitter = struct {
 
     fn emitDeref(self: *LlvmEmitter, ptr_expr: ast.Expr, pointee_ty: ast.TypeExpr) ![]const u8 {
         const ptr = try self.emitExpr(ptr_expr, try self.pointerTypeFor(pointee_ty));
-        const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(pointee_ty), ptr, try self.debugCallSuffix() });
-        return result;
+        const use_atomic = self.pointerExprHasGlobalStorageProvenance(ptr_expr);
+        if (use_atomic) try self.emitOrdinaryShadowHook(ptr, pointee_ty, .load_pre);
+        return try self.emitOrdinaryLoad(pointee_ty, ptr, use_atomic);
     }
 
     fn emitMemberLoad(self: *LlvmEmitter, node: anytype) ![]const u8 {
@@ -3011,6 +3041,39 @@ const LlvmEmitter = struct {
             .grouped => |inner| self.directGlobalStorageRoot(inner.*),
             .index => |node| self.directGlobalStorageRoot(node.base.*),
             .member => |node| self.directGlobalStorageRoot(node.base.*),
+            else => false,
+        };
+    }
+
+    fn isPointerLikeType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        return switch (self.resolveAliasType(ty).kind) {
+            .pointer, .raw_many_pointer => true,
+            else => false,
+        };
+    }
+
+    fn updatePointerGlobalProvenance(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
+        if (!self.isPointerLikeType(ty)) {
+            _ = self.global_pointer_locals.remove(name);
+            return;
+        }
+        if (self.pointerExprHasGlobalStorageProvenance(init)) {
+            try self.global_pointer_locals.put(name, {});
+        } else {
+            _ = self.global_pointer_locals.remove(name);
+        }
+    }
+
+    fn pointerExprHasGlobalStorageProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .ident => |ident| self.global_pointer_locals.contains(ident.text),
+            .address_of => |inner| self.directGlobalStorageRoot(inner.*),
+            .grouped => |inner| self.pointerExprHasGlobalStorageProvenance(inner.*),
+            .cast => |node| self.pointerExprHasGlobalStorageProvenance(node.value.*),
+            .call => |call| if (isAssumeNoaliasCall(call) and call.args.len == 2)
+                self.pointerExprHasGlobalStorageProvenance(call.args[0])
+            else
+                false,
             else => false,
         };
     }

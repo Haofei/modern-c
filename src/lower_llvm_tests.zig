@@ -82,6 +82,27 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(global_load_body, "load atomic i32, ptr @shared_counter unordered, align 4");
     try expectNotContains(global_load_body, "load i32, ptr @shared_counter");
 
+    const pointer_store_body = try llvmFunctionBody(output.items, "define internal void @possibly_racing_pointer_store");
+    try expectContains(pointer_store_body, "store ptr @shared_counter, ptr %gp.addr.");
+    try expectContains(pointer_store_body, "store atomic i32 %x, ptr %");
+    try expectContains(pointer_store_body, " unordered, align 4");
+    try expectNotContains(pointer_store_body, "store i32 %x, ptr %");
+
+    const pointer_load_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_pointer_load");
+    try expectContains(pointer_load_body, "store ptr @shared_counter, ptr %gp.addr.");
+    try expectContains(pointer_load_body, "load atomic i32, ptr %");
+    try expectContains(pointer_load_body, " unordered, align 4");
+    try expectNotContains(pointer_load_body, "load i32, ptr %");
+
+    const address_deref_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_direct_address_deref_load");
+    try expectContains(address_deref_body, "load atomic i32, ptr @shared_counter unordered, align 4");
+    try expectNotContains(address_deref_body, "load i32, ptr @shared_counter");
+
+    const local_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @local_pointer_deref_stays_plain");
+    try expectContains(local_pointer_body, "store i32 6, ptr %");
+    try expectContains(local_pointer_body, "load i32, ptr %");
+    try expectNotContains(local_pointer_body, " atomic ");
+
     const field_store_body = try llvmFunctionBody(output.items, "define internal void @possibly_racing_field_store");
     try expectContains(field_store_body, "store atomic i32 %x, ptr %");
     try expectContains(field_store_body, " unordered, align 4");
