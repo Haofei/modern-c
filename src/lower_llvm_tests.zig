@@ -181,6 +181,31 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(aggregate_exported_return_body, "load i32, ptr %");
     try expectNotContains(aggregate_exported_return_body, " atomic ");
 
+    const array_global_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @array_global_pointer_element_load");
+    try expectContains(array_global_pointer_body, "store ptr @shared_counter, ptr %");
+    try expectContains(array_global_pointer_body, "load atomic i32, ptr %");
+    try expectContains(array_global_pointer_body, " unordered, align 4");
+    try expectNotContains(array_global_pointer_body, "load i32, ptr %p.addr.");
+
+    const array_assigned_global_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @array_assigned_global_pointer_element_load");
+    try expectContains(array_assigned_global_pointer_body, "store ptr @shared_counter, ptr %");
+    try expectContains(array_assigned_global_pointer_body, "load atomic i32, ptr %");
+    try expectContains(array_assigned_global_pointer_body, " unordered, align 4");
+    try expectNotContains(array_assigned_global_pointer_body, "load i32, ptr %p.addr.");
+
+    const array_stack_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @array_stack_pointer_element_stays_plain");
+    try expectContains(array_stack_pointer_body, "load i32, ptr %");
+    try expectNotContains(array_stack_pointer_body, " atomic ");
+
+    const array_dynamic_index_body = try llvmFunctionBody(output.items, "define internal i32 @array_dynamic_index_pointer_element_stays_plain");
+    try expectContains(array_dynamic_index_body, "load i32, ptr %");
+    try expectNotContains(array_dynamic_index_body, " atomic ");
+
+    const array_dynamic_assignment_body = try llvmFunctionBody(output.items, "define internal i32 @array_dynamic_assignment_clears_pointer_element_fact");
+    try expectContains(array_dynamic_assignment_body, "store ptr @shared_counter, ptr %");
+    try expectContains(array_dynamic_assignment_body, "load i32, ptr %");
+    try expectNotContains(array_dynamic_assignment_body, " atomic ");
+
     const field_store_body = try llvmFunctionBody(output.items, "define internal void @possibly_racing_field_store");
     try expectContains(field_store_body, "store atomic i32 %x, ptr %");
     try expectContains(field_store_body, " unordered, align 4");

@@ -222,6 +222,46 @@ fn aggregate_exported_return_pointer_field_stays_plain() -> u32 {
     return p.*;
 }
 
+fn array_global_pointer_element_load() -> u32 {
+    let ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+    let p: *mut u32 = ptrs[0];
+    // EXPECT: lower-llvm emits unordered atomic load through a local array element proven to hold visible global storage.
+    return p.*;
+}
+
+fn array_assigned_global_pointer_element_load() -> u32 {
+    var local: u32 = 16;
+    var ptrs: [2]*mut u32 = .{ &local, &local };
+    ptrs[0] = &shared_counter;
+    let p: *mut u32 = ptrs[0];
+    // EXPECT: lower-llvm emits unordered atomic load after direct constant-index local array element assignment to visible global storage.
+    return p.*;
+}
+
+fn array_stack_pointer_element_stays_plain() -> u32 {
+    var local: u32 = 17;
+    let ptrs: [2]*mut u32 = .{ &local, &local };
+    let p: *mut u32 = ptrs[0];
+    // EXPECT: lower-llvm keeps stack-backed local array pointer element derefs plain.
+    return p.*;
+}
+
+fn array_dynamic_index_pointer_element_stays_plain(index: usize) -> u32 {
+    let ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+    let p: *mut u32 = ptrs[index];
+    // EXPECT: lower-llvm keeps dynamic-index local array pointer element derefs plain.
+    return p.*;
+}
+
+fn array_dynamic_assignment_clears_pointer_element_fact(index: usize) -> u32 {
+    var local: u32 = 18;
+    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+    ptrs[index] = &local;
+    let p: *mut u32 = ptrs[0];
+    // EXPECT: lower-llvm keeps local array pointer element derefs plain after unknown dynamic-index assignment.
+    return p.*;
+}
+
 fn possibly_racing_field_store(x: u32) -> void {
     // EXPECT: lower-c emits mc_race_store_u32(&shared_pair.value, value) rather than a plain C field store.
     shared_pair.value = x;

@@ -267,6 +267,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
         .global_pointer_locals = std.StringHashMap(void).init(allocator),
         .aggregate_global_pointer_fields = std.StringHashMap(void).init(allocator),
+        .local_array_global_pointer_elements = std.StringHashMap(void).init(allocator),
         .global_pointer_return_fns = std.StringHashMap(void).init(allocator),
         .global_pointer_params = std.StringHashMap(void).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
@@ -411,6 +412,7 @@ const LlvmEmitter = struct {
     local_slots: std.StringHashMap(LocalSlot) = undefined,
     global_pointer_locals: std.StringHashMap(void) = undefined,
     aggregate_global_pointer_fields: std.StringHashMap(void) = undefined,
+    local_array_global_pointer_elements: std.StringHashMap(void) = undefined,
     global_pointer_return_fns: std.StringHashMap(void) = undefined,
     global_pointer_params: std.StringHashMap(void) = undefined,
     // While a function body is being emitted, `entry_allocas` collects every `alloca`
@@ -486,6 +488,7 @@ const LlvmEmitter = struct {
         self.local_slots.deinit();
         self.global_pointer_locals.deinit();
         self.deinitOwnedStringVoidMap(&self.aggregate_global_pointer_fields);
+        self.deinitOwnedStringVoidMap(&self.local_array_global_pointer_elements);
         {
             var it = self.global_pointer_params.keyIterator();
             while (it.next()) |k| self.allocator.free(k.*);
@@ -1286,6 +1289,7 @@ const LlvmEmitter = struct {
         self.local_slots.clearRetainingCapacity();
         self.global_pointer_locals.clearRetainingCapacity();
         self.clearAggregateGlobalPointerFields();
+        self.clearLocalArrayGlobalPointerElements();
         self.defer_stack.clearRetainingCapacity();
         for (fn_decl.params, 0..) |param, i| {
             try self.local_types.put(param.name.text, param.ty);
@@ -1792,16 +1796,21 @@ const LlvmEmitter = struct {
         var saved_aggregate_global_pointer_fields = try self.cloneOwnedStringVoidMap(&self.aggregate_global_pointer_fields);
         errdefer if (!restore_installed) self.deinitOwnedStringVoidMap(&saved_aggregate_global_pointer_fields);
 
+        var saved_local_array_global_pointer_elements = try self.cloneOwnedStringVoidMap(&self.local_array_global_pointer_elements);
+        errdefer if (!restore_installed) self.deinitOwnedStringVoidMap(&saved_local_array_global_pointer_elements);
+
         restore_installed = true;
         defer {
             self.local_types.deinit();
             self.local_slots.deinit();
             self.global_pointer_locals.deinit();
             self.deinitOwnedStringVoidMap(&self.aggregate_global_pointer_fields);
+            self.deinitOwnedStringVoidMap(&self.local_array_global_pointer_elements);
             self.local_types = saved_types;
             self.local_slots = saved_slots;
             self.global_pointer_locals = saved_global_pointer_locals;
             self.aggregate_global_pointer_fields = saved_aggregate_global_pointer_fields;
+            self.local_array_global_pointer_elements = saved_local_array_global_pointer_elements;
         }
 
         return try self.emitBlock(block, ret_ty);
@@ -2125,10 +2134,12 @@ const LlvmEmitter = struct {
         const old_slot = self.local_slots.fetchRemove(binding.text);
         const old_global_pointer = self.global_pointer_locals.fetchRemove(binding.text);
         var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(binding.text);
+        var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(binding.text);
         defer restoreLocal(&self.local_types, binding.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
         defer restoreLocal(&self.global_pointer_locals, binding.text, old_global_pointer) catch {};
         defer self.restoreAggregatePointerFieldsForLocal(binding.text, &old_aggregate_pointer_fields) catch {};
+        defer self.restoreLocalArrayPointerElementsForLocal(binding.text, &old_local_array_pointer_elements) catch {};
 
         const binding_ptr = try self.nextBindingPtr(binding.text);
         const binding_value = if (is_value_opt) blk: {
@@ -2147,6 +2158,7 @@ const LlvmEmitter = struct {
         _ = self.local_slots.remove(binding.text);
         _ = self.global_pointer_locals.remove(binding.text);
         self.clearAggregatePointerFieldsForLocal(binding.text);
+        self.clearLocalArrayPointerElementsForLocal(binding.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{else_label});
         const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
@@ -2189,10 +2201,12 @@ const LlvmEmitter = struct {
         const old_slot = self.local_slots.fetchRemove(tag_bind.binding.text);
         const old_global_pointer = self.global_pointer_locals.fetchRemove(tag_bind.binding.text);
         var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(tag_bind.binding.text);
+        var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(tag_bind.binding.text);
         defer restoreLocal(&self.local_types, tag_bind.binding.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, tag_bind.binding.text, old_slot) catch {};
         defer restoreLocal(&self.global_pointer_locals, tag_bind.binding.text, old_global_pointer) catch {};
         defer self.restoreAggregatePointerFieldsForLocal(tag_bind.binding.text, &old_aggregate_pointer_fields) catch {};
+        defer self.restoreLocalArrayPointerElementsForLocal(tag_bind.binding.text, &old_local_array_pointer_elements) catch {};
 
         const binding_ptr = try self.nextBindingPtr(tag_bind.binding.text);
         const payload = try self.nextTemp();
@@ -2208,6 +2222,7 @@ const LlvmEmitter = struct {
         _ = self.local_slots.remove(tag_bind.binding.text);
         _ = self.global_pointer_locals.remove(tag_bind.binding.text);
         self.clearAggregatePointerFieldsForLocal(tag_bind.binding.text);
+        self.clearLocalArrayPointerElementsForLocal(tag_bind.binding.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{else_label});
         const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
@@ -2272,6 +2287,7 @@ const LlvmEmitter = struct {
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
         try self.updatePointerGlobalProvenance(name, ty, init);
         try self.updateAggregatePointerFieldProvenanceFromInit(name, ty, init);
+        try self.updateLocalArrayPointerElementProvenanceFromInit(name, ty, init);
         try self.emitDebugDeclare(name, ty, ptr, local.names[0].span, null);
         // `var ap: va_list = va.start();` — the slot IS the va_list cursor storage; initialize
         // it in place with llvm.va_start (it has no value to store).
@@ -2321,6 +2337,7 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, slot.ptr, try self.debugCallSuffix() });
                 try self.updatePointerGlobalProvenance(ident.text, slot.ty, value_expr);
                 try self.updateAggregatePointerFieldProvenanceFromInit(ident.text, slot.ty, value_expr);
+                try self.updateLocalArrayPointerElementProvenanceFromInit(ident.text, slot.ty, value_expr);
                 return;
             }
             if (self.global_types.get(ident.text)) |ty| {
@@ -2367,6 +2384,7 @@ const LlvmEmitter = struct {
                 try self.emitOrdinaryShadowHook(ptr, element_ty, .store_pre);
                 try self.emitOrdinaryStore(element_ty, try self.llvmType(element_ty), value, ptr, is_global);
                 if (is_global) try self.emitOrdinaryShadowHook(ptr, element_ty, .store_post);
+                try self.updateLocalArrayPointerElementProvenanceFromAssignment(target, element_ty, value_expr);
                 break :blk true;
             },
             .grouped => |inner| try self.emitIndexAssignment(inner.*, value_expr),
@@ -2571,10 +2589,12 @@ const LlvmEmitter = struct {
         const old_slot = self.local_slots.fetchRemove(binding.text);
         const old_global_pointer = self.global_pointer_locals.fetchRemove(binding.text);
         var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(binding.text);
+        var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(binding.text);
         defer restoreLocal(&self.local_types, binding.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
         defer restoreLocal(&self.global_pointer_locals, binding.text, old_global_pointer) catch {};
         defer self.restoreAggregatePointerFieldsForLocal(binding.text, &old_aggregate_pointer_fields) catch {};
+        defer self.restoreLocalArrayPointerElementsForLocal(binding.text, &old_local_array_pointer_elements) catch {};
         try self.local_types.put(binding.text, element_ty);
         try self.local_slots.put(binding.text, .{ .ty = element_ty, .ptr = binding_ptr });
 
@@ -2676,10 +2696,12 @@ const LlvmEmitter = struct {
         const old_slot = self.local_slots.fetchRemove(bind.text);
         const old_global_pointer = self.global_pointer_locals.fetchRemove(bind.text);
         var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(bind.text);
+        var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(bind.text);
         defer restoreLocal(&self.local_types, bind.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
         defer restoreLocal(&self.global_pointer_locals, bind.text, old_global_pointer) catch {};
         defer self.restoreAggregatePointerFieldsForLocal(bind.text, &old_aggregate_pointer_fields) catch {};
+        defer self.restoreLocalArrayPointerElementsForLocal(bind.text, &old_local_array_pointer_elements) catch {};
 
         const binding_ptr = try self.nextBindingPtr(bind.text);
         try self.emitAllocaStore(binding_ptr, try self.llvmType(inner_ty), subject);
@@ -2694,6 +2716,7 @@ const LlvmEmitter = struct {
         _ = self.local_slots.remove(bind.text);
         _ = self.global_pointer_locals.remove(bind.text);
         self.clearAggregatePointerFieldsForLocal(bind.text);
+        self.clearLocalArrayPointerElementsForLocal(bind.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{none_label});
         const none_terminated = try self.emitSwitchBody(node.arms[none_i].body, ret_ty);
@@ -2774,10 +2797,12 @@ const LlvmEmitter = struct {
             const old_slot = self.local_slots.fetchRemove(bind.text);
             const old_global_pointer = self.global_pointer_locals.fetchRemove(bind.text);
             var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(bind.text);
+            var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(bind.text);
             defer restoreLocal(&self.local_types, bind.text, old_type) catch {};
             defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
             defer restoreLocal(&self.global_pointer_locals, bind.text, old_global_pointer) catch {};
             defer self.restoreAggregatePointerFieldsForLocal(bind.text, &old_aggregate_pointer_fields) catch {};
+            defer self.restoreLocalArrayPointerElementsForLocal(bind.text, &old_local_array_pointer_elements) catch {};
 
             const binding_ptr = try self.nextBindingPtr(bind.text);
             const payload = try self.nextTemp();
@@ -2871,10 +2896,12 @@ const LlvmEmitter = struct {
             const old_slot = self.local_slots.fetchRemove(binding.binding.text);
             const old_global_pointer = self.global_pointer_locals.fetchRemove(binding.binding.text);
             var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(binding.binding.text);
+            var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(binding.binding.text);
             defer restoreLocal(&self.local_types, binding.binding.text, old_type) catch {};
             defer restoreLocal(&self.local_slots, binding.binding.text, old_slot) catch {};
             defer restoreLocal(&self.global_pointer_locals, binding.binding.text, old_global_pointer) catch {};
             defer self.restoreAggregatePointerFieldsForLocal(binding.binding.text, &old_aggregate_pointer_fields) catch {};
+            defer self.restoreLocalArrayPointerElementsForLocal(binding.binding.text, &old_local_array_pointer_elements) catch {};
 
             const binding_ptr = try self.nextBindingPtr(binding.binding.text);
             const payload = try self.taggedUnionLoadPayload(subject_ptr, subject_ty, payload_ty);
@@ -3273,6 +3300,11 @@ const LlvmEmitter = struct {
         field_path: []const u8,
     };
 
+    const LocalArrayPointerElementPath = struct {
+        local_name: []const u8,
+        index: u64,
+    };
+
     fn aggregatePointerFieldKey(self: *LlvmEmitter, local_name: []const u8, field_path: []const u8) ![]const u8 {
         return try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ local_name, field_path });
     }
@@ -3312,6 +3344,87 @@ const LlvmEmitter = struct {
         var it = self.aggregate_global_pointer_fields.keyIterator();
         while (it.next()) |key| self.allocator.free(key.*);
         self.aggregate_global_pointer_fields.clearRetainingCapacity();
+    }
+
+    fn localArrayPointerElementKey(self: *LlvmEmitter, local_name: []const u8, index: u64) ![]const u8 {
+        return try std.fmt.allocPrint(self.allocator, "{s}\x00{d}", .{ local_name, index });
+    }
+
+    fn localArrayPointerElementKeyMatchesLocal(key: []const u8, local_name: []const u8) bool {
+        return key.len > local_name.len and std.mem.eql(u8, key[0..local_name.len], local_name) and key[local_name.len] == 0;
+    }
+
+    fn clearLocalArrayGlobalPointerElements(self: *LlvmEmitter) void {
+        var it = self.local_array_global_pointer_elements.keyIterator();
+        while (it.next()) |key| self.allocator.free(key.*);
+        self.local_array_global_pointer_elements.clearRetainingCapacity();
+    }
+
+    fn clearLocalArrayPointerElementsForLocal(self: *LlvmEmitter, local_name: []const u8) void {
+        while (true) {
+            var found_key: ?[]const u8 = null;
+            var it = self.local_array_global_pointer_elements.keyIterator();
+            while (it.next()) |key| {
+                if (localArrayPointerElementKeyMatchesLocal(key.*, local_name)) {
+                    found_key = key.*;
+                    break;
+                }
+            }
+
+            const key = found_key orelse return;
+            if (self.local_array_global_pointer_elements.fetchRemove(key)) |entry| {
+                self.allocator.free(entry.key);
+            }
+        }
+    }
+
+    fn saveAndRemoveLocalArrayPointerElementsForLocal(self: *LlvmEmitter, local_name: []const u8) !std.StringHashMap(void) {
+        var saved = std.StringHashMap(void).init(self.allocator);
+        errdefer self.deinitOwnedStringVoidMap(&saved);
+
+        var it = self.local_array_global_pointer_elements.keyIterator();
+        while (it.next()) |key| {
+            if (!localArrayPointerElementKeyMatchesLocal(key.*, local_name)) continue;
+            const owned_key = try self.allocator.dupe(u8, key.*);
+            errdefer self.allocator.free(owned_key);
+            try saved.put(owned_key, {});
+        }
+
+        self.clearLocalArrayPointerElementsForLocal(local_name);
+        return saved;
+    }
+
+    fn restoreLocalArrayPointerElementsForLocal(self: *LlvmEmitter, local_name: []const u8, saved: *std.StringHashMap(void)) !void {
+        self.clearLocalArrayPointerElementsForLocal(local_name);
+        defer saved.deinit();
+
+        var it = saved.keyIterator();
+        while (it.next()) |key| {
+            try self.local_array_global_pointer_elements.put(key.*, {});
+        }
+    }
+
+    fn setLocalArrayPointerElementProvenance(self: *LlvmEmitter, local_name: []const u8, index: u64, is_global_backed: bool) !void {
+        const lookup_key = try self.localArrayPointerElementKey(local_name, index);
+        defer self.allocator.free(lookup_key);
+
+        if (!is_global_backed) {
+            if (self.local_array_global_pointer_elements.fetchRemove(lookup_key)) |entry| {
+                self.allocator.free(entry.key);
+            }
+            return;
+        }
+
+        if (self.local_array_global_pointer_elements.contains(lookup_key)) return;
+        const owned_key = try self.localArrayPointerElementKey(local_name, index);
+        errdefer self.allocator.free(owned_key);
+        try self.local_array_global_pointer_elements.put(owned_key, {});
+    }
+
+    fn localArrayElementHasGlobalPointerProvenance(self: *LlvmEmitter, local_name: []const u8, index: u64) bool {
+        const lookup_key = self.localArrayPointerElementKey(local_name, index) catch return false;
+        defer self.allocator.free(lookup_key);
+        return self.local_array_global_pointer_elements.contains(lookup_key);
     }
 
     fn clearAggregatePointerFieldsForLocal(self: *LlvmEmitter, local_name: []const u8) void {
@@ -3444,6 +3557,47 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn localArrayConstIndexValue(self: *LlvmEmitter, expr: ast.Expr) ?u64 {
+        if (self.globalConstIndexValue(expr)) |index| return index;
+        return switch (expr.kind) {
+            .int_literal => |literal| parseU64Literal(literal),
+            .grouped => |inner| self.localArrayConstIndexValue(inner.*),
+            else => null,
+        };
+    }
+
+    fn directLocalArrayBaseName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| blk: {
+                const slot = self.local_slots.get(ident.text) orelse break :blk null;
+                if (self.resolveAliasType(slot.ty).kind != .array) break :blk null;
+                break :blk ident.text;
+            },
+            .grouped => |inner| self.directLocalArrayBaseName(inner.*),
+            else => null,
+        };
+    }
+
+    fn directLocalArrayElementPath(self: *LlvmEmitter, expr: ast.Expr) ?LocalArrayPointerElementPath {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directLocalArrayElementPath(inner.*),
+            .index => |node| blk: {
+                const local_name = self.directLocalArrayBaseName(node.base.*) orelse break :blk null;
+                const base_ty = self.resolveAliasType(self.exprType(node.base.*) orelse break :blk null);
+                const array = switch (base_ty.kind) {
+                    .array => |array| array,
+                    else => break :blk null,
+                };
+                if (!self.isPointerLikeType(array.child.*)) break :blk null;
+                const index = self.localArrayConstIndexValue(node.index.*) orelse break :blk null;
+                const len = self.arrayLenValue(array.len) orelse break :blk null;
+                if (index >= len) break :blk null;
+                break :blk .{ .local_name = local_name, .index = index };
+            },
+            else => null,
+        };
+    }
+
     fn tryCopyAggregatePointerFieldProvenanceFromLocal(
         self: *LlvmEmitter,
         dest_name: []const u8,
@@ -3548,6 +3702,62 @@ const LlvmEmitter = struct {
         try self.updateAggregatePointerFieldProvenanceFromStructLiteral(target_path.local_name, struct_decl, fields, target_path.field_path);
     }
 
+    fn arrayLiteralItems(self: *LlvmEmitter, expr: ast.Expr) ?[]const ast.Expr {
+        _ = self;
+        return switch (expr.kind) {
+            .array_literal => |items| items,
+            .grouped => |inner| switch (inner.kind) {
+                .array_literal => |items| items,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn updateLocalArrayPointerElementProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
+        const resolved_ty = self.resolveAliasType(ty);
+        const array = switch (resolved_ty.kind) {
+            .array => |array| array,
+            else => {
+                self.clearLocalArrayPointerElementsForLocal(local_name);
+                return;
+            },
+        };
+        if (!self.isPointerLikeType(array.child.*)) {
+            self.clearLocalArrayPointerElementsForLocal(local_name);
+            return;
+        }
+
+        self.clearLocalArrayPointerElementsForLocal(local_name);
+        const items = self.arrayLiteralItems(init) orelse return;
+        const len = self.arrayLenValue(array.len) orelse return;
+        if (items.len != len) return;
+        for (items, 0..) |item, index| {
+            if (self.pointerExprHasGlobalStorageProvenance(item)) {
+                try self.setLocalArrayPointerElementProvenance(local_name, @intCast(index), true);
+            }
+        }
+    }
+
+    fn updateLocalArrayPointerElementProvenanceFromAssignment(self: *LlvmEmitter, target: ast.Expr, element_ty: ast.TypeExpr, value_expr: ast.Expr) !void {
+        const node = switch (target.kind) {
+            .index => |node| node,
+            .grouped => |inner| return self.updateLocalArrayPointerElementProvenanceFromAssignment(inner.*, element_ty, value_expr),
+            else => return,
+        };
+        const local_name = self.directLocalArrayBaseName(node.base.*) orelse return;
+        if (!self.isPointerLikeType(element_ty)) return;
+        const index = self.localArrayConstIndexValue(node.index.*) orelse {
+            self.clearLocalArrayPointerElementsForLocal(local_name);
+            return;
+        };
+        const path = self.directLocalArrayElementPath(target) orelse {
+            self.clearLocalArrayPointerElementsForLocal(local_name);
+            return;
+        };
+        try self.setLocalArrayPointerElementProvenance(path.local_name, index, self.pointerExprHasGlobalStorageProvenance(value_expr));
+    }
+
     fn directGlobalStorageRoot(self: *LlvmEmitter, expr: ast.Expr) bool {
         return switch (expr.kind) {
             .ident => |ident| !self.local_slots.contains(ident.text) and !self.local_types.contains(ident.text) and self.global_types.contains(ident.text),
@@ -3608,6 +3818,10 @@ const LlvmEmitter = struct {
             .cast => |node| self.pointerExprHasGlobalStorageProvenance(node.value.*),
             .member => if (self.directLocalAggregateMemberPath(expr)) |path|
                 self.localAggregateFieldHasGlobalPointerProvenance(path.local_name, path.field_path)
+            else
+                false,
+            .index => if (self.directLocalArrayElementPath(expr)) |path|
+                self.localArrayElementHasGlobalPointerProvenance(path.local_name, path.index)
             else
                 false,
             .call => |call| if (isAssumeNoaliasCall(call) and call.args.len == 2)
