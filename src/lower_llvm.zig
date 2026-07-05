@@ -184,6 +184,7 @@ const DebugBasicType = struct {
 const LocalSlicePointerArrayRange = struct {
     start: u64,
     end: u64,
+    start_exact: bool,
 };
 
 const AggregatePointerFieldPath = struct {
@@ -4005,6 +4006,12 @@ const LlvmEmitter = struct {
     fn localSliceElementHasGlobalPointerProvenance(self: *LlvmEmitter, slice_name: []const u8, index: u64) bool {
         const backing_name = self.local_slice_global_pointer_arrays.get(slice_name) orelse return false;
         const range = self.local_slice_pointer_array_ranges.get(slice_name) orelse return false;
+        if (!range.start_exact) {
+            if (self.local_slice_aggregate_pointer_array_fields.get(slice_name)) |field_path| {
+                return self.localAggregateArrayRangeAnyElementHasGlobalPointerProvenance(backing_name, field_path, range.start, range.end);
+            }
+            return self.localArrayRangeAnyElementHasGlobalPointerProvenance(backing_name, range.start, range.end);
+        }
         if (index >= range.end - range.start) return false;
         const backing_index = range.start + index;
         if (self.local_slice_aggregate_pointer_array_fields.get(slice_name)) |field_path| {
@@ -4617,11 +4624,14 @@ const LlvmEmitter = struct {
         };
         if (!self.isPointerLikeType(array.child.*)) return null;
         const len = self.arrayLenValue(array.len) orelse return null;
-        const start = self.localArrayConstIndexValue(node.start.*) orelse return null;
-        const end = self.localArrayConstIndexValue(node.end.*) orelse len;
+        const maybe_start = self.localArrayConstIndexValue(node.start.*);
+        const maybe_end = self.localArrayConstIndexValue(node.end.*);
+        const start = maybe_start orelse 0;
+        const end = maybe_end orelse len;
+        const start_exact = maybe_start != null;
         if (start >= end or end > len) return null;
         if (!self.localArrayRangeAnyElementHasGlobalPointerProvenance(array_name, start, end)) return null;
-        return .{ .name = array_name, .range = .{ .start = start, .end = end } };
+        return .{ .name = array_name, .range = .{ .start = start, .end = end, .start_exact = start_exact } };
     }
 
     fn directLocalAggregateArraySliceBase(self: *LlvmEmitter, ty: ast.TypeExpr, init: ast.Expr) ?LocalSliceAggregatePointerArrayBase {
@@ -4650,11 +4660,14 @@ const LlvmEmitter = struct {
         };
         if (!self.isPointerLikeType(array.child.*)) return null;
         const len = self.arrayLenValue(array.len) orelse return null;
-        const start = self.localArrayConstIndexValue(node.start.*) orelse return null;
-        const end = self.localArrayConstIndexValue(node.end.*) orelse len;
+        const maybe_start = self.localArrayConstIndexValue(node.start.*);
+        const maybe_end = self.localArrayConstIndexValue(node.end.*);
+        const start = maybe_start orelse 0;
+        const end = maybe_end orelse len;
+        const start_exact = maybe_start != null;
         if (start >= end or end > len) return null;
         if (!self.localAggregateArrayRangeAnyElementHasGlobalPointerProvenance(path.local_name, path.field_path, start, end)) return null;
-        return .{ .path = path, .range = .{ .start = start, .end = end } };
+        return .{ .path = path, .range = .{ .start = start, .end = end, .start_exact = start_exact } };
     }
 
     fn updateLocalSlicePointerElementProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {

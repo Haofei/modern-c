@@ -448,6 +448,18 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(aggregate_pointer_alias_slice_dynamic_end_body, " unordered, align 4");
     try expectNotContains(aggregate_pointer_alias_slice_dynamic_end_body, "load i32, ptr %p.addr.");
 
+    const aggregate_slice_dynamic_start_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_slice_dynamic_start_pointer_elements_load");
+    try expectContains(aggregate_slice_dynamic_start_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_slice_dynamic_start_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_slice_dynamic_start_body, " unordered, align 4");
+    try expectNotContains(aggregate_slice_dynamic_start_body, "load i32, ptr %p.addr.");
+
+    const aggregate_pointer_alias_slice_fully_dynamic_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_slice_fully_dynamic_pointer_elements_load");
+    try expectContains(aggregate_pointer_alias_slice_fully_dynamic_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_slice_fully_dynamic_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_pointer_alias_slice_fully_dynamic_body, " unordered, align 4");
+    try expectNotContains(aggregate_pointer_alias_slice_fully_dynamic_body, "load i32, ptr %p.addr.");
+
     const aggregate_slice_backing_assignment_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_slice_backing_array_assignment_clears_fact");
     try expectContains(aggregate_slice_backing_assignment_body, "store ptr @shared_counter, ptr %");
     try expectContains(aggregate_slice_backing_assignment_body, "load i32, ptr %");
@@ -604,6 +616,28 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     const slice_dynamic_end_all_local_body = try llvmFunctionBody(output.items, "define internal i32 @slice_dynamic_end_all_local_stays_plain");
     try expectContains(slice_dynamic_end_all_local_body, "load i32, ptr %");
     try expectNotContains(slice_dynamic_end_all_local_body, " atomic ");
+
+    const slice_dynamic_start_body = try llvmFunctionBody(output.items, "define internal i32 @slice_dynamic_start_pointer_elements_load");
+    try expectContains(slice_dynamic_start_body, "store ptr @shared_counter, ptr %");
+    try expectContains(slice_dynamic_start_body, "load atomic i32, ptr %");
+    try expectContains(slice_dynamic_start_body, " unordered, align 4");
+    try expectNotContains(slice_dynamic_start_body, "load i32, ptr %p.addr.");
+
+    const slice_dynamic_start_constant_body = try llvmFunctionBody(output.items, "define internal i32 @slice_dynamic_start_constant_index_is_conservative");
+    try expectContains(slice_dynamic_start_constant_body, "store ptr @shared_counter, ptr %");
+    try expectContains(slice_dynamic_start_constant_body, "load atomic i32, ptr %");
+    try expectContains(slice_dynamic_start_constant_body, " unordered, align 4");
+    try expectNotContains(slice_dynamic_start_constant_body, "load i32, ptr %p.addr.");
+
+    const slice_dynamic_start_all_local_body = try llvmFunctionBody(output.items, "define internal i32 @slice_dynamic_start_all_local_stays_plain");
+    try expectContains(slice_dynamic_start_all_local_body, "load i32, ptr %");
+    try expectNotContains(slice_dynamic_start_all_local_body, " atomic ");
+
+    const slice_fully_dynamic_body = try llvmFunctionBody(output.items, "define internal i32 @slice_fully_dynamic_pointer_elements_load");
+    try expectContains(slice_fully_dynamic_body, "store ptr @shared_counter, ptr %");
+    try expectContains(slice_fully_dynamic_body, "load atomic i32, ptr %");
+    try expectContains(slice_fully_dynamic_body, " unordered, align 4");
+    try expectNotContains(slice_fully_dynamic_body, "load i32, ptr %p.addr.");
 
     const slice_backing_assignment_body = try llvmFunctionBody(output.items, "define internal i32 @slice_backing_array_assignment_clears_fact");
     try expectContains(slice_backing_assignment_body, "store ptr @shared_counter, ptr %");
