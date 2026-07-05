@@ -79,10 +79,8 @@ FIELD="$(run_scenario 4 field)"
 # DETECT-claimed paths (must trap): scalar global LOAD, scalar global STORE.
 GLOAD="$(run_scenario 8 gload)"
 GSTORE="$(run_scenario 9 gstore)"
-# Struct-field array LOAD (`a.cells[3]`): DETECTS on the C backend (the `.cells` member load is
-# wrapped with mc_ksan_check over the whole array, so the element read traps) but MISSES on the
-# LLVM backend (emitIndexLoad only hooks a GLOBAL array base, not a struct-field array). This is a
-# real C-vs-LLVM coverage divergence — gate the DETECT only where it holds (C).
+# Struct-field array LOAD (`a.cells[3]`): DETECTS on both backends. C wraps the `.cells`
+# member load with mc_ksan_check over the whole array; LLVM hooks the precise element load.
 ARRLOAD="$(run_scenario 6 arrload)"
 # MISS-claimed paths (documented gaps — must NOT trap; recorded, not gated as failures):
 #   pointer struct-field STORE, array-index STORE, stack local, access outside the armed pool.
@@ -146,12 +144,7 @@ check "$FIELD" "struct-field-uaf"
 # Gate the verified DETECT paths so a regression that stops trapping fails the build.
 check "$GLOAD" "global-load"
 check "$GSTORE" "global-store"
-# Struct-field array LOAD: gate-assert DETECT on C; on LLVM it's a documented MISS (parity gap).
-if [ "$BACKEND" = llvm ]; then
-    check_miss "$ARRLOAD" "array-field-load (llvm parity gap)" "ARR-LOAD-MISSED"
-else
-    check "$ARRLOAD" "array-field-load"
-fi
+check "$ARRLOAD" "array-field-load"
 # Record the verified MISS paths (don't fail the gate on a known, documented gap).
 check_miss "$FSTORE" "field-store" "FIELD-STORE-MISSED"
 check_miss "$ARRSTORE" "array-store" "ARR-STORE-MISSED"

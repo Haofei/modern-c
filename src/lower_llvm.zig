@@ -2980,10 +2980,8 @@ const LlvmEmitter = struct {
     }
 
     // True when an index expression's base is a (non-local) global array. The C backend
-    // instruments array-element accesses ONLY for globals — `g_arr[i]` lowers to
-    // `mc_race_load_<T>` / `mc_race_store_<T>`, whose macro body is hook-instrumented — while a
-    // pointer/local array element is a plain access. We mirror that exactly: instrument the
-    // array-index hook here only when the base is a global, so the two backends agree.
+    // instruments global array-element accesses via `mc_race_load_<T>` / `mc_race_store_<T>`,
+    // whose macro body is hook-instrumented; pointer/local direct array elements stay plain.
     fn indexBaseIsGlobal(self: *LlvmEmitter, node: anytype) bool {
         const base = switch (node.base.*.kind) {
             .ident => |ident| ident,
@@ -2995,6 +2993,22 @@ const LlvmEmitter = struct {
         };
         if (self.local_slots.contains(base.text) or self.local_types.contains(base.text)) return false;
         return self.global_types.contains(base.text);
+    }
+
+    // True for `base.field[i]` value-loads where `field` is an ordinary array member. The C
+    // backend observes this as a struct-field load before the element selection, so KASAN already
+    // checks the poisoned aggregate; LLVM must hook the precise element pointer to keep parity.
+    fn indexBaseIsOrdinaryArrayMember(self: *LlvmEmitter, node: anytype) bool {
+        const base = switch (node.base.*.kind) {
+            .member => node.base.*,
+            .grouped => |inner| switch (inner.*.kind) {
+                .member => inner.*,
+                else => return false,
+            },
+            else => return false,
+        };
+        const ty = self.resolveAliasType(self.exprType(base) orelse return false);
+        return ty.kind == .array;
     }
 
     // True when a member expression's base is a (non-local) global struct. The C backend
@@ -3029,8 +3043,10 @@ const LlvmEmitter = struct {
         }
         const element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         const ptr = try self.emitIndexAddress(node);
-        // Global array element load: instrument to match the C backend's `mc_race_load_<T>`.
-        if (self.indexBaseIsGlobal(node)) try self.emitOrdinaryShadowHook(ptr, element_ty, .load_pre);
+        // Global and struct-field array element loads are instrumented to match the C backend.
+        if (self.indexBaseIsGlobal(node) or self.indexBaseIsOrdinaryArrayMember(node)) {
+            try self.emitOrdinaryShadowHook(ptr, element_ty, .load_pre);
+        }
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(element_ty), ptr, try self.debugCallSuffix() });
         return result;

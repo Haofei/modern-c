@@ -140,8 +140,7 @@ export fn ksan_field_store(region: usize, len: usize) -> u32 {
     return 1; // reached iff the store was NOT instrumented (a MISS)
 }
 
-// ---- array-index LOAD of freed memory (doc claims MISS: the `.index` value path does not
-//      call ordinaryLoadHookName) ----
+// ---- array-index LOAD of freed memory through a struct-field array (doc claims DETECT) ----
 struct Arr {
     cells: [16]u32,
 }
@@ -155,7 +154,7 @@ export fn ksan_arr_load(region: usize, len: usize) -> u32 {
         let a: *Arr = raw.ptr<Arr>(pa_value(p));
         v = a.cells[3]; // ARRAY-INDEX load of freed memory
     }
-    return v; // reached iff the array load was NOT instrumented (a MISS)
+    return v; // unreachable if detection works
 }
 
 // ---- array-index STORE to freed memory (doc claims MISS) ----
@@ -214,4 +213,3 @@ export fn ksan_outside_pool(region: usize, len: usize) -> u32 {
     }
     return v as u32; // reached iff the access was waved through (fail-open)
 }
-
