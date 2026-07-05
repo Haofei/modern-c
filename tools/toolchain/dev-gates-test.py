@@ -103,6 +103,11 @@ def main() -> None:
             "fuzz-corpus",
         ],
     )
+    assert_gates(
+        module,
+        ["kernel/core/production_ops.mc", "tests/qemu/lang/qjs_confined_runtime.mc"],
+        ["production-ops-test", "signed-boot-test", "app-run-test", "qjs-confined-test"],
+    )
     assert_checks(module, ["docs/compiler-production-readiness.md"], ["git diff --check"])
     docs_only = subprocess.run(
         [sys.executable, str(DEV_GATES), "docs/compiler-production-readiness.md"],

@@ -370,6 +370,19 @@ RULES: tuple[Rule, ...] = (
         "QuickJS agent smoke wrapper changes need its C and LLVM smoke gates",
     ),
     Rule(
+        (
+            "kernel/core/production_ops.mc",
+            "tests/qemu/arch/signed_boot_demo.mc",
+            "tests/qemu/proc/app_run_demo.mc",
+            "tests/qemu/lang/qjs_confined_runtime.mc",
+            "tools/fs/signed-boot-test.sh",
+            "tools/proc/app-run-test.sh",
+            "tools/lang/qjs-confined-test.sh",
+        ),
+        ("production-ops-test", "signed-boot-test", "app-run-test", "qjs-confined-test"),
+        "signed agent-admission changes need bundle metadata, signed boot, raw app loading, and the canonical confined runtime",
+    ),
+    Rule(
         ("tools/qemu/kernel-boot-lib.sh",),
         ("preflight", "riscv-qemu-validation"),
         "shared QEMU boot library changes need toolchain preflight and the RISC-V QEMU validation surrogate",
@@ -423,6 +436,13 @@ RULES: tuple[Rule, ...] = (
             "tools/mem/heap-bench.sh",
             "tools/mem/uaccess-bench.sh",
             "tools/net/kmain-net-test.sh",
+            "kernel/core/production_ops.mc",
+            "tests/qemu/arch/signed_boot_demo.mc",
+            "tests/qemu/proc/app_run_demo.mc",
+            "tests/qemu/lang/qjs_confined_runtime.mc",
+            "tools/fs/signed-boot-test.sh",
+            "tools/proc/app-run-test.sh",
+            "tools/lang/qjs-confined-test.sh",
         ),
     ),
 )
