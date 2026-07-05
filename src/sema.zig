@@ -363,6 +363,10 @@ pub const Checker = struct {
     // (fall-through / switch-exhaustiveness) still resolve a block-local subject's type; only the
     // liveness set here is scoped. Reset per function; markers via `enterScope`/`leaveScope`.
     live_locals: std.ArrayListUnmanaged([]const u8) = .empty,
+    // Lexical depth paired with `live_locals`: function-body locals and params are depth 0;
+    // each nested scoped block increments it. Stored on LocalInfo so borrow checks can tell
+    // when an outer storage slot would outlive an inner block-local borrow.
+    current_scope_depth: usize = 0,
     // (bug #3) Definite-init: defer bodies do NOT run at their lexical position — they
     // run at scope EXIT, after later assignments. Reading them eagerly mid-block produced
     // a false E_USE_BEFORE_INIT (`var x=uninit; defer sink(x); x=5;`). Instead we COLLECT
@@ -1331,6 +1335,8 @@ pub const Checker = struct {
         // own markers); it is emptied again when the function returns.
         self.live_locals.clearRetainingCapacity();
         defer self.live_locals.clearRetainingCapacity();
+        self.current_scope_depth = 0;
+        defer self.current_scope_depth = 0;
         var mmio_params = std.StringHashMap([]const u8).init(self.reporter.allocator);
         defer mmio_params.deinit();
 
@@ -1364,7 +1370,7 @@ pub const Checker = struct {
                 self.errorCode(param.name.span, "E_DUPLICATE_PARAMETER", "function parameter names must be unique");
             } else {
                 const param_class = classifyTypeCtx(param.ty, sig_ctx);
-                const param_address_origin: AddressOrigin = if (param_class == .closure) .local else .none;
+                const param_address_origin: AddressOrigin = if (param_class == .closure) .{ .local = .{ .scope_depth = self.current_scope_depth } } else .none;
                 scope.put(param.name.text, .{ .class = param_class, .mutable = false, .ty = param.ty, .origin = .param, .address_origin = param_address_origin }) catch {
                     self.oom = true;
                 };
@@ -2533,6 +2539,7 @@ pub const Checker = struct {
 
     // Enter a lexical scope: remember the current liveness marker to restore on exit.
     fn enterScope(self: *Checker) usize {
+        self.current_scope_depth += 1;
         return self.live_locals.items.len;
     }
 
@@ -2541,6 +2548,7 @@ pub const Checker = struct {
     // intact (keep-all) so post-body passes can still resolve those locals' types.
     fn leaveScope(self: *Checker, mark: usize) void {
         if (self.live_locals.items.len > mark) self.live_locals.shrinkRetainingCapacity(mark);
+        if (self.current_scope_depth > 0) self.current_scope_depth -= 1;
     }
 
     fn addLocalBinding(self: *Checker, scope: *Scope, name: ast.Ident, info: LocalInfo) void {
@@ -2559,7 +2567,9 @@ pub const Checker = struct {
             self.errorCode(name.span, "E_DUPLICATE_LOCAL", "local bindings must have unique names in the current scope");
             return;
         }
-        scope.put(name.text, info) catch {
+        var scoped_info = info;
+        scoped_info.scope_depth = self.current_scope_depth;
+        scope.put(name.text, scoped_info) catch {
             self.oom = true;
             return;
         };
@@ -2642,14 +2652,17 @@ pub const Checker = struct {
         {
             self.errorCode(value.span, "E_BORROW_ESCAPES_SCOPE", "cannot store the address of local storage where it outlives the local's scope (the borrow would dangle)");
         }
+        if (localStorageBorrowEscapesTarget(target, target_class, value, ctx)) |borrow| {
+            self.errorCode(borrow.span, "E_BORROW_ESCAPES_SCOPE", "cannot store the address of local storage where it outlives the local's scope (the borrow would dangle)");
+        }
         if (assignmentTargetEscapesFunction(target, ctx)) {
             if (target_class == .closure) {
                 if (closureLocalAddressRoot(value, ctx)) |span| {
-                    self.errorCode(span, "E_LOCAL_ADDRESS_ESCAPE", "cannot store a closure that captures local storage where it outlives the local's scope");
+                    self.errorCode(span.span, "E_LOCAL_ADDRESS_ESCAPE", "cannot store a closure that captures local storage where it outlives the local's scope");
                 }
             }
             if (aggregateLocalAddressRoot(value, ctx)) |span| {
-                self.errorCode(span, "E_LOCAL_ADDRESS_ESCAPE", "cannot store a value that captures local storage where it outlives the local's scope");
+                self.errorCode(span.span, "E_LOCAL_ADDRESS_ESCAPE", "cannot store a value that captures local storage where it outlives the local's scope");
             }
         }
         if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target_class, value_class)) {
@@ -5289,12 +5302,12 @@ pub const Checker = struct {
         const local_escape_checked = self.checkLocalAddressReturn(target, expr, ctx);
         const closure_local_escape = if (target == .closure) closureLocalAddressRoot(expr, ctx) else null;
         if (closure_local_escape) |span| {
-            self.errorCode(span, "E_LOCAL_ADDRESS_ESCAPE", "cannot return a closure that captures local storage (the environment would dangle)");
+            self.errorCode(span.span, "E_LOCAL_ADDRESS_ESCAPE", "cannot return a closure that captures local storage (the environment would dangle)");
         }
         // (bug #3) Returning an aggregate literal that embeds `&local` makes the borrow dangle
         // once the frame is gone — even though the return TYPE is a struct/array, not a pointer.
         if (aggregateLocalAddressRoot(expr, ctx)) |span| {
-            self.errorCode(span, "E_LOCAL_ADDRESS_ESCAPE", "cannot return the address of local storage inside an aggregate (the borrow would dangle)");
+            self.errorCode(span.span, "E_LOCAL_ADDRESS_ESCAPE", "cannot return the address of local storage inside an aggregate (the borrow would dangle)");
         }
         const enum_checked = self.checkEnumValueCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
@@ -5382,7 +5395,7 @@ pub const Checker = struct {
     fn checkClosureArgumentDoesNotEscape(self: *Checker, target_ty: ast.TypeExpr, arg: ast.Expr, ctx: Context, message: []const u8) void {
         if (classifyTypeCtx(target_ty, ctx) != .closure) return;
         if (closureLocalAddressRoot(arg, ctx)) |span| {
-            self.errorCode(span, "E_LOCAL_ADDRESS_ESCAPE", message);
+            self.errorCode(span.span, "E_LOCAL_ADDRESS_ESCAPE", message);
         }
     }
 
@@ -7997,6 +8010,11 @@ fn updateAssignmentAddressOrigin(target: ast.Expr, value: ast.Expr, ctx: Context
     }
 }
 
+const BorrowedLocal = struct {
+    span: diagnostics.Span,
+    scope_depth: usize,
+};
+
 // ----- unified place-root classification (closes the bug-#1/#2 class) -------
 //
 // "What storage does this lvalue ultimately name?" was previously re-derived in
@@ -8042,13 +8060,16 @@ fn placeRoot(expr: ast.Expr, ctx: Context) PlaceRoot {
     };
 }
 
-fn localAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
+fn localAddressRoot(expr: ast.Expr, ctx: Context) ?BorrowedLocal {
     return switch (expr.kind) {
         .address_of => |inner| localStorageRoot(inner.*, ctx),
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| {
-                if (entry.address_origin == .local) return expr.span;
+                switch (entry.address_origin) {
+                    .local => |origin| return .{ .span = expr.span, .scope_depth = origin.scope_depth },
+                    .none => {},
+                }
             }
             return null;
         },
@@ -8064,7 +8085,7 @@ fn localAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
 // no-false-positive slice: a field that is itself `&local` (or a nested aggregate holding
 // one) is the only thing flagged; a plain `&local` not inside an aggregate is already caught
 // by the direct pointer-return / escape checks.
-fn aggregateLocalAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
+fn aggregateLocalAddressRoot(expr: ast.Expr, ctx: Context) ?BorrowedLocal {
     return switch (expr.kind) {
         .grouped => |inner| aggregateLocalAddressRoot(inner.*, ctx),
         .struct_literal => |fields| {
@@ -8087,13 +8108,16 @@ fn aggregateLocalAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
     };
 }
 
-fn closureLocalAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
+fn closureLocalAddressRoot(expr: ast.Expr, ctx: Context) ?BorrowedLocal {
     return switch (expr.kind) {
         .call => |node| if (isBindCallNode(node)) localAddressRoot(node.args[0], ctx) else null,
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| {
-                if (entry.address_origin == .local) return expr.span;
+                switch (entry.address_origin) {
+                    .local => |origin| return .{ .span = expr.span, .scope_depth = origin.scope_depth },
+                    .none => {},
+                }
             }
             return null;
         },
@@ -8104,8 +8128,8 @@ fn closureLocalAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
 
 fn addressOrigin(expr: ast.Expr, ctx: Context) AddressOrigin {
     return switch (expr.kind) {
-        .address_of => |inner| if (localStorageRoot(inner.*, ctx) != null) .local else .none,
-        .call => if (closureLocalAddressRoot(expr, ctx) != null) .local else .none,
+        .address_of => |inner| if (localStorageRoot(inner.*, ctx)) |root| .{ .local = .{ .scope_depth = root.scope_depth } } else .none,
+        .call => if (closureLocalAddressRoot(expr, ctx)) |root| .{ .local = .{ .scope_depth = root.scope_depth } } else .none,
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| return entry.address_origin;
@@ -8114,6 +8138,24 @@ fn addressOrigin(expr: ast.Expr, ctx: Context) AddressOrigin {
         .grouped => |inner| addressOrigin(inner.*, ctx),
         else => .none,
     };
+}
+
+fn localStorageBorrowEscapesTarget(target: ast.Expr, target_class: TypeClass, value: ast.Expr, ctx: Context) ?BorrowedLocal {
+    const target_root = localStorageRoot(target, ctx) orelse return null;
+    const borrow = borrowedLocalInAssignedValue(target_class, value, ctx) orelse return null;
+    if (target_root.scope_depth < borrow.scope_depth) return borrow;
+    return null;
+}
+
+fn borrowedLocalInAssignedValue(target_class: TypeClass, value: ast.Expr, ctx: Context) ?BorrowedLocal {
+    if (isNonNullPointerLike(target_class) or isNullablePointerLike(target_class)) {
+        if (localAddressRoot(value, ctx)) |borrow| return borrow;
+    }
+    if (target_class == .closure) {
+        if (closureLocalAddressRoot(value, ctx)) |borrow| return borrow;
+    }
+    if (aggregateLocalAddressRoot(value, ctx)) |borrow| return borrow;
+    return null;
 }
 
 // T1.2: if `expr` is `&<ident>` (the address of a bare local binding, possibly under
@@ -8205,12 +8247,12 @@ fn identName(expr: ast.Expr) ?[]const u8 {
     };
 }
 
-fn localStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
+fn localStorageRoot(expr: ast.Expr, ctx: Context) ?BorrowedLocal {
     return switch (expr.kind) {
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| {
-                if (entry.origin == .local) return expr.span;
+                if (entry.origin == .local) return .{ .span = expr.span, .scope_depth = entry.scope_depth };
             }
             return null;
         },
@@ -8276,18 +8318,18 @@ fn placeOutlivesFrame(expr: ast.Expr, ctx: Context) bool {
     };
 }
 
-fn indexedLocalArrayStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
+fn indexedLocalArrayStorageRoot(expr: ast.Expr, ctx: Context) ?BorrowedLocal {
     const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return null;
     if (!isArrayType(ty)) return null;
     return switch (expr.kind) {
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| {
-                if (entry.origin == .local or entry.origin == .param) return expr.span;
+                if (entry.origin == .local or entry.origin == .param) return .{ .span = expr.span, .scope_depth = entry.scope_depth };
             }
             return null;
         },
-        .call => expr.span,
+        .call => .{ .span = expr.span, .scope_depth = 0 },
         .grouped => |inner| indexedLocalArrayStorageRoot(inner.*, ctx),
         else => localStorageRoot(expr, ctx),
     };

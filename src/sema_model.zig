@@ -214,6 +214,7 @@ pub const LocalInfo = struct {
     mutable: bool,
     ty: ?ast.TypeExpr,
     origin: BindingOrigin,
+    scope_depth: usize = 0,
     address_origin: AddressOrigin = .none,
 };
 
@@ -222,9 +223,11 @@ pub const BindingOrigin = enum {
     local,
 };
 
-pub const AddressOrigin = enum {
+pub const AddressOrigin = union(enum) {
     none,
-    local,
+    local: struct {
+        scope_depth: usize,
+    },
 };
 
 pub const Scope = std.StringHashMap(LocalInfo);

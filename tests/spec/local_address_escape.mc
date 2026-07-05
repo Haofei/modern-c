@@ -266,6 +266,54 @@ fn reject_return_var_copied_after_assigned_local_pointer(fallback: *mut u32) -> 
     return q;
 }
 
+// T1.1 — a borrow of a nested block local must not be written into storage declared
+// in an outer lexical scope. The target would remain live after the block-local dies.
+
+fn reject_inner_block_local_borrow_to_outer_pointer() -> u32 {
+    var p: *mut u32 = &shared_counter;
+    {
+        var x: u32 = 1;
+        // EXPECT_ERROR: E_BORROW_ESCAPES_SCOPE
+        p = &x;
+    }
+    return *p;
+}
+
+fn reject_grouped_inner_block_local_borrow_to_outer_pointer() -> u32 {
+    var p: *mut u32 = &shared_counter;
+    {
+        var x: u32 = 1;
+        // EXPECT_ERROR: E_BORROW_ESCAPES_SCOPE
+        (p) = &(x);
+    }
+    return *p;
+}
+
+fn reject_inner_block_local_borrow_to_outer_field() -> u32 {
+    var h: Holder = .{ .slot = &shared_counter };
+    {
+        var x: u32 = 1;
+        // EXPECT_ERROR: E_BORROW_ESCAPES_SCOPE
+        h.slot = &x;
+    }
+    return *h.slot;
+}
+
+fn accept_same_block_pointer_assignment_use() -> u32 {
+    var p: *mut u32 = &shared_counter;
+    var x: u32 = 1;
+    p = &x;
+    return *p;
+}
+
+fn accept_inner_block_global_borrow_to_outer_pointer() -> u32 {
+    var p: *mut u32 = &shared_counter;
+    {
+        p = &shared_counter;
+    }
+    return *p;
+}
+
 // T1.1 — storing a stack borrow OUT through a pointer parameter (the caller-owned
 // target outlives this frame): the borrow would dangle once `store` returns.
 
