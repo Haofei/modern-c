@@ -53,6 +53,16 @@ fn possibly_racing_direct_address_deref_load() -> u32 {
     return (&shared_counter).*;
 }
 
+fn returned_global_pointer() -> *mut u32 {
+    return &shared_counter;
+}
+
+fn possibly_racing_returned_pointer_load() -> u32 {
+    let gp: *mut u32 = returned_global_pointer();
+    // EXPECT: lower-llvm emits unordered atomic load through a pointer returned by a helper proven to return global storage.
+    return gp.*;
+}
+
 fn local_pointer_deref_stays_plain() -> u32 {
     var local: u32 = 5;
     let lp: *mut u32 = &local;

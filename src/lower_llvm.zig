@@ -266,6 +266,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
         .global_pointer_locals = std.StringHashMap(void).init(allocator),
+        .global_pointer_return_fns = std.StringHashMap(void).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
         .defer_stack = std.ArrayList(ast.Expr).empty,
         .string_literals = std.ArrayList(StringLiteralGlobal).empty,
@@ -337,6 +338,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
             else => {},
         }
     }
+    try ctx.collectGlobalPointerProvenanceSummaries(module);
     // Tier 2: one rodata vtable global per `impl Trait for Type` of an object-safe
     // trait. Function pointers may be forward-referenced in LLVM IR, so this can run
     // before the function bodies are emitted.
@@ -406,6 +408,7 @@ const LlvmEmitter = struct {
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
     global_pointer_locals: std.StringHashMap(void) = undefined,
+    global_pointer_return_fns: std.StringHashMap(void) = undefined,
     // While a function body is being emitted, `entry_allocas` collects every `alloca`
     // so they land at the TOP of the entry block (the LLVM rule: an alloca in a non-entry
     // block — e.g. a loop body — is a DYNAMIC stack allocation that grows the stack every
@@ -478,6 +481,7 @@ const LlvmEmitter = struct {
         self.local_types.deinit();
         self.local_slots.deinit();
         self.global_pointer_locals.deinit();
+        self.global_pointer_return_fns.deinit();
         self.loop_stack.deinit(self.allocator);
         self.defer_stack.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
@@ -602,6 +606,21 @@ const LlvmEmitter = struct {
         _ = try self.llvmType(ty);
         try self.global_types.put(global.name.text, ty);
         if (global.init) |expr| try self.global_initializers.put(global.name.text, expr);
+    }
+
+    fn collectGlobalPointerProvenanceSummaries(self: *LlvmEmitter, module: ast.Module) !void {
+        self.global_pointer_return_fns.clearRetainingCapacity();
+
+        for (module.decls) |decl| {
+            if (decl.kind != .fn_decl) continue;
+            const fn_decl = decl.kind.fn_decl;
+            if (fn_decl.exported) continue;
+            const body = fn_decl.body orelse continue;
+            const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
+            if (self.isPointerLikeType(ret_ty) and self.bodyReturnsOnlyVisibleGlobalPointers(body)) {
+                try self.global_pointer_return_fns.put(fn_decl.name.text, {});
+            }
+        }
     }
 
     fn emitGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
@@ -3045,6 +3064,29 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn exprIsVisibleGlobalPointer(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .address_of => |inner| self.directGlobalStorageRoot(inner.*),
+            .grouped => |inner| self.exprIsVisibleGlobalPointer(inner.*),
+            .cast => |node| self.exprIsVisibleGlobalPointer(node.value.*),
+            .call => |call| if (isAssumeNoaliasCall(call) and call.args.len == 2)
+                self.exprIsVisibleGlobalPointer(call.args[0])
+            else if (self.directCallName(call.callee.*)) |callee|
+                self.global_pointer_return_fns.contains(callee)
+            else
+                false,
+            else => false,
+        };
+    }
+
+    fn bodyReturnsOnlyVisibleGlobalPointers(self: *LlvmEmitter, body: ast.Block) bool {
+        if (body.items.len != 1) return false;
+        return switch (body.items[0].kind) {
+            .@"return" => |maybe_expr| if (maybe_expr) |expr| self.exprIsVisibleGlobalPointer(expr) else false,
+            else => false,
+        };
+    }
+
     fn isPointerLikeType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
         return switch (self.resolveAliasType(ty).kind) {
             .pointer, .raw_many_pointer => true,
@@ -3072,6 +3114,8 @@ const LlvmEmitter = struct {
             .cast => |node| self.pointerExprHasGlobalStorageProvenance(node.value.*),
             .call => |call| if (isAssumeNoaliasCall(call) and call.args.len == 2)
                 self.pointerExprHasGlobalStorageProvenance(call.args[0])
+            else if (self.directCallName(call.callee.*)) |callee|
+                self.global_pointer_return_fns.contains(callee)
             else
                 false,
             else => false,
