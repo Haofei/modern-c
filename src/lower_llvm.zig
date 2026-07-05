@@ -4432,6 +4432,7 @@ const LlvmEmitter = struct {
         const result = try self.nextTemp();
         const llvm_ty = try self.llvmType(ty);
         if (use_atomic and self.canUseOrdinaryAtomicAccess(ty)) {
+            if (self.ordinaryAtomicScalarTooWide(ty)) return error.UnsupportedLlvmEmission;
             if (typeNameEql(self.resolveAliasType(ty), "bool")) {
                 try self.out.print(self.allocator, "  {s} = load atomic i8, ptr {s} unordered, align 1{s}\n", .{ result, ptr, try self.debugCallSuffix() });
                 const bool_result = try self.nextTemp();
@@ -4447,6 +4448,7 @@ const LlvmEmitter = struct {
 
     fn emitOrdinaryStore(self: *LlvmEmitter, ty: ast.TypeExpr, llvm_ty: []const u8, value: []const u8, ptr: []const u8, use_atomic: bool) !void {
         if (use_atomic and self.canUseOrdinaryAtomicAccess(ty)) {
+            if (self.ordinaryAtomicScalarTooWide(ty)) return error.UnsupportedLlvmEmission;
             if (typeNameEql(self.resolveAliasType(ty), "bool")) {
                 const widened = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = zext i1 {s} to i8\n", .{ widened, value });
@@ -4461,6 +4463,16 @@ const LlvmEmitter = struct {
 
     fn canUseOrdinaryAtomicAccess(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
         return !self.isAggregateType(ty);
+    }
+
+    // Race-tolerant lowering (`load/store atomic ... unordered`) is only sound for
+    // scalars up to the native 8-byte word: a 128-bit atomic would lower to an
+    // `__atomic_load_16`/`__atomic_store_16` libcall that the freestanding kernel
+    // image cannot link. Spec §I.13: with no sound race-tolerant lowering, the
+    // backend must fail emission rather than guess.
+    fn ordinaryAtomicScalarTooWide(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        const bits = self.integerBitsOf(ty) orelse return false;
+        return bits > 64;
     }
 
     fn aggregatePointerFieldKey(self: *LlvmEmitter, local_name: []const u8, field_path: []const u8) ![]const u8 {

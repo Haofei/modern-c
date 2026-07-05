@@ -111,6 +111,21 @@ pub fn isPointerLikeGlobalType(ty: ast.TypeExpr) bool {
     };
 }
 
+// The `mc_race_load_<T>`/`mc_race_store_<T>` helper family is emitted for exactly
+// these scalar spellings (the MC_DEFINE_RACE_SCALAR list in lower_c_runtime.zig).
+// Any other non-aggregate, non-pointer-shaped scalar (u128/i128) has no sound
+// race-tolerant C lowering, so callers must fail emission closed (spec §I.13)
+// instead of naming a helper that does not exist.
+pub fn raceScalarHelperExists(race_type_name: []const u8) bool {
+    const helpers = [_][]const u8{
+        "bool", "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize", "f32", "f64",
+    };
+    for (helpers) |helper| {
+        if (std.mem.eql(u8, race_type_name, helper)) return true;
+    }
+    return false;
+}
+
 pub fn mmioFieldFromType(ty: ast.TypeExpr) ?MmioField {
     const generic = switch (ty.kind) {
         .generic => |node| node,
