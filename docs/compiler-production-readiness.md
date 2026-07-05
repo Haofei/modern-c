@@ -1,7 +1,7 @@
 # Production readiness: the MC compiler (`mcc`)
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
-Current ledger: **updated 2026-07-05, based on `6ccdb716`**.
+Current ledger: **updated 2026-07-05, saved in `9839dfc1`, based on implementation through `6ccdb716`**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
