@@ -59,7 +59,8 @@ pub fn emitConversionCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
     }
     const resolved = lower_c_alias.resolveAliasType(ctx.type_aliases, simpleNameType(ident.text, ident.span));
     const target_name = typeName(resolved);
-    const numeric_target = isNumericStorageType(resolved) or (target_name != null and primitiveCTypeName(target_name.?) != null);
+    const numeric_target = isNumericStorageType(resolved) or
+        (target_name != null and !std.mem.eql(u8, target_name.?, "cstr") and primitiveCTypeName(target_name.?) != null);
     if (!numeric_target) return false;
     if (call.args.len != 1) return error.UnsupportedCEmission;
     const cty = try ctx.c_type(ctx.emit_ctx, resolved);

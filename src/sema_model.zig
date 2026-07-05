@@ -255,6 +255,7 @@ pub const TypeClass = enum {
     slice,
     array,
     c_void_pointer,
+    cstr,
     nullable_pointer,
     nullable_c_void_pointer,
     // `?*dyn Trait` - a nullable trait object. Same two-word {data, vtable}

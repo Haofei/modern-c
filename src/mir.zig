@@ -3751,7 +3751,7 @@ fn isMirIntegerType(ty: ValueType) bool {
 // `.unknown` is treated as valid to avoid false positives.
 fn isMirBitcastLayout(ty: ValueType) bool {
     return switch (ty) {
-        .integer, .float, .bool, .pointer, .nullable_pointer, .address, .unknown => true,
+        .integer, .float, .bool, .cstr, .pointer, .nullable_pointer, .address, .unknown => true,
         else => false,
     };
 }

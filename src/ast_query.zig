@@ -512,6 +512,9 @@ pub fn isOpaqueAddressTypeName(name: []const u8) bool {
 
 /// True for a pointer (or raw many-pointer) to `u8` — the string-literal target shape.
 pub fn isStringLiteralTarget(ty: ast.TypeExpr) bool {
+    if (typeName(ty)) |name| {
+        if (std.mem.eql(u8, name, "cstr")) return true;
+    }
     const child = switch (ty.kind) {
         .pointer => |node| node.child.*,
         .raw_many_pointer => |node| node.child.*,

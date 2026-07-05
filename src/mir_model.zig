@@ -61,6 +61,7 @@ pub const ValueType = union(enum) {
     value,
     integer: []const u8,
     float: []const u8,
+    cstr,
     pointer: PointerShape,
     nullable_pointer: PointerShape,
     // `?*dyn Trait` - nullable trait object; niche is `data == null`. Narrows to a
@@ -90,6 +91,7 @@ pub const ValueType = union(enum) {
             .value => "value",
             .integer => |n| n,
             .float => |n| n,
+            .cstr => "cstr",
             .pointer => |shape| pointerShapeName(shape),
             .nullable_pointer => |shape| pointerShapeName(shape),
             .nullable_dyn_trait => "?dyn",

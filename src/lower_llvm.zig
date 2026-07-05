@@ -5012,6 +5012,8 @@ const LlvmEmitter = struct {
                 "i64"
             else if (std.mem.eql(u8, name.text, "c_void"))
                 "i8"
+            else if (std.mem.eql(u8, name.text, "cstr"))
+                "ptr"
             else if (std.mem.eql(u8, name.text, "IrqOff"))
                 "i8"
                 // C-ABI varargs cursor. On the RISC-V lp64 ABI `va_list` is a single pointer

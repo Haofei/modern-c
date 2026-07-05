@@ -89,6 +89,7 @@ fn checkMatches(instruction: Instruction, expected_kind: []const u8, expected_va
 pub fn checkKind(ty: ValueType) ?[]const u8 {
     return switch (ty) {
         .pointer => "nonnull_pointer",
+        .cstr => "nonnull_cstr",
         .closed_enum => "closed_enum",
         else => null,
     };
@@ -97,6 +98,7 @@ pub fn checkKind(ty: ValueType) ?[]const u8 {
 pub fn typeName(ty: ValueType) []const u8 {
     return switch (ty) {
         .pointer => "nonnull_pointer",
+        .cstr => "nonnull_cstr",
         .closed_enum => |name| name,
         else => "unknown",
     };
@@ -105,6 +107,7 @@ pub fn typeName(ty: ValueType) []const u8 {
 pub fn checkTraps(ty: ValueType) bool {
     return switch (ty) {
         .pointer => |shape| shape.kind != .raw_many,
+        .cstr => true,
         .closed_enum => true,
         else => false,
     };

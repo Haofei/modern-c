@@ -224,7 +224,7 @@ pub fn typesAreCompatible(target: ValueType, source: ValueType) bool {
         },
         // `.nullable_value` is fully handled by the early branch above (structural,
         // name-based); it never reaches this activeTag-equal switch.
-        .void, .never, .bool, .contract, .branch, .trap, .unknown, .value, .nullable_dyn_trait, .nullable_value => true,
+        .void, .never, .bool, .cstr, .contract, .branch, .trap, .unknown, .value, .nullable_dyn_trait, .nullable_value => true,
     };
 }
 
@@ -608,6 +608,7 @@ fn namedValueType(name: []const u8, enums: *const std.StringHashMap(EnumSummary)
     if (std.mem.eql(u8, name, "void")) return .void;
     if (std.mem.eql(u8, name, "never")) return .never;
     if (std.mem.eql(u8, name, "bool")) return .bool;
+    if (std.mem.eql(u8, name, "cstr")) return .cstr;
     if (std.mem.eql(u8, name, "PAddr")) return .{ .address = .paddr };
     if (std.mem.eql(u8, name, "VAddr")) return .{ .address = .vaddr };
     if (std.mem.eql(u8, name, "DmaAddr")) return .{ .address = .dma_addr };

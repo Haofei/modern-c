@@ -410,6 +410,7 @@ pub fn classifyTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "f32")) return .f32;
     if (std.mem.eql(u8, name, "f64")) return .f64;
     if (std.mem.eql(u8, name, "Order")) return .order;
+    if (std.mem.eql(u8, name, "cstr")) return .cstr;
     if (std.mem.eql(u8, name, "never")) return .never;
     if (std.mem.eql(u8, name, "void")) return .void;
     if (std.mem.eql(u8, name, "bool")) return .bool;

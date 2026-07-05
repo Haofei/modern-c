@@ -164,6 +164,7 @@ pub fn cType(ty: ast.TypeExpr) []const u8 {
     if (std.mem.eql(u8, name, "void")) return "void";
     if (std.mem.eql(u8, name, "c_void")) return "void";
     if (std.mem.eql(u8, name, "never")) return "void";
+    if (std.mem.eql(u8, name, "cstr")) return "char const *";
     if (std.mem.eql(u8, name, "bool")) return "bool";
     if (std.mem.eql(u8, name, "u8")) return "uint8_t";
     if (std.mem.eql(u8, name, "u16")) return "uint16_t";
@@ -340,6 +341,7 @@ pub fn primitiveCTypeName(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "void")) return "void";
     if (std.mem.eql(u8, name, "c_void")) return "void";
     if (std.mem.eql(u8, name, "never")) return "void";
+    if (std.mem.eql(u8, name, "cstr")) return "char const *";
     if (std.mem.eql(u8, name, "bool")) return "bool";
     if (std.mem.eql(u8, name, "u8")) return "uint8_t";
     if (std.mem.eql(u8, name, "u16")) return "uint16_t";

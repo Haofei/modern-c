@@ -103,6 +103,7 @@ pub fn sliceElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
 
 pub fn isPointerLikeGlobalType(ty: ast.TypeExpr) bool {
     return switch (ty.kind) {
+        .name => |name| std.mem.eql(u8, name.text, "cstr"),
         .pointer, .raw_many_pointer, .slice => true,
         .nullable => |child| isPointerLikeGlobalType(child.*),
         .qualified => |node| isPointerLikeGlobalType(node.child.*),

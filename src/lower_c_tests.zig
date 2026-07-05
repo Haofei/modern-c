@@ -142,6 +142,34 @@ test "lower-c emits support helpers used by evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_signal_fence") == null);
 }
 
+test "lower-c emits cstr as immutable C string pointer" {
+    const source =
+        \\extern "C" fn strlen(s: cstr) -> usize;
+        \\extern "C" fn identity(s: cstr) -> cstr;
+        \\
+        \\export fn use_cstr() -> usize {
+        \\    let s: cstr = "abc";
+        \\    return strlen(s);
+        \\}
+        \\
+        \\export fn return_cstr() -> cstr {
+        \\    return identity("xyz");
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("cstr_c.mc", source, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t strlen(char const * s);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * identity(char const * s);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * s = ((char const *)\"abc\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * return_cstr(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " = ((char const *)\"xyz\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return identity(mc_tmp") != null);
+}
+
 test "lower-c reuses prebuilt verified MIR without changing output" {
     const source =
         \\fn add_one(value: u32) -> u32 {

@@ -53,6 +53,31 @@ test "LLVM backend emits checked integer add from MIR-gated source" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, " nuw ") == null);
 }
 
+test "LLVM backend emits cstr as ptr" {
+    const source =
+        \\extern "C" fn strlen(s: cstr) -> usize;
+        \\extern "C" fn identity(s: cstr) -> cstr;
+        \\
+        \\export fn use_cstr() -> usize {
+        \\    let s: cstr = "abc";
+        \\    return strlen(s);
+        \\}
+        \\
+        \\export fn return_cstr() -> cstr {
+        \\    return identity("xyz");
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("cstr_llvm.mc", source, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "declare i64 @strlen(ptr)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "declare ptr @identity(ptr)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "define ptr @return_cstr()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "call ptr @identity(ptr") != null);
+}
+
 test "LLVM reflection rejects oversized tagged union layout without panicking" {
     const source =
         \\union Big {
