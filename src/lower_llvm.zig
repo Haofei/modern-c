@@ -2376,6 +2376,7 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, slot.ptr, try self.debugCallSuffix() });
                 try self.updatePointerGlobalProvenance(ident.text, slot.ty, value_expr);
                 _ = self.local_aggregate_pointer_aliases.remove(ident.text);
+                self.clearLocalSlicesBackedByArray(ident.text);
                 try self.updateAggregatePointerFieldProvenanceFromInit(ident.text, slot.ty, value_expr);
                 try self.updateLocalArrayPointerElementProvenanceFromInit(ident.text, slot.ty, value_expr);
                 try self.updateLocalSlicePointerElementProvenanceFromInit(ident.text, slot.ty, value_expr);
@@ -3465,6 +3466,7 @@ const LlvmEmitter = struct {
             return;
         };
         self.clearLocalArrayPointerElementsForLocal(array_name);
+        self.clearAggregatePointerFieldsForLocal(array_name);
         self.clearLocalSlicesBackedByArray(array_name);
     }
 
@@ -3935,9 +3937,44 @@ const LlvmEmitter = struct {
         return array_name;
     }
 
+    fn directFullLocalAggregateArraySliceBaseName(self: *LlvmEmitter, ty: ast.TypeExpr, init: ast.Expr) ?[]const u8 {
+        const resolved_ty = self.resolveAliasType(ty);
+        const slice_ty = switch (resolved_ty.kind) {
+            .slice => |slice| slice,
+            else => return null,
+        };
+        if (!self.isPointerLikeType(slice_ty.child.*)) return null;
+
+        const node = switch (init.kind) {
+            .slice => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .slice => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        const path = self.directLocalAggregateArrayBasePath(node.base.*) orelse
+            self.aggregatePointerAliasArrayBasePath(node.base.*) orelse
+            return null;
+        const base_ty = self.resolveAliasType(self.exprType(node.base.*) orelse return null);
+        const array = switch (base_ty.kind) {
+            .array => |array| array,
+            else => return null,
+        };
+        if (!self.isPointerLikeType(array.child.*)) return null;
+        const len = self.arrayLenValue(array.len) orelse return null;
+        const start = self.localArrayConstIndexValue(node.start.*) orelse return null;
+        const end = self.localArrayConstIndexValue(node.end.*) orelse return null;
+        if (start != 0 or end != len) return null;
+        if (!self.localAggregateArrayAllElementsHaveGlobalPointerProvenance(path.local_name, path.field_path, len)) return null;
+        return path.local_name;
+    }
+
     fn updateLocalSlicePointerElementProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
         self.clearLocalSliceGlobalPointerArray(local_name);
-        const array_name = self.directFullLocalArraySliceBaseName(ty, init) orelse return;
+        const array_name = self.directFullLocalArraySliceBaseName(ty, init) orelse
+            self.directFullLocalAggregateArraySliceBaseName(ty, init) orelse
+            return;
         try self.local_slice_global_pointer_arrays.put(local_name, array_name);
     }
 
@@ -4066,6 +4103,7 @@ const LlvmEmitter = struct {
             return;
         }
 
+        self.clearLocalSlicesBackedByArray(target_path.local_name);
         if (try self.updateAggregateArrayPointerElementProvenanceFromLiteral(target_path.local_name, target_path.field_path, field_ty, value_expr)) return;
 
         const struct_decl = self.structDeclForType(field_ty) orelse return;
@@ -4156,6 +4194,7 @@ const LlvmEmitter = struct {
         const array_path = self.directLocalAggregateArrayBasePath(node.base.*) orelse
             self.aggregatePointerAliasArrayBasePath(node.base.*) orelse
             return;
+        self.clearLocalSlicesBackedByArray(array_path.local_name);
         if (!self.isPointerLikeType(element_ty)) return;
         if (self.localArrayConstIndexValue(node.index.*) == null) {
             self.clearAggregatePointerFieldsForLocalPath(array_path.local_name, array_path.field_path);

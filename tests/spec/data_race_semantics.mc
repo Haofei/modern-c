@@ -25,6 +25,11 @@ struct PointerArrayHolder {
     tag: u32,
 }
 
+struct PointerArrayHolder3 {
+    ptrs: [3]*mut u32,
+    tag: u32,
+}
+
 global shared_pair: SharedPair;
 global shared_values: [4]u32;
 
@@ -478,6 +483,72 @@ fn aggregate_pointer_alias_array_reassigned_unknown_stays_plain() -> u32 {
     let p: *mut u32 = hp.ptrs[0];
     // EXPECT: lower-llvm clears aggregate pointer alias array element facts after reassignment to an unknown aggregate pointer.
     return p.*;
+}
+
+fn aggregate_slice_global_pointer_element_load(index: usize) -> u32 {
+    let holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 38 };
+    let s: []mut *mut u32 = holder.ptrs[0..2];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a full-range local aggregate pointer-array field slice proven global-backed.
+    return p.*;
+}
+
+fn aggregate_pointer_alias_slice_global_pointer_element_load(index: usize) -> u32 {
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 39 };
+    let hp: *mut PointerArrayHolder = &holder;
+    let s: []mut *mut u32 = hp.ptrs[0..2];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a full-range slice of a proven aggregate pointer alias array field.
+    return p.*;
+}
+
+fn aggregate_slice_stack_pointer_element_stays_plain(index: usize) -> u32 {
+    var local: u32 = 36;
+    let holder: PointerArrayHolder = .{ .ptrs = .{ &local, &local }, .tag = 40 };
+    let s: []mut *mut u32 = holder.ptrs[0..2];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps stack-backed aggregate pointer-array field slices plain.
+    return p.*;
+}
+
+fn aggregate_slice_partial_range_stays_plain(index: usize) -> u32 {
+    let holder: PointerArrayHolder3 = .{ .ptrs = .{ &shared_counter, &shared_counter, &shared_counter }, .tag = 41 };
+    let s: []mut *mut u32 = holder.ptrs[0..2];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps partial aggregate pointer-array field slices plain even when every included element is global-backed.
+    return p.*;
+}
+
+fn aggregate_slice_backing_array_assignment_clears_fact(index: usize) -> u32 {
+    var local: u32 = 37;
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 42 };
+    let s: []mut *mut u32 = holder.ptrs[0..2];
+    holder.ptrs[0] = &local;
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps aggregate pointer-array field slices plain after a backing field element write.
+    return p.*;
+}
+
+fn aggregate_pointer_alias_slice_backing_assignment_clears_fact(index: usize) -> u32 {
+    var local: u32 = 38;
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 43 };
+    let hp: *mut PointerArrayHolder = &holder;
+    let s: []mut *mut u32 = hp.ptrs[0..2];
+    hp.ptrs[index] = &local;
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps aggregate pointer-array field slices plain after a backing field element write through a local aggregate pointer alias.
+    return p.*;
+}
+
+fn aggregate_slice_element_assignment_clears_fact(index: usize) -> u32 {
+    var local: u32 = 39;
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 44 };
+    let s: []mut *mut u32 = holder.ptrs[0..2];
+    s[index] = &local;
+    let slice_p: *mut u32 = s[index];
+    let field_p: *mut u32 = holder.ptrs[0];
+    // EXPECT: lower-llvm keeps both slice and aggregate field derefs plain after a write through the slice.
+    return slice_p.* + field_p.*;
 }
 
 fn array_global_pointer_element_load() -> u32 {
