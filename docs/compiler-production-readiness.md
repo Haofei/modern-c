@@ -1,7 +1,7 @@
 # Production readiness: the MC compiler (`mcc`)
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
-Current ledger: **updated 2026-07-05, based on `3e74d7b4`**.
+Current ledger: **updated 2026-07-05, based on `1f4e67e9`**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -31,6 +31,7 @@ Current ledger: **updated 2026-07-05, based on `3e74d7b4`**.
 | LLVM bounded pointer-mediated global race lowering is no longer UB-bearing | Direct `(&global).*` and local pointer slots initialized from direct global storage, including simple pointer-local copies, lower scalar deref loads/stores to unordered LLVM atomics; broader escaped/computed provenance remains pending. | `cf8b2fdd Lower global pointer derefs to LLVM atomics`; `tests/spec/data_race_semantics.mc`; `src/lower_llvm_tests.zig`; `llvm-as` on `data_race_semantics` IR. |
 | Spec C/LLVM sweep gates are green for in-scope fixtures | Mixed accept/reject fixtures no longer leave dangling references after reject stripping, so backend sweeps catch real regressions instead of fixture-shape noise. | `4990226c Split mixed spec sweep fixtures`; `JOBS=8 tools/toolchain/spec-emit-sweep.py zig-out/bin/mcc tests/spec`; `JOBS=8 tools/toolchain/spec-llvm-sweep.py zig-out/bin/mcc tests/spec`. |
 | Rich diagnostic output is implemented and gated | Text diagnostics include source snippets/carets and notes; `mcc check --json` emits structured severity, code, message, mapped path/file, span, source/caret, notes, and counts; LSP consumes the JSON path and turns compiler notes into `relatedInformation`. Terminal color remains a polish gap, not a blocker for structured diagnostics. | `d947f211 docs: retire rich diagnostics readiness item`; `3e74d7b4 Refresh diagnostics ownership gates`; `src/diagnostics.zig` `Diagnostic.notes`, `Reporter.render`, `Reporter.appendJson`, and reporter JSON/notes tests; `src/main.zig` `check --json`; `tools/toolchain/diagnostics-test.sh`; `tools/toolchain/diagnostics-reference.py`; `tools/toolchain/diagnostic-code-inventory.py`; `tools/lsp/mc-lsp.py` JSON diagnostics parser; `tools/lsp/lsp-test.py` monomorphization notes-to-related-information assertion. |
+| Labeled async loop jumps are implemented | `break :label` and `continue :label` inside await-bearing async loops now resolve to the named source loop's state-machine exit/head rather than being rejected or accidentally targeting an inner copied loop. | `1f4e67e9 Support labeled async loop jumps`; `src/async_lower.zig` async loop target stack and labeled poll-loop edge; `tests/c_emit/fuzz_async_loop_breakcont.mc` labeled break/continue fixture; focused C/LLVM fixture probe returns `1` on both backends. |
 
 ### In Progress
 
@@ -45,7 +46,7 @@ Current ledger: **updated 2026-07-05, based on `3e74d7b4`**.
 | Broader pointer-provenance race lowering | The LLVM backend now handles direct address-of global derefs and simple local pointer copies, but escaped, returned, parameter-passed, computed, and aggregate-contained pointers are not yet proven as global-backed. | Decide whether to add sema/MIR provenance facts or conservatively unordered-atomic all scalar derefs whose storage cannot be proven local/raw/MMIO. |
 | Typed semantic fact table / typed MIR | Backends still re-derive too much from raw AST, which is the root drift class. | Start a design slice that records sema facts once and consumes them in both backends. |
 | CFG/place-based move checker | Current move checker is much stronger, but arrays of `move` types and deeper path sensitivity are intentionally deferred. | Decide between implementing element-place tracking or keeping `E_MOVE_ARRAY_UNSUPPORTED` as an accepted limitation. |
-| Async reserved forms | `for` loops containing `await`, labeled break/continue in await-bearing loops, unresolved future expressions, and pinning remain rejected. | Keep as documented limitations or implement one form with diff-backend gates. |
+| Async reserved forms | `for` loops containing `await`, unresolved future expressions such as dyn-future await, and self-referential pinning remain rejected. Labeled break/continue in await-bearing loops has been implemented and moved to Finished. | Keep as documented limitations or implement one form with diff-backend gates. |
 | Release qualification | Version/help/build/install/security/stability docs exist, but this ledger has not re-audited signed release artifacts, branch protection, and full release CI evidence. | Run the release/install gates and record artifact evidence. |
 
 ### Current Working Rules
