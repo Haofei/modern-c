@@ -1,7 +1,7 @@
 # Production readiness: the MC compiler (`mcc`)
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
-Current ledger: **updated 2026-07-05, based on implementation through `961956b0`**.
+Current ledger: **updated 2026-07-05, based on implementation through `d32d9cae`**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -65,6 +65,7 @@ Current ledger: **updated 2026-07-05, based on implementation through `961956b0`
 | Labeled async loop jumps are implemented | `break :label` and `continue :label` inside await-bearing async loops now resolve to the named source loop's state-machine exit/head rather than being rejected or accidentally targeting an inner copied loop. | `1f4e67e9 Support labeled async loop jumps`; `src/async_lower.zig` async loop target stack and labeled poll-loop edge; `tests/c_emit/fuzz_async_loop_breakcont.mc` labeled break/continue fixture; focused C/LLVM fixture probe returns `1` on both backends. |
 | Async reserved forms fail closed with check-mode diagnostics | The remaining reserved async forms named by the roadmap are now gated under `mcc check`: dyn-future await / unresolved future expressions, await-bearing `for` loops, constructor-formed borrow-across-await, and first-await self-reference/pinning all reject with stable explicit diagnostic codes instead of relying only on backend rejection. | `6f636d56 Gate async reserved forms under check`; `tests/c_emit/bad/async_await_unresolved_dyn.mc`; `tests/c_emit/bad/async_for_await_nested.mc`; `tests/c_emit/bad/async_borrow_across_await.mc`; `tests/c_emit/bad/async_borrow_pinning.mc`; `tests/diagnostics/bad-golden.tsv`; `python3 tools/toolchain/bad-diagnostics-test.py --check`. |
 | Release artifact packaging and local qualification gates are implemented | Repo-local gates now prove pinned release metadata, ReleaseSafe installability, deterministic tarballs, SHA256SUMS, release inventory, CycloneDX SBOM, required payload docs/files, tag-version rejection, GitHub/Sigstore attestation wiring, and release workflow upload staging. | `7e0d4592 docs: narrow release qualification ledger item`; `.github/workflows/release.yml`; `tools/ci/package-release.py`; `tools/toolchain/release-metadata-test.py`; `tools/toolchain/package-release-test.py`; `tools/toolchain/release-safe-install-test.sh`; `build/qemu.zig`; `build/tiers.zig`; `docs/release-process.md`; `SECURITY.md`; `STABILITY.md`; `CHANGELOG.md`; `zig build release-metadata-test package-release-test release-safe-install-test`. |
+| Release publication-control evidence is reproducible | The external GitHub publication-control checks are now captured in a read-only audit script instead of ad hoc terminal history, so branch protection, release workflow run evidence, and GitHub Release publication state can be rerun and archived for a release candidate. | `d32d9cae Add release publication audit`; `tools/toolchain/release-publication-audit.sh`; `docs/release-process.md`; `bash -n tools/toolchain/release-publication-audit.sh`; current `bash tools/toolchain/release-publication-audit.sh` exits nonzero as expected with missing branch protection, no recent `release.yml` runs, and no GitHub Releases; `zig build test`; `git diff --check`. |
 
 ### In Progress
 
