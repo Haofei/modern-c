@@ -596,6 +596,30 @@ fn returned_pointer_holder_via_mixed_switch(choice: u32) -> PointerHolder {
     }
 }
 
+fn returned_pointer_holder_after_side_effect() -> PointerHolder {
+    let noise: u32 = shared_counter;
+    return .{ .ptr = &shared_counter, .tag = noise };
+}
+
+fn returned_pointer_holder_via_local_after_noise() -> PointerHolder {
+    let noise: u32 = shared_counter;
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = noise };
+    return holder;
+}
+
+fn returned_pointer_holder_via_local_reassigned_stack_after_noise() -> PointerHolder {
+    let noise: u32 = shared_counter;
+    var local: u32 = 77;
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = noise };
+    holder = .{ .ptr = &local, .tag = 77 };
+    return holder;
+}
+
+fn returned_pointer_holder_after_unknown_call() -> PointerHolder {
+    let hp: *mut PointerHolder = external_pointer_holder();
+    return .{ .ptr = &shared_counter, .tag = 78 };
+}
+
 fn aggregate_computed_copy_pointer_field_load() -> u32 {
     var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 10 };
     holder = returned_pointer_holder();
@@ -665,6 +689,34 @@ fn aggregate_return_mixed_switch_pointer_field_stays_plain(choice: u32) -> u32 {
     let holder: PointerHolder = returned_pointer_holder_via_mixed_switch(choice);
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm keeps returned switch aggregate fields plain when any arm is stack-backed.
+    return p.*;
+}
+
+fn aggregate_return_prereturn_literal_pointer_field_load() -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_after_side_effect();
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load when simple pre-return reads do not affect returned aggregate provenance.
+    return p.*;
+}
+
+fn aggregate_return_prereturn_local_pointer_field_load() -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_via_local_after_noise();
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load when a pre-return local aggregate remains proven global-backed.
+    return p.*;
+}
+
+fn aggregate_return_prereturn_reassigned_stack_pointer_field_stays_plain() -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_via_local_reassigned_stack_after_noise();
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm keeps a returned aggregate field plain when pre-return code overwrites it with stack-backed data.
+    return p.*;
+}
+
+fn aggregate_return_prereturn_unknown_call_pointer_field_stays_plain() -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_after_unknown_call();
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm keeps returned aggregate fields plain when an unknown pre-return call prevents provenance proof.
     return p.*;
 }
 

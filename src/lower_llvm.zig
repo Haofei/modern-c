@@ -1092,19 +1092,16 @@ const LlvmEmitter = struct {
         try self.seedAggregateReturnSummaryParams(fn_decl.params);
 
         const summary_local = "__mc_aggregate_return_summary";
-        if (self.singleReturnExpr(body)) |return_expr| {
-            const fields = self.structLiteralFields(return_expr) orelse return;
-            try self.updateAggregatePointerFieldProvenanceFromStructLiteral(summary_local, struct_decl, fields, null);
-            try self.copyAggregateReturnPointerFieldsFromLocal(fn_decl.name.text, summary_local);
-            return;
-        }
-
         if (try self.collectSimpleControlFlowAggregateReturnPointerFields(fn_decl, struct_decl, body, summary_local)) return;
 
-        self.resetTransientPointerProvenance();
-        try self.seedAggregateReturnSummaryParams(fn_decl.params);
-        const returned_local = (try self.collectSimpleAggregateReturnLocal(struct_decl, body)) orelse return;
-        try self.copyAggregateReturnPointerFieldsFromLocal(fn_decl.name.text, returned_local);
+        var fields = (try self.aggregateReturnPointerFieldPathsForReturnPath(fn_decl.params, struct_decl, body, summary_local)) orelse return;
+        defer self.deinitOwnedStringVoidMap(&fields);
+        var it = fields.keyIterator();
+        while (it.next()) |field_path| {
+            const summary_key = try self.aggregateReturnPointerFieldKey(fn_decl.name.text, field_path.*);
+            errdefer self.allocator.free(summary_key);
+            try self.aggregate_return_pointer_fields.put(summary_key, {});
+        }
     }
 
     fn seedAggregateReturnSummaryParams(self: *LlvmEmitter, params: []const ast.Param) !void {
@@ -1255,16 +1252,25 @@ const LlvmEmitter = struct {
         self.resetTransientPointerProvenance();
         try self.seedAggregateReturnSummaryParams(params);
 
-        if (self.singleReturnExpr(return_path)) |return_expr| {
-            if (!self.aggregateReturnSummaryExprIsSimple(return_expr)) return null;
-            const fields = self.structLiteralFields(return_expr) orelse return null;
+        if (return_path.items.len == 0) return null;
+        if (!try self.trackSimpleAggregateReturnPrefix(return_path)) return null;
+
+        const return_expr = switch (return_path.items[return_path.items.len - 1].kind) {
+            .@"return" => |maybe_expr| maybe_expr orelse return null,
+            else => return null,
+        };
+
+        if (self.structLiteralFields(return_expr)) |fields| {
+            if (return_path.items.len > 1 and !self.aggregateReturnSummaryExprIsSimple(return_expr)) return null;
             self.clearAggregatePointerFieldsForLocal(summary_local);
             try self.updateAggregatePointerFieldProvenanceFromStructLiteral(summary_local, struct_decl, fields, null);
             return try self.aggregatePointerFieldPathsForLocal(summary_local);
         }
 
-        const returned_local = (try self.collectSimpleAggregateReturnLocal(struct_decl, return_path)) orelse return null;
-        return try self.aggregatePointerFieldPathsForLocal(returned_local);
+        if (!self.aggregateReturnSummaryExprIsSimple(return_expr)) return null;
+        const local_name = self.directLocalAggregateBaseName(return_expr) orelse return null;
+        if (!self.aggregateReturnLocalMatchesStruct(local_name, struct_decl)) return null;
+        return try self.aggregatePointerFieldPathsForLocal(local_name);
     }
 
     fn isSimpleBoolIfSwitch(self: *LlvmEmitter, switch_node: ast.Switch) bool {
@@ -1327,51 +1333,26 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn copyAggregateReturnPointerFieldsFromLocal(self: *LlvmEmitter, fn_name: []const u8, local_name: []const u8) !void {
-        var it = self.aggregate_global_pointer_fields.keyIterator();
-        while (it.next()) |key| {
-            if (!aggregatePointerFieldKeyMatchesLocal(key.*, local_name)) continue;
-            const field_path = key.*[local_name.len + 1 ..];
-            const summary_key = try self.aggregateReturnPointerFieldKey(fn_name, field_path);
-            errdefer self.allocator.free(summary_key);
-            try self.aggregate_return_pointer_fields.put(summary_key, {});
-        }
-    }
-
-    fn singleReturnExpr(self: *LlvmEmitter, body: ast.Block) ?ast.Expr {
-        _ = self;
-        if (body.items.len != 1) return null;
-        return switch (body.items[0].kind) {
-            .@"return" => |maybe_expr| maybe_expr,
-            else => null,
-        };
-    }
-
-    fn collectSimpleAggregateReturnLocal(self: *LlvmEmitter, return_struct_decl: ast.StructDecl, body: ast.Block) !?[]const u8 {
-        if (body.items.len < 2) return null;
-
+    fn trackSimpleAggregateReturnPrefix(self: *LlvmEmitter, body: ast.Block) !bool {
         for (body.items[0 .. body.items.len - 1]) |stmt| {
             switch (stmt.kind) {
                 .let_decl, .var_decl => |local| {
-                    if (!try self.trackSimpleAggregateReturnLocalDecl(local)) return null;
+                    if (!try self.trackSimpleAggregateReturnLocalDecl(local)) return false;
                 },
                 .assignment => |node| {
-                    if (!try self.trackSimpleAggregateReturnAssignment(node.target, node.value)) return null;
+                    if (!try self.trackSimpleAggregateReturnAssignment(node.target, node.value)) return false;
                 },
-                else => return null,
+                else => return false,
             }
         }
+        return true;
+    }
 
-        const return_expr = switch (body.items[body.items.len - 1].kind) {
-            .@"return" => |maybe_expr| maybe_expr orelse return null,
-            else => return null,
-        };
-        const local_name = self.directLocalAggregateBaseName(return_expr) orelse return null;
-        const slot = self.local_slots.get(local_name) orelse return null;
-        const local_struct_decl = self.structDeclForType(slot.ty) orelse return null;
-        if (local_struct_decl.is_c_union) return null;
-        if (!std.mem.eql(u8, local_struct_decl.name.text, return_struct_decl.name.text)) return null;
-        return local_name;
+    fn aggregateReturnLocalMatchesStruct(self: *LlvmEmitter, local_name: []const u8, return_struct_decl: ast.StructDecl) bool {
+        const slot = self.local_slots.get(local_name) orelse return false;
+        const local_struct_decl = self.structDeclForType(slot.ty) orelse return false;
+        if (local_struct_decl.is_c_union) return false;
+        return std.mem.eql(u8, local_struct_decl.name.text, return_struct_decl.name.text);
     }
 
     fn trackSimpleAggregateReturnLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl) !bool {

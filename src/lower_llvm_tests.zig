@@ -363,6 +363,28 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(aggregate_return_mixed_switch_body, "load i32, ptr %");
     try expectNotContains(aggregate_return_mixed_switch_body, " atomic ");
 
+    const aggregate_return_prereturn_literal_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_prereturn_literal_pointer_field_load");
+    try expectContains(aggregate_return_prereturn_literal_body, "call { ptr, i32 } @returned_pointer_holder_after_side_effect()");
+    try expectContains(aggregate_return_prereturn_literal_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_return_prereturn_literal_body, " unordered, align 4");
+    try expectNotContains(aggregate_return_prereturn_literal_body, "load i32, ptr %p.addr.");
+
+    const aggregate_return_prereturn_local_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_prereturn_local_pointer_field_load");
+    try expectContains(aggregate_return_prereturn_local_body, "call { ptr, i32 } @returned_pointer_holder_via_local_after_noise()");
+    try expectContains(aggregate_return_prereturn_local_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_return_prereturn_local_body, " unordered, align 4");
+    try expectNotContains(aggregate_return_prereturn_local_body, "load i32, ptr %p.addr.");
+
+    const aggregate_return_prereturn_reassigned_stack_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_prereturn_reassigned_stack_pointer_field_stays_plain");
+    try expectContains(aggregate_return_prereturn_reassigned_stack_body, "call { ptr, i32 } @returned_pointer_holder_via_local_reassigned_stack_after_noise()");
+    try expectContains(aggregate_return_prereturn_reassigned_stack_body, "load i32, ptr %");
+    try expectNotContains(aggregate_return_prereturn_reassigned_stack_body, " atomic ");
+
+    const aggregate_return_prereturn_unknown_call_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_prereturn_unknown_call_pointer_field_stays_plain");
+    try expectContains(aggregate_return_prereturn_unknown_call_body, "call { ptr, i32 } @returned_pointer_holder_after_unknown_call()");
+    try expectContains(aggregate_return_prereturn_unknown_call_body, "load i32, ptr %");
+    try expectNotContains(aggregate_return_prereturn_unknown_call_body, " atomic ");
+
     const aggregate_exported_return_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_exported_return_pointer_field_stays_plain");
     try expectContains(aggregate_exported_return_body, "call ptr @exported_global_pointer()");
     try expectContains(aggregate_exported_return_body, "load i32, ptr %");
