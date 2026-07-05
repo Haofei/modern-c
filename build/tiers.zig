@@ -648,6 +648,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("block-persistent-audit-test"));
     // agent-abi-test pins the versioned SYS_SUBMIT/SYS_POLL request/completion contract.
     m0_step.dependOn(ctx.cmd("agent-abi-test"));
+    // agent-abi-fuzz-test adversarially checks validation precedence and fail-closed syscall dispatch.
+    m0_step.dependOn(ctx.cmd("agent-abi-fuzz-test"));
     // production-ops-test gates bundle/update/watchdog/reboot/policy-actuation state transitions.
     m0_step.dependOn(ctx.cmd("production-ops-test"));
     // netcap-test links + runs capability-gated network egress (milestone #3); LLVM side via llvm-host-suite-test.

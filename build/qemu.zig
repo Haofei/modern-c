@@ -331,6 +331,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "persistent-audit-test", "Persistent policy/audit checkpoint: policy metadata and audited IPC events survive BlobStore reopen", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "persistent-audit-test" });
     _ = h.addScriptTest(ctx, "block-persistent-audit-test", "Block-backed persistent policy/audit checkpoint: policy metadata and audited IPC events survive BlockDevice remount", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "block-persistent-audit-test" });
     _ = h.addScriptTest(ctx, "agent-abi-test", "Versioned agent SYS_SUBMIT/SYS_POLL ABI: request validation and stable typed completion status mapping", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-test" });
+    _ = h.addScriptTest(ctx, "agent-abi-fuzz-test", "Adversarial agent SYS_SUBMIT/SYS_POLL ABI fuzz: validation precedence, typed events, and fail-closed syscall dispatch", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-fuzz-test" });
     _ = h.addScriptTest(ctx, "production-ops-test", "Production ops primitives: signed-bundle metadata, rollback, watchdog/reboot reason, policy actuation", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "production-ops-test" });
 
     _ = h.addScriptTest(ctx, "netcap-test", "Capability-gated network egress: default-deny NetCap, audited+attributed allow/deny, attenuation only narrows (milestone #3)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "netcap-test" });
