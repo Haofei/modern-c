@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Formatter gate for `mcc fmt`. The formatter is token-preserving by construction (it only
-# rewrites leading indentation / trailing whitespace and collapses blank lines), so this gate
-# proves exactly that across the real corpus, plus idempotence and the `--check` contract:
+# Formatter gate for `mcc fmt`. The formatter is token-preserving by construction (it rewrites
+# leading indentation / trailing whitespace, collapses blank lines, and normalizes conservative
+# intra-line token spacing), so this gate proves exactly that across the real corpus, plus
+# idempotence and the `--check` contract:
 #
 #   1. Token preservation — for every std/ and tests/spec/ and tests/c_emit/ module, the
 #      formatted output lexes to the SAME token sequence as the input (positions aside). So
@@ -31,6 +32,11 @@ trap 'cleanup_tmps; rm -rf "$W"' EXIT
 
 checked=0
 while IFS= read -r f; do
+    # `mcc lex` resolves imports. Intentional missing-import reject fixtures are diagnostic
+    # tests, not formatter corpus members; diagnostics-test owns them.
+    if grep -q 'EXPECT_ERROR: E_IMPORT_' "$f"; then
+        continue
+    fi
     checked=$((checked + 1))
     sib="$(dirname "$f")/.mcfmt_check_$$.mc"; TMPS+=("$sib")
     "$MCC" fmt "$f" > "$sib" 2>/dev/null || { echo "FAIL: fmt-test — fmt errored on $f"; exit 1; }
@@ -49,17 +55,17 @@ while IFS= read -r f; do
 done < <(find "$HERE/std" "$HERE/tests/spec" "$HERE/tests/c_emit" -name '*.mc' | LC_ALL=C sort)
 
 # 3. --check contract on a deliberately misindented input.
-printf 'fn  f( a: u32 )->u32{\n  let x: u32 = a + 1;\n        return x;\n}\n' > "$W/messy.mc"
+printf 'fn  f( a: u32 )->u32{\n  let x:u32=a+1;\n        return f( x,2 );\n}\n' > "$W/messy.mc"
 if "$MCC" fmt "$W/messy.mc" --check >/dev/null 2>&1; then
     echo "FAIL: fmt-test — fmt --check accepted a misindented file"; exit 1
 fi
 "$MCC" fmt "$W/messy.mc" > "$W/messy.fmt" 2>/dev/null
-# The canonical reindentation: body at one level, closer at column 0 (intra-line spacing is
-# preserved by design — the formatter is token-safe, not a full pretty-printer).
+# The canonical formatting: body at one level, closer at column 0, and conservative token
+# spacing within ordinary code lines.
 cat > "$W/messy.want" <<'EXPECTED'
-fn  f( a: u32 )->u32{
+fn f(a: u32) -> u32 {
     let x: u32 = a + 1;
-    return x;
+    return f(x, 2);
 }
 EXPECTED
 if ! cmp -s "$W/messy.fmt" "$W/messy.want"; then

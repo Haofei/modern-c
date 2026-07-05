@@ -5468,14 +5468,17 @@ Long-term, native debug info may map directly from object code back to MC source
 
 Two editor-facing tools reuse the compiler front end rather than re-implementing it:
 
-- **`mcc fmt <file> [--check]`** — a *token-preserving* canonical formatter. It only rewrites
+- **`mcc fmt <file> [--check]`** — a *token-preserving* canonical formatter. It rewrites
   leading indentation (four spaces per bracket-nesting level, derived from the token stream so
   a `{`/`(`/`[` inside a string or comment never shifts it; a line whose first token closes a
-  bracket dedents one level), strips trailing whitespace, and collapses blank-line runs. It
-  never edits a line's interior, so the formatted output lexes to exactly the same token
-  sequence — formatting cannot drop or reorder code. `--check` exits nonzero on an unformatted
-  file (for CI / editor format-on-save). It is idempotent. (`fmt-test` proves token-preservation
-  and idempotence across the whole `std`/`tests` corpus.)
+  bracket dedents one level), strips trailing whitespace, collapses blank-line runs, and
+  normalizes conservative intra-line spacing for unambiguous token pairs (`fn f`, calls,
+  commas, `name: Type`, `) -> T`, assignments/comparisons, and simple binary operators).
+  Comments, strings, existing line breaks, and ambiguous pointer/address operator lines are
+  preserved conservatively; the formatted output lexes to exactly the same token sequence —
+  formatting cannot drop or reorder code. `--check` exits nonzero on an unformatted file (for
+  CI / editor format-on-save). It is idempotent. (`fmt-test` proves token-preservation and
+  idempotence across the whole `std`/`tests` corpus.)
 
 - **`tools/lsp/mc-lsp.py`** — a stdio JSON-RPC language server. The compiler is the single
   source of truth; the server only drives `mcc` subcommands and translates output. It provides
