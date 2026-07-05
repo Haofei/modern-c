@@ -15,6 +15,11 @@ struct PointerHolder {
     tag: u32,
 }
 
+struct OuterHolder {
+    inner: PointerHolder,
+    tag: u32,
+}
+
 global shared_pair: SharedPair;
 global shared_values: [4]u32;
 
@@ -116,11 +121,35 @@ fn aggregate_global_pointer_field_load() -> u32 {
     return p.*;
 }
 
+fn nested_aggregate_global_pointer_field_load() -> u32 {
+    let outer: OuterHolder = .{ .inner = .{ .ptr = &shared_counter, .tag = 1 }, .tag = 2 };
+    let p: *mut u32 = outer.inner.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load through a nested local aggregate field proven to hold visible global storage.
+    return p.*;
+}
+
+fn nested_aggregate_assigned_global_pointer_field_load() -> u32 {
+    var local: u32 = 13;
+    var outer: OuterHolder = .{ .inner = .{ .ptr = &local, .tag = 3 }, .tag = 4 };
+    outer.inner.ptr = &shared_counter;
+    let p: *mut u32 = outer.inner.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load after direct nested aggregate pointer field assignment to visible global storage.
+    return p.*;
+}
+
 fn aggregate_stack_pointer_field_stays_plain() -> u32 {
     var local: u32 = 9;
     let holder: PointerHolder = .{ .ptr = &local, .tag = 2 };
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm keeps stack-backed aggregate pointer field derefs plain.
+    return p.*;
+}
+
+fn nested_aggregate_stack_pointer_field_stays_plain() -> u32 {
+    var local: u32 = 14;
+    let outer: OuterHolder = .{ .inner = .{ .ptr = &local, .tag = 5 }, .tag = 6 };
+    let p: *mut u32 = outer.inner.ptr;
+    // EXPECT: lower-llvm keeps stack-backed nested aggregate pointer field derefs plain.
     return p.*;
 }
 
@@ -130,6 +159,15 @@ fn aggregate_reassigned_stack_pointer_field_stays_plain() -> u32 {
     holder.ptr = &local;
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm keeps aggregate pointer field derefs plain after reassignment to stack storage.
+    return p.*;
+}
+
+fn nested_aggregate_reassigned_stack_pointer_field_stays_plain() -> u32 {
+    var local: u32 = 15;
+    var outer: OuterHolder = .{ .inner = .{ .ptr = &shared_counter, .tag = 7 }, .tag = 8 };
+    outer.inner.ptr = &local;
+    let p: *mut u32 = outer.inner.ptr;
+    // EXPECT: lower-llvm keeps nested aggregate pointer field derefs plain after reassignment to stack storage.
     return p.*;
 }
 

@@ -3268,12 +3268,26 @@ const LlvmEmitter = struct {
         return !self.isAggregateType(ty);
     }
 
-    fn aggregatePointerFieldKey(self: *LlvmEmitter, local_name: []const u8, field_name: []const u8) ![]const u8 {
-        return try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ local_name, field_name });
+    const AggregatePointerFieldPath = struct {
+        local_name: []const u8,
+        field_path: []const u8,
+    };
+
+    fn aggregatePointerFieldKey(self: *LlvmEmitter, local_name: []const u8, field_path: []const u8) ![]const u8 {
+        return try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ local_name, field_path });
     }
 
     fn aggregatePointerFieldKeyMatchesLocal(key: []const u8, local_name: []const u8) bool {
         return key.len > local_name.len and std.mem.eql(u8, key[0..local_name.len], local_name) and key[local_name.len] == 0;
+    }
+
+    fn aggregatePointerFieldKeyMatchesLocalPath(key: []const u8, local_name: []const u8, field_path: []const u8) bool {
+        if (!aggregatePointerFieldKeyMatchesLocal(key, local_name)) return false;
+        const existing_path = key[local_name.len + 1 ..];
+        if (std.mem.eql(u8, existing_path, field_path)) return true;
+        return existing_path.len > field_path.len and
+            std.mem.eql(u8, existing_path[0..field_path.len], field_path) and
+            existing_path[field_path.len] == '.';
     }
 
     fn deinitOwnedStringVoidMap(self: *LlvmEmitter, map: *std.StringHashMap(void)) void {
@@ -3318,6 +3332,24 @@ const LlvmEmitter = struct {
         }
     }
 
+    fn clearAggregatePointerFieldsForLocalPath(self: *LlvmEmitter, local_name: []const u8, field_path: []const u8) void {
+        while (true) {
+            var found_key: ?[]const u8 = null;
+            var it = self.aggregate_global_pointer_fields.keyIterator();
+            while (it.next()) |key| {
+                if (aggregatePointerFieldKeyMatchesLocalPath(key.*, local_name, field_path)) {
+                    found_key = key.*;
+                    break;
+                }
+            }
+
+            const key = found_key orelse return;
+            if (self.aggregate_global_pointer_fields.fetchRemove(key)) |entry| {
+                self.allocator.free(entry.key);
+            }
+        }
+    }
+
     fn saveAndRemoveAggregatePointerFieldsForLocal(self: *LlvmEmitter, local_name: []const u8) !std.StringHashMap(void) {
         var saved = std.StringHashMap(void).init(self.allocator);
         errdefer self.deinitOwnedStringVoidMap(&saved);
@@ -3344,8 +3376,8 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn setAggregatePointerFieldProvenance(self: *LlvmEmitter, local_name: []const u8, field_name: []const u8, is_global_backed: bool) !void {
-        const lookup_key = try self.aggregatePointerFieldKey(local_name, field_name);
+    fn setAggregatePointerFieldProvenance(self: *LlvmEmitter, local_name: []const u8, field_path: []const u8, is_global_backed: bool) !void {
+        const lookup_key = try self.aggregatePointerFieldKey(local_name, field_path);
         defer self.allocator.free(lookup_key);
 
         if (!is_global_backed) {
@@ -3356,13 +3388,13 @@ const LlvmEmitter = struct {
         }
 
         if (self.aggregate_global_pointer_fields.contains(lookup_key)) return;
-        const owned_key = try self.aggregatePointerFieldKey(local_name, field_name);
+        const owned_key = try self.aggregatePointerFieldKey(local_name, field_path);
         errdefer self.allocator.free(owned_key);
         try self.aggregate_global_pointer_fields.put(owned_key, {});
     }
 
-    fn localAggregateFieldHasGlobalPointerProvenance(self: *LlvmEmitter, local_name: []const u8, field_name: []const u8) bool {
-        const lookup_key = self.aggregatePointerFieldKey(local_name, field_name) catch return false;
+    fn localAggregateFieldHasGlobalPointerProvenance(self: *LlvmEmitter, local_name: []const u8, field_path: []const u8) bool {
+        const lookup_key = self.aggregatePointerFieldKey(local_name, field_path) catch return false;
         defer self.allocator.free(lookup_key);
         return self.aggregate_global_pointer_fields.contains(lookup_key);
     }
@@ -3372,6 +3404,43 @@ const LlvmEmitter = struct {
             .ident => |ident| if (self.local_slots.contains(ident.text)) ident.text else null,
             .grouped => |inner| self.directLocalAggregateBaseName(inner.*),
             else => null,
+        };
+    }
+
+    fn joinAggregatePointerFieldPath(self: *LlvmEmitter, prefix: []const u8, field_name: []const u8) ![]const u8 {
+        return try std.fmt.allocPrint(self.scratch.allocator(), "{s}.{s}", .{ prefix, field_name });
+    }
+
+    fn directLocalAggregateMemberPath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directLocalAggregateMemberPath(inner.*),
+            .member => |node| blk: {
+                const base_ty = self.exprType(node.base.*) orelse break :blk null;
+                if (self.resolveAliasType(base_ty).kind == .pointer) break :blk null;
+                _ = self.memberField(node.base.*, node.name.text) orelse break :blk null;
+                if (self.directLocalAggregateBaseName(node.base.*)) |local_name| {
+                    break :blk .{ .local_name = local_name, .field_path = node.name.text };
+                }
+                const base_path = self.directLocalAggregateMemberPath(node.base.*) orelse break :blk null;
+                break :blk .{
+                    .local_name = base_path.local_name,
+                    .field_path = self.joinAggregatePointerFieldPath(base_path.field_path, node.name.text) catch break :blk null,
+                };
+            },
+            else => null,
+        };
+    }
+
+    fn directLocalAggregateAssignmentPath(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) !?AggregatePointerFieldPath {
+        const base_ty = self.exprType(base) orelse return null;
+        if (self.resolveAliasType(base_ty).kind == .pointer) return null;
+        if (self.directLocalAggregateBaseName(base)) |local_name| {
+            return .{ .local_name = local_name, .field_path = field_name };
+        }
+        const base_path = self.directLocalAggregateMemberPath(base) orelse return null;
+        return .{
+            .local_name = base_path.local_name,
+            .field_path = try self.joinAggregatePointerFieldPath(base_path.field_path, field_name),
         };
     }
 
@@ -3419,19 +3488,43 @@ const LlvmEmitter = struct {
 
         self.clearAggregatePointerFieldsForLocal(local_name);
         if (try self.tryCopyAggregatePointerFieldProvenanceFromLocal(local_name, struct_decl, init)) return;
-        const fields = switch (init.kind) {
+        const fields = self.structLiteralFields(init) orelse return;
+        try self.updateAggregatePointerFieldProvenanceFromStructLiteral(local_name, struct_decl, fields, null);
+    }
+
+    fn structLiteralFields(self: *LlvmEmitter, expr: ast.Expr) ?[]const ast.StructLiteralField {
+        _ = self;
+        return switch (expr.kind) {
             .struct_literal => |fields| fields,
             .grouped => |inner| switch (inner.kind) {
                 .struct_literal => |fields| fields,
-                else => return,
+                else => null,
             },
-            else => return,
+            else => null,
         };
+    }
 
+    fn updateAggregatePointerFieldProvenanceFromStructLiteral(
+        self: *LlvmEmitter,
+        local_name: []const u8,
+        struct_decl: ast.StructDecl,
+        fields: []const ast.StructLiteralField,
+        path_prefix: ?[]const u8,
+    ) !void {
         for (struct_decl.fields) |field| {
-            if (!self.isPointerLikeType(field.ty)) continue;
             const value_expr = structLiteralField(fields, field.name.text) orelse continue;
-            try self.setAggregatePointerFieldProvenance(local_name, field.name.text, self.pointerExprHasGlobalStorageProvenance(value_expr));
+            const field_path = if (path_prefix) |prefix|
+                try self.joinAggregatePointerFieldPath(prefix, field.name.text)
+            else
+                field.name.text;
+            if (self.isPointerLikeType(field.ty)) {
+                try self.setAggregatePointerFieldProvenance(local_name, field_path, self.pointerExprHasGlobalStorageProvenance(value_expr));
+                continue;
+            }
+            const nested_struct_decl = self.structDeclForType(field.ty) orelse continue;
+            if (nested_struct_decl.is_c_union) continue;
+            const nested_fields = self.structLiteralFields(value_expr) orelse continue;
+            try self.updateAggregatePointerFieldProvenanceFromStructLiteral(local_name, nested_struct_decl, nested_fields, field_path);
         }
     }
 
@@ -3442,9 +3535,17 @@ const LlvmEmitter = struct {
         field_ty: ast.TypeExpr,
         value_expr: ast.Expr,
     ) !void {
-        if (!self.isPointerLikeType(field_ty)) return;
-        const local_name = self.directLocalAggregateBaseName(base) orelse return;
-        try self.setAggregatePointerFieldProvenance(local_name, field_name, self.pointerExprHasGlobalStorageProvenance(value_expr));
+        const target_path = (try self.directLocalAggregateAssignmentPath(base, field_name)) orelse return;
+        if (self.isPointerLikeType(field_ty)) {
+            try self.setAggregatePointerFieldProvenance(target_path.local_name, target_path.field_path, self.pointerExprHasGlobalStorageProvenance(value_expr));
+            return;
+        }
+
+        const struct_decl = self.structDeclForType(field_ty) orelse return;
+        self.clearAggregatePointerFieldsForLocalPath(target_path.local_name, target_path.field_path);
+        if (struct_decl.is_c_union) return;
+        const fields = self.structLiteralFields(value_expr) orelse return;
+        try self.updateAggregatePointerFieldProvenanceFromStructLiteral(target_path.local_name, struct_decl, fields, target_path.field_path);
     }
 
     fn directGlobalStorageRoot(self: *LlvmEmitter, expr: ast.Expr) bool {
@@ -3505,8 +3606,8 @@ const LlvmEmitter = struct {
             .address_of => |inner| self.directGlobalStorageRoot(inner.*),
             .grouped => |inner| self.pointerExprHasGlobalStorageProvenance(inner.*),
             .cast => |node| self.pointerExprHasGlobalStorageProvenance(node.value.*),
-            .member => |node| if (self.directLocalAggregateBaseName(node.base.*)) |local_name|
-                self.localAggregateFieldHasGlobalPointerProvenance(local_name, node.name.text)
+            .member => if (self.directLocalAggregateMemberPath(expr)) |path|
+                self.localAggregateFieldHasGlobalPointerProvenance(path.local_name, path.field_path)
             else
                 false,
             .call => |call| if (isAssumeNoaliasCall(call) and call.args.len == 2)
