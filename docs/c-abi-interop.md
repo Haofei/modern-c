@@ -34,10 +34,13 @@ operations — never dereferenced.
 ## C strings
 
 The normative boundary type is **`cstr`** (ABI-identical to `const char *`, non-null,
-NUL-terminated; carries no length). **Status (v0.7): `cstr` is not yet implemented** —
-using it raises `E_UNKNOWN_TYPE`. Until it lands, write FFI string parameters as
-`*const u8` and maintain the non-null / NUL-terminated invariant at the caller. A string
-literal lowers to a `*const u8` (`let s: *const u8 = "hi";`), not a `[]const u8` slice.
+NUL-terminated; carries no length). **Status (v0.7): `cstr` is implemented** as a
+distinct FFI C string type and lowers to the backend pointer type (`ptr` in LLVM).
+String literals may initialize a `cstr`, be passed to `cstr` parameters, or be
+returned from `cstr` functions when the surrounding type context is explicit. A string
+literal still lowers to `*const u8` in a pointer context (`let s: *const u8 = "hi";`)
+and to `[]const u8` in a slice context. Implicit conversions from ordinary pointers,
+slices, `null`, or integers to `cstr` are rejected.
 
 ## Address-space types at the boundary (§16)
 
@@ -93,4 +96,4 @@ export fn round_trips() -> u32 { assert(parse(serialize(x)) == x); return 1; }
 | `E_ADDRESS_CLASS_CAST` | forging an address-class pointer from a non-address value |
 | `E_DUPLICATE_BACKEND_NAME` | two declarations resolve to the same object symbol |
 | `E_NO_LANG_TRAP_EDGE` | a trap edge emitted inside `#[no_lang_trap]` |
-| `E_UNKNOWN_TYPE` (`cstr`) | `cstr` is normative but unimplemented in v0.7 |
+| `E_NO_IMPLICIT_CONVERSION` (`cstr`) | implicit pointer, slice, `null`, or integer conversion to `cstr` |

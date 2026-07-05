@@ -2551,20 +2551,22 @@ Invariants     : non-null; some byte at or after the pointer is `\0`; the bytes
                  up to and including that NUL are readable for the call's duration.
                  Encoding is unspecified (raw bytes); interior bytes are arbitrary.
 Immutability   : `cstr` is a read-only view; it does not own or free the buffer.
-Construction   : only across the FFI boundary or from an explicitly NUL-terminated
-                 byte literal / buffer — never an implicit `*const u8` -> `cstr`
-                 coercion (that would forge the NUL guarantee). A non-terminated
-                 source must go through a checked constructor that scans for `\0`.
+Construction   : only across the FFI boundary or from a string literal in a typed
+                 `cstr` context, or from an explicitly NUL-terminated byte buffer —
+                 never an implicit `*const u8` -> `cstr` coercion (that would forge
+                 the NUL guarantee). A non-terminated source must go through a
+                 checked constructor that scans for `\0`.
 Length         : `cstr` carries no length; obtaining one is an O(n) scan (`strlen`),
                  which is precisely why MC keeps it distinct from a sized `[]const u8`.
 ```
 
-> **Status (v0.7):** `cstr` is normative but **not yet implemented** in the
-> checker (using it currently raises `E_UNKNOWN_TYPE`). Until it lands, FFI string
-> parameters are written as `*const u8` with the NUL/non-null invariant maintained
-> by the caller; this is the "insufficient contract" the `cstr` type is meant to
-> replace. Tracking the same forward-looking status as the typed endian fields
-> (section 28.3) and capturing closures.
+> **Status (v0.7):** `cstr` is implemented as a distinct FFI C string type. It is
+> ABI-compatible with C `const char *` and lowers to the backend pointer type
+> (`ptr` in LLVM). String literals may initialize a `cstr`, be passed to `cstr`
+> parameters, and be returned from `cstr` functions when the surrounding type
+> context is explicit. Implicit conversions from ordinary pointers, slices, `null`,
+> or integers to `cstr` remain rejected; callers must not forge the non-null and
+> NUL-terminated contract through an untyped coercion.
 
 C ABI structs are explicit:
 
