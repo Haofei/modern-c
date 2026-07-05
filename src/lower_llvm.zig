@@ -1514,6 +1514,7 @@ const LlvmEmitter = struct {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| try self.trackAggregateParamLocalDecl(local, summaries),
             .assignment => |node| {
+                if (try self.trackAggregateParamFunctionPointerAssignment(node.target, node.value, summaries)) return;
                 try self.collectAggregatePointerParamCallSitesExpr(node.value, summaries, false);
                 try self.collectAggregatePointerParamCallSitesExpr(node.target, summaries, false);
                 try self.trackAggregateParamAssignment(node.target, node.value);
@@ -1564,9 +1565,10 @@ const LlvmEmitter = struct {
     ) !void {
         if (local.names.len != 1) return;
         const init = local.init orelse return;
-        try self.collectAggregatePointerParamCallSitesExpr(init, summaries, false);
         const ty = local.ty orelse self.exprType(init) orelse return;
         const name = local.names[0].text;
+        const is_fn_pointer = self.isFnPointerType(ty);
+        if (!is_fn_pointer) try self.collectAggregatePointerParamCallSitesExpr(init, summaries, false);
         self.clearAggregatePointerAliasesToLocal(name);
         _ = self.local_pointer_array_aliases.remove(name);
         self.clearLocalPointerArrayAliasesBackedByArray(name);
@@ -1576,6 +1578,10 @@ const LlvmEmitter = struct {
         self.clearLocalArrayPointerElementsForLocal(name);
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = "" });
+        if (is_fn_pointer) {
+            try self.updateAggregateParamFunctionPointerAlias(name, ty, init, summaries, false);
+            return;
+        }
         try self.updatePointerGlobalProvenance(name, ty, init);
         try self.updateAggregatePointerAliasProvenance(name, ty, init);
         try self.updateLocalPointerArrayAliasProvenanceFromInit(name, ty, init);
@@ -1613,6 +1619,50 @@ const LlvmEmitter = struct {
         }
     }
 
+    fn trackAggregateParamFunctionPointerAssignment(
+        self: *LlvmEmitter,
+        target: ast.Expr,
+        value_expr: ast.Expr,
+        summaries: *std.StringHashMap(AggregatePointerParamSummary),
+    ) !bool {
+        const ident = assignmentIdent(target) orelse return false;
+        if (self.local_function_pointer_aliases.fetchRemove(ident.text)) |entry| {
+            self.markAggregatePointerParamEscapedFunction(entry.value, summaries);
+        }
+        const ty = self.local_types.get(ident.text) orelse return false;
+        if (!self.isFnPointerType(ty)) return false;
+        try self.updateAggregateParamFunctionPointerAlias(ident.text, ty, value_expr, summaries, true);
+        return true;
+    }
+
+    fn updateAggregateParamFunctionPointerAlias(
+        self: *LlvmEmitter,
+        name: []const u8,
+        ty: ast.TypeExpr,
+        init: ast.Expr,
+        summaries: *std.StringHashMap(AggregatePointerParamSummary),
+        reassigned: bool,
+    ) !void {
+        if (!self.isFnPointerType(ty)) {
+            _ = self.local_function_pointer_aliases.remove(name);
+            return;
+        }
+
+        const target = self.directFunctionPointerAliasTarget(init) orelse {
+            _ = self.local_function_pointer_aliases.remove(name);
+            try self.collectAggregatePointerParamCallSitesExpr(init, summaries, false);
+            return;
+        };
+
+        if (reassigned) {
+            self.markAggregatePointerParamEscapedFunction(target, summaries);
+            _ = self.local_function_pointer_aliases.remove(name);
+            return;
+        }
+
+        try self.local_function_pointer_aliases.put(name, target);
+    }
+
     fn collectAggregatePointerParamCallSitesExpr(
         self: *LlvmEmitter,
         expr: ast.Expr,
@@ -1620,7 +1670,7 @@ const LlvmEmitter = struct {
         direct_callee: bool,
     ) anyerror!void {
         switch (expr.kind) {
-            .ident => |ident| if (!direct_callee) self.markAggregatePointerParamEscapedFunction(ident.text, summaries),
+            .ident => |ident| if (!direct_callee) self.markAggregatePointerParamEscapedFunctionOrAlias(ident.text, summaries),
             .grouped => |inner| try self.collectAggregatePointerParamCallSitesExpr(inner.*, summaries, direct_callee),
             .block => |block| try self.collectAggregatePointerParamCallSitesBlock(block, summaries),
             .unary => |node| try self.collectAggregatePointerParamCallSitesExpr(node.expr.*, summaries, false),
@@ -1635,8 +1685,9 @@ const LlvmEmitter = struct {
                 if (node.mapped) |mapped| try self.collectAggregatePointerParamCallSitesExpr(mapped.*, summaries, false);
             },
             .call => |call| {
-                const direct = self.directCallName(call.callee.*);
-                if (direct) |callee| {
+                if (self.localFunctionPointerAliasTarget(call.callee.*)) |callee| {
+                    try self.recordAggregatePointerParamCall(callee, call.args, summaries);
+                } else if (self.directCallName(call.callee.*)) |callee| {
                     try self.recordAggregatePointerParamCall(callee, call.args, summaries);
                 } else {
                     try self.collectAggregatePointerParamCallSitesExpr(call.callee.*, summaries, false);
@@ -1680,6 +1731,18 @@ const LlvmEmitter = struct {
             if (!aggregatePointerFieldKeyMatchesLocal(entry.key_ptr.*, name)) continue;
             entry.value_ptr.escaped = true;
         }
+    }
+
+    fn markAggregatePointerParamEscapedFunctionOrAlias(
+        self: *LlvmEmitter,
+        name: []const u8,
+        summaries: *std.StringHashMap(AggregatePointerParamSummary),
+    ) void {
+        if (self.local_function_pointer_aliases.get(name)) |target| {
+            self.markAggregatePointerParamEscapedFunction(target, summaries);
+            return;
+        }
+        self.markAggregatePointerParamEscapedFunction(name, summaries);
     }
 
     fn recordAggregatePointerParamCall(

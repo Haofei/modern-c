@@ -308,10 +308,45 @@ fn call_aggregate_unknown_address_param() -> u32 {
     return consume_aggregate_unknown_address_param(external_pointer_holder());
 }
 
+fn consume_indirect_aggregate_alias_param(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load because a local function-pointer alias call passes a local aggregate whose pointer field is global-backed.
+    return p.*;
+}
+
+fn call_indirect_aggregate_alias_param() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 41 };
+    let f: fn(*mut PointerHolder) -> u32 = consume_indirect_aggregate_alias_param;
+    return f(&holder);
+}
+
+fn consume_indirect_aggregate_reassigned_param(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm keeps this plain because the aggregate-param function-pointer alias is reassigned before the indirect call.
+    return p.*;
+}
+
+fn consume_indirect_aggregate_reassigned_other_param(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm keeps the reassignment target plain too; reassigned aggregate-param aliases do not prove either target.
+    return p.*;
+}
+
+fn call_indirect_aggregate_reassigned_param() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 42 };
+    var f: fn(*mut PointerHolder) -> u32 = consume_indirect_aggregate_reassigned_param;
+    f = consume_indirect_aggregate_reassigned_other_param;
+    return f(&holder);
+}
+
 fn consume_aggregate_indirect_escape_param(hp: *mut PointerHolder) -> u32 {
     let p: *mut u32 = hp.ptr;
-    // EXPECT: lower-llvm keeps aggregate pointer params plain when the function is also used through a function pointer.
+    // EXPECT: lower-llvm keeps aggregate pointer params plain when the local function-pointer alias escapes.
     return p.*;
+}
+
+fn escape_aggregate_param_callback(f: fn(*mut PointerHolder) -> u32) -> void {
+    return;
 }
 
 fn call_aggregate_indirect_escape_param_direct() -> u32 {
@@ -322,6 +357,7 @@ fn call_aggregate_indirect_escape_param_direct() -> u32 {
 fn call_aggregate_indirect_escape_param_indirect() -> u32 {
     var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 40 };
     let f: fn(*mut PointerHolder) -> u32 = consume_aggregate_indirect_escape_param;
+    escape_aggregate_param_callback(f);
     return f(&holder);
 }
 
