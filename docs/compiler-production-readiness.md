@@ -1,7 +1,7 @@
 # Production readiness: the MC compiler (`mcc`)
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
-Current ledger: **updated 2026-07-05, based on `d7642993`**.
+Current ledger: **updated 2026-07-05, based on `3e74d7b4`**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -30,7 +30,7 @@ Current ledger: **updated 2026-07-05, based on `d7642993`**.
 | LLVM direct global race lowering is no longer UB-bearing | Direct global scalar, struct-field, and array-element accesses now lower to unordered LLVM atomics instead of plain `load`/`store`. | `9ca762fc Lower racing globals to unordered LLVM atomics`; `llvm-as` on `data_race_semantics` IR. |
 | LLVM bounded pointer-mediated global race lowering is no longer UB-bearing | Direct `(&global).*` and local pointer slots initialized from direct global storage, including simple pointer-local copies, lower scalar deref loads/stores to unordered LLVM atomics; broader escaped/computed provenance remains pending. | `cf8b2fdd Lower global pointer derefs to LLVM atomics`; `tests/spec/data_race_semantics.mc`; `src/lower_llvm_tests.zig`; `llvm-as` on `data_race_semantics` IR. |
 | Spec C/LLVM sweep gates are green for in-scope fixtures | Mixed accept/reject fixtures no longer leave dangling references after reject stripping, so backend sweeps catch real regressions instead of fixture-shape noise. | `4990226c Split mixed spec sweep fixtures`; `JOBS=8 tools/toolchain/spec-emit-sweep.py zig-out/bin/mcc tests/spec`; `JOBS=8 tools/toolchain/spec-llvm-sweep.py zig-out/bin/mcc tests/spec`. |
-| Rich diagnostic output is implemented and gated | Text diagnostics include source snippets/carets and notes; `mcc check --json` emits structured severity, code, message, mapped path/file, span, source/caret, notes, and counts; LSP consumes the JSON path and turns compiler notes into `relatedInformation`. Terminal color remains a polish gap, not a blocker for structured diagnostics. | `src/diagnostics.zig` `Diagnostic.notes`, `Reporter.render`, `Reporter.appendJson`, and reporter JSON/notes tests; `src/main.zig` `check --json`; `tools/toolchain/diagnostics-test.sh` text/JSON snippet, note, import, and backend-span assertions; `tools/lsp/mc-lsp.py` JSON diagnostics parser; `tools/lsp/lsp-test.py` monomorphization notes-to-related-information assertion. |
+| Rich diagnostic output is implemented and gated | Text diagnostics include source snippets/carets and notes; `mcc check --json` emits structured severity, code, message, mapped path/file, span, source/caret, notes, and counts; LSP consumes the JSON path and turns compiler notes into `relatedInformation`. Terminal color remains a polish gap, not a blocker for structured diagnostics. | `d947f211 docs: retire rich diagnostics readiness item`; `3e74d7b4 Refresh diagnostics ownership gates`; `src/diagnostics.zig` `Diagnostic.notes`, `Reporter.render`, `Reporter.appendJson`, and reporter JSON/notes tests; `src/main.zig` `check --json`; `tools/toolchain/diagnostics-test.sh`; `tools/toolchain/diagnostics-reference.py`; `tools/toolchain/diagnostic-code-inventory.py`; `tools/lsp/mc-lsp.py` JSON diagnostics parser; `tools/lsp/lsp-test.py` monomorphization notes-to-related-information assertion. |
 
 ### In Progress
 
