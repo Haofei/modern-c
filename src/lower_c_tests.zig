@@ -1403,6 +1403,26 @@ test "lower-c emits simple functions and race-safe globals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((uint32_t)mc_race_load_u32(&shared_counter));") != null);
 }
 
+test "lower-c wide-scalar global race lowering fails closed" {
+    // A u128/i128 global scalar access would name a nonexistent mc_race_load_u128/
+    // mc_race_store_i128 helper and only fail at C compile time. Spec §I.13: no
+    // sound race-tolerant lowering means emission must fail closed.
+    try expectUnsupportedCheckedCEmission("emit_c_wide_global_load.mc",
+        \\global wide: u128;
+        \\
+        \\fn read_wide() -> u128 {
+        \\    return wide;
+        \\}
+    );
+    try expectUnsupportedCheckedCEmission("emit_c_wide_global_store.mc",
+        \\global wide: i128;
+        \\
+        \\fn write_wide(x: i128) -> void {
+        \\    wide = x;
+        \\}
+    );
+}
+
 test "lower-c consumes MIR pointer provenance facts for direct scalar pointer derefs" {
     const source =
         \\global shared_counter: u32 = 0;

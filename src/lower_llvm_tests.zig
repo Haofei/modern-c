@@ -1138,6 +1138,33 @@ test "LLVM ordinary bool global accesses use byte-sized atomics" {
     try expectNotContains(store_body, "store atomic i1");
 }
 
+test "LLVM wide-scalar global race lowering fails closed" {
+    // A u128 global scalar access would need `load atomic i128`, which lowers to an
+    // `__atomic_load_16` libcall the freestanding kernel cannot link. Spec §I.13:
+    // no sound race-tolerant lowering means emission must fail, not guess.
+    const load_source =
+        \\global wide: u128;
+        \\
+        \\fn read_wide() -> u128 {
+        \\    return wide;
+        \\}
+    ;
+    var load_output: std.ArrayList(u8) = .empty;
+    defer load_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_wide_global_load.mc", load_source, &load_output));
+
+    const store_source =
+        \\global wide: i128;
+        \\
+        \\fn write_wide(x: i128) -> void {
+        \\    wide = x;
+        \\}
+    ;
+    var store_output: std.ArrayList(u8) = .empty;
+    defer store_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_wide_global_store.mc", store_source, &store_output));
+}
+
 test "LLVM backend emits cstr as ptr" {
     const source =
         \\extern "C" fn strlen(s: cstr) -> usize;

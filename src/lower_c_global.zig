@@ -5,6 +5,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
+const lower_c_shape = @import("lower_c_shape.zig");
 
 const GlobalAccess = lower_c_model.GlobalAccess;
 const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
@@ -145,6 +146,9 @@ pub fn appendGlobalLoadExpr(allocator: std.mem.Allocator, out: *std.ArrayList(u8
     } else if (global.pointer_like) {
         try out.print(allocator, "(({s})__atomic_load_n(&{s}, __ATOMIC_RELAXED))", .{ global.c_type, name });
     } else {
+        // Fail closed on scalars without an mc_race helper (u128/i128): naming a
+        // nonexistent mc_race_load_<T> would only surface at C compile time.
+        if (!lower_c_shape.raceScalarHelperExists(global.race_type_name)) return error.UnsupportedCEmission;
         try out.print(allocator, "(({s})mc_race_load_{s}(&{s}))", .{ global.c_type, global.race_type_name, name });
     }
 }
@@ -155,6 +159,9 @@ pub fn appendGlobalStorePrefix(allocator: std.mem.Allocator, out: *std.ArrayList
     } else if (target.info.pointer_like) {
         try out.print(allocator, "__atomic_store_n(&{s}, ({s})", .{ target.name, target.info.c_type });
     } else {
+        // Fail closed on scalars without an mc_race helper (u128/i128); see
+        // appendGlobalLoadExpr.
+        if (!lower_c_shape.raceScalarHelperExists(target.info.race_type_name)) return error.UnsupportedCEmission;
         try out.print(allocator, "mc_race_store_{s}(&{s}, ({s})", .{ target.info.race_type_name, target.name, target.info.race_c_type });
     }
 }
