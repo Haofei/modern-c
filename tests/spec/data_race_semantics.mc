@@ -300,20 +300,39 @@ fn aggregate_array_stack_pointer_element_stays_plain() -> u32 {
     return p.*;
 }
 
-fn aggregate_array_dynamic_index_pointer_element_stays_plain(index: usize) -> u32 {
+fn aggregate_array_dynamic_index_all_global_pointer_elements_load(index: usize) -> u32 {
     let holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 20 };
     let p: *mut u32 = holder.ptrs[index];
-    // EXPECT: lower-llvm keeps dynamic-index aggregate array pointer element derefs plain.
+    // EXPECT: lower-llvm emits unordered atomic load through a dynamic-index aggregate array element when every possible element is proven to hold visible global storage.
+    return p.*;
+}
+
+fn aggregate_array_dynamic_index_assigned_all_global_pointer_elements_load(index: usize) -> u32 {
+    var local: u32 = 22;
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &local, &local }, .tag = 21 };
+    holder.ptrs[0] = &shared_counter;
+    holder.ptrs[1] = &shared_counter;
+    let p: *mut u32 = holder.ptrs[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a dynamic-index aggregate array element after every constant element is assigned visible global storage.
+    return p.*;
+}
+
+fn aggregate_array_dynamic_index_partial_pointer_elements_stays_plain(index: usize) -> u32 {
+    var local: u32 = 23;
+    let holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &local }, .tag = 22 };
+    let p: *mut u32 = holder.ptrs[index];
+    // EXPECT: lower-llvm keeps dynamic-index aggregate array pointer element derefs plain when only some possible elements hold visible global storage.
     return p.*;
 }
 
 fn aggregate_array_dynamic_assignment_clears_pointer_element_fact(index: usize) -> u32 {
-    var local: u32 = 22;
-    var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 21 };
+    var local: u32 = 24;
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 23 };
     holder.ptrs[index] = &local;
-    let p: *mut u32 = holder.ptrs[0];
+    let dynamic_p: *mut u32 = holder.ptrs[index];
+    let constant_p: *mut u32 = holder.ptrs[0];
     // EXPECT: lower-llvm keeps aggregate array pointer element derefs plain after unknown dynamic-index assignment.
-    return p.*;
+    return dynamic_p.* + constant_p.*;
 }
 
 fn array_global_pointer_element_load() -> u32 {
@@ -340,20 +359,39 @@ fn array_stack_pointer_element_stays_plain() -> u32 {
     return p.*;
 }
 
-fn array_dynamic_index_pointer_element_stays_plain(index: usize) -> u32 {
+fn array_dynamic_index_all_global_pointer_elements_load(index: usize) -> u32 {
     let ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
     let p: *mut u32 = ptrs[index];
-    // EXPECT: lower-llvm keeps dynamic-index local array pointer element derefs plain.
+    // EXPECT: lower-llvm emits unordered atomic load through a dynamic-index local array element when every possible element is proven to hold visible global storage.
+    return p.*;
+}
+
+fn array_dynamic_index_assigned_all_global_pointer_elements_load(index: usize) -> u32 {
+    var local: u32 = 18;
+    var ptrs: [2]*mut u32 = .{ &local, &local };
+    ptrs[0] = &shared_counter;
+    ptrs[1] = &shared_counter;
+    let p: *mut u32 = ptrs[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a dynamic-index local array element after every constant element is assigned visible global storage.
+    return p.*;
+}
+
+fn array_dynamic_index_partial_pointer_elements_stays_plain(index: usize) -> u32 {
+    var local: u32 = 19;
+    let ptrs: [2]*mut u32 = .{ &shared_counter, &local };
+    let p: *mut u32 = ptrs[index];
+    // EXPECT: lower-llvm keeps dynamic-index local array pointer element derefs plain when only some possible elements hold visible global storage.
     return p.*;
 }
 
 fn array_dynamic_assignment_clears_pointer_element_fact(index: usize) -> u32 {
-    var local: u32 = 18;
+    var local: u32 = 20;
     var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
     ptrs[index] = &local;
-    let p: *mut u32 = ptrs[0];
+    let dynamic_p: *mut u32 = ptrs[index];
+    let constant_p: *mut u32 = ptrs[0];
     // EXPECT: lower-llvm keeps local array pointer element derefs plain after unknown dynamic-index assignment.
-    return p.*;
+    return dynamic_p.* + constant_p.*;
 }
 
 fn possibly_racing_field_store(x: u32) -> void {

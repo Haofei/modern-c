@@ -3457,6 +3457,27 @@ const LlvmEmitter = struct {
         return self.local_array_global_pointer_elements.contains(lookup_key);
     }
 
+    fn localArrayHasAtLeastGlobalPointerElementFacts(self: *LlvmEmitter, local_name: []const u8, len: u64) bool {
+        var count: u64 = 0;
+        var it = self.local_array_global_pointer_elements.keyIterator();
+        while (it.next()) |key| {
+            if (!localArrayPointerElementKeyMatchesLocal(key.*, local_name)) continue;
+            count += 1;
+            if (count >= len) return true;
+        }
+        return false;
+    }
+
+    fn localArrayAllElementsHaveGlobalPointerProvenance(self: *LlvmEmitter, local_name: []const u8, len: u64) bool {
+        if (len == 0) return false;
+        if (!self.localArrayHasAtLeastGlobalPointerElementFacts(local_name, len)) return false;
+        var index: u64 = 0;
+        while (index < len) : (index += 1) {
+            if (!self.localArrayElementHasGlobalPointerProvenance(local_name, index)) return false;
+        }
+        return true;
+    }
+
     fn clearAggregatePointerFieldsForLocal(self: *LlvmEmitter, local_name: []const u8) void {
         while (true) {
             var found_key: ?[]const u8 = null;
@@ -3542,6 +3563,36 @@ const LlvmEmitter = struct {
         return self.aggregate_global_pointer_fields.contains(lookup_key);
     }
 
+    fn aggregatePointerFieldKeyMatchesLocalArrayPath(key: []const u8, local_name: []const u8, array_path: []const u8) bool {
+        if (!aggregatePointerFieldKeyMatchesLocal(key, local_name)) return false;
+        const existing_path = key[local_name.len + 1 ..];
+        return existing_path.len > array_path.len and
+            std.mem.eql(u8, existing_path[0..array_path.len], array_path) and
+            existing_path[array_path.len] == '[';
+    }
+
+    fn localAggregateArrayHasAtLeastGlobalPointerElementFacts(self: *LlvmEmitter, local_name: []const u8, array_path: []const u8, len: u64) bool {
+        var count: u64 = 0;
+        var it = self.aggregate_global_pointer_fields.keyIterator();
+        while (it.next()) |key| {
+            if (!aggregatePointerFieldKeyMatchesLocalArrayPath(key.*, local_name, array_path)) continue;
+            count += 1;
+            if (count >= len) return true;
+        }
+        return false;
+    }
+
+    fn localAggregateArrayAllElementsHaveGlobalPointerProvenance(self: *LlvmEmitter, local_name: []const u8, array_path: []const u8, len: u64) bool {
+        if (len == 0) return false;
+        if (!self.localAggregateArrayHasAtLeastGlobalPointerElementFacts(local_name, array_path, len)) return false;
+        var index: u64 = 0;
+        while (index < len) : (index += 1) {
+            const element_path = self.aggregatePointerArrayElementPath(array_path, index) catch return false;
+            if (!self.localAggregateFieldHasGlobalPointerProvenance(local_name, element_path)) return false;
+        }
+        return true;
+    }
+
     fn directLocalAggregateBaseName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
         return switch (expr.kind) {
             .ident => |ident| if (self.local_slots.contains(ident.text)) ident.text else null,
@@ -3620,6 +3671,17 @@ const LlvmEmitter = struct {
         return path;
     }
 
+    fn directLocalAggregateArrayBaseHasCompleteGlobalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+        const path = self.directLocalAggregateArrayBasePath(expr) orelse return false;
+        const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
+        const array = switch (base_ty.kind) {
+            .array => |array| array,
+            else => return false,
+        };
+        const len = self.arrayLenValue(array.len) orelse return false;
+        return self.localAggregateArrayAllElementsHaveGlobalPointerProvenance(path.local_name, path.field_path, len);
+    }
+
     fn aggregatePointerAliasMemberPath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
         return switch (expr.kind) {
             .grouped => |inner| self.aggregatePointerAliasMemberPath(inner.*),
@@ -3692,6 +3754,18 @@ const LlvmEmitter = struct {
             },
             else => null,
         };
+    }
+
+    fn directLocalArrayBaseHasCompleteGlobalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+        const local_name = self.directLocalArrayBaseName(expr) orelse return false;
+        const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
+        const array = switch (base_ty.kind) {
+            .array => |array| array,
+            else => return false,
+        };
+        if (!self.isPointerLikeType(array.child.*)) return false;
+        const len = self.arrayLenValue(array.len) orelse return false;
+        return self.localArrayAllElementsHaveGlobalPointerProvenance(local_name, len);
     }
 
     fn tryCopyAggregatePointerFieldProvenanceFromLocal(
@@ -4023,12 +4097,14 @@ const LlvmEmitter = struct {
                 self.localAggregateFieldHasGlobalPointerProvenance(path.local_name, path.field_path)
             else
                 false,
-            .index => if (self.directLocalAggregateArrayElementPath(expr)) |path|
+            .index => |node| if (self.directLocalAggregateArrayElementPath(expr)) |path|
                 self.localAggregateFieldHasGlobalPointerProvenance(path.local_name, path.field_path)
             else if (self.directLocalArrayElementPath(expr)) |path|
                 self.localArrayElementHasGlobalPointerProvenance(path.local_name, path.index)
             else
-                false,
+                self.localArrayConstIndexValue(node.index.*) == null and
+                    (self.directLocalAggregateArrayBaseHasCompleteGlobalPointerProvenance(node.base.*) or
+                        self.directLocalArrayBaseHasCompleteGlobalPointerProvenance(node.base.*)),
             .call => |call| if (isAssumeNoaliasCall(call) and call.args.len == 2)
                 self.pointerExprHasGlobalStorageProvenance(call.args[0])
             else if (self.directCallName(call.callee.*)) |callee|
