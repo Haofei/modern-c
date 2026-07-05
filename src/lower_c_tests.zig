@@ -2,6 +2,7 @@ const std = @import("std");
 
 const diagnostics = @import("diagnostics.zig");
 const lower_c = @import("lower_c.zig");
+const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const parser = @import("parser.zig");
 const test_support = @import("test_support.zig");
@@ -34,6 +35,35 @@ fn hasTestDiagnosticCode(reporter: diagnostics.Reporter, code: []const u8) bool 
         if (std.mem.startsWith(u8, diag.message, code) and diag.message.len > code.len and diag.message[code.len] == ':') return true;
     }
     return false;
+}
+
+fn expectContains(haystack: []const u8, needle: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) != null);
+}
+
+fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) == null);
+}
+
+fn commentSourceText(output: []const u8, comment_prefix: []const u8) ![]const u8 {
+    const comment_start = std.mem.indexOf(u8, output, comment_prefix) orelse return error.TestExpectedEqual;
+    const source_start = std.mem.indexOfPos(u8, output, comment_start, "source=") orelse return error.TestExpectedEqual;
+    const line_start = source_start + "source=".len;
+    const source_end = std.mem.indexOfPos(u8, output, line_start, " ") orelse return error.TestExpectedEqual;
+    return output[line_start..source_end];
+}
+
+fn expectCCommentSourceMatchesMirFact(c_output: []const u8, mir_dump: []const u8, comment_prefix: []const u8, mir_prefix: []const u8) !void {
+    const source = try commentSourceText(c_output, comment_prefix);
+    const colon = std.mem.indexOf(u8, source, ":") orelse return error.TestExpectedEqual;
+    const line = try std.fmt.parseUnsigned(usize, source[0..colon], 10);
+    const column = try std.fmt.parseUnsigned(usize, source[colon + 1 ..], 10);
+    const mir_start = std.mem.indexOf(u8, mir_dump, mir_prefix) orelse return error.TestExpectedEqual;
+    const mir_end = std.mem.indexOfPos(u8, mir_dump, mir_start, "\n") orelse mir_dump.len;
+    const mir_row = mir_dump[mir_start..mir_end];
+    const expected_source = try std.fmt.allocPrint(std.testing.allocator, "line={d} column={d}", .{ line, column });
+    defer std.testing.allocator.free(expected_source);
+    try expectContains(mir_row, expected_source);
 }
 
 test "lower-c inspection markers for lowering-sensitive spec behavior" {
@@ -1358,6 +1388,90 @@ test "lower-c emits simple functions and race-safe globals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_counter, (uint32_t)x);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((uint32_t)mc_race_load_u32(&shared_counter));") != null);
+}
+
+test "lower-c consumes MIR pointer provenance facts for direct scalar pointer derefs" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\extern fn external_pointer() -> *mut u32;
+        \\extern fn external_raw_many_pointer() -> [*]mut u32;
+        \\
+        \\fn pointer_fact_global_load() -> u32 {
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    return gp.*;
+        \\}
+        \\
+        \\fn pointer_fact_global_store(x: u32) -> void {
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    gp.* = x;
+        \\}
+        \\
+        \\fn pointer_fact_local_storage_stays_plain() -> u32 {
+        \\    var local: u32 = 5;
+        \\    let lp: *mut u32 = &local;
+        \\    lp.* = 6;
+        \\    return lp.*;
+        \\}
+        \\
+        \\fn pointer_fact_unknown_assignment_stays_plain() -> u32 {
+        \\    var gp: *mut u32 = &shared_counter;
+        \\    gp = external_pointer();
+        \\    return gp.*;
+        \\}
+        \\
+        \\fn pointer_fact_call_invalidated_stays_plain() -> u32 {
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    external_raw_many_pointer();
+        \\    return gp.*;
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("emit_c_pointer_provenance.mc", source);
+    defer parsed.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendC(std.testing.allocator, parsed.module, &output);
+
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_global_load subject=gp provenance=global_storage reason=none source=");
+    try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(gp));");
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_global_store subject=gp provenance=global_storage reason=none source=");
+    try expectContains(output.items, "mc_race_store_u32(gp, (uint32_t)x);");
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_local_storage_stays_plain subject=lp provenance=local_storage reason=none source=");
+    try expectContains(output.items, "*lp = 6;");
+    try expectContains(output.items, "return *lp;");
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_unknown_assignment_stays_plain subject=gp provenance=global_storage reason=none source=");
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_unknown_assignment_stays_plain subject=gp provenance=unknown reason=reassignment source=");
+    try expectContains(output.items, "return *gp;");
+
+    const invalidated_comment = "/* mir pointer_provenance consumed fn=pointer_fact_call_invalidated_stays_plain subject=gp provenance=global_storage reason=none source=";
+    const invalidated_pos = std.mem.indexOf(u8, output.items, invalidated_comment) orelse return error.TestExpectedEqual;
+    const invalidated_return = std.mem.indexOfPos(u8, output.items, invalidated_pos, "return *gp;") orelse return error.TestExpectedEqual;
+    const invalidated_slice = output.items[invalidated_pos..invalidated_return];
+    try expectNotContains(invalidated_slice, "mc_race_load_u32(gp)");
+
+    var mir_dump: std.ArrayList(u8) = .empty;
+    defer mir_dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, parsed.module, &mir_dump);
+    try expectCCommentSourceMatchesMirFact(
+        output.items,
+        mir_dump.items,
+        "/* mir pointer_provenance consumed fn=pointer_fact_global_load subject=gp provenance=global_storage reason=none source=",
+        "mir pointer_provenance_fact fn=pointer_fact_global_load subject=gp element=none provenance=global_storage storage=shared_counter",
+    );
+
+    var llvm_output: std.ArrayList(u8) = .empty;
+    defer llvm_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvm(std.testing.allocator, parsed.module, &llvm_output);
+    const c_source = try commentSourceText(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_global_load subject=gp provenance=global_storage reason=none source=");
+    const llvm_comment = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "; mir pointer_provenance consumed fn=pointer_fact_global_load subject=gp provenance=global_storage reason=none source={s}",
+        .{c_source},
+    );
+    defer std.testing.allocator.free(llvm_comment);
+    try expectContains(llvm_output.items, llvm_comment);
 }
 
 test "lower-c emits while loops and loop control" {

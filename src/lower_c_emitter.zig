@@ -94,6 +94,7 @@ const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
 const structFieldType = lower_c_shape.structFieldType;
 const genericChildType = lower_c_shape.genericChildType;
 const isVoidLiteralExpr = lower_c_shape.isVoidLiteralExpr;
+const isPointerLikeGlobalType = lower_c_shape.isPointerLikeGlobalType;
 const emitStaticCInitializer = lower_c_const.emitStaticCInitializer;
 const staticCInitializer = lower_c_const.staticCInitializer;
 const appendCIntLiteral = lower_c_const.appendCIntLiteral;
@@ -289,6 +290,7 @@ const CEmitter = struct {
     // hook is not spliced into a context where the result must remain assignable.
     suppress_load_hook: bool = false,
     current_function: ?[]const u8 = null,
+    mir_global_pointer_locals: std.StringHashMap(void),
     // For a variadic function body: the name of the last NAMED parameter, which C's
     // `va_start(ap, last)` anchors on. Null outside a variadic function.
     current_variadic_last: ?[]const u8 = null,
@@ -342,6 +344,7 @@ const CEmitter = struct {
             .mir_module = mir_module,
             .source_path = source_path,
             .reporter = reporter,
+            .mir_global_pointer_locals = std.StringHashMap(void).init(allocator),
             .temp_index = 0,
             .indent = 0,
         };
@@ -352,6 +355,7 @@ const CEmitter = struct {
         self.deinitTypeCollections();
         self.deinitDeclCollections();
         self.deinitControlFlowState();
+        self.mir_global_pointer_locals.deinit();
         self.scratch.deinit();
     }
 
@@ -1074,6 +1078,7 @@ const CEmitter = struct {
         const previous_function = self.current_function;
         self.current_function = fn_decl.name.text;
         defer self.current_function = previous_function;
+        self.mir_global_pointer_locals.clearRetainingCapacity();
 
         const previous_variadic_last = self.current_variadic_last;
         self.current_variadic_last = functionVariadicLastParam(fn_decl);
@@ -2662,7 +2667,7 @@ const CEmitter = struct {
                 try self.emitLocalDeclStmt(local, is_let, locals, return_ty);
             },
             .assignment => |node| {
-                try self.emitAssignmentStmt(node, locals, return_ty);
+                try self.emitAssignmentStmt(node, stmt.span, locals, return_ty);
             },
             .@"return" => |maybe| {
                 try self.emitReturnStmt(maybe, locals, return_ty);
@@ -2699,6 +2704,9 @@ const CEmitter = struct {
     fn emitLocalDeclStmt(self: *CEmitter, local: ast.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         for (local.names) |name| {
             try locals.put(name.text, try self.localDeclInfo(local, is_let, locals));
+            if (local.ty) |decl_ty| {
+                if (local.init) |initializer| try self.applyMirPointerProvenanceForLocalInitializer(name.text, decl_ty, initializer, locals);
+            }
             if (try self.emitSpecialLocalDecl(name.text, local, locals, return_ty)) continue;
             try self.emitDefaultLocalDecl(name.text, local.ty, local.init, locals);
         }
@@ -2829,7 +2837,9 @@ const CEmitter = struct {
         }
     }
 
-    fn emitAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitAssignmentStmt(self: *CEmitter, assignment: anytype, span: ast.Span, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        try self.applyMirPointerProvenanceForAssignment(assignment.target, assignment.value, span, locals);
+        if (try self.emitMirPointerProvenanceDerefStoreStmt(assignment.target, assignment.value, locals)) return;
         if (try self.emitSpecialAssignmentStmt(assignment, locals, return_ty)) return;
         try self.emitDefaultAssignmentStmt(assignment, locals);
     }
@@ -3458,7 +3468,7 @@ const CEmitter = struct {
             .unreachable_expr => try self.out.appendSlice(self.allocator, "mc_trap_Unreachable()"),
             .unary => try lower_c_expr.emitUnaryExpr(self.exprEmitContext(), expr, locals),
             .binary => try lower_c_expr.emitBinaryExpr(self.exprEmitContext(), expr, locals),
-            .call => |node| try self.emitCallExpr(node, locals),
+            .call => |node| try self.emitCallExpr(expr, node, locals),
             .index => |node| try self.emitIndexExpr(node, locals),
             .slice => |node| try self.emitSliceExpr(node, expr.span, locals),
             .address_of => |inner| try self.emitAddressOfExpr(inner.*, locals),
@@ -3475,7 +3485,8 @@ const CEmitter = struct {
         return error.UnsupportedCEmission;
     }
 
-    fn emitCallExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitCallExpr(self: *CEmitter, expr: ast.Expr, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        self.applyMirPointerProvenanceInvalidationsAtCall(expr.span, locals);
         if (try self.emitSpecialCallExpr(node, locals)) return;
         try self.emitDefaultCallExpr(node, locals);
     }
@@ -3534,6 +3545,12 @@ const CEmitter = struct {
     }
 
     fn emitDerefExpr(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        if (self.mirPointerProvenanceDerefRaceInfo(inner, locals)) |info| {
+            try self.out.print(self.allocator, "(({s})mc_race_load_{s}(", .{ info.c_type, info.race_type_name });
+            try self.emitExpr(inner, locals);
+            try self.out.appendSlice(self.allocator, "))");
+            return;
+        }
         try self.out.appendSlice(self.allocator, "*");
         try self.emitExpr(inner, locals);
     }
@@ -4570,6 +4587,155 @@ const CEmitter = struct {
             }
         }
         return false;
+    }
+
+    fn currentMirFunction(self: *CEmitter) ?*const mir.Function {
+        const function_name = self.current_function orelse return null;
+        for (self.mir_module.functions) |*function| {
+            if (std.mem.eql(u8, function.name, function_name)) return function;
+        }
+        return null;
+    }
+
+    fn mirSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
+        return span.line == source.line and span.column == source.column;
+    }
+
+    fn mirPointerFactIsLiveGlobal(fact: mir.PointerProvenanceFact) bool {
+        if (fact.provenance != .global_storage) return false;
+        return switch (fact.invalidation_reason) {
+            .none, .reassignment => true,
+            .dynamic_index_write, .call, .indirect_call, .address_escape => false,
+        };
+    }
+
+    fn mirPointerFactSubjectSupportedNow(self: *CEmitter, fact: mir.PointerProvenanceFact, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        if (fact.element_index != null) return false;
+        const local_set = locals orelse return false;
+        const info = local_set.get(fact.subject) orelse return false;
+        const ty = info.source_ty orelse return false;
+        return isPointerLikeGlobalType(self.resolveAliasType(ty));
+    }
+
+    fn emitMirPointerProvenanceConsumedComment(self: *CEmitter, fact: mir.PointerProvenanceFact) !void {
+        const fn_name = self.current_function orelse return;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "/* mir pointer_provenance consumed fn={s} subject={s} provenance={s} reason={s} source={d}:{d} */\n", .{
+            fn_name,
+            fact.subject,
+            @tagName(fact.provenance),
+            @tagName(fact.invalidation_reason),
+            fact.source.line,
+            fact.source.column,
+        });
+    }
+
+    fn applyMirPointerProvenanceFact(self: *CEmitter, fact: mir.PointerProvenanceFact, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        if (!self.mirPointerFactSubjectSupportedNow(fact, locals)) return;
+        try self.emitMirPointerProvenanceConsumedComment(fact);
+        if (mirPointerFactIsLiveGlobal(fact)) {
+            try self.mir_global_pointer_locals.put(fact.subject, {});
+        } else {
+            _ = self.mir_global_pointer_locals.remove(fact.subject);
+        }
+    }
+
+    fn applyMirPointerProvenanceFactsAtSource(self: *CEmitter, subject: []const u8, span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const function = self.currentMirFunction() orelse return false;
+        var matched = false;
+        for (function.pointer_provenance_facts) |fact| {
+            if (!std.mem.eql(u8, fact.subject, subject)) continue;
+            if (fact.element_index != null) continue;
+            if (!mirSourceMatches(span, fact.source)) continue;
+            matched = true;
+            try self.applyMirPointerProvenanceFact(fact, locals);
+        }
+        return matched;
+    }
+
+    fn applyMirPointerProvenanceInvalidationsAtCall(self: *CEmitter, span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) void {
+        const function = self.currentMirFunction() orelse return;
+        for (function.pointer_provenance_facts) |fact| {
+            if (!mirSourceMatches(span, fact.source)) continue;
+            switch (fact.invalidation_reason) {
+                .call, .indirect_call => {},
+                else => continue,
+            }
+            if (!self.mirPointerFactSubjectSupportedNow(fact, locals)) continue;
+            _ = self.mir_global_pointer_locals.remove(fact.subject);
+        }
+    }
+
+    fn directMirAddressProvenanceExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directMirAddressProvenanceExpr(inner.*, locals),
+            .cast => |node| self.directMirAddressProvenanceExpr(node.value.*, locals),
+            .address_of => |inner| self.directMirAddressProvenanceTarget(inner.*, locals),
+            else => false,
+        };
+    }
+
+    fn directMirAddressProvenanceTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directMirAddressProvenanceTarget(inner.*, locals),
+            .ident => |ident| blk: {
+                if (locals) |local_set| {
+                    if (local_set.contains(ident.text)) break :blk true;
+                }
+                break :blk self.globals.contains(ident.text);
+            },
+            else => false,
+        };
+    }
+
+    fn applyMirPointerProvenanceForLocalInitializer(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+        if (!isPointerLikeGlobalType(self.resolveAliasType(ty))) return;
+        const matched = try self.applyMirPointerProvenanceFactsAtSource(name, initializer.span, locals);
+        if (!matched and self.directMirAddressProvenanceExpr(initializer, locals)) _ = self.mir_global_pointer_locals.remove(name);
+    }
+
+    fn directLocalName(expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| ident.text,
+            .grouped => |inner| directLocalName(inner.*),
+            else => null,
+        };
+    }
+
+    fn applyMirPointerProvenanceForAssignment(self: *CEmitter, target: ast.Expr, value: ast.Expr, span: ast.Span, locals: *std.StringHashMap(LocalInfo)) !void {
+        const name = directLocalName(target) orelse return;
+        const info = locals.get(name) orelse return;
+        const ty = info.source_ty orelse return;
+        if (!isPointerLikeGlobalType(self.resolveAliasType(ty))) return;
+        const matched_value = try self.applyMirPointerProvenanceFactsAtSource(name, value.span, locals);
+        _ = try self.applyMirPointerProvenanceFactsAtSource(name, span, locals);
+        if (!matched_value and self.directMirAddressProvenanceExpr(value, locals)) _ = self.mir_global_pointer_locals.remove(name);
+    }
+
+    fn mirPointerProvenanceDerefRaceInfo(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?GlobalInfo {
+        const name = directLocalName(inner) orelse return null;
+        if (!self.mir_global_pointer_locals.contains(name)) return null;
+        const pointee_ty = self.derefPointeeType(inner, locals) orelse return null;
+        const info = self.globalInfoFromType(pointee_ty) catch return null;
+        if (info.aggregate or info.pointer_like) return null;
+        return info;
+    }
+
+    fn emitMirPointerProvenanceDerefStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const inner = switch (target.kind) {
+            .deref => |ptr| ptr.*,
+            .grouped => |wrapped| return try self.emitMirPointerProvenanceDerefStoreStmt(wrapped.*, value, locals),
+            else => return false,
+        };
+        const info = self.mirPointerProvenanceDerefRaceInfo(inner, locals) orelse return false;
+        const pointee_ty = self.derefPointeeType(inner, locals) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "mc_race_store_{s}(", .{info.race_type_name});
+        try self.emitExpr(inner, locals);
+        try self.out.print(self.allocator, ", ({s})", .{info.race_c_type});
+        try self.emitExprWithTarget(value, locals, pointee_ty);
+        try self.out.appendSlice(self.allocator, ");\n");
+        return true;
     }
 
     // The constant value of an integer local initializer, but only when it fits
