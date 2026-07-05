@@ -500,6 +500,31 @@ fn returned_pointer_holder_via_mixed_branch_local_if(cond: bool) -> PointerHolde
     return other;
 }
 
+fn returned_pointer_holder_via_switch(choice: u32) -> PointerHolder {
+    switch choice {
+        0 => {
+            return .{ .ptr = &shared_counter, .tag = 73 };
+        }
+        _ => {
+            let holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 74 };
+            return holder;
+        }
+    }
+}
+
+fn returned_pointer_holder_via_mixed_switch(choice: u32) -> PointerHolder {
+    switch choice {
+        0 => {
+            return .{ .ptr = &shared_counter, .tag = 75 };
+        }
+        _ => {
+            var local: u32 = 76;
+            let holder: PointerHolder = .{ .ptr = &local, .tag = 76 };
+            return holder;
+        }
+    }
+}
+
 fn aggregate_computed_copy_pointer_field_load() -> u32 {
     var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 10 };
     holder = returned_pointer_holder();
@@ -555,6 +580,20 @@ fn aggregate_return_mixed_branch_local_if_pointer_field_stays_plain(cond: bool) 
     let holder: PointerHolder = returned_pointer_holder_via_mixed_branch_local_if(cond);
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm keeps returned branch-local aggregate fields plain when any path is stack-backed.
+    return p.*;
+}
+
+fn aggregate_return_switch_pointer_field_load(choice: u32) -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_via_switch(choice);
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load when all simple switch return arms prove the field global-backed.
+    return p.*;
+}
+
+fn aggregate_return_mixed_switch_pointer_field_stays_plain(choice: u32) -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_via_mixed_switch(choice);
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm keeps returned switch aggregate fields plain when any arm is stack-backed.
     return p.*;
 }
 

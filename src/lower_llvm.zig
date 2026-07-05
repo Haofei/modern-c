@@ -1113,7 +1113,7 @@ const LlvmEmitter = struct {
     }
 
     const SimpleAggregateReturnPaths = struct {
-        paths: [2]ast.Block = undefined,
+        paths: [8]ast.Block = undefined,
         len: usize = 0,
 
         fn append(self: *SimpleAggregateReturnPaths, path: ast.Block) bool {
@@ -1184,7 +1184,7 @@ const LlvmEmitter = struct {
     }
 
     fn collectIfElseReturnPaths(self: *LlvmEmitter, switch_node: ast.Switch, paths: *SimpleAggregateReturnPaths) bool {
-        if (!self.isSimpleBoolIfSwitch(switch_node)) return false;
+        if (!self.switchAggregateReturnPathsAreExhaustive(switch_node)) return false;
         for (switch_node.arms) |arm| {
             const block = switch (arm.body) {
                 .block => |block| block,
@@ -1194,6 +1194,21 @@ const LlvmEmitter = struct {
             if (!paths.append(block)) return false;
         }
         return true;
+    }
+
+    fn switchAggregateReturnPathsAreExhaustive(self: *LlvmEmitter, switch_node: ast.Switch) bool {
+        if (!self.aggregateReturnSummaryExprIsSimple(switch_node.subject)) return false;
+        return self.isSimpleBoolIfSwitch(switch_node) or self.switchHasWildcardPattern(switch_node);
+    }
+
+    fn switchHasWildcardPattern(self: *LlvmEmitter, switch_node: ast.Switch) bool {
+        _ = self;
+        for (switch_node.arms) |arm| {
+            for (arm.patterns) |pattern| {
+                if (pattern.kind == .wildcard) return true;
+            }
+        }
+        return false;
     }
 
     fn collectIfWithTrailingReturnPaths(
