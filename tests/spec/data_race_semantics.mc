@@ -539,6 +539,94 @@ fn array_dynamic_assignment_clears_pointer_element_fact(index: usize) -> u32 {
     return dynamic_p.* + constant_p.*;
 }
 
+fn slice_global_pointer_element_load(index: usize) -> u32 {
+    let ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+    let s: []mut *mut u32 = ptrs[0..2];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a local slice proven to cover a global-backed local pointer array.
+    return p.*;
+}
+
+fn slice_assigned_global_pointer_element_load(index: usize) -> u32 {
+    var local: u32 = 21;
+    var ptrs: [2]*mut u32 = .{ &local, &local };
+    ptrs[0] = &shared_counter;
+    ptrs[1] = &shared_counter;
+    let s: []mut *mut u32 = ptrs[0..2];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a local slice after every backing array element is assigned visible global storage.
+    return p.*;
+}
+
+fn slice_stack_pointer_element_stays_plain(index: usize) -> u32 {
+    var local: u32 = 22;
+    let ptrs: [2]*mut u32 = .{ &local, &local };
+    let s: []mut *mut u32 = ptrs[0..2];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps stack-backed local pointer slices plain.
+    return p.*;
+}
+
+fn slice_partial_pointer_elements_stays_plain(index: usize) -> u32 {
+    var local: u32 = 23;
+    let ptrs: [2]*mut u32 = .{ &shared_counter, &local };
+    let s: []mut *mut u32 = ptrs[0..2];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps local pointer slices plain when only some backing elements hold visible global storage.
+    return p.*;
+}
+
+fn slice_backing_array_assignment_clears_fact(index: usize) -> u32 {
+    var local: u32 = 24;
+    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+    let s: []mut *mut u32 = ptrs[0..2];
+    ptrs[0] = &local;
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps local pointer slices plain after a direct backing array write.
+    return p.*;
+}
+
+fn slice_backing_array_dynamic_assignment_clears_fact(index: usize) -> u32 {
+    var local: u32 = 25;
+    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+    let s: []mut *mut u32 = ptrs[0..2];
+    ptrs[index] = &local;
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps local pointer slices plain after a dynamic backing array write.
+    return p.*;
+}
+
+fn slice_backing_array_whole_assignment_clears_fact(index: usize) -> u32 {
+    var local: u32 = 26;
+    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+    let s: []mut *mut u32 = ptrs[0..2];
+    ptrs = .{ &local, &local };
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps local pointer slices plain after a whole backing array assignment.
+    return p.*;
+}
+
+fn slice_element_assignment_clears_fact(index: usize) -> u32 {
+    var local: u32 = 27;
+    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+    let s: []mut *mut u32 = ptrs[0..2];
+    s[index] = &local;
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps local pointer slices plain after a write through the slice.
+    return p.*;
+}
+
+fn slice_reassignment_clears_fact(index: usize) -> u32 {
+    var local: u32 = 28;
+    let ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+    let other: [2]*mut u32 = .{ &local, &local };
+    var s: []mut *mut u32 = ptrs[0..2];
+    s = other[0..2];
+    let p: *mut u32 = s[index];
+    // EXPECT: lower-llvm keeps local pointer slices plain after slice reassignment to unproven storage.
+    return p.*;
+}
+
 fn possibly_racing_field_store(x: u32) -> void {
     // EXPECT: lower-c emits mc_race_store_u32(&shared_pair.value, value) rather than a plain C field store.
     shared_pair.value = x;
