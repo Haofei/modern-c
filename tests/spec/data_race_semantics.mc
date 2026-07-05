@@ -108,6 +108,7 @@ fn consume_indirect_reassigned_param(p: *mut u32) -> u32 {
 }
 
 fn consume_indirect_reassigned_other_param(p: *mut u32) -> u32 {
+    // EXPECT: lower-llvm keeps the reassignment target plain too; reassigned aliases do not prove either target.
     return p.*;
 }
 

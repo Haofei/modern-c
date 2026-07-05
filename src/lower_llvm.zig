@@ -746,6 +746,11 @@ const LlvmEmitter = struct {
         return try std.fmt.allocPrint(self.allocator, "{s}\x00{d}", .{ fn_name, param_index });
     }
 
+    fn globalPointerParamKeyMatchesFunction(self: *LlvmEmitter, key: []const u8, fn_name: []const u8) bool {
+        _ = self;
+        return key.len > fn_name.len and std.mem.eql(u8, key[0..fn_name.len], fn_name) and key[fn_name.len] == 0;
+    }
+
     fn collectGlobalPointerParamCallSitesInFunction(
         self: *LlvmEmitter,
         fn_decl: ast.FnDecl,
@@ -979,7 +984,7 @@ const LlvmEmitter = struct {
         if (self.local_types.contains(name) or self.global_types.contains(name) or !self.fn_sigs.contains(name)) return;
         var it = summaries.iterator();
         while (it.next()) |entry| {
-            if (!aggregatePointerFieldKeyMatchesLocal(entry.key_ptr.*, name)) continue;
+            if (!self.globalPointerParamKeyMatchesFunction(entry.key_ptr.*, name)) continue;
             entry.value_ptr.escaped = true;
         }
     }
