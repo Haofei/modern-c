@@ -59,7 +59,10 @@ export fn rsa_pkcs1_sha256_verify(
         raw.store<usize>(phys(pkp + 24), elen);
     }
 
-    var recovered: [32]u8 = uninit;
+    // Zero-initialized (not `uninit`): the callee fills all 32 bytes through the out
+    // pointer, but definite-init (S0.1) cannot see writes made through a raw address,
+    // so the direct `recovered[i]` reads below need a whole-value init here.
+    var recovered: [32]u8 = .{ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
     let rok: u32 = br_rsa_i31_pkcs1_vrfy(
         sig, sig_len,
         (&SHA256_OID[0]) as usize, SHA256_LEN,
@@ -67,7 +70,8 @@ export fn rsa_pkcs1_sha256_verify(
     );
     if rok != 1 { return false; }
 
-    var computed: [32]u8 = uninit;
+    // Zero-initialized for the same reason: sha256 fills it via the out pointer.
+    var computed: [32]u8 = .{ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
     sha256(msg, msg_len, (&computed[0]) as usize);
 
     // Constant-time 32-byte digest compare (no early exit on first mismatch).
