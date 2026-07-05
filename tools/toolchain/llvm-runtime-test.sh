@@ -30,29 +30,29 @@ void mc_trap_NullUnwrap(void) { __builtin_trap(); }
 void mc_trap_Unreachable(void) { __builtin_trap(); }
 
 struct SpinLock { uint32_t state; };
-struct Guard { struct SpinLock *lock; };
-struct IrqGuard { struct SpinLock *lock; uintptr_t flags; };
 static int balance = 0;
 
-struct Guard mc_spin_acquire(struct SpinLock *l) {
+// The seam passes only pointers/scalars (extern struct-by-value is rejected); the
+// linear Guard/IrqGuard witnesses live entirely on the MC side (std/sync/sync.mc).
+void mc_spin_acquire(struct SpinLock *l) {
     l->state = 1;
     balance++;
-    return (struct Guard){ l };
 }
 
-void mc_spin_release(struct Guard g) {
-    g.lock->state = 0;
+void mc_spin_release(struct SpinLock *l) {
+    l->state = 0;
     balance--;
 }
 
-struct IrqGuard mc_spin_acquire_irqsave(struct SpinLock *l) {
+uintptr_t mc_spin_acquire_irqsave(struct SpinLock *l) {
     l->state = 1;
     balance++;
-    return (struct IrqGuard){ l, 0 };
+    return 0;
 }
 
-void mc_spin_release_irqrestore(struct IrqGuard g) {
-    g.lock->state = 0;
+void mc_spin_release_irqrestore(struct SpinLock *l, uintptr_t flags) {
+    (void)flags;
+    l->state = 0;
     balance--;
 }
 
