@@ -19,6 +19,14 @@ fn llvmFunctionBody(output: []const u8, signature_prefix: []const u8) ![]const u
     return output[start .. start + body_end];
 }
 
+fn expectContains(haystack: []const u8, needle: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) != null);
+}
+
+fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) == null);
+}
+
 test "LLVM backend emits a backend_name alias for the override symbol" {
     const source =
         \\#[backend_name("rss_helper_x")]
@@ -51,6 +59,77 @@ test "LLVM backend emits checked integer add from MIR-gated source" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "call void @mc_trap_IntegerOverflow()") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, " nsw ") == null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, " nuw ") == null);
+}
+
+test "LLVM ordinary global scalar accesses lower to unordered atomics" {
+    const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/spec/data_race_semantics.mc", std.testing.allocator, .limited(1 << 20));
+    defer std.testing.allocator.free(source);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("data_race_semantics.mc", source, &output);
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_non_racing_access");
+    try expectContains(local_body, "load i32, ptr %local.addr.");
+    try expectContains(local_body, "store i32 ");
+    try expectNotContains(local_body, " atomic ");
+
+    const global_store_body = try llvmFunctionBody(output.items, "define internal void @possibly_racing_store");
+    try expectContains(global_store_body, "store atomic i32 %x, ptr @shared_counter unordered, align 4");
+    try expectNotContains(global_store_body, "store i32 %x, ptr @shared_counter");
+
+    const global_load_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_load");
+    try expectContains(global_load_body, "load atomic i32, ptr @shared_counter unordered, align 4");
+    try expectNotContains(global_load_body, "load i32, ptr @shared_counter");
+
+    const field_store_body = try llvmFunctionBody(output.items, "define internal void @possibly_racing_field_store");
+    try expectContains(field_store_body, "store atomic i32 %x, ptr %");
+    try expectContains(field_store_body, " unordered, align 4");
+    try expectNotContains(field_store_body, "store i32 %x, ptr %");
+
+    const field_load_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_field_load");
+    try expectContains(field_load_body, "load atomic i32, ptr %");
+    try expectContains(field_load_body, " unordered, align 4");
+    try expectNotContains(field_load_body, "load i32, ptr %");
+
+    const array_store_body = try llvmFunctionBody(output.items, "define internal void @possibly_racing_array_store");
+    try expectContains(array_store_body, "store atomic i32 %value, ptr %");
+    try expectContains(array_store_body, " unordered, align 4");
+    try expectNotContains(array_store_body, "store i32 %value, ptr %");
+
+    const array_load_body = try llvmFunctionBody(output.items, "define internal i32 @possibly_racing_array_load");
+    try expectContains(array_load_body, "load atomic i32, ptr %");
+    try expectContains(array_load_body, " unordered, align 4");
+    try expectNotContains(array_load_body, "load i32, ptr %");
+}
+
+test "LLVM ordinary bool global accesses use byte-sized atomics" {
+    const source =
+        \\global flag: bool = false;
+        \\
+        \\fn read_flag() -> bool {
+        \\    return flag;
+        \\}
+        \\
+        \\fn write_flag(value: bool) -> void {
+        \\    flag = value;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("ordinary_bool_global.mc", source, &output);
+
+    const load_body = try llvmFunctionBody(output.items, "define internal i1 @read_flag");
+    try expectContains(load_body, "load atomic i8, ptr @flag unordered, align 1");
+    try expectContains(load_body, "trunc i8 ");
+    try expectNotContains(load_body, "load atomic i1");
+
+    const store_body = try llvmFunctionBody(output.items, "define internal void @write_flag");
+    try expectContains(store_body, "zext i1 %value to i8");
+    try expectContains(store_body, "store atomic i8 ");
+    try expectContains(store_body, "ptr @flag unordered, align 1");
+    try expectNotContains(store_body, "store atomic i1");
 }
 
 test "LLVM backend emits cstr as ptr" {

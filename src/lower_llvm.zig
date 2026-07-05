@@ -1250,9 +1250,7 @@ const LlvmEmitter = struct {
         if (self.global_types.get(ident.text)) |ty| {
             const global_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
             try self.emitOrdinaryShadowHook(global_ptr, ty, .load_pre);
-            const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = load {s}, ptr @{s}{s}\n", .{ result, try self.llvmType(ty), ident.text, try self.debugCallSuffix() });
-            return result;
+            return try self.emitOrdinaryLoad(ty, global_ptr, true);
         }
         if (self.fn_sigs.contains(ident.text)) return try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
         return try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{ident.text});
@@ -2089,7 +2087,7 @@ const LlvmEmitter = struct {
                 const value = try self.emitExpr(value_expr, ty);
                 const global_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
                 try self.emitOrdinaryShadowHook(global_ptr, ty, .store_pre);
-                try self.out.print(self.allocator, "  store {s} {s}, ptr @{s}{s}\n", .{ llvm_ty, value, ident.text, try self.debugCallSuffix() });
+                try self.emitOrdinaryStore(ty, llvm_ty, value, global_ptr, true);
                 try self.emitOrdinaryShadowHook(global_ptr, ty, .store_post);
                 return;
             }
@@ -2123,7 +2121,7 @@ const LlvmEmitter = struct {
                 const value = try self.emitExpr(value_expr, element_ty);
                 const is_global = self.indexBaseIsGlobal(node);
                 try self.emitOrdinaryShadowHook(ptr, element_ty, .store_pre);
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(element_ty), value, ptr, try self.debugCallSuffix() });
+                try self.emitOrdinaryStore(element_ty, try self.llvmType(element_ty), value, ptr, is_global);
                 if (is_global) try self.emitOrdinaryShadowHook(ptr, element_ty, .store_post);
                 break :blk true;
             },
@@ -2257,7 +2255,7 @@ const LlvmEmitter = struct {
                 const value = try self.emitExpr(value_expr, field.ty);
                 const field_global = self.memberBaseIsGlobal(node);
                 try self.emitOrdinaryShadowHook(ptr, field.ty, .store_pre);
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(field.ty), value, ptr, try self.debugCallSuffix() });
+                try self.emitOrdinaryStore(field.ty, try self.llvmType(field.ty), value, ptr, field_global);
                 if (field_global) try self.emitOrdinaryShadowHook(ptr, field.ty, .store_post);
                 break :blk true;
             },
@@ -2898,16 +2896,12 @@ const LlvmEmitter = struct {
             if (overlayArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
             const ptr = try self.emitOverlayFieldAddress(node.base.*, field);
             try self.emitOrdinaryShadowHook(ptr, field.ty, .load_pre);
-            const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(field.ty), ptr, try self.debugCallSuffix() });
-            return result;
+            return try self.emitOrdinaryLoad(field.ty, ptr, self.memberBaseIsGlobal(node));
         }
         const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
         const ptr = try self.emitMemberAddress(node);
         try self.emitOrdinaryShadowHook(ptr, field.ty, .load_pre);
-        const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(field.ty), ptr, try self.debugCallSuffix() });
-        return result;
+        return try self.emitOrdinaryLoad(field.ty, ptr, self.memberBaseIsGlobal(node));
     }
 
     fn emitMemberAddress(self: *LlvmEmitter, node: anytype) anyerror![]const u8 {
@@ -2976,20 +2970,58 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  call void @{s}(i64 {s}, i64 {d})\n", .{ name, addr, size });
     }
 
-    // True when an index expression's base is a (non-local) global array. The C backend
+    fn emitOrdinaryLoad(self: *LlvmEmitter, ty: ast.TypeExpr, ptr: []const u8, use_atomic: bool) ![]const u8 {
+        const result = try self.nextTemp();
+        const llvm_ty = try self.llvmType(ty);
+        if (use_atomic and self.canUseOrdinaryAtomicAccess(ty)) {
+            if (typeNameEql(self.resolveAliasType(ty), "bool")) {
+                try self.out.print(self.allocator, "  {s} = load atomic i8, ptr {s} unordered, align 1{s}\n", .{ result, ptr, try self.debugCallSuffix() });
+                const bool_result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = trunc i8 {s} to i1\n", .{ bool_result, result });
+                return bool_result;
+            }
+            try self.out.print(self.allocator, "  {s} = load atomic {s}, ptr {s} unordered, align {d}{s}\n", .{ result, llvm_ty, ptr, self.llvmAlignOf(ty), try self.debugCallSuffix() });
+        } else {
+            try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, llvm_ty, ptr, try self.debugCallSuffix() });
+        }
+        return result;
+    }
+
+    fn emitOrdinaryStore(self: *LlvmEmitter, ty: ast.TypeExpr, llvm_ty: []const u8, value: []const u8, ptr: []const u8, use_atomic: bool) !void {
+        if (use_atomic and self.canUseOrdinaryAtomicAccess(ty)) {
+            if (typeNameEql(self.resolveAliasType(ty), "bool")) {
+                const widened = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = zext i1 {s} to i8\n", .{ widened, value });
+                try self.out.print(self.allocator, "  store atomic i8 {s}, ptr {s} unordered, align 1{s}\n", .{ widened, ptr, try self.debugCallSuffix() });
+                return;
+            }
+            try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} unordered, align {d}{s}\n", .{ llvm_ty, value, ptr, self.llvmAlignOf(ty), try self.debugCallSuffix() });
+        } else {
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
+        }
+    }
+
+    fn canUseOrdinaryAtomicAccess(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        return !self.isAggregateType(ty);
+    }
+
+    fn directGlobalStorageRoot(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .ident => |ident| !self.local_slots.contains(ident.text) and !self.local_types.contains(ident.text) and self.global_types.contains(ident.text),
+            .grouped => |inner| self.directGlobalStorageRoot(inner.*),
+            .index => |node| self.directGlobalStorageRoot(node.base.*),
+            .member => |node| self.directGlobalStorageRoot(node.base.*),
+            else => false,
+        };
+    }
+
+    // True when an index expression's base is direct global array storage. The C backend
     // instruments global array-element loads via `mc_race_load_<T>`, whose macro body is
     // hook-instrumented; stores are hooked directly in emitIndexAssignment.
     fn indexBaseIsGlobal(self: *LlvmEmitter, node: anytype) bool {
-        const base = switch (node.base.*.kind) {
-            .ident => |ident| ident,
-            .grouped => |inner| switch (inner.*.kind) {
-                .ident => |ident| ident,
-                else => return false,
-            },
-            else => return false,
-        };
-        if (self.local_slots.contains(base.text) or self.local_types.contains(base.text)) return false;
-        return self.global_types.contains(base.text);
+        const base_ty = self.resolveAliasType(self.exprType(node.base.*) orelse return false);
+        if (base_ty.kind != .array) return false;
+        return self.directGlobalStorageRoot(node.base.*);
     }
 
     // True for `base.field[i]` value-loads where `field` is an ordinary array member. The C
@@ -3012,16 +3044,8 @@ const LlvmEmitter = struct {
     // routes a global struct-field LOAD through `mc_race_load_<T>`; stores are hooked directly
     // in emitMemberAssignment.
     fn memberBaseIsGlobal(self: *LlvmEmitter, node: anytype) bool {
-        const base = switch (node.base.*.kind) {
-            .ident => |ident| ident,
-            .grouped => |inner| switch (inner.*.kind) {
-                .ident => |ident| ident,
-                else => return false,
-            },
-            else => return false,
-        };
-        if (self.local_slots.contains(base.text) or self.local_types.contains(base.text)) return false;
-        return self.global_types.contains(base.text);
+        if (self.resolveAliasType(self.exprType(node.base.*) orelse return false).kind == .pointer) return false;
+        return self.directGlobalStorageRoot(node.base.*);
     }
 
     fn emitIndexLoad(self: *LlvmEmitter, node: anytype) ![]const u8 {
@@ -3043,9 +3067,7 @@ const LlvmEmitter = struct {
         if (self.indexBaseIsGlobal(node) or self.indexBaseIsOrdinaryArrayMember(node)) {
             try self.emitOrdinaryShadowHook(ptr, element_ty, .load_pre);
         }
-        const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(element_ty), ptr, try self.debugCallSuffix() });
-        return result;
+        return try self.emitOrdinaryLoad(element_ty, ptr, self.indexBaseIsGlobal(node));
     }
 
     fn emitIndexAddress(self: *LlvmEmitter, node: anytype) anyerror![]const u8 {
