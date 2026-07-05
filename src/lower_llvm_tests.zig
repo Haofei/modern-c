@@ -163,6 +163,22 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(aggregate_pointer_alias_stack_body, "load i32, ptr %");
     try expectNotContains(aggregate_pointer_alias_stack_body, " atomic ");
 
+    const aggregate_pointer_alias_field_assignment_direct_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_field_assignment_clears_direct_field_fact");
+    try expectContains(aggregate_pointer_alias_field_assignment_direct_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_field_assignment_direct_body, "load i32, ptr %");
+    try expectNotContains(aggregate_pointer_alias_field_assignment_direct_body, " atomic ");
+
+    const aggregate_pointer_alias_field_assignment_alias_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_field_assignment_clears_alias_field_fact");
+    try expectContains(aggregate_pointer_alias_field_assignment_alias_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_field_assignment_alias_body, "load i32, ptr %");
+    try expectNotContains(aggregate_pointer_alias_field_assignment_alias_body, " atomic ");
+
+    const aggregate_pointer_alias_field_assignment_global_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_field_assignment_establishes_global_fact");
+    try expectContains(aggregate_pointer_alias_field_assignment_global_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_field_assignment_global_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_pointer_alias_field_assignment_global_body, " unordered, align 4");
+    try expectNotContains(aggregate_pointer_alias_field_assignment_global_body, "load i32, ptr %p.addr.");
+
     const aggregate_pointer_alias_returned_unknown_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_returned_unknown_stays_plain");
     try expectContains(aggregate_pointer_alias_returned_unknown_body, "call ptr @external_pointer_holder()");
     try expectContains(aggregate_pointer_alias_returned_unknown_body, "load i32, ptr %");
@@ -177,6 +193,13 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(aggregate_pointer_alias_reassigned_unknown_body, "call ptr @external_pointer_holder()");
     try expectContains(aggregate_pointer_alias_reassigned_unknown_body, "load i32, ptr %");
     try expectNotContains(aggregate_pointer_alias_reassigned_unknown_body, " atomic ");
+
+    const aggregate_pointer_alias_reassigned_unknown_write_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_reassigned_unknown_write_does_not_clear_old_field_fact");
+    try expectContains(aggregate_pointer_alias_reassigned_unknown_write_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_reassigned_unknown_write_body, "call ptr @external_pointer_holder()");
+    try expectContains(aggregate_pointer_alias_reassigned_unknown_write_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_pointer_alias_reassigned_unknown_write_body, " unordered, align 4");
+    try expectNotContains(aggregate_pointer_alias_reassigned_unknown_write_body, "load i32, ptr %p.addr.");
 
     const aggregate_reassigned_stack_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_reassigned_stack_pointer_field_stays_plain");
     try expectContains(aggregate_reassigned_stack_body, "load i32, ptr %");
@@ -266,6 +289,33 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     const aggregate_pointer_alias_array_dynamic_index_partial_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_array_dynamic_index_partial_pointer_elements_stays_plain");
     try expectContains(aggregate_pointer_alias_array_dynamic_index_partial_body, "load i32, ptr %");
     try expectNotContains(aggregate_pointer_alias_array_dynamic_index_partial_body, " atomic ");
+
+    const aggregate_pointer_alias_array_assignment_clears_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_array_assignment_clears_element_fact");
+    try expectContains(aggregate_pointer_alias_array_assignment_clears_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_array_assignment_clears_body, "load i32, ptr %");
+    try expectNotContains(aggregate_pointer_alias_array_assignment_clears_body, " atomic ");
+
+    const aggregate_pointer_alias_array_dynamic_assignment_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_array_dynamic_assignment_clears_all_element_facts");
+    try expectContains(aggregate_pointer_alias_array_dynamic_assignment_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_array_dynamic_assignment_body, "load i32, ptr %");
+    try expectNotContains(aggregate_pointer_alias_array_dynamic_assignment_body, " atomic ");
+
+    const aggregate_pointer_alias_array_assignment_global_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_array_assignment_establishes_element_fact");
+    try expectContains(aggregate_pointer_alias_array_assignment_global_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_array_assignment_global_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_pointer_alias_array_assignment_global_body, " unordered, align 4");
+    try expectNotContains(aggregate_pointer_alias_array_assignment_global_body, "load i32, ptr %p.addr.");
+
+    const aggregate_pointer_alias_array_dynamic_index_assigned_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_array_dynamic_index_assigned_all_global_pointer_elements_load");
+    try expectContains(aggregate_pointer_alias_array_dynamic_index_assigned_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_array_dynamic_index_assigned_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_pointer_alias_array_dynamic_index_assigned_body, " unordered, align 4");
+    try expectNotContains(aggregate_pointer_alias_array_dynamic_index_assigned_body, "load i32, ptr %p.addr.");
+
+    const aggregate_pointer_alias_array_dynamic_index_partially_assigned_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_array_dynamic_index_partially_assigned_stays_plain");
+    try expectContains(aggregate_pointer_alias_array_dynamic_index_partially_assigned_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_pointer_alias_array_dynamic_index_partially_assigned_body, "load i32, ptr %");
+    try expectNotContains(aggregate_pointer_alias_array_dynamic_index_partially_assigned_body, " atomic ");
 
     const aggregate_pointer_alias_array_returned_unknown_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_array_returned_unknown_stays_plain");
     try expectContains(aggregate_pointer_alias_array_returned_unknown_body, "call ptr @external_pointer_array_holder()");

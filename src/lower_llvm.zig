@@ -3760,6 +3760,19 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn aggregatePointerAliasAssignmentPath(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) !?AggregatePointerFieldPath {
+        const base_ty = self.exprType(base) orelse return null;
+        if (self.resolveAliasType(base_ty).kind == .pointer) {
+            const local_name = self.localAggregatePointerAliasBaseName(base) orelse return null;
+            return .{ .local_name = local_name, .field_path = field_name };
+        }
+        const base_path = self.aggregatePointerAliasMemberPath(base) orelse return null;
+        return .{
+            .local_name = base_path.local_name,
+            .field_path = try self.joinAggregatePointerFieldPath(base_path.field_path, field_name),
+        };
+    }
+
     fn localArrayConstIndexValue(self: *LlvmEmitter, expr: ast.Expr) ?u64 {
         if (self.globalConstIndexValue(expr)) |index| return index;
         return switch (expr.kind) {
@@ -3930,7 +3943,9 @@ const LlvmEmitter = struct {
         field_ty: ast.TypeExpr,
         value_expr: ast.Expr,
     ) !void {
-        const target_path = (try self.directLocalAggregateAssignmentPath(base, field_name)) orelse return;
+        const target_path = (try self.directLocalAggregateAssignmentPath(base, field_name)) orelse
+            (try self.aggregatePointerAliasAssignmentPath(base, field_name)) orelse
+            return;
         if (self.isPointerLikeType(field_ty)) {
             try self.setAggregatePointerFieldProvenance(target_path.local_name, target_path.field_path, self.pointerExprHasGlobalStorageProvenance(value_expr));
             return;
@@ -4007,13 +4022,16 @@ const LlvmEmitter = struct {
             .grouped => |inner| return self.updateAggregateArrayPointerElementProvenanceFromAssignment(inner.*, element_ty, value_expr),
             else => return,
         };
-        const array_path = self.directLocalAggregateArrayBasePath(node.base.*) orelse return;
+        const array_path = self.directLocalAggregateArrayBasePath(node.base.*) orelse
+            self.aggregatePointerAliasArrayBasePath(node.base.*) orelse
+            return;
         if (!self.isPointerLikeType(element_ty)) return;
         if (self.localArrayConstIndexValue(node.index.*) == null) {
             self.clearAggregatePointerFieldsForLocalPath(array_path.local_name, array_path.field_path);
             return;
         }
-        const element_path = self.directLocalAggregateArrayElementPath(target) orelse {
+        const element_path = self.directLocalAggregateArrayElementPath(target) orelse
+            self.aggregatePointerAliasArrayElementPath(target) orelse {
             self.clearAggregatePointerFieldsForLocalPath(array_path.local_name, array_path.field_path);
             return;
         };
