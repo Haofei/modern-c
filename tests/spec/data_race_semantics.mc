@@ -146,6 +146,22 @@ fn call_indirect_alias_copy_reassigned_param() -> u32 {
     return g(&shared_counter);
 }
 
+fn consume_alias_copy_escape_param(p: *mut u32) -> u32 {
+    // EXPECT: lower-llvm keeps this plain because a copied local function-pointer alias escapes as a value.
+    return p.*;
+}
+
+fn escape_scalar_param_callback(f: fn(*mut u32) -> u32) -> void {
+    return;
+}
+
+fn call_indirect_alias_copy_escape_param() -> u32 {
+    let f: fn(*mut u32) -> u32 = consume_alias_copy_escape_param;
+    let g: fn(*mut u32) -> u32 = f;
+    escape_scalar_param_callback(g);
+    return g(&shared_counter);
+}
+
 fn consume_mixed_param(p: *mut u32) -> u32 {
     // EXPECT: lower-llvm keeps this plain because at least one direct call passes stack storage.
     return p.*;
@@ -358,6 +374,20 @@ fn call_indirect_aggregate_alias_copy_param() -> u32 {
     var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 43 };
     let f: fn(*mut PointerHolder) -> u32 = consume_aggregate_alias_copy_param;
     let g: fn(*mut PointerHolder) -> u32 = f;
+    return g(&holder);
+}
+
+fn consume_aggregate_alias_copy_escape_param(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm keeps this plain because a copied aggregate-param function-pointer alias escapes as a value.
+    return p.*;
+}
+
+fn call_indirect_aggregate_alias_copy_escape_param() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 44 };
+    let f: fn(*mut PointerHolder) -> u32 = consume_aggregate_alias_copy_escape_param;
+    let g: fn(*mut PointerHolder) -> u32 = f;
+    escape_aggregate_param_callback(g);
     return g(&holder);
 }
 
