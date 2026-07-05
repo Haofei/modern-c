@@ -1423,6 +1423,77 @@ test "lower-c wide-scalar global race lowering fails closed" {
     );
 }
 
+test "lower-c unproven wide-scalar pointer deref fails closed" {
+    // An unproven *mut u128 deref demands race-tolerant lowering (spec I.13
+    // default), but no mc_race helper exists for 128-bit scalars -> emission
+    // must fail closed rather than name a nonexistent helper.
+    try expectUnsupportedCheckedCEmission("emit_c_wide_deref.mc",
+        \\fn read_wide(p: *mut u128) -> u128 {
+        \\    return p.*;
+        \\}
+    );
+}
+
+test "lower-c proven-local wide-scalar deref stays plain" {
+    const source =
+        \\fn local_wide() -> u128 {
+        \\    var w: u128 = 7;
+        \\    let p: *mut u128 = &w;
+        \\    p.* = 9;
+        \\    return p.*;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("emit_c_wide_local_deref.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static unsigned __int128 local_wide(void)");
+    try expectContains(body, "/* mir pointer_provenance consumed fn=local_wide subject=p provenance=local_storage reason=none source=");
+    try expectContains(body, "*p = 9;");
+    try expectContains(body, "return *p;");
+    try expectNotContains(body, "mc_race_");
+}
+
+test "lower-c pointer-shaped pointee derefs lower through relaxed atomics" {
+    // Pointer-shaped pointees have no mc_race helper; the race-tolerant form is
+    // a relaxed __atomic_load_n/__atomic_store_n, mirroring pointer-typed
+    // global accesses.
+    const source =
+        \\global slot: u32;
+        \\
+        \\fn read_pp(pp: *mut *mut u32) -> *mut u32 {
+        \\    return pp.*;
+        \\}
+        \\
+        \\fn write_pp(pp: *mut *mut u32) -> void {
+        \\    pp.* = &slot;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("emit_c_pointer_pointee_deref.mc", source, &output);
+    const read_body = try cFunctionBody(output.items, "static uint32_t * read_pp(uint32_t * * pp)");
+    try expectContains(read_body, "__atomic_load_n(pp, __ATOMIC_RELAXED)");
+    const write_body = try cFunctionBody(output.items, "static void write_pp(uint32_t * * pp)");
+    try expectContains(write_body, "__atomic_store_n(pp, ");
+    try expectContains(write_body, "__ATOMIC_RELAXED);");
+}
+
+test "lower-c address-of-local deref keeps plain lowering" {
+    const source =
+        \\fn read_local() -> u32 {
+        \\    var local: u32 = 1;
+        \\    local = 2;
+        \\    return (&local).*;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("emit_c_address_of_local_deref.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static uint32_t read_local(void)");
+    try expectContains(body, "return *(&local);");
+    try expectNotContains(body, "mc_race_");
+}
+
 test "lower-c consumes MIR pointer provenance facts for direct scalar pointer derefs" {
     const source =
         \\global shared_counter: u32 = 0;
@@ -1467,13 +1538,13 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
         \\    return copy.*;
         \\}
         \\
-        \\fn pointer_fact_unknown_assignment_stays_plain() -> u32 {
+        \\fn pointer_fact_unknown_assignment_lowers_race_tolerant() -> u32 {
         \\    var gp: *mut u32 = &shared_counter;
         \\    gp = external_pointer();
         \\    return gp.*;
         \\}
         \\
-        \\fn pointer_fact_call_invalidated_stays_plain() -> u32 {
+        \\fn pointer_fact_call_invalidated_lowers_race_tolerant() -> u32 {
         \\    let gp: *mut u32 = &shared_counter;
         \\    external_raw_many_pointer();
         \\    return gp.*;
@@ -1503,7 +1574,7 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
         \\    }
         \\}
         \\
-        \\fn pointer_fact_raw_many_nonzero_stays_plain() -> u32 {
+        \\fn pointer_fact_raw_many_nonzero_lowers_race_tolerant() -> u32 {
         \\    unsafe {
         \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
         \\        let q: [*]mut u32 = p.offset(1);
@@ -1511,7 +1582,7 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
         \\    }
         \\}
         \\
-        \\fn pointer_fact_raw_many_dynamic_stays_plain(i: usize) -> u32 {
+        \\fn pointer_fact_raw_many_dynamic_lowers_race_tolerant(i: usize) -> u32 {
         \\    unsafe {
         \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
         \\        let q: [*]mut u32 = p.offset(i);
@@ -1519,7 +1590,7 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
         \\    }
         \\}
         \\
-        \\fn pointer_fact_raw_many_unknown_stays_plain() -> u32 {
+        \\fn pointer_fact_raw_many_unknown_lowers_race_tolerant() -> u32 {
         \\    unsafe {
         \\        let q: [*]mut u32 = external_raw_many_pointer().offset(0);
         \\        return q.*;
@@ -1546,17 +1617,18 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
     try expectContains(output.items, "*lp = 6;");
     try expectContains(output.items, "return *lp;");
     const local_copy_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_local_copy_stays_plain(void)");
+    try expectContains(local_copy_body, "/* mir pointer_provenance consumed fn=pointer_fact_local_copy_stays_plain subject=copy provenance=local_storage reason=none source=");
     try expectContains(local_copy_body, "return *copy;");
     try expectNotContains(local_copy_body, "mc_race_load_u32(copy)");
-    try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_unknown_assignment_stays_plain subject=gp provenance=global_storage reason=none source=");
-    try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_unknown_assignment_stays_plain subject=gp provenance=unknown reason=reassignment source=");
-    try expectContains(output.items, "return *gp;");
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_unknown_assignment_lowers_race_tolerant subject=gp provenance=global_storage reason=none source=");
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_unknown_assignment_lowers_race_tolerant subject=gp provenance=unknown reason=reassignment source=");
+    try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(gp));");
 
-    const invalidated_comment = "/* mir pointer_provenance consumed fn=pointer_fact_call_invalidated_stays_plain subject=gp provenance=global_storage reason=none source=";
+    const invalidated_comment = "/* mir pointer_provenance consumed fn=pointer_fact_call_invalidated_lowers_race_tolerant subject=gp provenance=global_storage reason=none source=";
     const invalidated_pos = std.mem.indexOf(u8, output.items, invalidated_comment) orelse return error.TestExpectedEqual;
-    const invalidated_return = std.mem.indexOfPos(u8, output.items, invalidated_pos, "return *gp;") orelse return error.TestExpectedEqual;
-    const invalidated_slice = output.items[invalidated_pos..invalidated_return];
-    try expectNotContains(invalidated_slice, "mc_race_load_u32(gp)");
+    _ = std.mem.indexOfPos(u8, output.items, invalidated_pos, "return ((uint32_t)mc_race_load_u32(gp));") orelse return error.TestExpectedEqual;
+    const invalidated_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_call_invalidated_lowers_race_tolerant(void)");
+    try expectNotContains(invalidated_body, "return *gp;");
 
     const raw_many_zero_load_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_zero_load(void)");
     try expectContains(raw_many_zero_load_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_zero_load subject=q provenance=global_storage reason=none source=");
@@ -1570,17 +1642,17 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
     try expectContains(raw_many_copy_load_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_copy_load subject=q provenance=global_storage reason=none source=");
     try expectContains(raw_many_copy_load_body, "return ((uint32_t)mc_race_load_u32(q));");
 
-    const raw_many_nonzero_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_nonzero_stays_plain(void)");
-    try expectContains(raw_many_nonzero_body, "return *q;");
-    try expectNotContains(raw_many_nonzero_body, "mc_race_load_u32(q)");
+    const raw_many_nonzero_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_nonzero_lowers_race_tolerant(void)");
+    try expectContains(raw_many_nonzero_body, "return ((uint32_t)mc_race_load_u32(q));");
+    try expectNotContains(raw_many_nonzero_body, "return *q;");
 
-    const raw_many_dynamic_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_dynamic_stays_plain(uintptr_t i)");
-    try expectContains(raw_many_dynamic_body, "return *q;");
-    try expectNotContains(raw_many_dynamic_body, "mc_race_load_u32(q)");
+    const raw_many_dynamic_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_dynamic_lowers_race_tolerant(uintptr_t i)");
+    try expectContains(raw_many_dynamic_body, "return ((uint32_t)mc_race_load_u32(q));");
+    try expectNotContains(raw_many_dynamic_body, "return *q;");
 
-    const raw_many_unknown_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_unknown_stays_plain(void)");
-    try expectContains(raw_many_unknown_body, "return *q;");
-    try expectNotContains(raw_many_unknown_body, "mc_race_load_u32(q)");
+    const raw_many_unknown_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_unknown_lowers_race_tolerant(void)");
+    try expectContains(raw_many_unknown_body, "return ((uint32_t)mc_race_load_u32(q));");
+    try expectNotContains(raw_many_unknown_body, "return *q;");
 
     var mir_dump: std.ArrayList(u8) = .empty;
     defer mir_dump.deinit(std.testing.allocator);
@@ -1657,15 +1729,16 @@ test "lower-c consumes MIR pointer provenance facts for fixed pointer-array elem
 
     const stack_body = try cFunctionBody(output.items, "static uint32_t c_array_stack_pointer_element_stays_plain(void)");
     try expectContains(stack_body, "/* mir pointer_provenance consumed fn=c_array_stack_pointer_element_stays_plain subject=ptrs element=0 provenance=local_storage reason=none source=");
+    try expectContains(stack_body, "/* mir pointer_provenance consumed fn=c_array_stack_pointer_element_stays_plain subject=p provenance=local_storage reason=none source=");
     try expectContains(stack_body, "return *p;");
     try expectNotContains(stack_body, "mc_race_load_u32(p)");
 
     const dynamic_body = try cFunctionBody(output.items, "static uint32_t c_array_dynamic_assignment_clears_pointer_element_fact(uintptr_t index)");
     try expectContains(dynamic_body, "/* mir pointer_provenance consumed fn=c_array_dynamic_assignment_clears_pointer_element_fact subject=ptrs provenance=unknown reason=dynamic_index_write source=");
-    try expectContains(dynamic_body, "*dynamic_p");
-    try expectContains(dynamic_body, "*constant_p");
-    try expectNotContains(dynamic_body, "mc_race_load_u32(dynamic_p)");
-    try expectNotContains(dynamic_body, "mc_race_load_u32(constant_p)");
+    try expectContains(dynamic_body, "mc_race_load_u32(dynamic_p)");
+    try expectContains(dynamic_body, "mc_race_load_u32(constant_p)");
+    try expectNotContains(dynamic_body, "*dynamic_p");
+    try expectNotContains(dynamic_body, "*constant_p");
 
     var mir_dump: std.ArrayList(u8) = .empty;
     defer mir_dump.deinit(std.testing.allocator);

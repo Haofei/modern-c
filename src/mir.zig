@@ -2923,7 +2923,8 @@ const FunctionBuilder = struct {
     fn directPointerProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape, target_subject: ?[]const u8) ?DirectPointerProvenance {
         return self.directAddressProvenance(expr) orelse
             self.rawManyZeroOffsetProvenance(expr, target_shape) orelse
-            self.directLocalPointerCopyProvenance(expr, target_shape, target_subject);
+            self.directLocalPointerCopyProvenance(expr, target_shape, target_subject) orelse
+            self.constantIndexLocalPointerElementProvenance(expr, target_shape);
     }
 
     fn rawManyZeroOffsetProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape) ?DirectPointerProvenance {
@@ -2954,10 +2955,39 @@ const FunctionBuilder = struct {
             if (std.mem.eql(u8, subject, base_name)) return null;
         }
         const live = self.livePointerProvenanceForDirectLocal(base_name) orelse return null;
-        if (live.provenance != .global_storage) return null;
+        // Copies propagate both proven-global AND proven-local provenance: the
+        // local_storage facts are load-bearing on both backends (a positive
+        // locality proof is what gates plain deref lowering, spec §I.13).
+        if (live.provenance != .global_storage and live.provenance != .local_storage) return null;
         if (!samePointerShape(live.pointer_shape, target_shape)) return null;
         const storage = live.storage orelse return null;
         return .{ .kind = live.provenance, .storage = storage };
+    }
+
+    // A constant-index read of a local fixed pointer array propagates the
+    // element's live LOCAL provenance to the destination pointer
+    // (`let p = ptrs[0];` with a live `ptrs[0] -> local_storage` fact). The
+    // proven-GLOBAL element case intentionally stays with the emitters' own
+    // element ladders — only the local side needs a MIR-grounded positive proof
+    // because plain deref lowering is gated on proven-local storage (spec §I.13).
+    fn constantIndexLocalPointerElementProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape) ?DirectPointerProvenance {
+        return switch (expr.kind) {
+            .grouped => |inner| self.constantIndexLocalPointerElementProvenance(inner.*, target_shape),
+            .cast => |node| self.constantIndexLocalPointerElementProvenance(node.value.*, target_shape),
+            .index => |node| blk: {
+                const base_name = directIdentName(node.base.*) orelse break :blk null;
+                const ty_expr = self.local_type_exprs.get(base_name) orelse break :blk null;
+                const shape = self.fixedPointerArrayElementShape(ty_expr) orelse break :blk null;
+                if (!samePointerShape(shape, target_shape)) break :blk null;
+                const offset = integerLiteralValue(node.index.*) orelse break :blk null;
+                if (offset.negative) break :blk null;
+                const live = self.livePointerProvenanceForElement(base_name, @intCast(offset.magnitude)) orelse break :blk null;
+                if (live.provenance != .local_storage) break :blk null;
+                const storage = live.storage orelse break :blk null;
+                break :blk .{ .kind = live.provenance, .storage = storage };
+            },
+            else => null,
+        };
     }
 
     fn directLocalPointerCopyBaseName(self: *FunctionBuilder, expr: ast.Expr) ?[]const u8 {
@@ -2992,6 +3022,18 @@ const FunctionBuilder = struct {
             index -= 1;
             const live = self.live_pointer_provenance.items[index];
             if (live.element_index != null) continue;
+            if (std.mem.eql(u8, live.subject, subject)) return live;
+        }
+        return null;
+    }
+
+    fn livePointerProvenanceForElement(self: *FunctionBuilder, subject: []const u8, element_index: usize) ?LivePointerProvenance {
+        var index = self.live_pointer_provenance.items.len;
+        while (index > 0) {
+            index -= 1;
+            const live = self.live_pointer_provenance.items[index];
+            const live_element = live.element_index orelse continue;
+            if (live_element != element_index) continue;
             if (std.mem.eql(u8, live.subject, subject)) return live;
         }
         return null;
