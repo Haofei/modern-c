@@ -14,7 +14,7 @@ EXPECT_RE = re.compile(r"EXPECT(?:_ERROR)?:\s+(E_[A-Z0-9_]+)")
 UNIT_MARKER_RE = re.compile(r"//\s*DIAGNOSTIC_UNIT:\s+(E_[A-Z0-9_]+)\b")
 ALLOWLIST_ROW_RE = re.compile(r"^\|\s*`?(E_[A-Z0-9_]+)`?\s*\|\s*(.*?)\s*\|")
 FIXTURE_GLOBS = (
-    "tests/spec/*.mc",
+    "tests/spec/**/*.mc",
     "tests/c_emit/bad/*.mc",
     "kernel/bad/*.mc",
     "demo/bad/*.mc",
