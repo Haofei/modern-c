@@ -128,6 +128,22 @@ fn nested_aggregate_global_pointer_field_load() -> u32 {
     return p.*;
 }
 
+fn aggregate_pointer_alias_global_pointer_field_load() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 12 };
+    let hp: *mut PointerHolder = &holder;
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load through a local aggregate pointer alias to a proven pointer field.
+    return p.*;
+}
+
+fn nested_aggregate_pointer_alias_global_pointer_field_load() -> u32 {
+    var outer: OuterHolder = .{ .inner = .{ .ptr = &shared_counter, .tag = 13 }, .tag = 14 };
+    let op: *mut OuterHolder = &outer;
+    let p: *mut u32 = op.inner.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load through a nested local aggregate pointer alias to a proven pointer field.
+    return p.*;
+}
+
 fn nested_aggregate_assigned_global_pointer_field_load() -> u32 {
     var local: u32 = 13;
     var outer: OuterHolder = .{ .inner = .{ .ptr = &local, .tag = 3 }, .tag = 4 };
@@ -150,6 +166,39 @@ fn nested_aggregate_stack_pointer_field_stays_plain() -> u32 {
     let outer: OuterHolder = .{ .inner = .{ .ptr = &local, .tag = 5 }, .tag = 6 };
     let p: *mut u32 = outer.inner.ptr;
     // EXPECT: lower-llvm keeps stack-backed nested aggregate pointer field derefs plain.
+    return p.*;
+}
+
+fn aggregate_pointer_alias_stack_pointer_field_stays_plain() -> u32 {
+    var local: u32 = 19;
+    var holder: PointerHolder = .{ .ptr = &local, .tag = 15 };
+    let hp: *mut PointerHolder = &holder;
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm keeps stack-backed aggregate pointer field derefs through local aggregate pointer aliases plain.
+    return p.*;
+}
+
+extern "C" fn external_pointer_holder() -> *mut PointerHolder;
+
+fn aggregate_pointer_alias_returned_unknown_stays_plain() -> u32 {
+    let hp: *mut PointerHolder = external_pointer_holder();
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm keeps aggregate pointer fields through returned/external aggregate pointers plain.
+    return p.*;
+}
+
+fn aggregate_pointer_param_field_stays_plain(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm keeps direct aggregate pointer params plain because the pointee storage is ambiguous.
+    return p.*;
+}
+
+fn aggregate_pointer_alias_reassigned_unknown_stays_plain() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 16 };
+    var hp: *mut PointerHolder = &holder;
+    hp = external_pointer_holder();
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm clears aggregate pointer alias facts after reassignment to an unknown aggregate pointer.
     return p.*;
 }
 
