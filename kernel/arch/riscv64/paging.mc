@@ -132,7 +132,7 @@ pub fn riscv_aspace_of(pt: *PageTable) -> AddressSpace {
 }
 
 // Why a mapping request was rejected.
-enum MapError {
+pub enum MapError {
     MisalignedAddress,   // `virt`/`phys` are not aligned to the mapping granularity
     AlreadyMapped,       // a valid leaf PTE already covers this VA (unmap it first)
     ConflictWithLargePage, // a larger leaf mapping already spans this VA
