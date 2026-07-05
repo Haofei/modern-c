@@ -1123,6 +1123,11 @@ const LlvmEmitter = struct {
         }
     };
 
+    const SimpleAggregateReturnControlFlow = struct {
+        prefix: ast.Block,
+        return_paths: SimpleAggregateReturnPaths,
+    };
+
     fn collectSimpleControlFlowAggregateReturnPointerFields(
         self: *LlvmEmitter,
         fn_decl: ast.FnDecl,
@@ -1130,14 +1135,17 @@ const LlvmEmitter = struct {
         body: ast.Block,
         summary_local: []const u8,
     ) !bool {
-        const return_paths = self.simpleControlFlowAggregateReturnPaths(body) orelse return false;
-        if (return_paths.len < 2) return false;
+        const control_flow = self.simpleControlFlowAggregateReturnPaths(body) orelse return false;
+        if (control_flow.return_paths.len < 2) return false;
 
         var common_fields: ?std.StringHashMap(void) = null;
         defer if (common_fields) |*fields| self.deinitOwnedStringVoidMap(fields);
 
-        for (return_paths.paths[0..return_paths.len]) |return_path| {
-            var branch_fields = (try self.aggregateReturnPointerFieldPathsForReturnPath(fn_decl.params, struct_decl, return_path, summary_local)) orelse return false;
+        for (control_flow.return_paths.paths[0..control_flow.return_paths.len]) |return_path| {
+            self.resetTransientPointerProvenance();
+            try self.seedAggregateReturnSummaryParams(fn_decl.params);
+            if (!try self.trackSimpleAggregateReturnStatements(control_flow.prefix.items)) return false;
+            var branch_fields = (try self.aggregateReturnPointerFieldPathsForReturnPathWithCurrentFacts(struct_decl, return_path, summary_local)) orelse return false;
             errdefer self.deinitOwnedStringVoidMap(&branch_fields);
             if (common_fields) |*common| {
                 try self.intersectOwnedStringVoidMap(common, &branch_fields);
@@ -1157,26 +1165,21 @@ const LlvmEmitter = struct {
         return true;
     }
 
-    fn simpleControlFlowAggregateReturnPaths(self: *LlvmEmitter, body: ast.Block) ?SimpleAggregateReturnPaths {
-        if (body.items.len == 1) {
-            const switch_node = switch (body.items[0].kind) {
+    fn simpleControlFlowAggregateReturnPaths(self: *LlvmEmitter, body: ast.Block) ?SimpleAggregateReturnControlFlow {
+        for (body.items, 0..) |stmt, switch_index| {
+            const switch_node = switch (stmt.kind) {
                 .@"switch" => |node| node,
-                else => return null,
+                else => continue,
             };
+            const prefix: ast.Block = .{ .span = body.span, .items = body.items[0..switch_index] };
             var paths: SimpleAggregateReturnPaths = .{};
-            if (!self.collectIfElseReturnPaths(switch_node, &paths)) return null;
-            return paths;
-        }
-
-        if (body.items.len >= 2) {
-            const switch_node = switch (body.items[0].kind) {
-                .@"switch" => |node| node,
-                else => return null,
-            };
-            var paths: SimpleAggregateReturnPaths = .{};
-            const trailing_path: ast.Block = .{ .span = body.span, .items = body.items[1..] };
+            if (switch_index + 1 == body.items.len) {
+                if (!self.collectIfElseReturnPaths(switch_node, &paths)) return null;
+                return .{ .prefix = prefix, .return_paths = paths };
+            }
+            const trailing_path: ast.Block = .{ .span = body.span, .items = body.items[switch_index + 1 ..] };
             if (!self.collectIfWithTrailingReturnPaths(switch_node, trailing_path, &paths)) return null;
-            return paths;
+            return .{ .prefix = prefix, .return_paths = paths };
         }
 
         return null;
@@ -1252,6 +1255,15 @@ const LlvmEmitter = struct {
         self.resetTransientPointerProvenance();
         try self.seedAggregateReturnSummaryParams(params);
 
+        return try self.aggregateReturnPointerFieldPathsForReturnPathWithCurrentFacts(struct_decl, return_path, summary_local);
+    }
+
+    fn aggregateReturnPointerFieldPathsForReturnPathWithCurrentFacts(
+        self: *LlvmEmitter,
+        struct_decl: ast.StructDecl,
+        return_path: ast.Block,
+        summary_local: []const u8,
+    ) !?std.StringHashMap(void) {
         if (return_path.items.len == 0) return null;
         if (!try self.trackSimpleAggregateReturnPrefix(return_path)) return null;
 
@@ -1334,7 +1346,11 @@ const LlvmEmitter = struct {
     }
 
     fn trackSimpleAggregateReturnPrefix(self: *LlvmEmitter, body: ast.Block) !bool {
-        for (body.items[0 .. body.items.len - 1]) |stmt| {
+        return try self.trackSimpleAggregateReturnStatements(body.items[0 .. body.items.len - 1]);
+    }
+
+    fn trackSimpleAggregateReturnStatements(self: *LlvmEmitter, statements: []const ast.Stmt) !bool {
+        for (statements) |stmt| {
             switch (stmt.kind) {
                 .let_decl, .var_decl => |local| {
                     if (!try self.trackSimpleAggregateReturnLocalDecl(local)) return false;

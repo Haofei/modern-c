@@ -363,6 +363,28 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(aggregate_return_mixed_switch_body, "load i32, ptr %");
     try expectNotContains(aggregate_return_mixed_switch_body, " atomic ");
 
+    const aggregate_return_prefix_bool_switch_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_prefix_bool_switch_pointer_field_load");
+    try expectContains(aggregate_return_prefix_bool_switch_body, "call { ptr, i32 } @returned_pointer_holder_via_prefix_bool_switch(");
+    try expectContains(aggregate_return_prefix_bool_switch_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_return_prefix_bool_switch_body, " unordered, align 4");
+    try expectNotContains(aggregate_return_prefix_bool_switch_body, "load i32, ptr %p.addr.");
+
+    const aggregate_return_prefix_wildcard_switch_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_prefix_wildcard_switch_pointer_field_load");
+    try expectContains(aggregate_return_prefix_wildcard_switch_body, "call { ptr, i32 } @returned_pointer_holder_via_prefix_wildcard_switch(");
+    try expectContains(aggregate_return_prefix_wildcard_switch_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_return_prefix_wildcard_switch_body, " unordered, align 4");
+    try expectNotContains(aggregate_return_prefix_wildcard_switch_body, "load i32, ptr %p.addr.");
+
+    const aggregate_return_prefix_unknown_call_switch_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_prefix_unknown_call_switch_pointer_field_stays_plain");
+    try expectContains(aggregate_return_prefix_unknown_call_switch_body, "call { ptr, i32 } @returned_pointer_holder_via_prefix_unknown_call_switch(");
+    try expectContains(aggregate_return_prefix_unknown_call_switch_body, "load i32, ptr %");
+    try expectNotContains(aggregate_return_prefix_unknown_call_switch_body, " atomic ");
+
+    const aggregate_return_prefix_mixed_switch_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_prefix_mixed_switch_pointer_field_stays_plain");
+    try expectContains(aggregate_return_prefix_mixed_switch_body, "call { ptr, i32 } @returned_pointer_holder_via_prefix_mixed_switch(");
+    try expectContains(aggregate_return_prefix_mixed_switch_body, "load i32, ptr %");
+    try expectNotContains(aggregate_return_prefix_mixed_switch_body, " atomic ");
+
     const aggregate_return_prereturn_literal_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_prereturn_literal_pointer_field_load");
     try expectContains(aggregate_return_prereturn_literal_body, "call { ptr, i32 } @returned_pointer_holder_after_side_effect()");
     try expectContains(aggregate_return_prereturn_literal_body, "load atomic i32, ptr %");

@@ -596,6 +596,57 @@ fn returned_pointer_holder_via_mixed_switch(choice: u32) -> PointerHolder {
     }
 }
 
+fn returned_pointer_holder_via_prefix_bool_switch(cond: bool) -> PointerHolder {
+    let noise: u32 = shared_counter;
+    switch cond {
+        true => {
+            return .{ .ptr = &shared_counter, .tag = noise };
+        }
+        false => {
+            let holder: PointerHolder = .{ .ptr = &shared_counter, .tag = noise };
+            return holder;
+        }
+    }
+}
+
+fn returned_pointer_holder_via_prefix_wildcard_switch(choice: u32) -> PointerHolder {
+    let noise: u32 = shared_counter;
+    switch choice {
+        0 => {
+            return .{ .ptr = &shared_counter, .tag = noise };
+        }
+        _ => {
+            return .{ .ptr = &shared_counter, .tag = noise };
+        }
+    }
+}
+
+fn returned_pointer_holder_via_prefix_unknown_call_switch(choice: u32) -> PointerHolder {
+    let hp: *mut PointerHolder = external_pointer_holder();
+    switch choice {
+        0 => {
+            return .{ .ptr = &shared_counter, .tag = 79 };
+        }
+        _ => {
+            return hp.*;
+        }
+    }
+}
+
+fn returned_pointer_holder_via_prefix_mixed_switch(choice: u32) -> PointerHolder {
+    let noise: u32 = shared_counter;
+    switch choice {
+        0 => {
+            return .{ .ptr = &shared_counter, .tag = noise };
+        }
+        _ => {
+            var local: u32 = 80;
+            let holder: PointerHolder = .{ .ptr = &local, .tag = noise };
+            return holder;
+        }
+    }
+}
+
 fn returned_pointer_holder_after_side_effect() -> PointerHolder {
     let noise: u32 = shared_counter;
     return .{ .ptr = &shared_counter, .tag = noise };
@@ -689,6 +740,34 @@ fn aggregate_return_mixed_switch_pointer_field_stays_plain(choice: u32) -> u32 {
     let holder: PointerHolder = returned_pointer_holder_via_mixed_switch(choice);
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm keeps returned switch aggregate fields plain when any arm is stack-backed.
+    return p.*;
+}
+
+fn aggregate_return_prefix_bool_switch_pointer_field_load(cond: bool) -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_via_prefix_bool_switch(cond);
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load when a simple prefix precedes all-global bool switch return arms.
+    return p.*;
+}
+
+fn aggregate_return_prefix_wildcard_switch_pointer_field_load(choice: u32) -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_via_prefix_wildcard_switch(choice);
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load when a simple prefix precedes all-global wildcard switch return arms.
+    return p.*;
+}
+
+fn aggregate_return_prefix_unknown_call_switch_pointer_field_stays_plain(choice: u32) -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_via_prefix_unknown_call_switch(choice);
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm keeps returned aggregate fields plain when a pre-switch unknown call prevents provenance proof.
+    return p.*;
+}
+
+fn aggregate_return_prefix_mixed_switch_pointer_field_stays_plain(choice: u32) -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_via_prefix_mixed_switch(choice);
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm keeps prefixed switch aggregate fields plain when branch facts do not intersect.
     return p.*;
 }
 
