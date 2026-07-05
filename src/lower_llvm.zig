@@ -938,8 +938,184 @@ const LlvmEmitter = struct {
             return;
         }
 
+        if (try self.collectSimpleControlFlowAggregateReturnPointerFields(fn_decl.name.text, struct_decl, body, summary_local)) return;
+
         const returned_local = (try self.collectSimpleAggregateReturnLocal(struct_decl, body)) orelse return;
         try self.copyAggregateReturnPointerFieldsFromLocal(fn_decl.name.text, returned_local);
+    }
+
+    const SimpleAggregateReturnExprs = struct {
+        exprs: [2]ast.Expr = undefined,
+        len: usize = 0,
+
+        fn append(self: *SimpleAggregateReturnExprs, expr: ast.Expr) bool {
+            if (self.len >= self.exprs.len) return false;
+            self.exprs[self.len] = expr;
+            self.len += 1;
+            return true;
+        }
+    };
+
+    fn collectSimpleControlFlowAggregateReturnPointerFields(
+        self: *LlvmEmitter,
+        fn_name: []const u8,
+        struct_decl: ast.StructDecl,
+        body: ast.Block,
+        summary_local: []const u8,
+    ) !bool {
+        const return_exprs = self.simpleControlFlowAggregateReturnExprs(body) orelse return false;
+        if (return_exprs.len < 2) return false;
+
+        var common_fields: ?std.StringHashMap(void) = null;
+        defer if (common_fields) |*fields| self.deinitOwnedStringVoidMap(fields);
+
+        for (return_exprs.exprs[0..return_exprs.len]) |return_expr| {
+            if (!self.aggregateReturnSummaryExprIsSimple(return_expr)) return false;
+            const fields = self.structLiteralFields(return_expr) orelse return false;
+            self.clearAggregatePointerFieldsForLocal(summary_local);
+            try self.updateAggregatePointerFieldProvenanceFromStructLiteral(summary_local, struct_decl, fields, null);
+
+            var branch_fields = try self.aggregatePointerFieldPathsForLocal(summary_local);
+            errdefer self.deinitOwnedStringVoidMap(&branch_fields);
+            if (common_fields) |*common| {
+                try self.intersectOwnedStringVoidMap(common, &branch_fields);
+                self.deinitOwnedStringVoidMap(&branch_fields);
+            } else {
+                common_fields = branch_fields;
+            }
+        }
+
+        const fields = common_fields orelse return false;
+        var it = fields.keyIterator();
+        while (it.next()) |field_path| {
+            const summary_key = try self.aggregateReturnPointerFieldKey(fn_name, field_path.*);
+            errdefer self.allocator.free(summary_key);
+            try self.aggregate_return_pointer_fields.put(summary_key, {});
+        }
+        return true;
+    }
+
+    fn simpleControlFlowAggregateReturnExprs(self: *LlvmEmitter, body: ast.Block) ?SimpleAggregateReturnExprs {
+        if (body.items.len == 1) {
+            const switch_node = switch (body.items[0].kind) {
+                .@"switch" => |node| node,
+                else => return null,
+            };
+            var exprs: SimpleAggregateReturnExprs = .{};
+            if (!self.collectIfElseReturnExprs(switch_node, &exprs)) return null;
+            return exprs;
+        }
+
+        if (body.items.len == 2) {
+            const switch_node = switch (body.items[0].kind) {
+                .@"switch" => |node| node,
+                else => return null,
+            };
+            const trailing_return = switch (body.items[1].kind) {
+                .@"return" => |maybe_expr| maybe_expr orelse return null,
+                else => return null,
+            };
+            var exprs: SimpleAggregateReturnExprs = .{};
+            if (!self.collectIfWithTrailingReturnExprs(switch_node, trailing_return, &exprs)) return null;
+            return exprs;
+        }
+
+        return null;
+    }
+
+    fn collectIfElseReturnExprs(self: *LlvmEmitter, switch_node: ast.Switch, exprs: *SimpleAggregateReturnExprs) bool {
+        if (!self.isSimpleBoolIfSwitch(switch_node)) return false;
+        for (switch_node.arms) |arm| {
+            const block = switch (arm.body) {
+                .block => |block| block,
+                .expr => return false,
+            };
+            const return_expr = self.singleReturnExpr(block) orelse return false;
+            if (!exprs.append(return_expr)) return false;
+        }
+        return true;
+    }
+
+    fn collectIfWithTrailingReturnExprs(
+        self: *LlvmEmitter,
+        switch_node: ast.Switch,
+        trailing_return: ast.Expr,
+        exprs: *SimpleAggregateReturnExprs,
+    ) bool {
+        if (!self.isSimpleBoolIfSwitch(switch_node)) return false;
+        var returned_arms: usize = 0;
+        for (switch_node.arms) |arm| {
+            const block = switch (arm.body) {
+                .block => |block| block,
+                .expr => return false,
+            };
+            if (block.items.len == 0) continue;
+            const return_expr = self.singleReturnExpr(block) orelse return false;
+            returned_arms += 1;
+            if (!exprs.append(return_expr)) return false;
+        }
+        if (returned_arms != 1) return false;
+        return exprs.append(trailing_return);
+    }
+
+    fn isSimpleBoolIfSwitch(self: *LlvmEmitter, switch_node: ast.Switch) bool {
+        if (!self.aggregateReturnSummaryExprIsSimple(switch_node.subject)) return false;
+        if (switch_node.arms.len != 2) return false;
+        var saw_true = false;
+        var saw_false = false;
+        for (switch_node.arms) |arm| {
+            if (arm.patterns.len != 1) return false;
+            const value = self.boolLiteralPatternValue(arm.patterns[0]) orelse return false;
+            if (value) {
+                if (saw_true) return false;
+                saw_true = true;
+            } else {
+                if (saw_false) return false;
+                saw_false = true;
+            }
+        }
+        return saw_true and saw_false;
+    }
+
+    fn boolLiteralPatternValue(self: *LlvmEmitter, pattern: ast.Pattern) ?bool {
+        _ = self;
+        return switch (pattern.kind) {
+            .literal => |expr| switch (expr.kind) {
+                .bool_literal => |value| value,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn aggregatePointerFieldPathsForLocal(self: *LlvmEmitter, local_name: []const u8) !std.StringHashMap(void) {
+        var fields = std.StringHashMap(void).init(self.allocator);
+        errdefer self.deinitOwnedStringVoidMap(&fields);
+
+        var it = self.aggregate_global_pointer_fields.keyIterator();
+        while (it.next()) |key| {
+            if (!aggregatePointerFieldKeyMatchesLocal(key.*, local_name)) continue;
+            const field_path = key.*[local_name.len + 1 ..];
+            const owned_path = try self.allocator.dupe(u8, field_path);
+            errdefer self.allocator.free(owned_path);
+            try fields.put(owned_path, {});
+        }
+
+        return fields;
+    }
+
+    fn intersectOwnedStringVoidMap(self: *LlvmEmitter, common: *std.StringHashMap(void), branch: *const std.StringHashMap(void)) !void {
+        var removals: std.ArrayList([]const u8) = .empty;
+        defer removals.deinit(self.scratch.allocator());
+
+        var it = common.keyIterator();
+        while (it.next()) |key| {
+            if (!branch.contains(key.*)) try removals.append(self.scratch.allocator(), key.*);
+        }
+
+        for (removals.items) |key| {
+            if (common.fetchRemove(key)) |entry| self.allocator.free(entry.key);
+        }
     }
 
     fn copyAggregateReturnPointerFieldsFromLocal(self: *LlvmEmitter, fn_name: []const u8, local_name: []const u8) !void {

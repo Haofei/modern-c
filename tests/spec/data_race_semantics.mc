@@ -404,6 +404,21 @@ fn returned_pointer_holder_via_assignment() -> PointerHolder {
     return holder;
 }
 
+fn returned_pointer_holder_via_if(cond: bool) -> PointerHolder {
+    if cond {
+        return .{ .ptr = &shared_counter, .tag = 64 };
+    }
+    return .{ .ptr = &shared_counter, .tag = 65 };
+}
+
+fn returned_pointer_holder_via_mixed_if_else(cond: bool, fallback: *mut u32) -> PointerHolder {
+    if cond {
+        return .{ .ptr = &shared_counter, .tag = 66 };
+    } else {
+        return .{ .ptr = fallback, .tag = 67 };
+    }
+}
+
 fn aggregate_computed_copy_pointer_field_load() -> u32 {
     var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 10 };
     holder = returned_pointer_holder();
@@ -430,6 +445,21 @@ fn aggregate_return_local_assignment_pointer_field_load() -> u32 {
     let holder: PointerHolder = returned_pointer_holder_via_assignment();
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm emits unordered atomic load after aggregate initialization from a summarized internal assigned local return.
+    return p.*;
+}
+
+fn aggregate_return_if_pointer_field_load(cond: bool) -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_via_if(cond);
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load when all simple if return paths summarize the field as global-backed.
+    return p.*;
+}
+
+fn aggregate_return_mixed_if_pointer_field_stays_plain(cond: bool) -> u32 {
+    var local: u32 = 68;
+    let holder: PointerHolder = returned_pointer_holder_via_mixed_if_else(cond, &local);
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm keeps a returned aggregate field plain when simple if branches have mixed global/unknown provenance.
     return p.*;
 }
 
