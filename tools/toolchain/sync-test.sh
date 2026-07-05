@@ -17,14 +17,14 @@ MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/sync.o" >/dev/null
 cat >"$WORK/driver.c" <<'CEOF'
 #include <stdint.h>
 struct SpinLock { uint32_t state; };
-struct Guard { struct SpinLock *lock; };
-struct IrqGuard { struct SpinLock *lock; uintptr_t flags; };
 static int balance = 0;
 // Single-core lock: a plain flag suffices; the linear Guard provides the safety.
-struct Guard mc_spin_acquire(struct SpinLock *l) { l->state = 1; balance++; return (struct Guard){ l }; }
-void mc_spin_release(struct Guard g) { g.lock->state = 0; balance--; }
-struct IrqGuard mc_spin_acquire_irqsave(struct SpinLock *l) { l->state = 1; balance++; return (struct IrqGuard){ l, 0 }; }
-void mc_spin_release_irqrestore(struct IrqGuard g) { g.lock->state = 0; balance--; }
+// The seam passes only pointers/scalars (extern struct-by-value is rejected); the
+// linear Guard/IrqGuard witnesses live entirely on the MC side (std/sync/sync.mc).
+void mc_spin_acquire(struct SpinLock *l) { l->state = 1; balance++; }
+void mc_spin_release(struct SpinLock *l) { l->state = 0; balance--; }
+uintptr_t mc_spin_acquire_irqsave(struct SpinLock *l) { l->state = 1; balance++; return 0; }
+void mc_spin_release_irqrestore(struct SpinLock *l, uintptr_t flags) { (void)flags; l->state = 0; balance--; }
 extern void guarded_add(struct SpinLock *l, uint32_t *counter, uint32_t delta);
 int main(void) {
     struct SpinLock l = { 0 };

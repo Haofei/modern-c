@@ -6,17 +6,17 @@
 
 // ----- structs matching the MC-emitted layout (std/sync.mc, std/dma.mc) -----
 typedef struct SpinLock { uint32_t state; } SpinLock;
-typedef struct Guard { SpinLock *lock; } Guard;
-typedef struct IrqGuard { SpinLock *lock; uintptr_t flags; } IrqGuard;
 typedef struct CpuBuffer { uintptr_t dev_addr; uintptr_t cpu_addr; uintptr_t len; } CpuBuffer;
 typedef struct DeviceBuffer { uintptr_t dev_addr; uintptr_t len; } DeviceBuffer;
 typedef struct Uart16550 Uart16550;
 
 // ----- std/sync platform primitives (single-core) -----
-Guard mc_spin_acquire(SpinLock *l) { l->state = 1; return (Guard){ l }; }
-void mc_spin_release(Guard g) { g.lock->state = 0; }
-IrqGuard mc_spin_acquire_irqsave(SpinLock *l) { l->state = 1; return (IrqGuard){ l, 0 }; }
-void mc_spin_release_irqrestore(IrqGuard g) { g.lock->state = 0; }
+// The seam passes only pointers/scalars (extern struct-by-value is rejected); the
+// linear Guard/IrqGuard witnesses live entirely on the MC side (std/sync/sync.mc).
+void mc_spin_acquire(SpinLock *l) { l->state = 1; }
+void mc_spin_release(SpinLock *l) { l->state = 0; }
+uintptr_t mc_spin_acquire_irqsave(SpinLock *l) { l->state = 1; return 0; }
+void mc_spin_release_irqrestore(SpinLock *l, uintptr_t flags) { (void)flags; l->state = 0; }
 
 // ----- std/dma platform primitives (single-slot pool) -----
 // The platform hook must honor the same linear contract the MC types promise:
