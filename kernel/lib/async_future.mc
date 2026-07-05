@@ -35,12 +35,7 @@ struct ReqFut {
 // quota is exhausted the id is ASYNC_NO_ID and the future completes immediately with 0 (the caller
 // must back-pressure on submission to avoid that).
 pub fn req_begin(b: *mut AsyncBroker) -> ReqFut {
-    var f: ReqFut = uninit;
-    f.b = b;
-    f.id = async_submit(b);
-    f.ready = false;
-    f.result = 0;
-    return f;
+    return .{ .b = b, .id = async_submit(b), .ready = false, .result = 0 };
 }
 
 // A future over an ALREADY-RESERVED broker id. Used when the operation that will `async_complete`
@@ -48,12 +43,7 @@ pub fn req_begin(b: *mut AsyncBroker) -> ReqFut {
 // to tie the slot to a hardware descriptor) — the caller passes the resulting id here rather than
 // having the future reserve a fresh slot. Same poll/take/cancel ABI as `req_begin`'s future.
 pub fn req_over(b: *mut AsyncBroker, id: u64) -> ReqFut {
-    var f: ReqFut = uninit;
-    f.b = b;
-    f.id = id;
-    f.ready = false;
-    f.result = 0;
-    return f;
+    return .{ .b = b, .id = id, .ready = false, .result = 0 };
 }
 
 impl Future for ReqFut {
@@ -258,12 +248,10 @@ export fn drive_many(set: *mut FutSet, max_idle: u32,
     if n > DRIVE_MANY_MAX {
         n = DRIVE_MANY_MAX;
     }
-    var done: [DRIVE_MANY_MAX]bool = uninit;
-    var i: usize = 0;
-    while i < DRIVE_MANY_MAX {
-        done[i] = false;
-        i = i + 1;
-    }
+    // Whole-value init (definite-init S0.1: element-wise loop init does not count) — the
+    // literal length is checked against DRIVE_MANY_MAX at compile time.
+    var done: [DRIVE_MANY_MAX]bool = .{ false, false, false, false, false, false, false, false,
+                                        false, false, false, false, false, false, false, false };
     var completed: usize = 0;
     var idle_streak: u32 = 0;
     var stop: bool = false;
