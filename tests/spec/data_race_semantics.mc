@@ -392,6 +392,18 @@ fn returned_pointer_holder() -> PointerHolder {
     return .{ .ptr = &shared_counter, .tag = 9 };
 }
 
+fn returned_pointer_holder_via_local() -> PointerHolder {
+    let holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 60 };
+    return holder;
+}
+
+fn returned_pointer_holder_via_assignment() -> PointerHolder {
+    var local: u32 = 61;
+    var holder: PointerHolder = .{ .ptr = &local, .tag = 61 };
+    holder = .{ .ptr = &shared_counter, .tag = 62 };
+    return holder;
+}
+
 fn aggregate_computed_copy_pointer_field_load() -> u32 {
     var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 10 };
     holder = returned_pointer_holder();
@@ -404,6 +416,20 @@ fn aggregate_return_init_pointer_field_load() -> u32 {
     let holder: PointerHolder = returned_pointer_holder();
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm emits unordered atomic load after aggregate initialization from a summarized internal return.
+    return p.*;
+}
+
+fn aggregate_return_local_init_pointer_field_load() -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_via_local();
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load after aggregate initialization from a summarized internal local return.
+    return p.*;
+}
+
+fn aggregate_return_local_assignment_pointer_field_load() -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_via_assignment();
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load after aggregate initialization from a summarized internal assigned local return.
     return p.*;
 }
 
@@ -422,10 +448,22 @@ fn returned_pointer_array_holder() -> PointerArrayHolder {
     return .{ .ptrs = .{ &shared_counter, exported_global_pointer() }, .tag = 16 };
 }
 
+fn returned_pointer_array_holder_via_local() -> PointerArrayHolder {
+    let holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 63 };
+    return holder;
+}
+
 fn aggregate_return_array_dynamic_index_pointer_element_load(index: usize) -> u32 {
     let holder: PointerArrayHolder = returned_pointer_array_holder();
     let p: *mut u32 = holder.ptrs[index];
     // EXPECT: lower-llvm emits unordered atomic load for a dynamic read from a returned aggregate array with a summarized global-backed element.
+    return p.*;
+}
+
+fn aggregate_return_array_local_dynamic_index_pointer_element_load(index: usize) -> u32 {
+    let holder: PointerArrayHolder = returned_pointer_array_holder_via_local();
+    let p: *mut u32 = holder.ptrs[index];
+    // EXPECT: lower-llvm emits unordered atomic load for a dynamic read from a returned local aggregate array with summarized global-backed elements.
     return p.*;
 }
 

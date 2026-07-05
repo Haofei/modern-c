@@ -911,28 +911,42 @@ const LlvmEmitter = struct {
             const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
             const struct_decl = self.structDeclForType(ret_ty) orelse continue;
             if (struct_decl.is_c_union) continue;
-            const return_expr = self.singleReturnExpr(body) orelse continue;
-            try self.collectAggregateReturnPointerFieldsForFunction(fn_decl.name.text, struct_decl, return_expr);
+            try self.collectAggregateReturnPointerFieldsForFunction(fn_decl, struct_decl, body);
         }
         self.resetTransientPointerProvenance();
     }
 
     fn collectAggregateReturnPointerFieldsForFunction(
         self: *LlvmEmitter,
-        fn_name: []const u8,
+        fn_decl: ast.FnDecl,
         struct_decl: ast.StructDecl,
-        return_expr: ast.Expr,
+        body: ast.Block,
     ) !void {
         self.resetTransientPointerProvenance();
         defer self.resetTransientPointerProvenance();
-        const summary_local = "__mc_aggregate_return_summary";
-        const fields = self.structLiteralFields(return_expr) orelse return;
-        try self.updateAggregatePointerFieldProvenanceFromStructLiteral(summary_local, struct_decl, fields, null);
 
+        for (fn_decl.params) |param| {
+            try self.local_types.put(param.name.text, param.ty);
+            try self.local_slots.put(param.name.text, .{ .ty = param.ty, .ptr = "" });
+        }
+
+        const summary_local = "__mc_aggregate_return_summary";
+        if (self.singleReturnExpr(body)) |return_expr| {
+            const fields = self.structLiteralFields(return_expr) orelse return;
+            try self.updateAggregatePointerFieldProvenanceFromStructLiteral(summary_local, struct_decl, fields, null);
+            try self.copyAggregateReturnPointerFieldsFromLocal(fn_decl.name.text, summary_local);
+            return;
+        }
+
+        const returned_local = (try self.collectSimpleAggregateReturnLocal(struct_decl, body)) orelse return;
+        try self.copyAggregateReturnPointerFieldsFromLocal(fn_decl.name.text, returned_local);
+    }
+
+    fn copyAggregateReturnPointerFieldsFromLocal(self: *LlvmEmitter, fn_name: []const u8, local_name: []const u8) !void {
         var it = self.aggregate_global_pointer_fields.keyIterator();
         while (it.next()) |key| {
-            if (!aggregatePointerFieldKeyMatchesLocal(key.*, summary_local)) continue;
-            const field_path = key.*[summary_local.len + 1 ..];
+            if (!aggregatePointerFieldKeyMatchesLocal(key.*, local_name)) continue;
+            const field_path = key.*[local_name.len + 1 ..];
             const summary_key = try self.aggregateReturnPointerFieldKey(fn_name, field_path);
             errdefer self.allocator.free(summary_key);
             try self.aggregate_return_pointer_fields.put(summary_key, {});
@@ -945,6 +959,107 @@ const LlvmEmitter = struct {
         return switch (body.items[0].kind) {
             .@"return" => |maybe_expr| maybe_expr,
             else => null,
+        };
+    }
+
+    fn collectSimpleAggregateReturnLocal(self: *LlvmEmitter, return_struct_decl: ast.StructDecl, body: ast.Block) !?[]const u8 {
+        if (body.items.len < 2) return null;
+
+        for (body.items[0 .. body.items.len - 1]) |stmt| {
+            switch (stmt.kind) {
+                .let_decl, .var_decl => |local| {
+                    if (!try self.trackSimpleAggregateReturnLocalDecl(local)) return null;
+                },
+                .assignment => |node| {
+                    if (!try self.trackSimpleAggregateReturnAssignment(node.target, node.value)) return null;
+                },
+                else => return null,
+            }
+        }
+
+        const return_expr = switch (body.items[body.items.len - 1].kind) {
+            .@"return" => |maybe_expr| maybe_expr orelse return null,
+            else => return null,
+        };
+        const local_name = self.directLocalAggregateBaseName(return_expr) orelse return null;
+        const slot = self.local_slots.get(local_name) orelse return null;
+        const local_struct_decl = self.structDeclForType(slot.ty) orelse return null;
+        if (local_struct_decl.is_c_union) return null;
+        if (!std.mem.eql(u8, local_struct_decl.name.text, return_struct_decl.name.text)) return null;
+        return local_name;
+    }
+
+    fn trackSimpleAggregateReturnLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl) !bool {
+        if (local.names.len != 1) return false;
+        const init = local.init orelse return false;
+        if (!self.aggregateReturnSummaryExprIsSimple(init)) return false;
+        const ty = local.ty orelse self.exprType(init) orelse return false;
+        const name = local.names[0].text;
+        try self.trackSimpleAggregateReturnLocalInit(name, ty, init);
+        return true;
+    }
+
+    fn trackSimpleAggregateReturnAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {
+        const ident = assignmentIdent(target) orelse return false;
+        if (!self.aggregateReturnSummaryExprIsSimple(value_expr)) return false;
+        const slot = self.local_slots.get(ident.text) orelse return false;
+        try self.trackSimpleAggregateReturnLocalInit(ident.text, slot.ty, value_expr);
+        return true;
+    }
+
+    fn trackSimpleAggregateReturnLocalInit(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
+        self.clearAggregatePointerAliasesToLocal(name);
+        _ = self.local_pointer_array_aliases.remove(name);
+        self.clearLocalPointerArrayAliasesBackedByArray(name);
+        self.clearLocalSliceGlobalPointerArray(name);
+        self.clearLocalSlicesBackedByArray(name);
+        self.clearAggregatePointerFieldsForLocal(name);
+        self.clearLocalArrayPointerElementsForLocal(name);
+        try self.local_types.put(name, ty);
+        try self.local_slots.put(name, .{ .ty = ty, .ptr = "" });
+        try self.updatePointerGlobalProvenance(name, ty, init);
+        try self.updateAggregatePointerAliasProvenance(name, ty, init);
+        try self.updateLocalPointerArrayAliasProvenanceFromInit(name, ty, init);
+        try self.updateAggregatePointerFieldProvenanceFromInit(name, ty, init);
+        try self.updateLocalArrayPointerElementProvenanceFromInit(name, ty, init);
+        try self.updateLocalSlicePointerElementProvenanceFromInit(name, ty, init);
+    }
+
+    fn aggregateReturnSummaryExprIsSimple(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.aggregateReturnSummaryExprIsSimple(inner.*),
+            .cast => |node| self.aggregateReturnSummaryExprIsSimple(node.value.*),
+            .address_of => |inner| self.aggregateReturnSummaryExprIsSimplePlace(inner.*),
+            .member => |node| self.aggregateReturnSummaryExprIsSimplePlace(node.base.*),
+            .index => |node| self.aggregateReturnSummaryExprIsSimplePlace(node.base.*) and self.aggregateReturnSummaryExprIsSimple(node.index.*),
+            .array_literal => |items| for (items) |item| {
+                if (!self.aggregateReturnSummaryExprIsSimple(item)) break false;
+            } else true,
+            .struct_literal => |fields| for (fields) |field| {
+                if (!self.aggregateReturnSummaryExprIsSimple(field.value)) break false;
+            } else true,
+            .ident,
+            .int_literal,
+            .float_literal,
+            .string_literal,
+            .char_literal,
+            .bool_literal,
+            .null_literal,
+            .uninit_literal,
+            .void_literal,
+            .enum_literal,
+            => true,
+            else => false,
+        };
+    }
+
+    fn aggregateReturnSummaryExprIsSimplePlace(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.aggregateReturnSummaryExprIsSimplePlace(inner.*),
+            .ident => true,
+            .member => |node| self.aggregateReturnSummaryExprIsSimplePlace(node.base.*),
+            .index => |node| self.aggregateReturnSummaryExprIsSimplePlace(node.base.*) and self.aggregateReturnSummaryExprIsSimple(node.index.*),
+            else => false,
         };
     }
 
