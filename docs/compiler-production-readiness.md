@@ -1,7 +1,7 @@
 # Production readiness: the MC compiler (`mcc`)
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
-Current ledger: **updated 2026-07-05, based on `cf8b2fdd`**.
+Current ledger: **updated 2026-07-05, based on parser recovery evidence in this worktree**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -15,6 +15,7 @@ Current ledger: **updated 2026-07-05, based on `cf8b2fdd`**.
 | Item | Why it matters | Evidence |
 |---|---|---|
 | Parser nesting is bounded | Deep input now produces a diagnostic instead of a compiler crash. | `E_NESTING_TOO_DEEP`; direct deep-paren probe rejects cleanly. |
+| Parser recovery reports multiple parse errors across scoped bodies | Top-level declarations, block statements, module/impl/trait members, and aggregate fields now resync inside the enclosing syntax body; parse-failed modules still abort before sema, avoiding misleading semantic follow-on errors. | `tests/spec/parser_statement_recovery.mc`; `tests/spec/parser_declaration_recovery.mc`; direct `mcc check` emits multiple parse diagnostics without orphan-brace noise. |
 | Missing imports and cross-file diagnostics are actionable | Users see the failing import path or imported file/line instead of root-file noise or raw Zig traces. | `E_IMPORT_NOT_FOUND` probe; imported `lib.mc` diagnostic points at `lib.mc`. |
 | Expected diagnostic failures no longer print Zig error-return traces | Normal user errors no longer look like compiler ICEs. | Unknown identifier probe prints only the MC diagnostic. |
 | Monomorphization has limits and generic body prechecks | Polymorphic recursion and invalid instantiated operators fail loudly instead of hanging or reaching backend emission. | `E_MONOMORPHIZATION_LIMIT`; `38eff033 Validate generic instantiation operators in sema`. |
@@ -41,7 +42,6 @@ Current ledger: **updated 2026-07-05, based on `cf8b2fdd`**.
 | Item | Why it remains | First next step |
 |---|---|---|
 | Broader pointer-provenance race lowering | The LLVM backend now handles direct address-of global derefs and simple local pointer copies, but escaped, returned, parameter-passed, computed, and aggregate-contained pointers are not yet proven as global-backed. | Decide whether to add sema/MIR provenance facts or conservatively unordered-atomic all scalar derefs whose storage cannot be proven local/raw/MMIO. |
-| Parser recovery / multiple parse errors | Parser still stops at the first syntax error. | Add declaration/statement resync and golden diagnostics. |
 | Rich diagnostic output | Diagnostics are now cleaner, but source snippets, notes, structured JSON coverage, and full LSP consumption remain incomplete. | Extend `Diagnostic` with code/notes/related spans and add renderer tests. |
 | Typed semantic fact table / typed MIR | Backends still re-derive too much from raw AST, which is the root drift class. | Start a design slice that records sema facts once and consumes them in both backends. |
 | CFG/place-based move checker | Current move checker is much stronger, but arrays of `move` types and deeper path sensitivity are intentionally deferred. | Decide between implementing element-place tracking or keeping `E_MOVE_ARRAY_UNSUPPORTED` as an accepted limitation. |
