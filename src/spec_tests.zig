@@ -820,6 +820,8 @@ fn isAcceptanceCheck(check: []const u8) bool {
         "sanitizer-hook-override-accept",
         "value-optional-tagged-repr",
         "generic-union-monomorphize-accept",
+        "bounded-termination-accept",
+        "generic-instantiation-operator-accept",
     };
     return matchesAny(check, &names);
 }
