@@ -188,6 +188,37 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(aggregate_pointer_param_body, "load i32, ptr %");
     try expectNotContains(aggregate_pointer_param_body, " atomic ");
 
+    const aggregate_global_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_aggregate_global_param");
+    try expectContains(aggregate_global_param_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_global_param_body, " unordered, align 4");
+    try expectNotContains(aggregate_global_param_body, "load i32, ptr %p.addr.");
+
+    const aggregate_array_global_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_aggregate_array_global_param");
+    try expectContains(aggregate_array_global_param_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_array_global_param_body, " unordered, align 4");
+    try expectNotContains(aggregate_array_global_param_body, "load i32, ptr %p.addr.");
+
+    const aggregate_mixed_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_aggregate_mixed_param");
+    try expectContains(aggregate_mixed_param_body, "load i32, ptr %");
+    try expectNotContains(aggregate_mixed_param_body, " atomic ");
+
+    const aggregate_unknown_address_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_aggregate_unknown_address_param");
+    try expectContains(aggregate_unknown_address_param_body, "load i32, ptr %");
+    try expectNotContains(aggregate_unknown_address_param_body, " atomic ");
+
+    const aggregate_indirect_escape_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_aggregate_indirect_escape_param");
+    try expectContains(aggregate_indirect_escape_param_body, "load i32, ptr %");
+    try expectNotContains(aggregate_indirect_escape_param_body, " atomic ");
+
+    const aggregate_param_write_clears_body = try llvmFunctionBody(output.items, "define internal i32 @consume_aggregate_param_write_clears");
+    try expectContains(aggregate_param_write_clears_body, "call ptr @exported_global_pointer()");
+    try expectContains(aggregate_param_write_clears_body, "load i32, ptr %");
+    try expectNotContains(aggregate_param_write_clears_body, " atomic ");
+
+    const exported_aggregate_param_body = try llvmFunctionBody(output.items, "define i32 @exported_aggregate_global_param_stays_plain");
+    try expectContains(exported_aggregate_param_body, "load i32, ptr %");
+    try expectNotContains(exported_aggregate_param_body, " atomic ");
+
     const aggregate_pointer_alias_reassigned_unknown_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_pointer_alias_reassigned_unknown_stays_plain");
     try expectContains(aggregate_pointer_alias_reassigned_unknown_body, "store ptr @shared_counter, ptr %");
     try expectContains(aggregate_pointer_alias_reassigned_unknown_body, "call ptr @external_pointer_holder()");

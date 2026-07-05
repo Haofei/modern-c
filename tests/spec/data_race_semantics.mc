@@ -229,8 +229,97 @@ fn aggregate_pointer_alias_returned_unknown_stays_plain() -> u32 {
 
 fn aggregate_pointer_param_field_stays_plain(hp: *mut PointerHolder) -> u32 {
     let p: *mut u32 = hp.ptr;
-    // EXPECT: lower-llvm keeps direct aggregate pointer params plain because the pointee storage is ambiguous.
+    // EXPECT: lower-llvm keeps uncalled aggregate pointer params plain because the pointee storage is ambiguous.
     return p.*;
+}
+
+fn consume_aggregate_global_param(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load because every direct call passes a local aggregate whose pointer field is global-backed.
+    return p.*;
+}
+
+fn call_aggregate_global_param() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 33 };
+    return consume_aggregate_global_param(&holder);
+}
+
+fn consume_aggregate_array_global_param(hp: *mut PointerArrayHolder, index: usize) -> u32 {
+    let p: *mut u32 = hp.ptrs[index];
+    // EXPECT: lower-llvm emits unordered atomic load through a proven aggregate pointer param array field.
+    return p.*;
+}
+
+fn call_aggregate_array_global_param(index: usize) -> u32 {
+    var holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &shared_counter }, .tag = 34 };
+    return consume_aggregate_array_global_param(&holder, index);
+}
+
+fn consume_aggregate_mixed_param(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm keeps aggregate pointer params plain when any direct call passes local-backed pointer fields.
+    return p.*;
+}
+
+fn call_aggregate_mixed_param_with_global() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 35 };
+    return consume_aggregate_mixed_param(&holder);
+}
+
+fn call_aggregate_mixed_param_with_local() -> u32 {
+    var local: u32 = 31;
+    var holder: PointerHolder = .{ .ptr = &local, .tag = 36 };
+    return consume_aggregate_mixed_param(&holder);
+}
+
+fn consume_aggregate_unknown_address_param(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm keeps aggregate pointer params plain when a direct call passes unknown aggregate storage.
+    return p.*;
+}
+
+fn call_aggregate_unknown_address_param() -> u32 {
+    return consume_aggregate_unknown_address_param(external_pointer_holder());
+}
+
+fn consume_aggregate_indirect_escape_param(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm keeps aggregate pointer params plain when the function is also used through a function pointer.
+    return p.*;
+}
+
+fn call_aggregate_indirect_escape_param_direct() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 39 };
+    return consume_aggregate_indirect_escape_param(&holder);
+}
+
+fn call_aggregate_indirect_escape_param_indirect() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 40 };
+    let f: fn(*mut PointerHolder) -> u32 = consume_aggregate_indirect_escape_param;
+    return f(&holder);
+}
+
+fn consume_aggregate_param_write_clears(hp: *mut PointerHolder) -> u32 {
+    hp.ptr = exported_global_pointer();
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm clears aggregate pointer param field facts after writes through the param.
+    return p.*;
+}
+
+fn call_aggregate_param_write_clears() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 37 };
+    return consume_aggregate_param_write_clears(&holder);
+}
+
+export fn exported_aggregate_global_param_stays_plain(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm keeps exported aggregate pointer params plain even if direct calls pass global-backed fields.
+    return p.*;
+}
+
+fn call_exported_aggregate_global_param() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 38 };
+    return exported_aggregate_global_param_stays_plain(&holder);
 }
 
 fn aggregate_pointer_alias_reassigned_unknown_stays_plain() -> u32 {

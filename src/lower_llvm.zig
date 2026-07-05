@@ -301,6 +301,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
         .local_slice_aggregate_pointer_array_fields = std.StringHashMap([]const u8).init(allocator),
         .global_pointer_return_fns = std.StringHashMap(void).init(allocator),
         .global_pointer_params = std.StringHashMap(void).init(allocator),
+        .aggregate_pointer_param_fields = std.StringHashMap(void).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
         .defer_stack = std.ArrayList(ast.Expr).empty,
         .string_literals = std.ArrayList(StringLiteralGlobal).empty,
@@ -451,6 +452,7 @@ const LlvmEmitter = struct {
     local_slice_aggregate_pointer_array_fields: std.StringHashMap([]const u8) = undefined,
     global_pointer_return_fns: std.StringHashMap(void) = undefined,
     global_pointer_params: std.StringHashMap(void) = undefined,
+    aggregate_pointer_param_fields: std.StringHashMap(void) = undefined,
     // While a function body is being emitted, `entry_allocas` collects every `alloca`
     // so they land at the TOP of the entry block (the LLVM rule: an alloca in a non-entry
     // block — e.g. a loop body — is a DYNAMIC stack allocation that grows the stack every
@@ -535,6 +537,11 @@ const LlvmEmitter = struct {
             while (it.next()) |k| self.allocator.free(k.*);
         }
         self.global_pointer_params.deinit();
+        {
+            var it = self.aggregate_pointer_param_fields.keyIterator();
+            while (it.next()) |k| self.allocator.free(k.*);
+        }
+        self.aggregate_pointer_param_fields.deinit();
         self.global_pointer_return_fns.deinit();
         self.loop_stack.deinit(self.allocator);
         self.defer_stack.deinit(self.allocator);
@@ -669,6 +676,11 @@ const LlvmEmitter = struct {
             while (it.next()) |k| self.allocator.free(k.*);
         }
         self.global_pointer_params.clearRetainingCapacity();
+        {
+            var it = self.aggregate_pointer_param_fields.keyIterator();
+            while (it.next()) |k| self.allocator.free(k.*);
+        }
+        self.aggregate_pointer_param_fields.clearRetainingCapacity();
 
         for (module.decls) |decl| {
             if (decl.kind != .fn_decl) continue;
@@ -709,6 +721,8 @@ const LlvmEmitter = struct {
                 self.allocator.free(entry.key_ptr.*);
             }
         }
+
+        try self.collectAggregatePointerParamSummaries(module);
     }
 
     const GlobalPointerParamSummary = struct {
@@ -825,6 +839,343 @@ const LlvmEmitter = struct {
             .void_literal,
             .enum_literal,
             => {},
+        }
+    }
+
+    const AggregatePointerParamSummary = struct {
+        seen: bool = false,
+        all_direct_local_aggregate: bool = true,
+        escaped: bool = false,
+        fields: ?std.StringHashMap(void) = null,
+    };
+
+    fn deinitAggregatePointerParamSummaries(self: *LlvmEmitter, summaries: *std.StringHashMap(AggregatePointerParamSummary)) void {
+        var it = summaries.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            if (entry.value_ptr.fields) |*fields| self.deinitOwnedStringVoidMap(fields);
+        }
+        summaries.deinit();
+    }
+
+    fn aggregatePointerParamFieldKey(self: *LlvmEmitter, fn_name: []const u8, param_index: usize, field_path: []const u8) ![]const u8 {
+        return try std.fmt.allocPrint(self.allocator, "{s}\x00{d}\x00{s}", .{ fn_name, param_index, field_path });
+    }
+
+    fn aggregatePointerParamFieldKeyPrefix(self: *LlvmEmitter, fn_name: []const u8, param_index: usize) ![]const u8 {
+        return try std.fmt.allocPrint(self.scratch.allocator(), "{s}\x00{d}\x00", .{ fn_name, param_index });
+    }
+
+    fn aggregatePointerParamFieldKeyPath(self: *LlvmEmitter, key: []const u8, fn_name: []const u8, param_index: usize) ?[]const u8 {
+        const prefix = self.aggregatePointerParamFieldKeyPrefix(fn_name, param_index) catch return null;
+        if (!std.mem.startsWith(u8, key, prefix)) return null;
+        return key[prefix.len..];
+    }
+
+    fn isAggregatePointerParamType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        const pointee_ty = switch (self.resolveAliasType(ty).kind) {
+            .pointer => |node| node.child.*,
+            else => return false,
+        };
+        const struct_decl = self.structDeclForType(pointee_ty) orelse return false;
+        return !struct_decl.is_c_union;
+    }
+
+    fn collectAggregatePointerParamSummaries(self: *LlvmEmitter, module: ast.Module) !void {
+        var summaries = std.StringHashMap(AggregatePointerParamSummary).init(self.allocator);
+        defer self.deinitAggregatePointerParamSummaries(&summaries);
+
+        for (module.decls) |decl| {
+            if (decl.kind != .fn_decl) continue;
+            const fn_decl = decl.kind.fn_decl;
+            if (fn_decl.exported or fn_decl.body == null) continue;
+            for (fn_decl.params, 0..) |param, i| {
+                if (!self.isAggregatePointerParamType(param.ty)) continue;
+                const key = try self.globalPointerParamKey(fn_decl.name.text, i);
+                errdefer self.allocator.free(key);
+                try summaries.put(key, .{});
+            }
+        }
+
+        for (module.decls) |decl| {
+            if (decl.kind != .fn_decl) continue;
+            const fn_decl = decl.kind.fn_decl;
+            const body = fn_decl.body orelse continue;
+            try self.collectAggregatePointerParamCallSitesInFunction(fn_decl, body, &summaries);
+        }
+
+        var summary_it = summaries.iterator();
+        while (summary_it.next()) |entry| {
+            if (!entry.value_ptr.seen or !entry.value_ptr.all_direct_local_aggregate or entry.value_ptr.escaped) continue;
+            const fields = entry.value_ptr.fields orelse continue;
+            if (fields.count() == 0) continue;
+            const sep = std.mem.indexOfScalar(u8, entry.key_ptr.*, 0) orelse continue;
+            const fn_name = entry.key_ptr.*[0..sep];
+            const index_text = entry.key_ptr.*[sep + 1 ..];
+            const param_index = std.fmt.parseInt(usize, index_text, 10) catch continue;
+            var field_it = fields.keyIterator();
+            while (field_it.next()) |field_path| {
+                const key = try self.aggregatePointerParamFieldKey(fn_name, param_index, field_path.*);
+                errdefer self.allocator.free(key);
+                try self.aggregate_pointer_param_fields.put(key, {});
+            }
+        }
+    }
+
+    fn resetTransientPointerProvenance(self: *LlvmEmitter) void {
+        self.local_types.clearRetainingCapacity();
+        self.local_slots.clearRetainingCapacity();
+        self.global_pointer_locals.clearRetainingCapacity();
+        self.local_aggregate_pointer_aliases.clearRetainingCapacity();
+        self.local_pointer_array_aliases.clearRetainingCapacity();
+        self.clearAggregateGlobalPointerFields();
+        self.clearLocalArrayGlobalPointerElements();
+        self.local_slice_global_pointer_arrays.clearRetainingCapacity();
+        self.local_slice_pointer_array_ranges.clearRetainingCapacity();
+        self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
+    }
+
+    fn collectAggregatePointerParamCallSitesInFunction(
+        self: *LlvmEmitter,
+        fn_decl: ast.FnDecl,
+        body: ast.Block,
+        summaries: *std.StringHashMap(AggregatePointerParamSummary),
+    ) !void {
+        self.resetTransientPointerProvenance();
+        defer self.resetTransientPointerProvenance();
+        for (fn_decl.params) |param| try self.local_types.put(param.name.text, param.ty);
+        try self.collectAggregatePointerParamCallSitesBlock(body, summaries);
+    }
+
+    fn collectAggregatePointerParamCallSitesBlock(
+        self: *LlvmEmitter,
+        block: ast.Block,
+        summaries: *std.StringHashMap(AggregatePointerParamSummary),
+    ) anyerror!void {
+        for (block.items) |stmt| try self.collectAggregatePointerParamCallSitesStmt(stmt, summaries);
+    }
+
+    fn collectAggregatePointerParamCallSitesStmt(
+        self: *LlvmEmitter,
+        stmt: ast.Stmt,
+        summaries: *std.StringHashMap(AggregatePointerParamSummary),
+    ) anyerror!void {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| try self.trackAggregateParamLocalDecl(local, summaries),
+            .assignment => |node| {
+                try self.collectAggregatePointerParamCallSitesExpr(node.value, summaries, false);
+                try self.collectAggregatePointerParamCallSitesExpr(node.target, summaries, false);
+                try self.trackAggregateParamAssignment(node.target, node.value);
+            },
+            .@"return" => |maybe_expr| if (maybe_expr) |expr| try self.collectAggregatePointerParamCallSitesExpr(expr, summaries, false),
+            .block, .unsafe_block, .comptime_block => |child| {
+                try self.collectAggregatePointerParamCallSitesBlock(child, summaries);
+                self.resetTransientPointerProvenance();
+            },
+            .contract_block => |node| {
+                try self.collectAggregatePointerParamCallSitesBlock(node.block, summaries);
+                self.resetTransientPointerProvenance();
+            },
+            .loop => |node| {
+                if (node.iterable) |iterable| try self.collectAggregatePointerParamCallSitesExpr(iterable, summaries, false);
+                try self.collectAggregatePointerParamCallSitesBlock(node.body, summaries);
+                self.resetTransientPointerProvenance();
+            },
+            .if_let => |node| {
+                try self.collectAggregatePointerParamCallSitesExpr(node.value, summaries, false);
+                try self.collectAggregatePointerParamCallSitesBlock(node.then_block, summaries);
+                if (node.else_block) |else_block| try self.collectAggregatePointerParamCallSitesBlock(else_block, summaries);
+                self.resetTransientPointerProvenance();
+            },
+            .@"switch" => |node| {
+                try self.collectAggregatePointerParamCallSitesExpr(node.subject, summaries, false);
+                for (node.arms) |arm| {
+                    for (arm.patterns) |pattern| if (pattern.kind == .literal) {
+                        try self.collectAggregatePointerParamCallSitesExpr(pattern.kind.literal, summaries, false);
+                    };
+                    switch (arm.body) {
+                        .block => |child| try self.collectAggregatePointerParamCallSitesBlock(child, summaries),
+                        .expr => |expr| try self.collectAggregatePointerParamCallSitesExpr(expr, summaries, false),
+                    }
+                }
+                self.resetTransientPointerProvenance();
+            },
+            .@"defer", .assert, .expr => |expr| try self.collectAggregatePointerParamCallSitesExpr(expr, summaries, false),
+            .asm_stmt => self.resetTransientPointerProvenance(),
+            .@"break", .@"continue" => {},
+        }
+    }
+
+    fn trackAggregateParamLocalDecl(
+        self: *LlvmEmitter,
+        local: ast.LocalDecl,
+        summaries: *std.StringHashMap(AggregatePointerParamSummary),
+    ) !void {
+        if (local.names.len != 1) return;
+        const init = local.init orelse return;
+        try self.collectAggregatePointerParamCallSitesExpr(init, summaries, false);
+        const ty = local.ty orelse self.exprType(init) orelse return;
+        const name = local.names[0].text;
+        self.clearAggregatePointerAliasesToLocal(name);
+        _ = self.local_pointer_array_aliases.remove(name);
+        self.clearLocalPointerArrayAliasesBackedByArray(name);
+        self.clearLocalSliceGlobalPointerArray(name);
+        self.clearLocalSlicesBackedByArray(name);
+        self.clearAggregatePointerFieldsForLocal(name);
+        self.clearLocalArrayPointerElementsForLocal(name);
+        try self.local_types.put(name, ty);
+        try self.local_slots.put(name, .{ .ty = ty, .ptr = "" });
+        try self.updatePointerGlobalProvenance(name, ty, init);
+        try self.updateAggregatePointerAliasProvenance(name, ty, init);
+        try self.updateLocalPointerArrayAliasProvenanceFromInit(name, ty, init);
+        try self.updateAggregatePointerFieldProvenanceFromInit(name, ty, init);
+        try self.updateLocalArrayPointerElementProvenanceFromInit(name, ty, init);
+        try self.updateLocalSlicePointerElementProvenanceFromInit(name, ty, init);
+    }
+
+    fn trackAggregateParamAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !void {
+        if (assignmentIdent(target)) |ident| {
+            if (self.local_slots.get(ident.text)) |slot| {
+                try self.updatePointerGlobalProvenance(ident.text, slot.ty, value_expr);
+                _ = self.local_aggregate_pointer_aliases.remove(ident.text);
+                _ = self.local_pointer_array_aliases.remove(ident.text);
+                self.clearLocalSlicesBackedByArray(ident.text);
+                self.clearLocalPointerArrayAliasesBackedByArray(ident.text);
+                try self.updateAggregatePointerFieldProvenanceFromInit(ident.text, slot.ty, value_expr);
+                try self.updateLocalArrayPointerElementProvenanceFromInit(ident.text, slot.ty, value_expr);
+                try self.updateLocalSlicePointerElementProvenanceFromInit(ident.text, slot.ty, value_expr);
+            }
+            return;
+        }
+        switch (target.kind) {
+            .member => |node| if (self.memberField(node.base.*, node.name.text)) |field| {
+                try self.updateAggregatePointerFieldProvenanceFromAssignment(node.base.*, node.name.text, field.ty, value_expr);
+            },
+            .index => |node| if (self.indexElementType(node.base.*)) |element_ty| {
+                try self.updateLocalArrayPointerElementProvenanceFromAssignment(target, element_ty, value_expr);
+                try self.updateAggregateArrayPointerElementProvenanceFromAssignment(target, element_ty, value_expr);
+                self.invalidateLocalSlicePointerElementProvenanceFromAssignment(target);
+            },
+            .deref => |inner| self.invalidateAggregatePointerDerefAssignment(inner.*),
+            .grouped => |inner| try self.trackAggregateParamAssignment(inner.*, value_expr),
+            else => {},
+        }
+    }
+
+    fn collectAggregatePointerParamCallSitesExpr(
+        self: *LlvmEmitter,
+        expr: ast.Expr,
+        summaries: *std.StringHashMap(AggregatePointerParamSummary),
+        direct_callee: bool,
+    ) anyerror!void {
+        switch (expr.kind) {
+            .ident => |ident| if (!direct_callee) self.markAggregatePointerParamEscapedFunction(ident.text, summaries),
+            .grouped => |inner| try self.collectAggregatePointerParamCallSitesExpr(inner.*, summaries, direct_callee),
+            .block => |block| try self.collectAggregatePointerParamCallSitesBlock(block, summaries),
+            .unary => |node| try self.collectAggregatePointerParamCallSitesExpr(node.expr.*, summaries, false),
+            .binary => |node| {
+                try self.collectAggregatePointerParamCallSitesExpr(node.left.*, summaries, false);
+                try self.collectAggregatePointerParamCallSitesExpr(node.right.*, summaries, false);
+            },
+            .cast => |node| try self.collectAggregatePointerParamCallSitesExpr(node.value.*, summaries, false),
+            .address_of, .deref, .await_expr => |inner| try self.collectAggregatePointerParamCallSitesExpr(inner.*, summaries, false),
+            .try_expr => |node| {
+                try self.collectAggregatePointerParamCallSitesExpr(node.operand.*, summaries, false);
+                if (node.mapped) |mapped| try self.collectAggregatePointerParamCallSitesExpr(mapped.*, summaries, false);
+            },
+            .call => |call| {
+                const direct = self.directCallName(call.callee.*);
+                if (direct) |callee| {
+                    try self.recordAggregatePointerParamCall(callee, call.args, summaries);
+                } else {
+                    try self.collectAggregatePointerParamCallSitesExpr(call.callee.*, summaries, false);
+                }
+                for (call.args) |arg| try self.collectAggregatePointerParamCallSitesExpr(arg, summaries, false);
+                for (call.args) |arg| if (self.localAggregateAddressBaseName(arg)) |local_name| {
+                    self.clearAggregatePointerFieldsForLocal(local_name);
+                    self.clearLocalSlicesBackedByArray(local_name);
+                };
+            },
+            .index => |node| {
+                try self.collectAggregatePointerParamCallSitesExpr(node.base.*, summaries, false);
+                try self.collectAggregatePointerParamCallSitesExpr(node.index.*, summaries, false);
+            },
+            .slice => |node| {
+                try self.collectAggregatePointerParamCallSitesExpr(node.base.*, summaries, false);
+                try self.collectAggregatePointerParamCallSitesExpr(node.start.*, summaries, false);
+                try self.collectAggregatePointerParamCallSitesExpr(node.end.*, summaries, false);
+            },
+            .member => |node| try self.collectAggregatePointerParamCallSitesExpr(node.base.*, summaries, false),
+            .array_literal => |items| for (items) |item| try self.collectAggregatePointerParamCallSitesExpr(item, summaries, false),
+            .struct_literal => |fields| for (fields) |field| try self.collectAggregatePointerParamCallSitesExpr(field.value, summaries, false),
+            .int_literal,
+            .float_literal,
+            .string_literal,
+            .char_literal,
+            .bool_literal,
+            .null_literal,
+            .uninit_literal,
+            .unreachable_expr,
+            .void_literal,
+            .enum_literal,
+            => {},
+        }
+    }
+
+    fn markAggregatePointerParamEscapedFunction(self: *LlvmEmitter, name: []const u8, summaries: *std.StringHashMap(AggregatePointerParamSummary)) void {
+        if (self.local_types.contains(name) or self.global_types.contains(name) or !self.fn_sigs.contains(name)) return;
+        var it = summaries.iterator();
+        while (it.next()) |entry| {
+            if (!aggregatePointerFieldKeyMatchesLocal(entry.key_ptr.*, name)) continue;
+            entry.value_ptr.escaped = true;
+        }
+    }
+
+    fn recordAggregatePointerParamCall(
+        self: *LlvmEmitter,
+        callee: []const u8,
+        args: []const ast.Expr,
+        summaries: *std.StringHashMap(AggregatePointerParamSummary),
+    ) !void {
+        for (args, 0..) |arg, i| {
+            const key = try self.globalPointerParamKey(callee, i);
+            defer self.allocator.free(key);
+            const summary = summaries.getPtr(key) orelse continue;
+            summary.seen = true;
+            const local_name = self.localAggregateAddressBaseName(arg) orelse {
+                summary.all_direct_local_aggregate = false;
+                continue;
+            };
+            try self.intersectAggregatePointerParamCallFields(summary, local_name);
+        }
+    }
+
+    fn intersectAggregatePointerParamCallFields(self: *LlvmEmitter, summary: *AggregatePointerParamSummary, local_name: []const u8) !void {
+        if (summary.fields == null) {
+            summary.fields = std.StringHashMap(void).init(self.allocator);
+            var it = self.aggregate_global_pointer_fields.keyIterator();
+            while (it.next()) |key| {
+                if (!aggregatePointerFieldKeyMatchesLocal(key.*, local_name)) continue;
+                const field_path = key.*[local_name.len + 1 ..];
+                const owned = try self.allocator.dupe(u8, field_path);
+                errdefer self.allocator.free(owned);
+                try summary.fields.?.put(owned, {});
+            }
+            return;
+        }
+
+        var fields = &summary.fields.?;
+        while (true) {
+            var remove_key: ?[]const u8 = null;
+            var it = fields.keyIterator();
+            while (it.next()) |field_path| {
+                if (!self.localAggregateFieldHasGlobalPointerProvenance(local_name, field_path.*)) {
+                    remove_key = field_path.*;
+                    break;
+                }
+            }
+            const field_path = remove_key orelse return;
+            if (fields.fetchRemove(field_path)) |entry| self.allocator.free(entry.key);
         }
     }
 
@@ -1218,6 +1569,17 @@ const LlvmEmitter = struct {
         }
     }
 
+    fn seedAggregatePointerParamProvenance(self: *LlvmEmitter, fn_name: []const u8, param_index: usize, param_name: []const u8) !void {
+        var seeded = false;
+        var it = self.aggregate_pointer_param_fields.keyIterator();
+        while (it.next()) |key| {
+            const field_path = self.aggregatePointerParamFieldKeyPath(key.*, fn_name, param_index) orelse continue;
+            try self.setAggregatePointerFieldProvenance(param_name, field_path, true);
+            seeded = true;
+        }
+        if (seeded) try self.local_aggregate_pointer_aliases.put(param_name, param_name);
+    }
+
     fn emitFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl, body: ast.Block, attrs: []const ast.Attr) !void {
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
@@ -1343,6 +1705,7 @@ const LlvmEmitter = struct {
                 const key = try self.globalPointerParamKey(fn_decl.name.text, i);
                 defer self.allocator.free(key);
                 if (self.global_pointer_params.contains(key)) try self.global_pointer_locals.put(param.name.text, {});
+                try self.seedAggregatePointerParamProvenance(fn_decl.name.text, i, param.name.text);
             }
             if (self.isVaListType(param.ty)) {
                 const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{param.name.text});
@@ -2481,6 +2844,7 @@ const LlvmEmitter = struct {
             if (self.localPointerArrayAliasBaseName(target)) |array_name| {
                 self.invalidateLocalPointerArrayBackedByArrayWrite(array_name);
             }
+            self.invalidateAggregatePointerDerefAssignment(ptr_expr);
             return;
         }
         return error.UnsupportedLlvmEmission;
@@ -4652,6 +5016,12 @@ const LlvmEmitter = struct {
             return;
         }
         try self.local_aggregate_pointer_aliases.put(name, base_name);
+    }
+
+    fn invalidateAggregatePointerDerefAssignment(self: *LlvmEmitter, ptr_expr: ast.Expr) void {
+        const local_name = self.localAggregatePointerAliasBaseName(ptr_expr) orelse return;
+        self.clearAggregatePointerFieldsForLocal(local_name);
+        self.clearLocalSlicesBackedByArray(local_name);
     }
 
     fn pointerExprHasGlobalStorageProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
