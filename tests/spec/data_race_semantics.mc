@@ -63,6 +63,39 @@ fn possibly_racing_returned_pointer_load() -> u32 {
     return gp.*;
 }
 
+fn consume_global_param(p: *mut u32) -> u32 {
+    // EXPECT: lower-llvm emits unordered atomic load because every direct call passes visible global storage.
+    return p.*;
+}
+
+fn possibly_racing_param_pointer_load() -> u32 {
+    return consume_global_param(&shared_counter);
+}
+
+fn consume_mixed_param(p: *mut u32) -> u32 {
+    // EXPECT: lower-llvm keeps this plain because at least one direct call passes stack storage.
+    return p.*;
+}
+
+fn call_mixed_param_with_global() -> u32 {
+    return consume_mixed_param(&shared_counter);
+}
+
+fn call_mixed_param_with_local() -> u32 {
+    var local: u32 = 7;
+    return consume_mixed_param(&local);
+}
+
+fn consume_local_only_param(p: *mut u32) -> u32 {
+    // EXPECT: lower-llvm keeps this plain because all direct calls pass stack storage.
+    return p.*;
+}
+
+fn call_local_only_param() -> u32 {
+    var local: u32 = 8;
+    return consume_local_only_param(&local);
+}
+
 fn local_pointer_deref_stays_plain() -> u32 {
     var local: u32 = 5;
     let lp: *mut u32 = &local;

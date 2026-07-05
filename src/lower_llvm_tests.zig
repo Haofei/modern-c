@@ -104,6 +104,18 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(returned_pointer_body, " unordered, align 4");
     try expectNotContains(returned_pointer_body, "load i32, ptr %");
 
+    const param_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @consume_global_param");
+    try expectContains(param_pointer_body, "load atomic i32, ptr %p unordered, align 4");
+    try expectNotContains(param_pointer_body, "load i32, ptr %p");
+
+    const mixed_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_mixed_param");
+    try expectContains(mixed_param_body, "load i32, ptr %p");
+    try expectNotContains(mixed_param_body, "load atomic i32, ptr %p");
+
+    const local_only_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_local_only_param");
+    try expectContains(local_only_param_body, "load i32, ptr %p");
+    try expectNotContains(local_only_param_body, "load atomic i32, ptr %p");
+
     const local_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @local_pointer_deref_stays_plain");
     try expectContains(local_pointer_body, "store i32 6, ptr %");
     try expectContains(local_pointer_body, "load i32, ptr %");
