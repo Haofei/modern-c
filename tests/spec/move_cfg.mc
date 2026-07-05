@@ -2,7 +2,7 @@
 // SPEC: milestone=linear-move
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_RESOURCE_LEAK,E_MOVE_FIELD_IN_NONMOVE,E_MOVE_ARRAY_UNSUPPORTED
+// SPEC: check=E_RESOURCE_LEAK,E_MOVE_FIELD_IN_NONMOVE
 
 // Regression coverage for the move checker's control-flow model (section 18.1):
 //   * `?` is an exit edge — on its error branch the function returns, so any other
@@ -12,6 +12,12 @@
 //   * A `move` resource may not be stored by value in a non-`move` aggregate, where it
 //     would escape linear tracking (this also rejects a generic container over a move
 //     type, which monomorphizes to exactly such a struct).
+//
+// The fail-closed E_MOVE_ARRAY_UNSUPPORTED reject cases (arrays of `move` resources in
+// every position) live in tests/spec/bad/move_cfg_arrays_reject.mc: several are top-level
+// declarations whose trailing reject markers fall after the chunk-ending `;`, so the
+// sweeps' chunk-level strip cannot isolate them and they need a pure-reject fixture
+// the sweeps do not compile.
 
 move struct Handle { v: u32 }
 enum E { Bad }
@@ -80,33 +86,4 @@ move struct GoodPair {
 struct BadContainer {
     // EXPECT_ERROR: E_MOVE_FIELD_IN_NONMOVE
     h: Handle,
-}
-
-// --- rejected: an array of a `move` resource as a struct field (not yet trackable — element
-//     moves need the indexed-place model), so it is rejected in any struct, move or not ---
-struct BadArrayContainer {
-    // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    hs: [4]Handle,
-}
-
-// --- rejected: aliases to arrays of `move` resources are also fail-closed ---
-type BadArrayAlias = [4]Handle; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-
-// --- rejected: nested arrays still require element-place tracking ---
-type BadNestedArrayAlias = [2][1]Handle; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-
-// --- rejected: a function cannot return an array of `move` resources by value ---
-fn reject_move_array_return() -> [1]Handle { // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    return .{ acquire() };
-}
-
-// --- rejected: a function cannot accept an array of `move` resources by value ---
-extern fn reject_move_array_param(hs: [1]Handle) -> void; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-
-// --- rejected: global storage cannot hold an array of `move` resources by value ---
-global bad_move_array_global: [1]Handle; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-
-// --- rejected: explicit local bindings to arrays of `move` resources are not trackable ---
-fn reject_move_array_local() -> void {
-    let hs: [1]Handle = .{ acquire() }; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
 }
