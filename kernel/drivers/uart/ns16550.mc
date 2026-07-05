@@ -33,7 +33,7 @@ struct Ns16550 {
 }
 
 // Construct a handle for the 16550 at `base` (e.g. from bootinfo_console_pa).
-export fn ns16550_at(base: usize) -> Ns16550 {
+pub fn ns16550_at(base: usize) -> Ns16550 {
     return .{ .base = base };
 }
 

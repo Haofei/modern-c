@@ -108,7 +108,7 @@ export fn page_table_root(pt: *PageTable) -> PAddr {
 
 // Create an empty page table (one zeroed PML4 frame). Traps on heap exhaustion — for
 // boot/init paths where a fresh heap that cannot yield one root frame is a kernel bug.
-export fn page_table_new(h: *mut Heap) -> PageTable {
+pub fn page_table_new(h: *mut Heap) -> PageTable {
     return .{ .root = alloc_table(h) };
 }
 
@@ -124,7 +124,7 @@ export fn page_table_try_new(h: *mut Heap) -> Result<PageTable, HeapError> {
 // Encode this page table's root as a portable `AddressSpace` handle. On x86-64 CR3 is
 // simply the physical address of the PML4 (low bits 0; PCID/flags unused here), so the
 // handle carries the raw root address. This is the one place the x86 CR3 layout lives.
-export fn x86_aspace_of(pt: *PageTable) -> AddressSpace {
+pub fn x86_aspace_of(pt: *PageTable) -> AddressSpace {
     return AddressSpace.from_root(pa_value(page_table_root(pt)) as u64);
 }
 

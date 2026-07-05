@@ -34,7 +34,7 @@ struct ReqFut {
 // actual operation (a device or the timer) that will `async_complete` this id. If the MAX_INFLIGHT
 // quota is exhausted the id is ASYNC_NO_ID and the future completes immediately with 0 (the caller
 // must back-pressure on submission to avoid that).
-export fn req_begin(b: *mut AsyncBroker) -> ReqFut {
+pub fn req_begin(b: *mut AsyncBroker) -> ReqFut {
     var f: ReqFut = uninit;
     f.b = b;
     f.id = async_submit(b);
@@ -47,7 +47,7 @@ export fn req_begin(b: *mut AsyncBroker) -> ReqFut {
 // the id is armed by a separate submit path (e.g. a device driver that calls `async_submit` itself
 // to tie the slot to a hardware descriptor) — the caller passes the resulting id here rather than
 // having the future reserve a fresh slot. Same poll/take/cancel ABI as `req_begin`'s future.
-export fn req_over(b: *mut AsyncBroker, id: u64) -> ReqFut {
+pub fn req_over(b: *mut AsyncBroker, id: u64) -> ReqFut {
     var f: ReqFut = uninit;
     f.b = b;
     f.id = id;

@@ -36,13 +36,13 @@ struct PageAllocator {
 
 // Describe a region from raw platform values. `phys_range` traps if base+size
 // overflows the address space; alignment/size policy is checked by `validate`.
-export fn memory_map(base: usize, size: usize) -> MemoryMap<Unvalidated> {
+pub fn memory_map(base: usize, size: usize) -> MemoryMap<Unvalidated> {
     return .{ .range = phys_range(pa(base), size) };
 }
 
 // Validate the region: page-aligned base and size, at least one page. A bad map is
 // a platform/config error (the bring-up code supplies it), so this traps.
-export fn validate(m: MemoryMap<Unvalidated>) -> MemoryMap<Validated> {
+pub fn validate(m: MemoryMap<Unvalidated>) -> MemoryMap<Validated> {
     if !pa_is_aligned(pr_start(&m.range), PAGE_SIZE) {
         unreachable; // base must be page-aligned
     }
@@ -56,13 +56,13 @@ export fn validate(m: MemoryMap<Unvalidated>) -> MemoryMap<Validated> {
     return .{ .range = m.range };
 }
 
-export fn page_allocator_from(m: MemoryMap<Validated>) -> PageAllocator {
+pub fn page_allocator_from(m: MemoryMap<Validated>) -> PageAllocator {
     return .{ .next = pr_start(&m.range), .end = pr_end(&m.range), .free_head = 0, .free_count = 0 };
 }
 
 // Allocate one page: reuse a freed frame if any, otherwise bump. Traps only when
 // the region is genuinely exhausted (callers gate on `pages_available`).
-export fn page_alloc(a: *mut PageAllocator) -> Page {
+pub fn page_alloc(a: *mut PageAllocator) -> Page {
     if a.free_count != 0 {
         let frame: PAddr = pa(a.free_head);
         unsafe {
@@ -80,7 +80,7 @@ export fn page_alloc(a: *mut PageAllocator) -> Page {
 }
 
 // Free a page (consumes the linear handle) and return its frame to the free list.
-export fn page_free(a: *mut PageAllocator, p: Page) -> void {
+pub fn page_free(a: *mut PageAllocator, p: Page) -> void {
     let frame: PAddr = p.addr; // borrow before consuming
     unsafe { forget_unchecked(p); }
     unsafe {
