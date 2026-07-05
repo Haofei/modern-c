@@ -66,6 +66,19 @@ fn expectCCommentSourceMatchesMirFact(c_output: []const u8, mir_dump: []const u8
     try expectContains(mir_row, expected_source);
 }
 
+fn cFunctionBody(output: []const u8, signature_prefix: []const u8) ![]const u8 {
+    var search_from: usize = 0;
+    const start = while (std.mem.indexOfPos(u8, output, search_from, signature_prefix)) |candidate| {
+        const semicolon = std.mem.indexOfPos(u8, output, candidate, ";\n") orelse output.len;
+        const brace = std.mem.indexOfPos(u8, output, candidate, "{\n") orelse return error.TestExpectedEqual;
+        if (brace < semicolon) break candidate;
+        search_from = candidate + signature_prefix.len;
+    } else return error.TestExpectedEqual;
+    const body_start = std.mem.indexOfPos(u8, output, start, "{\n") orelse return error.TestExpectedEqual;
+    const body_end = std.mem.indexOfPos(u8, output, body_start, "\n}\n\n") orelse return error.TestExpectedEqual;
+    return output[body_start + 2 .. body_end];
+}
+
 test "lower-c inspection markers for lowering-sensitive spec behavior" {
     const source =
         \\global shared_counter: u32 = 0;
@@ -1468,6 +1481,91 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
     const llvm_comment = try std.fmt.allocPrint(
         std.testing.allocator,
         "; mir pointer_provenance consumed fn=pointer_fact_global_load subject=gp provenance=global_storage reason=none source={s}",
+        .{c_source},
+    );
+    defer std.testing.allocator.free(llvm_comment);
+    try expectContains(llvm_output.items, llvm_comment);
+}
+
+test "lower-c consumes MIR pointer provenance facts for fixed pointer-array elements" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn c_array_global_pointer_element_load() -> u32 {
+        \\    let ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+        \\    let p: *mut u32 = ptrs[0];
+        \\    return p.*;
+        \\}
+        \\
+        \\fn c_array_assigned_global_pointer_element_load() -> u32 {
+        \\    var local: u32 = 16;
+        \\    var ptrs: [2]*mut u32 = .{ &local, &local };
+        \\    ptrs[0] = &shared_counter;
+        \\    let p: *mut u32 = ptrs[0];
+        \\    return p.*;
+        \\}
+        \\
+        \\fn c_array_stack_pointer_element_stays_plain() -> u32 {
+        \\    var local: u32 = 17;
+        \\    let ptrs: [2]*mut u32 = .{ &local, &local };
+        \\    let p: *mut u32 = ptrs[0];
+        \\    return p.*;
+        \\}
+        \\
+        \\fn c_array_dynamic_assignment_clears_pointer_element_fact(index: usize) -> u32 {
+        \\    var local: u32 = 20;
+        \\    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+        \\    ptrs[index] = &local;
+        \\    let dynamic_p: *mut u32 = ptrs[index];
+        \\    let constant_p: *mut u32 = ptrs[0];
+        \\    return dynamic_p.* + constant_p.*;
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("emit_c_pointer_array_provenance.mc", source);
+    defer parsed.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendC(std.testing.allocator, parsed.module, &output);
+
+    const global_body = try cFunctionBody(output.items, "static uint32_t c_array_global_pointer_element_load(void)");
+    try expectContains(global_body, "/* mir pointer_provenance consumed fn=c_array_global_pointer_element_load subject=ptrs element=0 provenance=global_storage reason=none source=");
+    try expectContains(global_body, "return ((uint32_t)mc_race_load_u32(p));");
+
+    const assigned_body = try cFunctionBody(output.items, "static uint32_t c_array_assigned_global_pointer_element_load(void)");
+    try expectContains(assigned_body, "/* mir pointer_provenance consumed fn=c_array_assigned_global_pointer_element_load subject=ptrs element=0 provenance=global_storage reason=reassignment source=");
+    try expectContains(assigned_body, "return ((uint32_t)mc_race_load_u32(p));");
+
+    const stack_body = try cFunctionBody(output.items, "static uint32_t c_array_stack_pointer_element_stays_plain(void)");
+    try expectContains(stack_body, "/* mir pointer_provenance consumed fn=c_array_stack_pointer_element_stays_plain subject=ptrs element=0 provenance=local_storage reason=none source=");
+    try expectContains(stack_body, "return *p;");
+    try expectNotContains(stack_body, "mc_race_load_u32(p)");
+
+    const dynamic_body = try cFunctionBody(output.items, "static uint32_t c_array_dynamic_assignment_clears_pointer_element_fact(uintptr_t index)");
+    try expectContains(dynamic_body, "/* mir pointer_provenance consumed fn=c_array_dynamic_assignment_clears_pointer_element_fact subject=ptrs provenance=unknown reason=dynamic_index_write source=");
+    try expectContains(dynamic_body, "*dynamic_p");
+    try expectContains(dynamic_body, "*constant_p");
+    try expectNotContains(dynamic_body, "mc_race_load_u32(dynamic_p)");
+    try expectNotContains(dynamic_body, "mc_race_load_u32(constant_p)");
+
+    var mir_dump: std.ArrayList(u8) = .empty;
+    defer mir_dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, parsed.module, &mir_dump);
+    try expectCCommentSourceMatchesMirFact(
+        output.items,
+        mir_dump.items,
+        "/* mir pointer_provenance consumed fn=c_array_global_pointer_element_load subject=ptrs element=0 provenance=global_storage reason=none source=",
+        "mir pointer_provenance_fact fn=c_array_global_pointer_element_load subject=ptrs element=0 provenance=global_storage storage=shared_counter",
+    );
+
+    var llvm_output: std.ArrayList(u8) = .empty;
+    defer llvm_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvm(std.testing.allocator, parsed.module, &llvm_output);
+    const c_source = try commentSourceText(output.items, "/* mir pointer_provenance consumed fn=c_array_global_pointer_element_load subject=ptrs element=0 provenance=global_storage reason=none source=");
+    const llvm_comment = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "; mir pointer_provenance consumed fn=c_array_global_pointer_element_load subject=ptrs element=0 provenance=global_storage reason=none source={s}",
         .{c_source},
     );
     defer std.testing.allocator.free(llvm_comment);

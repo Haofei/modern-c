@@ -129,7 +129,7 @@ surfaces unless a backend is listed as consuming the in-memory MIR data directly
 | MIR no-overflow range facts | `src/mir_model.zig:201` `RangeFact` records `region_id`, `target`, `op`, operands, result type, and source point. Producers are `FunctionBuilder.addRangeFactForUncheckedCall` (`src/mir.zig:2491-2507`) and `addAggregateRangeFactForUncheckedExpr` (`src/mir.zig:2509-2530`) inside active `#[unsafe_contract(no_overflow)]` regions. | These facts are appended for unchecked no-overflow calls in contract regions. They are not the same as transient optimizer `proven_facts`; they persist in `Function.range_facts` until the MIR module is freed. | `appendDumpOpt` prints `mir range_fact ... assumption=no_overflow recorded=true` at `src/mir.zig:359-364`; MIR verification facts also scan `function.range_facts` at `src/mir.zig:534`. | The C backend wires `has_mir_no_overflow_range_fact` through `arithContext` (`src/lower_c_emitter.zig:1591-1610`) and matches facts in `hasMirNoOverflowRangeFact` (`src/lower_c_emitter.zig:4545-4557`). LLVM does not currently have an equivalent `range_facts` consumer. |
 | MIR check-elision source points | `src/mir_model.zig:212` `SourcePoint` and `Function.elided_bounds` (`src/mir_model.zig:234-239`) record checks proven dead by optimized MIR. Producers append source points for constant in-bounds index (`src/mir.zig:2263-2278`), constant in-bounds slice (`src/mir.zig:2293-2305`), and division/modulo elision (`src/mir.zig:2437`). | Transient `ProvenFact` guard/assert facts are recorded by `recordTrueCondFacts` (`src/mir.zig:2704-2730`), restricted by `factIdentAllowed` (`src/mir.zig:2743-2750`), and invalidated by new bindings, assignment, loops, and address-of (`src/mir.zig:1176-1178`, `src/mir.zig:1212-1214`, `src/mir.zig:1972-1982`, `src/mir.zig:2046-2049`, `src/mir.zig:2690-2697`). | `lower-mir --checks=elide-proven` exposes absence of the original `cmp_bounds`/trap edge and records optimized instruction detail such as `const_in_bounds`; the current dump does not print an explicit `elided_bounds` row. | Both backends consume the same MIR list and fail closed when absent. C uses `mirCheckElided` for array indexing and slice guards (`src/lower_c_emitter.zig:3574-3586`, `src/lower_c_emitter.zig:4272-4280`, `src/lower_c_emitter.zig:4564-4573`) and passes the hook into arithmetic lowering (`src/lower_c_arith.zig:58-59`, `src/lower_c_arith.zig:391`, `src/lower_c_arith.zig:467`, `src/lower_c_arith.zig:507`). LLVM uses `mirCheckElided` for array indexing, slice guards, and div/rem checks (`src/lower_llvm.zig:5830-5834`, `src/lower_llvm.zig:5895-5910`, `src/lower_llvm.zig:5948-5959`, `src/lower_llvm.zig:7102-7118`). |
 | LLVM backend-local pointer/global race provenance | `LlvmEmitter` owns backend-local maps for `global_pointer_locals`, local function/aggregate/pointer-array aliases, aggregate field facts, array element facts, slice facts, return summaries, and parameter summaries (`src/lower_llvm.zig`). It collects summary facts in `collectGlobalPointerProvenanceSummaries` and updates local facts through functions such as `updatePointerGlobalProvenance`, `updateAggregatePointerAliasProvenance`, and array/field/slice helpers. | This is the largest duplicated inference class. It resets or clears facts on block/contract/loop/switch boundaries and asm, on local declaration/assignment tracking, on aggregate pointer deref assignment, and on array/slice backing writes. The Phase 3 LLVM slice now routes direct pointer-like locals and direct fixed local pointer-array elements through MIR fact helpers such as `applyMirPointerProvenanceForLocalInitializer`, `applyMirPointerProvenanceForAssignment`, and `applyMirPointerProvenanceForIndexAssignment`; broader cases still use backend-local inference. | `lower-mir` prints the authoritative `mir pointer_provenance_fact ...` rows for the narrow subset. LLVM tests also assert non-semantic `; mir pointer_provenance consumed ...` comments at direct consumption sites. | LLVM consumes MIR `PointerProvenanceFact` rows for the narrow direct-local/direct-array subset before `pointerExprHasGlobalStorageProvenance` chooses unordered atomics. The broader LLVM provenance family still needs migration/cleanup. |
-| C backend global/race lowering helpers | `src/lower_c_global.zig` routes direct global scalar, array, and field accesses through race helpers or relaxed C atomics. Examples include `appendGlobalLoadExpr` (`src/lower_c_global.zig:142-150`), `appendGlobalStorePrefix` (`src/lower_c_global.zig:153-162`), `globalAssignmentTarget` (`src/lower_c_global.zig:176-183`), and array/member global access helpers (`src/lower_c_global.zig:219-242`, `src/lower_c_global.zig:270-315`). The Phase 4 C slice adds `src/lower_c_emitter.zig` MIR consumers such as `applyMirPointerProvenanceForLocalInitializer`, `applyMirPointerProvenanceForAssignment`, `applyMirPointerProvenanceInvalidationsAtCall`, and `mirPointerProvenanceDerefRaceInfo` for direct pointer-like locals. | Direct global helper logic still keys from AST/global type information and `GlobalInfo`. For direct pointer-like locals, C now consumes `Function.pointer_provenance_facts` at local initializer, assignment, and call-invalidation source points; only live `global_storage` facts route scalar pointee deref loads/stores through `mc_race_load_*` / `mc_race_store_*`, and `local_storage`/`unknown`/invalidated facts clear or avoid that path. | `src/lower_c_inspect.zig:455-492` prints `lower ordinary_access`, `lower race_backend`, `lower race_semantics`, `lower c_ub`, and `lower racing_load_semantics` rows for direct global inspection. C emission also prints non-semantic `/* mir pointer_provenance consumed ... */` comments for the direct-local facts it consumes. | C consumes MIR `elided_bounds`, `range_facts`, and now the direct pointer-like local subset of `PointerProvenanceFact` for scalar deref load/store decisions. C still does not consume the direct fixed pointer-array element subset, and broader race/global helper decisions remain outside typed pointer-provenance facts. |
+| C backend global/race lowering helpers | `src/lower_c_global.zig` routes direct global scalar, array, and field accesses through race helpers or relaxed C atomics. Examples include `appendGlobalLoadExpr` (`src/lower_c_global.zig:142-150`), `appendGlobalStorePrefix` (`src/lower_c_global.zig:153-162`), `globalAssignmentTarget` (`src/lower_c_global.zig:176-183`), and array/member global access helpers (`src/lower_c_global.zig:219-242`, `src/lower_c_global.zig:270-315`). The Phase 4 C slice adds `src/lower_c_emitter.zig` MIR consumers such as `applyMirPointerProvenanceForLocalInitializer`, `applyMirPointerProvenanceForAssignment`, `applyMirPointerProvenanceForIndexAssignment`, `applyMirPointerProvenanceInvalidationsAtCall`, and `mirPointerProvenanceDerefRaceInfo`. | Direct global helper logic still keys from AST/global type information and `GlobalInfo`. For direct pointer-like locals and direct fixed local pointer-array elements, C now consumes `Function.pointer_provenance_facts` at local initializer, assignment, index-assignment, and call-invalidation source points; only live `global_storage` facts route scalar pointee deref loads/stores through `mc_race_load_*` / `mc_race_store_*`, and `local_storage`/`unknown`/invalidated facts clear or avoid that path. | `src/lower_c_inspect.zig:455-492` prints `lower ordinary_access`, `lower race_backend`, `lower race_semantics`, `lower c_ub`, and `lower racing_load_semantics` rows for direct global inspection. C emission also prints non-semantic `/* mir pointer_provenance consumed ... */` comments for the narrow facts it consumes, including `element=N` for array element rows. | C consumes MIR `elided_bounds`, `range_facts`, and now the narrow direct pointer-like local/direct fixed pointer-array element subset of `PointerProvenanceFact` for scalar deref load/store decisions. Broader race/global helper decisions remain outside typed pointer-provenance facts. |
 
 ### Phase 2: add a typed fact table for one narrow fact family
 
@@ -188,9 +188,9 @@ Gate:
 
 Status: complete only for LLVM consumption of the narrow
 `PointerProvenanceFact` subset: direct pointer-like locals and direct fixed
-local pointer-array elements. The Phase 4 C direct-local slice is also complete
-for scalar pointer deref load/store decisions. C fixed pointer-array element
-consumption and removal of duplicated broader LLVM inference remain pending.
+local pointer-array elements. The Phase 4 C narrow subset is also complete for
+scalar pointer deref load/store decisions. Removal of duplicated broader LLVM
+inference remains pending.
 
 Move one backend from AST re-inference to typed fact consumption.
 
@@ -217,17 +217,21 @@ Gate:
 
 ### Phase 4: migrate the second backend and add parity tests
 
-Status: complete for the direct pointer-like local C subset only. C now consumes
-MIR `PointerProvenanceFact` rows for direct pointer-like locals initialized or
-assigned from visible address expressions, and for call/indirect-call
-invalidation rows that make those facts stale. For scalar pointee deref
-loads/stores, live `global_storage` facts route through `mc_race_load_*` /
+Status: complete for the narrow C subset: direct pointer-like locals and direct
+fixed local pointer-array elements. C now consumes MIR `PointerProvenanceFact`
+rows for pointer-like locals initialized or assigned from visible address
+expressions, direct fixed pointer-array literal elements and constant-index
+assignments, and invalidation rows that make those facts stale. Constant-index
+reads such as `let p = ptrs[0]` inherit the array-element fact only when MIR has
+proven that element live `global_storage`. For scalar pointee deref loads/stores,
+live `global_storage` facts route through `mc_race_load_*` /
 `mc_race_store_*` using the pointer expression; `local_storage`, `unknown`,
-reassignment/call invalidation, and absent facts keep the existing plain deref
-behavior. C emits non-semantic `/* mir pointer_provenance consumed ... */`
-comments, and `src/lower_c_tests.zig` checks that at least one C comment source
-point matches the authoritative `lower-mir` fact row. This does not implement C
-consumption for fixed pointer-array element facts.
+dynamic-index writes, call/reassignment invalidation, absent facts, and
+non-constant indexes keep the existing plain deref behavior. C emits
+non-semantic `/* mir pointer_provenance consumed ... */` comments, including
+`element=N` for consumed array facts, and `src/lower_c_tests.zig` checks that C
+comment source points match the authoritative `lower-mir` fact row and LLVM
+comment.
 
 Teach the C backend to consume the same typed fact. The C backend may not need
 the same atomic lowering choice for every case, but it must make its emission
@@ -237,11 +241,13 @@ Gate:
 
 - one source fixture is run through C and LLVM with artifact checks showing the
   same semantic fact id/source point drives both emissions: done for the
-  direct-local scalar deref fixture in `src/lower_c_tests.zig`, alongside the
-  existing LLVM `; mir pointer_provenance consumed ...` checks;
+  direct-local scalar deref and direct fixed pointer-array fixtures in
+  `src/lower_c_tests.zig`, alongside the existing LLVM
+  `; mir pointer_provenance consumed ...` checks;
 - absent/stale fact fixtures prove both backends choose the conservative path:
-  done in C for `local_storage`, `unknown` reassignment, and call invalidation,
-  and in LLVM for the Phase 3 negative fixtures;
+  done in C for `local_storage`, `unknown` reassignment, dynamic-index write
+  invalidation, and call invalidation, and in LLVM for the Phase 3 negative
+  fixtures;
 - `zig build test` covers the fact dump, C emission, LLVM emission, and
   differential/spec harness rows: done for this slice.
 

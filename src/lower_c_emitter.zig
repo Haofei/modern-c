@@ -291,6 +291,7 @@ const CEmitter = struct {
     suppress_load_hook: bool = false,
     current_function: ?[]const u8 = null,
     mir_global_pointer_locals: std.StringHashMap(void),
+    mir_global_pointer_array_elements: std.StringHashMap(void),
     // For a variadic function body: the name of the last NAMED parameter, which C's
     // `va_start(ap, last)` anchors on. Null outside a variadic function.
     current_variadic_last: ?[]const u8 = null,
@@ -345,6 +346,7 @@ const CEmitter = struct {
             .source_path = source_path,
             .reporter = reporter,
             .mir_global_pointer_locals = std.StringHashMap(void).init(allocator),
+            .mir_global_pointer_array_elements = std.StringHashMap(void).init(allocator),
             .temp_index = 0,
             .indent = 0,
         };
@@ -355,6 +357,7 @@ const CEmitter = struct {
         self.deinitTypeCollections();
         self.deinitDeclCollections();
         self.deinitControlFlowState();
+        self.deinitOwnedStringVoidMap(&self.mir_global_pointer_array_elements);
         self.mir_global_pointer_locals.deinit();
         self.scratch.deinit();
     }
@@ -1079,6 +1082,7 @@ const CEmitter = struct {
         self.current_function = fn_decl.name.text;
         defer self.current_function = previous_function;
         self.mir_global_pointer_locals.clearRetainingCapacity();
+        self.clearOwnedStringVoidMapRetainingCapacity(&self.mir_global_pointer_array_elements);
 
         const previous_variadic_last = self.current_variadic_last;
         self.current_variadic_last = functionVariadicLastParam(fn_decl);
@@ -2839,6 +2843,7 @@ const CEmitter = struct {
 
     fn emitAssignmentStmt(self: *CEmitter, assignment: anytype, span: ast.Span, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         try self.applyMirPointerProvenanceForAssignment(assignment.target, assignment.value, span, locals);
+        try self.applyMirPointerProvenanceForIndexAssignment(assignment.target, assignment.value, span, locals);
         if (try self.emitMirPointerProvenanceDerefStoreStmt(assignment.target, assignment.value, locals)) return;
         if (try self.emitSpecialAssignmentStmt(assignment, locals, return_ty)) return;
         try self.emitDefaultAssignmentStmt(assignment, locals);
@@ -4609,43 +4614,202 @@ const CEmitter = struct {
         };
     }
 
+    fn deinitOwnedStringVoidMap(self: *CEmitter, map: *std.StringHashMap(void)) void {
+        var it = map.keyIterator();
+        while (it.next()) |key| self.allocator.free(key.*);
+        map.deinit();
+    }
+
+    fn clearOwnedStringVoidMapRetainingCapacity(self: *CEmitter, map: *std.StringHashMap(void)) void {
+        var it = map.keyIterator();
+        while (it.next()) |key| self.allocator.free(key.*);
+        map.clearRetainingCapacity();
+    }
+
+    fn localArrayPointerElementKey(self: *CEmitter, local_name: []const u8, index: u64) ![]const u8 {
+        return try std.fmt.allocPrint(self.allocator, "{s}\x00{d}", .{ local_name, index });
+    }
+
+    fn localArrayPointerElementKeyMatchesLocal(key: []const u8, local_name: []const u8) bool {
+        return key.len > local_name.len and std.mem.eql(u8, key[0..local_name.len], local_name) and key[local_name.len] == 0;
+    }
+
+    fn clearLocalArrayPointerElementsForLocal(self: *CEmitter, local_name: []const u8) void {
+        while (true) {
+            var found_key: ?[]const u8 = null;
+            var it = self.mir_global_pointer_array_elements.keyIterator();
+            while (it.next()) |key| {
+                if (localArrayPointerElementKeyMatchesLocal(key.*, local_name)) {
+                    found_key = key.*;
+                    break;
+                }
+            }
+
+            const key = found_key orelse return;
+            if (self.mir_global_pointer_array_elements.fetchRemove(key)) |entry| {
+                self.allocator.free(entry.key);
+            }
+        }
+    }
+
+    fn setLocalArrayPointerElementProvenance(self: *CEmitter, local_name: []const u8, index: u64, is_global_backed: bool) !void {
+        const lookup_key = try self.localArrayPointerElementKey(local_name, index);
+        defer self.allocator.free(lookup_key);
+
+        if (!is_global_backed) {
+            if (self.mir_global_pointer_array_elements.fetchRemove(lookup_key)) |entry| {
+                self.allocator.free(entry.key);
+            }
+            return;
+        }
+
+        if (self.mir_global_pointer_array_elements.contains(lookup_key)) return;
+        const owned_key = try self.localArrayPointerElementKey(local_name, index);
+        errdefer self.allocator.free(owned_key);
+        try self.mir_global_pointer_array_elements.put(owned_key, {});
+    }
+
+    fn localArrayElementHasGlobalPointerProvenance(self: *CEmitter, local_name: []const u8, index: u64) bool {
+        const lookup_key = self.localArrayPointerElementKey(local_name, index) catch return false;
+        defer self.allocator.free(lookup_key);
+        return self.mir_global_pointer_array_elements.contains(lookup_key);
+    }
+
+    fn fixedLocalPointerArrayElementType(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+        const resolved_ty = self.resolveAliasType(ty);
+        const array = switch (resolved_ty.kind) {
+            .array => |array| array,
+            else => return null,
+        };
+        if (!isPointerLikeGlobalType(self.resolveAliasType(array.child.*))) return null;
+        var reflect_env = self.reflectEnv();
+        _ = constArrayLenValue(array.len, &self.const_fns, &self.const_globals, lower_c_reflect.comptimeReflectThunk, &reflect_env) orelse return null;
+        return array.child.*;
+    }
+
+    fn arrayLiteralItems(expr: ast.Expr) ?[]const ast.Expr {
+        return switch (expr.kind) {
+            .array_literal => |items| items,
+            .grouped => |inner| arrayLiteralItems(inner.*),
+            .cast => |node| arrayLiteralItems(node.value.*),
+            else => null,
+        };
+    }
+
+    const LocalArrayElementPath = struct {
+        local_name: []const u8,
+        index: u64,
+    };
+
+    fn directLocalPointerArrayBaseName(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?[]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| blk: {
+                const info = locals.get(ident.text) orelse break :blk null;
+                const ty = info.source_ty orelse break :blk null;
+                if (self.fixedLocalPointerArrayElementType(ty) == null) break :blk null;
+                break :blk ident.text;
+            },
+            .grouped => |inner| self.directLocalPointerArrayBaseName(inner.*, locals),
+            else => null,
+        };
+    }
+
+    fn localArrayConstIndexValue(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?u64 {
+        const value = constIntValue(expr, locals) orelse return null;
+        if (value < 0) return null;
+        return std.math.cast(u64, value);
+    }
+
+    fn directLocalArrayElementPath(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?LocalArrayElementPath {
+        return switch (expr.kind) {
+            .index => |node| blk: {
+                const local_name = self.directLocalPointerArrayBaseName(node.base.*, locals) orelse break :blk null;
+                const index = localArrayConstIndexValue(node.index.*, locals) orelse break :blk null;
+                break :blk .{ .local_name = local_name, .index = index };
+            },
+            .grouped => |inner| self.directLocalArrayElementPath(inner.*, locals),
+            else => null,
+        };
+    }
+
+    fn mirArrayElementExprGlobalProvenance(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.mirArrayElementExprGlobalProvenance(inner.*, locals),
+            .cast => |node| self.mirArrayElementExprGlobalProvenance(node.value.*, locals),
+            .index => |node| blk: {
+                const local_name = self.directLocalPointerArrayBaseName(node.base.*, locals) orelse break :blk null;
+                const index = localArrayConstIndexValue(node.index.*, locals) orelse break :blk false;
+                break :blk self.localArrayElementHasGlobalPointerProvenance(local_name, index);
+            },
+            else => null,
+        };
+    }
+
     fn mirPointerFactSubjectSupportedNow(self: *CEmitter, fact: mir.PointerProvenanceFact, locals: ?*std.StringHashMap(LocalInfo)) bool {
-        if (fact.element_index != null) return false;
         const local_set = locals orelse return false;
         const info = local_set.get(fact.subject) orelse return false;
         const ty = info.source_ty orelse return false;
-        return isPointerLikeGlobalType(self.resolveAliasType(ty));
+        if (fact.element_index != null) return self.fixedLocalPointerArrayElementType(ty) != null;
+        return isPointerLikeGlobalType(self.resolveAliasType(ty)) or self.fixedLocalPointerArrayElementType(ty) != null;
     }
 
     fn emitMirPointerProvenanceConsumedComment(self: *CEmitter, fact: mir.PointerProvenanceFact) !void {
         const fn_name = self.current_function orelse return;
         try self.writeIndent();
-        try self.out.print(self.allocator, "/* mir pointer_provenance consumed fn={s} subject={s} provenance={s} reason={s} source={d}:{d} */\n", .{
-            fn_name,
-            fact.subject,
-            @tagName(fact.provenance),
-            @tagName(fact.invalidation_reason),
-            fact.source.line,
-            fact.source.column,
-        });
+        if (fact.element_index) |index| {
+            try self.out.print(self.allocator, "/* mir pointer_provenance consumed fn={s} subject={s} element={d} provenance={s} reason={s} source={d}:{d} */\n", .{
+                fn_name,
+                fact.subject,
+                index,
+                @tagName(fact.provenance),
+                @tagName(fact.invalidation_reason),
+                fact.source.line,
+                fact.source.column,
+            });
+        } else {
+            try self.out.print(self.allocator, "/* mir pointer_provenance consumed fn={s} subject={s} provenance={s} reason={s} source={d}:{d} */\n", .{
+                fn_name,
+                fact.subject,
+                @tagName(fact.provenance),
+                @tagName(fact.invalidation_reason),
+                fact.source.line,
+                fact.source.column,
+            });
+        }
     }
 
     fn applyMirPointerProvenanceFact(self: *CEmitter, fact: mir.PointerProvenanceFact, locals: ?*std.StringHashMap(LocalInfo)) !void {
         if (!self.mirPointerFactSubjectSupportedNow(fact, locals)) return;
         try self.emitMirPointerProvenanceConsumedComment(fact);
-        if (mirPointerFactIsLiveGlobal(fact)) {
+        const live_global = mirPointerFactIsLiveGlobal(fact);
+        if (fact.element_index) |index| {
+            try self.setLocalArrayPointerElementProvenance(fact.subject, @intCast(index), live_global);
+            return;
+        }
+        const local_set = locals orelse return;
+        const info = local_set.get(fact.subject) orelse return;
+        const ty = info.source_ty orelse return;
+        if (self.fixedLocalPointerArrayElementType(ty) != null) {
+            self.clearLocalArrayPointerElementsForLocal(fact.subject);
+            return;
+        }
+        if (live_global) {
             try self.mir_global_pointer_locals.put(fact.subject, {});
         } else {
             _ = self.mir_global_pointer_locals.remove(fact.subject);
         }
     }
 
-    fn applyMirPointerProvenanceFactsAtSource(self: *CEmitter, subject: []const u8, span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    fn applyMirPointerProvenanceFactsAtSource(self: *CEmitter, subject: []const u8, element_index: ?usize, span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
             if (!std.mem.eql(u8, fact.subject, subject)) continue;
-            if (fact.element_index != null) continue;
+            if (element_index) |wanted| {
+                if (fact.element_index == null or fact.element_index.? != wanted) continue;
+            } else if (fact.element_index != null) {
+                continue;
+            }
             if (!mirSourceMatches(span, fact.source)) continue;
             matched = true;
             try self.applyMirPointerProvenanceFact(fact, locals);
@@ -4662,7 +4826,19 @@ const CEmitter = struct {
                 else => continue,
             }
             if (!self.mirPointerFactSubjectSupportedNow(fact, locals)) continue;
-            _ = self.mir_global_pointer_locals.remove(fact.subject);
+            if (fact.element_index != null) {
+                self.clearLocalArrayPointerElementsForLocal(fact.subject);
+            } else if (locals) |local_set| {
+                if (local_set.get(fact.subject)) |info| {
+                    if (info.source_ty) |ty| {
+                        if (self.fixedLocalPointerArrayElementType(ty) != null) {
+                            self.clearLocalArrayPointerElementsForLocal(fact.subject);
+                            continue;
+                        }
+                    }
+                }
+                _ = self.mir_global_pointer_locals.remove(fact.subject);
+            }
         }
     }
 
@@ -4689,9 +4865,29 @@ const CEmitter = struct {
     }
 
     fn applyMirPointerProvenanceForLocalInitializer(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
-        if (!isPointerLikeGlobalType(self.resolveAliasType(ty))) return;
-        const matched = try self.applyMirPointerProvenanceFactsAtSource(name, initializer.span, locals);
-        if (!matched and self.directMirAddressProvenanceExpr(initializer, locals)) _ = self.mir_global_pointer_locals.remove(name);
+        if (isPointerLikeGlobalType(self.resolveAliasType(ty))) {
+            const matched = try self.applyMirPointerProvenanceFactsAtSource(name, null, initializer.span, locals);
+            if (!matched) {
+                if (self.mirArrayElementExprGlobalProvenance(initializer, locals)) |is_global| {
+                    if (is_global) {
+                        try self.mir_global_pointer_locals.put(name, {});
+                    } else {
+                        _ = self.mir_global_pointer_locals.remove(name);
+                    }
+                } else if (self.directMirAddressProvenanceExpr(initializer, locals)) {
+                    _ = self.mir_global_pointer_locals.remove(name);
+                }
+            }
+            return;
+        }
+        if (self.fixedLocalPointerArrayElementType(ty) == null) return;
+        const items = arrayLiteralItems(initializer) orelse return;
+        for (items, 0..) |item, index| {
+            const matched = try self.applyMirPointerProvenanceFactsAtSource(name, index, item.span, locals);
+            if (!matched and self.directMirAddressProvenanceExpr(item, locals)) {
+                try self.setLocalArrayPointerElementProvenance(name, @intCast(index), false);
+            }
+        }
     }
 
     fn directLocalName(expr: ast.Expr) ?[]const u8 {
@@ -4706,10 +4902,51 @@ const CEmitter = struct {
         const name = directLocalName(target) orelse return;
         const info = locals.get(name) orelse return;
         const ty = info.source_ty orelse return;
-        if (!isPointerLikeGlobalType(self.resolveAliasType(ty))) return;
-        const matched_value = try self.applyMirPointerProvenanceFactsAtSource(name, value.span, locals);
-        _ = try self.applyMirPointerProvenanceFactsAtSource(name, span, locals);
-        if (!matched_value and self.directMirAddressProvenanceExpr(value, locals)) _ = self.mir_global_pointer_locals.remove(name);
+        if (isPointerLikeGlobalType(self.resolveAliasType(ty))) {
+            const matched_value = try self.applyMirPointerProvenanceFactsAtSource(name, null, value.span, locals);
+            _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span, locals);
+            if (!matched_value) {
+                if (self.mirArrayElementExprGlobalProvenance(value, locals)) |is_global| {
+                    if (is_global) {
+                        try self.mir_global_pointer_locals.put(name, {});
+                    } else {
+                        _ = self.mir_global_pointer_locals.remove(name);
+                    }
+                } else if (self.directMirAddressProvenanceExpr(value, locals)) {
+                    _ = self.mir_global_pointer_locals.remove(name);
+                }
+            }
+            return;
+        }
+        if (self.fixedLocalPointerArrayElementType(ty) == null) return;
+        _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span, locals);
+        const items = arrayLiteralItems(value) orelse return;
+        for (items, 0..) |item, index| {
+            const matched = try self.applyMirPointerProvenanceFactsAtSource(name, index, item.span, locals);
+            if (!matched and self.directMirAddressProvenanceExpr(item, locals)) {
+                try self.setLocalArrayPointerElementProvenance(name, @intCast(index), false);
+            }
+        }
+    }
+
+    fn applyMirPointerProvenanceForIndexAssignment(self: *CEmitter, target: ast.Expr, value: ast.Expr, span: ast.Span, locals: *std.StringHashMap(LocalInfo)) !void {
+        const path = self.directLocalArrayElementPath(target, locals) orelse {
+            const node = switch (target.kind) {
+                .index => |node| node,
+                .grouped => |inner| return self.applyMirPointerProvenanceForIndexAssignment(inner.*, value, span, locals),
+                else => return,
+            };
+            if (self.directLocalPointerArrayBaseName(node.base.*, locals)) |local_name| {
+                _ = try self.applyMirPointerProvenanceFactsAtSource(local_name, null, span, locals);
+            }
+            return;
+        };
+        const matched_value = try self.applyMirPointerProvenanceFactsAtSource(path.local_name, path.index, value.span, locals);
+        _ = try self.applyMirPointerProvenanceFactsAtSource(path.local_name, path.index, span, locals);
+        _ = try self.applyMirPointerProvenanceFactsAtSource(path.local_name, null, span, locals);
+        if (!matched_value and self.directMirAddressProvenanceExpr(value, locals)) {
+            try self.setLocalArrayPointerElementProvenance(path.local_name, path.index, false);
+        }
     }
 
     fn mirPointerProvenanceDerefRaceInfo(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?GlobalInfo {
