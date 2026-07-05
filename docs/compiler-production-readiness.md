@@ -1,7 +1,7 @@
 # Production readiness: the MC compiler (`mcc`)
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
-Current ledger: **updated 2026-07-05, based on `0fb49f96`**.
+Current ledger: **updated 2026-07-05, based on `f3db7111`**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -33,6 +33,7 @@ Current ledger: **updated 2026-07-05, based on `0fb49f96`**.
 | Spec C/LLVM sweep gates are green for in-scope fixtures | Mixed accept/reject fixtures no longer leave dangling references after reject stripping, so backend sweeps catch real regressions instead of fixture-shape noise. | `4990226c Split mixed spec sweep fixtures`; `JOBS=8 tools/toolchain/spec-emit-sweep.py zig-out/bin/mcc tests/spec`; `JOBS=8 tools/toolchain/spec-llvm-sweep.py zig-out/bin/mcc tests/spec`. |
 | Rich diagnostic output is implemented and gated | Text diagnostics include source snippets/carets and notes; `mcc check --json` emits structured severity, code, message, mapped path/file, span, source/caret, notes, and counts; LSP consumes the JSON path and turns compiler notes into `relatedInformation`. Terminal color remains a polish gap, not a blocker for structured diagnostics. | `d947f211 docs: retire rich diagnostics readiness item`; `3e74d7b4 Refresh diagnostics ownership gates`; `src/diagnostics.zig` `Diagnostic.notes`, `Reporter.render`, `Reporter.appendJson`, and reporter JSON/notes tests; `src/main.zig` `check --json`; `tools/toolchain/diagnostics-test.sh`; `tools/toolchain/diagnostics-reference.py`; `tools/toolchain/diagnostic-code-inventory.py`; `tools/lsp/mc-lsp.py` JSON diagnostics parser; `tools/lsp/lsp-test.py` monomorphization notes-to-related-information assertion. |
 | Labeled async loop jumps are implemented | `break :label` and `continue :label` inside await-bearing async loops now resolve to the named source loop's state-machine exit/head rather than being rejected or accidentally targeting an inner copied loop. | `1f4e67e9 Support labeled async loop jumps`; `src/async_lower.zig` async loop target stack and labeled poll-loop edge; `tests/c_emit/fuzz_async_loop_breakcont.mc` labeled break/continue fixture; focused C/LLVM fixture probe returns `1` on both backends. |
+| Release artifact packaging and local qualification gates are implemented | Repo-local gates now prove pinned release metadata, ReleaseSafe installability, deterministic tarballs, SHA256SUMS, release inventory, CycloneDX SBOM, required payload docs/files, tag-version rejection, GitHub/Sigstore attestation wiring, and release workflow upload staging. | `f3db7111` audit; `.github/workflows/release.yml`; `tools/ci/package-release.py`; `tools/toolchain/release-metadata-test.py`; `tools/toolchain/package-release-test.py`; `tools/toolchain/release-safe-install-test.sh`; `build/qemu.zig`; `build/tiers.zig`; `docs/release-process.md`; `SECURITY.md`; `STABILITY.md`; `CHANGELOG.md`; `zig build release-metadata-test package-release-test release-safe-install-test`. |
 
 ### In Progress
 
@@ -48,7 +49,7 @@ Current ledger: **updated 2026-07-05, based on `0fb49f96`**.
 | Typed semantic fact table / typed MIR | Backends still re-derive too much from raw AST, which is the root drift class. | Start a design slice that records sema facts once and consumes them in both backends. |
 | CFG/place-based move checker | Current move checker is much stronger, but arrays of `move` types and deeper path sensitivity are intentionally deferred. | Decide between implementing element-place tracking or keeping `E_MOVE_ARRAY_UNSUPPORTED` as an accepted limitation. |
 | Async reserved forms | `for` loops containing `await`, unresolved future expressions such as dyn-future await, and self-referential pinning remain rejected. Labeled break/continue in await-bearing loops has been implemented and moved to Finished. | Keep as documented limitations or implement one form with diff-backend gates. |
-| Release qualification | Version/help/build/install/security/stability docs exist, but this ledger has not re-audited signed release artifacts, branch protection, and full release CI evidence. | Run the release/install gates and record artifact evidence. |
+| Release publication controls | Local release packaging, checksums, SBOM/inventory, and GitHub/Sigstore attestation wiring are now audited and gated, but repo-local evidence cannot prove GitHub branch protection, a successful full dry-run/tag release workflow execution, or detached minisign signatures separate from GitHub artifact attestations. | Verify branch protection and full release workflow evidence in GitHub; decide whether detached minisign signatures are required or explicitly accept GitHub/Sigstore attestations as the release signing story. |
 
 ### Current Working Rules
 
