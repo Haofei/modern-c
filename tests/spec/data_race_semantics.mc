@@ -392,11 +392,18 @@ fn returned_pointer_holder() -> PointerHolder {
     return .{ .ptr = &shared_counter, .tag = 9 };
 }
 
-fn aggregate_computed_copy_pointer_field_stays_plain() -> u32 {
+fn aggregate_computed_copy_pointer_field_load() -> u32 {
     var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 10 };
     holder = returned_pointer_holder();
     let p: *mut u32 = holder.ptr;
-    // EXPECT: lower-llvm keeps computed aggregate assignment plain even when the callee body returns global storage.
+    // EXPECT: lower-llvm emits unordered atomic load after aggregate assignment from a summarized internal return.
+    return p.*;
+}
+
+fn aggregate_return_init_pointer_field_load() -> u32 {
+    let holder: PointerHolder = returned_pointer_holder();
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load after aggregate initialization from a summarized internal return.
     return p.*;
 }
 
@@ -408,6 +415,17 @@ fn aggregate_exported_return_pointer_field_stays_plain() -> u32 {
     let holder: PointerHolder = .{ .ptr = exported_global_pointer(), .tag = 11 };
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm keeps aggregate pointer field derefs plain when the field source is exported-return ambiguity.
+    return p.*;
+}
+
+fn returned_pointer_array_holder() -> PointerArrayHolder {
+    return .{ .ptrs = .{ &shared_counter, exported_global_pointer() }, .tag = 16 };
+}
+
+fn aggregate_return_array_dynamic_index_pointer_element_load(index: usize) -> u32 {
+    let holder: PointerArrayHolder = returned_pointer_array_holder();
+    let p: *mut u32 = holder.ptrs[index];
+    // EXPECT: lower-llvm emits unordered atomic load for a dynamic read from a returned aggregate array with a summarized global-backed element.
     return p.*;
 }
 

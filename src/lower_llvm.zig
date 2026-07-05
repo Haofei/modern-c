@@ -301,6 +301,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
         .local_slice_pointer_array_ranges = std.StringHashMap(LocalSlicePointerArrayRange).init(allocator),
         .local_slice_aggregate_pointer_array_fields = std.StringHashMap([]const u8).init(allocator),
         .global_pointer_return_fns = std.StringHashMap(void).init(allocator),
+        .aggregate_return_pointer_fields = std.StringHashMap(void).init(allocator),
         .global_pointer_params = std.StringHashMap(void).init(allocator),
         .aggregate_pointer_param_fields = std.StringHashMap(void).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
@@ -452,6 +453,7 @@ const LlvmEmitter = struct {
     local_slice_pointer_array_ranges: std.StringHashMap(LocalSlicePointerArrayRange) = undefined,
     local_slice_aggregate_pointer_array_fields: std.StringHashMap([]const u8) = undefined,
     global_pointer_return_fns: std.StringHashMap(void) = undefined,
+    aggregate_return_pointer_fields: std.StringHashMap(void) = undefined,
     global_pointer_params: std.StringHashMap(void) = undefined,
     aggregate_pointer_param_fields: std.StringHashMap(void) = undefined,
     // While a function body is being emitted, `entry_allocas` collects every `alloca`
@@ -544,6 +546,7 @@ const LlvmEmitter = struct {
         }
         self.aggregate_pointer_param_fields.deinit();
         self.global_pointer_return_fns.deinit();
+        self.deinitOwnedStringVoidMap(&self.aggregate_return_pointer_fields);
         self.loop_stack.deinit(self.allocator);
         self.defer_stack.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
@@ -672,6 +675,7 @@ const LlvmEmitter = struct {
 
     fn collectGlobalPointerProvenanceSummaries(self: *LlvmEmitter, module: ast.Module) !void {
         self.global_pointer_return_fns.clearRetainingCapacity();
+        self.clearOwnedStringVoidMapRetainingCapacity(&self.aggregate_return_pointer_fields);
         {
             var it = self.global_pointer_params.keyIterator();
             while (it.next()) |k| self.allocator.free(k.*);
@@ -693,6 +697,8 @@ const LlvmEmitter = struct {
                 try self.global_pointer_return_fns.put(fn_decl.name.text, {});
             }
         }
+
+        try self.collectAggregateReturnPointerFieldSummaries(module);
 
         var param_summaries = std.StringHashMap(GlobalPointerParamSummary).init(self.allocator);
         defer param_summaries.deinit();
@@ -873,6 +879,20 @@ const LlvmEmitter = struct {
         return key[prefix.len..];
     }
 
+    fn aggregateReturnPointerFieldKey(self: *LlvmEmitter, fn_name: []const u8, field_path: []const u8) ![]const u8 {
+        return try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ fn_name, field_path });
+    }
+
+    fn aggregateReturnPointerFieldKeyPrefix(self: *LlvmEmitter, fn_name: []const u8) ![]const u8 {
+        return try std.fmt.allocPrint(self.scratch.allocator(), "{s}\x00", .{fn_name});
+    }
+
+    fn aggregateReturnPointerFieldKeyPath(self: *LlvmEmitter, key: []const u8, fn_name: []const u8) ?[]const u8 {
+        const prefix = self.aggregateReturnPointerFieldKeyPrefix(fn_name) catch return null;
+        if (!std.mem.startsWith(u8, key, prefix)) return null;
+        return key[prefix.len..];
+    }
+
     fn isAggregatePointerParamType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
         const pointee_ty = switch (self.resolveAliasType(ty).kind) {
             .pointer => |node| node.child.*,
@@ -880,6 +900,52 @@ const LlvmEmitter = struct {
         };
         const struct_decl = self.structDeclForType(pointee_ty) orelse return false;
         return !struct_decl.is_c_union;
+    }
+
+    fn collectAggregateReturnPointerFieldSummaries(self: *LlvmEmitter, module: ast.Module) !void {
+        for (module.decls) |decl| {
+            if (decl.kind != .fn_decl) continue;
+            const fn_decl = decl.kind.fn_decl;
+            if (fn_decl.exported) continue;
+            const body = fn_decl.body orelse continue;
+            const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
+            const struct_decl = self.structDeclForType(ret_ty) orelse continue;
+            if (struct_decl.is_c_union) continue;
+            const return_expr = self.singleReturnExpr(body) orelse continue;
+            try self.collectAggregateReturnPointerFieldsForFunction(fn_decl.name.text, struct_decl, return_expr);
+        }
+        self.resetTransientPointerProvenance();
+    }
+
+    fn collectAggregateReturnPointerFieldsForFunction(
+        self: *LlvmEmitter,
+        fn_name: []const u8,
+        struct_decl: ast.StructDecl,
+        return_expr: ast.Expr,
+    ) !void {
+        self.resetTransientPointerProvenance();
+        defer self.resetTransientPointerProvenance();
+        const summary_local = "__mc_aggregate_return_summary";
+        const fields = self.structLiteralFields(return_expr) orelse return;
+        try self.updateAggregatePointerFieldProvenanceFromStructLiteral(summary_local, struct_decl, fields, null);
+
+        var it = self.aggregate_global_pointer_fields.keyIterator();
+        while (it.next()) |key| {
+            if (!aggregatePointerFieldKeyMatchesLocal(key.*, summary_local)) continue;
+            const field_path = key.*[summary_local.len + 1 ..];
+            const summary_key = try self.aggregateReturnPointerFieldKey(fn_name, field_path);
+            errdefer self.allocator.free(summary_key);
+            try self.aggregate_return_pointer_fields.put(summary_key, {});
+        }
+    }
+
+    fn singleReturnExpr(self: *LlvmEmitter, body: ast.Block) ?ast.Expr {
+        _ = self;
+        if (body.items.len != 1) return null;
+        return switch (body.items[0].kind) {
+            .@"return" => |maybe_expr| maybe_expr,
+            else => null,
+        };
     }
 
     fn collectAggregatePointerParamSummaries(self: *LlvmEmitter, module: ast.Module) !void {
@@ -3849,6 +3915,12 @@ const LlvmEmitter = struct {
         map.deinit();
     }
 
+    fn clearOwnedStringVoidMapRetainingCapacity(self: *LlvmEmitter, map: *std.StringHashMap(void)) void {
+        var it = map.keyIterator();
+        while (it.next()) |key| self.allocator.free(key.*);
+        map.clearRetainingCapacity();
+    }
+
     fn cloneOwnedStringVoidMap(self: *LlvmEmitter, source: *std.StringHashMap(void)) !std.StringHashMap(void) {
         var clone = std.StringHashMap(void).init(self.allocator);
         errdefer self.deinitOwnedStringVoidMap(&clone);
@@ -4713,6 +4785,37 @@ const LlvmEmitter = struct {
         return true;
     }
 
+    fn tryCopyAggregatePointerFieldProvenanceFromCall(
+        self: *LlvmEmitter,
+        dest_name: []const u8,
+        dest_struct_decl: ast.StructDecl,
+        init: ast.Expr,
+    ) !bool {
+        const call = switch (init.kind) {
+            .call => |call| call,
+            .grouped => |inner| return self.tryCopyAggregatePointerFieldProvenanceFromCall(dest_name, dest_struct_decl, inner.*),
+            else => return false,
+        };
+        const callee = self.directCallName(call.callee.*) orelse return false;
+        const sig = self.fn_sigs.get(callee) orelse return false;
+        const source_struct_decl = self.structDeclForType(sig.ret) orelse return false;
+        if (source_struct_decl.is_c_union) return false;
+        if (!std.mem.eql(u8, source_struct_decl.name.text, dest_struct_decl.name.text)) return false;
+
+        var copied_fields: std.ArrayList([]const u8) = .empty;
+        const scratch = self.scratch.allocator();
+        var it = self.aggregate_return_pointer_fields.keyIterator();
+        while (it.next()) |key| {
+            const field_path = self.aggregateReturnPointerFieldKeyPath(key.*, callee) orelse continue;
+            try copied_fields.append(scratch, try scratch.dupe(u8, field_path));
+        }
+
+        for (copied_fields.items) |field_path| {
+            try self.setAggregatePointerFieldProvenance(dest_name, field_path, true);
+        }
+        return copied_fields.items.len != 0;
+    }
+
     fn updateAggregatePointerFieldProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
         const struct_decl = self.structDeclForType(ty) orelse {
             self.clearAggregatePointerFieldsForLocal(local_name);
@@ -4728,6 +4831,7 @@ const LlvmEmitter = struct {
 
         self.clearAggregatePointerFieldsForLocal(local_name);
         if (try self.tryCopyAggregatePointerFieldProvenanceFromLocal(local_name, struct_decl, init)) return;
+        if (try self.tryCopyAggregatePointerFieldProvenanceFromCall(local_name, struct_decl, init)) return;
         const fields = self.structLiteralFields(init) orelse return;
         try self.updateAggregatePointerFieldProvenanceFromStructLiteral(local_name, struct_decl, fields, null);
     }
