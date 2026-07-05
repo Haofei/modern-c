@@ -135,9 +135,26 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(aggregate_reassigned_stack_body, "load i32, ptr %");
     try expectNotContains(aggregate_reassigned_stack_body, " atomic ");
 
-    const aggregate_whole_copy_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_whole_copy_pointer_field_stays_plain");
-    try expectContains(aggregate_whole_copy_body, "load i32, ptr %");
-    try expectNotContains(aggregate_whole_copy_body, " atomic ");
+    const aggregate_whole_copy_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_whole_copy_pointer_field_load");
+    try expectContains(aggregate_whole_copy_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_whole_copy_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_whole_copy_body, " unordered, align 4");
+    try expectNotContains(aggregate_whole_copy_body, "load i32, ptr %p.addr.");
+
+    const aggregate_init_copy_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_init_copy_pointer_field_load");
+    try expectContains(aggregate_init_copy_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_init_copy_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_init_copy_body, " unordered, align 4");
+    try expectNotContains(aggregate_init_copy_body, "load i32, ptr %p.addr.");
+
+    const aggregate_whole_copy_stack_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_whole_copy_stack_pointer_field_stays_plain");
+    try expectContains(aggregate_whole_copy_stack_body, "load i32, ptr %");
+    try expectNotContains(aggregate_whole_copy_stack_body, " atomic ");
+
+    const aggregate_computed_copy_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_computed_copy_pointer_field_stays_plain");
+    try expectContains(aggregate_computed_copy_body, "call { ptr, i32 } @returned_pointer_holder()");
+    try expectContains(aggregate_computed_copy_body, "load i32, ptr %");
+    try expectNotContains(aggregate_computed_copy_body, " atomic ");
 
     const aggregate_exported_return_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_exported_return_pointer_field_stays_plain");
     try expectContains(aggregate_exported_return_body, "call ptr @exported_global_pointer()");

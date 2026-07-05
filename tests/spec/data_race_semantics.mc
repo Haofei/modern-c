@@ -133,12 +133,43 @@ fn aggregate_reassigned_stack_pointer_field_stays_plain() -> u32 {
     return p.*;
 }
 
-fn aggregate_whole_copy_pointer_field_stays_plain() -> u32 {
+fn aggregate_whole_copy_pointer_field_load() -> u32 {
     let source: PointerHolder = .{ .ptr = &shared_counter, .tag = 4 };
-    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 5 };
+    var local: u32 = 11;
+    var holder: PointerHolder = .{ .ptr = &local, .tag = 5 };
     holder = source;
     let p: *mut u32 = holder.ptr;
-    // EXPECT: lower-llvm keeps whole-aggregate copy provenance plain because this slice only tracks direct local evidence.
+    // EXPECT: lower-llvm emits unordered atomic load after direct local aggregate copy propagates proven pointer-field provenance.
+    return p.*;
+}
+
+fn aggregate_init_copy_pointer_field_load() -> u32 {
+    let source: PointerHolder = .{ .ptr = &shared_counter, .tag = 6 };
+    let holder: PointerHolder = source;
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load after direct local aggregate init copy propagates proven pointer-field provenance.
+    return p.*;
+}
+
+fn aggregate_whole_copy_stack_pointer_field_stays_plain() -> u32 {
+    var local: u32 = 12;
+    let source: PointerHolder = .{ .ptr = &local, .tag = 7 };
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 8 };
+    holder = source;
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm keeps whole-aggregate copies from stack-backed sources plain.
+    return p.*;
+}
+
+fn returned_pointer_holder() -> PointerHolder {
+    return .{ .ptr = &shared_counter, .tag = 9 };
+}
+
+fn aggregate_computed_copy_pointer_field_stays_plain() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 10 };
+    holder = returned_pointer_holder();
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm keeps computed aggregate assignment plain even when the callee body returns global storage.
     return p.*;
 }
 
@@ -147,7 +178,7 @@ export fn exported_global_pointer() -> *mut u32 {
 }
 
 fn aggregate_exported_return_pointer_field_stays_plain() -> u32 {
-    let holder: PointerHolder = .{ .ptr = exported_global_pointer(), .tag = 6 };
+    let holder: PointerHolder = .{ .ptr = exported_global_pointer(), .tag = 11 };
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm keeps aggregate pointer field derefs plain when the field source is exported-return ambiguity.
     return p.*;

@@ -3375,11 +3375,50 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn updateAggregatePointerFieldProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
-        self.clearAggregatePointerFieldsForLocal(local_name);
+    fn tryCopyAggregatePointerFieldProvenanceFromLocal(
+        self: *LlvmEmitter,
+        dest_name: []const u8,
+        dest_struct_decl: ast.StructDecl,
+        init: ast.Expr,
+    ) !bool {
+        const source_name = self.directLocalAggregateBaseName(init) orelse return false;
+        if (std.mem.eql(u8, source_name, dest_name)) return true;
 
-        const struct_decl = self.structDeclForType(ty) orelse return;
-        if (struct_decl.is_c_union) return;
+        const source_ty = if (self.local_slots.get(source_name)) |slot| slot.ty else return false;
+        const source_struct_decl = self.structDeclForType(source_ty) orelse return false;
+        if (source_struct_decl.is_c_union) return false;
+        if (!std.mem.eql(u8, source_struct_decl.name.text, dest_struct_decl.name.text)) return false;
+
+        var copied_fields: std.ArrayList([]const u8) = .empty;
+        const scratch = self.scratch.allocator();
+        var it = self.aggregate_global_pointer_fields.keyIterator();
+        while (it.next()) |key| {
+            if (!aggregatePointerFieldKeyMatchesLocal(key.*, source_name)) continue;
+            const field_name = key.*[source_name.len + 1 ..];
+            try copied_fields.append(scratch, try scratch.dupe(u8, field_name));
+        }
+
+        for (copied_fields.items) |field_name| {
+            try self.setAggregatePointerFieldProvenance(dest_name, field_name, true);
+        }
+        return true;
+    }
+
+    fn updateAggregatePointerFieldProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
+        const struct_decl = self.structDeclForType(ty) orelse {
+            self.clearAggregatePointerFieldsForLocal(local_name);
+            return;
+        };
+        if (struct_decl.is_c_union) {
+            self.clearAggregatePointerFieldsForLocal(local_name);
+            return;
+        }
+        if (self.directLocalAggregateBaseName(init)) |source_name| {
+            if (std.mem.eql(u8, source_name, local_name)) return;
+        }
+
+        self.clearAggregatePointerFieldsForLocal(local_name);
+        if (try self.tryCopyAggregatePointerFieldProvenanceFromLocal(local_name, struct_decl, init)) return;
         const fields = switch (init.kind) {
             .struct_literal => |fields| fields,
             .grouped => |inner| switch (inner.kind) {
