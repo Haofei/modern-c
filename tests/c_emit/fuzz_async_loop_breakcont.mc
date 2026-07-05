@@ -73,6 +73,46 @@ async fn loop_continue(n: i32, d: u64) -> i32 {
     return acc;
 }
 
+// ---- LABELED BREAK targeting the await-bearing source loop ----
+// The break sits inside an await-free inner loop, but `break :outer_break` exits the named
+// await-bearing outer loop after the awaited child result has already been taken.
+async fn loop_labeled_break(n: i32, d: u64) -> i32 {
+    var acc: i32 = 0;
+    var i: i32 = 0;
+    outer_break: while i < n {
+        let v: i32 = await mk_val(d, i * 10);
+        acc = acc + 1 + v;
+        var j: i32 = 0;
+        while j < 3 {
+            if j == 1 { break :outer_break; }
+            acc = acc + j;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return acc;
+}
+
+// ---- LABELED CONTINUE targeting the await-bearing source loop ----
+// The continue sits inside an await-free inner loop, but `continue :outer_continue` jumps to the
+// named await-bearing outer loop's next condition check, skipping the outer body tail.
+async fn loop_labeled_continue(n: i32, d: u64) -> i32 {
+    var acc: i32 = 0;
+    var i: i32 = 0;
+    outer_continue: while i < n {
+        let v: i32 = await mk_val(d, i * 10);
+        i = i + 1;
+        var j: i32 = 0;
+        while j < 3 {
+            j = j + 1;
+            if j == 2 { continue :outer_continue; }
+            acc = acc + v + j;
+        }
+        acc = acc + 1000;
+    }
+    return acc;
+}
+
 // ---- IF-LET inside an await-bearing loop body ----
 // After the loop-body await is taken, the body tail contains an `if let` narrowing. The loop-body
 // rewriter must rewrite captured reads in the matched value and both arms while keeping the payload
@@ -119,6 +159,23 @@ export fn async_loop_breakcont_run() -> u32 {
     if loop_continue__Fut_take_result(&lc) == 50 { acc = acc ^ 0x10; }
     if g_open == 0 { acc = acc ^ 0x20; }                   // every iteration slot consumed (incl skipped)
 
+    // LABELED BREAK: exits the named await-bearing outer loop from inside the inner loop on the
+    // first iteration. Result is 1; if the label were treated as an inner break, later outer
+    // iterations and the post-inner tail would run and the result would be much larger.
+    g_clock = 0; g_open = 0;
+    var llb: loop_labeled_break__Fut = loop_labeled_break(5, 1);
+    run_to_completion(&llb, tick_idle);
+    if loop_labeled_break__Fut_take_result(&llb) == 1 { acc = acc ^ 0x2000; }
+    if g_open == 0 { acc = acc ^ 0x4000; }
+
+    // LABELED CONTINUE: n=3, v=0,10,20. Each iteration adds only v+1, then continues the named
+    // outer loop before the +1000 tail: 1 + 11 + 21 = 33.
+    g_clock = 0; g_open = 0;
+    var llc: loop_labeled_continue__Fut = loop_labeled_continue(3, 1);
+    run_to_completion(&llc, tick_idle);
+    if loop_labeled_continue__Fut_take_result(&llc) == 33 { acc = acc ^ 0x8000; }
+    if g_open == 0 { acc = acc ^ 0x10000; }
+
     // CANCEL mid-loop (parked on the body await, before any break/continue): long deadline keeps the
     // await pending; poll once to park (one slot held), cancel, prove no leak / double-free.
     g_clock = 0; g_open = 0;
@@ -145,6 +202,6 @@ export fn async_loop_breakcont_run() -> u32 {
     if loop_iflet__Fut_take_result(&ln) == 30 { acc = acc ^ 0x800; }
     if g_open == 0 { acc = acc ^ 0x1000; }
 
-    if acc != 0x1FFF { return 0; }
+    if acc != 0x1FFFF { return 0; }
     return 1;
 }

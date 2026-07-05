@@ -92,7 +92,6 @@ const selfMember = async_ast.selfMember;
 const stmtContainsAwait = async_query.stmtContainsAwait;
 const typeName = async_ast.typeName;
 const unwrapToAwaitCall = async_query.unwrapToAwaitCall;
-const whileTrueBlock = async_ast.whileTrueBlock;
 const zspan = async_ast.zspan;
 
 const Error = std.mem.Allocator.Error || error{AsyncLowerFailed};
@@ -149,6 +148,7 @@ const AwaitStep = struct {
 // and the last body state sets `state` back to the loop-head state (0). (v0: exactly one such loop,
 // optional no-await pre-loop straight-line, a straight-line tail ending in `return expr;`.)
 const WhileLoop = struct {
+    label: ?[]const u8 = null, // source loop label (`outer:`), for labeled break/continue
     cond: ast.Expr, // the loop condition (re-checked at the head each iteration)
     steps: std.ArrayList(AwaitStep) = .empty, // the body's leading await-run
     tail: std.ArrayList(ast.Stmt) = .empty, // the body's straight-line tail (no return/break/continue)
@@ -963,7 +963,7 @@ fn lowerAsyncLoopFn(
             const loop = stmt.kind.loop;
             if (loop.kind != .@"while") return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: async v0 supports an `await` only inside a `while` loop (a `for` loop with awaits is unsupported)", .{});
             const cond = loop.iterable orelse return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: a `while` loop must have a condition in async v0", .{});
-            var w = WhileLoop{ .cond = cond };
+            var w = WhileLoop{ .label = if (loop.loop_label) |lbl| lbl.text else null, .cond = cond };
             try collectLoopBody(low, loop.body, &w.steps, &w.tail);
             if (w.steps.items.len == 0) return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: an await-bearing `while` body must begin with a `let x = await call;` run in async v0", .{});
             wl = w;
@@ -1021,6 +1021,7 @@ fn lowerAsyncLoopFn(
     const cont_state: usize = B + 1;
     const done_state: usize = B + 2;
     const done_str = try std.fmt.allocPrint(arena, "{d}", .{done_state});
+    const poll_label = try std.fmt.allocPrint(arena, "{s}__poll_loop", .{fut_type});
 
     // ---- Constructor: initialize the future root as a whole value but build NO child eagerly (the
     // first child is built at the loop head); copy params; REPLAY pre-loop straight-line decls as
@@ -1085,7 +1086,21 @@ fn lowerAsyncLoopFn(
             // break/continue/return, the `state=0` below is dead but harmless.
             // Route the tail through rewriteLoopBodyBlock so block-scoped `let`/`var` shadowing of a
             // captured name is honored (a region-local must read the local, not the captured field).
-            const rtail = try rewriteLoopBodyBlock(low, .{ .span = zspan, .items = loopw.tail.items }, bind_names, done_str, cont_state, false);
+            const async_loop_target = AsyncLoopTarget{
+                .label = loopw.label,
+                .break_state = cont_state,
+                .continue_state = 0,
+            };
+            const rtail = try rewriteLoopBodyBlock(
+                low,
+                .{ .span = zspan, .items = loopw.tail.items },
+                bind_names,
+                done_str,
+                poll_label,
+                &.{async_loop_target},
+                &.{},
+                false,
+            );
             for (rtail.items) |st| try blk.append(arena, st);
             try setState(low, &blk, 0);
         }
@@ -1103,7 +1118,7 @@ fn lowerAsyncLoopFn(
     // Wrap the state chain in `while true { ... }`, then a trailing `return false;` (the return
     // checker does not special-case `while true`, so this is REQUIRED to avoid E_RETURN_MISSING).
     var pbody: std.ArrayList(ast.Stmt) = .empty;
-    try pbody.append(arena, try whileTrueBlock(try inner.toOwnedSlice(arena)));
+    try pbody.append(arena, pollLoopBlock(poll_label, try inner.toOwnedSlice(arena)));
     try pbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = false } } } });
 
     const poll_method_name = try std.fmt.allocPrint(arena, "{s}__poll", .{fut_type});
@@ -1720,6 +1735,7 @@ const GenCtx = struct {
     low: *Lowerer,
     names: *std.StringHashMap(void),
     done_str: []const u8,
+    poll_label: []const u8,
     states: std.ArrayList(GenState) = .empty, // finalized state blocks
     cur: std.ArrayList(ast.Stmt) = .empty, // the block being accumulated
     cur_state: usize = 0,
@@ -1752,6 +1768,69 @@ const GenCtx = struct {
         self.cur = .empty;
     }
 };
+
+const AsyncLoopTarget = struct {
+    label: ?[]const u8,
+    break_state: usize,
+    continue_state: usize,
+};
+
+const JumpKind = enum { @"break", @"continue" };
+
+fn resolveAsyncLoopTarget(
+    low: *Lowerer,
+    span: diagnostics.Span,
+    target: ?ast.Ident,
+    kind: JumpKind,
+    async_loops: []const AsyncLoopTarget,
+) Error!usize {
+    if (target) |lbl| {
+        var i = async_loops.len;
+        while (i > 0) {
+            i -= 1;
+            if (async_loops[i].label) |candidate| {
+                if (std.mem.eql(u8, candidate, lbl.text)) {
+                    return if (kind == .@"break") async_loops[i].break_state else async_loops[i].continue_state;
+                }
+            }
+        }
+        return low.fail(lbl.span, "E_ASYNC_GENERAL_UNSUPPORTED: labeled `{s}` targets a loop that cannot be represented in this await-bearing async region", .{@tagName(kind)});
+    }
+    if (async_loops.len == 0) {
+        return low.fail(span, "E_ASYNC_GENERAL_UNSUPPORTED: `{s}` outside an await-bearing loop in async E3c", .{@tagName(kind)});
+    }
+    const edge = async_loops[async_loops.len - 1];
+    return if (kind == .@"break") edge.break_state else edge.continue_state;
+}
+
+fn labelInPassthroughLoops(target: ?ast.Ident, passthrough_loop_labels: []const ?[]const u8) bool {
+    const lbl = target orelse return passthrough_loop_labels.len > 0;
+    var i = passthrough_loop_labels.len;
+    while (i > 0) {
+        i -= 1;
+        if (passthrough_loop_labels[i]) |candidate| {
+            if (std.mem.eql(u8, candidate, lbl.text)) return true;
+        }
+    }
+    return false;
+}
+
+fn stateJumpBlock(low: *Lowerer, span: diagnostics.Span, state: usize, poll_label: []const u8) Error!ast.Stmt {
+    var b: std.ArrayList(ast.Stmt) = .empty;
+    try setState(low, &b, state);
+    try b.append(low.arena, .{ .span = span, .kind = .{ .@"continue" = id(poll_label) } });
+    return .{ .span = span, .kind = .{ .block = .{ .span = span, .items = try b.toOwnedSlice(low.arena) } } };
+}
+
+fn pollLoopBlock(label: []const u8, body: []ast.Stmt) ast.Stmt {
+    return .{ .span = zspan, .kind = .{ .loop = .{
+        .kind = .@"while",
+        .label = null,
+        .loop_label = id(label),
+        .iterable = .{ .span = zspan, .kind = .{ .bool_literal = true } },
+        .body = .{ .span = zspan, .items = body },
+    } } };
+}
 
 fn lowerAsyncGeneralFn(
     low: *Lowerer,
@@ -1791,7 +1870,8 @@ fn lowerAsyncGeneralFn(
     for (local_caps.items) |lc| try field_names.put(lc.name.text, {});
     const names = &field_names;
 
-    var ctx = GenCtx{ .low = low, .names = names, .done_str = "" };
+    const poll_label = try std.fmt.allocPrint(arena, "{s}__poll_loop", .{fut_type});
+    var ctx = GenCtx{ .low = low, .names = names, .done_str = "", .poll_label = poll_label };
 
     // DONE is a FIXED state allocated FIRST (so `return`/fall-off can reference it during lowering);
     // the body's states are allocated after it. State 0 is the entry. The numeric value of DONE thus
@@ -1805,7 +1885,7 @@ fn lowerAsyncGeneralFn(
     // that never returns is rejected by the return checker later (an async fn must `return`). brk/cont
     // are null at the top level (a break/continue outside any loop is a parse/sema error upstream).
     ctx.startState(0);
-    try lowerStmtsGen(&ctx, body.items, done_state, null, null);
+    try lowerStmtsGen(&ctx, body.items, done_state, &.{}, &.{});
     try ctx.finishCur(); // finalize the last open block (its terminator is its own goto/return)
 
     // ---- Build the future struct: state + one __cN per await (in state order) + params + top-level
@@ -1888,7 +1968,7 @@ fn lowerAsyncGeneralFn(
         try inner.append(arena, try ifStateEq(arena, st.num, st.items));
     }
     var pbody: std.ArrayList(ast.Stmt) = .empty;
-    try pbody.append(arena, try whileTrueBlock(try inner.toOwnedSlice(arena)));
+    try pbody.append(arena, pollLoopBlock(ctx.poll_label, try inner.toOwnedSlice(arena)));
     try pbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = false } } } });
 
     const poll_method_name = try std.fmt.allocPrint(arena, "{s}__poll", .{fut_type});
@@ -1976,14 +2056,20 @@ fn collectAwaitBindingNames(b: ast.Block, set: *std.StringHashMap(void)) Error!v
 // is null, the body's final fall-off — only the top-level uses non-null `succ`). `brk`/`cont` are the
 // enclosing async-loop's exit/head state numbers (null outside a loop). Each await/await-bearing
 // construct CUTS the current block into new states; straight-line code accumulates into `ctx.cur`.
-fn lowerStmtsGen(ctx: *GenCtx, items: []const ast.Stmt, succ: ?usize, brk: ?usize, cont: ?usize) Error!void {
+fn lowerStmtsGen(
+    ctx: *GenCtx,
+    items: []const ast.Stmt,
+    succ: ?usize,
+    async_loops: []const AsyncLoopTarget,
+    passthrough_loop_labels: []const ?[]const u8,
+) Error!void {
     const low = ctx.low;
     const arena = ctx.arena();
     for (items) |s| {
         if (!stmtContainsAwait(s)) {
             // Straight-line (possibly with await-free inner control flow). Rewrite return->DONE,
             // break/continue->edges; recurse through inner await-free control flow.
-            const rs = try genRewriteStraight(ctx, s, brk, cont);
+            const rs = try genRewriteStraight(ctx, s, async_loops, passthrough_loop_labels);
             try ctx.cur.append(arena, rs);
             if (isUnconditionalTerminator(s)) return; // dead code after a terminator
             continue;
@@ -2019,12 +2105,12 @@ fn lowerStmtsGen(ctx: *GenCtx, items: []const ast.Stmt, succ: ?usize, brk: ?usiz
             try ctx.finishCur();
             // then arm
             ctx.startState(t_entry);
-            try lowerStmtsGen(ctx, bi.then_blk.items, join, brk, cont);
+            try lowerStmtsGen(ctx, bi.then_blk.items, join, async_loops, passthrough_loop_labels);
             try ctx.gotoState(join);
             try ctx.finishCur();
             // else arm
             ctx.startState(f_entry);
-            try lowerStmtsGen(ctx, bi.else_blk.items, join, brk, cont);
+            try lowerStmtsGen(ctx, bi.else_blk.items, join, async_loops, passthrough_loop_labels);
             try ctx.gotoState(join);
             try ctx.finishCur();
             // continue the outer sequence in the join state
@@ -2037,6 +2123,13 @@ fn lowerStmtsGen(ctx: *GenCtx, items: []const ast.Stmt, succ: ?usize, brk: ?usiz
             const head = ctx.newState();
             const body_entry = ctx.newState();
             const exit = ctx.newState();
+            const body_loops = try ctx.arena().alloc(AsyncLoopTarget, async_loops.len + 1);
+            @memcpy(body_loops[0..async_loops.len], async_loops);
+            body_loops[async_loops.len] = .{
+                .label = if (loop.loop_label) |lbl| lbl.text else null,
+                .break_state = exit,
+                .continue_state = head,
+            };
             // edge into the head
             try ctx.gotoState(head);
             try ctx.finishCur();
@@ -2055,7 +2148,7 @@ fn lowerStmtsGen(ctx: *GenCtx, items: []const ast.Stmt, succ: ?usize, brk: ?usiz
             }
             // body: lower with succ=head (back-edge), brk=exit, cont=head.
             ctx.startState(body_entry);
-            try lowerStmtsGen(ctx, loop.body.items, head, exit, head);
+            try lowerStmtsGen(ctx, loop.body.items, head, body_loops, passthrough_loop_labels);
             try ctx.gotoState(head); // fall off the body -> back-edge to head
             try ctx.finishCur();
             // continue the outer sequence at the exit state
@@ -2088,7 +2181,12 @@ fn isUnconditionalTerminator(s: ast.Stmt) bool {
 //   `continue`  -> `self.state = cont; continue;`  (the enclosing async loop's head state)
 // recursing THROUGH await-free inner control flow (a plain `if`/`switch`/`block`), and leaving an
 // INNER await-free loop's own break/continue to that loop. Captured-name reads rewrite to `self.*`.
-fn genRewriteStraight(ctx: *GenCtx, s: ast.Stmt, brk: ?usize, cont: ?usize) Error!ast.Stmt {
+fn genRewriteStraight(
+    ctx: *GenCtx,
+    s: ast.Stmt,
+    async_loops: []const AsyncLoopTarget,
+    passthrough_loop_labels: []const ?[]const u8,
+) Error!ast.Stmt {
     const low = ctx.low;
     const arena = ctx.arena();
     switch (s.kind) {
@@ -2104,28 +2202,26 @@ fn genRewriteStraight(ctx: *GenCtx, s: ast.Stmt, brk: ?usize, cont: ?usize) Erro
         },
         .@"return" => return rewriteRegionStmt(low, s, ctx.names, ctx.done_str),
         .@"break" => |target| {
-            if (target != null) return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: labeled `break` in an await-bearing loop is not supported yet", .{});
-            const b = brk orelse return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: `break` outside an await-bearing loop in async E3c", .{});
-            var bb: std.ArrayList(ast.Stmt) = .empty;
-            try setState(low, &bb, b);
-            try bb.append(arena, .{ .span = s.span, .kind = .{ .@"continue" = null } });
-            return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try bb.toOwnedSlice(arena) } } };
+            if (labelInPassthroughLoops(target, passthrough_loop_labels)) return s;
+            const b = try resolveAsyncLoopTarget(low, s.span, target, .@"break", async_loops);
+            return stateJumpBlock(low, s.span, b, ctx.poll_label);
         },
         .@"continue" => |target| {
-            if (target != null) return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: labeled `continue` in an await-bearing loop is not supported yet", .{});
-            const c = cont orelse return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: `continue` outside an await-bearing loop in async E3c", .{});
-            var cb: std.ArrayList(ast.Stmt) = .empty;
-            try setState(low, &cb, c);
-            try cb.append(arena, .{ .span = s.span, .kind = .{ .@"continue" = null } });
-            return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try cb.toOwnedSlice(arena) } } };
+            if (labelInPassthroughLoops(target, passthrough_loop_labels)) return s;
+            const c = try resolveAsyncLoopTarget(low, s.span, target, .@"continue", async_loops);
+            return stateJumpBlock(low, s.span, c, ctx.poll_label);
         },
-        .block => |b| return .{ .span = s.span, .kind = .{ .block = try genRewriteStraightBlock(ctx, b, brk, cont) } },
-        .unsafe_block => |b| return .{ .span = s.span, .kind = .{ .unsafe_block = try genRewriteStraightBlock(ctx, b, brk, cont) } },
+        .block => |b| return .{ .span = s.span, .kind = .{ .block = try genRewriteStraightBlock(ctx, b, async_loops, passthrough_loop_labels) } },
+        .unsafe_block => |b| return .{ .span = s.span, .kind = .{ .unsafe_block = try genRewriteStraightBlock(ctx, b, async_loops, passthrough_loop_labels) } },
         .loop => |l| {
             // An INNER await-free loop: its own break/continue belong to IT, not the async loop, so
-            // pass `brk`/`cont` as null inside. A `return` inside still exits the whole fn (-> DONE).
+            // bare jumps pass through. Labeled jumps to this loop pass through too; labeled jumps to
+            // an outer await-bearing loop still resolve through `async_loops`.
             const new_iter = if (l.iterable) |it| try rewriteParamRefs(low, it, ctx.names) else null;
-            const new_body = try genRewriteStraightBlock(ctx, l.body, null, null);
+            const inner_labels = try arena.alloc(?[]const u8, passthrough_loop_labels.len + 1);
+            @memcpy(inner_labels[0..passthrough_loop_labels.len], passthrough_loop_labels);
+            inner_labels[passthrough_loop_labels.len] = if (l.loop_label) |lbl| lbl.text else null;
+            const new_body = try genRewriteStraightBlock(ctx, l.body, async_loops, inner_labels);
             var nl = l;
             nl.iterable = new_iter;
             nl.body = new_body;
@@ -2141,7 +2237,7 @@ fn genRewriteStraight(ctx: *GenCtx, s: ast.Stmt, brk: ?usize, cont: ?usize) Erro
                 var removed: std.ArrayList([]const u8) = .empty;
                 try shadowRemove(ctx.names, bound, &removed, arena);
                 const new_body: ast.SwitchBody = switch (arm.body) {
-                    .block => |b| .{ .block = try genRewriteStraightBlock(ctx, b, brk, cont) },
+                    .block => |b| .{ .block = try genRewriteStraightBlock(ctx, b, async_loops, passthrough_loop_labels) },
                     .expr => |e| .{ .expr = try rewriteParamRefs(low, e, ctx.names) },
                 };
                 try shadowRestore(ctx.names, removed.items);
@@ -2153,9 +2249,14 @@ fn genRewriteStraight(ctx: *GenCtx, s: ast.Stmt, brk: ?usize, cont: ?usize) Erro
     }
 }
 
-fn genRewriteStraightBlock(ctx: *GenCtx, b: ast.Block, brk: ?usize, cont: ?usize) Error!ast.Block {
+fn genRewriteStraightBlock(
+    ctx: *GenCtx,
+    b: ast.Block,
+    async_loops: []const AsyncLoopTarget,
+    passthrough_loop_labels: []const ?[]const u8,
+) Error!ast.Block {
     var items: std.ArrayList(ast.Stmt) = .empty;
-    for (b.items) |st| try items.append(ctx.arena(), try genRewriteStraight(ctx, st, brk, cont));
+    for (b.items) |st| try items.append(ctx.arena(), try genRewriteStraight(ctx, st, async_loops, passthrough_loop_labels));
     return .{ .span = b.span, .items = try items.toOwnedSlice(ctx.arena()) };
 }
 
@@ -2821,31 +2922,39 @@ fn rewriteRegionBlock(low: *Lowerer, b: ast.Block, names: *std.StringHashMap(voi
 // runs AFTER the body await took its result, so no child is live. `continue` re-enters at state 0,
 // where the loop head rebuilds __c0 exactly once per entry; `break` builds no child. So no leak and
 // no double-build across the back-edge/exit edge.
-fn rewriteLoopBodyStmtIn(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(void), done_str: []const u8, cont_state: usize, in_inner_loop: bool) Error!ast.Stmt {
+fn rewriteLoopBodyStmtIn(
+    low: *Lowerer,
+    s: ast.Stmt,
+    names: *std.StringHashMap(void),
+    done_str: []const u8,
+    poll_label: []const u8,
+    async_loops: []const AsyncLoopTarget,
+    passthrough_loop_labels: []const ?[]const u8,
+    in_inner_loop: bool,
+) Error!ast.Stmt {
     const arena = low.arena;
     switch (s.kind) {
         .@"return" => return rewriteRegionStmt(low, s, names, done_str),
         .@"break" => |target| {
-            if (target != null) return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: labeled `break` in an await-bearing loop is not supported yet", .{});
-            if (in_inner_loop) return s; // belongs to the inner loop
-            var bb: std.ArrayList(ast.Stmt) = .empty;
-            try setState(low, &bb, cont_state);
-            try bb.append(arena, .{ .span = s.span, .kind = .{ .@"continue" = null } });
-            return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try bb.toOwnedSlice(arena) } } };
+            if (labelInPassthroughLoops(target, passthrough_loop_labels)) return s;
+            if (target == null and in_inner_loop) return s; // belongs to the inner loop
+            const b = try resolveAsyncLoopTarget(low, s.span, target, .@"break", async_loops);
+            return stateJumpBlock(low, s.span, b, poll_label);
         },
         .@"continue" => |target| {
-            if (target != null) return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: labeled `continue` in an await-bearing loop is not supported yet", .{});
-            if (in_inner_loop) return s; // belongs to the inner loop
-            var cb: std.ArrayList(ast.Stmt) = .empty;
-            try setState(low, &cb, 0);
-            try cb.append(arena, .{ .span = s.span, .kind = .{ .@"continue" = null } });
-            return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try cb.toOwnedSlice(arena) } } };
+            if (labelInPassthroughLoops(target, passthrough_loop_labels)) return s;
+            if (target == null and in_inner_loop) return s; // belongs to the inner loop
+            const c = try resolveAsyncLoopTarget(low, s.span, target, .@"continue", async_loops);
+            return stateJumpBlock(low, s.span, c, poll_label);
         },
-        .block => |b| return .{ .span = s.span, .kind = .{ .block = try rewriteLoopBodyBlock(low, b, names, done_str, cont_state, in_inner_loop) } },
-        .unsafe_block => |b| return .{ .span = s.span, .kind = .{ .unsafe_block = try rewriteLoopBodyBlock(low, b, names, done_str, cont_state, in_inner_loop) } },
+        .block => |b| return .{ .span = s.span, .kind = .{ .block = try rewriteLoopBodyBlock(low, b, names, done_str, poll_label, async_loops, passthrough_loop_labels, in_inner_loop) } },
+        .unsafe_block => |b| return .{ .span = s.span, .kind = .{ .unsafe_block = try rewriteLoopBodyBlock(low, b, names, done_str, poll_label, async_loops, passthrough_loop_labels, in_inner_loop) } },
         .loop => |l| {
             const new_iter = if (l.iterable) |it| try rewriteParamRefs(low, it, names) else null;
-            const new_body = try rewriteLoopBodyBlock(low, l.body, names, done_str, cont_state, true);
+            const inner_labels = try arena.alloc(?[]const u8, passthrough_loop_labels.len + 1);
+            @memcpy(inner_labels[0..passthrough_loop_labels.len], passthrough_loop_labels);
+            inner_labels[passthrough_loop_labels.len] = if (l.loop_label) |lbl| lbl.text else null;
+            const new_body = try rewriteLoopBodyBlock(low, l.body, names, done_str, poll_label, async_loops, inner_labels, true);
             var nl = l;
             nl.iterable = new_iter;
             nl.body = new_body;
@@ -2865,7 +2974,7 @@ fn rewriteLoopBodyStmtIn(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(v
                 var removed: std.ArrayList([]const u8) = .empty;
                 try shadowRemove(names, bound, &removed, arena);
                 const new_body: ast.SwitchBody = switch (arm.body) {
-                    .block => |b| .{ .block = try rewriteLoopBodyBlock(low, b, names, done_str, cont_state, in_inner_loop) },
+                    .block => |b| .{ .block = try rewriteLoopBodyBlock(low, b, names, done_str, poll_label, async_loops, passthrough_loop_labels, in_inner_loop) },
                     .expr => |e| .{ .expr = try rewriteParamRefs(low, e, names) },
                 };
                 try shadowRestore(names, removed.items);
@@ -2882,23 +2991,32 @@ fn rewriteLoopBodyStmtIn(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(v
             const bound = try ifLetBoundNames(arena, il.pattern);
             var removed: std.ArrayList([]const u8) = .empty;
             try shadowRemove(names, bound, &removed, arena);
-            const rthen = try rewriteLoopBodyBlock(low, il.then_block, names, done_str, cont_state, in_inner_loop);
+            const rthen = try rewriteLoopBodyBlock(low, il.then_block, names, done_str, poll_label, async_loops, passthrough_loop_labels, in_inner_loop);
             try shadowRestore(names, removed.items);
-            const relse = if (il.else_block) |eb| try rewriteLoopBodyBlock(low, eb, names, done_str, cont_state, in_inner_loop) else null;
+            const relse = if (il.else_block) |eb| try rewriteLoopBodyBlock(low, eb, names, done_str, poll_label, async_loops, passthrough_loop_labels, in_inner_loop) else null;
             return .{ .span = s.span, .kind = .{ .if_let = .{ .pattern = il.pattern, .value = rvalue, .then_block = rthen, .else_block = relse } } };
         },
         else => return rewriteStmtParamRefs(low, s, names),
     }
 }
 
-fn rewriteLoopBodyBlock(low: *Lowerer, b: ast.Block, names: *std.StringHashMap(void), done_str: []const u8, cont_state: usize, in_inner_loop: bool) Error!ast.Block {
+fn rewriteLoopBodyBlock(
+    low: *Lowerer,
+    b: ast.Block,
+    names: *std.StringHashMap(void),
+    done_str: []const u8,
+    poll_label: []const u8,
+    async_loops: []const AsyncLoopTarget,
+    passthrough_loop_labels: []const ?[]const u8,
+    in_inner_loop: bool,
+) Error!ast.Block {
     const arena = low.arena;
     var items: std.ArrayList(ast.Stmt) = .empty;
     // Block-scoped shadowing (see rewriteRegionBlock): a `let`/`var` shadows a captured outer name for
     // the rest of the block; restore at block close.
     var block_removed: std.ArrayList([]const u8) = .empty;
     for (b.items) |st| {
-        try items.append(arena, try rewriteLoopBodyStmtIn(low, st, names, done_str, cont_state, in_inner_loop));
+        try items.append(arena, try rewriteLoopBodyStmtIn(low, st, names, done_str, poll_label, async_loops, passthrough_loop_labels, in_inner_loop));
         switch (st.kind) {
             .let_decl, .var_decl => |ld| try shadowRemove(names, try declShadowNames(arena, ld), &block_removed, arena),
             else => {},
