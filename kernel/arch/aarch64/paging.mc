@@ -146,7 +146,7 @@ fn try_alloc_table(h: *mut Heap) -> Result<PAddr, HeapError> {
     }
 }
 
-struct PageTable {
+pub struct PageTable {
     root: PAddr, // the L0 table frame
 }
 
@@ -183,7 +183,7 @@ export fn page_table_ttbr0(pt: *PageTable) -> u64 {
 }
 
 // Why a mapping request was rejected.
-enum MapError {
+pub enum MapError {
     MisalignedAddress,     // `virt`/`phys` are not aligned to the mapping granularity
     AlreadyMapped,         // a valid leaf descriptor already covers this VA (unmap first)
     ConflictWithLargePage, // a larger block leaf already spans this VA
