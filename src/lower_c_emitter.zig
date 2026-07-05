@@ -290,7 +290,12 @@ const CEmitter = struct {
     // hook is not spliced into a context where the result must remain assignable.
     suppress_load_hook: bool = false,
     current_function: ?[]const u8 = null,
-    mir_global_pointer_locals: std.StringHashMap(void),
+    // Proven storage class per pointer-typed local, sourced from live MIR
+    // pointer-provenance facts: .global_storage routes derefs through the
+    // mc_race helpers; .local_storage is the positive locality proof that keeps
+    // a deref PLAIN under the spec I.13 conservative default (absent/unknown
+    // pointers lower race-tolerantly).
+    mir_pointer_local_provenance: std.StringHashMap(mir.PointerProvenance),
     mir_global_pointer_array_elements: std.StringHashMap(void),
     // For a variadic function body: the name of the last NAMED parameter, which C's
     // `va_start(ap, last)` anchors on. Null outside a variadic function.
@@ -345,7 +350,7 @@ const CEmitter = struct {
             .mir_module = mir_module,
             .source_path = source_path,
             .reporter = reporter,
-            .mir_global_pointer_locals = std.StringHashMap(void).init(allocator),
+            .mir_pointer_local_provenance = std.StringHashMap(mir.PointerProvenance).init(allocator),
             .mir_global_pointer_array_elements = std.StringHashMap(void).init(allocator),
             .temp_index = 0,
             .indent = 0,
@@ -358,7 +363,7 @@ const CEmitter = struct {
         self.deinitDeclCollections();
         self.deinitControlFlowState();
         self.deinitOwnedStringVoidMap(&self.mir_global_pointer_array_elements);
-        self.mir_global_pointer_locals.deinit();
+        self.mir_pointer_local_provenance.deinit();
         self.scratch.deinit();
     }
 
@@ -1081,7 +1086,7 @@ const CEmitter = struct {
         const previous_function = self.current_function;
         self.current_function = fn_decl.name.text;
         defer self.current_function = previous_function;
-        self.mir_global_pointer_locals.clearRetainingCapacity();
+        self.mir_pointer_local_provenance.clearRetainingCapacity();
         self.clearOwnedStringVoidMapRetainingCapacity(&self.mir_global_pointer_array_elements);
 
         const previous_variadic_last = self.current_variadic_last;
@@ -2707,6 +2712,10 @@ const CEmitter = struct {
 
     fn emitLocalDeclStmt(self: *CEmitter, local: ast.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         for (local.names) |name| {
+            // A declaration (re)binds the name: a stale provenance entry from a
+            // disjoint sibling scope must never leak into the new binding (a
+            // leaked .local_storage proof would be an unsound plain lowering).
+            _ = self.mir_pointer_local_provenance.remove(name.text);
             try locals.put(name.text, try self.localDeclInfo(local, is_let, locals));
             if (local.ty) |decl_ty| {
                 if (local.init) |initializer| try self.applyMirPointerProvenanceForLocalInitializer(name.text, decl_ty, initializer, locals);
@@ -2844,7 +2853,7 @@ const CEmitter = struct {
     fn emitAssignmentStmt(self: *CEmitter, assignment: anytype, span: ast.Span, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         try self.applyMirPointerProvenanceForAssignment(assignment.target, assignment.value, span, locals);
         try self.applyMirPointerProvenanceForIndexAssignment(assignment.target, assignment.value, span, locals);
-        if (try self.emitMirPointerProvenanceDerefStoreStmt(assignment.target, assignment.value, locals)) return;
+        if (try self.emitRaceTolerantDerefStoreStmt(assignment.target, assignment.value, locals)) return;
         if (try self.emitSpecialAssignmentStmt(assignment, locals, return_ty)) return;
         try self.emitDefaultAssignmentStmt(assignment, locals);
     }
@@ -3034,6 +3043,8 @@ const CEmitter = struct {
     }
 
     fn emitLoopStmt(self: *CEmitter, stmt: ast.Stmt, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        // The for-binding (re)binds its name; see clearMirPointerProvenanceForPattern.
+        if (loop.label) |binding| _ = self.mir_pointer_local_provenance.remove(binding.text);
         if (loop.kind == .@"while") {
             if (try lower_c_mmio.emitReadWhileLoop(self.mmioWhileEmitContext(), loop, locals, return_ty)) return;
             if (try lower_c_flow.emitSequencedConditionWhileLoop(self.flowEmitContext(), loop, locals, return_ty)) return;
@@ -3205,7 +3216,24 @@ const CEmitter = struct {
         }
     }
 
+    // A pattern binding (re)binds its name in a nested scope the shared MIR
+    // pointer-provenance map does not model. Drop any entry a disjoint sibling
+    // scope may have left for the same name: a leaked .local_storage proof would
+    // let the binding's derefs lower PLAIN unsoundly (the leaked .global analog
+    // was merely conservative). Removal-only — after the arm the name stays
+    // unknown, which is the conservative default.
+    fn clearMirPointerProvenanceForPattern(self: *CEmitter, pattern: ast.Pattern) void {
+        switch (pattern.kind) {
+            .bind => |ident| _ = self.mir_pointer_local_provenance.remove(ident.text),
+            .tag_bind => |tag_bind| _ = self.mir_pointer_local_provenance.remove(tag_bind.binding.text),
+            else => {},
+        }
+    }
+
     fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        for (node.arms) |arm| {
+            for (arm.patterns) |pattern| self.clearMirPointerProvenanceForPattern(pattern);
+        }
         if (try self.emitResultSwitch(node, locals, return_ty)) return;
         if (try self.emitTaggedUnionSwitch(node, locals, return_ty)) return;
         if (try self.emitNullableSwitch(node, locals, return_ty)) return;
@@ -3315,6 +3343,7 @@ const CEmitter = struct {
     }
 
     fn emitIfLet(self: *CEmitter, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        self.clearMirPointerProvenanceForPattern(node.pattern);
         if (node.pattern.kind == .tag_bind) {
             const subject = (try lower_c_switch.resultSubjectForValueExpr(self.switchEmitContext(), node.value, locals)) orelse {
                 self.reportUnsupported(node.value.span, "result if-let value");
@@ -3550,14 +3579,22 @@ const CEmitter = struct {
     }
 
     fn emitDerefExpr(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
-        if (self.mirPointerProvenanceDerefRaceInfo(inner, locals)) |info| {
-            try self.out.print(self.allocator, "(({s})mc_race_load_{s}(", .{ info.c_type, info.race_type_name });
-            try self.emitExpr(inner, locals);
-            try self.out.appendSlice(self.allocator, "))");
-            return;
+        switch (try self.derefAccessLowering(inner, locals)) {
+            .plain => {
+                try self.out.appendSlice(self.allocator, "*");
+                try self.emitExpr(inner, locals);
+            },
+            .race_scalar => |info| {
+                try self.out.print(self.allocator, "(({s})mc_race_load_{s}(", .{ info.c_type, info.race_type_name });
+                try self.emitExpr(inner, locals);
+                try self.out.appendSlice(self.allocator, "))");
+            },
+            .race_pointer => |info| {
+                try self.out.print(self.allocator, "(({s})__atomic_load_n(", .{info.c_type});
+                try self.emitExpr(inner, locals);
+                try self.out.appendSlice(self.allocator, ", __ATOMIC_RELAXED))");
+            },
         }
-        try self.out.appendSlice(self.allocator, "*");
-        try self.emitExpr(inner, locals);
     }
 
     fn emitCastExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
@@ -3594,7 +3631,7 @@ const CEmitter = struct {
     }
 
     fn emitArrayIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), base_arr: ast.TypeExpr) anyerror!void {
-        try self.emitExpr(node.base.*, locals);
+        try self.emitArrayIndexBase(node.base.*, locals);
         if (self.mirCheckElided(node.index.span)) {
             try self.out.appendSlice(self.allocator, ".elems[");
             try self.emitExpr(node.index.*, locals);
@@ -3605,6 +3642,18 @@ const CEmitter = struct {
         try self.emitExpr(node.index.*, locals);
         const len = try self.arrayLenTextForExpr(base_arr.kind.array.len);
         try self.out.print(self.allocator, ", {s})]", .{len});
+    }
+
+    // A deref base (`pa.*[i]`) must parenthesize so `.elems` binds to the deref
+    // result: `(*pa).elems[...]`, not `*pa.elems[...]`.
+    fn emitArrayIndexBase(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        if (base.kind == .deref) {
+            try self.out.appendSlice(self.allocator, "(");
+            try self.emitExpr(base, locals);
+            try self.out.appendSlice(self.allocator, ")");
+            return;
+        }
+        try self.emitExpr(base, locals);
     }
 
     fn emitMemberExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
@@ -3763,7 +3812,10 @@ const CEmitter = struct {
 
     fn emitArrayIndexAddressOperand(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), base_arr: ast.TypeExpr) anyerror!void {
         // Mirrors the value-read path so `&arr[i]` and `arr[i]` agree.
-        try self.emitAddressOperand(node.base.*, locals);
+        if (node.base.*.kind == .deref) {
+            // `&pa.*[i]` — parenthesize the deref so `.elems` binds to its result.
+            try self.emitArrayIndexBase(node.base.*, locals);
+        } else try self.emitAddressOperand(node.base.*, locals);
         if (locals == null) {
             try self.emitStaticArrayIndexAddress(node);
             return;
@@ -4608,6 +4660,19 @@ const CEmitter = struct {
 
     fn mirPointerFactIsLiveGlobal(fact: mir.PointerProvenanceFact) bool {
         if (fact.provenance != .global_storage) return false;
+        return mirPointerFactReasonIsLive(fact);
+    }
+
+    // A live local_storage fact is the positive locality proof that keeps a deref
+    // PLAIN under the spec I.13 conservative default. Liveness is symmetric with
+    // the global side: any call/indirect-call/address-escape/dynamic-index
+    // invalidation drops the proof back to unknown (-> race-tolerant lowering).
+    fn mirPointerFactIsLiveLocal(fact: mir.PointerProvenanceFact) bool {
+        if (fact.provenance != .local_storage) return false;
+        return mirPointerFactReasonIsLive(fact);
+    }
+
+    fn mirPointerFactReasonIsLive(fact: mir.PointerProvenanceFact) bool {
         return switch (fact.invalidation_reason) {
             .none, .reassignment => true,
             .dynamic_index_write, .call, .indirect_call, .address_escape => false,
@@ -4794,9 +4859,11 @@ const CEmitter = struct {
             return;
         }
         if (live_global) {
-            try self.mir_global_pointer_locals.put(fact.subject, {});
+            try self.mir_pointer_local_provenance.put(fact.subject, .global_storage);
+        } else if (mirPointerFactIsLiveLocal(fact)) {
+            try self.mir_pointer_local_provenance.put(fact.subject, .local_storage);
         } else {
-            _ = self.mir_global_pointer_locals.remove(fact.subject);
+            _ = self.mir_pointer_local_provenance.remove(fact.subject);
         }
     }
 
@@ -4837,7 +4904,7 @@ const CEmitter = struct {
                         }
                     }
                 }
-                _ = self.mir_global_pointer_locals.remove(fact.subject);
+                _ = self.mir_pointer_local_provenance.remove(fact.subject);
             }
         }
     }
@@ -4864,34 +4931,19 @@ const CEmitter = struct {
         };
     }
 
-    fn directMirPointerLocalCopyExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
-        const local_set = locals orelse return false;
-        return switch (expr.kind) {
-            .grouped => |inner| self.directMirPointerLocalCopyExpr(inner.*, locals),
-            .cast => |node| self.directMirPointerLocalCopyExpr(node.value.*, locals),
-            .ident => |ident| blk: {
-                const info = local_set.get(ident.text) orelse break :blk false;
-                const ty = info.source_ty orelse break :blk false;
-                break :blk isPointerLikeGlobalType(self.resolveAliasType(ty));
-            },
-            else => false,
-        };
-    }
-
     fn applyMirPointerProvenanceForLocalInitializer(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         if (isPointerLikeGlobalType(self.resolveAliasType(ty))) {
+            // A declaration (re)binds the name: drop any stale entry first (a
+            // sibling-scope local of the same name must not leak its proof —
+            // a leaked .local_storage would be an unsound plain lowering).
+            // Matched facts re-establish the class below.
+            _ = self.mir_pointer_local_provenance.remove(name);
             const matched = try self.applyMirPointerProvenanceFactsAtSource(name, null, initializer.span, locals);
             if (!matched) {
                 if (self.mirArrayElementExprGlobalProvenance(initializer, locals)) |is_global| {
                     if (is_global) {
-                        try self.mir_global_pointer_locals.put(name, {});
-                    } else {
-                        _ = self.mir_global_pointer_locals.remove(name);
+                        try self.mir_pointer_local_provenance.put(name, .global_storage);
                     }
-                } else if (self.directMirAddressProvenanceExpr(initializer, locals)) {
-                    _ = self.mir_global_pointer_locals.remove(name);
-                } else if (self.directMirPointerLocalCopyExpr(initializer, locals)) {
-                    _ = self.mir_global_pointer_locals.remove(name);
                 }
             }
             return;
@@ -4919,19 +4971,16 @@ const CEmitter = struct {
         const info = locals.get(name) orelse return;
         const ty = info.source_ty orelse return;
         if (isPointerLikeGlobalType(self.resolveAliasType(ty))) {
+            // Reassignment invalidates any prior proof; matched facts (or the
+            // syntactic global element ladder) re-establish the class below.
+            _ = self.mir_pointer_local_provenance.remove(name);
             const matched_value = try self.applyMirPointerProvenanceFactsAtSource(name, null, value.span, locals);
             _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span, locals);
             if (!matched_value) {
                 if (self.mirArrayElementExprGlobalProvenance(value, locals)) |is_global| {
                     if (is_global) {
-                        try self.mir_global_pointer_locals.put(name, {});
-                    } else {
-                        _ = self.mir_global_pointer_locals.remove(name);
+                        try self.mir_pointer_local_provenance.put(name, .global_storage);
                     }
-                } else if (self.directMirAddressProvenanceExpr(value, locals)) {
-                    _ = self.mir_global_pointer_locals.remove(name);
-                } else if (self.directMirPointerLocalCopyExpr(value, locals)) {
-                    _ = self.mir_global_pointer_locals.remove(name);
                 }
             }
             return;
@@ -4967,30 +5016,90 @@ const CEmitter = struct {
         }
     }
 
-    fn mirPointerProvenanceDerefRaceInfo(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?GlobalInfo {
-        const name = directLocalName(inner) orelse return null;
-        if (!self.mir_global_pointer_locals.contains(name)) return null;
-        const pointee_ty = self.derefPointeeType(inner, locals) orelse return null;
-        const info = self.globalInfoFromType(pointee_ty) catch return null;
-        if (info.aggregate or info.pointer_like) return null;
-        return info;
+    const DerefAccessLowering = union(enum) {
+        plain,
+        race_scalar: GlobalInfo,
+        race_pointer: GlobalInfo,
+    };
+
+    // Positive locality proof for the bare pointer-deref access class (spec I.13):
+    // PLAIN deref lowering is allowed only when the pointer provably names the
+    // current function's own storage — a live MIR local_storage fact for the
+    // pointer local, or a syntactic address-of a named local (through grouped/
+    // cast). Everything else lowers race-tolerantly.
+    fn derefPointerHasProvenLocalStorage(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        return switch (inner.kind) {
+            .ident => |ident| blk: {
+                const local_set = locals orelse break :blk false;
+                if (!local_set.contains(ident.text)) break :blk false;
+                if (self.mir_pointer_local_provenance.get(ident.text)) |provenance| break :blk provenance == .local_storage;
+                break :blk false;
+            },
+            .address_of => |target| directLocalStorageTarget(target.*, locals),
+            .grouped => |wrapped| self.derefPointerHasProvenLocalStorage(wrapped.*, locals),
+            .cast => |node| self.derefPointerHasProvenLocalStorage(node.value.*, locals),
+            else => false,
+        };
     }
 
-    fn emitMirPointerProvenanceDerefStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    // Only a bare named local counts: member/index roots may reach through a
+    // pointer-typed base (auto-deref), which does NOT prove the storage is local.
+    fn directLocalStorageTarget(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .grouped => |wrapped| directLocalStorageTarget(wrapped.*, locals),
+            .ident => |ident| if (locals) |local_set| local_set.contains(ident.text) else false,
+            else => false,
+        };
+    }
+
+    // Spec I.13 conservative default for the bare pointer-deref class: an
+    // ordinary scalar deref lowers race-tolerantly (mc_race helpers for helper
+    // scalars, relaxed __atomic_*_n for pointer-shaped pointees) unless the
+    // pointer is positively proven local. Aggregate pointees stay on the plain
+    // path — the aggregate/member/index access classes are separate lowering
+    // classes (follow-up slices). Scalars with no sound race-tolerant lowering
+    // (u128/i128) fail emission closed. Pointees the C backend cannot type
+    // (derefPointeeType null) keep today's plain lowering — a residual gap for
+    // a follow-up slice.
+    fn derefAccessLowering(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !DerefAccessLowering {
+        if (self.derefPointerHasProvenLocalStorage(inner, locals)) return .plain;
+        const pointee_ty = self.derefPointeeType(inner, locals) orelse return .plain;
+        const info = self.globalInfoFromType(pointee_ty) catch return .plain;
+        if (info.aggregate) return .plain;
+        if (info.pointer_like) return .{ .race_pointer = info };
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        return .{ .race_scalar = info };
+    }
+
+    fn emitRaceTolerantDerefStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const inner = switch (target.kind) {
             .deref => |ptr| ptr.*,
-            .grouped => |wrapped| return try self.emitMirPointerProvenanceDerefStoreStmt(wrapped.*, value, locals),
+            .grouped => |wrapped| return try self.emitRaceTolerantDerefStoreStmt(wrapped.*, value, locals),
             else => return false,
         };
-        const info = self.mirPointerProvenanceDerefRaceInfo(inner, locals) orelse return false;
-        const pointee_ty = self.derefPointeeType(inner, locals) orelse return false;
-        try self.writeIndent();
-        try self.out.print(self.allocator, "mc_race_store_{s}(", .{info.race_type_name});
-        try self.emitExpr(inner, locals);
-        try self.out.print(self.allocator, ", ({s})", .{info.race_c_type});
-        try self.emitExprWithTarget(value, locals, pointee_ty);
-        try self.out.appendSlice(self.allocator, ");\n");
-        return true;
+        switch (try self.derefAccessLowering(inner, locals)) {
+            .plain => return false,
+            .race_scalar => |info| {
+                const pointee_ty = self.derefPointeeType(inner, locals) orelse return false;
+                try self.writeIndent();
+                try self.out.print(self.allocator, "mc_race_store_{s}(", .{info.race_type_name});
+                try self.emitExpr(inner, locals);
+                try self.out.print(self.allocator, ", ({s})", .{info.race_c_type});
+                try self.emitExprWithTarget(value, locals, pointee_ty);
+                try self.out.appendSlice(self.allocator, ");\n");
+                return true;
+            },
+            .race_pointer => |info| {
+                const pointee_ty = self.derefPointeeType(inner, locals) orelse return false;
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "__atomic_store_n(");
+                try self.emitExpr(inner, locals);
+                try self.out.print(self.allocator, ", ({s})", .{info.c_type});
+                try self.emitExprWithTarget(value, locals, pointee_ty);
+                try self.out.appendSlice(self.allocator, ", __ATOMIC_RELAXED);\n");
+                return true;
+            },
+        }
     }
 
     // The constant value of an integer local initializer, but only when it fits

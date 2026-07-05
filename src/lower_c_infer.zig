@@ -338,6 +338,12 @@ pub fn arrayTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
             }
             return null;
         },
+        // `pa.*[i]` — deref of a pointer-to-array indexes the pointee array.
+        .deref => |inner| {
+            const pointee = derefPointeeType(ctx, inner.*, locals) orelse return null;
+            const resolved = resolveAliasType(ctx, pointee);
+            return if (resolved.kind == .array) resolved else null;
+        },
         else => return null,
     }
 }
