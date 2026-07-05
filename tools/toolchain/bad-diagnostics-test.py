@@ -31,6 +31,14 @@ EMIT_LLVM_BAD_FIXTURES = (
 )
 
 
+ASYNC_CHECK_BAD_FIXTURES = (
+    "tests/c_emit/bad/async_await_unresolved_dyn.mc",
+    "tests/c_emit/bad/async_borrow_across_await.mc",
+    "tests/c_emit/bad/async_borrow_pinning.mc",
+    "tests/c_emit/bad/async_for_await_nested.mc",
+)
+
+
 def fixture_plan(root: Path) -> list[Fixture]:
     specs: list[Fixture] = []
     for pattern, command in (
@@ -40,6 +48,8 @@ def fixture_plan(root: Path) -> list[Fixture]:
     ):
         for path in sorted(root.glob(pattern)):
             specs.append(Fixture(command=command, path=path.relative_to(root)))
+    for fixture in ASYNC_CHECK_BAD_FIXTURES:
+        specs.append(Fixture(command="check", path=Path(fixture)))
     for fixture in EMIT_LLVM_BAD_FIXTURES:
         specs.append(Fixture(command="emit-llvm", path=Path(fixture)))
     return specs
