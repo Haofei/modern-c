@@ -112,6 +112,10 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(indirect_param_pointer_body, "load atomic i32, ptr %p unordered, align 4");
     try expectNotContains(indirect_param_pointer_body, "load i32, ptr %p");
 
+    const alias_copy_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_alias_copy_param");
+    try expectContains(alias_copy_param_body, "load atomic i32, ptr %p unordered, align 4");
+    try expectNotContains(alias_copy_param_body, "load i32, ptr %p");
+
     const indirect_reassigned_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_indirect_reassigned_param");
     try expectContains(indirect_reassigned_param_body, "load i32, ptr %p");
     try expectNotContains(indirect_reassigned_param_body, "load atomic i32, ptr %p");
@@ -119,6 +123,14 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     const indirect_reassigned_other_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_indirect_reassigned_other_param");
     try expectContains(indirect_reassigned_other_param_body, "load i32, ptr %p");
     try expectNotContains(indirect_reassigned_other_param_body, "load atomic i32, ptr %p");
+
+    const alias_copy_reassigned_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_alias_copy_reassigned_param");
+    try expectContains(alias_copy_reassigned_param_body, "load i32, ptr %p");
+    try expectNotContains(alias_copy_reassigned_param_body, "load atomic i32, ptr %p");
+
+    const alias_copy_reassigned_other_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_alias_copy_reassigned_other_param");
+    try expectContains(alias_copy_reassigned_other_param_body, "load i32, ptr %p");
+    try expectNotContains(alias_copy_reassigned_other_param_body, "load atomic i32, ptr %p");
 
     const mixed_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_mixed_param");
     try expectContains(mixed_param_body, "load i32, ptr %p");
@@ -222,6 +234,11 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(indirect_aggregate_alias_param_body, "load atomic i32, ptr %");
     try expectContains(indirect_aggregate_alias_param_body, " unordered, align 4");
     try expectNotContains(indirect_aggregate_alias_param_body, "load i32, ptr %p.addr.");
+
+    const aggregate_alias_copy_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_aggregate_alias_copy_param");
+    try expectContains(aggregate_alias_copy_param_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_alias_copy_param_body, " unordered, align 4");
+    try expectNotContains(aggregate_alias_copy_param_body, "load i32, ptr %p.addr.");
 
     const indirect_aggregate_reassigned_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_indirect_aggregate_reassigned_param");
     try expectContains(indirect_aggregate_reassigned_param_body, "load i32, ptr %");

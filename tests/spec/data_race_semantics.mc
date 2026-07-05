@@ -102,6 +102,17 @@ fn call_indirect_global_param_alias() -> u32 {
     return f(&shared_counter);
 }
 
+fn consume_alias_copy_param(p: *mut u32) -> u32 {
+    // EXPECT: lower-llvm emits unordered atomic load because a local function-pointer alias copy preserves the internal target.
+    return p.*;
+}
+
+fn call_indirect_alias_copy_param() -> u32 {
+    let f: fn(*mut u32) -> u32 = consume_alias_copy_param;
+    let g: fn(*mut u32) -> u32 = f;
+    return g(&shared_counter);
+}
+
 fn consume_indirect_reassigned_param(p: *mut u32) -> u32 {
     // EXPECT: lower-llvm keeps this plain because the local function-pointer alias is reassigned before the indirect call.
     return p.*;
@@ -116,6 +127,23 @@ fn call_indirect_reassigned_param_alias() -> u32 {
     var f: fn(*mut u32) -> u32 = consume_indirect_reassigned_param;
     f = consume_indirect_reassigned_other_param;
     return f(&shared_counter);
+}
+
+fn consume_alias_copy_reassigned_param(p: *mut u32) -> u32 {
+    // EXPECT: lower-llvm keeps this plain because the copied local function-pointer alias is reassigned before the indirect call.
+    return p.*;
+}
+
+fn consume_alias_copy_reassigned_other_param(p: *mut u32) -> u32 {
+    // EXPECT: lower-llvm keeps the copied alias reassignment target plain too; reassigned aliases do not prove either target.
+    return p.*;
+}
+
+fn call_indirect_alias_copy_reassigned_param() -> u32 {
+    let f: fn(*mut u32) -> u32 = consume_alias_copy_reassigned_param;
+    var g: fn(*mut u32) -> u32 = f;
+    g = consume_alias_copy_reassigned_other_param;
+    return g(&shared_counter);
 }
 
 fn consume_mixed_param(p: *mut u32) -> u32 {
@@ -318,6 +346,19 @@ fn call_indirect_aggregate_alias_param() -> u32 {
     var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 41 };
     let f: fn(*mut PointerHolder) -> u32 = consume_indirect_aggregate_alias_param;
     return f(&holder);
+}
+
+fn consume_aggregate_alias_copy_param(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load because a local aggregate-param function-pointer alias copy preserves the internal target.
+    return p.*;
+}
+
+fn call_indirect_aggregate_alias_copy_param() -> u32 {
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 43 };
+    let f: fn(*mut PointerHolder) -> u32 = consume_aggregate_alias_copy_param;
+    let g: fn(*mut PointerHolder) -> u32 = f;
+    return g(&holder);
 }
 
 fn consume_indirect_aggregate_reassigned_param(hp: *mut PointerHolder) -> u32 {

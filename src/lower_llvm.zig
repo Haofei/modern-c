@@ -991,7 +991,9 @@ const LlvmEmitter = struct {
 
     fn directFunctionPointerAliasTarget(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
         return switch (expr.kind) {
-            .ident => |ident| if (!self.local_types.contains(ident.text) and !self.global_types.contains(ident.text) and self.fn_sigs.contains(ident.text))
+            .ident => |ident| if (self.local_function_pointer_aliases.get(ident.text)) |target|
+                target
+            else if (!self.local_types.contains(ident.text) and !self.global_types.contains(ident.text) and self.fn_sigs.contains(ident.text))
                 ident.text
             else
                 null,
