@@ -121,6 +121,29 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(local_pointer_body, "load i32, ptr %");
     try expectNotContains(local_pointer_body, " atomic ");
 
+    const aggregate_global_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_global_pointer_field_load");
+    try expectContains(aggregate_global_pointer_body, "store ptr @shared_counter, ptr %");
+    try expectContains(aggregate_global_pointer_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_global_pointer_body, " unordered, align 4");
+    try expectNotContains(aggregate_global_pointer_body, "load i32, ptr %p.addr.");
+
+    const aggregate_stack_pointer_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_stack_pointer_field_stays_plain");
+    try expectContains(aggregate_stack_pointer_body, "load i32, ptr %");
+    try expectNotContains(aggregate_stack_pointer_body, " atomic ");
+
+    const aggregate_reassigned_stack_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_reassigned_stack_pointer_field_stays_plain");
+    try expectContains(aggregate_reassigned_stack_body, "load i32, ptr %");
+    try expectNotContains(aggregate_reassigned_stack_body, " atomic ");
+
+    const aggregate_whole_copy_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_whole_copy_pointer_field_stays_plain");
+    try expectContains(aggregate_whole_copy_body, "load i32, ptr %");
+    try expectNotContains(aggregate_whole_copy_body, " atomic ");
+
+    const aggregate_exported_return_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_exported_return_pointer_field_stays_plain");
+    try expectContains(aggregate_exported_return_body, "call ptr @exported_global_pointer()");
+    try expectContains(aggregate_exported_return_body, "load i32, ptr %");
+    try expectNotContains(aggregate_exported_return_body, " atomic ");
+
     const field_store_body = try llvmFunctionBody(output.items, "define internal void @possibly_racing_field_store");
     try expectContains(field_store_body, "store atomic i32 %x, ptr %");
     try expectContains(field_store_body, " unordered, align 4");

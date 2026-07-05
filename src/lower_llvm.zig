@@ -266,6 +266,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
         .global_pointer_locals = std.StringHashMap(void).init(allocator),
+        .aggregate_global_pointer_fields = std.StringHashMap(void).init(allocator),
         .global_pointer_return_fns = std.StringHashMap(void).init(allocator),
         .global_pointer_params = std.StringHashMap(void).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
@@ -409,6 +410,7 @@ const LlvmEmitter = struct {
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
     global_pointer_locals: std.StringHashMap(void) = undefined,
+    aggregate_global_pointer_fields: std.StringHashMap(void) = undefined,
     global_pointer_return_fns: std.StringHashMap(void) = undefined,
     global_pointer_params: std.StringHashMap(void) = undefined,
     // While a function body is being emitted, `entry_allocas` collects every `alloca`
@@ -483,6 +485,7 @@ const LlvmEmitter = struct {
         self.local_types.deinit();
         self.local_slots.deinit();
         self.global_pointer_locals.deinit();
+        self.deinitOwnedStringVoidMap(&self.aggregate_global_pointer_fields);
         {
             var it = self.global_pointer_params.keyIterator();
             while (it.next()) |k| self.allocator.free(k.*);
@@ -1282,6 +1285,7 @@ const LlvmEmitter = struct {
         self.local_types.clearRetainingCapacity();
         self.local_slots.clearRetainingCapacity();
         self.global_pointer_locals.clearRetainingCapacity();
+        self.clearAggregateGlobalPointerFields();
         self.defer_stack.clearRetainingCapacity();
         for (fn_decl.params, 0..) |param, i| {
             try self.local_types.put(param.name.text, param.ty);
@@ -1785,14 +1789,19 @@ const LlvmEmitter = struct {
         var global_pointer_it = self.global_pointer_locals.iterator();
         while (global_pointer_it.next()) |entry| try saved_global_pointer_locals.put(entry.key_ptr.*, {});
 
+        var saved_aggregate_global_pointer_fields = try self.cloneOwnedStringVoidMap(&self.aggregate_global_pointer_fields);
+        errdefer if (!restore_installed) self.deinitOwnedStringVoidMap(&saved_aggregate_global_pointer_fields);
+
         restore_installed = true;
         defer {
             self.local_types.deinit();
             self.local_slots.deinit();
             self.global_pointer_locals.deinit();
+            self.deinitOwnedStringVoidMap(&self.aggregate_global_pointer_fields);
             self.local_types = saved_types;
             self.local_slots = saved_slots;
             self.global_pointer_locals = saved_global_pointer_locals;
+            self.aggregate_global_pointer_fields = saved_aggregate_global_pointer_fields;
         }
 
         return try self.emitBlock(block, ret_ty);
@@ -2115,9 +2124,11 @@ const LlvmEmitter = struct {
         const old_type = self.local_types.fetchRemove(binding.text);
         const old_slot = self.local_slots.fetchRemove(binding.text);
         const old_global_pointer = self.global_pointer_locals.fetchRemove(binding.text);
+        var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(binding.text);
         defer restoreLocal(&self.local_types, binding.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
         defer restoreLocal(&self.global_pointer_locals, binding.text, old_global_pointer) catch {};
+        defer self.restoreAggregatePointerFieldsForLocal(binding.text, &old_aggregate_pointer_fields) catch {};
 
         const binding_ptr = try self.nextBindingPtr(binding.text);
         const binding_value = if (is_value_opt) blk: {
@@ -2135,6 +2146,7 @@ const LlvmEmitter = struct {
         _ = self.local_types.remove(binding.text);
         _ = self.local_slots.remove(binding.text);
         _ = self.global_pointer_locals.remove(binding.text);
+        self.clearAggregatePointerFieldsForLocal(binding.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{else_label});
         const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
@@ -2176,9 +2188,11 @@ const LlvmEmitter = struct {
         const old_type = self.local_types.fetchRemove(tag_bind.binding.text);
         const old_slot = self.local_slots.fetchRemove(tag_bind.binding.text);
         const old_global_pointer = self.global_pointer_locals.fetchRemove(tag_bind.binding.text);
+        var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(tag_bind.binding.text);
         defer restoreLocal(&self.local_types, tag_bind.binding.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, tag_bind.binding.text, old_slot) catch {};
         defer restoreLocal(&self.global_pointer_locals, tag_bind.binding.text, old_global_pointer) catch {};
+        defer self.restoreAggregatePointerFieldsForLocal(tag_bind.binding.text, &old_aggregate_pointer_fields) catch {};
 
         const binding_ptr = try self.nextBindingPtr(tag_bind.binding.text);
         const payload = try self.nextTemp();
@@ -2193,6 +2207,7 @@ const LlvmEmitter = struct {
         _ = self.local_types.remove(tag_bind.binding.text);
         _ = self.local_slots.remove(tag_bind.binding.text);
         _ = self.global_pointer_locals.remove(tag_bind.binding.text);
+        self.clearAggregatePointerFieldsForLocal(tag_bind.binding.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{else_label});
         const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
@@ -2256,6 +2271,7 @@ const LlvmEmitter = struct {
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
         try self.updatePointerGlobalProvenance(name, ty, init);
+        try self.updateAggregatePointerFieldProvenanceFromInit(name, ty, init);
         try self.emitDebugDeclare(name, ty, ptr, local.names[0].span, null);
         // `var ap: va_list = va.start();` — the slot IS the va_list cursor storage; initialize
         // it in place with llvm.va_start (it has no value to store).
@@ -2304,6 +2320,7 @@ const LlvmEmitter = struct {
                 const value = try self.emitExpr(value_expr, slot.ty);
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, slot.ptr, try self.debugCallSuffix() });
                 try self.updatePointerGlobalProvenance(ident.text, slot.ty, value_expr);
+                try self.updateAggregatePointerFieldProvenanceFromInit(ident.text, slot.ty, value_expr);
                 return;
             }
             if (self.global_types.get(ident.text)) |ty| {
@@ -2484,6 +2501,7 @@ const LlvmEmitter = struct {
                 try self.emitOrdinaryShadowHook(ptr, field.ty, .store_pre);
                 try self.emitOrdinaryStore(field.ty, try self.llvmType(field.ty), value, ptr, field_global);
                 if (field_global) try self.emitOrdinaryShadowHook(ptr, field.ty, .store_post);
+                try self.updateAggregatePointerFieldProvenanceFromAssignment(node.base.*, node.name.text, field.ty, value_expr);
                 break :blk true;
             },
             .grouped => |inner| try self.emitMemberAssignment(inner.*, value_expr),
@@ -2552,9 +2570,11 @@ const LlvmEmitter = struct {
         const old_type = self.local_types.fetchRemove(binding.text);
         const old_slot = self.local_slots.fetchRemove(binding.text);
         const old_global_pointer = self.global_pointer_locals.fetchRemove(binding.text);
+        var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(binding.text);
         defer restoreLocal(&self.local_types, binding.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
         defer restoreLocal(&self.global_pointer_locals, binding.text, old_global_pointer) catch {};
+        defer self.restoreAggregatePointerFieldsForLocal(binding.text, &old_aggregate_pointer_fields) catch {};
         try self.local_types.put(binding.text, element_ty);
         try self.local_slots.put(binding.text, .{ .ty = element_ty, .ptr = binding_ptr });
 
@@ -2655,9 +2675,11 @@ const LlvmEmitter = struct {
         const old_type = self.local_types.fetchRemove(bind.text);
         const old_slot = self.local_slots.fetchRemove(bind.text);
         const old_global_pointer = self.global_pointer_locals.fetchRemove(bind.text);
+        var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(bind.text);
         defer restoreLocal(&self.local_types, bind.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
         defer restoreLocal(&self.global_pointer_locals, bind.text, old_global_pointer) catch {};
+        defer self.restoreAggregatePointerFieldsForLocal(bind.text, &old_aggregate_pointer_fields) catch {};
 
         const binding_ptr = try self.nextBindingPtr(bind.text);
         try self.emitAllocaStore(binding_ptr, try self.llvmType(inner_ty), subject);
@@ -2670,6 +2692,8 @@ const LlvmEmitter = struct {
         }
         _ = self.local_types.remove(bind.text);
         _ = self.local_slots.remove(bind.text);
+        _ = self.global_pointer_locals.remove(bind.text);
+        self.clearAggregatePointerFieldsForLocal(bind.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{none_label});
         const none_terminated = try self.emitSwitchBody(node.arms[none_i].body, ret_ty);
@@ -2749,9 +2773,11 @@ const LlvmEmitter = struct {
             const old_type = self.local_types.fetchRemove(bind.text);
             const old_slot = self.local_slots.fetchRemove(bind.text);
             const old_global_pointer = self.global_pointer_locals.fetchRemove(bind.text);
+            var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(bind.text);
             defer restoreLocal(&self.local_types, bind.text, old_type) catch {};
             defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
             defer restoreLocal(&self.global_pointer_locals, bind.text, old_global_pointer) catch {};
+            defer self.restoreAggregatePointerFieldsForLocal(bind.text, &old_aggregate_pointer_fields) catch {};
 
             const binding_ptr = try self.nextBindingPtr(bind.text);
             const payload = try self.nextTemp();
@@ -2844,9 +2870,11 @@ const LlvmEmitter = struct {
             const old_type = self.local_types.fetchRemove(binding.binding.text);
             const old_slot = self.local_slots.fetchRemove(binding.binding.text);
             const old_global_pointer = self.global_pointer_locals.fetchRemove(binding.binding.text);
+            var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(binding.binding.text);
             defer restoreLocal(&self.local_types, binding.binding.text, old_type) catch {};
             defer restoreLocal(&self.local_slots, binding.binding.text, old_slot) catch {};
             defer restoreLocal(&self.global_pointer_locals, binding.binding.text, old_global_pointer) catch {};
+            defer self.restoreAggregatePointerFieldsForLocal(binding.binding.text, &old_aggregate_pointer_fields) catch {};
 
             const binding_ptr = try self.nextBindingPtr(binding.binding.text);
             const payload = try self.taggedUnionLoadPayload(subject_ptr, subject_ty, payload_ty);
@@ -3240,6 +3268,146 @@ const LlvmEmitter = struct {
         return !self.isAggregateType(ty);
     }
 
+    fn aggregatePointerFieldKey(self: *LlvmEmitter, local_name: []const u8, field_name: []const u8) ![]const u8 {
+        return try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ local_name, field_name });
+    }
+
+    fn aggregatePointerFieldKeyMatchesLocal(key: []const u8, local_name: []const u8) bool {
+        return key.len > local_name.len and std.mem.eql(u8, key[0..local_name.len], local_name) and key[local_name.len] == 0;
+    }
+
+    fn deinitOwnedStringVoidMap(self: *LlvmEmitter, map: *std.StringHashMap(void)) void {
+        var it = map.keyIterator();
+        while (it.next()) |key| self.allocator.free(key.*);
+        map.deinit();
+    }
+
+    fn cloneOwnedStringVoidMap(self: *LlvmEmitter, source: *std.StringHashMap(void)) !std.StringHashMap(void) {
+        var clone = std.StringHashMap(void).init(self.allocator);
+        errdefer self.deinitOwnedStringVoidMap(&clone);
+        var it = source.keyIterator();
+        while (it.next()) |key| {
+            const owned_key = try self.allocator.dupe(u8, key.*);
+            errdefer self.allocator.free(owned_key);
+            try clone.put(owned_key, {});
+        }
+        return clone;
+    }
+
+    fn clearAggregateGlobalPointerFields(self: *LlvmEmitter) void {
+        var it = self.aggregate_global_pointer_fields.keyIterator();
+        while (it.next()) |key| self.allocator.free(key.*);
+        self.aggregate_global_pointer_fields.clearRetainingCapacity();
+    }
+
+    fn clearAggregatePointerFieldsForLocal(self: *LlvmEmitter, local_name: []const u8) void {
+        while (true) {
+            var found_key: ?[]const u8 = null;
+            var it = self.aggregate_global_pointer_fields.keyIterator();
+            while (it.next()) |key| {
+                if (aggregatePointerFieldKeyMatchesLocal(key.*, local_name)) {
+                    found_key = key.*;
+                    break;
+                }
+            }
+
+            const key = found_key orelse return;
+            if (self.aggregate_global_pointer_fields.fetchRemove(key)) |entry| {
+                self.allocator.free(entry.key);
+            }
+        }
+    }
+
+    fn saveAndRemoveAggregatePointerFieldsForLocal(self: *LlvmEmitter, local_name: []const u8) !std.StringHashMap(void) {
+        var saved = std.StringHashMap(void).init(self.allocator);
+        errdefer self.deinitOwnedStringVoidMap(&saved);
+
+        var it = self.aggregate_global_pointer_fields.keyIterator();
+        while (it.next()) |key| {
+            if (!aggregatePointerFieldKeyMatchesLocal(key.*, local_name)) continue;
+            const owned_key = try self.allocator.dupe(u8, key.*);
+            errdefer self.allocator.free(owned_key);
+            try saved.put(owned_key, {});
+        }
+
+        self.clearAggregatePointerFieldsForLocal(local_name);
+        return saved;
+    }
+
+    fn restoreAggregatePointerFieldsForLocal(self: *LlvmEmitter, local_name: []const u8, saved: *std.StringHashMap(void)) !void {
+        self.clearAggregatePointerFieldsForLocal(local_name);
+        defer saved.deinit();
+
+        var it = saved.keyIterator();
+        while (it.next()) |key| {
+            try self.aggregate_global_pointer_fields.put(key.*, {});
+        }
+    }
+
+    fn setAggregatePointerFieldProvenance(self: *LlvmEmitter, local_name: []const u8, field_name: []const u8, is_global_backed: bool) !void {
+        const lookup_key = try self.aggregatePointerFieldKey(local_name, field_name);
+        defer self.allocator.free(lookup_key);
+
+        if (!is_global_backed) {
+            if (self.aggregate_global_pointer_fields.fetchRemove(lookup_key)) |entry| {
+                self.allocator.free(entry.key);
+            }
+            return;
+        }
+
+        if (self.aggregate_global_pointer_fields.contains(lookup_key)) return;
+        const owned_key = try self.aggregatePointerFieldKey(local_name, field_name);
+        errdefer self.allocator.free(owned_key);
+        try self.aggregate_global_pointer_fields.put(owned_key, {});
+    }
+
+    fn localAggregateFieldHasGlobalPointerProvenance(self: *LlvmEmitter, local_name: []const u8, field_name: []const u8) bool {
+        const lookup_key = self.aggregatePointerFieldKey(local_name, field_name) catch return false;
+        defer self.allocator.free(lookup_key);
+        return self.aggregate_global_pointer_fields.contains(lookup_key);
+    }
+
+    fn directLocalAggregateBaseName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| if (self.local_slots.contains(ident.text)) ident.text else null,
+            .grouped => |inner| self.directLocalAggregateBaseName(inner.*),
+            else => null,
+        };
+    }
+
+    fn updateAggregatePointerFieldProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
+        self.clearAggregatePointerFieldsForLocal(local_name);
+
+        const struct_decl = self.structDeclForType(ty) orelse return;
+        if (struct_decl.is_c_union) return;
+        const fields = switch (init.kind) {
+            .struct_literal => |fields| fields,
+            .grouped => |inner| switch (inner.kind) {
+                .struct_literal => |fields| fields,
+                else => return,
+            },
+            else => return,
+        };
+
+        for (struct_decl.fields) |field| {
+            if (!self.isPointerLikeType(field.ty)) continue;
+            const value_expr = structLiteralField(fields, field.name.text) orelse continue;
+            try self.setAggregatePointerFieldProvenance(local_name, field.name.text, self.pointerExprHasGlobalStorageProvenance(value_expr));
+        }
+    }
+
+    fn updateAggregatePointerFieldProvenanceFromAssignment(
+        self: *LlvmEmitter,
+        base: ast.Expr,
+        field_name: []const u8,
+        field_ty: ast.TypeExpr,
+        value_expr: ast.Expr,
+    ) !void {
+        if (!self.isPointerLikeType(field_ty)) return;
+        const local_name = self.directLocalAggregateBaseName(base) orelse return;
+        try self.setAggregatePointerFieldProvenance(local_name, field_name, self.pointerExprHasGlobalStorageProvenance(value_expr));
+    }
+
     fn directGlobalStorageRoot(self: *LlvmEmitter, expr: ast.Expr) bool {
         return switch (expr.kind) {
             .ident => |ident| !self.local_slots.contains(ident.text) and !self.local_types.contains(ident.text) and self.global_types.contains(ident.text),
@@ -3298,6 +3466,10 @@ const LlvmEmitter = struct {
             .address_of => |inner| self.directGlobalStorageRoot(inner.*),
             .grouped => |inner| self.pointerExprHasGlobalStorageProvenance(inner.*),
             .cast => |node| self.pointerExprHasGlobalStorageProvenance(node.value.*),
+            .member => |node| if (self.directLocalAggregateBaseName(node.base.*)) |local_name|
+                self.localAggregateFieldHasGlobalPointerProvenance(local_name, node.name.text)
+            else
+                false,
             .call => |call| if (isAssumeNoaliasCall(call) and call.args.len == 2)
                 self.pointerExprHasGlobalStorageProvenance(call.args[0])
             else if (self.directCallName(call.callee.*)) |callee|

@@ -10,6 +10,11 @@ struct SharedPair {
     value: u32,
 }
 
+struct PointerHolder {
+    ptr: *mut u32,
+    tag: u32,
+}
+
 global shared_pair: SharedPair;
 global shared_values: [4]u32;
 
@@ -102,6 +107,50 @@ fn local_pointer_deref_stays_plain() -> u32 {
     lp.* = 6;
     // EXPECT: lower-llvm keeps stack pointer derefs plain.
     return lp.*;
+}
+
+fn aggregate_global_pointer_field_load() -> u32 {
+    let holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 1 };
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load through a local aggregate field proven to hold visible global storage.
+    return p.*;
+}
+
+fn aggregate_stack_pointer_field_stays_plain() -> u32 {
+    var local: u32 = 9;
+    let holder: PointerHolder = .{ .ptr = &local, .tag = 2 };
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm keeps stack-backed aggregate pointer field derefs plain.
+    return p.*;
+}
+
+fn aggregate_reassigned_stack_pointer_field_stays_plain() -> u32 {
+    var local: u32 = 10;
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 3 };
+    holder.ptr = &local;
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm keeps aggregate pointer field derefs plain after reassignment to stack storage.
+    return p.*;
+}
+
+fn aggregate_whole_copy_pointer_field_stays_plain() -> u32 {
+    let source: PointerHolder = .{ .ptr = &shared_counter, .tag = 4 };
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 5 };
+    holder = source;
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm keeps whole-aggregate copy provenance plain because this slice only tracks direct local evidence.
+    return p.*;
+}
+
+export fn exported_global_pointer() -> *mut u32 {
+    return &shared_counter;
+}
+
+fn aggregate_exported_return_pointer_field_stays_plain() -> u32 {
+    let holder: PointerHolder = .{ .ptr = exported_global_pointer(), .tag = 6 };
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm keeps aggregate pointer field derefs plain when the field source is exported-return ambiguity.
+    return p.*;
 }
 
 fn possibly_racing_field_store(x: u32) -> void {
