@@ -92,6 +92,31 @@ fn possibly_racing_param_pointer_load() -> u32 {
     return consume_global_param(&shared_counter);
 }
 
+fn consume_indirect_global_param(p: *mut u32) -> u32 {
+    // EXPECT: lower-llvm emits unordered atomic load because every local function-pointer alias call passes visible global storage.
+    return p.*;
+}
+
+fn call_indirect_global_param_alias() -> u32 {
+    let f: fn(*mut u32) -> u32 = consume_indirect_global_param;
+    return f(&shared_counter);
+}
+
+fn consume_indirect_reassigned_param(p: *mut u32) -> u32 {
+    // EXPECT: lower-llvm keeps this plain because the local function-pointer alias is reassigned before the indirect call.
+    return p.*;
+}
+
+fn consume_indirect_reassigned_other_param(p: *mut u32) -> u32 {
+    return p.*;
+}
+
+fn call_indirect_reassigned_param_alias() -> u32 {
+    var f: fn(*mut u32) -> u32 = consume_indirect_reassigned_param;
+    f = consume_indirect_reassigned_other_param;
+    return f(&shared_counter);
+}
+
 fn consume_mixed_param(p: *mut u32) -> u32 {
     // EXPECT: lower-llvm keeps this plain because at least one direct call passes stack storage.
     return p.*;

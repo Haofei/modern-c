@@ -293,6 +293,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
         .global_pointer_locals = std.StringHashMap(void).init(allocator),
+        .local_function_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
         .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
         .local_pointer_array_aliases = std.StringHashMap([]const u8).init(allocator),
         .aggregate_global_pointer_fields = std.StringHashMap(void).init(allocator),
@@ -445,6 +446,7 @@ const LlvmEmitter = struct {
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
     global_pointer_locals: std.StringHashMap(void) = undefined,
+    local_function_pointer_aliases: std.StringHashMap([]const u8) = undefined,
     local_aggregate_pointer_aliases: std.StringHashMap([]const u8) = undefined,
     local_pointer_array_aliases: std.StringHashMap([]const u8) = undefined,
     aggregate_global_pointer_fields: std.StringHashMap(void) = undefined,
@@ -528,6 +530,7 @@ const LlvmEmitter = struct {
         self.local_types.deinit();
         self.local_slots.deinit();
         self.global_pointer_locals.deinit();
+        self.local_function_pointer_aliases.deinit();
         self.local_aggregate_pointer_aliases.deinit();
         self.local_pointer_array_aliases.deinit();
         self.deinitOwnedStringVoidMap(&self.aggregate_global_pointer_fields);
@@ -716,13 +719,14 @@ const LlvmEmitter = struct {
 
         for (module.decls) |decl| {
             if (decl.kind != .fn_decl) continue;
-            const body = decl.kind.fn_decl.body orelse continue;
-            try self.collectGlobalPointerParamCallSites(body, &param_summaries);
+            const fn_decl = decl.kind.fn_decl;
+            const body = fn_decl.body orelse continue;
+            try self.collectGlobalPointerParamCallSitesInFunction(fn_decl, body, &param_summaries);
         }
 
         var summary_it = param_summaries.iterator();
         while (summary_it.next()) |entry| {
-            if (entry.value_ptr.seen and entry.value_ptr.all_visible_global) {
+            if (entry.value_ptr.seen and entry.value_ptr.all_visible_global and !entry.value_ptr.escaped) {
                 try self.global_pointer_params.put(entry.key_ptr.*, {});
             } else {
                 self.allocator.free(entry.key_ptr.*);
@@ -735,10 +739,23 @@ const LlvmEmitter = struct {
     const GlobalPointerParamSummary = struct {
         seen: bool = false,
         all_visible_global: bool = true,
+        escaped: bool = false,
     };
 
     fn globalPointerParamKey(self: *LlvmEmitter, fn_name: []const u8, param_index: usize) ![]const u8 {
         return try std.fmt.allocPrint(self.allocator, "{s}\x00{d}", .{ fn_name, param_index });
+    }
+
+    fn collectGlobalPointerParamCallSitesInFunction(
+        self: *LlvmEmitter,
+        fn_decl: ast.FnDecl,
+        body: ast.Block,
+        summaries: *std.StringHashMap(GlobalPointerParamSummary),
+    ) anyerror!void {
+        self.resetTransientPointerProvenance();
+        defer self.resetTransientPointerProvenance();
+        for (fn_decl.params) |param| try self.local_types.put(param.name.text, param.ty);
+        try self.collectGlobalPointerParamCallSites(body, summaries);
     }
 
     fn collectGlobalPointerParamCallSites(
@@ -755,9 +772,9 @@ const LlvmEmitter = struct {
         summaries: *std.StringHashMap(GlobalPointerParamSummary),
     ) anyerror!void {
         switch (stmt.kind) {
-            .let_decl, .var_decl => |local| if (local.init) |init| try self.collectGlobalPointerParamCallSitesExpr(init, summaries),
+            .let_decl, .var_decl => |local| try self.trackGlobalParamLocalDecl(local, summaries),
             .assignment => |node| {
-                try self.collectGlobalPointerParamCallSitesExpr(node.target, summaries);
+                try self.trackGlobalParamAssignment(node.target, node.value, summaries);
                 try self.collectGlobalPointerParamCallSitesExpr(node.value, summaries);
             },
             .@"return" => |maybe_expr| if (maybe_expr) |expr| try self.collectGlobalPointerParamCallSitesExpr(expr, summaries),
@@ -789,6 +806,81 @@ const LlvmEmitter = struct {
         }
     }
 
+    fn trackGlobalParamLocalDecl(
+        self: *LlvmEmitter,
+        local: ast.LocalDecl,
+        summaries: *std.StringHashMap(GlobalPointerParamSummary),
+    ) !void {
+        if (local.names.len != 1) {
+            if (local.init) |init| try self.collectGlobalPointerParamCallSitesExpr(init, summaries);
+            return;
+        }
+
+        const name = local.names[0].text;
+        const init = local.init orelse {
+            _ = self.local_function_pointer_aliases.remove(name);
+            return;
+        };
+        const ty = local.ty orelse self.exprType(init) orelse {
+            try self.collectGlobalPointerParamCallSitesExpr(init, summaries);
+            _ = self.local_function_pointer_aliases.remove(name);
+            return;
+        };
+
+        try self.local_types.put(name, ty);
+        try self.local_slots.put(name, .{ .ty = ty, .ptr = "" });
+        try self.updateGlobalParamFunctionPointerAlias(name, ty, init, summaries, false);
+    }
+
+    fn trackGlobalParamAssignment(
+        self: *LlvmEmitter,
+        target: ast.Expr,
+        value_expr: ast.Expr,
+        summaries: *std.StringHashMap(GlobalPointerParamSummary),
+    ) !void {
+        if (assignmentIdent(target)) |ident| {
+            if (self.local_function_pointer_aliases.fetchRemove(ident.text)) |entry| {
+                self.markGlobalPointerParamEscapedFunction(entry.value, summaries);
+            }
+            if (self.local_types.get(ident.text)) |ty| {
+                if (self.isFnPointerType(ty)) {
+                    try self.updateGlobalParamFunctionPointerAlias(ident.text, ty, value_expr, summaries, true);
+                    return;
+                }
+            }
+        }
+        try self.collectGlobalPointerParamCallSitesExpr(target, summaries);
+    }
+
+    fn updateGlobalParamFunctionPointerAlias(
+        self: *LlvmEmitter,
+        name: []const u8,
+        ty: ast.TypeExpr,
+        init: ast.Expr,
+        summaries: *std.StringHashMap(GlobalPointerParamSummary),
+        reassigned: bool,
+    ) !void {
+        if (!self.isFnPointerType(ty)) {
+            _ = self.local_function_pointer_aliases.remove(name);
+            try self.collectGlobalPointerParamCallSitesExpr(init, summaries);
+            return;
+        }
+
+        const target = self.directFunctionPointerAliasTarget(init) orelse {
+            _ = self.local_function_pointer_aliases.remove(name);
+            try self.collectGlobalPointerParamCallSitesExpr(init, summaries);
+            return;
+        };
+
+        if (reassigned) {
+            self.markGlobalPointerParamEscapedFunction(target, summaries);
+            _ = self.local_function_pointer_aliases.remove(name);
+            return;
+        }
+
+        try self.local_function_pointer_aliases.put(name, target);
+    }
+
     fn collectGlobalPointerParamCallSitesExpr(
         self: *LlvmEmitter,
         expr: ast.Expr,
@@ -809,8 +901,9 @@ const LlvmEmitter = struct {
                 if (node.mapped) |mapped| try self.collectGlobalPointerParamCallSitesExpr(mapped.*, summaries);
             },
             .call => |call| {
-                try self.collectGlobalPointerParamCallSitesExpr(call.callee.*, summaries);
-                if (self.directCallName(call.callee.*)) |callee| {
+                if (self.localFunctionPointerAliasTarget(call.callee.*)) |callee| {
+                    try self.recordGlobalPointerParamCall(callee, call.args, summaries);
+                } else if (self.directCallName(call.callee.*)) |callee| {
                     for (call.args, 0..) |arg, i| {
                         const key = try self.globalPointerParamKey(callee, i);
                         defer self.allocator.free(key);
@@ -819,6 +912,8 @@ const LlvmEmitter = struct {
                             if (!self.paramCallArgIsVisibleGlobalPointer(arg)) summary.all_visible_global = false;
                         }
                     }
+                } else {
+                    try self.collectGlobalPointerParamCallSitesExpr(call.callee.*, summaries);
                 }
                 for (call.args) |arg| try self.collectGlobalPointerParamCallSitesExpr(arg, summaries);
             },
@@ -834,7 +929,7 @@ const LlvmEmitter = struct {
             .member => |node| try self.collectGlobalPointerParamCallSitesExpr(node.base.*, summaries),
             .array_literal => |items| for (items) |item| try self.collectGlobalPointerParamCallSitesExpr(item, summaries),
             .struct_literal => |fields| for (fields) |field| try self.collectGlobalPointerParamCallSitesExpr(field.value, summaries),
-            .ident,
+            .ident => |ident| self.markGlobalPointerParamEscapedFunctionOrAlias(ident.text, summaries),
             .int_literal,
             .float_literal,
             .string_literal,
@@ -847,6 +942,68 @@ const LlvmEmitter = struct {
             .enum_literal,
             => {},
         }
+    }
+
+    fn recordGlobalPointerParamCall(
+        self: *LlvmEmitter,
+        callee: []const u8,
+        args: []const ast.Expr,
+        summaries: *std.StringHashMap(GlobalPointerParamSummary),
+    ) !void {
+        for (args, 0..) |arg, i| {
+            const key = try self.globalPointerParamKey(callee, i);
+            defer self.allocator.free(key);
+            const summary = summaries.getPtr(key) orelse continue;
+            summary.seen = true;
+            if (!self.paramCallArgIsVisibleGlobalPointer(arg)) summary.all_visible_global = false;
+        }
+    }
+
+    fn markGlobalPointerParamEscapedFunctionOrAlias(
+        self: *LlvmEmitter,
+        name: []const u8,
+        summaries: *std.StringHashMap(GlobalPointerParamSummary),
+    ) void {
+        if (self.local_function_pointer_aliases.get(name)) |target| {
+            self.markGlobalPointerParamEscapedFunction(target, summaries);
+            return;
+        }
+        self.markGlobalPointerParamEscapedFunction(name, summaries);
+    }
+
+    fn markGlobalPointerParamEscapedFunction(
+        self: *LlvmEmitter,
+        name: []const u8,
+        summaries: *std.StringHashMap(GlobalPointerParamSummary),
+    ) void {
+        if (self.local_types.contains(name) or self.global_types.contains(name) or !self.fn_sigs.contains(name)) return;
+        var it = summaries.iterator();
+        while (it.next()) |entry| {
+            if (!aggregatePointerFieldKeyMatchesLocal(entry.key_ptr.*, name)) continue;
+            entry.value_ptr.escaped = true;
+        }
+    }
+
+    fn directFunctionPointerAliasTarget(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| if (!self.local_types.contains(ident.text) and !self.global_types.contains(ident.text) and self.fn_sigs.contains(ident.text))
+                ident.text
+            else
+                null,
+            .grouped => |inner| self.directFunctionPointerAliasTarget(inner.*),
+            .cast => |node| self.directFunctionPointerAliasTarget(node.value.*),
+            .address_of => |inner| self.directFunctionPointerAliasTarget(inner.*),
+            else => null,
+        };
+    }
+
+    fn localFunctionPointerAliasTarget(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| self.local_function_pointer_aliases.get(ident.text),
+            .grouped => |inner| self.localFunctionPointerAliasTarget(inner.*),
+            .cast => |node| self.localFunctionPointerAliasTarget(node.value.*),
+            else => null,
+        };
     }
 
     const AggregatePointerParamSummary = struct {
@@ -1314,6 +1471,7 @@ const LlvmEmitter = struct {
         self.local_types.clearRetainingCapacity();
         self.local_slots.clearRetainingCapacity();
         self.global_pointer_locals.clearRetainingCapacity();
+        self.local_function_pointer_aliases.clearRetainingCapacity();
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         self.local_pointer_array_aliases.clearRetainingCapacity();
         self.clearAggregateGlobalPointerFields();
@@ -2079,6 +2237,7 @@ const LlvmEmitter = struct {
         self.local_types.clearRetainingCapacity();
         self.local_slots.clearRetainingCapacity();
         self.global_pointer_locals.clearRetainingCapacity();
+        self.local_function_pointer_aliases.clearRetainingCapacity();
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         self.local_pointer_array_aliases.clearRetainingCapacity();
         self.clearAggregateGlobalPointerFields();
