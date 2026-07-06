@@ -48,13 +48,16 @@ bash "$HERE/tools/user/build-qjs.sh" "$WORK" "$CLANG" "${APP_CFLAGS[@]}"
 # with hardware FP. CFLAGS must be the app's FP flags for the emit-c -> clang path.
 CFLAGS=("${APP_CFLAGS[@]}")
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$HERE/examples/apps/qjs_host.mc" "$WORK/agent.o" "$WORK"
+# The JSValue-by-value ABI seam: mcc externs cannot pass/return structs by value, so the MC
+# host calls the engine through these C pointer-seam wrappers (mc_js_*).
+"$CLANG" "${APP_CFLAGS[@]}" -c "$HERE/examples/apps/qjs_host_shim.c" -o "$WORK/qjs_shim.o"
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$HERE/user/libc/libc.mc" "$WORK/libc.o" "$WORK"
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$HERE/user/libc/syscall_user.mc" "$WORK/sys.o" "$WORK"
 APP_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/app-support.o")"
 bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
 
 "$LLD" -T "$HERE/user/runtime/user_qjs.ld" \
-    "$WORK/crt0.o" "$WORK/agent.o" \
+    "$WORK/crt0.o" "$WORK/agent.o" "$WORK/qjs_shim.o" \
     "$WORK/dtoa.o" "$WORK/libunicode.o" "$WORK/libregexp.o" "$WORK/quickjs.o" \
     "$WORK/libc.o" "$WORK/sys.o" "$WORK/traps.o" $APP_SUPPORT "$WORK/libm.a" \
     -o "$WORK/agent.elf"

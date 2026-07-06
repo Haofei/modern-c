@@ -19,7 +19,7 @@ MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$SRC" -o "$WORK/move.o" >/dev
 cat >"$WORK/driver.c" <<'CEOF'
 #include <stdint.h>
 struct Box { uint32_t value; };
-uint32_t box_consume(struct Box b) { return b.value * 2; }
+uint32_t box_consume(const struct Box *b) { return b->value * 2; }
 extern uint32_t box_roundtrip(uint32_t v);
 int main(void) {
     if (box_roundtrip(21) != 42) return 1;
