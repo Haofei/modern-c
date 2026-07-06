@@ -72,11 +72,11 @@ const ATTR_PXN: u64 = 0x0020_0000_0000_0000; // bit 53 — privileged execute-ne
 // AF/SH are added by the map functions; these carry AP + AttrIndx + XN policy).
 //
 // Kernel Normal-memory RWX page (PXN=0 so EL1 may fetch instructions; UXN=1, EL0 cannot exec).
-export const FLAGS_KERNEL_RWX: u64 = ATTR_AP_KRW | ATTR_ATTRIDX0 | ATTR_UXN;
+pub const FLAGS_KERNEL_RWX: u64 = ATTR_AP_KRW | ATTR_ATTRIDX0 | ATTR_UXN;
 // Kernel Normal-memory data page (no execute at all): PXN=1, UXN=1.
 export const FLAGS_KERNEL_DATA: u64 = ATTR_AP_KRW | ATTR_ATTRIDX0 | ATTR_PXN | ATTR_UXN;
 // Device memory (UART MMIO): Device-nGnRE, kernel RW, no execute.
-export const FLAGS_DEVICE: u64 = ATTR_AP_KRW | ATTR_ATTRIDX1 | ATTR_PXN | ATTR_UXN;
+pub const FLAGS_DEVICE: u64 = ATTR_AP_KRW | ATTR_ATTRIDX1 | ATTR_PXN | ATTR_UXN;
 // User Normal-memory RW data page: EL0 RW, PXN=1 (EL1 cannot exec user data), UXN=1.
 export const FLAGS_USER_RW: u64 = ATTR_AP_URW | ATTR_ATTRIDX0 | ATTR_PXN | ATTR_UXN;
 

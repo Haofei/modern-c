@@ -250,7 +250,7 @@ struct AsyncEvent {
 // A fixed-size drain buffer (bounded by MAX_INFLIGHT — at most that many can be in flight, so at
 // most that many completions exist at once). `count` is how many of `ev` are valid after a drain.
 const ASYNC_MAX_EVENTS: usize = MAX_INFLIGHT;
-struct AsyncEvents {
+pub struct AsyncEvents {
     count: usize,
     ev: [ASYNC_MAX_EVENTS]AsyncEvent,
 }

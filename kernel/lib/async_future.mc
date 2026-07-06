@@ -47,7 +47,7 @@ pub fn req_over(b: *mut AsyncBroker, id: u64) -> ReqFut {
 }
 
 impl Future for ReqFut {
-    fn poll(self: *mut ReqFut) -> bool {
+    export fn poll(self: *mut ReqFut) -> bool {
         if self.ready {
             return true;
         }
@@ -216,7 +216,7 @@ const DRIVE_MANY_MAX: usize = 16;
 // codegen, so we pass a pointer to this struct and index its array field — the same `b.slots[i]`
 // pattern the broker uses). Fill `fs[0..n]` (n <= DRIVE_MANY_MAX) and set `n`. `&concrete` coerces
 // to `*mut dyn Future` on element assignment.
-export struct FutSet {
+pub struct FutSet {
     fs: [DRIVE_MANY_MAX]*mut dyn Future,
     n: usize,
 }

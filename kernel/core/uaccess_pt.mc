@@ -31,7 +31,7 @@ enum UaccessError {
 }
 
 // A target address space: the process page table plus its [base, limit) user-region bound.
-struct UserAddrSpace {
+pub struct UserAddrSpace {
     pt: *PageTable,
     base: usize,
     limit: usize,
