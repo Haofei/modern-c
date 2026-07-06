@@ -38,7 +38,7 @@ import "kernel/core/process.mc";
 const MAX_INFLIGHT: usize = 8;
 
 // Returned by async_submit when the MAX_INFLIGHT quota is exhausted.
-export const ASYNC_NO_ID: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+pub const ASYNC_NO_ID: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
 struct Inflight {
     active: bool,
@@ -48,7 +48,7 @@ struct Inflight {
     waiter: WaitQueue,   // tasks parked awaiting THIS request
 }
 
-struct AsyncBroker {
+pub struct AsyncBroker {
     slots: [MAX_INFLIGHT]Inflight,
     next_id: u64,
 }
