@@ -23,7 +23,7 @@ import "std/task.mc";
 // `ReqFut_cancel` frees a still-pending slot on drop (`async_cancel_slot`) — so a dropped async
 // future reclaims its `MAX_INFLIGHT` reservation. `ready` latches so `poll` stays idempotent and
 // the result survives the slot's release.
-struct ReqFut {
+pub struct ReqFut {
     b: *mut AsyncBroker,
     id: u64,
     ready: bool,
@@ -91,7 +91,7 @@ export fn ReqFut_cancel(self: *mut ReqFut) -> void {
 // exercises both). `ReqRace2` is RETAINED as the TYPED-RESULT convenience: it reads the winner's
 // `i32` result from the concrete `ReqFut` leaf (`req_race2_result`), which a type-erased `Race2`
 // cannot — `poll` does not thread a typed value (see std/task.mc's "no generic poll result" note).
-struct ReqRace2 {
+pub struct ReqRace2 {
     a: *mut ReqFut,
     b: *mut ReqFut,
     winner: i32,

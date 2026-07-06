@@ -28,7 +28,7 @@ const REG_LSR: usize = 5; // Line Status Register (read)
 const LSR_THRE: u8 = 0x20; // bit 5: Transmit-Holding-Register-Empty (ready to send)
 
 // A handle to one 16550 instance at a physical MMIO base.
-struct Ns16550 {
+pub struct Ns16550 {
     base: usize,
 }
 
