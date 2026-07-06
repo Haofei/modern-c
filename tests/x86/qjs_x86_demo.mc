@@ -170,12 +170,16 @@ fn qx_sys_read(buf: u64, max: u64, c: u64) -> u64 {
 // request payload into a bounded kernel buffer, arm a completion slot with a delay-driven ready
 // tick (so completions can arrive out of submit order). Returns the request id, or a -errno.
 fn qx_sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
-    var req: ToolReq = uninit;
+    var req_buf: ToolReq = uninit;
     let rsz: usize = sizeof(ToolReq);
-    switch copy_from_user_pt(&qx_uas, pa((&req) as usize), qx_uptr(req_ptr as usize), rsz) {
+    switch copy_from_user_pt(&qx_uas, pa((&req_buf) as usize), qx_uptr(req_ptr as usize), rsz) {
         ok(v) => {}
         err(e) => { return bitcast<u64>(E_FAULT); }
     }
+    // Re-read the snapshot through the same raw address the copy filled: definite-init
+    // (S0.1) cannot see writes made through a raw address, so direct `req_buf.` reads
+    // would be rejected (the kernel/core/uaccess.mc fetch idiom).
+    let req: *ToolReq = raw.ptr<ToolReq>(pa((&req_buf) as usize));
 
     if req.in_len > MAX_REQ_BYTES {
         return bitcast<u64>(E_NOCAP);

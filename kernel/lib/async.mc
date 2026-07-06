@@ -255,6 +255,14 @@ pub struct AsyncEvents {
     ev: [ASYNC_MAX_EVENTS]AsyncEvent,
 }
 
+// An empty drain buffer. Callers must declare their buffer with a whole-value init
+// (definite-init S0.1: the out-pointer fill inside `async_poll_many` does not count),
+// and a [8]AsyncEvent literal is not something to ask of every call site.
+pub fn async_events_empty() -> AsyncEvents {
+    let z: AsyncEvent = .{ .id = 0, .result = 0 };
+    return .{ .count = 0, .ev = .{ z, z, z, z, z, z, z, z } };
+}
+
 // VECTORED drain: harvest up to `max` COMPLETED in-flight requests into `out.ev[0..]`, freeing each
 // drained slot, and return the count (also stored in `out.count`). One scheduler wakeup can collect
 // many completions in a single pass over the inflight table — the kernel-side analogue of the

@@ -18,7 +18,9 @@ fn uputdec(v: u32) -> void {
         uputc(48); // '0'
         return;
     }
-    var buf: [12]u8 = uninit;
+    // Whole-value init (definite-init S0.1: element-wise digit writes do not count);
+    // only buf[0..n] is ever read back.
+    var buf: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     var n: usize = 0;
     var x: u32 = v;
     while x != 0 {

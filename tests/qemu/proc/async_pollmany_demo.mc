@@ -31,11 +31,11 @@ export fn async_pollmany_demo(region_base: usize, region_len: usize) -> u32 {
     let r2: bool = async_complete(&g_broker, &g_procs, b, 20);
 
     // Drain capped at 2 -> harvests exactly 2 ready slots, frees them.
-    var ev1: AsyncEvents = uninit;
+    var ev1: AsyncEvents = async_events_empty();
     let n1: usize = async_poll_many(&g_broker, &ev1, 2);
 
     // Drain again with a generous max -> harvests the remaining 1 ready slot.
-    var ev2: AsyncEvents = uninit;
+    var ev2: AsyncEvents = async_events_empty();
     let n2: usize = async_poll_many(&g_broker, &ev2, 8);
     console_putc('D');
 
@@ -50,7 +50,7 @@ export fn async_pollmany_demo(region_base: usize, region_len: usize) -> u32 {
     let reuse: u64 = async_submit(&g_broker);
 
     // A final drain harvests nothing: `c` is still pending and `reuse` is not ready.
-    var ev3: AsyncEvents = uninit;
+    var ev3: AsyncEvents = async_events_empty();
     let n3: usize = async_poll_many(&g_broker, &ev3, 8);
 
     if r0 && r1 && r2 && n1 == 2 && n2 == 1 && sum == 70 && reuse != ASYNC_NO_ID && n3 == 0 {

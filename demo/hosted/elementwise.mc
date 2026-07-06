@@ -50,8 +50,9 @@ export fn hosted_kernel_run() -> i32 {
     let input: Fd = stdin_fd();
     let output: Fd = stdout_fd();
 
-    // 1. element count (u32, 4 bytes).
-    var count_buf: [1]u32 = uninit;
+    // 1. element count (u32, 4 bytes). Whole-value init: definite-init (S0.1) cannot
+    // see the read_exact fill through the raw address, so the direct read below needs it.
+    var count_buf: [1]u32 = .{ 0 };
     let count_addr: PAddr = pa((&count_buf[0]) as usize);
     if let err(e) = read_exact(input, count_addr, 4) {
         return 1; // could not read the count header
@@ -76,10 +77,15 @@ export fn hosted_kernel_run() -> i32 {
         return 5; // truncated input b[]
     }
 
-    // 3. the kernel: sqrt intrinsic + IEEE add, elementwise.
+    // 3. the kernel: sqrt intrinsic + IEEE add, elementwise. `a`/`b` were filled by
+    // read_exact through their raw addresses, which definite-init (S0.1) cannot see —
+    // re-read them through the same raw addresses (the kernel/core/uaccess.mc fetch
+    // idiom; a whole-value [256]f32 literal would be absurd).
+    let av: *[CAP]f32 = raw.ptr<[CAP]f32>(a_addr);
+    let bv: *[CAP]f32 = raw.ptr<[CAP]f32>(b_addr);
     var i: usize = 0;
     while i < n {
-        out[i] = sqrt_f32(a[i]) + b[i];
+        out[i] = sqrt_f32(av.*[i]) + bv.*[i];
         i = i + 1;
     }
 
