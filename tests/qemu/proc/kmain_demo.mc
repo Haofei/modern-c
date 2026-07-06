@@ -175,7 +175,11 @@ fn run_workload(heap: *mut Heap) -> bool {
             s0 = r;
         }
         err(e) => {
-            pass = false;
+            // Fail the workload immediately: falling through would read the
+            // never-initialized handle (a real latent bug definite-init caught —
+            // every later step consumes s0).
+            arena_destroy(arena); // consume the linear arena on this exit path too
+            return false;
         }
     }
     let init0: Session = .{ .id = 100, .total = 0, .active = true };

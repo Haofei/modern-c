@@ -46,7 +46,9 @@ fn uputhex(v: u64) -> void {
 // Print one decimal octet (0..255), no leading zeros.
 fn put_octet(o: u32) -> void {
     if o == 0 { uputc(48); return; }
-    var tmp: [3]u8 = uninit;
+    // Whole-value init (definite-init S0.1: element-wise digit writes do not count);
+    // only tmp[0..n] is ever read back.
+    var tmp: [3]u8 = .{ 0, 0, 0 };
     var n: i32 = 0;
     var v: u32 = o;
     while v != 0 {
