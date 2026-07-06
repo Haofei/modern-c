@@ -36,8 +36,8 @@ const PTES_PER_TABLE: usize = 512;
 const X86_PA_MASK: u64 = 0x000F_FFFF_FFFF_F000; // bits 51:12 — the frame address field
 
 const PTE_P: u64 = 1;            // present
-const PTE_W: u64 = 2;            // writable        (1 << 1)
-const PTE_US: u64 = 4;           // user-accessible (1 << 2)
+pub const PTE_W: u64 = 2;            // writable        (1 << 1)
+pub const PTE_US: u64 = 4;           // user-accessible (1 << 2)
 const PTE_PS: u64 = 0x80;        // page-size: 2 MiB leaf at PD level (1 << 7)
 const PTE_NX: u64 = 0x8000_0000_0000_0000; // no-execute (1 << 63); needs EFER.NXE
 

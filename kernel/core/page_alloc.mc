@@ -21,13 +21,13 @@ struct MemoryMap<State> {
 }
 
 // A single owned page frame (linear). Freed exactly once.
-move struct Page {
+pub move struct Page {
     addr: PAddr,
 }
 
 // The allocator: a bump frontier plus an intrusive free list. A freed frame stores
 // the previous free-list head in its first word, so reclaim needs no side table.
-struct PageAllocator {
+pub struct PageAllocator {
     next: PAddr,       // bump frontier
     end: PAddr,        // one past the region
     free_head: usize,  // raw addr of the first free frame, 0 = list empty
