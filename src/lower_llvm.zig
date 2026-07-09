@@ -1243,17 +1243,21 @@ const LlvmEmitter = struct {
     ) bool {
         if (!self.switchAggregateReturnPathsAreExhaustive(switch_node)) return false;
         var returned_arms: usize = 0;
+        var fallthrough_arms: usize = 0;
         for (switch_node.arms) |arm| {
             const block = switch (arm.body) {
                 .block => |block| block,
                 .expr => return false,
             };
-            if (block.items.len == 0) continue;
+            if (block.items.len == 0) {
+                fallthrough_arms += 1;
+                continue;
+            }
             if (!self.aggregateReturnPathHasReturn(block)) return false;
             returned_arms += 1;
             if (!paths.append(block)) return false;
         }
-        if (returned_arms != 1) return false;
+        if (returned_arms == 0 or fallthrough_arms == 0) return false;
         if (!self.aggregateReturnPathHasReturn(trailing_path)) return false;
         return paths.append(trailing_path);
     }

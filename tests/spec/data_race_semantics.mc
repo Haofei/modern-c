@@ -746,6 +746,20 @@ fn returned_pointer_holder_via_wildcard_switch_trailing(choice: u32) -> PointerH
     return holder;
 }
 
+fn returned_pointer_holder_via_multi_wildcard_switch_trailing(choice: u32) -> PointerHolder {
+    switch choice {
+        0 => {
+            return .{ .ptr = &shared_counter, .tag = 83 };
+        }
+        1 => {
+            let holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 84 };
+            return holder;
+        }
+        _ => {}
+    }
+    return .{ .ptr = &shared_counter, .tag = 85 };
+}
+
 fn returned_pointer_holder_via_prefix_unknown_call_switch(choice: u32) -> PointerHolder {
     let hp: *mut PointerHolder = external_pointer_holder();
     switch choice {
@@ -893,6 +907,13 @@ fn aggregate_return_wildcard_switch_trailing_pointer_field_load(choice: u32) -> 
     let holder: PointerHolder = returned_pointer_holder_via_wildcard_switch_trailing(choice);
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm emits unordered atomic load when an exhaustive wildcard switch has a return arm plus trailing return.
+    return p.*;
+}
+
+fn aggregate_return_multi_wildcard_switch_trailing_pointer_field_load(choice: u32) -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_via_multi_wildcard_switch_trailing(choice);
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm emits unordered atomic load when multiple switch arms return and the wildcard arm falls through.
     return p.*;
 }
 

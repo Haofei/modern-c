@@ -784,6 +784,12 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(aggregate_return_wildcard_switch_trailing_body, " unordered, align 4");
     try expectNotContains(aggregate_return_wildcard_switch_trailing_body, "load i32, ptr %p.addr.");
 
+    const aggregate_return_multi_wildcard_switch_trailing_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_multi_wildcard_switch_trailing_pointer_field_load");
+    try expectContains(aggregate_return_multi_wildcard_switch_trailing_body, "call { ptr, i32 } @returned_pointer_holder_via_multi_wildcard_switch_trailing(");
+    try expectContains(aggregate_return_multi_wildcard_switch_trailing_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_return_multi_wildcard_switch_trailing_body, " unordered, align 4");
+    try expectNotContains(aggregate_return_multi_wildcard_switch_trailing_body, "load i32, ptr %p.addr.");
+
     const aggregate_return_prefix_unknown_call_switch_body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_return_prefix_unknown_call_switch_pointer_field_lowers_atomic");
     try expectContains(aggregate_return_prefix_unknown_call_switch_body, "call { ptr, i32 } @returned_pointer_holder_via_prefix_unknown_call_switch(");
     try expectContains(aggregate_return_prefix_unknown_call_switch_body, "load atomic i32, ptr %");
