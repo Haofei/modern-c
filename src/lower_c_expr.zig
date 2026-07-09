@@ -189,13 +189,18 @@ pub fn uncheckedNoOverflowOperator(op: []const u8) []const u8 {
     return "+";
 }
 
-pub fn isBitcastCall(call: anytype) bool {
+pub fn isBitcastCallee(call: anytype) bool {
     const name = calleeIdentName(call.callee.*) orelse return false;
     return std.mem.eql(u8, name, "bitcast");
 }
 
+pub fn isBitcastCall(call: anytype) bool {
+    if (call.type_args.len != 1 or call.args.len != 1) return false;
+    return isBitcastCallee(call);
+}
+
 pub fn bitcastReturnTypeForCall(call: anytype) ?ast.TypeExpr {
-    if (!isBitcastCall(call) or call.type_args.len != 1) return null;
+    if (!isBitcastCall(call)) return null;
     return call.type_args[0];
 }
 

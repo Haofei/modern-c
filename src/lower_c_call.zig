@@ -19,6 +19,7 @@ const lower_c_type = @import("lower_c_type.zig");
 const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
 const isDeclassifyCall = lower_c_expr.isDeclassifyCall;
+const isBitcastCallee = lower_c_expr.isBitcastCallee;
 const isBitcastCall = lower_c_expr.isBitcastCall;
 const isIdentNamed = ast_query.isIdentNamed;
 const isRawLoadCall = ast_query.isRawLoadCall;
@@ -204,7 +205,7 @@ pub fn emitBitcastValueTemp(ctx: TempContext, expr: ast.Expr, locals: *std.Strin
 }
 
 pub fn emitBitcastValueTempFromCall(ctx: TempContext, call: anytype, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
-    if (!isBitcastCall(call) or call.type_args.len != 1 or call.args.len != 1) return null;
+    if (!isBitcastCall(call)) return null;
     const target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, call.type_args[0]);
     const source_ty = ctx.expr_source_type(ctx.emit_ctx, call.args[0], locals) orelse return error.UnsupportedCEmission;
     const source_temp = try ctx.emit_arg_temp(ctx.emit_ctx, call.args[0], locals, source_ty);
@@ -220,8 +221,8 @@ pub fn emitBitcastValueTempFromCall(ctx: TempContext, call: anytype, locals: *st
 
 pub fn emitBitcastLocalInit(ctx: TempContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(initializer) orelse return false;
-    if (!isBitcastCall(call)) return false;
-    if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
+    if (!isBitcastCallee(call)) return false;
+    if (!isBitcastCall(call)) return error.UnsupportedCEmission;
     const source_ty = ctx.expr_source_type(ctx.emit_ctx, call.args[0], locals) orelse return error.UnsupportedCEmission;
     const source_temp = try ctx.emit_arg_temp(ctx.emit_ctx, call.args[0], locals, source_ty);
 
@@ -234,7 +235,7 @@ pub fn emitBitcastLocalInit(ctx: TempContext, name: []const u8, decl_ty: ast.Typ
 
 pub fn emitBitcastInferredLocalInit(ctx: TempContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(initializer) orelse return false;
-    if (!isBitcastCall(call) or call.type_args.len != 1 or call.args.len != 1) return false;
+    if (!isBitcastCall(call)) return false;
     try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, call.type_args[0]));
     return try emitBitcastLocalInit(ctx, name, call.type_args[0], initializer, locals);
 }

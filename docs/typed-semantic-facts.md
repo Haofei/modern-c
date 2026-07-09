@@ -503,7 +503,9 @@ fallback parameter, return, direct provenance, or expression-type facts outside
 the MIR-owned classifier. C uses the same strict shared noalias call-shape helper
 for emission, type inference, and MIR/fallback provenance classifiers, so its
 remaining noalias fallback paths do not carry separate argument-count/type-arg
-truth. The
+truth. C's shared bitcast classifier now owns the complete one-type-argument,
+one-value-argument shape as well, with malformed local bitcast initializers still
+failing closed through the callee-only check. The
 shared LLVM raw-many `.offset` classifier now also requires the real no-type-arg,
 one-offset-argument shape before fallback typing or provenance can use the base
 expression. MIR pointer provenance now uses the builder's compile-time `usize`

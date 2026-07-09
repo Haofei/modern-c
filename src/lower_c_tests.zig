@@ -3,6 +3,7 @@ const std = @import("std");
 const diagnostics = @import("diagnostics.zig");
 const lower_c = @import("lower_c.zig");
 const lower_c_builtin = @import("lower_c_builtin.zig");
+const lower_c_expr = @import("lower_c_expr.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const parser = @import("parser.zig");
@@ -228,6 +229,47 @@ test "C noalias query accepts only the real builtin call shape" {
     const with_type_arg_fn = parsed.module.decls[2].kind.fn_decl;
     const with_type_arg_ret = with_type_arg_fn.body.?.items[0].kind.@"return".?;
     try std.testing.expect(!lower_c_builtin.isAssumeNoaliasCall(with_type_arg_ret.kind.call));
+}
+
+test "C bitcast query accepts only the real builtin call shape" {
+    const source =
+        \\fn probe(x: u32) -> u32 {
+        \\    return (bitcast<u32>(x))(x);
+        \\}
+        \\fn missing_value() -> u32 {
+        \\    return bitcast<u32>();
+        \\}
+        \\fn missing_type(x: u32) -> u32 {
+        \\    return bitcast(x);
+        \\}
+        \\fn valid(x: u32) -> u32 {
+        \\    return bitcast<u32>(x);
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("c_bitcast_grouped_call_callee.mc", source);
+    defer parsed.deinit();
+
+    const probe_fn = parsed.module.decls[0].kind.fn_decl;
+    const probe_ret = probe_fn.body.?.items[0].kind.@"return".?;
+    const outer_call = probe_ret.kind.call;
+    try std.testing.expect(!lower_c_expr.isBitcastCall(outer_call));
+
+    const grouped_callee = outer_call.callee.*.kind.grouped;
+    const inner_call = grouped_callee.kind.call;
+    try std.testing.expect(lower_c_expr.isBitcastCall(inner_call));
+
+    const missing_value_fn = parsed.module.decls[1].kind.fn_decl;
+    const missing_value_ret = missing_value_fn.body.?.items[0].kind.@"return".?;
+    try std.testing.expect(!lower_c_expr.isBitcastCall(missing_value_ret.kind.call));
+
+    const missing_type_fn = parsed.module.decls[2].kind.fn_decl;
+    const missing_type_ret = missing_type_fn.body.?.items[0].kind.@"return".?;
+    try std.testing.expect(!lower_c_expr.isBitcastCall(missing_type_ret.kind.call));
+
+    const valid_fn = parsed.module.decls[3].kind.fn_decl;
+    const valid_ret = valid_fn.body.?.items[0].kind.@"return".?;
+    try std.testing.expect(lower_c_expr.isBitcastCall(valid_ret.kind.call));
 }
 
 test "lower-c inspection markers for lowering-sensitive spec behavior" {

@@ -604,7 +604,7 @@ const Inspector = struct {
     }
 
     fn writeBitcastMetadata(self: *Inspector, call: anytype, ctx: *FnContext) !void {
-        if (!isBitcastCall(call) or call.type_args.len != 1 or call.args.len != 1) return;
+        if (!isBitcastCall(call)) return;
         const target = typeName(call.type_args[0]) orelse "unknown";
         const source = exprType(call.args[0], ctx) orelse "unknown";
         try self.out.print(
