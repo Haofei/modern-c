@@ -22,6 +22,8 @@ const sema_type = @import("sema_type.zig");
 
 pub const Context = sema_model.Context;
 pub const MoveSlot = sema_model.MoveSlot;
+pub const MovePlace = sema_model.MovePlace;
+pub const MovePlaceProjection = sema_model.MovePlaceProjection;
 pub const LoopMoveFrame = sema_model.LoopMoveFrame;
 pub const TypeClass = sema_model.TypeClass;
 const LoopLabelNode = sema_model.LoopLabelNode;

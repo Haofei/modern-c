@@ -1344,32 +1344,8 @@ fn sameIndexFact(left: MoveSlot, right: MoveSlot) bool {
 // Move-place construction is now structured. The state map still uses `key` as a
 // compatibility adapter while the checker is migrated, but field/index identity is
 // no longer discovered by reparsing that string at the construction boundary.
-const max_move_place_projections = 16;
-
-const MoveProjection = union(enum) {
-    field: []const u8,
-    constant_index: usize,
-    symbolic_index: []const u8,
-    wildcard_index,
-};
-
-pub const MovePlace = struct {
-    root: []const u8,
-    projections: [max_move_place_projections]MoveProjection = undefined,
-    projection_count: usize = 0,
-
-    fn isSubplace(self: MovePlace) bool {
-        return self.projection_count != 0;
-    }
-
-    fn project(self: MovePlace, projection: MoveProjection) ?MovePlace {
-        if (self.projection_count == max_move_place_projections) return null;
-        var result = self;
-        result.projections[result.projection_count] = projection;
-        result.projection_count += 1;
-        return result;
-    }
-};
+pub const MovePlace = sema.MovePlace;
+const MoveProjection = sema.MovePlaceProjection;
 
 pub const PlaceKeyTy = struct {
     key: []const u8,

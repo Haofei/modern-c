@@ -7,6 +7,33 @@ const eval = @import("eval.zig");
 
 const MmioRegisterAccess = ast_query.MmioRegisterAccess;
 
+pub const max_move_place_projections = 16;
+
+pub const MovePlaceProjection = union(enum) {
+    field: []const u8,
+    constant_index: usize,
+    symbolic_index: []const u8,
+    wildcard_index,
+};
+
+pub const MovePlace = struct {
+    root: []const u8,
+    projections: [max_move_place_projections]MovePlaceProjection = undefined,
+    projection_count: usize = 0,
+
+    pub fn isSubplace(self: MovePlace) bool {
+        return self.projection_count != 0;
+    }
+
+    pub fn project(self: MovePlace, projection: MovePlaceProjection) ?MovePlace {
+        if (self.projection_count == max_move_place_projections) return null;
+        var result = self;
+        result.projections[result.projection_count] = projection;
+        result.projection_count += 1;
+        return result;
+    }
+};
+
 pub const Context = struct {
     no_lang_trap: bool = false,
     // C2: the enclosing function runs in IRQ/atomic context (`#[irq_context]`/
