@@ -3009,6 +3009,42 @@ fn reject_constant_after_dynamic_array_element_full_alias_move(i: usize) -> u32 
     return consume(x) + consume(y);
 }
 
+// Accepted: a noalias-wrapped immediate address of a dynamic array element is
+// still a full alias to the same wildcard place when immediately dereferenced.
+fn accept_move_dynamic_array_element_through_noalias_full_deref(i: usize) -> u32 {
+    let arr: ResArray = .{ mkres(1), mkres(2) };
+    #[unsafe_contract(noalias)] {
+        let x: Res = compiler.assume_noalias_unchecked(&arr[i], 4).*;
+        unsafe { forget_unchecked(arr); }
+        return consume(x);
+    }
+}
+
+// Rejected: the noalias wrapper must not hide the wildcard place from later
+// overlap checks.
+fn reject_constant_after_noalias_dynamic_array_element_full_deref_move(i: usize) -> u32 {
+    let arr: ResArray = .{ mkres(1), mkres(2) };
+    #[unsafe_contract(noalias)] {
+        let x: Res = compiler.assume_noalias_unchecked(&arr[i], 4).*;
+        // EXPECT_ERROR: E_USE_AFTER_MOVE
+        let y: Res = arr[0];
+        unsafe { forget_unchecked(arr); }
+        return consume(x) + consume(y);
+    }
+}
+
+// Accepted: assigning the noalias-wrapped address to a pointer local preserves
+// the full-alias place identity just like `let p = &arr[i]`.
+fn accept_move_dynamic_array_element_through_noalias_full_alias(i: usize) -> u32 {
+    let arr: ResArray = .{ mkres(1), mkres(2) };
+    #[unsafe_contract(noalias)] {
+        let p: *Res = compiler.assume_noalias_unchecked(&arr[i], 4);
+        let x: Res = p.*;
+        unsafe { forget_unchecked(arr); }
+        return consume(x);
+    }
+}
+
 // Rejected: moving the whole array after moving through a dynamic element alias
 // would duplicate the unknown element.
 fn reject_whole_after_dynamic_array_element_full_alias_move(i: usize) -> u32 {

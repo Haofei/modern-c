@@ -945,6 +945,10 @@ fn fullDerefMoveSubplaceAlias(self: *Checker, expr: ast.Expr, state: *const std.
     const target = switch (expr.kind) {
         .address_of => |inner| inner.*,
         .grouped => |inner| return fullDerefMoveSubplaceAlias(self, inner.*, state, aliases),
+        .call => |call| {
+            if (!isAssumeNoaliasCall(call)) return null;
+            return fullDerefMoveSubplaceAlias(self, call.args[0], state, aliases);
+        },
         else => return null,
     };
     const pp = placeKeyAndType(self, target, state) orelse {
@@ -953,6 +957,12 @@ fn fullDerefMoveSubplaceAlias(self: *Checker, expr: ast.Expr, state: *const std.
     if (!isMoveSubplaceKey(pp.key)) return null;
     if (!self.typeEmbedsMoveByValue(pp.ty, aliases)) return null;
     return pp.key;
+}
+
+fn isAssumeNoaliasCall(call: anytype) bool {
+    if (call.type_args.len != 0 or call.args.len != 2) return false;
+    const member = ast_query.memberCallee(call.callee.*) orelse return false;
+    return ast_query.isIdentNamed(member.base.*, "compiler") and std.mem.eql(u8, member.name.text, "assume_noalias_unchecked");
 }
 
 // Consume the move bindings used by-value in `expr` (checking liveness).
