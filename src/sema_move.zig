@@ -3523,6 +3523,7 @@ fn moveDeferStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveS
                 .index => recordAssignedAliasPlaceOrEscape(self, a.target, a.value, a.target.span, state, aliases),
                 else => {},
             }
+            markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
         },
         .block, .unsafe_block, .comptime_block => |b| moveDeferBlock(self, b, state, aliases),
         .contract_block => |c| moveDeferBlock(self, c.block, state, aliases),
@@ -3608,5 +3609,6 @@ fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *std.St
         } else if (init.kind == .array_literal) {
             registerArrayElementAliases(self, decl.names[0].text, decl.names[0].span, init, state, aliases);
         }
+        markBorrowEscapeCapturedCallResult(self, init, decl.names[0].span, state, aliases);
     }
 }

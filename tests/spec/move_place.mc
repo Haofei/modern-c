@@ -74,6 +74,9 @@ fn peek_res_matrix(matrix: *ResMatrix) -> u32 {
 fn id_res(r: *Res) -> *Res {
     return r;
 }
+fn hold_res(r: *Res) -> ResPtrHolder {
+    return .{ .p = r };
+}
 extern fn dynamic_index() -> usize;
 extern fn external_res_ptr() -> *Res;
 fn take_whole(p: Pair) -> u32 {
@@ -191,6 +194,32 @@ fn reject_defer_block_cleanup_local_array_alias_after_consume() -> u32 {
         let ptrs: [1]*Res = .{ &r };
         consume(r);
         peek_ptr_array(ptrs); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    };
+    return 0;
+}
+
+// Rejected: cleanup-local aggregate call results may carry a borrow of their
+// argument, just like ordinary block locals, so consuming that argument first
+// would leave the captured aggregate result dangling.
+fn reject_defer_block_cleanup_local_captured_aggregate_call_result_after_consume() -> u32 {
+    defer {
+        let r: Res = mkres(1);
+        let h: ResPtrHolder = hold_res(&r);
+        consume(r); // EXPECT_ERROR: E_USE_AFTER_MOVE
+        peek_holder(h);
+    };
+    return 0;
+}
+
+// Rejected: the same captured aggregate call-result escape applies when a
+// cleanup-local aggregate slot is assigned after declaration.
+fn reject_defer_block_cleanup_local_captured_aggregate_call_assignment_after_consume() -> u32 {
+    defer {
+        let r: Res = mkres(1);
+        var h: ResPtrHolder = uninit;
+        h = hold_res(&r);
+        consume(r); // EXPECT_ERROR: E_USE_AFTER_MOVE
+        peek_holder(h);
     };
     return 0;
 }
