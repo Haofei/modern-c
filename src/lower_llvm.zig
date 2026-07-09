@@ -1904,7 +1904,7 @@ const LlvmEmitter = struct {
             .address_of => |inner| self.directGlobalIdentAddress(inner.*),
             .grouped => |inner| self.paramCallArgIsVisibleGlobalPointer(inner.*),
             .cast => |node| self.paramCallArgIsVisibleGlobalPointer(node.value.*),
-            .call => |call| if (isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2)
+            .call => |call| if (isAssumeNoaliasCall(call))
                 self.paramCallArgIsVisibleGlobalPointer(call.args[0])
             else if (self.directCallName(call.callee.*)) |callee|
                 self.global_pointer_return_fns.contains(callee)
@@ -1919,7 +1919,7 @@ const LlvmEmitter = struct {
             .address_of => |inner| self.directLocalIdentAddress(inner.*),
             .grouped => |inner| self.paramCallArgIsVisibleLocalPointer(inner.*),
             .cast => |node| self.paramCallArgIsVisibleLocalPointer(node.value.*),
-            .call => |call| if (isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2)
+            .call => |call| if (isAssumeNoaliasCall(call))
                 self.paramCallArgIsVisibleLocalPointer(call.args[0])
             else
                 false,
@@ -5271,7 +5271,7 @@ const LlvmEmitter = struct {
             .ident => |ident| if (self.local_slots.contains(ident.text)) ident.text else null,
             .grouped => |inner| self.directLocalAggregateBaseName(inner.*),
             .cast => |node| self.directLocalAggregateBaseName(node.value.*),
-            .call => |call| if (isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2)
+            .call => |call| if (isAssumeNoaliasCall(call))
                 self.directLocalAggregateBaseName(call.args[0])
             else
                 null,
@@ -5304,7 +5304,7 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directAggregateCopySourceBaseNameForStruct(inner.*, target_struct_name),
             .cast => |node| self.directAggregateCopySourceBaseNameForStruct(node.value.*, target_struct_name),
-            .call => |call| if (isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2)
+            .call => |call| if (isAssumeNoaliasCall(call))
                 self.directAggregateCopySourceBaseNameForStruct(call.args[0], target_struct_name)
             else
                 null,
@@ -5323,7 +5323,7 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directAggregateCopySourceMemberForStruct(inner.*, target_struct_name),
             .cast => |node| self.directAggregateCopySourceMemberForStruct(node.value.*, target_struct_name),
-            .call => |call| isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2 and
+            .call => |call| isAssumeNoaliasCall(call) and
                 self.directAggregateCopySourceMemberForStruct(call.args[0], target_struct_name),
             .member => blk: {
                 _ = self.directLocalAggregateMemberPath(expr) orelse break :blk false;
@@ -6343,7 +6343,7 @@ const LlvmEmitter = struct {
             .grouped => |inner| self.directMirAddressProvenanceExpr(inner.*),
             .cast => |node| self.directMirAddressProvenanceExpr(node.value.*),
             .address_of => |inner| self.directMirAddressProvenanceTarget(inner.*),
-            .call => |call| isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2 and self.directMirAddressProvenanceExpr(call.args[0]),
+            .call => |call| isAssumeNoaliasCall(call) and self.directMirAddressProvenanceExpr(call.args[0]),
             else => false,
         };
     }
@@ -6365,7 +6365,7 @@ const LlvmEmitter = struct {
             .grouped => |inner| self.directMirRawManyZeroOffsetExpr(inner.*),
             .cast => |node| self.directMirRawManyZeroOffsetExpr(node.value.*),
             .call => |call| blk: {
-                if (isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2) {
+                if (isAssumeNoaliasCall(call)) {
                     break :blk self.directMirRawManyZeroOffsetExpr(call.args[0]);
                 }
                 if (call.type_args.len != 0 or call.args.len != 1) break :blk false;
@@ -6396,7 +6396,7 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirPointerLocalCopyExpr(inner.*),
             .cast => |node| self.directMirPointerLocalCopyExpr(node.value.*),
-            .call => |call| isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2 and self.directMirPointerLocalCopyExpr(call.args[0]),
+            .call => |call| isAssumeNoaliasCall(call) and self.directMirPointerLocalCopyExpr(call.args[0]),
             .ident => |ident| blk: {
                 const ty = self.local_types.get(ident.text) orelse break :blk false;
                 break :blk self.isPointerLikeType(ty);
@@ -6409,7 +6409,7 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirFixedPointerArrayElementExpr(inner.*),
             .cast => |node| self.directMirFixedPointerArrayElementExpr(node.value.*),
-            .call => |call| isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2 and self.directMirFixedPointerArrayElementExpr(call.args[0]),
+            .call => |call| isAssumeNoaliasCall(call) and self.directMirFixedPointerArrayElementExpr(call.args[0]),
             else => self.directLocalArrayElementPath(expr) != null,
         };
     }
@@ -6418,7 +6418,7 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAggregatePointerFieldExpr(inner.*),
             .cast => |node| self.directMirAggregatePointerFieldExpr(node.value.*),
-            .call => |call| isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2 and self.directMirAggregatePointerFieldExpr(call.args[0]),
+            .call => |call| isAssumeNoaliasCall(call) and self.directMirAggregatePointerFieldExpr(call.args[0]),
             else => self.directLocalAggregateMemberPath(expr) != null,
         };
     }
@@ -6427,7 +6427,7 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAggregatePointerArrayElementExpr(inner.*),
             .cast => |node| self.directMirAggregatePointerArrayElementExpr(node.value.*),
-            .call => |call| isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2 and self.directMirAggregatePointerArrayElementExpr(call.args[0]),
+            .call => |call| isAssumeNoaliasCall(call) and self.directMirAggregatePointerArrayElementExpr(call.args[0]),
             else => self.directLocalAggregateArrayElementPath(expr) != null,
         };
     }
@@ -6435,7 +6435,7 @@ const LlvmEmitter = struct {
     fn directMirPointerContainerValueExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
         switch (expr.kind) {
             .call => |call| {
-                if (isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2) {
+                if (isAssumeNoaliasCall(call)) {
                     return self.directMirPointerContainerValueExpr(call.args[0]);
                 }
             },
@@ -6518,7 +6518,7 @@ const LlvmEmitter = struct {
             .address_of => |inner| self.directGlobalStorageRoot(inner.*),
             .grouped => |inner| self.exprIsVisibleGlobalPointer(inner.*),
             .cast => |node| self.exprIsVisibleGlobalPointer(node.value.*),
-            .call => |call| if (isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2)
+            .call => |call| if (isAssumeNoaliasCall(call))
                 self.exprIsVisibleGlobalPointer(call.args[0])
             else if (self.directCallName(call.callee.*)) |callee|
                 self.global_pointer_return_fns.contains(callee)
@@ -6684,7 +6684,7 @@ const LlvmEmitter = struct {
                         self.aggregatePointerAliasArrayBaseHasAnyGlobalPointerProvenance(node.base.*) or
                         self.directLocalArrayBaseHasAnyGlobalPointerProvenance(node.base.*) or
                         self.localPointerArrayAliasBaseHasAnyGlobalPointerProvenance(node.base.*)),
-            .call => |call| if (isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2)
+            .call => |call| if (isAssumeNoaliasCall(call))
                 self.pointerExprHasGlobalStorageProvenance(call.args[0])
             else if (self.rawManyOffsetCallInfo(call)) |info|
                 call.args.len == 1 and
@@ -7562,7 +7562,6 @@ const LlvmEmitter = struct {
             return try self.coerceExprValue(value, call.args[0], expected_ty);
         }
         if (isAssumeNoaliasCall(call)) {
-            if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
             const source_ty = self.exprType(call.args[0]) orelse expected_ty;
             const value = try self.emitExpr(call.args[0], source_ty);
             _ = try self.emitExpr(call.args[1], simpleType(call.args[1].span, "usize"));
@@ -9088,7 +9087,7 @@ const LlvmEmitter = struct {
             .call => |call| if (self.qualifiedUnionConstructorType(call)) |ty|
                 ty
             else if (isAssumeNoaliasCall(call))
-                if (call.type_args.len == 0 and call.args.len == 2) self.exprType(call.args[0]) else null
+                self.exprType(call.args[0])
             else if (isDeclassifyCall(call))
                 // declassify/reveal yields the Secret<T> argument's inner T.
                 if (call.args.len == 1) (if (self.exprType(call.args[0])) |ty| secretInnerType(self.resolveAliasType(ty)) orelse ty else null) else null

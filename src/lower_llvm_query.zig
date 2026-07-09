@@ -97,7 +97,7 @@ pub fn packedBitsClearMask(info: PackedBitsInfo, bit_index: usize) ?u64 {
 
 pub fn builtinCallReturnType(call: anytype) ?ast.TypeExpr {
     if (isPhysCall(call.callee.*) and call.type_args.len == 0 and call.args.len == 1) return simpleType(call.callee.*.span, "PAddr");
-    if (isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2) return null;
+    if (isAssumeNoaliasCall(call)) return null;
     if (ast_query.isRawLoadCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1) return call.type_args[0];
     if (ast_query.isRawPtrCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1) {
         const child = @constCast(&call.type_args[0]);
@@ -122,6 +122,7 @@ pub fn isDeclassifyCall(call: anytype) bool {
 }
 
 pub fn isAssumeNoaliasCall(call: anytype) bool {
+    if (call.type_args.len != 0 or call.args.len != 2) return false;
     return isAssumeNoaliasCallee(call.callee.*);
 }
 
