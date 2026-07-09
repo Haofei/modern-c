@@ -451,7 +451,10 @@ cast as a no-op instead of failing or re-deriving copy provenance.
 Nested aggregate member copies are path-aware too: MIR can copy live facts from
 `src.inner.*` into `dst.inner.*` for
 `dst.inner = compiler.assume_noalias_unchecked(src.inner, n)`, and backends
-consume the resulting nested destination field facts.
+consume the resulting nested destination field facts. The same nested copy path
+now covers same-struct cast wrappers such as
+`dst.inner = compiler.assume_noalias_unchecked(src.inner, n) as Inner` for both
+scalar pointer fields and fixed pointer-array elements.
 Missing
 or stale facts remain fail-closed: the MIR consumer clears/avoids proven
 state for direct address, noalias-wrapped direct address, pointer-local copy,

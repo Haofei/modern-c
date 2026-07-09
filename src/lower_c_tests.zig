@@ -4788,6 +4788,17 @@ test "lower-c aggregate pointer reads without MIR destination fact lower conserv
         \\    }
         \\    return dst.inner.ptr.*;
         \\}
+        \\
+        \\fn c_nested_aggregate_field_casted_noalias_member_copy_direct_deref_requires_mir_field_fact() -> u32 {
+        \\    var local: u32 = 0;
+        \\    let src: Outer = .{ .inner = .{ .ptr = &shared_counter } };
+        \\    var dst: Outer = .{ .inner = .{ .ptr = &local } };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        dst.inner = compiler.assume_noalias_unchecked(src.inner, 4) as Inner;
+        \\    }
+        \\    return dst.inner.ptr.*;
+        \\}
     ;
 
     var normal_output: std.ArrayList(u8) = .empty;
@@ -4940,6 +4951,11 @@ test "lower-c aggregate pointer reads without MIR destination fact lower conserv
     try expectContains(normal_nested_noalias_member_copy_body, "/* mir pointer_provenance consumed fn=c_nested_aggregate_field_noalias_member_copy_direct_deref_requires_mir_field_fact subject=dst field=inner.ptr provenance=global_storage reason=reassignment source=");
     try expectContains(normal_nested_noalias_member_copy_body, "return ((uint32_t)mc_race_load_u32(dst.inner.ptr));");
     try expectNotContains(normal_nested_noalias_member_copy_body, "return *dst.inner.ptr;");
+
+    const normal_nested_casted_noalias_member_copy_body = try cFunctionBody(normal_output.items, "static uint32_t c_nested_aggregate_field_casted_noalias_member_copy_direct_deref_requires_mir_field_fact(void)");
+    try expectContains(normal_nested_casted_noalias_member_copy_body, "/* mir pointer_provenance consumed fn=c_nested_aggregate_field_casted_noalias_member_copy_direct_deref_requires_mir_field_fact subject=dst field=inner.ptr provenance=global_storage reason=reassignment source=");
+    try expectContains(normal_nested_casted_noalias_member_copy_body, "return ((uint32_t)mc_race_load_u32(dst.inner.ptr));");
+    try expectNotContains(normal_nested_casted_noalias_member_copy_body, "return *dst.inner.ptr;");
 
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
@@ -5169,6 +5185,14 @@ test "lower-c aggregate pointer reads without MIR destination fact lower conserv
     try expectContains(missing_nested_noalias_member_copy_field_body, "return ((uint32_t)mc_race_load_u32(dst.inner.ptr));");
     try expectNotContains(missing_nested_noalias_member_copy_field_body, "return *dst.inner.ptr;");
 
+    var missing_nested_casted_noalias_member_copy_field_output: std.ArrayList(u8) = .empty;
+    defer missing_nested_casted_noalias_member_copy_field_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutPointerProvenanceFactsForSubjectField("emit_c_nested_aggregate_field_missing_casted_noalias_member_copy_field_provenance.mc", field_source, "c_nested_aggregate_field_casted_noalias_member_copy_direct_deref_requires_mir_field_fact", "dst", "inner.ptr", &missing_nested_casted_noalias_member_copy_field_output);
+    const missing_nested_casted_noalias_member_copy_field_body = try cFunctionBody(missing_nested_casted_noalias_member_copy_field_output.items, "static uint32_t c_nested_aggregate_field_casted_noalias_member_copy_direct_deref_requires_mir_field_fact(void)");
+    try expectNotContains(missing_nested_casted_noalias_member_copy_field_body, "/* mir pointer_provenance consumed fn=c_nested_aggregate_field_casted_noalias_member_copy_direct_deref_requires_mir_field_fact subject=dst field=inner.ptr provenance");
+    try expectContains(missing_nested_casted_noalias_member_copy_field_body, "return ((uint32_t)mc_race_load_u32(dst.inner.ptr));");
+    try expectNotContains(missing_nested_casted_noalias_member_copy_field_body, "return *dst.inner.ptr;");
+
     var missing_copy_field_output: std.ArrayList(u8) = .empty;
     defer missing_copy_field_output.deinit(std.testing.allocator);
     try appendCheckedCTestWithoutPointerProvenanceFactsForSubjectField("emit_c_aggregate_field_missing_copy_field_provenance.mc", field_source, "c_aggregate_field_local_copy_direct_deref_requires_mir_field_fact", "copied", "ptr", &missing_copy_field_output);
@@ -5371,6 +5395,17 @@ test "lower-c aggregate pointer reads without MIR destination fact lower conserv
         \\    #[unsafe_contract(noalias)]
         \\    {
         \\        dst.inner = compiler.assume_noalias_unchecked(src.inner, 4);
+        \\    }
+        \\    return dst.inner.ptrs[0].*;
+        \\}
+        \\
+        \\fn c_nested_aggregate_array_element_casted_noalias_member_copy_direct_deref_requires_mir_field_fact() -> u32 {
+        \\    var local: u32 = 0;
+        \\    let src: Outer = .{ .inner = .{ .ptrs = .{ &shared_counter, &shared_counter } } };
+        \\    var dst: Outer = .{ .inner = .{ .ptrs = .{ &local, &local } } };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        dst.inner = compiler.assume_noalias_unchecked(src.inner, 4) as Inner;
         \\    }
         \\    return dst.inner.ptrs[0].*;
         \\}
@@ -5599,6 +5634,11 @@ test "lower-c aggregate pointer reads without MIR destination fact lower conserv
     try expectContains(normal_nested_array_assignment_copy_body, "return ((uint32_t)mc_race_load_u32(assigned.inner.ptrs.elems[mc_check_index_usize(0, 2)]));");
     try expectNotContains(normal_nested_array_assignment_copy_body, "return *assigned.inner.ptrs.elems[mc_check_index_usize(0, 2)];");
 
+    const normal_nested_array_casted_noalias_member_copy_body = try cFunctionBody(normal_array_output.items, "static uint32_t c_nested_aggregate_array_element_casted_noalias_member_copy_direct_deref_requires_mir_field_fact(void)");
+    try expectContains(normal_nested_array_casted_noalias_member_copy_body, "/* mir pointer_provenance consumed fn=c_nested_aggregate_array_element_casted_noalias_member_copy_direct_deref_requires_mir_field_fact subject=dst field=inner.ptrs element=0 provenance=global_storage reason=reassignment source=");
+    try expectContains(normal_nested_array_casted_noalias_member_copy_body, "return ((uint32_t)mc_race_load_u32(dst.inner.ptrs.elems[mc_check_index_usize(0, 2)]));");
+    try expectNotContains(normal_nested_array_casted_noalias_member_copy_body, "return *dst.inner.ptrs.elems[mc_check_index_usize(0, 2)];");
+
     const normal_nested_array_noalias_member_copy_body = try cFunctionBody(normal_array_output.items, "static uint32_t c_nested_aggregate_array_element_noalias_member_copy_direct_deref_requires_mir_field_fact(void)");
     try expectContains(normal_nested_array_noalias_member_copy_body, "/* mir pointer_provenance consumed fn=c_nested_aggregate_array_element_noalias_member_copy_direct_deref_requires_mir_field_fact subject=dst field=inner.ptrs element=0 provenance=global_storage reason=reassignment source=");
     try expectContains(normal_nested_array_noalias_member_copy_body, "return ((uint32_t)mc_race_load_u32(dst.inner.ptrs.elems[mc_check_index_usize(0, 2)]));");
@@ -5787,6 +5827,14 @@ test "lower-c aggregate pointer reads without MIR destination fact lower conserv
     try expectNotContains(missing_nested_array_noalias_member_copy_field_body, "/* mir pointer_provenance consumed fn=c_nested_aggregate_array_element_noalias_member_copy_direct_deref_requires_mir_field_fact subject=dst field=inner.ptrs element=0 provenance");
     try expectContains(missing_nested_array_noalias_member_copy_field_body, "return ((uint32_t)mc_race_load_u32(dst.inner.ptrs.elems[mc_check_index_usize(0, 2)]));");
     try expectNotContains(missing_nested_array_noalias_member_copy_field_body, "return *dst.inner.ptrs.elems[mc_check_index_usize(0, 2)];");
+
+    var missing_nested_array_casted_noalias_member_copy_field_output: std.ArrayList(u8) = .empty;
+    defer missing_nested_array_casted_noalias_member_copy_field_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutPointerProvenanceFactsForSubjectField("emit_c_nested_aggregate_array_element_missing_casted_noalias_member_copy_field_provenance.mc", array_source, "c_nested_aggregate_array_element_casted_noalias_member_copy_direct_deref_requires_mir_field_fact", "dst", "inner.ptrs", &missing_nested_array_casted_noalias_member_copy_field_output);
+    const missing_nested_array_casted_noalias_member_copy_field_body = try cFunctionBody(missing_nested_array_casted_noalias_member_copy_field_output.items, "static uint32_t c_nested_aggregate_array_element_casted_noalias_member_copy_direct_deref_requires_mir_field_fact(void)");
+    try expectNotContains(missing_nested_array_casted_noalias_member_copy_field_body, "/* mir pointer_provenance consumed fn=c_nested_aggregate_array_element_casted_noalias_member_copy_direct_deref_requires_mir_field_fact subject=dst field=inner.ptrs element=0 provenance");
+    try expectContains(missing_nested_array_casted_noalias_member_copy_field_body, "return ((uint32_t)mc_race_load_u32(dst.inner.ptrs.elems[mc_check_index_usize(0, 2)]));");
+    try expectNotContains(missing_nested_array_casted_noalias_member_copy_field_body, "return *dst.inner.ptrs.elems[mc_check_index_usize(0, 2)];");
 }
 
 test "lower-c emits while loops and loop control" {

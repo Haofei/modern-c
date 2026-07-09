@@ -3136,6 +3136,17 @@ test "LLVM aggregate pointer-field reads without MIR destination fact lower cons
         \\    return dst.inner.ptr.*;
         \\}
         \\
+        \\fn nested_aggregate_field_casted_noalias_member_copy_direct_deref_requires_mir_field_fact() -> u32 {
+        \\    var local: u32 = 0;
+        \\    let src: Outer = .{ .inner = .{ .ptr = &shared_counter } };
+        \\    var dst: Outer = .{ .inner = .{ .ptr = &local } };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        dst.inner = compiler.assume_noalias_unchecked(src.inner, 4) as Inner;
+        \\    }
+        \\    return dst.inner.ptr.*;
+        \\}
+        \\
         \\fn nested_aggregate_field_literal_local_pointer_copy_direct_deref_requires_mir_field_fact() -> u32 {
         \\    var local: u32 = 0;
         \\    let lp: *mut u32 = &local;
@@ -3401,6 +3412,12 @@ test "LLVM aggregate pointer-field reads without MIR destination fact lower cons
     try expectContains(normal_nested_noalias_member_copy_body, "load atomic i32, ptr %");
     try expectContains(normal_nested_noalias_member_copy_body, " unordered, align 4");
     try expectNotContains(normal_nested_noalias_member_copy_body, "load i32, ptr %");
+
+    const normal_nested_casted_noalias_member_copy_body = try llvmFunctionBody(normal_output.items, "define internal i32 @nested_aggregate_field_casted_noalias_member_copy_direct_deref_requires_mir_field_fact");
+    try expectContains(normal_nested_casted_noalias_member_copy_body, "; mir pointer_provenance consumed fn=nested_aggregate_field_casted_noalias_member_copy_direct_deref_requires_mir_field_fact subject=dst field=inner.ptr provenance=global_storage reason=reassignment");
+    try expectContains(normal_nested_casted_noalias_member_copy_body, "load atomic i32, ptr %");
+    try expectContains(normal_nested_casted_noalias_member_copy_body, " unordered, align 4");
+    try expectNotContains(normal_nested_casted_noalias_member_copy_body, "load i32, ptr %");
 
     const normal_nested_scoped_body = try llvmFunctionBody(normal_output.items, "define internal i32 @nested_aggregate_field_scoped_assignment_preserves_fact");
     try expectContains(normal_nested_scoped_body, "; mir pointer_provenance consumed fn=nested_aggregate_field_scoped_assignment_preserves_fact subject=p provenance=global_storage reason=none");
@@ -3696,6 +3713,16 @@ test "LLVM aggregate pointer-field reads without MIR destination fact lower cons
     try expectContains(missing_nested_noalias_member_copy_field_body, " unordered, align 4");
     try expectNotContains(missing_nested_noalias_member_copy_field_body, "load i32, ptr %");
 
+    var missing_nested_casted_noalias_member_copy_field_output: std.ArrayList(u8) = .empty;
+    defer missing_nested_casted_noalias_member_copy_field_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubjectField("llvm_nested_aggregate_field_missing_casted_noalias_member_copy_field_provenance.mc", source, "nested_aggregate_field_casted_noalias_member_copy_direct_deref_requires_mir_field_fact", "dst", "inner.ptr", &missing_nested_casted_noalias_member_copy_field_output);
+
+    const missing_nested_casted_noalias_member_copy_field_body = try llvmFunctionBody(missing_nested_casted_noalias_member_copy_field_output.items, "define internal i32 @nested_aggregate_field_casted_noalias_member_copy_direct_deref_requires_mir_field_fact");
+    try expectNotContains(missing_nested_casted_noalias_member_copy_field_body, "; mir pointer_provenance consumed fn=nested_aggregate_field_casted_noalias_member_copy_direct_deref_requires_mir_field_fact subject=dst field=inner.ptr provenance");
+    try expectContains(missing_nested_casted_noalias_member_copy_field_body, "load atomic i32, ptr %");
+    try expectContains(missing_nested_casted_noalias_member_copy_field_body, " unordered, align 4");
+    try expectNotContains(missing_nested_casted_noalias_member_copy_field_body, "load i32, ptr %");
+
     var missing_copy_field_output: std.ArrayList(u8) = .empty;
     defer missing_copy_field_output.deinit(std.testing.allocator);
     try appendLlvmTestWithoutPointerProvenanceFactsForSubjectField("llvm_aggregate_field_missing_copy_field_provenance.mc", source, "aggregate_field_local_copy_direct_deref_requires_mir_field_fact", "copied", "ptr", &missing_copy_field_output);
@@ -3928,6 +3955,17 @@ test "LLVM aggregate pointer-array element reads without MIR destination fact lo
         \\    return dst.inner.ptrs[0].*;
         \\}
         \\
+        \\fn nested_aggregate_array_element_casted_noalias_member_copy_direct_deref_requires_mir_field_fact() -> u32 {
+        \\    var local: u32 = 0;
+        \\    let src: Outer = .{ .inner = .{ .ptrs = .{ &shared_counter, &shared_counter } } };
+        \\    var dst: Outer = .{ .inner = .{ .ptrs = .{ &local, &local } } };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        dst.inner = compiler.assume_noalias_unchecked(src.inner, 4) as Inner;
+        \\    }
+        \\    return dst.inner.ptrs[0].*;
+        \\}
+        \\
         \\fn nested_aggregate_array_element_assignment_requires_mir_fact() -> u32 {
         \\    var local: u32 = 0;
         \\    var outer: Outer = .{ .inner = .{ .ptrs = .{ &local, &local } } };
@@ -4148,6 +4186,12 @@ test "LLVM aggregate pointer-array element reads without MIR destination fact lo
     try expectContains(normal_nested_array_noalias_member_copy_body, "load atomic i32, ptr %");
     try expectContains(normal_nested_array_noalias_member_copy_body, " unordered, align 4");
     try expectNotContains(normal_nested_array_noalias_member_copy_body, "load i32, ptr %");
+
+    const normal_nested_array_casted_noalias_member_copy_body = try llvmFunctionBody(normal_output.items, "define internal i32 @nested_aggregate_array_element_casted_noalias_member_copy_direct_deref_requires_mir_field_fact");
+    try expectContains(normal_nested_array_casted_noalias_member_copy_body, "; mir pointer_provenance consumed fn=nested_aggregate_array_element_casted_noalias_member_copy_direct_deref_requires_mir_field_fact subject=dst field=inner.ptrs element=0 provenance=global_storage reason=reassignment");
+    try expectContains(normal_nested_array_casted_noalias_member_copy_body, "load atomic i32, ptr %");
+    try expectContains(normal_nested_array_casted_noalias_member_copy_body, " unordered, align 4");
+    try expectNotContains(normal_nested_array_casted_noalias_member_copy_body, "load i32, ptr %");
 
     const normal_scoped_assignment_body = try llvmFunctionBody(normal_output.items, "define internal i32 @aggregate_array_element_scoped_assignment_preserves_fact");
     try expectContains(normal_scoped_assignment_body, "; mir pointer_provenance consumed fn=aggregate_array_element_scoped_assignment_preserves_fact subject=p provenance=global_storage reason=none");
@@ -4482,6 +4526,16 @@ test "LLVM aggregate pointer-array element reads without MIR destination fact lo
     try expectContains(missing_nested_array_noalias_member_copy_field_body, "load atomic i32, ptr %");
     try expectContains(missing_nested_array_noalias_member_copy_field_body, " unordered, align 4");
     try expectNotContains(missing_nested_array_noalias_member_copy_field_body, "load i32, ptr %");
+
+    var missing_nested_array_casted_noalias_member_copy_field_output: std.ArrayList(u8) = .empty;
+    defer missing_nested_array_casted_noalias_member_copy_field_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubjectField("llvm_nested_aggregate_array_element_missing_casted_noalias_member_copy_field_provenance.mc", source, "nested_aggregate_array_element_casted_noalias_member_copy_direct_deref_requires_mir_field_fact", "dst", "inner.ptrs", &missing_nested_array_casted_noalias_member_copy_field_output);
+
+    const missing_nested_array_casted_noalias_member_copy_field_body = try llvmFunctionBody(missing_nested_array_casted_noalias_member_copy_field_output.items, "define internal i32 @nested_aggregate_array_element_casted_noalias_member_copy_direct_deref_requires_mir_field_fact");
+    try expectNotContains(missing_nested_array_casted_noalias_member_copy_field_body, "; mir pointer_provenance consumed fn=nested_aggregate_array_element_casted_noalias_member_copy_direct_deref_requires_mir_field_fact subject=dst field=inner.ptrs element=0 provenance");
+    try expectContains(missing_nested_array_casted_noalias_member_copy_field_body, "load atomic i32, ptr %");
+    try expectContains(missing_nested_array_casted_noalias_member_copy_field_body, " unordered, align 4");
+    try expectNotContains(missing_nested_array_casted_noalias_member_copy_field_body, "load i32, ptr %");
 }
 
 test "LLVM ordinary bool global accesses use byte-sized atomics" {
