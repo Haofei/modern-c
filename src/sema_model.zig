@@ -103,9 +103,26 @@ pub const MoveSlot = struct {
     span: diagnostics.Span,
     // Reserved by a `defer` to be consumed at scope end: not a leak, not movable.
     deferred: bool = false,
+    // A place borrowed by a deferred expression. Unlike `deferred`, this does not
+    // consume the resource or suppress leak checks; it only prevents moving the
+    // borrowed root/subplace before deferred cleanup runs.
+    deferred_borrow: ?[]const u8 = null,
     // The binding's declared/inferred type, when known - used to look up a `move` field's
     // type for place-sensitive field-move tracking. Null for synthetic field place keys.
     ty: ?ast.TypeExpr = null,
+    // Non-resource local whose type is retained only so place-sensitive helpers can resolve
+    // fixed-array/member paths. It is not a linear value and must not participate in move,
+    // borrow, or leak diagnostics.
+    type_only: bool = false,
+    // Non-live scalar locals proven to hold a constant array index. The move checker uses
+    // these only to turn `arr[i]` into the same stable place as `arr[0]` when `i` was
+    // initialized from a constant index literal.
+    const_index: ?usize = null,
+    // Non-live scalar locals/params that name a stable but runtime-known array index.
+    // This is narrower than arbitrary symbolic arithmetic: `arr[i]` and a copied
+    // immutable `let j = i` can share a precise dynamic place key, while concrete
+    // and unrelated dynamic indexes still conflict conservatively.
+    symbolic_index: ?[]const u8 = null,
     // T1.2: if this binding is a pointer/reference DERIVED from a tracked `move` binding
     // (taken via `&x` and bound to `let p = &x`), this is the referent's binding name. The
     // alias is itself a borrow - not a linear resource (`live`/leak rules do not apply to it)
@@ -121,6 +138,10 @@ pub const MoveSlot = struct {
     // move). Holds the span of the escaping store, for the diagnostic. Null when no borrow
     // has escaped into untracked memory.
     escaped_borrow: ?diagnostics.Span = null,
+    // True for bindings declared inside a deferred cleanup block. Aliases to these bindings
+    // are checked for stale cleanup-order use, but they should not reserve an outer deferred
+    // borrow because the referent itself only exists during cleanup execution.
+    cleanup_local: bool = false,
     // Set when this alias was formed by taking the address of the move binding ITSELF
     // (`let p = &o;`, or copied from such an alias `let q = p;`), so dereferencing it
     // reconstitutes the whole move value: `*p` IS `o`. Moving `*p` out by value (e.g.
@@ -130,6 +151,20 @@ pub const MoveSlot = struct {
     // is rejected in moveConsume's `.deref` arm. False for DERIVED aliases (`p = f(&o)`,
     // `p = &o.field`) where `*p` is sub-data, not the move binding - those stay borrows.
     full_deref_alias: bool = false,
+};
+
+pub const LoopMoveFrame = struct {
+    entry_names: std.StringHashMap(void),
+    entry_state: std.StringHashMap(MoveSlot),
+    invalidated_const_indexes: std.StringHashMap(void),
+    invalidated_aliases: std.StringHashMap(void),
+
+    pub fn deinit(self: *LoopMoveFrame) void {
+        self.entry_names.deinit();
+        self.entry_state.deinit();
+        self.invalidated_const_indexes.deinit();
+        self.invalidated_aliases.deinit();
+    }
 };
 
 pub const LayoutFieldInfo = struct {

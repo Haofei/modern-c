@@ -6,11 +6,16 @@
 
 // T1.2 (conservative rejection): a `move` value may not be MOVED while a borrow of it (or
 // of one of its subfields/elements) has been stored into memory we cannot prove dead — an
-// aggregate field, an array element, or a sub-place alias. The earlier checker tracked
+// dynamic/non-nameable storage or a sub-place alias. Nameable aggregate fields,
+// constant-index array elements, singleton dynamic-index array elements, and wildcard
+// multi-element dynamic array-element aliases are tracked
+// precisely, so `h.p = &t`, `arr[0] = &t`, `[1]*T`, and `arr[i]` element aliases
+// can be accepted when the stored pointer is not used after the move. The earlier checker tracked
 // use-after-move only for direct scalar pointer-local aliases (`let p = &t; ...; use(p)`),
 // so a borrow laundered into memory and read after the move leaked silently. Rather than
-// chase the later read through untrackable memory, we refuse the move itself: the borrow
-// could still be live. This closes the struct-assign / array-element / subfield cases.
+// chase the later read through untrackable memory, we refuse the move itself when the storage
+// is not nameable: the borrow could still be live. This closes the subfield cases while
+// allowing precise struct-field and constant-index array-element cases.
 //
 // The accept cases below confirm the rule does NOT reject the legitimate borrow-use-then-
 // move pattern (borrow taken, used, and dead before the move).
@@ -32,38 +37,103 @@ fn pk(p: *T) -> u32 {      // reads through a borrow
 extern fn use_ptr(p: *T) -> u32;
 extern fn id(p: *T) -> *T;       // returns the borrow it was given (laundering channel)
 
-// --- rejected: borrow stored into a struct FIELD by assignment, then the value is moved ---
-fn reject_struct_field_assign() -> u32 {
+fn holder(p: *T) -> H {
+    return .{ .p = p };
+}
+
+fn use_holder(h: H) -> u32 {
+    return pk(h.p);
+}
+
+// --- accepted: borrow stored into a nameable struct FIELD by assignment, read, then dead ---
+fn accept_struct_field_assign_before_move() -> u32 {
     let t: T = mk();
     var h: H = .{ .p = &t };
-    h.p = &t;                     // borrow of t laundered into memory (h.p)
-    let b: u32 = pk(h.p);         // a legitimate read of the escaped borrow BEFORE the move
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let a: u32 = cn(t);           // moving t would leave h.p dangling — rejected
+    h.p = &t;                     // borrow of t stored in a tracked field alias (h.p)
+    let b: u32 = pk(h.p);         // legitimate read BEFORE the move; h.p is dead afterwards
+    let a: u32 = cn(t);
     return a + b;
 }
 
-// --- rejected: borrow stored into an ARRAY ELEMENT by assignment, then the value is moved ---
+// --- rejected: borrow stored into an ARRAY ELEMENT by assignment, then read after move ---
 fn reject_array_elem_assign() -> u32 {
     let t: T = mk();
     var arr: [1]*T = .{ &t };
     arr[0] = &t;                  // borrow of t laundered into memory (arr[0])
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let a: u32 = cn(t);           // moving t would leave arr[0] dangling — rejected
-    return a + pk(arr[0]);
+    let a: u32 = cn(t);
+    return a + pk(arr[0]);        // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
-// --- rejected: borrow stored into an ARRAY-LITERAL ELEMENT, then the value is moved ---
+// --- rejected: borrow stored into an ARRAY-LITERAL ELEMENT, then read after move ---
 // The symmetric counterpart of the element-ASSIGNMENT case above. The array-literal
 // initializer `.{ &t }` launders &t into arr[0] just as `arr[0] = &t` does; before the
-// fix this element path was NOT routed through the escape-into-memory hook, so the move
-// was silently accepted (use-after-move). Now the move is refused.
+// precise element-alias fix this path was conservatively rejected at the move. Now the move
+// is allowed if arr[0] is dead, and the stale read is rejected if it is used after the move.
 fn reject_array_literal_elem() -> u32 {
     let t: T = mk();
     let arr: [1]*T = .{ &t };     // borrow of t laundered into memory (arr[0]) at init
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let a: u32 = cn(t);           // moving t would leave arr[0] dangling — rejected
-    return a + pk(arr[0]);
+    let a: u32 = cn(t);
+    return a + pk(arr[0]);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+}
+
+// --- accepted: singleton dynamic array-element assignment, read, then dead ---
+fn accept_dynamic_singleton_array_elem_assign_before_move(i: usize) -> u32 {
+    let t: T = mk();
+    var arr: [1]*T = .{ &t };
+    arr[i] = &t;                  // in a singleton array, every successful dynamic index is [0]
+    let b: u32 = pk(arr[i]);      // legitimate read BEFORE the move; arr[0] is dead afterwards
+    let a: u32 = cn(t);
+    return a + b;
+}
+
+// --- rejected: singleton dynamic array-element assignment, then read after move ---
+fn reject_dynamic_singleton_array_elem_assign() -> u32 {
+    let t: T = mk();
+    var arr: [1]*T = .{ &t };
+    let i: usize = 0;
+    arr[i] = &t;
+    let a: u32 = cn(t);
+    return a + pk(arr[i]);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+}
+
+// --- accepted: multi-element dynamic array-element assignment, read, then dead ---
+fn accept_dynamic_multi_array_elem_assign_before_move(i: usize) -> u32 {
+    let t: T = mk();
+    var arr: [2]*T = .{ &t, &t };
+    arr[i] = &t;                  // unknown element: tracked as a wildcard arr[*] alias
+    let b: u32 = pk(arr[i]);      // legitimate read BEFORE the move
+    let a: u32 = cn(t);
+    return a + b;
+}
+
+// --- rejected: multi-element dynamic array-element assignment, dynamic read after move ---
+fn reject_dynamic_multi_array_elem_assign() -> u32 {
+    let t: T = mk();
+    var arr: [2]*T = .{ &t, &t };
+    let i: usize = 0;
+    arr[i] = &t;
+    let a: u32 = cn(t);
+    return a + pk(arr[i]);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+}
+
+// --- rejected: multi-element dynamic assignment also poisons later constant element reads ---
+fn reject_dynamic_multi_array_elem_constant_read() -> u32 {
+    let t: T = mk();
+    var arr: [2]*T = .{ &t, &t };
+    let i: usize = 0;
+    arr[i] = &t;
+    let a: u32 = cn(t);
+    return a + pk(arr[0]);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+}
+
+// --- rejected: laundered multi-element dynamic array-element assignment, read after move ---
+fn reject_dynamic_multi_array_elem_laundered() -> u32 {
+    let t: T = mk();
+    var arr: [2]*T = .{ &t, &t };
+    let i: usize = 0;
+    arr[i] = id(&t);
+    let a: u32 = cn(t);
+    return a + pk(arr[i]);        // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // --- rejected: alias of a SUBFIELD, whole value then moved ---
@@ -88,6 +158,24 @@ fn accept_subfield_borrow_used() -> u32 {
     let x: u32 = use_ptr(&t);     // a transient borrow, not stored anywhere
     let y: u32 = t.v;             // read a field by value (still a borrow of t)
     return cn(t) + x + y;         // t may be moved — no live escaped borrow
+}
+
+// --- rejected: borrow buried in an aggregate literal passed by value to a call ---
+fn reject_call_arg_aggregate_literal_escape() -> u32 {
+    let t: T = mk();
+    let b: u32 = use_holder(.{ .p = &t });
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let a: u32 = cn(t);           // the callee may retain the copied aggregate's pointer field
+    return a + b;
+}
+
+// --- rejected: captured aggregate call result may store an argument borrow ---
+fn reject_captured_aggregate_call_result_escape() -> u32 {
+    let t: T = mk();
+    let h: H = holder(&t);
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let a: u32 = cn(t);           // the returned aggregate may still carry the borrow
+    return a + pk(h.p);
 }
 
 // (Gap #2) Interprocedural borrow laundering through a CALL RESULT. `id(p)` may return the

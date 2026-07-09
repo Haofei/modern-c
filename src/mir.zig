@@ -7,6 +7,7 @@ const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const numeric = @import("numeric.zig");
 const parser = @import("parser.zig");
+const sema_builtin = @import("sema_builtin.zig");
 
 // Pure AST-shape queries shared with `sema.zig`/`lower_c.zig` (see `ast_query.zig`).
 const MmioRegisterAccess = ast_query.MmioRegisterAccess;
@@ -25,6 +26,8 @@ const reduceCallKind = ast_query.reduceCallKind;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
 const memberCallee = ast_query.memberCallee;
+const reflectionKind = sema_builtin.reflectionKind;
+const reflectionRequiresField = sema_builtin.reflectionRequiresField;
 
 // Numeric-literal and integer-bounds primitives shared with `sema.zig` and `lower_c.zig`
 // (see `numeric.zig`); aliased here so the existing call sites read unchanged.
@@ -34,6 +37,7 @@ const maxUnsigned = numeric.maxUnsigned;
 const signedBounds = numeric.signedBounds;
 const integerLiteralValue = numeric.integerLiteralValue;
 const parseArrayLen = array_len.parseArrayLen;
+const parseArrayLenWithReflect = array_len.parseArrayLenWithReflect;
 
 const mir_model = @import("mir_model.zig");
 const mir_operator = @import("mir_operator.zig");
@@ -59,6 +63,7 @@ pub const RangeFact = mir_model.RangeFact;
 pub const SourcePoint = mir_model.SourcePoint;
 pub const PointerProvenance = mir_model.PointerProvenance;
 pub const PointerProvenanceFact = mir_model.PointerProvenanceFact;
+pub const RepresentationFact = mir_model.RepresentationFact;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
 pub const Block = mir_model.Block;
@@ -296,6 +301,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
                         .contract_regions = try allocator.alloc(ContractRegion, 0),
                         .range_facts = try allocator.alloc(RangeFact, 0),
                         .pointer_provenance_facts = try allocator.alloc(PointerProvenanceFact, 0),
+                        .representation_facts = try allocator.alloc(RepresentationFact, 0),
                         .elided_bounds = try allocator.alloc(SourcePoint, 0),
                     });
                 }
@@ -318,8 +324,8 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
     for (mir.functions) |function| {
         try out.print(
             allocator,
-            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} pointer_provenance_facts={}\n",
-            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.pointer_provenance_facts.len },
+            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
+            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
         );
         for (function.contract_regions) |region| {
             try out.print(
@@ -340,17 +346,18 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
             }
             try out.append(allocator, '\n');
             for (block.instructions) |instruction| {
+                const value_id = instruction.value_id orelse "none";
                 if (instruction.contract_region_id) |region_id| {
                     try out.print(
                         allocator,
-                        "mir instr fn={s} block={} kind={s} detail={s} type={s} contract_region_id={} line={} column={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), region_id, instruction.line, instruction.column },
+                        "mir instr fn={s} block={} kind={s} detail={s} type={s} value_id={s} contract_region_id={} line={} column={}\n",
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), value_id, region_id, instruction.line, instruction.column },
                     );
                 } else {
                     try out.print(
                         allocator,
-                        "mir instr fn={s} block={} kind={s} detail={s} type={s} contract_region_id=none line={} column={}\n",
-                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), instruction.line, instruction.column },
+                        "mir instr fn={s} block={} kind={s} detail={s} type={s} value_id={s} contract_region_id=none line={} column={}\n",
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), value_id, instruction.line, instruction.column },
                     );
                 }
             }
@@ -360,6 +367,21 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
                 allocator,
                 "mir trap_edge fn={s} from={} trap_block={} kind={s} source={s} explicit=true line={} column={}\n",
                 .{ function.name, edge.from_block, edge.trap_block, @tagName(edge.kind), @tagName(edge.source), edge.line, edge.column },
+            );
+        }
+        for (function.representation_facts) |fact| {
+            try out.print(
+                allocator,
+                "mir representation_fact fn={s} kind={s} detail={s} type={s} value_id={s} recorded=true line={} column={}\n",
+                .{
+                    function.name,
+                    @tagName(fact.kind),
+                    fact.detail,
+                    fact.result_ty.name(),
+                    fact.value_id,
+                    fact.source.line,
+                    fact.source.column,
+                },
             );
         }
         for (function.range_facts) |fact| {
@@ -374,7 +396,7 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
             defer if (fact.element_index != null) allocator.free(element);
             try out.print(
                 allocator,
-                "mir pointer_provenance_fact fn={s} subject={s} element={s} provenance={s} storage={s} pointer_kind={s} mutability={s} child={s} invalidation_reason={s} invalidation_policy={s} line={} column={}\n",
+                "mir pointer_provenance_fact fn={s} subject={s} element={s} provenance={s} storage={s} pointer_kind={s} mutability={s} child={s} field={s} invalidation_reason={s} invalidation_policy={s} line={} column={}\n",
                 .{
                     function.name,
                     fact.subject,
@@ -384,11 +406,19 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
                     @tagName(fact.pointer_shape.kind),
                     @tagName(fact.pointer_shape.mutability),
                     fact.pointer_shape.child,
+                    fact.field_path orelse "none",
                     @tagName(fact.invalidation_reason),
                     @tagName(fact.invalidation_policy),
                     fact.source.line,
                     fact.source.column,
                 },
+            );
+        }
+        for (function.elided_bounds) |fact| {
+            try out.print(
+                allocator,
+                "mir elided_bounds_fact fn={s} check=bounds_elided recorded=true line={} column={}\n",
+                .{ function.name, fact.line, fact.column },
             );
         }
     }
@@ -473,27 +503,6 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
                         .{ function.name, instruction.detail, instruction.line, instruction.column },
                     );
                 }
-                if (instruction.kind == .representation_check) {
-                    try out.print(
-                        allocator,
-                        "mir verify fn={s} pass=representation finding=representation_check type={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.line, instruction.column },
-                    );
-                }
-                if (instruction.kind == .representation_use) {
-                    try out.print(
-                        allocator,
-                        "mir verify fn={s} pass=representation finding=representation_use detail={s} type={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.result_ty.name(), instruction.line, instruction.column },
-                    );
-                }
-                if (instruction.kind == .typed_load and representationCheckKind(instruction.result_ty) != null) {
-                    try out.print(
-                        allocator,
-                        "mir verify fn={s} pass=representation finding=typed_load detail={s} type={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.result_ty.name(), instruction.line, instruction.column },
-                    );
-                }
                 if (instruction.kind == .nullability_conversion) {
                     try out.print(
                         allocator,
@@ -557,6 +566,26 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
                         .{ function.name, irqContextFindingName(finding), instruction.detail, instruction.line, instruction.column },
                     );
                 }
+            }
+        }
+        for (function.representation_facts) |fact| {
+            switch (fact.kind) {
+                .representation_check => try out.print(
+                    allocator,
+                    "mir verify fn={s} pass=representation finding=representation_check type={s} line={} column={}\n",
+                    .{ function.name, fact.detail, fact.source.line, fact.source.column },
+                ),
+                .representation_use => try out.print(
+                    allocator,
+                    "mir verify fn={s} pass=representation finding=representation_use detail={s} type={s} line={} column={}\n",
+                    .{ function.name, fact.detail, fact.result_ty.name(), fact.source.line, fact.source.column },
+                ),
+                .typed_load => try out.print(
+                    allocator,
+                    "mir verify fn={s} pass=representation finding=typed_load detail={s} type={s} line={} column={}\n",
+                    .{ function.name, fact.detail, fact.result_ty.name(), fact.source.line, fact.source.column },
+                ),
+                else => {},
             }
         }
         for (function.range_facts) |fact| {
@@ -788,6 +817,7 @@ const ProvenFact = struct {
 
 const LivePointerProvenance = struct {
     subject: []const u8,
+    field_path: ?[]const u8 = null,
     element_index: ?usize,
     pointer_shape: PointerShape,
     provenance: PointerProvenance,
@@ -803,6 +833,16 @@ const IndexedAssignmentTarget = struct {
     subject: []const u8,
     base: ast.Expr,
     index: usize,
+};
+
+const AggregateCopySource = struct {
+    local_name: []const u8,
+    field_path: ?[]const u8 = null,
+};
+
+const AggregatePointerFieldPath = struct {
+    local_name: []const u8,
+    field_path: []const u8,
 };
 
 const FunctionBuilder = struct {
@@ -827,7 +867,9 @@ const FunctionBuilder = struct {
     contract_regions: std.ArrayList(ContractRegion),
     range_facts: std.ArrayList(RangeFact),
     pointer_provenance_facts: std.ArrayList(PointerProvenanceFact),
+    representation_facts: std.ArrayList(RepresentationFact),
     live_pointer_provenance: std.ArrayList(LivePointerProvenance),
+    field_path_allocations: std.ArrayList([]const u8),
     elided_bounds: std.ArrayList(SourcePoint),
     // OPT (annex E) — guard/assert-proven facts live for check elision (see ProvenFact).
     proven_facts: std.ArrayList(ProvenFact) = .empty,
@@ -890,7 +932,9 @@ const FunctionBuilder = struct {
             .contract_regions = .empty,
             .range_facts = .empty,
             .pointer_provenance_facts = .empty,
+            .representation_facts = .empty,
             .live_pointer_provenance = .empty,
+            .field_path_allocations = .empty,
             .elided_bounds = .empty,
             .address_taken = std.StringHashMap(void).init(allocator),
             .local_types = std.StringHashMap(ValueType).init(allocator),
@@ -943,7 +987,9 @@ const FunctionBuilder = struct {
             .contract_regions = .empty,
             .range_facts = .empty,
             .pointer_provenance_facts = .empty,
+            .representation_facts = .empty,
             .live_pointer_provenance = .empty,
+            .field_path_allocations = .empty,
             .elided_bounds = .empty,
             .address_taken = std.StringHashMap(void).init(allocator),
             .local_types = std.StringHashMap(ValueType).init(allocator),
@@ -977,7 +1023,10 @@ const FunctionBuilder = struct {
         self.contract_regions.deinit(self.allocator);
         self.range_facts.deinit(self.allocator);
         self.pointer_provenance_facts.deinit(self.allocator);
+        self.representation_facts.deinit(self.allocator);
         self.live_pointer_provenance.deinit(self.allocator);
+        self.freeFieldPathAllocations();
+        self.field_path_allocations.deinit(self.allocator);
         self.elided_bounds.deinit(self.allocator);
         self.proven_facts.deinit(self.allocator);
         self.address_taken.deinit();
@@ -1020,6 +1069,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(range_facts);
         const pointer_provenance_facts = try self.pointer_provenance_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(pointer_provenance_facts);
+        const representation_facts = try self.representation_facts.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(representation_facts);
         const elided_bounds = try self.elided_bounds.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(elided_bounds);
 
@@ -1029,6 +1080,9 @@ const FunctionBuilder = struct {
         self.proven_facts = .empty;
         self.live_pointer_provenance.deinit(self.allocator);
         self.live_pointer_provenance = .empty;
+        self.freeFieldPathAllocations();
+        self.field_path_allocations.deinit(self.allocator);
+        self.field_path_allocations = .empty;
         self.address_taken.deinit();
         self.address_taken = std.StringHashMap(void).init(self.allocator);
         self.local_types.deinit();
@@ -1060,6 +1114,7 @@ const FunctionBuilder = struct {
             .contract_regions = contract_regions,
             .range_facts = range_facts,
             .pointer_provenance_facts = pointer_provenance_facts,
+            .representation_facts = representation_facts,
             .elided_bounds = elided_bounds,
         };
     }
@@ -1231,6 +1286,7 @@ const FunctionBuilder = struct {
                     try self.buildExpr(expr);
                     if (local.ty != null) try self.addRepresentationUseForValue(ty, "initializer", expr.span, exprText(expr));
                     try self.recordPointerProvenanceForLocalInitializer(local.names, ty_expr, ty, expr);
+                    try self.recordAggregatePointerFieldProvenanceForLocalInitializer(local.names, ty_expr, expr);
                     self.assignment_target = previous_target;
                     self.assignment_target_ty = previous_target_ty;
                 }
@@ -2259,7 +2315,7 @@ const FunctionBuilder = struct {
                     }
                 }
                 if (instr_kind == .unchecked_assume) try self.addRangeFactForUncheckedCall(callee_name, node.args, expr.span);
-                const preserves_pointer_provenance = self.ptrOffsetReceiverType(node.callee.*) != null;
+                const preserves_pointer_provenance = self.ptrOffsetReceiverType(node.callee.*) != null or reflectionCallPreservesPointerProvenance(node);
                 if (!preserves_pointer_provenance and instr_kind == .call) try self.recordPointerProvenanceCallInvalidation(.call, expr.span);
                 if (!preserves_pointer_provenance and instr_kind == .indirect_call) try self.recordPointerProvenanceCallInvalidation(.indirect_call, expr.span);
                 if (isTrapCall(node.callee.*)) try self.addTrapEdge(.ExplicitTrap, .explicit_trap, expr.span);
@@ -2536,15 +2592,25 @@ const FunctionBuilder = struct {
     }
 
     fn addInstrWithValue(self: *FunctionBuilder, kind: Instruction.Kind, detail: []const u8, ty: ValueType, span: ast.Span, value_id: ?[]const u8) !void {
+        const resolved_value_id = value_id orelse defaultInstructionValueId(kind, detail);
         try self.blocks.items[self.current].instructions.append(self.allocator, .{
             .kind = kind,
             .result_ty = ty,
             .detail = detail,
-            .value_id = value_id orelse defaultInstructionValueId(kind, detail),
+            .value_id = resolved_value_id,
             .contract_region_id = if (kind == .unchecked_assume) self.active_contract_region_id else null,
             .line = span.line,
             .column = span.column,
         });
+        if (representationFactKind(kind, ty)) {
+            try self.representation_facts.append(self.allocator, .{
+                .kind = kind,
+                .detail = detail,
+                .result_ty = ty,
+                .value_id = resolved_value_id orelse "none",
+                .source = .{ .line = span.line, .column = span.column },
+            });
+        }
     }
 
     fn addRuntimeRepresentationCheck(self: *FunctionBuilder, ty: ValueType, span: ast.Span, value_id: []const u8) !void {
@@ -2766,10 +2832,111 @@ const FunctionBuilder = struct {
         const items = arrayLiteralItems(initializer) orelse return;
         for (names) |name| {
             for (items, 0..) |item, index| {
-                const provenance = self.directAddressProvenance(item) orelse continue;
+                const provenance = self.directPointerProvenance(item, shape, null) orelse continue;
                 try self.appendPointerProvenanceFact(name.text, index, provenance, shape, .none, item.span);
             }
         }
+    }
+
+    fn recordAggregatePointerFieldProvenanceForLocalInitializer(self: *FunctionBuilder, names: []ast.Ident, ty_expr: ?ast.TypeExpr, initializer: ast.Expr) !void {
+        const aggregate_ty = ty_expr orelse return;
+        const struct_name = structTypeNameAlias(aggregate_ty, self.aliases) orelse return;
+        for (names) |name| {
+            if (structLiteralFields(initializer)) |fields| {
+                try self.recordAggregatePointerFieldProvenanceFromStructLiteral(name.text, struct_name, fields, null);
+                continue;
+            }
+            if (self.directAggregateCopySourceName(initializer, struct_name)) |source_name| {
+                if (std.mem.eql(u8, name.text, source_name)) continue;
+                try self.copyLiveAggregatePointerProvenance(name.text, source_name, .none, initializer.span);
+            }
+        }
+    }
+
+    fn recordAggregatePointerFieldProvenanceFromStructLiteral(self: *FunctionBuilder, subject: []const u8, struct_name: []const u8, fields: []const ast.StructLiteralField, path_prefix: ?[]const u8) !void {
+        const summary = self.structs.get(struct_name) orelse return;
+        for (summary.fields) |field| {
+            const value = structLiteralField(fields, field.name.text) orelse continue;
+            const field_path = if (path_prefix) |prefix| try self.joinAggregatePointerFieldPath(prefix, field.name.text) else field.name.text;
+            if (self.pointerShapeFromTypeExpr(field.ty)) |shape| {
+                if (self.directPointerProvenance(value, shape, null)) |provenance| {
+                    try self.appendPointerFieldProvenanceFact(subject, field_path, null, provenance, shape, .none, value.span);
+                } else {
+                    try self.appendUnknownPointerFieldProvenanceFact(subject, field_path, null, shape, .reassignment, value.span);
+                }
+                continue;
+            }
+            if (self.fixedPointerArrayElementShape(field.ty)) |shape| {
+                try self.invalidatePointerFieldProvenanceSubject(subject, field_path, null, shape, .reassignment, value.span);
+                const items = arrayLiteralItems(value) orelse continue;
+                for (items, 0..) |item, index| {
+                    const provenance = self.directPointerProvenance(item, shape, null) orelse continue;
+                    try self.appendPointerFieldProvenanceFact(subject, field_path, index, provenance, shape, .none, item.span);
+                }
+                continue;
+            }
+            const nested_struct_name = structTypeNameAlias(field.ty, self.aliases) orelse continue;
+            const nested_fields = structLiteralFields(value) orelse {
+                try self.invalidatePointerFieldsForLocalPath(subject, field_path, .reassignment, value.span);
+                continue;
+            };
+            try self.recordAggregatePointerFieldProvenanceFromStructLiteral(subject, nested_struct_name, nested_fields, field_path);
+            continue;
+        }
+    }
+
+    fn joinAggregatePointerFieldPath(self: *FunctionBuilder, prefix: []const u8, field_name: []const u8) ![]const u8 {
+        const path = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ prefix, field_name });
+        try self.field_path_allocations.append(self.allocator, path);
+        return path;
+    }
+
+    fn aggregatePointerArrayElementPath(self: *FunctionBuilder, array_path: []const u8, index: usize) ![]const u8 {
+        const path = try std.fmt.allocPrint(self.allocator, "{s}[{d}]", .{ array_path, index });
+        try self.field_path_allocations.append(self.allocator, path);
+        return path;
+    }
+
+    fn freeFieldPathAllocations(self: *FunctionBuilder) void {
+        for (self.field_path_allocations.items) |path| self.allocator.free(path);
+        self.field_path_allocations.clearRetainingCapacity();
+    }
+
+    fn directLocalAggregateMemberPath(self: *FunctionBuilder, expr: ast.Expr) ?AggregatePointerFieldPath {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directLocalAggregateMemberPath(inner.*),
+            .member => |node| blk: {
+                _ = self.typeExprForExpr(node.base.*) orelse break :blk null;
+                _ = self.typeExprForExpr(expr) orelse break :blk null;
+                if (directIdentName(node.base.*)) |local_name| {
+                    _ = self.directLocalAggregateTypeName(node.base.*) orelse break :blk null;
+                    break :blk .{ .local_name = local_name, .field_path = node.name.text };
+                }
+                const base_path = self.directLocalAggregateMemberPath(node.base.*) orelse break :blk null;
+                break :blk .{
+                    .local_name = base_path.local_name,
+                    .field_path = self.joinAggregatePointerFieldPath(base_path.field_path, node.name.text) catch break :blk null,
+                };
+            },
+            else => null,
+        };
+    }
+
+    fn directLocalAggregateArrayElementPath(self: *FunctionBuilder, expr: ast.Expr) ?AggregatePointerFieldPath {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directLocalAggregateArrayElementPath(inner.*),
+            .index => |node| blk: {
+                const base_path = self.directLocalAggregateMemberPath(node.base.*) orelse break :blk null;
+                const field_ty = self.typeExprForExpr(node.base.*) orelse break :blk null;
+                _ = self.fixedPointerArrayElementShape(field_ty) orelse break :blk null;
+                const element_index = self.constUsizeValue(node.index.*) orelse break :blk null;
+                break :blk .{
+                    .local_name = base_path.local_name,
+                    .field_path = self.aggregatePointerArrayElementPath(base_path.field_path, element_index) catch break :blk null,
+                };
+            },
+            else => null,
+        };
     }
 
     fn recordPointerProvenanceForAssignment(self: *FunctionBuilder, target: ast.Expr, value: ast.Expr, span: ast.Span) !void {
@@ -2791,15 +2958,79 @@ const FunctionBuilder = struct {
                     };
                     try self.invalidatePointerProvenanceSubject(target_name, null, shape, .reassignment, span);
                     for (items, 0..) |item, index| {
-                        const provenance = self.directAddressProvenance(item) orelse continue;
+                        const provenance = self.directPointerProvenance(item, shape, null) orelse continue;
                         try self.appendPointerProvenanceFact(target_name, index, provenance, shape, .reassignment, item.span);
+                    }
+                }
+                if (structTypeNameAlias(target_ty_expr, self.aliases)) |struct_name| {
+                    if (structLiteralFields(value)) |fields| {
+                        self.clearLivePointerProvenance(target_name, null);
+                        try self.recordAggregatePointerFieldProvenanceFromStructLiteral(target_name, struct_name, fields, null);
+                    } else if (self.directAggregateCopySourceName(value, struct_name)) |source_name| {
+                        if (!std.mem.eql(u8, target_name, source_name)) {
+                            self.clearLivePointerProvenance(target_name, null);
+                            try self.copyLiveAggregatePointerProvenance(target_name, source_name, .reassignment, value.span);
+                        }
+                    } else {
+                        self.clearLivePointerProvenance(target_name, null);
                     }
                 }
             }
             return;
         }
 
-        const indexed = constantIndexAssignmentTarget(target) orelse {
+        switch (target.kind) {
+            .grouped => |inner| return self.recordPointerProvenanceForAssignment(inner.*, value, span),
+            .index => |index_node| {
+                const maybe_member = switch (index_node.base.*.kind) {
+                    .member => |member| member,
+                    .grouped => |inner| switch (inner.*.kind) {
+                        .member => |member| member,
+                        else => null,
+                    },
+                    else => null,
+                };
+                if (maybe_member) |_| {
+                    const field_ty = self.typeExprForExpr(index_node.base.*) orelse return;
+                    const shape = self.fixedPointerArrayElementShape(field_ty) orelse return;
+                    const path = self.directLocalAggregateMemberPath(index_node.base.*) orelse return;
+                    const element_index = self.constUsizeValue(index_node.index.*) orelse {
+                        try self.invalidatePointerFieldsForLocalPath(path.local_name, path.field_path, .dynamic_index_write, span);
+                        return;
+                    };
+                    if (self.directPointerProvenance(value, shape, null)) |provenance| {
+                        try self.appendPointerFieldProvenanceFact(path.local_name, path.field_path, element_index, provenance, shape, .reassignment, value.span);
+                    } else {
+                        try self.appendUnknownPointerFieldProvenanceFact(path.local_name, path.field_path, element_index, shape, .reassignment, span);
+                    }
+                    return;
+                }
+            },
+            .member => {
+                const path = self.directLocalAggregateMemberPath(target) orelse return;
+                const field_ty = self.typeExprForExpr(target) orelse return;
+                if (self.pointerShapeFromTypeExpr(field_ty)) |shape| {
+                    if (self.directPointerProvenance(value, shape, null)) |provenance| {
+                        try self.appendPointerFieldProvenanceFact(path.local_name, path.field_path, null, provenance, shape, .reassignment, value.span);
+                    } else {
+                        try self.appendUnknownPointerFieldProvenanceFact(path.local_name, path.field_path, null, shape, .reassignment, span);
+                    }
+                    return;
+                }
+                if (structTypeNameAlias(field_ty, self.aliases)) |struct_name| {
+                    try self.invalidatePointerFieldsForLocalPath(path.local_name, path.field_path, .reassignment, span);
+                    if (structLiteralFields(value)) |fields| {
+                        try self.recordAggregatePointerFieldProvenanceFromStructLiteral(path.local_name, struct_name, fields, path.field_path);
+                    } else if (self.directAggregateCopySource(value, struct_name)) |source| {
+                        try self.copyLiveAggregatePointerProvenancePath(path.local_name, path.field_path, source, .reassignment, value.span);
+                    }
+                }
+                return;
+            },
+            else => {},
+        }
+
+        const indexed = self.constantIndexAssignmentTarget(target) orelse {
             if (dynamicIndexAssignmentSubject(target)) |subject| {
                 if (self.local_type_exprs.get(subject)) |ty_expr| {
                     if (self.fixedPointerArrayElementShape(ty_expr)) |shape| {
@@ -2810,7 +3041,7 @@ const FunctionBuilder = struct {
             return;
         };
         const shape = self.fixedPointerArrayElementShapeForExpr(indexed.base) orelse return;
-        if (self.directAddressProvenance(value)) |provenance| {
+        if (self.directPointerProvenance(value, shape, null)) |provenance| {
             try self.appendPointerProvenanceFact(indexed.subject, indexed.index, provenance, shape, .reassignment, value.span);
         } else {
             try self.appendUnknownPointerProvenanceFact(indexed.subject, indexed.index, shape, .reassignment, span);
@@ -2822,6 +3053,7 @@ const FunctionBuilder = struct {
         for (self.live_pointer_provenance.items) |live| {
             try self.pointer_provenance_facts.append(self.allocator, .{
                 .subject = live.subject,
+                .field_path = try self.ownedPointerFactFieldPath(live.field_path),
                 .element_index = live.element_index,
                 .storage = null,
                 .provenance = .unknown,
@@ -2834,6 +3066,22 @@ const FunctionBuilder = struct {
         self.live_pointer_provenance.clearRetainingCapacity();
     }
 
+    fn constantIndexAssignmentTarget(self: *FunctionBuilder, expr: ast.Expr) ?IndexedAssignmentTarget {
+        return switch (expr.kind) {
+            .grouped => |inner| self.constantIndexAssignmentTarget(inner.*),
+            .index => |node| {
+                const subject = switch (node.base.kind) {
+                    .ident => |ident| ident.text,
+                    .grouped => |inner| exprBaseIdentName(inner.*) orelse return null,
+                    else => return null,
+                };
+                const index = self.constUsizeValue(node.index.*) orelse return null;
+                return .{ .subject = subject, .base = node.base.*, .index = index };
+            },
+            else => null,
+        };
+    }
+
     fn recordPointerProvenanceAddressEscape(self: *FunctionBuilder, expr: ast.Expr, span: ast.Span) !void {
         const subject = identBaseName(expr) orelse return;
         var index = self.live_pointer_provenance.items.len;
@@ -2843,6 +3091,7 @@ const FunctionBuilder = struct {
             if (!std.mem.eql(u8, live.subject, subject)) continue;
             try self.pointer_provenance_facts.append(self.allocator, .{
                 .subject = live.subject,
+                .field_path = try self.ownedPointerFactFieldPath(live.field_path),
                 .element_index = live.element_index,
                 .storage = null,
                 .provenance = .unknown,
@@ -2858,6 +3107,7 @@ const FunctionBuilder = struct {
     fn appendPointerProvenanceFact(self: *FunctionBuilder, subject: []const u8, element_index: ?usize, provenance: DirectPointerProvenance, shape: PointerShape, reason: PointerProvenanceInvalidationReason, span: ast.Span) !void {
         try self.pointer_provenance_facts.append(self.allocator, .{
             .subject = subject,
+            .field_path = null,
             .element_index = element_index,
             .storage = provenance.storage,
             .provenance = provenance.kind,
@@ -2872,6 +3122,7 @@ const FunctionBuilder = struct {
     fn appendUnknownPointerProvenanceFact(self: *FunctionBuilder, subject: []const u8, element_index: ?usize, shape: PointerShape, reason: PointerProvenanceInvalidationReason, span: ast.Span) !void {
         try self.pointer_provenance_facts.append(self.allocator, .{
             .subject = subject,
+            .field_path = null,
             .element_index = element_index,
             .storage = null,
             .provenance = .unknown,
@@ -2887,6 +3138,81 @@ const FunctionBuilder = struct {
         try self.appendUnknownPointerProvenanceFact(subject, element_index, shape, reason, span);
     }
 
+    fn ownedPointerFactFieldPath(self: *FunctionBuilder, field_path: ?[]const u8) !?[]const u8 {
+        const path = field_path orelse return null;
+        return try self.allocator.dupe(u8, path);
+    }
+
+    fn appendPointerFieldProvenanceFact(self: *FunctionBuilder, subject: []const u8, field_path: []const u8, element_index: ?usize, provenance: DirectPointerProvenance, shape: PointerShape, reason: PointerProvenanceInvalidationReason, span: ast.Span) !void {
+        try self.pointer_provenance_facts.append(self.allocator, .{
+            .subject = subject,
+            .field_path = try self.ownedPointerFactFieldPath(field_path),
+            .element_index = element_index,
+            .storage = provenance.storage,
+            .provenance = provenance.kind,
+            .pointer_shape = shape,
+            .invalidation_reason = reason,
+            .invalidation_policy = .invalidate_on_mutation_escape_or_call,
+            .source = .{ .line = span.line, .column = span.column },
+        });
+        if (element_index) |index| {
+            try self.setLivePointerFieldElementProvenance(subject, field_path, index, shape, provenance);
+        } else {
+            try self.setLivePointerFieldProvenance(subject, field_path, shape, provenance);
+        }
+    }
+
+    fn appendUnknownPointerFieldProvenanceFact(self: *FunctionBuilder, subject: []const u8, field_path: []const u8, element_index: ?usize, shape: PointerShape, reason: PointerProvenanceInvalidationReason, span: ast.Span) !void {
+        try self.pointer_provenance_facts.append(self.allocator, .{
+            .subject = subject,
+            .field_path = try self.ownedPointerFactFieldPath(field_path),
+            .element_index = element_index,
+            .storage = null,
+            .provenance = .unknown,
+            .pointer_shape = shape,
+            .invalidation_reason = reason,
+            .invalidation_policy = .invalidate_on_mutation_escape_or_call,
+            .source = .{ .line = span.line, .column = span.column },
+        });
+        if (element_index) |index| {
+            self.clearLivePointerFieldElementProvenance(subject, field_path, index);
+        } else {
+            self.clearLivePointerFieldProvenance(subject, field_path);
+        }
+    }
+
+    fn invalidatePointerFieldProvenanceSubject(self: *FunctionBuilder, subject: []const u8, field_path: []const u8, element_index: ?usize, shape: PointerShape, reason: PointerProvenanceInvalidationReason, span: ast.Span) !void {
+        try self.appendUnknownPointerFieldProvenanceFact(subject, field_path, element_index, shape, reason, span);
+    }
+
+    fn invalidatePointerFieldsForLocalPath(self: *FunctionBuilder, subject: []const u8, field_path: []const u8, reason: PointerProvenanceInvalidationReason, span: ast.Span) !void {
+        var index = self.live_pointer_provenance.items.len;
+        while (index > 0) {
+            index -= 1;
+            const live = self.live_pointer_provenance.items[index];
+            const live_field = live.field_path orelse continue;
+            if (!std.mem.eql(u8, live.subject, subject)) continue;
+            if (std.mem.eql(u8, live_field, field_path) or
+                (live_field.len > field_path.len and
+                    std.mem.eql(u8, live_field[0..field_path.len], field_path) and
+                    (live_field[field_path.len] == '.' or live_field[field_path.len] == '[')))
+            {
+                try self.pointer_provenance_facts.append(self.allocator, .{
+                    .subject = live.subject,
+                    .field_path = try self.ownedPointerFactFieldPath(live.field_path),
+                    .element_index = live.element_index,
+                    .storage = null,
+                    .provenance = .unknown,
+                    .pointer_shape = live.pointer_shape,
+                    .invalidation_reason = reason,
+                    .invalidation_policy = .invalidate_on_mutation_escape_or_call,
+                    .source = .{ .line = span.line, .column = span.column },
+                });
+                _ = self.live_pointer_provenance.orderedRemove(index);
+            }
+        }
+    }
+
     fn setLivePointerProvenance(self: *FunctionBuilder, subject: []const u8, element_index: ?usize, shape: PointerShape, provenance: DirectPointerProvenance) !void {
         self.clearLivePointerProvenance(subject, element_index);
         try self.live_pointer_provenance.append(self.allocator, .{
@@ -2896,6 +3222,73 @@ const FunctionBuilder = struct {
             .provenance = provenance.kind,
             .storage = provenance.storage,
         });
+    }
+
+    fn setLivePointerFieldProvenance(self: *FunctionBuilder, subject: []const u8, field_path: []const u8, shape: PointerShape, provenance: DirectPointerProvenance) !void {
+        self.clearLivePointerFieldProvenance(subject, field_path);
+        try self.live_pointer_provenance.append(self.allocator, .{
+            .subject = subject,
+            .field_path = field_path,
+            .element_index = null,
+            .pointer_shape = shape,
+            .provenance = provenance.kind,
+            .storage = provenance.storage,
+        });
+    }
+
+    fn setLivePointerFieldElementProvenance(self: *FunctionBuilder, subject: []const u8, field_path: []const u8, element_index: usize, shape: PointerShape, provenance: DirectPointerProvenance) !void {
+        self.clearLivePointerFieldElementProvenance(subject, field_path, element_index);
+        try self.live_pointer_provenance.append(self.allocator, .{
+            .subject = subject,
+            .field_path = field_path,
+            .element_index = element_index,
+            .pointer_shape = shape,
+            .provenance = provenance.kind,
+            .storage = provenance.storage,
+        });
+    }
+
+    fn copyLiveAggregatePointerProvenance(self: *FunctionBuilder, target_subject: []const u8, source_subject: []const u8, reason: PointerProvenanceInvalidationReason, span: ast.Span) !void {
+        const existing_len = self.live_pointer_provenance.items.len;
+        for (self.live_pointer_provenance.items[0..existing_len]) |live| {
+            const field_path = live.field_path orelse continue;
+            if (!std.mem.eql(u8, live.subject, source_subject)) continue;
+            if (live.provenance != .local_storage and live.provenance != .global_storage) continue;
+            const storage = live.storage orelse continue;
+            const provenance: DirectPointerProvenance = .{ .kind = live.provenance, .storage = storage };
+            try self.appendPointerFieldProvenanceFact(target_subject, field_path, live.element_index, provenance, live.pointer_shape, reason, span);
+        }
+    }
+
+    fn copyLiveAggregatePointerProvenancePath(self: *FunctionBuilder, target_subject: []const u8, target_field_path: []const u8, source: AggregateCopySource, reason: PointerProvenanceInvalidationReason, span: ast.Span) !void {
+        const existing_len = self.live_pointer_provenance.items.len;
+        for (self.live_pointer_provenance.items[0..existing_len]) |live| {
+            const source_live_field = live.field_path orelse continue;
+            if (!std.mem.eql(u8, live.subject, source.local_name)) continue;
+            const suffix = aggregateCopyFieldSuffix(source_live_field, source.field_path) orelse continue;
+            if (live.provenance != .local_storage and live.provenance != .global_storage) continue;
+            const storage = live.storage orelse continue;
+            const target_live_field = try self.joinAggregateCopyTargetPath(target_field_path, suffix);
+            const provenance: DirectPointerProvenance = .{ .kind = live.provenance, .storage = storage };
+            try self.appendPointerFieldProvenanceFact(target_subject, target_live_field, live.element_index, provenance, live.pointer_shape, reason, span);
+        }
+    }
+
+    fn joinAggregateCopyTargetPath(self: *FunctionBuilder, target_field_path: []const u8, suffix: []const u8) ![]const u8 {
+        if (suffix.len == 0) return (try self.ownedPointerFactFieldPath(target_field_path)).?;
+        const path = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ target_field_path, suffix });
+        try self.field_path_allocations.append(self.allocator, path);
+        return path;
+    }
+
+    fn aggregateCopyFieldSuffix(live_field_path: []const u8, source_field_path: ?[]const u8) ?[]const u8 {
+        const source = source_field_path orelse return live_field_path;
+        if (std.mem.eql(u8, live_field_path, source)) return "";
+        if (live_field_path.len <= source.len) return null;
+        if (!std.mem.eql(u8, live_field_path[0..source.len], source)) return null;
+        const separator = live_field_path[source.len];
+        if (separator != '.' and separator != '[') return null;
+        return live_field_path[source.len..];
     }
 
     fn clearLivePointerProvenance(self: *FunctionBuilder, subject: []const u8, element_index: ?usize) void {
@@ -2911,20 +3304,77 @@ const FunctionBuilder = struct {
         }
     }
 
+    fn clearLivePointerFieldProvenance(self: *FunctionBuilder, subject: []const u8, field_path: []const u8) void {
+        var index = self.live_pointer_provenance.items.len;
+        while (index > 0) {
+            index -= 1;
+            const live = self.live_pointer_provenance.items[index];
+            const live_field = live.field_path orelse continue;
+            if (!std.mem.eql(u8, live.subject, subject)) continue;
+            if (!std.mem.eql(u8, live_field, field_path)) continue;
+            _ = self.live_pointer_provenance.orderedRemove(index);
+        }
+    }
+
+    fn clearLivePointerFieldElementProvenance(self: *FunctionBuilder, subject: []const u8, field_path: []const u8, element_index: usize) void {
+        var index = self.live_pointer_provenance.items.len;
+        while (index > 0) {
+            index -= 1;
+            const live = self.live_pointer_provenance.items[index];
+            const live_field = live.field_path orelse continue;
+            const live_element = live.element_index orelse continue;
+            if (!std.mem.eql(u8, live.subject, subject)) continue;
+            if (!std.mem.eql(u8, live_field, field_path)) continue;
+            if (live_element != element_index) continue;
+            _ = self.live_pointer_provenance.orderedRemove(index);
+        }
+    }
+
+    fn clearLivePointerFieldsForLocalPath(self: *FunctionBuilder, subject: []const u8, field_path: []const u8) void {
+        var index = self.live_pointer_provenance.items.len;
+        while (index > 0) {
+            index -= 1;
+            const live = self.live_pointer_provenance.items[index];
+            const live_field = live.field_path orelse continue;
+            if (!std.mem.eql(u8, live.subject, subject)) continue;
+            if (std.mem.eql(u8, live_field, field_path) or
+                (live_field.len > field_path.len and
+                    std.mem.eql(u8, live_field[0..field_path.len], field_path) and
+                    (live_field[field_path.len] == '.' or live_field[field_path.len] == '[')))
+            {
+                _ = self.live_pointer_provenance.orderedRemove(index);
+            }
+        }
+    }
+
     fn directAddressProvenance(self: *FunctionBuilder, expr: ast.Expr) ?DirectPointerProvenance {
         return switch (expr.kind) {
             .grouped => |inner| self.directAddressProvenance(inner.*),
             .cast => |node| self.directAddressProvenance(node.value.*),
             .address_of => |inner| self.directAddressTargetProvenance(inner.*),
+            .call => |call| blk: {
+                if (!isAssumeNoaliasDirectCall(call) or call.type_args.len != 0 or call.args.len != 2) break :blk null;
+                break :blk self.directAddressProvenance(call.args[0]);
+            },
             else => null,
         };
     }
 
     fn directPointerProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape, target_subject: ?[]const u8) ?DirectPointerProvenance {
+        switch (expr.kind) {
+            .call => |call| {
+                if (isAssumeNoaliasDirectCall(call) and call.type_args.len == 0 and call.args.len == 2) {
+                    return self.directPointerProvenance(call.args[0], target_shape, target_subject);
+                }
+            },
+            else => {},
+        }
         return self.directAddressProvenance(expr) orelse
             self.rawManyZeroOffsetProvenance(expr, target_shape) orelse
             self.directLocalPointerCopyProvenance(expr, target_shape, target_subject) orelse
-            self.constantIndexLocalPointerElementProvenance(expr, target_shape);
+            self.constantIndexLocalPointerElementProvenance(expr, target_shape) orelse
+            self.directAggregatePointerFieldProvenance(expr, target_shape) orelse
+            self.directAggregatePointerArrayElementProvenance(expr, target_shape);
     }
 
     fn rawManyZeroOffsetProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape) ?DirectPointerProvenance {
@@ -2933,14 +3383,18 @@ const FunctionBuilder = struct {
             .grouped => |inner| self.rawManyZeroOffsetProvenance(inner.*, target_shape),
             .cast => |node| self.rawManyZeroOffsetProvenance(node.value.*, target_shape),
             .call => |call| blk: {
+                if (isAssumeNoaliasDirectCall(call) and call.type_args.len == 0 and call.args.len == 2) {
+                    break :blk self.rawManyZeroOffsetProvenance(call.args[0], target_shape);
+                }
                 if (call.type_args.len != 0 or call.args.len != 1) break :blk null;
                 const member = memberCallee(call.callee.*) orelse break :blk null;
                 if (!std.mem.eql(u8, member.name.text, "offset")) break :blk null;
-                const offset = integerLiteralValue(call.args[0]) orelse break :blk null;
-                if (offset.negative or offset.magnitude != 0) break :blk null;
+                const offset = self.constUsizeValue(call.args[0]) orelse break :blk null;
+                if (offset != 0) break :blk null;
                 const base_name = self.directRawManyOffsetBaseLocalName(member.base.*) orelse break :blk null;
                 const live = self.livePointerProvenanceForDirectLocal(base_name) orelse break :blk null;
-                if (live.pointer_shape.kind != .raw_many or live.provenance != .global_storage) break :blk null;
+                if (live.pointer_shape.kind != .raw_many) break :blk null;
+                if (live.provenance != .global_storage and live.provenance != .local_storage) break :blk null;
                 if (!samePointerShape(live.pointer_shape, target_shape)) break :blk null;
                 const storage = live.storage orelse break :blk null;
                 break :blk .{ .kind = live.provenance, .storage = storage };
@@ -2965,24 +3419,69 @@ const FunctionBuilder = struct {
     }
 
     // A constant-index read of a local fixed pointer array propagates the
-    // element's live LOCAL provenance to the destination pointer
-    // (`let p = ptrs[0];` with a live `ptrs[0] -> local_storage` fact). The
-    // proven-GLOBAL element case intentionally stays with the emitters' own
-    // element ladders — only the local side needs a MIR-grounded positive proof
-    // because plain deref lowering is gated on proven-local storage (spec §I.13).
+    // element's live provenance to the destination pointer (`let p = ptrs[0];`
+    // with a live `ptrs[0] -> local_storage/global_storage` fact). This keeps
+    // the direct destination pointer grounded in MIR instead of requiring each
+    // backend to re-derive the same fixed-element provenance ladder.
     fn constantIndexLocalPointerElementProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape) ?DirectPointerProvenance {
         return switch (expr.kind) {
             .grouped => |inner| self.constantIndexLocalPointerElementProvenance(inner.*, target_shape),
             .cast => |node| self.constantIndexLocalPointerElementProvenance(node.value.*, target_shape),
+            .call => |call| blk: {
+                if (!isAssumeNoaliasDirectCall(call) or call.type_args.len != 0 or call.args.len != 2) break :blk null;
+                break :blk self.constantIndexLocalPointerElementProvenance(call.args[0], target_shape);
+            },
             .index => |node| blk: {
                 const base_name = directIdentName(node.base.*) orelse break :blk null;
                 const ty_expr = self.local_type_exprs.get(base_name) orelse break :blk null;
                 const shape = self.fixedPointerArrayElementShape(ty_expr) orelse break :blk null;
                 if (!samePointerShape(shape, target_shape)) break :blk null;
-                const offset = integerLiteralValue(node.index.*) orelse break :blk null;
-                if (offset.negative) break :blk null;
-                const live = self.livePointerProvenanceForElement(base_name, @intCast(offset.magnitude)) orelse break :blk null;
-                if (live.provenance != .local_storage) break :blk null;
+                const offset = self.constUsizeValue(node.index.*) orelse break :blk null;
+                const live = self.livePointerProvenanceForElement(base_name, offset) orelse break :blk null;
+                if (live.provenance != .local_storage and live.provenance != .global_storage) break :blk null;
+                const storage = live.storage orelse break :blk null;
+                break :blk .{ .kind = live.provenance, .storage = storage };
+            },
+            else => null,
+        };
+    }
+
+    fn directAggregatePointerFieldProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape) ?DirectPointerProvenance {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directAggregatePointerFieldProvenance(inner.*, target_shape),
+            .cast => |node| self.directAggregatePointerFieldProvenance(node.value.*, target_shape),
+            .call => |call| blk: {
+                if (!isAssumeNoaliasDirectCall(call) or call.type_args.len != 0 or call.args.len != 2) break :blk null;
+                break :blk self.directAggregatePointerFieldProvenance(call.args[0], target_shape);
+            },
+            .member => blk: {
+                const path = self.directLocalAggregateMemberPath(expr) orelse break :blk null;
+                const live = self.livePointerProvenanceForField(path.local_name, path.field_path) orelse break :blk null;
+                if (live.provenance != .local_storage and live.provenance != .global_storage) break :blk null;
+                if (!samePointerShape(live.pointer_shape, target_shape)) break :blk null;
+                const storage = live.storage orelse break :blk null;
+                break :blk .{ .kind = live.provenance, .storage = storage };
+            },
+            else => null,
+        };
+    }
+
+    fn directAggregatePointerArrayElementProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape) ?DirectPointerProvenance {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directAggregatePointerArrayElementProvenance(inner.*, target_shape),
+            .cast => |node| self.directAggregatePointerArrayElementProvenance(node.value.*, target_shape),
+            .call => |call| blk: {
+                if (!isAssumeNoaliasDirectCall(call) or call.type_args.len != 0 or call.args.len != 2) break :blk null;
+                break :blk self.directAggregatePointerArrayElementProvenance(call.args[0], target_shape);
+            },
+            .index => |node| blk: {
+                const path = self.directLocalAggregateMemberPath(node.base.*) orelse break :blk null;
+                const field_ty = self.typeExprForExpr(node.base.*) orelse break :blk null;
+                _ = self.fixedPointerArrayElementShape(field_ty) orelse break :blk null;
+                const element_index = self.constUsizeValue(node.index.*) orelse break :blk null;
+                const live = self.livePointerProvenanceForFieldElement(path.local_name, path.field_path, element_index) orelse break :blk null;
+                if (live.provenance != .local_storage and live.provenance != .global_storage) break :blk null;
+                if (!samePointerShape(live.pointer_shape, target_shape)) break :blk null;
                 const storage = live.storage orelse break :blk null;
                 break :blk .{ .kind = live.provenance, .storage = storage };
             },
@@ -2994,10 +3493,45 @@ const FunctionBuilder = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directLocalPointerCopyBaseName(inner.*),
             .cast => |node| self.directLocalPointerCopyBaseName(node.value.*),
+            .call => |call| blk: {
+                if (!isAssumeNoaliasDirectCall(call) or call.type_args.len != 0 or call.args.len != 2) break :blk null;
+                break :blk self.directLocalPointerCopyBaseName(call.args[0]);
+            },
             .ident => |ident| blk: {
                 const ty = self.local_types.get(ident.text) orelse break :blk null;
                 _ = pointerShapeFromValueType(ty) orelse break :blk null;
                 break :blk ident.text;
+            },
+            else => null,
+        };
+    }
+
+    fn directAggregateCopySourceName(self: *FunctionBuilder, expr: ast.Expr, target_struct_name: []const u8) ?[]const u8 {
+        const source = self.directAggregateCopySource(expr, target_struct_name) orelse return null;
+        if (source.field_path != null) return null;
+        return source.local_name;
+    }
+
+    fn directAggregateCopySource(self: *FunctionBuilder, expr: ast.Expr, target_struct_name: []const u8) ?AggregateCopySource {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directAggregateCopySource(inner.*, target_struct_name),
+            .cast => |node| self.directAggregateCopySource(node.value.*, target_struct_name),
+            .call => |call| blk: {
+                if (!isAssumeNoaliasDirectCall(call) or call.type_args.len != 0 or call.args.len != 2) break :blk null;
+                break :blk self.directAggregateCopySource(call.args[0], target_struct_name);
+            },
+            .ident => |ident| blk: {
+                const ty = self.local_type_exprs.get(ident.text) orelse break :blk null;
+                const source_struct_name = directStructTypeNameAlias(ty, self.aliases) orelse break :blk null;
+                if (!std.mem.eql(u8, source_struct_name, target_struct_name)) break :blk null;
+                break :blk .{ .local_name = ident.text };
+            },
+            .member => blk: {
+                const field_ty = self.typeExprForExpr(expr) orelse break :blk null;
+                const source_struct_name = directStructTypeNameAlias(field_ty, self.aliases) orelse break :blk null;
+                if (!std.mem.eql(u8, source_struct_name, target_struct_name)) break :blk null;
+                const path = self.directLocalAggregateMemberPath(expr) orelse break :blk null;
+                break :blk .{ .local_name = path.local_name, .field_path = path.field_path };
             },
             else => null,
         };
@@ -3021,6 +3555,7 @@ const FunctionBuilder = struct {
         while (index > 0) {
             index -= 1;
             const live = self.live_pointer_provenance.items[index];
+            if (live.field_path != null) continue;
             if (live.element_index != null) continue;
             if (std.mem.eql(u8, live.subject, subject)) return live;
         }
@@ -3032,7 +3567,34 @@ const FunctionBuilder = struct {
         while (index > 0) {
             index -= 1;
             const live = self.live_pointer_provenance.items[index];
+            if (live.field_path != null) continue;
             const live_element = live.element_index orelse continue;
+            if (live_element != element_index) continue;
+            if (std.mem.eql(u8, live.subject, subject)) return live;
+        }
+        return null;
+    }
+
+    fn livePointerProvenanceForField(self: *FunctionBuilder, subject: []const u8, field_path: []const u8) ?LivePointerProvenance {
+        var index = self.live_pointer_provenance.items.len;
+        while (index > 0) {
+            index -= 1;
+            const live = self.live_pointer_provenance.items[index];
+            const live_field = live.field_path orelse continue;
+            if (!std.mem.eql(u8, live_field, field_path)) continue;
+            if (std.mem.eql(u8, live.subject, subject)) return live;
+        }
+        return null;
+    }
+
+    fn livePointerProvenanceForFieldElement(self: *FunctionBuilder, subject: []const u8, field_path: []const u8, element_index: usize) ?LivePointerProvenance {
+        var index = self.live_pointer_provenance.items.len;
+        while (index > 0) {
+            index -= 1;
+            const live = self.live_pointer_provenance.items[index];
+            const live_field = live.field_path orelse continue;
+            const live_element = live.element_index orelse continue;
+            if (!std.mem.eql(u8, live_field, field_path)) continue;
             if (live_element != element_index) continue;
             if (std.mem.eql(u8, live.subject, subject)) return live;
         }
@@ -3060,6 +3622,17 @@ const FunctionBuilder = struct {
         if (parseArrayLen(array.len, self.const_fns, self.const_globals) == null) return null;
         const child_ty = valueTypeFromTypeAlias(array.child.*, self.enums, self.structs, self.packed_bits, self.aliases);
         return pointerShapeFromValueType(child_ty);
+    }
+
+    fn pointerShapeFromTypeExpr(self: *FunctionBuilder, ty: ast.TypeExpr) ?PointerShape {
+        const value_ty = valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        return pointerShapeFromValueType(value_ty);
+    }
+
+    fn directLocalAggregateTypeName(self: *FunctionBuilder, expr: ast.Expr) ?[]const u8 {
+        const name = directIdentName(expr) orelse return null;
+        const ty = self.local_type_exprs.get(name) orelse return null;
+        return directStructTypeNameAlias(ty, self.aliases);
     }
 
     fn fixedPointerArrayElementShapeForExpr(self: *FunctionBuilder, expr: ast.Expr) ?PointerShape {
@@ -3177,14 +3750,21 @@ const FunctionBuilder = struct {
         };
     }
 
-    // The compile-time usize value of a length-bound expression (integer literal or named
-    // const), or null when not statically known.
+    // The compile-time usize value of a length/index expression, including
+    // reflection constants, or null when not statically known.
     fn constUsizeValue(self: *FunctionBuilder, expr: ast.Expr) ?usize {
         if (integerLiteralValue(expr)) |v| {
             if (v.negative) return null;
             return std.math.cast(usize, v.magnitude);
         }
-        return parseArrayLen(expr, self.const_fns, self.const_globals);
+        var reflect_env = MirReflectEnv{
+            .enums = self.enums,
+            .structs = self.structs,
+            .unions = self.unions,
+            .packed_bits = self.packed_bits,
+            .aliases = self.aliases,
+        };
+        return parseArrayLenWithReflect(expr, self.const_fns, self.const_globals, mir_reflect.comptimeReflectThunk, &reflect_env);
     }
 
     // `expr` is `base.len` for the same fixed-array place as `base` — so `i < expr` is exactly
@@ -3857,8 +4437,20 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     allocator.free(function.trap_edges);
     allocator.free(function.contract_regions);
     allocator.free(function.range_facts);
+    for (function.pointer_provenance_facts) |fact| {
+        if (fact.field_path) |field_path| allocator.free(field_path);
+    }
     allocator.free(function.pointer_provenance_facts);
+    allocator.free(function.representation_facts);
     allocator.free(function.elided_bounds);
+}
+
+fn representationFactKind(kind: Instruction.Kind, ty: ValueType) bool {
+    return switch (kind) {
+        .representation_check, .representation_use => true,
+        .typed_load => representationCheckKind(ty) != null,
+        else => false,
+    };
 }
 
 fn functionFallsThrough(function: Function) ?SourcePoint {
@@ -4244,6 +4836,13 @@ fn isUncheckedCall(callee: ast.Expr) bool {
     return std.mem.startsWith(u8, name, "unchecked_") or std.mem.eql(u8, name, "assume_noalias_unchecked");
 }
 
+fn reflectionCallPreservesPointerProvenance(call: anytype) bool {
+    const kind = reflectionKind(call.callee.*) orelse return false;
+    if (call.type_args.len != 1) return false;
+    const expected_args: usize = if (reflectionRequiresField(kind)) 1 else 0;
+    return call.args.len == expected_args;
+}
+
 fn isUnsafeOperationCall(callee: ast.Expr) bool {
     const member = memberExpr(callee) orelse return false;
     if (exprIsIdentNamed(member.base.*, "raw") and std.mem.eql(u8, member.name.text, "store")) return true;
@@ -4345,26 +4944,39 @@ fn arrayLiteralItems(expr: ast.Expr) ?[]ast.Expr {
     };
 }
 
+fn structLiteralFields(expr: ast.Expr) ?[]ast.StructLiteralField {
+    return switch (expr.kind) {
+        .struct_literal => |fields| fields,
+        .grouped => |inner| structLiteralFields(inner.*),
+        .cast => |node| structLiteralFields(node.value.*),
+        else => null,
+    };
+}
+
+fn structLiteralField(fields: []const ast.StructLiteralField, name: []const u8) ?ast.Expr {
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name.text, name)) return field.value;
+    }
+    return null;
+}
+
+fn directStructTypeNameAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+    return directStructTypeNameAliasDepth(ty, aliases, 0);
+}
+
+fn directStructTypeNameAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) ?[]const u8 {
+    if (depth > 64) return null;
+    return switch (ty.kind) {
+        .name => |name| if (aliases.get(name.text)) |resolved| directStructTypeNameAliasDepth(resolved, aliases, depth + 1) else name.text,
+        .qualified => |node| directStructTypeNameAliasDepth(node.child.*, aliases, depth + 1),
+        else => null,
+    };
+}
+
 fn constIndexValue(expr: ast.Expr) ?usize {
     const value = integerLiteralValue(expr) orelse return null;
     if (value.negative or value.magnitude > std.math.maxInt(usize)) return null;
     return @intCast(value.magnitude);
-}
-
-fn constantIndexAssignmentTarget(expr: ast.Expr) ?IndexedAssignmentTarget {
-    return switch (expr.kind) {
-        .grouped => |inner| constantIndexAssignmentTarget(inner.*),
-        .index => |node| {
-            const subject = switch (node.base.kind) {
-                .ident => |ident| ident.text,
-                .grouped => |inner| exprBaseIdentName(inner.*) orelse return null,
-                else => return null,
-            };
-            const index = constIndexValue(node.index.*) orelse return null;
-            return .{ .subject = subject, .base = node.base.*, .index = index };
-        },
-        else => null,
-    };
 }
 
 fn dynamicIndexAssignmentSubject(expr: ast.Expr) ?[]const u8 {
@@ -4391,6 +5003,12 @@ fn isKnownDirectPrimitive(name: []const u8) bool {
         std.mem.startsWith(u8, name, "unchecked.") or
         std.mem.startsWith(u8, name, "unchecked_") or
         std.mem.eql(u8, name, "compiler.assume_noalias_unchecked") or
+        std.mem.eql(u8, name, "assume_noalias_unchecked");
+}
+
+fn isAssumeNoaliasDirectCall(call: anytype) bool {
+    const name = directCalleeName(call.callee.*) orelse return false;
+    return std.mem.eql(u8, name, "compiler.assume_noalias_unchecked") or
         std.mem.eql(u8, name, "assume_noalias_unchecked");
 }
 

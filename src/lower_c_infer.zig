@@ -372,19 +372,21 @@ pub fn exprIsPointer(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.String
 }
 
 pub fn derefPointeeType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    const set = locals orelse return null;
     return switch (expr.kind) {
-        .ident => |id| blk: {
-            const info = set.get(id.text) orelse break :blk null;
-            const ty = info.source_ty orelse break :blk null;
-            const resolved = resolveAliasType(ctx, ty);
-            break :blk switch (resolved.kind) {
-                .pointer => |p| p.child.*,
-                .raw_many_pointer => |p| p.child.*,
-                else => null,
-            };
-        },
+        .ident => |id| pointeeTypeFromPointerLike(ctx, sourceTypeForIdent(ctx, id.text, locals) orelse return null),
+        .call => |node| pointeeTypeFromPointerLike(ctx, rawManyOffsetReturnTypeForCall(ctx, node, locals) orelse callReturnType(ctx.functions, node) orelse return null),
+        .cast => |node| pointeeTypeFromPointerLike(ctx, node.ty.*),
+        .member, .index => pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null),
         .grouped => |inner| derefPointeeType(ctx, inner.*, locals),
+        else => null,
+    };
+}
+
+fn pointeeTypeFromPointerLike(ctx: TypeQueryContext, ty: ast.TypeExpr) ?ast.TypeExpr {
+    const resolved = resolveAliasType(ctx, ty);
+    return switch (resolved.kind) {
+        .pointer => |p| p.child.*,
+        .raw_many_pointer => |p| p.child.*,
         else => null,
     };
 }

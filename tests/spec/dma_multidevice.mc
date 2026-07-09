@@ -66,8 +66,9 @@ fn accept_buffer_migrates_engines() -> void {
 }
 
 // ----- accepted: a 3-slot ring drained in order, each slot a distinct handle ----
-// (MC has no array of `move` — E_MOVE_ARRAY_UNSUPPORTED — so the slots are distinct
-// locals, which is exactly how a fixed-depth descriptor ring is unrolled.)
+// Move-owner ring storage is still modeled as distinct locals here: by-value move
+// arrays in struct fields remain E_MOVE_ARRAY_UNSUPPORTED, and this fixture is about
+// ownership transfer rather than local constant-index array element places.
 fn accept_ring_drain() -> void {
     let s0: CpuOwned = make();
     let s1: CpuOwned = make();

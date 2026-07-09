@@ -46,6 +46,7 @@ pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) an
 pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
 pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitRaceLoadTempFn = *const fn (ctx: *anyopaque, ptr_name: []const u8, target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp;
 
 pub const DirectCallIndexTemps = struct {
     base: SequencedArgTemp,
@@ -67,6 +68,7 @@ pub const EmitContext = struct {
     operand_emit_type: OperandEmitTypeFn,
     global_assignment_target: GlobalAssignmentTargetFn,
     emit_assign_target: EmitAssignTargetFn,
+    emit_race_load_temp: EmitRaceLoadTempFn,
     raw_many_offset_expr_type: RawManyOffsetExprTypeFn,
     slice_return_type_for_call: SliceReturnTypeForCallFn,
     array_return_type_for_expr: ArrayReturnTypeForExprFn,
@@ -214,6 +216,7 @@ pub fn emitRawManyOffsetDerefValueTemp(ctx: EmitContext, expr: ast.Expr, locals:
     };
     const ptr_ty = rawManyOffsetTypeForExpr(ctx, inner, locals) orelse return null;
     const ptr_temp = (try emitRawManyOffsetValueTemp(ctx, inner, locals, ptr_ty)) orelse return null;
+    if (try ctx.emit_race_load_temp(ctx.emit_ctx, ptr_temp.name, target_ty)) |temp| return temp;
     const value_temp = try nextTempName(ctx);
 
     try writeIndent(ctx);
@@ -720,6 +723,9 @@ pub fn emitDirectCallIndexAddressValueTemp(ctx: EmitContext, index: anytype, loc
 }
 
 pub fn emitDirectCallSliceIndexValueTemp(ctx: EmitContext, value_ty: ast.TypeExpr, base_temp: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
+    const ptr_expr = try std.fmt.allocPrint(ctx.scratch, "&{s}.ptr[mc_check_index_usize({s}, {s}.len)]", .{ base_temp, index_temp, base_temp });
+    if (try ctx.emit_race_load_temp(ctx.emit_ctx, ptr_expr, value_ty)) |temp| return temp;
+
     const value_temp = try nextTempName(ctx);
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "{s} {s} = {s}.ptr[mc_check_index_usize({s}, {s}.len)];\n", .{

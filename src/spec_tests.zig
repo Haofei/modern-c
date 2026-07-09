@@ -822,6 +822,7 @@ fn isAcceptanceCheck(check: []const u8) bool {
         "generic-union-monomorphize-accept",
         "bounded-termination-accept",
         "generic-instantiation-operator-accept",
+        "conservative-overrejection-retired",
     };
     return matchesAny(check, &names);
 }

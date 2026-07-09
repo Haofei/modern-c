@@ -4,10 +4,13 @@
 // SPEC: expect=compile_error
 // SPEC: check=E_MOVE_ARRAY_UNSUPPORTED
 
-// Arrays of linear `move` resources are not yet trackable (element moves need the
-// indexed-place model), so the checker fails closed on them in EVERY position:
-// struct fields, type aliases (nested or not), return types, parameters, globals,
-// and explicit locals (section 18.1). Split out of tests/spec/move_cfg.mc: several
+// Arrays of linear `move` resources are still rejected in storage/signature
+// positions whose ownership cannot be tracked by the local indexed-place model:
+// non-move struct fields, extern/export return types, extern/export parameters,
+// and globals (section 18.1).
+// Type aliases are allowed as names for locally tracked array places, but using
+// those aliases in unsupported storage/signature positions still fails closed.
+// Split out of tests/spec/move_cfg.mc: several
 // of these are top-level declarations with trailing EXPECT_ERROR markers that the
 // sweeps' chunk-level strip cannot isolate (the marker comment falls after the
 // chunk-ending `;`), so they live in this pure-reject fixture the sweeps skip.
@@ -17,31 +20,26 @@ fn acquire() -> Handle {
     return .{ .v = 1 };
 }
 
-// --- rejected: an array of a `move` resource as a struct field (not yet trackable — element
-//     moves need the indexed-place model), so it is rejected in any struct, move or not ---
+// --- rejected: an array of a `move` resource as a non-move struct field would make
+//     a copyable aggregate own linear resources by value ---
 struct BadArrayContainer {
     // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
     hs: [4]Handle,
 }
 
-// --- rejected: aliases to arrays of `move` resources are also fail-closed ---
-type BadArrayAlias = [4]Handle; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+type HandleArray = [4]Handle;
+type NestedHandleArray = [2][1]Handle;
 
-// --- rejected: nested arrays still require element-place tracking ---
-type BadNestedArrayAlias = [2][1]Handle; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-
-// --- rejected: a function cannot return an array of `move` resources by value ---
-fn reject_move_array_return() -> [1]Handle { // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    return .{ acquire() };
+// --- rejected: an exported function cannot return an array of `move` resources
+//     by value, including through an alias ---
+export fn reject_move_array_return() -> HandleArray { // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+    return .{ acquire(), acquire(), acquire(), acquire() };
 }
 
-// --- rejected: a function cannot accept an array of `move` resources by value ---
-extern fn reject_move_array_param(hs: [1]Handle) -> void; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+// --- rejected: an extern function cannot accept an array of `move` resources by
+//     value, including through a nested alias ---
+extern fn reject_move_array_param(hs: NestedHandleArray) -> void; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
 
-// --- rejected: global storage cannot hold an array of `move` resources by value ---
-global bad_move_array_global: [1]Handle; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-
-// --- rejected: explicit local bindings to arrays of `move` resources are not trackable ---
-fn reject_move_array_local() -> void {
-    let hs: [1]Handle = .{ acquire() }; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-}
+// --- rejected: global storage cannot hold an array of `move` resources by value,
+//     including through an alias ---
+global bad_move_array_global: HandleArray; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED

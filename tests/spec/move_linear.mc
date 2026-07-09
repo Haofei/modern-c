@@ -297,9 +297,10 @@ fn reject_unused_move_switch_arm(tag: u32) -> void {
 // --- T1.2: a pointer alias derived from a moved-out value is invalidated ---
 //
 // `let p = &t` records `p` as a borrow alias of the tracked move binding `t`. Reading
-// through `p` AFTER `t` is moved (through the alias `p`, or by deref `*p`) is a stale
-// use-after-move. An alias used BEFORE the move, or an alias of a value that is never
-// moved, is fine.
+// through `p` AFTER `t` is moved is a stale use-after-move. Moving through a full
+// deref alias (`p.*`) is treated as moving the owner `t`; the owner is then poisoned
+// exactly as if `t` had been moved directly. An alias used BEFORE the move, or an
+// alias of a value that is never moved, is fine.
 
 // accepted: the alias is read before `t` is moved (still valid)
 fn accept_alias_before_move() -> u32 {
@@ -333,6 +334,52 @@ fn reject_alias_deref_after_move() -> u32 {
     let p: *Token = &t;
     let a: u32 = consume(t);     // t moved out
     let b: u32 = (*p).v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + b;
+}
+
+// accepted: moving through a full alias moves the owner and transfers the value.
+fn accept_move_through_full_alias() -> u32 {
+    let t: Token = make();
+    let p: *Token = &t;
+    let moved: Token = p.*;
+    return consume(moved);
+}
+
+// accepted: an immediate full deref of the owner's address is the same move as
+// going through a named full alias.
+fn accept_move_through_immediate_full_deref() -> u32 {
+    let t: Token = make();
+    let moved: Token = (&t).*;
+    return consume(moved);
+}
+
+// rejected: after moving through a full alias, the original owner is moved out.
+fn reject_owner_after_full_alias_move() -> u32 {
+    let t: Token = make();
+    let p: *Token = &t;
+    let moved: Token = p.*;
+    let a: u32 = consume(moved);
+    let b: u32 = consume(t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + b;
+}
+
+// rejected: immediate full deref moves poison the owner too.
+fn reject_owner_after_immediate_full_deref_move() -> u32 {
+    let t: Token = make();
+    let moved: Token = (&t).*;
+    let a: u32 = consume(moved);
+    let b: u32 = consume(t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + b;
+}
+
+// rejected: copied full aliases poison the same owner when moved through.
+fn reject_owner_after_copied_full_alias_move() -> u32 {
+    let t: Token = make();
+    let p: *Token = &t;
+    let q: *Token = p;
+    let moved: Token = q.*;
+    let a: u32 = consume(moved);
+    let b: u32 = consume(t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
 

@@ -43,6 +43,25 @@ fn countTrapEdges(function: mir.Function, kind: mir.TrapKind) usize {
 fn hasPointerProvenanceFact(function: mir.Function, subject: []const u8, element_index: ?usize, provenance: PointerProvenance, reason: PointerProvenanceInvalidationReason, storage: ?[]const u8) bool {
     for (function.pointer_provenance_facts) |fact| {
         if (!std.mem.eql(u8, fact.subject, subject)) continue;
+        if (fact.field_path != null) continue;
+        if (fact.element_index != element_index) continue;
+        if (fact.provenance != provenance) continue;
+        if (fact.invalidation_reason != reason) continue;
+        if (storage) |expected_storage| {
+            if (fact.storage == null or !std.mem.eql(u8, fact.storage.?, expected_storage)) continue;
+        } else if (fact.storage != null) {
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
+fn hasPointerProvenanceFieldFact(function: mir.Function, subject: []const u8, field_path: []const u8, element_index: ?usize, provenance: PointerProvenance, reason: PointerProvenanceInvalidationReason, storage: ?[]const u8) bool {
+    for (function.pointer_provenance_facts) |fact| {
+        if (!std.mem.eql(u8, fact.subject, subject)) continue;
+        const actual_field = fact.field_path orelse continue;
+        if (!std.mem.eql(u8, actual_field, field_path)) continue;
         if (fact.element_index != element_index) continue;
         if (fact.provenance != provenance) continue;
         if (fact.invalidation_reason != reason) continue;
@@ -59,6 +78,7 @@ fn hasPointerProvenanceFact(function: mir.Function, subject: []const u8, element
 fn countPointerProvenanceFacts(function: mir.Function, subject: []const u8, provenance: PointerProvenance) usize {
     var count: usize = 0;
     for (function.pointer_provenance_facts) |fact| {
+        if (fact.field_path != null) continue;
         if (std.mem.eql(u8, fact.subject, subject) and fact.provenance == provenance) count += 1;
     }
     return count;
@@ -991,6 +1011,7 @@ test "MIR verifier rejects malformed CFG structure" {
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -1031,6 +1052,7 @@ test "MIR verifier rejects block id mismatch in CFG" {
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -1085,6 +1107,7 @@ test "MIR verifier rejects fallthrough successors and trap kind mismatch" {
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -1137,16 +1160,165 @@ test "MIR records no_overflow range facts for unchecked add contract" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accumulate pass=range finding=no_overflow_range target=sum op=add left=sum right=b") != null);
 }
 
+test "MIR dump exposes elided bounds facts" {
+    const source =
+        \\fn read_const_index() -> u32 {
+        \\    let arr: [2]u32 = .{ 10, 20 };
+        \\    return arr[1];
+        \\}
+        \\
+        \\fn read_const_slice() -> u32 {
+        \\    let arr: [3]u32 = .{ 1, 2, 3 };
+        \\    let s: []u32 = arr[0..2];
+        \\    return s[1];
+        \\}
+        \\
+        \\fn divide_const_nonzero(x: u32) -> u32 {
+        \\    return x / 2;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_elided_bounds.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.buildOpt(std.testing.allocator, module, .{ .optimize = true });
+    defer typed_mir.deinit();
+
+    const index_fn = functionByName(typed_mir, "read_const_index").?;
+    const slice_fn = functionByName(typed_mir, "read_const_slice").?;
+    const div_fn = functionByName(typed_mir, "divide_const_nonzero").?;
+    try std.testing.expect(index_fn.elided_bounds.len >= 1);
+    try std.testing.expect(slice_fn.elided_bounds.len >= 1);
+    try std.testing.expect(div_fn.elided_bounds.len >= 1);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDumpOpt(std.testing.allocator, module, &dump, .{ .optimize = true });
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=read_const_index") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "elided_bounds=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir elided_bounds_fact fn=read_const_index check=bounds_elided recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir elided_bounds_fact fn=read_const_slice check=bounds_elided recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir elided_bounds_fact fn=divide_const_nonzero check=bounds_elided recorded=true") != null);
+}
+
+test "MIR dump exposes representation value identities" {
+    const source =
+        \\fn return_ptr_param(p: *mut u8) -> *mut u8 {
+        \\    return p;
+        \\}
+        \\
+        \\fn read_ptr_param(p: *mut u8) -> u8 {
+        \\    return p.*;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_representation_dump.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const return_fn = functionByName(typed_mir, "return_ptr_param").?;
+    const read_fn = functionByName(typed_mir, "read_ptr_param").?;
+    try std.testing.expectEqual(@as(usize, 2), return_fn.representation_facts.len);
+    try std.testing.expectEqual(.typed_load, return_fn.representation_facts[0].kind);
+    try std.testing.expectEqualStrings("p", return_fn.representation_facts[0].detail);
+    try std.testing.expectEqualStrings("p", return_fn.representation_facts[0].value_id);
+    try std.testing.expectEqual(.representation_check, return_fn.representation_facts[1].kind);
+    try std.testing.expectEqualStrings("nonnull_pointer", return_fn.representation_facts[1].detail);
+    try std.testing.expectEqualStrings("p", return_fn.representation_facts[1].value_id);
+    try std.testing.expectEqual(@as(usize, 3), read_fn.representation_facts.len);
+    try std.testing.expectEqual(.typed_load, read_fn.representation_facts[0].kind);
+    try std.testing.expectEqualStrings("p", read_fn.representation_facts[0].detail);
+    try std.testing.expectEqualStrings("p", read_fn.representation_facts[0].value_id);
+    try std.testing.expectEqual(.representation_check, read_fn.representation_facts[1].kind);
+    try std.testing.expectEqualStrings("nonnull_pointer", read_fn.representation_facts[1].detail);
+    try std.testing.expectEqualStrings("p", read_fn.representation_facts[1].value_id);
+    try std.testing.expectEqual(.representation_use, read_fn.representation_facts[2].kind);
+    try std.testing.expectEqualStrings("deref_base", read_fn.representation_facts[2].detail);
+    try std.testing.expectEqualStrings("p", read_fn.representation_facts[2].value_id);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, module, &dump);
+
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir instr fn=return_ptr_param") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "representation_facts=2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=typed_load detail=p type=*mut value_id=p") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=representation_check detail=nonnull_pointer type=*mut value_id=p") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir instr fn=read_ptr_param") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=representation_use detail=deref_base type=*mut value_id=p") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=return_ptr_param kind=typed_load detail=p type=*mut value_id=p recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=return_ptr_param kind=representation_check detail=nonnull_pointer type=*mut value_id=p recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=read_ptr_param kind=representation_use detail=deref_base type=*mut value_id=p recorded=true") != null);
+}
+
 test "MIR records typed pointer provenance facts for direct globals and pointer arrays" {
     const source =
         \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, ptrs: [2]*mut u32 }
+        \\struct Inner { ptr: *mut u32, ptrs: [2]*mut u32 }
+        \\struct Outer { inner: Inner }
         \\
         \\fn direct_pointer_and_array() {
         \\    var local: u32 = 1;
         \\    let p: *mut u32 = &shared_counter;
         \\    var q: *mut u32 = &local;
+        \\    let noalias_global: *mut u32 = compiler.assume_noalias_unchecked(&shared_counter, 4);
+        \\    var noalias_assigned: *mut u32 = &local;
+        \\    noalias_assigned = compiler.assume_noalias_unchecked(&shared_counter, 4);
+        \\    let noalias_local: *mut u32 = compiler.assume_noalias_unchecked(&local, 4);
         \\    var ptrs: [2]*mut u32 = .{ &local, &shared_counter };
+        \\    let global_alias: *mut u32 = &shared_counter;
+        \\    let copied_ptrs: [2]*mut u32 = .{ global_alias, &shared_counter };
+        \\    let from_copied_array_literal: *mut u32 = copied_ptrs[0];
         \\    ptrs[0] = &shared_counter;
+        \\    let from_global_element: *mut u32 = ptrs[1];
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        let noalias_from_global_element: *mut u32 = compiler.assume_noalias_unchecked(ptrs[1], 4);
+        \\    }
+        \\    var assigned_from_global_element: *mut u32 = &local;
+        \\    assigned_from_global_element = ptrs[0];
+        \\    var holder: Holder = .{ .ptr = &local, .ptrs = .{ &local, &shared_counter } };
+        \\    holder.ptr = &shared_counter;
+        \\    let from_global_field: *mut u32 = holder.ptr;
+        \\    holder.ptrs[0] = &shared_counter;
+        \\    let from_global_field_element: *mut u32 = holder.ptrs[0];
+        \\    let from_literal_field_element: *mut u32 = holder.ptrs[1];
+        \\    let copied_holder: Holder = holder;
+        \\    let from_copied_field: *mut u32 = copied_holder.ptr;
+        \\    let from_copied_field_element: *mut u32 = copied_holder.ptrs[0];
+        \\    var assigned_holder: Holder = .{ .ptr = &local, .ptrs = .{ &local, &local } };
+        \\    assigned_holder = holder;
+        \\    let from_assigned_copy_field: *mut u32 = assigned_holder.ptr;
+        \\    let from_assigned_copy_field_element: *mut u32 = assigned_holder.ptrs[0];
+        \\    var outer: Outer = .{ .inner = .{ .ptr = &local, .ptrs = .{ &local, &shared_counter } } };
+        \\    outer.inner.ptr = &shared_counter;
+        \\    let from_nested_field: *mut u32 = outer.inner.ptr;
+        \\    outer.inner.ptrs[0] = &shared_counter;
+        \\    let from_nested_field_element: *mut u32 = outer.inner.ptrs[0];
+        \\    let copied_outer: Outer = outer;
+        \\    let from_copied_nested_field: *mut u32 = copied_outer.inner.ptr;
+        \\    let from_copied_nested_field_element: *mut u32 = copied_outer.inner.ptrs[0];
+        \\    var assigned_outer: Outer = .{ .inner = .{ .ptr = &local, .ptrs = .{ &local, &local } } };
+        \\    assigned_outer = outer;
+        \\    let from_assigned_nested_field: *mut u32 = assigned_outer.inner.ptr;
+        \\    let from_assigned_nested_field_element: *mut u32 = assigned_outer.inner.ptrs[0];
         \\}
     ;
 
@@ -1166,9 +1338,40 @@ test "MIR records typed pointer provenance facts for direct globals and pointer 
     const function = functionByName(typed_mir, "direct_pointer_and_array").?;
     try std.testing.expect(hasPointerProvenanceFact(function, "p", null, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(function, "q", null, .local_storage, .none, "local"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "noalias_global", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "noalias_assigned", null, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "noalias_local", null, .local_storage, .none, "local"));
     try std.testing.expect(hasPointerProvenanceFact(function, "ptrs", 0, .local_storage, .none, "local"));
     try std.testing.expect(hasPointerProvenanceFact(function, "ptrs", 1, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(function, "ptrs", 0, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "copied_ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_copied_array_literal", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_global_element", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "noalias_from_global_element", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "assigned_from_global_element", null, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_global_field", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_global_field_element", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_literal_field_element", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_copied_field", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_copied_field_element", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_assigned_copy_field", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_assigned_copy_field_element", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_nested_field", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_nested_field_element", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_copied_nested_field", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_copied_nested_field_element", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_assigned_nested_field", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "from_assigned_nested_field_element", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(function, "holder", "ptr", null, .local_storage, .none, "local"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(function, "holder", "ptr", null, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(function, "holder", "ptrs", 1, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(function, "holder", "ptrs", 0, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(function, "outer", "inner.ptr", null, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(function, "outer", "inner.ptrs", 0, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(function, "copied_outer", "inner.ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(function, "copied_outer", "inner.ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(function, "assigned_outer", "inner.ptr", null, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(function, "assigned_outer", "inner.ptrs", 0, .global_storage, .reassignment, "shared_counter"));
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
@@ -1176,12 +1379,36 @@ test "MIR records typed pointer provenance facts for direct globals and pointer 
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=direct_pointer_and_array return=void no_lang_trap=false irq_context=false") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "pointer_provenance_facts=") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=p element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=noalias_global element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=noalias_assigned element=none provenance=global_storage storage=shared_counter") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=ptrs element=0 provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_global_element element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=assigned_from_global_element element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_global_field element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_global_field_element element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_literal_field_element element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_copied_field element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_copied_field_element element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_assigned_copy_field element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_assigned_copy_field_element element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_nested_field element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_nested_field_element element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_copied_nested_field element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_copied_nested_field_element element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_assigned_nested_field element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_assigned_nested_field_element element=none provenance=global_storage storage=shared_counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=outer element=none provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=outer element=0 provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptrs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=copied_outer element=none provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=copied_outer element=0 provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptrs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=assigned_outer element=none provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=assigned_outer element=0 provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptrs") != null);
 }
 
 test "MIR pointer provenance facts fail closed on reassignment dynamic writes calls and address escape" {
     const source =
         \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, ptrs: [2]*mut u32 }
         \\
         \\fn touch() {}
         \\
@@ -1195,12 +1422,18 @@ test "MIR pointer provenance facts fail closed on reassignment dynamic writes ca
         \\    let qp: *mut *mut u32 = &q;
         \\    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
         \\    ptrs[index] = &local;
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &shared_counter } };
+        \\    holder.ptr = &local;
+        \\    holder.ptr = q;
+        \\    holder.ptrs[index] = &local;
+        \\    holder.ptr = &shared_counter;
+        \\    touch();
         \\}
         \\
-        \\fn absent_computed_pointer() {
+        \\fn absent_computed_pointer(index: usize) {
         \\    var local: u32 = 2;
         \\    let ptrs: [2]*mut u32 = .{ &shared_counter, &local };
-        \\    let p: *mut u32 = ptrs[0];
+        \\    let p: *mut u32 = ptrs[index];
         \\}
     ;
 
@@ -1223,6 +1456,9 @@ test "MIR pointer provenance facts fail closed on reassignment dynamic writes ca
     try std.testing.expect(hasPointerProvenanceFact(invalidations_fn, "p", null, .unknown, .call, null));
     try std.testing.expect(hasPointerProvenanceFact(invalidations_fn, "q", null, .unknown, .address_escape, null));
     try std.testing.expect(hasPointerProvenanceFact(invalidations_fn, "ptrs", null, .unknown, .dynamic_index_write, null));
+    try std.testing.expect(hasPointerProvenanceFieldFact(invalidations_fn, "holder", "ptr", null, .unknown, .reassignment, null));
+    try std.testing.expect(hasPointerProvenanceFieldFact(invalidations_fn, "holder", "ptrs", 0, .unknown, .dynamic_index_write, null));
+    try std.testing.expect(hasPointerProvenanceFieldFact(invalidations_fn, "holder", "ptr", null, .unknown, .call, null));
 
     const absent_fn = functionByName(typed_mir, "absent_computed_pointer").?;
     try std.testing.expectEqual(@as(usize, 0), countPointerProvenanceFacts(absent_fn, "p", .global_storage));
@@ -1234,6 +1470,8 @@ test "MIR pointer provenance facts fail closed on reassignment dynamic writes ca
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=call") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=address_escape") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=dynamic_index_write") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "subject=holder element=0 provenance=unknown storage=none pointer_kind=single mutability=mut child=u32 field=ptrs invalidation_reason=dynamic_index_write") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "subject=holder element=none provenance=unknown storage=none pointer_kind=single mutability=mut child=u32 field=ptr invalidation_reason=call") != null);
 }
 
 test "MIR records direct pointer-local copy provenance facts" {
@@ -1245,6 +1483,10 @@ test "MIR records direct pointer-local copy provenance facts" {
         \\fn pointer_local_copy_fact() {
         \\    let p: *mut u32 = &shared_counter;
         \\    let q: *mut u32 = p;
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        let noalias_q: *mut u32 = compiler.assume_noalias_unchecked(p, 4);
+        \\    }
         \\    var r: *mut u32 = &shared_counter;
         \\    r = p;
         \\}
@@ -1278,6 +1520,7 @@ test "MIR records direct pointer-local copy provenance facts" {
     const copy_fn = functionByName(typed_mir, "pointer_local_copy_fact").?;
     try std.testing.expect(hasPointerProvenanceFact(copy_fn, "p", null, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(copy_fn, "q", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(copy_fn, "noalias_q", null, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(copy_fn, "r", null, .global_storage, .reassignment, "shared_counter"));
 
     const fail_closed_fn = functionByName(typed_mir, "pointer_local_copy_fail_closed").?;
@@ -1292,12 +1535,366 @@ test "MIR records direct pointer-local copy provenance facts" {
     defer dump.deinit(std.testing.allocator);
     try mir.appendDump(std.testing.allocator, module, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=single") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=noalias_q element=none provenance=global_storage storage=shared_counter pointer_kind=single") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=r element=none provenance=global_storage storage=shared_counter pointer_kind=single") != null);
+}
+
+test "MIR records fixed pointer-array assignment from pointer-local copy facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\const FIRST_INDEX: usize = 0;
+        \\struct ZeroField { value: u8 }
+        \\const REFLECT_INDEX: usize = field_offset<ZeroField>(.value);
+        \\
+        \\fn pointer_array_assignment_from_copy() {
+        \\    var local: u32 = 0;
+        \\    var ptrs: [2]*mut u32 = .{ &local, &local };
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    ptrs[FIRST_INDEX] = gp;
+        \\    let p: *mut u32 = ptrs[FIRST_INDEX];
+        \\    let q: *mut u32 = ptrs[REFLECT_INDEX];
+        \\    let r: *mut u32 = ptrs[field_offset<ZeroField>(.value)];
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_pointer_array_assignment_from_copy.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const function = functionByName(typed_mir, "pointer_array_assignment_from_copy").?;
+    try std.testing.expect(hasPointerProvenanceFact(function, "gp", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "ptrs", 0, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "q", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "r", null, .global_storage, .none, "shared_counter"));
+}
+
+test "MIR records aggregate pointer assignments from pointer-local copy facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\const FIRST_INDEX: usize = 0;
+        \\struct ZeroField { value: u8 }
+        \\const REFLECT_INDEX: usize = field_offset<ZeroField>(.value);
+        \\struct Holder { ptr: *mut u32, ptrs: [2]*mut u32 }
+        \\struct RawHolder { ptr: [*]mut u32, ptrs: [2][*]mut u32 }
+        \\struct Outer { inner: Holder }
+        \\struct RawOuter { inner: RawHolder }
+        \\
+        \\fn aggregate_assignment_from_copy() {
+        \\    var local: u32 = 0;
+        \\    var holder: Holder = .{ .ptr = &local, .ptrs = .{ &local, &local } };
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    holder.ptr = gp;
+        \\    holder.ptrs[FIRST_INDEX] = gp;
+        \\    let p: *mut u32 = holder.ptr;
+        \\    let q: *mut u32 = holder.ptrs[FIRST_INDEX];
+        \\    let r: *mut u32 = holder.ptrs[REFLECT_INDEX];
+        \\    let s: *mut u32 = holder.ptrs[field_offset<ZeroField>(.value)];
+        \\}
+        \\
+        \\fn aggregate_assignment_from_raw_many_zero() {
+        \\    unsafe {
+        \\        var local: u32 = 0;
+        \\        var holder: RawHolder = .{ .ptr = (&local) as [*]mut u32, .ptrs = .{ (&local) as [*]mut u32, (&local) as [*]mut u32 } };
+        \\        let gp: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        holder.ptr = gp.offset(0);
+        \\        holder.ptrs[0] = gp.offset(0);
+        \\        let p: [*]mut u32 = holder.ptr;
+        \\        let q: [*]mut u32 = holder.ptrs[0];
+        \\    }
+        \\}
+        \\
+        \\fn aggregate_assignment_from_noalias() {
+        \\    var local: u32 = 0;
+        \\    var holder: Holder = .{ .ptr = &local, .ptrs = .{ &local, &local } };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        holder.ptr = compiler.assume_noalias_unchecked(&shared_counter, 4);
+        \\        holder.ptrs[0] = compiler.assume_noalias_unchecked(&shared_counter, 4);
+        \\    }
+        \\    let p: *mut u32 = holder.ptr;
+        \\    let q: *mut u32 = holder.ptrs[0];
+        \\}
+        \\
+        \\fn aggregate_noalias_read_from_fields() {
+        \\    var local: u32 = 0;
+        \\    let holder: Holder = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &local } };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        let p: *mut u32 = compiler.assume_noalias_unchecked(holder.ptr, 4);
+        \\        let q: *mut u32 = compiler.assume_noalias_unchecked(holder.ptrs[0], 4);
+        \\        let r: *mut u32 = compiler.assume_noalias_unchecked(holder.ptr, 4) as *mut u32;
+        \\        let s: *mut u32 = compiler.assume_noalias_unchecked(holder.ptrs[0], 4) as *mut u32;
+        \\    }
+        \\}
+        \\
+        \\fn aggregate_update_from_noalias_reads() {
+        \\    var local: u32 = 0;
+        \\    let src: Holder = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &local } };
+        \\    var dst: Holder = .{ .ptr = &local, .ptrs = .{ &local, &local } };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        dst.ptr = compiler.assume_noalias_unchecked(src.ptr, 4);
+        \\        dst.ptrs[0] = compiler.assume_noalias_unchecked(src.ptrs[0], 4);
+        \\    }
+        \\    let p: *mut u32 = dst.ptr;
+        \\    let q: *mut u32 = dst.ptrs[0];
+        \\}
+        \\
+        \\fn nested_aggregate_member_copy_from_noalias() {
+        \\    var local: u32 = 0;
+        \\    let src: Outer = .{ .inner = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &local } } };
+        \\    var dst: Outer = .{ .inner = .{ .ptr = &local, .ptrs = .{ &local, &local } } };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        dst.inner = compiler.assume_noalias_unchecked(src.inner, 4);
+        \\    }
+        \\    let p: *mut u32 = dst.inner.ptr;
+        \\    let q: *mut u32 = dst.inner.ptrs[0];
+        \\}
+        \\
+        \\fn aggregate_literal_from_direct_pointer_expressions() {
+        \\    var local: u32 = 0;
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    let holder: Holder = .{ .ptr = gp, .ptrs = .{ gp, &local } };
+        \\    let p: *mut u32 = holder.ptr;
+        \\    let q: *mut u32 = holder.ptrs[0];
+        \\}
+        \\
+        \\fn aggregate_copy_from_noalias() {
+        \\    let holder: Holder = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &shared_counter } };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        let copied: Holder = compiler.assume_noalias_unchecked(holder, 4);
+        \\        let p: *mut u32 = copied.ptr;
+        \\        let q: *mut u32 = copied.ptrs[0];
+        \\    }
+        \\}
+        \\
+        \\fn aggregate_literal_from_raw_many_zero() {
+        \\    unsafe {
+        \\        var local: u32 = 0;
+        \\        let gp: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let holder: RawHolder = .{ .ptr = gp.offset(0), .ptrs = .{ gp.offset(0), (&local) as [*]mut u32 } };
+        \\        let p: [*]mut u32 = holder.ptr;
+        \\        let q: [*]mut u32 = holder.ptrs[0];
+        \\    }
+        \\}
+        \\
+        \\fn aggregate_literal_from_noalias() {
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        var local: u32 = 0;
+        \\        let holder: Holder = .{ .ptr = compiler.assume_noalias_unchecked(&shared_counter, 4), .ptrs = .{ compiler.assume_noalias_unchecked(&shared_counter, 4), &local } };
+        \\        let p: *mut u32 = holder.ptr;
+        \\        let q: *mut u32 = holder.ptrs[0];
+        \\    }
+        \\}
+        \\
+        \\fn aggregate_literal_reassignment_from_direct_pointer_expressions() {
+        \\    var local: u32 = 0;
+        \\    var holder: Holder = .{ .ptr = &local, .ptrs = .{ &local, &local } };
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    holder = .{ .ptr = gp, .ptrs = .{ gp, &local } };
+        \\    let p: *mut u32 = holder.ptr;
+        \\    let q: *mut u32 = holder.ptrs[0];
+        \\}
+        \\
+        \\fn aggregate_literal_reassignment_from_raw_many_zero() {
+        \\    unsafe {
+        \\        var local: u32 = 0;
+        \\        var holder: RawHolder = .{ .ptr = (&local) as [*]mut u32, .ptrs = .{ (&local) as [*]mut u32, (&local) as [*]mut u32 } };
+        \\        let gp: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        holder = .{ .ptr = gp.offset(0), .ptrs = .{ gp.offset(0), (&local) as [*]mut u32 } };
+        \\        let p: [*]mut u32 = holder.ptr;
+        \\        let q: [*]mut u32 = holder.ptrs[0];
+        \\    }
+        \\}
+        \\
+        \\fn aggregate_literal_reassignment_from_noalias() {
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        var local: u32 = 0;
+        \\        var holder: Holder = .{ .ptr = &local, .ptrs = .{ &local, &local } };
+        \\        holder = .{ .ptr = compiler.assume_noalias_unchecked(&shared_counter, 4), .ptrs = .{ compiler.assume_noalias_unchecked(&shared_counter, 4), &local } };
+        \\        let p: *mut u32 = holder.ptr;
+        \\        let q: *mut u32 = holder.ptrs[0];
+        \\    }
+        \\}
+        \\
+        \\fn nested_aggregate_literal_reassignment_from_direct_pointer_expressions() {
+        \\    var local: u32 = 0;
+        \\    var outer: Outer = .{ .inner = .{ .ptr = &local, .ptrs = .{ &local, &local } } };
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    outer.inner = .{ .ptr = gp, .ptrs = .{ gp, &local } };
+        \\    let p: *mut u32 = outer.inner.ptr;
+        \\    let q: *mut u32 = outer.inner.ptrs[0];
+        \\}
+        \\
+        \\fn nested_aggregate_literal_reassignment_from_raw_many_zero() {
+        \\    unsafe {
+        \\        var local: u32 = 0;
+        \\        var outer: RawOuter = .{ .inner = .{ .ptr = (&local) as [*]mut u32, .ptrs = .{ (&local) as [*]mut u32, (&local) as [*]mut u32 } } };
+        \\        let gp: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        outer.inner = .{ .ptr = gp.offset(0), .ptrs = .{ gp.offset(0), (&local) as [*]mut u32 } };
+        \\        let p: [*]mut u32 = outer.inner.ptr;
+        \\        let q: [*]mut u32 = outer.inner.ptrs[0];
+        \\    }
+        \\}
+        \\
+        \\fn nested_aggregate_literal_reassignment_from_noalias() {
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        var local: u32 = 0;
+        \\        var outer: Outer = .{ .inner = .{ .ptr = &local, .ptrs = .{ &local, &local } } };
+        \\        outer.inner = .{ .ptr = compiler.assume_noalias_unchecked(&shared_counter, 4), .ptrs = .{ compiler.assume_noalias_unchecked(&shared_counter, 4), &local } };
+        \\        let p: *mut u32 = outer.inner.ptr;
+        \\        let q: *mut u32 = outer.inner.ptrs[0];
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_aggregate_assignment_from_copy.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const function = functionByName(typed_mir, "aggregate_assignment_from_copy").?;
+    try std.testing.expect(hasPointerProvenanceFact(function, "gp", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(function, "holder", "ptr", null, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(function, "holder", "ptrs", 0, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "q", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "r", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(function, "s", null, .global_storage, .none, "shared_counter"));
+
+    const raw_function = functionByName(typed_mir, "aggregate_assignment_from_raw_many_zero").?;
+    try std.testing.expect(hasPointerProvenanceFact(raw_function, "gp", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(raw_function, "holder", "ptr", null, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(raw_function, "holder", "ptrs", 0, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(raw_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(raw_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const noalias_function = functionByName(typed_mir, "aggregate_assignment_from_noalias").?;
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_function, "holder", "ptr", null, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_function, "holder", "ptrs", 0, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const noalias_read_function = functionByName(typed_mir, "aggregate_noalias_read_from_fields").?;
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_read_function, "holder", "ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_read_function, "holder", "ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_read_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_read_function, "q", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_read_function, "r", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_read_function, "s", null, .global_storage, .none, "shared_counter"));
+
+    const noalias_update_function = functionByName(typed_mir, "aggregate_update_from_noalias_reads").?;
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_update_function, "src", "ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_update_function, "src", "ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_update_function, "dst", "ptr", null, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_update_function, "dst", "ptrs", 0, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_update_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_update_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const noalias_nested_member_copy_function = functionByName(typed_mir, "nested_aggregate_member_copy_from_noalias").?;
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_nested_member_copy_function, "src", "inner.ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_nested_member_copy_function, "src", "inner.ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_nested_member_copy_function, "dst", "inner.ptr", null, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_nested_member_copy_function, "dst", "inner.ptrs", 0, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_nested_member_copy_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_nested_member_copy_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const literal_function = functionByName(typed_mir, "aggregate_literal_from_direct_pointer_expressions").?;
+    try std.testing.expect(hasPointerProvenanceFact(literal_function, "gp", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(literal_function, "holder", "ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(literal_function, "holder", "ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(literal_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(literal_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const noalias_copy_function = functionByName(typed_mir, "aggregate_copy_from_noalias").?;
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_copy_function, "copied", "ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_copy_function, "copied", "ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_copy_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_copy_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const raw_literal_function = functionByName(typed_mir, "aggregate_literal_from_raw_many_zero").?;
+    try std.testing.expect(hasPointerProvenanceFact(raw_literal_function, "gp", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(raw_literal_function, "holder", "ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(raw_literal_function, "holder", "ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(raw_literal_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(raw_literal_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const noalias_literal_function = functionByName(typed_mir, "aggregate_literal_from_noalias").?;
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_literal_function, "holder", "ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_literal_function, "holder", "ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_literal_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_literal_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const literal_reassignment_function = functionByName(typed_mir, "aggregate_literal_reassignment_from_direct_pointer_expressions").?;
+    try std.testing.expect(hasPointerProvenanceFact(literal_reassignment_function, "gp", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(literal_reassignment_function, "holder", "ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(literal_reassignment_function, "holder", "ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(literal_reassignment_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(literal_reassignment_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const raw_literal_reassignment_function = functionByName(typed_mir, "aggregate_literal_reassignment_from_raw_many_zero").?;
+    try std.testing.expect(hasPointerProvenanceFact(raw_literal_reassignment_function, "gp", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(raw_literal_reassignment_function, "holder", "ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(raw_literal_reassignment_function, "holder", "ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(raw_literal_reassignment_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(raw_literal_reassignment_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const noalias_literal_reassignment_function = functionByName(typed_mir, "aggregate_literal_reassignment_from_noalias").?;
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_literal_reassignment_function, "holder", "ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_literal_reassignment_function, "holder", "ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_literal_reassignment_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_literal_reassignment_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const nested_literal_reassignment_function = functionByName(typed_mir, "nested_aggregate_literal_reassignment_from_direct_pointer_expressions").?;
+    try std.testing.expect(hasPointerProvenanceFact(nested_literal_reassignment_function, "gp", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(nested_literal_reassignment_function, "outer", "inner.ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(nested_literal_reassignment_function, "outer", "inner.ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(nested_literal_reassignment_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(nested_literal_reassignment_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const raw_nested_literal_reassignment_function = functionByName(typed_mir, "nested_aggregate_literal_reassignment_from_raw_many_zero").?;
+    try std.testing.expect(hasPointerProvenanceFact(raw_nested_literal_reassignment_function, "gp", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(raw_nested_literal_reassignment_function, "outer", "inner.ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(raw_nested_literal_reassignment_function, "outer", "inner.ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(raw_nested_literal_reassignment_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(raw_nested_literal_reassignment_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const noalias_nested_literal_reassignment_function = functionByName(typed_mir, "nested_aggregate_literal_reassignment_from_noalias").?;
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_nested_literal_reassignment_function, "outer", "inner.ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(noalias_nested_literal_reassignment_function, "outer", "inner.ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_nested_literal_reassignment_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(noalias_nested_literal_reassignment_function, "q", null, .global_storage, .none, "shared_counter"));
 }
 
 test "MIR records narrow raw-many zero offset pointer provenance facts" {
     const source =
         \\global shared_counter: u32 = 0;
+        \\const ZERO_OFFSET: usize = 0;
+        \\struct ZeroField { value: u8 }
+        \\const REFLECT_ZERO_OFFSET: usize = field_offset<ZeroField>(.value);
         \\
         \\extern fn external_raw_many_pointer() -> [*]mut u32;
         \\
@@ -1308,6 +1905,12 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
         \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
         \\        let copy: [*]mut u32 = p;
         \\        let q: [*]mut u32 = p.offset(0);
+        \\        let r: [*]mut u32 = p.offset(REFLECT_ZERO_OFFSET);
+        \\        let s: [*]mut u32 = p.offset(field_offset<ZeroField>(.value));
+        \\        #[unsafe_contract(noalias)]
+        \\        {
+        \\            let t: [*]mut u32 = compiler.assume_noalias_unchecked(p.offset(0), 4);
+        \\        }
         \\    }
         \\}
         \\
@@ -1317,7 +1920,7 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
         \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
         \\        var q: [*]mut u32 = (&local) as [*]mut u32;
         \\        q = p;
-        \\        q = p.offset(0);
+        \\        q = p.offset(ZERO_OFFSET);
         \\    }
         \\}
         \\
@@ -1354,6 +1957,9 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
     try std.testing.expect(hasPointerProvenanceFact(zero_fn, "p", null, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(zero_fn, "copy", null, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(zero_fn, "q", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(zero_fn, "r", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(zero_fn, "s", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(zero_fn, "t", null, .global_storage, .none, "shared_counter"));
 
     const assignment_fn = functionByName(typed_mir, "raw_many_zero_assignment_fact").?;
     try std.testing.expect(hasPointerProvenanceFact(assignment_fn, "q", null, .global_storage, .reassignment, "shared_counter"));
@@ -1361,6 +1967,7 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
     const fail_closed_fn = functionByName(typed_mir, "raw_many_zero_fail_closed").?;
     try std.testing.expect(hasPointerProvenanceFact(fail_closed_fn, "global_p", null, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(fail_closed_fn, "local_p", null, .local_storage, .none, "local"));
+    try std.testing.expect(hasPointerProvenanceFact(fail_closed_fn, "q", null, .local_storage, .reassignment, "local"));
     try std.testing.expectEqual(@as(usize, 1), countPointerProvenanceFacts(fail_closed_fn, "q", .global_storage));
     try std.testing.expectEqual(@as(usize, 5), countPointerProvenanceFacts(fail_closed_fn, "q", .unknown));
 
@@ -1368,7 +1975,9 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
     defer dump.deinit(std.testing.allocator);
     try mir.appendDump(std.testing.allocator, module, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fact subject=t element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_assignment_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fail_closed subject=q element=none provenance=local_storage storage=local pointer_kind=raw_many") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fail_closed subject=q element=none provenance=unknown storage=none pointer_kind=raw_many") != null);
 }
 
@@ -2057,6 +2666,7 @@ test "MIR verifier rejects missing representation check" {
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2092,6 +2702,7 @@ test "MIR verifier rejects missing representation check on indirect call" {
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2126,6 +2737,7 @@ test "MIR verifier rejects missing representation check on typed load" {
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2174,6 +2786,7 @@ test "MIR verifier requires representation checks to dominate sensitive returns"
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2219,6 +2832,7 @@ test "MIR verifier rejects representation return when one predecessor lacks chec
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2267,6 +2881,7 @@ test "MIR verifier matches representation identity across predecessor paths" {
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2314,6 +2929,7 @@ test "MIR verifier rejects predecessor representation check for wrong identity" 
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2351,6 +2967,7 @@ test "MIR verifier requires representation checks to dominate non-return typed u
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2385,6 +3002,7 @@ test "MIR verifier rejects missing representation check on non-return typed use"
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2422,6 +3040,7 @@ test "MIR verifier rejects representation check for the wrong value identity" {
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
             .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
             .elided_bounds = &.{},
         },
     };
@@ -2493,6 +3112,17 @@ test "MIR target representation checks see through casts" {
 
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, module, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_return kind=representation_check detail=nonnull_pointer type=*mut value_id=cast recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_local kind=representation_use detail=initializer type=*mut value_id=cast recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_assignment kind=representation_use detail=assignment type=*mut value_id=cast recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_call_arg kind=representation_use detail=call_arg type=*mut value_id=cast recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_aggregate_field kind=representation_use detail=aggregate_field type=*mut value_id=cast recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_aggregate_element kind=representation_use detail=aggregate_element type=*mut value_id=cast recorded=true") != null);
+
     try mir.verifyBuiltMir(typed_mir, &reporter);
     try std.testing.expect(!reporter.has_errors);
 }

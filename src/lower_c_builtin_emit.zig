@@ -13,6 +13,7 @@ const lower_c_atomic = @import("lower_c_atomic.zig");
 const lower_c_call = @import("lower_c_call.zig");
 const lower_c_convert = @import("lower_c_convert.zig");
 const lower_c_domain = @import("lower_c_domain.zig");
+const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_memory = @import("lower_c_memory.zig");
 const lower_c_mmio = @import("lower_c_mmio.zig");
 const lower_c_model = @import("lower_c_model.zig");
@@ -20,6 +21,7 @@ const lower_c_reflect = @import("lower_c_reflect.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const memberCallee = ast_query.memberCallee;
+const uncheckedNoOverflowCallOp = lower_c_expr.uncheckedNoOverflowCallOp;
 
 pub const EnumNameForValueExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8;
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
@@ -76,7 +78,7 @@ fn emitMemoryBuiltinCallExpr(ctx: Context, node: anytype, locals: ?*std.StringHa
 fn emitArithmeticBuiltinCallExpr(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
     if (try lower_c_arith.emitWrappingCall(ctx.arith, node, locals)) return true;
     if (try lower_c_arith.emitReduceSumCheckedCall(ctx.arith, node, locals)) return true;
-    if (try lower_c_call.emitUncheckedCall(ctx.call, node, locals)) return true;
+    if (uncheckedNoOverflowCallOp(node) != null) return error.UnsupportedCEmission;
     return false;
 }
 

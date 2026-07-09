@@ -296,7 +296,8 @@ const CEmitter = struct {
     // a deref PLAIN under the spec I.13 conservative default (absent/unknown
     // pointers lower race-tolerantly).
     mir_pointer_local_provenance: std.StringHashMap(mir.PointerProvenance),
-    mir_global_pointer_array_elements: std.StringHashMap(void),
+    mir_pointer_array_elements: std.StringHashMap(mir.PointerProvenance),
+    mir_aggregate_pointer_fields: std.StringHashMap(mir.PointerProvenance),
     // For a variadic function body: the name of the last NAMED parameter, which C's
     // `va_start(ap, last)` anchors on. Null outside a variadic function.
     current_variadic_last: ?[]const u8 = null,
@@ -351,7 +352,8 @@ const CEmitter = struct {
             .source_path = source_path,
             .reporter = reporter,
             .mir_pointer_local_provenance = std.StringHashMap(mir.PointerProvenance).init(allocator),
-            .mir_global_pointer_array_elements = std.StringHashMap(void).init(allocator),
+            .mir_pointer_array_elements = std.StringHashMap(mir.PointerProvenance).init(allocator),
+            .mir_aggregate_pointer_fields = std.StringHashMap(mir.PointerProvenance).init(allocator),
             .temp_index = 0,
             .indent = 0,
         };
@@ -362,7 +364,8 @@ const CEmitter = struct {
         self.deinitTypeCollections();
         self.deinitDeclCollections();
         self.deinitControlFlowState();
-        self.deinitOwnedStringVoidMap(&self.mir_global_pointer_array_elements);
+        self.deinitOwnedStringProvenanceMap(&self.mir_pointer_array_elements);
+        self.deinitOwnedStringProvenanceMap(&self.mir_aggregate_pointer_fields);
         self.mir_pointer_local_provenance.deinit();
         self.scratch.deinit();
     }
@@ -1087,7 +1090,8 @@ const CEmitter = struct {
         self.current_function = fn_decl.name.text;
         defer self.current_function = previous_function;
         self.mir_pointer_local_provenance.clearRetainingCapacity();
-        self.clearOwnedStringVoidMapRetainingCapacity(&self.mir_global_pointer_array_elements);
+        self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_pointer_array_elements);
+        self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_aggregate_pointer_fields);
 
         const previous_variadic_last = self.current_variadic_last;
         self.current_variadic_last = functionVariadicLastParam(fn_decl);
@@ -1720,6 +1724,7 @@ const CEmitter = struct {
             .operand_emit_type = operandEmitTypeForAccess,
             .global_assignment_target = globalAssignmentTargetForAccess,
             .emit_assign_target = emitAssignTargetForAccess,
+            .emit_race_load_temp = emitRaceLoadTempForAccess,
             .raw_many_offset_expr_type = rawManyOffsetExprTypeForAccess,
             .slice_return_type_for_call = sliceReturnTypeForAccess,
             .array_return_type_for_expr = arrayReturnTypeForAccess,
@@ -2656,6 +2661,12 @@ const CEmitter = struct {
         return out.toOwnedSlice(self.scratch.allocator());
     }
 
+    fn pointerTypeFor(self: *CEmitter, child: ast.TypeExpr, mutability: ast.Mutability, style: StructTypeStyle) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        try self.appendPointerType(&out, child, mutability, style);
+        return out.toOwnedSlice(self.scratch.allocator());
+    }
+
     fn arrayTypeName(self: *CEmitter, child: ast.TypeExpr, len_expr: ast.Expr) ![]const u8 {
         return lower_c_names.arrayTypeName(self.typeNameContext(), child, len_expr);
     }
@@ -2854,7 +2865,14 @@ const CEmitter = struct {
         try self.applyMirPointerProvenanceForAssignment(assignment.target, assignment.value, span, locals);
         try self.applyMirPointerProvenanceForIndexAssignment(assignment.target, assignment.value, span, locals);
         if (try self.emitRaceTolerantDerefStoreStmt(assignment.target, assignment.value, locals)) return;
+        if (try self.emitRaceTolerantPointerMemberStoreStmt(assignment.target, assignment.value, locals)) return;
+        if (try self.emitRaceTolerantSliceIndexStoreStmt(assignment.target, assignment.value, locals)) return;
+        if (try self.emitRaceTolerantPointerArrayIndexStoreStmt(assignment.target, assignment.value, locals)) return;
         if (try self.emitSpecialAssignmentStmt(assignment, locals, return_ty)) return;
+        if (try self.emitRaceTolerantIndexedMemberStoreStmt(assignment.target, assignment.value, locals)) return;
+        if (try self.emitRaceTolerantNestedIndexedMemberStoreStmt(assignment.target, assignment.value, locals)) return;
+        if (try self.emitRaceTolerantNestedPointerMemberStoreStmt(assignment.target, assignment.value, locals)) return;
+        if (self.memberChainHasRaceTolerantIndexedBase(assignment.target, locals)) return error.UnsupportedCEmission;
         try self.emitDefaultAssignmentStmt(assignment, locals);
     }
 
@@ -3597,6 +3615,40 @@ const CEmitter = struct {
         }
     }
 
+    fn emitRaceLoadTempForAccess(ctx: *anyopaque, ptr_name: []const u8, target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        return self.emitRaceLoadTempFromPointerTemp(ptr_name, target_ty);
+    }
+
+    fn emitRaceLoadTempFromPointerTemp(self: *CEmitter, ptr_name: []const u8, target_ty: ast.TypeExpr) !?SequencedArgTemp {
+        const info = self.globalInfoFromType(target_ty) catch return null;
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        if (info.aggregate) {
+            try self.out.print(self.allocator, "{s} {s} = ", .{ info.c_type, temp_name });
+            try self.emitRaceTolerantAggregateLoadFromPtr(ptr_name, target_ty);
+            try self.out.appendSlice(self.allocator, ";\n");
+        } else if (info.pointer_like) {
+            try self.out.print(self.allocator, "{s} {s} = ({s})__atomic_load_n({s}, __ATOMIC_RELAXED);\n", .{
+                info.c_type,
+                temp_name,
+                info.c_type,
+                ptr_name,
+            });
+        } else {
+            if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+            try self.out.print(self.allocator, "{s} {s} = ({s})mc_race_load_{s}({s});\n", .{
+                info.c_type,
+                temp_name,
+                info.c_type,
+                info.race_type_name,
+                ptr_name,
+            });
+        }
+        return .{ .name = temp_name, .ty = target_ty };
+    }
+
     fn emitCastExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(node.ty.*, .typedef_name)});
         try self.emitExpr(node.value.*, locals);
@@ -3610,9 +3662,13 @@ const CEmitter = struct {
         if (globalArrayElementAccess(node, locals, &self.globals)) |access| {
             try lower_c_global.emitGlobalArrayElementLoadExpr(self.globalArrayAccessEmitContext(), access, locals);
         } else if (self.sliceAccessForBase(node.base.*, locals)) |slice| {
-            try self.emitSliceIndexExpr(node, locals, slice);
+            if (!try self.emitRaceTolerantSliceIndexExpr(node, locals, slice)) {
+                try self.emitSliceIndexExpr(node, locals, slice);
+            }
         } else if (self.arrayTypeForExpr(node.base.*, locals)) |base_arr| {
-            try self.emitArrayIndexExpr(node, locals, base_arr);
+            if (!try self.emitRaceTolerantPointerArrayIndexExpr(node, locals, base_arr)) {
+                try self.emitArrayIndexExpr(node, locals, base_arr);
+            }
         } else {
             try self.emitExpr(node.base.*, locals);
             try self.out.appendSlice(self.allocator, "[");
@@ -3667,6 +3723,11 @@ const CEmitter = struct {
             try appendGlobalLoadExpr(self.allocator, self.out, access.name, access.info);
             return true;
         }
+        if (try self.emitRaceTolerantIndexedMemberLoadExpr(node, locals)) return true;
+        if (try self.emitRaceTolerantNestedIndexedMemberLoadExpr(node, locals)) return true;
+        if (try self.emitRaceTolerantPointerMemberLoadExpr(node, locals)) return true;
+        if (try self.emitRaceTolerantNestedPointerMemberLoadExpr(node, locals)) return true;
+        if (self.memberChainHasRaceTolerantIndexedBase(node.base.*, locals)) return error.UnsupportedCEmission;
         try self.emitOrdinaryMemberLoadExpr(node, locals);
         return true;
     }
@@ -3703,6 +3764,208 @@ const CEmitter = struct {
         }
         try self.emitExpr(node.base.*, locals);
         try self.out.print(self.allocator, "{s}{s}", .{ op, field_name });
+    }
+
+    fn emitRaceTolerantPointerMemberLoadExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
+        if (!self.exprHasPointerType(node.base.*, locals)) return false;
+        const field_ty = self.memberFieldType(node.base.*, node.name.text, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+        if (info.aggregate) return false;
+        const field_name = try self.cIdent(node.name.text);
+        if (info.pointer_like) {
+            try self.out.print(self.allocator, "(({s})__atomic_load_n(&(", .{info.c_type});
+            try self.emitExpr(node.base.*, locals);
+            try self.out.print(self.allocator, "->{s}), __ATOMIC_RELAXED))", .{field_name});
+            return true;
+        }
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "(({s})mc_race_load_{s}(&(", .{ info.c_type, info.race_type_name });
+        try self.emitExpr(node.base.*, locals);
+        try self.out.print(self.allocator, "->{s})))", .{field_name});
+        return true;
+    }
+
+    const PointerMemberPath = struct {
+        root: ast.Expr,
+        fields: []const []const u8,
+    };
+
+    fn collectPointerMemberPath(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), fields: *std.ArrayList([]const u8)) !?ast.Expr {
+        switch (expr.kind) {
+            .member => |node| {
+                const root = try self.collectPointerMemberPath(node.base.*, locals, fields) orelse return null;
+                try fields.append(self.allocator, node.name.text);
+                return root;
+            },
+            .grouped => |wrapped| return try self.collectPointerMemberPath(wrapped.*, locals, fields),
+            else => return if (self.exprHasPointerType(expr, locals)) expr else null,
+        }
+    }
+
+    fn pointerMemberPath(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), fields: *std.ArrayList([]const u8)) !?PointerMemberPath {
+        const root = try self.collectPointerMemberPath(expr, locals, fields) orelse return null;
+        if (fields.items.len <= 1) return null;
+        return .{ .root = root, .fields = fields.items };
+    }
+
+    fn pointerMemberPathFinalType(self: *CEmitter, root: ast.Expr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        var current = self.operandEmitType(root, locals) orelse self.exprSourceTypeForEmission(root, locals) orelse return null;
+        for (fields) |field_name| current = self.memberFieldTypeFromAggregate(current, field_name) orelse return null;
+        return current;
+    }
+
+    fn emitPointerMemberPathAddressExpr(self: *CEmitter, root: ast.Expr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        try self.emitExpr(root, locals);
+        if (fields.len == 0) return;
+        try self.out.print(self.allocator, "->{s}", .{try self.cIdent(fields[0])});
+        for (fields[1..]) |field_name| try self.out.print(self.allocator, ".{s}", .{try self.cIdent(field_name)});
+    }
+
+    fn pointerMemberPathPtrExpr(self: *CEmitter, root_name: []const u8, fields: []const []const u8) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(self.scratch.allocator(), "&(");
+        try out.appendSlice(self.scratch.allocator(), root_name);
+        if (fields.len != 0) {
+            try out.print(self.scratch.allocator(), "->{s}", .{try self.cIdent(fields[0])});
+            for (fields[1..]) |field_name| try out.print(self.scratch.allocator(), ".{s}", .{try self.cIdent(field_name)});
+        }
+        try out.appendSlice(self.scratch.allocator(), ")");
+        return out.toOwnedSlice(self.scratch.allocator());
+    }
+
+    fn emitRaceTolerantNestedPointerMemberLoadExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
+        var fields: std.ArrayList([]const u8) = .empty;
+        defer fields.deinit(self.allocator);
+        const path = try self.pointerMemberPath(.{ .span = node.name.span, .kind = .{ .member = node } }, locals, &fields) orelse return false;
+        const field_ty = self.pointerMemberPathFinalType(path.root, path.fields, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+        if (info.aggregate) {
+            if (self.derefPointerHasProvenLocalStorage(path.root, locals)) return false;
+            return error.UnsupportedCEmission;
+        }
+        if (info.pointer_like) {
+            try self.out.print(self.allocator, "(({s})__atomic_load_n(&(", .{info.c_type});
+            try self.emitPointerMemberPathAddressExpr(path.root, path.fields, locals);
+            try self.out.appendSlice(self.allocator, "), __ATOMIC_RELAXED))");
+            return true;
+        }
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "(({s})mc_race_load_{s}(&(", .{ info.c_type, info.race_type_name });
+        try self.emitPointerMemberPathAddressExpr(path.root, path.fields, locals);
+        try self.out.appendSlice(self.allocator, ")))");
+        return true;
+    }
+
+    fn emitIndexedMemberAddressExpr(self: *CEmitter, index: ast_query.IndexExpr, field_name: []const u8, locals: ?*std.StringHashMap(LocalInfo), index_temp: ?[]const u8) anyerror!bool {
+        if (self.sliceAccessForBase(index.base.*, locals)) |slice| {
+            try self.emitExpr(index.base.*, locals);
+            try self.out.print(self.allocator, ".{s}[mc_check_index_usize(", .{slice.ptr_field});
+            if (index_temp) |temp| {
+                try self.out.appendSlice(self.allocator, temp);
+            } else {
+                try self.emitExpr(index.index.*, locals);
+            }
+            try self.out.appendSlice(self.allocator, ", ");
+            try self.emitExpr(index.base.*, locals);
+            try self.out.print(self.allocator, ".{s})].{s}", .{ slice.len_field, field_name });
+            return true;
+        }
+        const base_arr = self.arrayTypeForExpr(index.base.*, locals) orelse return false;
+        _ = self.pointerArrayDerefInner(index.base.*, locals) orelse return false;
+        try self.emitPointerArrayIndexExpr(index, locals, base_arr, index_temp);
+        try self.out.print(self.allocator, ".{s}", .{field_name});
+        return true;
+    }
+
+    fn collectIndexedMemberPath(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), fields: *std.ArrayList([]const u8)) !?ast_query.IndexExpr {
+        switch (expr.kind) {
+            .member => |node| {
+                const index = try self.collectIndexedMemberPath(node.base.*, locals, fields) orelse return null;
+                try fields.append(self.allocator, node.name.text);
+                return index;
+            },
+            .grouped => |wrapped| return try self.collectIndexedMemberPath(wrapped.*, locals, fields),
+            else => return indexExpr(expr),
+        }
+    }
+
+    fn indexedElementType(self: *CEmitter, index: ast_query.IndexExpr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (self.arrayTypeForExpr(index.base.*, locals)) |array_ty| return array_ty.kind.array.child.*;
+        const base_ty = self.operandEmitType(index.base.*, locals) orelse self.exprSourceTypeForEmission(index.base.*, locals) orelse return null;
+        const resolved = self.resolveAliasType(base_ty);
+        if (resolved.kind == .slice) return resolved.kind.slice.child.*;
+        return null;
+    }
+
+    fn indexedMemberPathFinalType(self: *CEmitter, index: ast_query.IndexExpr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        var current = self.indexedElementType(index, locals) orelse return null;
+        for (fields) |field_name| current = self.memberFieldTypeFromAggregate(current, field_name) orelse return null;
+        return current;
+    }
+
+    fn emitIndexedMemberPathAddressExpr(self: *CEmitter, index: ast_query.IndexExpr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo), index_temp: ?[]const u8) anyerror!bool {
+        if (fields.len == 0) return false;
+        if (!try self.emitIndexedMemberAddressExpr(index, try self.cIdent(fields[0]), locals, index_temp)) return false;
+        for (fields[1..]) |field_name| try self.out.print(self.allocator, ".{s}", .{try self.cIdent(field_name)});
+        return true;
+    }
+
+    fn indexedMemberHasRaceTolerantStorage(self: *CEmitter, index: ast_query.IndexExpr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        if (self.sliceAccessForBase(index.base.*, locals) != null) return true;
+        if (self.arrayTypeForExpr(index.base.*, locals) != null and self.pointerArrayDerefInner(index.base.*, locals) != null) return true;
+        return false;
+    }
+
+    fn memberChainHasRaceTolerantIndexedBase(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        switch (expr.kind) {
+            .member => |node| return self.memberChainHasRaceTolerantIndexedBase(node.base.*, locals),
+            .grouped => |wrapped| return self.memberChainHasRaceTolerantIndexedBase(wrapped.*, locals),
+            else => {},
+        }
+        const index = indexExpr(expr) orelse return false;
+        return self.indexedMemberHasRaceTolerantStorage(index, locals);
+    }
+
+    fn emitRaceTolerantIndexedMemberLoadExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
+        const index = indexExpr(node.base.*) orelse return false;
+        if (!self.indexedMemberHasRaceTolerantStorage(index, locals)) return false;
+        const field_ty = self.memberFieldType(node.base.*, node.name.text, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+        if (info.aggregate) return false;
+        const field_name = try self.cIdent(node.name.text);
+        if (info.pointer_like) {
+            try self.out.print(self.allocator, "(({s})__atomic_load_n(&(", .{info.c_type});
+            if (!try self.emitIndexedMemberAddressExpr(index, field_name, locals, null)) return false;
+            try self.out.appendSlice(self.allocator, "), __ATOMIC_RELAXED))");
+            return true;
+        }
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "(({s})mc_race_load_{s}(&(", .{ info.c_type, info.race_type_name });
+        if (!try self.emitIndexedMemberAddressExpr(index, field_name, locals, null)) return false;
+        try self.out.appendSlice(self.allocator, ")))");
+        return true;
+    }
+
+    fn emitRaceTolerantNestedIndexedMemberLoadExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
+        var fields: std.ArrayList([]const u8) = .empty;
+        defer fields.deinit(self.allocator);
+        const index = try self.collectIndexedMemberPath(.{ .span = node.name.span, .kind = .{ .member = node } }, locals, &fields) orelse return false;
+        if (fields.items.len <= 1) return false;
+        if (!self.indexedMemberHasRaceTolerantStorage(index, locals)) return false;
+        const field_ty = self.indexedMemberPathFinalType(index, fields.items, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+        if (info.aggregate) return error.UnsupportedCEmission;
+        if (info.pointer_like) {
+            try self.out.print(self.allocator, "(({s})__atomic_load_n(&(", .{info.c_type});
+            if (!try self.emitIndexedMemberPathAddressExpr(index, fields.items, locals, null)) return false;
+            try self.out.appendSlice(self.allocator, "), __ATOMIC_RELAXED))");
+            return true;
+        }
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "(({s})mc_race_load_{s}(&(", .{ info.c_type, info.race_type_name });
+        if (!try self.emitIndexedMemberPathAddressExpr(index, fields.items, locals, null)) return false;
+        try self.out.appendSlice(self.allocator, ")))");
+        return true;
     }
 
     fn emitHookedMemberLoadExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), hook: []const u8, op: []const u8, field_name: []const u8) anyerror!void {
@@ -3860,6 +4123,13 @@ const CEmitter = struct {
     }
 
     fn emitExprWithTargetInner(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
+        if (try self.emitRaceTolerantAggregateDerefExpr(expr, locals, target_ty)) return;
+        if (try self.emitRaceTolerantPointerMemberAggregateExpr(expr, locals, target_ty)) return;
+        if (try self.emitRaceTolerantNestedPointerMemberAggregateExpr(expr, locals, target_ty)) return;
+        if (try self.emitRaceTolerantIndexedMemberAggregateExpr(expr, locals, target_ty)) return;
+        if (try self.ambiguousAggregateDerefValueCopy(expr, locals)) return error.UnsupportedCEmission;
+        if (try self.ambiguousPointerMemberAggregateValueCopy(expr, locals)) return error.UnsupportedCEmission;
+        if (try self.ambiguousIndexedMemberAggregateValueCopy(expr, locals)) return error.UnsupportedCEmission;
         if (try self.emitValueOptionalCoercion(expr, locals, target_ty)) return;
         if (try self.emitTargetPreludeExpr(expr, locals, target_ty)) return;
         switch (expr.kind) {
@@ -4685,7 +4955,19 @@ const CEmitter = struct {
         map.deinit();
     }
 
+    fn deinitOwnedStringProvenanceMap(self: *CEmitter, map: *std.StringHashMap(mir.PointerProvenance)) void {
+        var it = map.keyIterator();
+        while (it.next()) |key| self.allocator.free(key.*);
+        map.deinit();
+    }
+
     fn clearOwnedStringVoidMapRetainingCapacity(self: *CEmitter, map: *std.StringHashMap(void)) void {
+        var it = map.keyIterator();
+        while (it.next()) |key| self.allocator.free(key.*);
+        map.clearRetainingCapacity();
+    }
+
+    fn clearOwnedStringProvenanceMapRetainingCapacity(self: *CEmitter, map: *std.StringHashMap(mir.PointerProvenance)) void {
         var it = map.keyIterator();
         while (it.next()) |key| self.allocator.free(key.*);
         map.clearRetainingCapacity();
@@ -4702,7 +4984,7 @@ const CEmitter = struct {
     fn clearLocalArrayPointerElementsForLocal(self: *CEmitter, local_name: []const u8) void {
         while (true) {
             var found_key: ?[]const u8 = null;
-            var it = self.mir_global_pointer_array_elements.keyIterator();
+            var it = self.mir_pointer_array_elements.keyIterator();
             while (it.next()) |key| {
                 if (localArrayPointerElementKeyMatchesLocal(key.*, local_name)) {
                     found_key = key.*;
@@ -4711,33 +4993,36 @@ const CEmitter = struct {
             }
 
             const key = found_key orelse return;
-            if (self.mir_global_pointer_array_elements.fetchRemove(key)) |entry| {
+            if (self.mir_pointer_array_elements.fetchRemove(key)) |entry| {
                 self.allocator.free(entry.key);
             }
         }
     }
 
-    fn setLocalArrayPointerElementProvenance(self: *CEmitter, local_name: []const u8, index: u64, is_global_backed: bool) !void {
+    fn setLocalArrayPointerElementProvenance(self: *CEmitter, local_name: []const u8, index: u64, provenance: mir.PointerProvenance) !void {
         const lookup_key = try self.localArrayPointerElementKey(local_name, index);
         defer self.allocator.free(lookup_key);
 
-        if (!is_global_backed) {
-            if (self.mir_global_pointer_array_elements.fetchRemove(lookup_key)) |entry| {
+        if (provenance == .unknown) {
+            if (self.mir_pointer_array_elements.fetchRemove(lookup_key)) |entry| {
                 self.allocator.free(entry.key);
             }
             return;
         }
 
-        if (self.mir_global_pointer_array_elements.contains(lookup_key)) return;
+        if (self.mir_pointer_array_elements.getPtr(lookup_key)) |existing| {
+            existing.* = provenance;
+            return;
+        }
         const owned_key = try self.localArrayPointerElementKey(local_name, index);
         errdefer self.allocator.free(owned_key);
-        try self.mir_global_pointer_array_elements.put(owned_key, {});
+        try self.mir_pointer_array_elements.put(owned_key, provenance);
     }
 
-    fn localArrayElementHasGlobalPointerProvenance(self: *CEmitter, local_name: []const u8, index: u64) bool {
-        const lookup_key = self.localArrayPointerElementKey(local_name, index) catch return false;
+    fn localArrayElementPointerProvenance(self: *CEmitter, local_name: []const u8, index: u64) ?mir.PointerProvenance {
+        const lookup_key = self.localArrayPointerElementKey(local_name, index) catch return null;
         defer self.allocator.free(lookup_key);
-        return self.mir_global_pointer_array_elements.contains(lookup_key);
+        return self.mir_pointer_array_elements.get(lookup_key);
     }
 
     fn fixedLocalPointerArrayElementType(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
@@ -4765,6 +5050,109 @@ const CEmitter = struct {
         local_name: []const u8,
         index: u64,
     };
+
+    const AggregatePointerFieldPath = struct {
+        local_name: []const u8,
+        field_path: []const u8,
+    };
+
+    fn aggregatePointerFieldKey(self: *CEmitter, local_name: []const u8, field_path: []const u8) ![]const u8 {
+        return try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ local_name, field_path });
+    }
+
+    fn aggregatePointerFieldKeyMatchesLocalPath(key: []const u8, local_name: []const u8, field_path: []const u8) bool {
+        if (key.len <= local_name.len or !std.mem.eql(u8, key[0..local_name.len], local_name) or key[local_name.len] != 0) return false;
+        if (field_path.len == 0) return true;
+        const existing_path = key[local_name.len + 1 ..];
+        if (std.mem.eql(u8, existing_path, field_path)) return true;
+        return existing_path.len > field_path.len and
+            std.mem.eql(u8, existing_path[0..field_path.len], field_path) and
+            (existing_path[field_path.len] == '.' or existing_path[field_path.len] == '[');
+    }
+
+    fn setAggregatePointerFieldProvenance(self: *CEmitter, local_name: []const u8, field_path: []const u8, provenance: mir.PointerProvenance) !void {
+        const lookup_key = try self.aggregatePointerFieldKey(local_name, field_path);
+        defer self.allocator.free(lookup_key);
+
+        if (provenance == .unknown) {
+            if (self.mir_aggregate_pointer_fields.fetchRemove(lookup_key)) |entry| self.allocator.free(entry.key);
+            return;
+        }
+
+        if (self.mir_aggregate_pointer_fields.getPtr(lookup_key)) |existing| {
+            existing.* = provenance;
+            return;
+        }
+        const owned_key = try self.aggregatePointerFieldKey(local_name, field_path);
+        errdefer self.allocator.free(owned_key);
+        try self.mir_aggregate_pointer_fields.put(owned_key, provenance);
+    }
+
+    fn clearAggregatePointerFieldsForLocalPath(self: *CEmitter, local_name: []const u8, field_path: []const u8) void {
+        while (true) {
+            var found_key: ?[]const u8 = null;
+            var it = self.mir_aggregate_pointer_fields.keyIterator();
+            while (it.next()) |key| {
+                if (aggregatePointerFieldKeyMatchesLocalPath(key.*, local_name, field_path)) {
+                    found_key = key.*;
+                    break;
+                }
+            }
+
+            const key = found_key orelse return;
+            if (self.mir_aggregate_pointer_fields.fetchRemove(key)) |entry| self.allocator.free(entry.key);
+        }
+    }
+
+    fn aggregateFieldPointerProvenance(self: *CEmitter, local_name: []const u8, field_path: []const u8) ?mir.PointerProvenance {
+        const lookup_key = self.aggregatePointerFieldKey(local_name, field_path) catch return null;
+        defer self.allocator.free(lookup_key);
+        return self.mir_aggregate_pointer_fields.get(lookup_key);
+    }
+
+    fn joinAggregatePointerFieldPath(self: *CEmitter, prefix: []const u8, field_name: []const u8) ![]const u8 {
+        return try std.fmt.allocPrint(self.scratch.allocator(), "{s}.{s}", .{ prefix, field_name });
+    }
+
+    fn aggregatePointerArrayElementPath(self: *CEmitter, array_path: []const u8, index: u64) ![]const u8 {
+        return try std.fmt.allocPrint(self.scratch.allocator(), "{s}[{d}]", .{ array_path, index });
+    }
+
+    fn directLocalAggregateMemberPath(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?AggregatePointerFieldPath {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directLocalAggregateMemberPath(inner.*, locals),
+            .member => |node| blk: {
+                if (directLocalName(node.base.*)) |local_name| {
+                    const local_set = locals orelse break :blk null;
+                    const info = local_set.get(local_name) orelse break :blk null;
+                    _ = self.memberFieldTypeFromAggregate(info.source_ty orelse break :blk null, node.name.text) orelse break :blk null;
+                    break :blk .{ .local_name = local_name, .field_path = node.name.text };
+                }
+                const base_path = self.directLocalAggregateMemberPath(node.base.*, locals) orelse break :blk null;
+                _ = self.memberFieldType(node.base.*, node.name.text, locals) orelse break :blk null;
+                break :blk .{
+                    .local_name = base_path.local_name,
+                    .field_path = self.joinAggregatePointerFieldPath(base_path.field_path, node.name.text) catch break :blk null,
+                };
+            },
+            else => null,
+        };
+    }
+
+    fn directLocalAggregateArrayElementPath(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?AggregatePointerFieldPath {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directLocalAggregateArrayElementPath(inner.*, locals),
+            .index => |node| blk: {
+                const base_path = self.directLocalAggregateMemberPath(node.base.*, locals) orelse break :blk null;
+                const index = localArrayConstIndexValue(node.index.*, locals orelse break :blk null) orelse break :blk null;
+                break :blk .{
+                    .local_name = base_path.local_name,
+                    .field_path = self.aggregatePointerArrayElementPath(base_path.field_path, index) catch break :blk null,
+                };
+            },
+            else => null,
+        };
+    }
 
     fn directLocalPointerArrayBaseName(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?[]const u8 {
         return switch (expr.kind) {
@@ -4797,23 +5185,16 @@ const CEmitter = struct {
         };
     }
 
-    fn mirArrayElementExprGlobalProvenance(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?bool {
-        return switch (expr.kind) {
-            .grouped => |inner| self.mirArrayElementExprGlobalProvenance(inner.*, locals),
-            .cast => |node| self.mirArrayElementExprGlobalProvenance(node.value.*, locals),
-            .index => |node| blk: {
-                const local_name = self.directLocalPointerArrayBaseName(node.base.*, locals) orelse break :blk null;
-                const index = localArrayConstIndexValue(node.index.*, locals) orelse break :blk false;
-                break :blk self.localArrayElementHasGlobalPointerProvenance(local_name, index);
-            },
-            else => null,
-        };
+    fn isKnownStructType(self: *CEmitter, ty: ast.TypeExpr) bool {
+        const name = typeName(self.resolveAliasType(ty)) orelse return false;
+        return self.structs.contains(name);
     }
 
     fn mirPointerFactSubjectSupportedNow(self: *CEmitter, fact: mir.PointerProvenanceFact, locals: ?*std.StringHashMap(LocalInfo)) bool {
         const local_set = locals orelse return false;
         const info = local_set.get(fact.subject) orelse return false;
         const ty = info.source_ty orelse return false;
+        if (fact.field_path != null) return self.isKnownStructType(ty);
         if (fact.element_index != null) return self.fixedLocalPointerArrayElementType(ty) != null;
         return isPointerLikeGlobalType(self.resolveAliasType(ty)) or self.fixedLocalPointerArrayElementType(ty) != null;
     }
@@ -4821,7 +5202,30 @@ const CEmitter = struct {
     fn emitMirPointerProvenanceConsumedComment(self: *CEmitter, fact: mir.PointerProvenanceFact) !void {
         const fn_name = self.current_function orelse return;
         try self.writeIndent();
-        if (fact.element_index) |index| {
+        if (fact.field_path) |field_path| {
+            if (fact.element_index) |index| {
+                try self.out.print(self.allocator, "/* mir pointer_provenance consumed fn={s} subject={s} field={s} element={d} provenance={s} reason={s} source={d}:{d} */\n", .{
+                    fn_name,
+                    fact.subject,
+                    field_path,
+                    index,
+                    @tagName(fact.provenance),
+                    @tagName(fact.invalidation_reason),
+                    fact.source.line,
+                    fact.source.column,
+                });
+            } else {
+                try self.out.print(self.allocator, "/* mir pointer_provenance consumed fn={s} subject={s} field={s} provenance={s} reason={s} source={d}:{d} */\n", .{
+                    fn_name,
+                    fact.subject,
+                    field_path,
+                    @tagName(fact.provenance),
+                    @tagName(fact.invalidation_reason),
+                    fact.source.line,
+                    fact.source.column,
+                });
+            }
+        } else if (fact.element_index) |index| {
             try self.out.print(self.allocator, "/* mir pointer_provenance consumed fn={s} subject={s} element={d} provenance={s} reason={s} source={d}:{d} */\n", .{
                 fn_name,
                 fact.subject,
@@ -4843,14 +5247,29 @@ const CEmitter = struct {
         }
     }
 
+    fn mirPointerFactState(fact: mir.PointerProvenanceFact) mir.PointerProvenance {
+        if (mirPointerFactIsLiveGlobal(fact)) return .global_storage;
+        if (mirPointerFactIsLiveLocal(fact)) return .local_storage;
+        return .unknown;
+    }
+
     fn applyMirPointerProvenanceFact(self: *CEmitter, fact: mir.PointerProvenanceFact, locals: ?*std.StringHashMap(LocalInfo)) !void {
         if (!self.mirPointerFactSubjectSupportedNow(fact, locals)) return;
         try self.emitMirPointerProvenanceConsumedComment(fact);
-        const live_global = mirPointerFactIsLiveGlobal(fact);
-        if (fact.element_index) |index| {
-            try self.setLocalArrayPointerElementProvenance(fact.subject, @intCast(index), live_global);
+        if (fact.field_path) |field_path| {
+            if (fact.element_index) |index| {
+                const element_path = try self.aggregatePointerArrayElementPath(field_path, @intCast(index));
+                try self.setAggregatePointerFieldProvenance(fact.subject, element_path, mirPointerFactState(fact));
+            } else {
+                try self.setAggregatePointerFieldProvenance(fact.subject, field_path, mirPointerFactState(fact));
+            }
             return;
         }
+        if (fact.element_index) |index| {
+            try self.setLocalArrayPointerElementProvenance(fact.subject, @intCast(index), mirPointerFactState(fact));
+            return;
+        }
+        const live_global = mirPointerFactIsLiveGlobal(fact);
         const local_set = locals orelse return;
         const info = local_set.get(fact.subject) orelse return;
         const ty = info.source_ty orelse return;
@@ -4871,6 +5290,7 @@ const CEmitter = struct {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
+            if (fact.field_path != null) continue;
             if (!std.mem.eql(u8, fact.subject, subject)) continue;
             if (element_index) |wanted| {
                 if (fact.element_index == null or fact.element_index.? != wanted) continue;
@@ -4892,6 +5312,10 @@ const CEmitter = struct {
                 .call, .indirect_call => {},
                 else => continue,
             }
+            if (fact.field_path) |field_path| {
+                self.clearAggregatePointerFieldsForLocalPath(fact.subject, field_path);
+                continue;
+            }
             if (!self.mirPointerFactSubjectSupportedNow(fact, locals)) continue;
             if (fact.element_index != null) {
                 self.clearLocalArrayPointerElementsForLocal(fact.subject);
@@ -4909,11 +5333,92 @@ const CEmitter = struct {
         }
     }
 
+    fn applyMirAggregatePointerFieldFactsAtSource(self: *CEmitter, subject: []const u8, field_path: []const u8, element_index: ?usize, span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const function = self.currentMirFunction() orelse return false;
+        var matched = false;
+        for (function.pointer_provenance_facts) |fact| {
+            if (!std.mem.eql(u8, fact.subject, subject)) continue;
+            const fact_field = fact.field_path orelse continue;
+            if (!std.mem.eql(u8, fact_field, field_path)) continue;
+            if (element_index) |wanted| {
+                if (fact.element_index == null or fact.element_index.? != wanted) continue;
+            } else if (fact.element_index != null) {
+                continue;
+            }
+            if (!mirSourceMatches(span, fact.source)) continue;
+            matched = true;
+            try self.applyMirPointerProvenanceFact(fact, locals);
+        }
+        return matched;
+    }
+
+    fn applyMirAggregatePointerFieldFactsForSubjectAtSource(self: *CEmitter, subject: []const u8, span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const function = self.currentMirFunction() orelse return false;
+        var matched = false;
+        for (function.pointer_provenance_facts) |fact| {
+            if (!std.mem.eql(u8, fact.subject, subject)) continue;
+            if (fact.field_path == null) continue;
+            if (!mirSourceMatches(span, fact.source)) continue;
+            matched = true;
+            try self.applyMirPointerProvenanceFact(fact, locals);
+        }
+        return matched;
+    }
+
+    fn structLiteralFields(expr: ast.Expr) ?[]const ast.StructLiteralField {
+        return switch (expr.kind) {
+            .struct_literal => |fields| fields,
+            .grouped => |inner| structLiteralFields(inner.*),
+            else => null,
+        };
+    }
+
+    fn applyMirAggregatePointerFieldFactsFromStructLiteral(self: *CEmitter, subject: []const u8, aggregate_ty: ast.TypeExpr, literal: ast.Expr, path_prefix: ?[]const u8, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const fields = structLiteralFields(literal) orelse return false;
+        var matched = false;
+        for (fields) |field| {
+            const field_ty = self.memberFieldTypeFromAggregate(aggregate_ty, field.name.text) orelse continue;
+            const field_path = if (path_prefix) |prefix|
+                try self.joinAggregatePointerFieldPath(prefix, field.name.text)
+            else
+                field.name.text;
+            if (isPointerLikeGlobalType(self.resolveAliasType(field_ty))) {
+                const field_matched = try self.applyMirAggregatePointerFieldFactsAtSource(subject, field_path, null, field.value.span, locals);
+                matched = matched or field_matched;
+                if (!field_matched and self.directMirPointerContainerValueExpr(field.value, locals)) {
+                    try self.setAggregatePointerFieldProvenance(subject, field_path, .unknown);
+                    matched = true;
+                }
+                continue;
+            }
+            if (self.fixedLocalPointerArrayElementType(field_ty) != null) {
+                self.clearAggregatePointerFieldsForLocalPath(subject, field_path);
+                const items = arrayLiteralItems(field.value) orelse continue;
+                for (items, 0..) |item, index| {
+                    const element_matched = try self.applyMirAggregatePointerFieldFactsAtSource(subject, field_path, index, item.span, locals);
+                    matched = matched or element_matched;
+                    if (!element_matched and self.directMirPointerContainerValueExpr(item, locals)) {
+                        const element_path = try self.aggregatePointerArrayElementPath(field_path, @intCast(index));
+                        try self.setAggregatePointerFieldProvenance(subject, element_path, .unknown);
+                        matched = true;
+                    }
+                }
+                continue;
+            }
+            matched = (try self.applyMirAggregatePointerFieldFactsFromStructLiteral(subject, field_ty, field.value, field_path, locals)) or matched;
+        }
+        return matched;
+    }
+
     fn directMirAddressProvenanceExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAddressProvenanceExpr(inner.*, locals),
             .cast => |node| self.directMirAddressProvenanceExpr(node.value.*, locals),
             .address_of => |inner| self.directMirAddressProvenanceTarget(inner.*, locals),
+            .call => |call| lower_c_builtin.isAssumeNoaliasCall(call) and
+                call.type_args.len == 0 and
+                call.args.len == 2 and
+                self.directMirAddressProvenanceExpr(call.args[0], locals),
             else => false,
         };
     }
@@ -4931,29 +5436,155 @@ const CEmitter = struct {
         };
     }
 
+    fn mirPointerProvenanceCoversDirectLocalUpdate(self: *CEmitter, ty: ast.TypeExpr, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+        return isPointerLikeGlobalType(self.resolveAliasType(ty)) and self.directMirPointerContainerValueExpr(expr, locals);
+    }
+
+    fn directMirRawManyZeroOffsetExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directMirRawManyZeroOffsetExpr(inner.*, locals),
+            .cast => |node| self.directMirRawManyZeroOffsetExpr(node.value.*, locals),
+            .call => |call| blk: {
+                if (lower_c_builtin.isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2) {
+                    break :blk self.directMirRawManyZeroOffsetExpr(call.args[0], locals);
+                }
+                if (call.type_args.len != 0 or call.args.len != 1) break :blk false;
+                const member = memberExpr(call.callee.*) orelse break :blk false;
+                if (!std.mem.eql(u8, member.name.text, "offset")) break :blk false;
+                if (localArrayConstIndexValue(call.args[0], locals) != 0) break :blk false;
+                _ = self.directRawManyLocalName(member.base.*, locals) orelse break :blk false;
+                break :blk true;
+            },
+            else => false,
+        };
+    }
+
+    fn directRawManyLocalName(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?[]const u8 {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directRawManyLocalName(inner.*, locals),
+            .ident => |ident| blk: {
+                const info = locals.get(ident.text) orelse break :blk null;
+                const ty = info.source_ty orelse break :blk null;
+                if (self.resolveAliasType(ty).kind != .raw_many_pointer) break :blk null;
+                break :blk ident.text;
+            },
+            else => null,
+        };
+    }
+
+    fn directMirPointerLocalCopyExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directMirPointerLocalCopyExpr(inner.*, locals),
+            .cast => |node| self.directMirPointerLocalCopyExpr(node.value.*, locals),
+            .call => |call| lower_c_builtin.isAssumeNoaliasCall(call) and
+                call.type_args.len == 0 and
+                call.args.len == 2 and
+                self.directMirPointerLocalCopyExpr(call.args[0], locals),
+            .ident => |ident| blk: {
+                const info = locals.get(ident.text) orelse break :blk false;
+                const ty = info.source_ty orelse break :blk false;
+                break :blk isPointerLikeGlobalType(self.resolveAliasType(ty));
+            },
+            else => false,
+        };
+    }
+
+    fn directMirFixedPointerArrayElementExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directMirFixedPointerArrayElementExpr(inner.*, locals),
+            .cast => |node| self.directMirFixedPointerArrayElementExpr(node.value.*, locals),
+            .call => |call| lower_c_builtin.isAssumeNoaliasCall(call) and
+                call.type_args.len == 0 and
+                call.args.len == 2 and
+                self.directMirFixedPointerArrayElementExpr(call.args[0], locals),
+            else => self.directLocalArrayElementPath(expr, locals) != null,
+        };
+    }
+
+    fn directMirAggregatePointerFieldExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directMirAggregatePointerFieldExpr(inner.*, locals),
+            .cast => |node| self.directMirAggregatePointerFieldExpr(node.value.*, locals),
+            .call => |call| lower_c_builtin.isAssumeNoaliasCall(call) and
+                call.type_args.len == 0 and
+                call.args.len == 2 and
+                self.directMirAggregatePointerFieldExpr(call.args[0], locals),
+            else => self.directLocalAggregateMemberPath(expr, locals) != null,
+        };
+    }
+
+    fn directMirAggregatePointerArrayElementExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directMirAggregatePointerArrayElementExpr(inner.*, locals),
+            .cast => |node| self.directMirAggregatePointerArrayElementExpr(node.value.*, locals),
+            .call => |call| lower_c_builtin.isAssumeNoaliasCall(call) and
+                call.type_args.len == 0 and
+                call.args.len == 2 and
+                self.directMirAggregatePointerArrayElementExpr(call.args[0], locals),
+            else => self.directLocalAggregateArrayElementPath(expr, locals) != null,
+        };
+    }
+
+    fn directMirPointerContainerValueExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+        switch (expr.kind) {
+            .call => |call| {
+                if (lower_c_builtin.isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2) {
+                    return self.directMirPointerContainerValueExpr(call.args[0], locals);
+                }
+            },
+            else => {},
+        }
+        return self.directMirAddressProvenanceExpr(expr, locals) or
+            self.directMirRawManyZeroOffsetExpr(expr, locals) or
+            self.directMirPointerLocalCopyExpr(expr, locals) or
+            self.directMirFixedPointerArrayElementExpr(expr, locals) or
+            self.directMirAggregatePointerFieldExpr(expr, locals) or
+            self.directMirAggregatePointerArrayElementExpr(expr, locals);
+    }
+
+    fn updatePointerProvenanceFromMirOrFallback(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+        if (!isPointerLikeGlobalType(self.resolveAliasType(ty))) {
+            _ = self.mir_pointer_local_provenance.remove(name);
+            return;
+        }
+
+        _ = self.mir_pointer_local_provenance.remove(name);
+        const matched = try self.applyMirPointerProvenanceFactsAtSource(name, null, initializer.span, locals);
+        if (matched or self.mirPointerProvenanceCoversDirectLocalUpdate(ty, initializer, locals)) return;
+    }
+
+    fn updatePointerProvenanceAssignmentFromMirOrFallback(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, value: ast.Expr, span: ast.Span, locals: *std.StringHashMap(LocalInfo)) !void {
+        if (!isPointerLikeGlobalType(self.resolveAliasType(ty))) {
+            _ = self.mir_pointer_local_provenance.remove(name);
+            return;
+        }
+
+        _ = self.mir_pointer_local_provenance.remove(name);
+        const matched_value = try self.applyMirPointerProvenanceFactsAtSource(name, null, value.span, locals);
+        _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span, locals);
+        if (matched_value or self.mirPointerProvenanceCoversDirectLocalUpdate(ty, value, locals)) return;
+    }
+
     fn applyMirPointerProvenanceForLocalInitializer(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         if (isPointerLikeGlobalType(self.resolveAliasType(ty))) {
-            // A declaration (re)binds the name: drop any stale entry first (a
-            // sibling-scope local of the same name must not leak its proof —
-            // a leaked .local_storage would be an unsound plain lowering).
-            // Matched facts re-establish the class below.
-            _ = self.mir_pointer_local_provenance.remove(name);
-            const matched = try self.applyMirPointerProvenanceFactsAtSource(name, null, initializer.span, locals);
-            if (!matched) {
-                if (self.mirArrayElementExprGlobalProvenance(initializer, locals)) |is_global| {
-                    if (is_global) {
-                        try self.mir_pointer_local_provenance.put(name, .global_storage);
-                    }
-                }
+            try self.updatePointerProvenanceFromMirOrFallback(name, ty, initializer, locals);
+            return;
+        }
+        if (self.isKnownStructType(ty)) {
+            self.clearAggregatePointerFieldsForLocalPath(name, "");
+            if (self.directAggregateCopySourceExpr(initializer, ty, locals)) {
+                _ = try self.applyMirAggregatePointerFieldFactsForSubjectAtSource(name, initializer.span, locals);
+                return;
             }
+            _ = try self.applyMirAggregatePointerFieldFactsFromStructLiteral(name, ty, initializer, null, locals);
             return;
         }
         if (self.fixedLocalPointerArrayElementType(ty) == null) return;
         const items = arrayLiteralItems(initializer) orelse return;
         for (items, 0..) |item, index| {
             const matched = try self.applyMirPointerProvenanceFactsAtSource(name, index, item.span, locals);
-            if (!matched and self.directMirAddressProvenanceExpr(item, locals)) {
-                try self.setLocalArrayPointerElementProvenance(name, @intCast(index), false);
+            if (!matched and self.directMirPointerContainerValueExpr(item, locals)) {
+                try self.setLocalArrayPointerElementProvenance(name, @intCast(index), .unknown);
             }
         }
     }
@@ -4966,23 +5597,77 @@ const CEmitter = struct {
         };
     }
 
+    fn directStructTypeName(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
+        const name = typeName(self.resolveAliasType(ty)) orelse return null;
+        if (!self.structs.contains(name)) return null;
+        return name;
+    }
+
+    fn directAggregateCopySourceExpr(self: *CEmitter, expr: ast.Expr, target_ty: ast.TypeExpr, locals: *std.StringHashMap(LocalInfo)) bool {
+        const target_struct_name = self.directStructTypeName(target_ty) orelse return false;
+        return self.directAggregateCopySourceExprForStruct(expr, target_struct_name, locals);
+    }
+
+    fn directAggregateCopySourceExprForStruct(self: *CEmitter, expr: ast.Expr, target_struct_name: []const u8, locals: *std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directAggregateCopySourceExprForStruct(inner.*, target_struct_name, locals),
+            .cast => |node| self.directAggregateCopySourceExprForStruct(node.value.*, target_struct_name, locals),
+            .call => |call| lower_c_builtin.isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2 and self.directAggregateCopySourceExprForStruct(call.args[0], target_struct_name, locals),
+            .ident => |ident| blk: {
+                const info = locals.get(ident.text) orelse break :blk false;
+                const source_ty = info.source_ty orelse break :blk false;
+                const source_struct_name = self.directStructTypeName(source_ty) orelse break :blk false;
+                break :blk std.mem.eql(u8, source_struct_name, target_struct_name);
+            },
+            .member => blk: {
+                _ = self.directLocalAggregateMemberPath(expr, locals) orelse break :blk false;
+                const source_ty = self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse break :blk false;
+                const source_struct_name = self.directStructTypeName(source_ty) orelse break :blk false;
+                break :blk std.mem.eql(u8, source_struct_name, target_struct_name);
+            },
+            else => false,
+        };
+    }
+
     fn applyMirPointerProvenanceForAssignment(self: *CEmitter, target: ast.Expr, value: ast.Expr, span: ast.Span, locals: *std.StringHashMap(LocalInfo)) !void {
+        switch (target.kind) {
+            .grouped => |inner| return self.applyMirPointerProvenanceForAssignment(inner.*, value, span, locals),
+            .member => |member| {
+                const path = self.directLocalAggregateMemberPath(target, locals) orelse return;
+                const field_ty = self.memberFieldType(member.base.*, member.name.text, locals) orelse return;
+                if (isPointerLikeGlobalType(self.resolveAliasType(field_ty))) {
+                    if (try self.applyMirAggregatePointerFieldFactsAtSource(path.local_name, path.field_path, null, value.span, locals)) return;
+                    if (self.directMirPointerContainerValueExpr(value, locals)) {
+                        try self.setAggregatePointerFieldProvenance(path.local_name, path.field_path, .unknown);
+                        return;
+                    }
+                }
+                if (self.isKnownStructType(field_ty)) {
+                    self.clearAggregatePointerFieldsForLocalPath(path.local_name, path.field_path);
+                    if (self.directAggregateCopySourceExpr(value, field_ty, locals)) {
+                        _ = try self.applyMirAggregatePointerFieldFactsForSubjectAtSource(path.local_name, value.span, locals);
+                        return;
+                    }
+                    _ = try self.applyMirAggregatePointerFieldFactsFromStructLiteral(path.local_name, field_ty, value, path.field_path, locals);
+                }
+                return;
+            },
+            else => {},
+        }
         const name = directLocalName(target) orelse return;
         const info = locals.get(name) orelse return;
         const ty = info.source_ty orelse return;
         if (isPointerLikeGlobalType(self.resolveAliasType(ty))) {
-            // Reassignment invalidates any prior proof; matched facts (or the
-            // syntactic global element ladder) re-establish the class below.
-            _ = self.mir_pointer_local_provenance.remove(name);
-            const matched_value = try self.applyMirPointerProvenanceFactsAtSource(name, null, value.span, locals);
-            _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span, locals);
-            if (!matched_value) {
-                if (self.mirArrayElementExprGlobalProvenance(value, locals)) |is_global| {
-                    if (is_global) {
-                        try self.mir_pointer_local_provenance.put(name, .global_storage);
-                    }
-                }
+            try self.updatePointerProvenanceAssignmentFromMirOrFallback(name, ty, value, span, locals);
+            return;
+        }
+        if (self.isKnownStructType(ty)) {
+            self.clearAggregatePointerFieldsForLocalPath(name, "");
+            if (self.directAggregateCopySourceExpr(value, ty, locals)) {
+                _ = try self.applyMirAggregatePointerFieldFactsForSubjectAtSource(name, value.span, locals);
+                return;
             }
+            _ = try self.applyMirAggregatePointerFieldFactsFromStructLiteral(name, ty, value, null, locals);
             return;
         }
         if (self.fixedLocalPointerArrayElementType(ty) == null) return;
@@ -4990,13 +5675,30 @@ const CEmitter = struct {
         const items = arrayLiteralItems(value) orelse return;
         for (items, 0..) |item, index| {
             const matched = try self.applyMirPointerProvenanceFactsAtSource(name, index, item.span, locals);
-            if (!matched and self.directMirAddressProvenanceExpr(item, locals)) {
-                try self.setLocalArrayPointerElementProvenance(name, @intCast(index), false);
+            if (!matched and self.directMirPointerContainerValueExpr(item, locals)) {
+                try self.setLocalArrayPointerElementProvenance(name, @intCast(index), .unknown);
             }
         }
     }
 
     fn applyMirPointerProvenanceForIndexAssignment(self: *CEmitter, target: ast.Expr, value: ast.Expr, span: ast.Span, locals: *std.StringHashMap(LocalInfo)) !void {
+        if (self.directLocalAggregateArrayElementPath(target, locals)) |aggregate_path| {
+            const index_node = switch (target.kind) {
+                .index => |node| node,
+                .grouped => |inner| switch (inner.kind) {
+                    .index => |node| node,
+                    else => return,
+                },
+                else => return,
+            };
+            const field_path = self.directLocalAggregateMemberPath(index_node.base.*, locals) orelse return;
+            const index = localArrayConstIndexValue(index_node.index.*, locals) orelse return;
+            if (try self.applyMirAggregatePointerFieldFactsAtSource(field_path.local_name, field_path.field_path, index, value.span, locals)) return;
+            if (self.directMirPointerContainerValueExpr(value, locals)) {
+                try self.setAggregatePointerFieldProvenance(aggregate_path.local_name, aggregate_path.field_path, .unknown);
+                return;
+            }
+        }
         const path = self.directLocalArrayElementPath(target, locals) orelse {
             const node = switch (target.kind) {
                 .index => |node| node,
@@ -5011,8 +5713,8 @@ const CEmitter = struct {
         const matched_value = try self.applyMirPointerProvenanceFactsAtSource(path.local_name, path.index, value.span, locals);
         _ = try self.applyMirPointerProvenanceFactsAtSource(path.local_name, path.index, span, locals);
         _ = try self.applyMirPointerProvenanceFactsAtSource(path.local_name, null, span, locals);
-        if (!matched_value and self.directMirAddressProvenanceExpr(value, locals)) {
-            try self.setLocalArrayPointerElementProvenance(path.local_name, path.index, false);
+        if (!matched_value and self.directMirPointerContainerValueExpr(value, locals)) {
+            try self.setLocalArrayPointerElementProvenance(path.local_name, path.index, .unknown);
         }
     }
 
@@ -5022,12 +5724,30 @@ const CEmitter = struct {
         race_pointer: GlobalInfo,
     };
 
+    const RaceAggregateKind = union(enum) {
+        scalar: GlobalInfo,
+        pointer: GlobalInfo,
+        @"struct": ast.StructDecl,
+        array: ast.TypeExpr,
+    };
+
     // Positive locality proof for the bare pointer-deref access class (spec I.13):
     // PLAIN deref lowering is allowed only when the pointer provably names the
     // current function's own storage — a live MIR local_storage fact for the
     // pointer local, or a syntactic address-of a named local (through grouped/
     // cast). Everything else lowers race-tolerantly.
     fn derefPointerHasProvenLocalStorage(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        if (locals) |local_set| {
+            if (self.directLocalArrayElementPath(inner, local_set)) |path| {
+                if (self.localArrayElementPointerProvenance(path.local_name, path.index)) |provenance| return provenance == .local_storage;
+            }
+        }
+        if (self.directLocalAggregateArrayElementPath(inner, locals)) |path| {
+            if (self.aggregateFieldPointerProvenance(path.local_name, path.field_path)) |provenance| return provenance == .local_storage;
+        }
+        if (self.directLocalAggregateMemberPath(inner, locals)) |path| {
+            if (self.aggregateFieldPointerProvenance(path.local_name, path.field_path)) |provenance| return provenance == .local_storage;
+        }
         return switch (inner.kind) {
             .ident => |ident| blk: {
                 const local_set = locals orelse break :blk false;
@@ -5056,11 +5776,10 @@ const CEmitter = struct {
     // ordinary scalar deref lowers race-tolerantly (mc_race helpers for helper
     // scalars, relaxed __atomic_*_n for pointer-shaped pointees) unless the
     // pointer is positively proven local. Aggregate pointees stay on the plain
-    // path — the aggregate/member/index access classes are separate lowering
-    // classes (follow-up slices). Scalars with no sound race-tolerant lowering
-    // (u128/i128) fail emission closed. Pointees the C backend cannot type
-    // (derefPointeeType null) keep today's plain lowering — a residual gap for
-    // a follow-up slice.
+    // structural path here so pointer-to-array/member-base forms can use their
+    // dedicated access-class handling; aggregate value-copy/store contexts fail
+    // closed before they reach plain C aggregate copying. Scalars with no sound
+    // race-tolerant lowering (u128/i128) fail emission closed.
     fn derefAccessLowering(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !DerefAccessLowering {
         if (self.derefPointerHasProvenLocalStorage(inner, locals)) return .plain;
         const pointee_ty = self.derefPointeeType(inner, locals) orelse return .plain;
@@ -5077,6 +5796,31 @@ const CEmitter = struct {
             .grouped => |wrapped| return try self.emitRaceTolerantDerefStoreStmt(wrapped.*, value, locals),
             else => return false,
         };
+        if (!self.derefPointerHasProvenLocalStorage(inner, locals)) {
+            if (self.derefPointeeType(inner, locals)) |pointee_ty| {
+                const info = self.globalInfoFromType(pointee_ty) catch null;
+                if (info) |global_info| {
+                    if (global_info.aggregate) {
+                        const ptr_ty = try self.pointerTypeFor(pointee_ty, .mut, .typedef_name);
+                        const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+                        self.temp_index += 1;
+                        const value_ty = try self.cTypeFor(pointee_ty, .typedef_name);
+                        const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
+                        self.temp_index += 1;
+                        try self.writeIndent();
+                        try self.out.print(self.allocator, "{s} {s} = ", .{ ptr_ty, ptr_name });
+                        try self.emitExpr(inner, locals);
+                        try self.out.appendSlice(self.allocator, ";\n");
+                        try self.writeIndent();
+                        try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
+                        try self.emitExprWithTarget(value, locals, pointee_ty);
+                        try self.out.appendSlice(self.allocator, ";\n");
+                        try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, pointee_ty, value_name);
+                        return true;
+                    }
+                }
+            }
+        }
         switch (try self.derefAccessLowering(inner, locals)) {
             .plain => return false,
             .race_scalar => |info| {
@@ -5100,6 +5844,615 @@ const CEmitter = struct {
                 return true;
             },
         }
+    }
+
+    fn emitRaceTolerantAggregateDerefExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+        const inner = switch (expr.kind) {
+            .deref => |ptr| ptr.*,
+            .grouped => |wrapped| return try self.emitRaceTolerantAggregateDerefExpr(wrapped.*, locals, target_ty),
+            else => return false,
+        };
+        if (self.derefPointerHasProvenLocalStorage(inner, locals)) return false;
+        const pointee_ty = self.derefPointeeType(inner, locals) orelse return false;
+        const info = self.globalInfoFromType(pointee_ty) catch return false;
+        if (!info.aggregate) return false;
+        _ = target_ty orelse return false;
+        const ptr_ty = try self.pointerTypeFor(pointee_ty, .mut, .typedef_name);
+        const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.out.print(self.allocator, "({{ {s} {s} = ", .{ ptr_ty, ptr_name });
+        try self.emitExpr(inner, locals);
+        try self.out.appendSlice(self.allocator, "; ");
+        try self.emitRaceTolerantAggregateLoadFromPtr(ptr_name, pointee_ty);
+        try self.out.appendSlice(self.allocator, "; })");
+        return true;
+    }
+
+    fn raceAggregateKind(self: *CEmitter, ty: ast.TypeExpr) !RaceAggregateKind {
+        const info = try self.globalInfoFromType(ty);
+        if (!info.aggregate) {
+            if (info.pointer_like) return .{ .pointer = info };
+            if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+            return .{ .scalar = info };
+        }
+        const resolved = self.resolveAliasType(ty);
+        switch (resolved.kind) {
+            .array => return .{ .array = resolved },
+            .name => |name| {
+                const decl = self.structs.get(name.text) orelse return error.UnsupportedCEmission;
+                if (decl.is_c_union) return error.UnsupportedCEmission;
+                return .{ .@"struct" = decl };
+            },
+            else => return error.UnsupportedCEmission,
+        }
+    }
+
+    fn emitRaceTolerantAggregateLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr) !void {
+        switch (try self.raceAggregateKind(ty)) {
+            .scalar => |info| try self.out.print(self.allocator, "(({s})mc_race_load_{s}({s}))", .{ info.c_type, info.race_type_name, ptr_expr }),
+            .pointer => |info| try self.out.print(self.allocator, "(({s})__atomic_load_n({s}, __ATOMIC_RELAXED))", .{ info.c_type, ptr_expr }),
+            .@"struct" => |decl| {
+                try self.out.print(self.allocator, "({s}){{ ", .{try self.cTypeFor(ty, .typedef_name)});
+                for (decl.fields, 0..) |field, i| {
+                    if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+                    const field_name = try self.cIdent(field.name.text);
+                    try self.out.print(self.allocator, ".{s} = ", .{field_name});
+                    const field_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&({s}->{s})", .{ ptr_expr, field_name });
+                    try self.emitRaceTolerantAggregateLoadFromPtr(field_ptr, field.ty);
+                }
+                try self.out.appendSlice(self.allocator, " }");
+            },
+            .array => |array_ty| {
+                const array = array_ty.kind.array;
+                const len = self.constArrayLen(array.len) orelse return error.UnsupportedCEmission;
+                try self.out.print(self.allocator, "({s}){{ .elems = {{ ", .{try self.cTypeFor(array_ty, .typedef_name)});
+                for (0..len) |i| {
+                    if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+                    const elem_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&({s}->elems[{d}])", .{ ptr_expr, i });
+                    try self.emitRaceTolerantAggregateLoadFromPtr(elem_ptr, array.child.*);
+                }
+                try self.out.appendSlice(self.allocator, " } }");
+            },
+        }
+    }
+
+    fn emitRaceTolerantAggregateStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr, value_expr: []const u8) !void {
+        switch (try self.raceAggregateKind(ty)) {
+            .scalar => |info| {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "mc_race_store_{s}({s}, ({s}){s});\n", .{ info.race_type_name, ptr_expr, info.race_c_type, value_expr });
+            },
+            .pointer => |info| {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "__atomic_store_n({s}, ({s}){s}, __ATOMIC_RELAXED);\n", .{ ptr_expr, info.c_type, value_expr });
+            },
+            .@"struct" => |decl| {
+                for (decl.fields) |field| {
+                    const field_name = try self.cIdent(field.name.text);
+                    const field_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&({s}->{s})", .{ ptr_expr, field_name });
+                    const field_value = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.{s}", .{ value_expr, field_name });
+                    try self.emitRaceTolerantAggregateStoreFromPtr(field_ptr, field.ty, field_value);
+                }
+            },
+            .array => |array_ty| {
+                const array = array_ty.kind.array;
+                const len = self.constArrayLen(array.len) orelse return error.UnsupportedCEmission;
+                for (0..len) |i| {
+                    const elem_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&({s}->elems[{d}])", .{ ptr_expr, i });
+                    const elem_value = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.elems[{d}]", .{ value_expr, i });
+                    try self.emitRaceTolerantAggregateStoreFromPtr(elem_ptr, array.child.*, elem_value);
+                }
+            },
+        }
+    }
+
+    fn constArrayLen(self: *CEmitter, expr: ast.Expr) ?usize {
+        var reflect_env = lower_c_reflect.ReflectEnv{
+            .structs = &self.structs,
+            .packed_bits = &self.packed_bits,
+            .overlay_unions = &self.overlay_unions,
+            .tagged_unions = &self.tagged_unions,
+            .enums = &self.enums,
+            .type_aliases = &self.type_aliases,
+            .const_fns = &self.const_fns,
+            .const_globals = &self.const_globals,
+        };
+        const len = constArrayLenValue(expr, &self.const_fns, &self.const_globals, lower_c_reflect.comptimeReflectThunk, &reflect_env) orelse return null;
+        return std.math.cast(usize, len);
+    }
+
+    fn emitRaceTolerantPointerMemberStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const member = switch (target.kind) {
+            .member => |node| node,
+            .grouped => |wrapped| return try self.emitRaceTolerantPointerMemberStoreStmt(wrapped.*, value, locals),
+            else => return false,
+        };
+        if (!self.exprHasPointerType(member.base.*, locals)) return false;
+        const field_ty = self.operandEmitType(target, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+        if (info.aggregate) {
+            if (self.derefPointerHasProvenLocalStorage(member.base.*, locals)) return false;
+            const base_ty = self.operandEmitType(member.base.*, locals) orelse self.exprSourceTypeForEmission(member.base.*, locals) orelse return false;
+            const base_c_ty = try self.cTypeFor(base_ty, .typedef_name);
+            const base_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+            self.temp_index += 1;
+            const value_ty = try self.cTypeFor(field_ty, .typedef_name);
+            const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
+            self.temp_index += 1;
+            const field_name = try self.cIdent(member.name.text);
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ base_c_ty, base_name });
+            try self.emitExpr(member.base.*, locals);
+            try self.out.appendSlice(self.allocator, ";\n");
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
+            try self.emitExprWithTarget(value, locals, field_ty);
+            try self.out.appendSlice(self.allocator, ";\n");
+            const field_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&({s}->{s})", .{ base_name, field_name });
+            try self.emitRaceTolerantAggregateStoreFromPtr(field_ptr, field_ty, value_name);
+            return true;
+        }
+        const field_name = try self.cIdent(member.name.text);
+        try self.writeIndent();
+        if (info.pointer_like) {
+            try self.out.appendSlice(self.allocator, "__atomic_store_n(&(");
+            try self.emitExpr(member.base.*, locals);
+            try self.out.print(self.allocator, "->{s}), ({s})", .{ field_name, info.c_type });
+            try self.emitExprWithTarget(value, locals, field_ty);
+            try self.out.appendSlice(self.allocator, ", __ATOMIC_RELAXED);\n");
+            return true;
+        }
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "mc_race_store_{s}(&(", .{info.race_type_name});
+        try self.emitExpr(member.base.*, locals);
+        try self.out.print(self.allocator, "->{s}), ({s})", .{ field_name, info.race_c_type });
+        try self.emitExprWithTarget(value, locals, field_ty);
+        try self.out.appendSlice(self.allocator, ");\n");
+        return true;
+    }
+
+    fn emitRaceTolerantPointerMemberAggregateExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+        const member = switch (expr.kind) {
+            .member => |node| node,
+            .grouped => |wrapped| return try self.emitRaceTolerantPointerMemberAggregateExpr(wrapped.*, locals, target_ty),
+            else => return false,
+        };
+        if (!self.exprHasPointerType(member.base.*, locals)) return false;
+        if (self.derefPointerHasProvenLocalStorage(member.base.*, locals)) return false;
+        const field_ty = self.memberFieldType(member.base.*, member.name.text, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+        if (!info.aggregate) return false;
+        _ = target_ty orelse return false;
+        const base_ty = self.operandEmitType(member.base.*, locals) orelse self.exprSourceTypeForEmission(member.base.*, locals) orelse return false;
+        const base_c_ty = try self.cTypeFor(base_ty, .typedef_name);
+        const base_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+        self.temp_index += 1;
+        const field_name = try self.cIdent(member.name.text);
+        try self.out.print(self.allocator, "({{ {s} {s} = ", .{ base_c_ty, base_name });
+        try self.emitExpr(member.base.*, locals);
+        try self.out.appendSlice(self.allocator, "; ");
+        const field_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&({s}->{s})", .{ base_name, field_name });
+        try self.emitRaceTolerantAggregateLoadFromPtr(field_ptr, field_ty);
+        try self.out.appendSlice(self.allocator, "; })");
+        return true;
+    }
+
+    fn emitRaceTolerantNestedPointerMemberAggregateExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+        var fields: std.ArrayList([]const u8) = .empty;
+        defer fields.deinit(self.allocator);
+        const path = try self.pointerMemberPath(expr, locals, &fields) orelse return false;
+        if (self.derefPointerHasProvenLocalStorage(path.root, locals)) return false;
+        const field_ty = self.pointerMemberPathFinalType(path.root, path.fields, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+        if (!info.aggregate) return false;
+        _ = target_ty orelse return false;
+        const root_ty = self.operandEmitType(path.root, locals) orelse self.exprSourceTypeForEmission(path.root, locals) orelse return false;
+        const root_c_ty = try self.cTypeFor(root_ty, .typedef_name);
+        const root_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.out.print(self.allocator, "({{ {s} {s} = ", .{ root_c_ty, root_name });
+        try self.emitExpr(path.root, locals);
+        try self.out.appendSlice(self.allocator, "; ");
+        const field_ptr = try self.pointerMemberPathPtrExpr(root_name, path.fields);
+        try self.emitRaceTolerantAggregateLoadFromPtr(field_ptr, field_ty);
+        try self.out.appendSlice(self.allocator, "; })");
+        return true;
+    }
+
+    fn emitRaceTolerantIndexedMemberAggregateExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+        var fields: std.ArrayList([]const u8) = .empty;
+        defer fields.deinit(self.allocator);
+        const index = try self.collectIndexedMemberPath(expr, locals, &fields) orelse return false;
+        if (fields.items.len == 0) return false;
+        if (!self.indexedMemberHasRaceTolerantStorage(index, locals)) return false;
+        const field_ty = self.indexedMemberPathFinalType(index, fields.items, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+        if (!info.aggregate) return false;
+        _ = target_ty orelse return false;
+        const usize_ty = simpleNameType("usize", index.index.*.span);
+        const usize_c_ty = try self.cTypeFor(usize_ty, .typedef_name);
+        const index_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_idx{d}", .{self.temp_index});
+        self.temp_index += 1;
+        const ptr_ty = try self.pointerTypeFor(field_ty, .mut, .typedef_name);
+        const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.out.print(self.allocator, "({{ {s} {s} = ", .{ usize_c_ty, index_name });
+        try self.emitExpr(index.index.*, locals);
+        try self.out.print(self.allocator, "; {s} {s} = &(", .{ ptr_ty, ptr_name });
+        if (!try self.emitIndexedMemberPathAddressExpr(index, fields.items, locals, index_name)) return false;
+        try self.out.appendSlice(self.allocator, "); ");
+        try self.emitRaceTolerantAggregateLoadFromPtr(ptr_name, field_ty);
+        try self.out.appendSlice(self.allocator, "; })");
+        return true;
+    }
+
+    fn ambiguousPointerMemberAggregateValueCopy(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const member = switch (expr.kind) {
+            .member => |node| node,
+            .grouped => |wrapped| return try self.ambiguousPointerMemberAggregateValueCopy(wrapped.*, locals),
+            else => return false,
+        };
+        if (!self.exprHasPointerType(member.base.*, locals)) return false;
+        if (self.derefPointerHasProvenLocalStorage(member.base.*, locals)) return false;
+        const field_ty = self.memberFieldType(member.base.*, member.name.text, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+        return info.aggregate;
+    }
+
+    fn ambiguousIndexedMemberAggregateValueCopy(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const member = switch (expr.kind) {
+            .member => |node| node,
+            .grouped => |wrapped| return try self.ambiguousIndexedMemberAggregateValueCopy(wrapped.*, locals),
+            else => return false,
+        };
+        const index = indexExpr(member.base.*) orelse return false;
+        if (!self.indexedMemberHasRaceTolerantStorage(index, locals)) return false;
+        const field_ty = self.memberFieldType(member.base.*, member.name.text, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+        return info.aggregate;
+    }
+
+    fn ambiguousAggregateDerefValueCopy(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const inner = switch (expr.kind) {
+            .deref => |ptr| ptr.*,
+            .grouped => |wrapped| return try self.ambiguousAggregateDerefValueCopy(wrapped.*, locals),
+            else => return false,
+        };
+        if (self.derefPointerHasProvenLocalStorage(inner, locals)) return false;
+        const pointee_ty = self.derefPointeeType(inner, locals) orelse return false;
+        const info = self.globalInfoFromType(pointee_ty) catch return false;
+        return info.aggregate;
+    }
+
+    fn emitRaceTolerantSliceIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), slice: SliceAccess) anyerror!bool {
+        const element_ty = self.operandEmitType(.{ .span = node.index.*.span, .kind = .{ .index = node } }, locals) orelse return false;
+        const info = self.globalInfoFromType(element_ty) catch return false;
+        if (info.aggregate) {
+            const usize_ty = simpleNameType("usize", node.index.*.span);
+            const usize_c_ty = try self.cTypeFor(usize_ty, .typedef_name);
+            const index_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_idx{d}", .{self.temp_index});
+            self.temp_index += 1;
+            const ptr_ty = try self.pointerTypeFor(element_ty, .mut, .typedef_name);
+            const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.out.print(self.allocator, "({{ {s} {s} = ", .{ usize_c_ty, index_name });
+            try self.emitExpr(node.index.*, locals);
+            try self.out.print(self.allocator, "; {s} {s} = &(", .{ ptr_ty, ptr_name });
+            try self.emitExpr(node.base.*, locals);
+            try self.out.print(self.allocator, ".{s}[mc_check_index_usize({s}, ", .{ slice.ptr_field, index_name });
+            try self.emitExpr(node.base.*, locals);
+            try self.out.print(self.allocator, ".{s})]); ", .{slice.len_field});
+            try self.emitRaceTolerantAggregateLoadFromPtr(ptr_name, element_ty);
+            try self.out.appendSlice(self.allocator, "; })");
+            return true;
+        }
+        if (info.pointer_like) {
+            try self.out.print(self.allocator, "(({s})__atomic_load_n(&(", .{info.c_type});
+            try self.emitSliceIndexExpr(node, locals, slice);
+            try self.out.appendSlice(self.allocator, "), __ATOMIC_RELAXED))");
+            return true;
+        }
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "(({s})mc_race_load_{s}(&(", .{ info.c_type, info.race_type_name });
+        try self.emitSliceIndexExpr(node, locals, slice);
+        try self.out.appendSlice(self.allocator, ")))");
+        return true;
+    }
+
+    fn emitRaceTolerantSliceIndexStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const index = switch (target.kind) {
+            .index => |node| node,
+            .grouped => |wrapped| return try self.emitRaceTolerantSliceIndexStoreStmt(wrapped.*, value, locals),
+            else => return false,
+        };
+        const slice = self.sliceAccessForBase(index.base.*, locals) orelse return false;
+        const element_ty = self.operandEmitType(target, locals) orelse return false;
+        const info = self.globalInfoFromType(element_ty) catch return false;
+
+        const usize_ty = simpleNameType("usize", index.index.*.span);
+        const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
+        if (info.aggregate) {
+            const ptr_ty = try self.pointerTypeFor(element_ty, .mut, .typedef_name);
+            const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+            self.temp_index += 1;
+            const value_ty = try self.cTypeFor(element_ty, .typedef_name);
+            const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = &(", .{ ptr_ty, ptr_name });
+            try self.emitExpr(index.base.*, locals);
+            try self.out.print(self.allocator, ".{s}[mc_check_index_usize({s}, ", .{ slice.ptr_field, index_temp.name });
+            try self.emitExpr(index.base.*, locals);
+            try self.out.print(self.allocator, ".{s})]);\n", .{slice.len_field});
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
+            try self.emitExprWithTarget(value, locals, element_ty);
+            try self.out.appendSlice(self.allocator, ";\n");
+            try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, element_ty, value_name);
+            return true;
+        }
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, element_ty);
+
+        try self.writeIndent();
+        if (info.pointer_like) {
+            try self.out.appendSlice(self.allocator, "__atomic_store_n(&(");
+            try self.emitExpr(index.base.*, locals);
+            try self.out.print(self.allocator, ".{s}[mc_check_index_usize({s}, ", .{ slice.ptr_field, index_temp.name });
+            try self.emitExpr(index.base.*, locals);
+            try self.out.print(self.allocator, ".{s})]), ({s}){s}, __ATOMIC_RELAXED);\n", .{ slice.len_field, info.c_type, value_temp.name });
+            return true;
+        }
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "mc_race_store_{s}(&(", .{info.race_type_name});
+        try self.emitExpr(index.base.*, locals);
+        try self.out.print(self.allocator, ".{s}[mc_check_index_usize({s}, ", .{ slice.ptr_field, index_temp.name });
+        try self.emitExpr(index.base.*, locals);
+        try self.out.print(self.allocator, ".{s})]), ({s}){s});\n", .{ slice.len_field, info.race_c_type, value_temp.name });
+        return true;
+    }
+
+    fn pointerArrayDerefInner(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.Expr {
+        return switch (base.kind) {
+            .deref => |inner| if (self.derefPointerHasProvenLocalStorage(inner.*, locals)) null else inner.*,
+            .grouped => |inner| self.pointerArrayDerefInner(inner.*, locals),
+            else => null,
+        };
+    }
+
+    fn emitPointerArrayIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), base_arr: ast.TypeExpr, index_temp: ?[]const u8) anyerror!void {
+        try self.emitArrayIndexBase(node.base.*, locals);
+        if (index_temp == null and self.mirCheckElided(node.index.span)) {
+            try self.out.appendSlice(self.allocator, ".elems[");
+            try self.emitExpr(node.index.*, locals);
+            try self.out.appendSlice(self.allocator, "]");
+            return;
+        }
+        try self.out.appendSlice(self.allocator, ".elems[mc_check_index_usize(");
+        if (index_temp) |temp| {
+            try self.out.appendSlice(self.allocator, temp);
+        } else {
+            try self.emitExpr(node.index.*, locals);
+        }
+        const len = try self.arrayLenTextForExpr(base_arr.kind.array.len);
+        try self.out.print(self.allocator, ", {s})]", .{len});
+    }
+
+    fn emitRaceTolerantPointerArrayIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), base_arr: ast.TypeExpr) anyerror!bool {
+        _ = self.pointerArrayDerefInner(node.base.*, locals) orelse return false;
+        const element_ty = base_arr.kind.array.child.*;
+        const info = self.globalInfoFromType(element_ty) catch return false;
+        if (info.aggregate) {
+            const usize_ty = simpleNameType("usize", node.index.*.span);
+            const usize_c_ty = try self.cTypeFor(usize_ty, .typedef_name);
+            const index_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_idx{d}", .{self.temp_index});
+            self.temp_index += 1;
+            const ptr_ty = try self.pointerTypeFor(element_ty, .mut, .typedef_name);
+            const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.out.print(self.allocator, "({{ {s} {s} = ", .{ usize_c_ty, index_name });
+            try self.emitExpr(node.index.*, locals);
+            try self.out.print(self.allocator, "; {s} {s} = &(", .{ ptr_ty, ptr_name });
+            try self.emitPointerArrayIndexExpr(node, locals, base_arr, index_name);
+            try self.out.appendSlice(self.allocator, "); ");
+            try self.emitRaceTolerantAggregateLoadFromPtr(ptr_name, element_ty);
+            try self.out.appendSlice(self.allocator, "; })");
+            return true;
+        }
+        if (info.pointer_like) {
+            try self.out.print(self.allocator, "(({s})__atomic_load_n(&(", .{info.c_type});
+            try self.emitPointerArrayIndexExpr(node, locals, base_arr, null);
+            try self.out.appendSlice(self.allocator, "), __ATOMIC_RELAXED))");
+            return true;
+        }
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "(({s})mc_race_load_{s}(&(", .{ info.c_type, info.race_type_name });
+        try self.emitPointerArrayIndexExpr(node, locals, base_arr, null);
+        try self.out.appendSlice(self.allocator, ")))");
+        return true;
+    }
+
+    fn emitRaceTolerantPointerArrayIndexStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const index = switch (target.kind) {
+            .index => |node| node,
+            .grouped => |wrapped| return try self.emitRaceTolerantPointerArrayIndexStoreStmt(wrapped.*, value, locals),
+            else => return false,
+        };
+        const base_arr = self.arrayTypeForExpr(index.base.*, locals) orelse return false;
+        _ = self.pointerArrayDerefInner(index.base.*, locals) orelse return false;
+        const element_ty = base_arr.kind.array.child.*;
+        const info = self.globalInfoFromType(element_ty) catch return false;
+
+        const usize_ty = simpleNameType("usize", index.index.*.span);
+        const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
+        if (info.aggregate) {
+            const ptr_ty = try self.pointerTypeFor(element_ty, .mut, .typedef_name);
+            const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+            self.temp_index += 1;
+            const value_ty = try self.cTypeFor(element_ty, .typedef_name);
+            const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = &(", .{ ptr_ty, ptr_name });
+            try self.emitPointerArrayIndexExpr(index, locals, base_arr, index_temp.name);
+            try self.out.appendSlice(self.allocator, ");\n");
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
+            try self.emitExprWithTarget(value, locals, element_ty);
+            try self.out.appendSlice(self.allocator, ";\n");
+            try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, element_ty, value_name);
+            return true;
+        }
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, element_ty);
+
+        try self.writeIndent();
+        if (info.pointer_like) {
+            try self.out.appendSlice(self.allocator, "__atomic_store_n(&(");
+            try self.emitPointerArrayIndexExpr(index, locals, base_arr, index_temp.name);
+            try self.out.print(self.allocator, "), ({s}){s}, __ATOMIC_RELAXED);\n", .{ info.c_type, value_temp.name });
+            return true;
+        }
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "mc_race_store_{s}(&(", .{info.race_type_name});
+        try self.emitPointerArrayIndexExpr(index, locals, base_arr, index_temp.name);
+        try self.out.print(self.allocator, "), ({s}){s});\n", .{ info.race_c_type, value_temp.name });
+        return true;
+    }
+
+    fn emitRaceTolerantIndexedMemberStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const member = switch (target.kind) {
+            .member => |node| node,
+            .grouped => |wrapped| return try self.emitRaceTolerantIndexedMemberStoreStmt(wrapped.*, value, locals),
+            else => return false,
+        };
+        const index = indexExpr(member.base.*) orelse return false;
+        if (!self.indexedMemberHasRaceTolerantStorage(index, locals)) return false;
+        const field_ty = self.memberFieldType(member.base.*, member.name.text, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+        const field_name = try self.cIdent(member.name.text);
+
+        const usize_ty = simpleNameType("usize", index.index.*.span);
+        const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
+        if (info.aggregate) {
+            const ptr_ty = try self.pointerTypeFor(field_ty, .mut, .typedef_name);
+            const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+            self.temp_index += 1;
+            const value_ty = try self.cTypeFor(field_ty, .typedef_name);
+            const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = &(", .{ ptr_ty, ptr_name });
+            if (!try self.emitIndexedMemberAddressExpr(index, field_name, locals, index_temp.name)) return false;
+            try self.out.appendSlice(self.allocator, ");\n");
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
+            try self.emitExprWithTarget(value, locals, field_ty);
+            try self.out.appendSlice(self.allocator, ";\n");
+            try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, field_ty, value_name);
+            return true;
+        }
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
+
+        try self.writeIndent();
+        if (info.pointer_like) {
+            try self.out.appendSlice(self.allocator, "__atomic_store_n(&(");
+            if (!try self.emitIndexedMemberAddressExpr(index, field_name, locals, index_temp.name)) return false;
+            try self.out.print(self.allocator, "), ({s}){s}, __ATOMIC_RELAXED);\n", .{ info.c_type, value_temp.name });
+            return true;
+        }
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "mc_race_store_{s}(&(", .{info.race_type_name});
+        if (!try self.emitIndexedMemberAddressExpr(index, field_name, locals, index_temp.name)) return false;
+        try self.out.print(self.allocator, "), ({s}){s});\n", .{ info.race_c_type, value_temp.name });
+        return true;
+    }
+
+    fn emitRaceTolerantNestedIndexedMemberStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        var fields: std.ArrayList([]const u8) = .empty;
+        defer fields.deinit(self.allocator);
+        const index = try self.collectIndexedMemberPath(target, locals, &fields) orelse return false;
+        if (fields.items.len <= 1) return false;
+        if (!self.indexedMemberHasRaceTolerantStorage(index, locals)) return false;
+        const field_ty = self.indexedMemberPathFinalType(index, fields.items, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+
+        const usize_ty = simpleNameType("usize", index.index.*.span);
+        const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
+        if (info.aggregate) {
+            const ptr_ty = try self.pointerTypeFor(field_ty, .mut, .typedef_name);
+            const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+            self.temp_index += 1;
+            const value_ty = try self.cTypeFor(field_ty, .typedef_name);
+            const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = &(", .{ ptr_ty, ptr_name });
+            if (!try self.emitIndexedMemberPathAddressExpr(index, fields.items, locals, index_temp.name)) return false;
+            try self.out.appendSlice(self.allocator, ");\n");
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
+            try self.emitExprWithTarget(value, locals, field_ty);
+            try self.out.appendSlice(self.allocator, ";\n");
+            try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, field_ty, value_name);
+            return true;
+        }
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
+
+        try self.writeIndent();
+        if (info.pointer_like) {
+            try self.out.appendSlice(self.allocator, "__atomic_store_n(&(");
+            if (!try self.emitIndexedMemberPathAddressExpr(index, fields.items, locals, index_temp.name)) return false;
+            try self.out.print(self.allocator, "), ({s}){s}, __ATOMIC_RELAXED);\n", .{ info.c_type, value_temp.name });
+            return true;
+        }
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "mc_race_store_{s}(&(", .{info.race_type_name});
+        if (!try self.emitIndexedMemberPathAddressExpr(index, fields.items, locals, index_temp.name)) return false;
+        try self.out.print(self.allocator, "), ({s}){s});\n", .{ info.race_c_type, value_temp.name });
+        return true;
+    }
+
+    fn emitRaceTolerantNestedPointerMemberStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        var fields: std.ArrayList([]const u8) = .empty;
+        defer fields.deinit(self.allocator);
+        const path = try self.pointerMemberPath(target, locals, &fields) orelse return false;
+        if (self.derefPointerHasProvenLocalStorage(path.root, locals)) return false;
+        const field_ty = self.pointerMemberPathFinalType(path.root, path.fields, locals) orelse return false;
+        const info = self.globalInfoFromType(field_ty) catch return false;
+        if (info.aggregate) {
+            const root_ty = self.operandEmitType(path.root, locals) orelse self.exprSourceTypeForEmission(path.root, locals) orelse return false;
+            const root_c_ty = try self.cTypeFor(root_ty, .typedef_name);
+            const root_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
+            self.temp_index += 1;
+            const value_ty = try self.cTypeFor(field_ty, .typedef_name);
+            const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ root_c_ty, root_name });
+            try self.emitExpr(path.root, locals);
+            try self.out.appendSlice(self.allocator, ";\n");
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
+            try self.emitExprWithTarget(value, locals, field_ty);
+            try self.out.appendSlice(self.allocator, ";\n");
+            const field_ptr = try self.pointerMemberPathPtrExpr(root_name, path.fields);
+            try self.emitRaceTolerantAggregateStoreFromPtr(field_ptr, field_ty, value_name);
+            return true;
+        }
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
+
+        try self.writeIndent();
+        if (info.pointer_like) {
+            try self.out.appendSlice(self.allocator, "__atomic_store_n(&(");
+            try self.emitPointerMemberPathAddressExpr(path.root, path.fields, locals);
+            try self.out.print(self.allocator, "), ({s}){s}, __ATOMIC_RELAXED);\n", .{ info.c_type, value_temp.name });
+            return true;
+        }
+        if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "mc_race_store_{s}(&(", .{info.race_type_name});
+        try self.emitPointerMemberPathAddressExpr(path.root, path.fields, locals);
+        try self.out.print(self.allocator, "), ({s}){s});\n", .{ info.race_c_type, value_temp.name });
+        return true;
     }
 
     // The constant value of an integer local initializer, but only when it fits
@@ -5159,6 +6512,41 @@ const CEmitter = struct {
     // enum-literal comparison operands typed.
     fn operandEmitType(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         return lower_c_infer.operandEmitType(self.inferTypeContext(), expr, locals);
+    }
+
+    fn exprHasPointerType(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        const ty = self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse return false;
+        return self.resolveAliasType(ty).kind == .pointer;
+    }
+
+    fn memberFieldType(self: *CEmitter, base: ast.Expr, field_name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (indexExpr(base)) |index| {
+            if (self.arrayTypeForExpr(index.base.*, locals)) |array_ty| {
+                return self.memberFieldTypeFromAggregate(array_ty.kind.array.child.*, field_name);
+            }
+            const base_ty = self.operandEmitType(index.base.*, locals) orelse self.exprSourceTypeForEmission(index.base.*, locals) orelse return null;
+            if (self.resolveAliasType(base_ty).kind == .slice) {
+                return self.memberFieldTypeFromAggregate(self.resolveAliasType(base_ty).kind.slice.child.*, field_name);
+            }
+        }
+        const base_ty = self.operandEmitType(base, locals) orelse self.exprSourceTypeForEmission(base, locals) orelse return null;
+        return self.memberFieldTypeFromAggregate(base_ty, field_name);
+    }
+
+    fn memberFieldTypeFromAggregate(self: *CEmitter, aggregate_ty: ast.TypeExpr, field_name: []const u8) ?ast.TypeExpr {
+        const struct_name = switch (self.resolveAliasType(aggregate_ty).kind) {
+            .name => |name| name.text,
+            .pointer => |ptr| switch (self.resolveAliasType(ptr.child.*).kind) {
+                .name => |name| name.text,
+                else => return null,
+            },
+            else => return null,
+        };
+        const struct_decl = self.structs.get(struct_name) orelse return null;
+        for (struct_decl.fields) |field| {
+            if (std.mem.eql(u8, field.name.text, field_name)) return field.ty;
+        }
+        return null;
     }
 
     // Slice ptr/len access for a base expression, covering both a local/param base

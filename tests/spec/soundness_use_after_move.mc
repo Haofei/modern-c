@@ -19,12 +19,14 @@
 //   * "use of an alias ... after that value was moved" — the precise stale-alias check, on
 //     the READ of a scalar pointer alias laundered out of a tracked move binding.
 //   * "cannot move this linear `move` value: a borrow ... stored into memory" — the
-//     conservative move-refusal, on the MOVE itself, when the borrow escaped into aggregate
-//     or array memory we cannot prove dead.
+//     conservative move-refusal, on the MOVE itself, when the borrow escaped into memory
+//     we cannot prove dead. Constant-index and singleton dynamic-index array-element aliases
+//     are now precise, so those cases reject at the stale read instead.
 
 move struct T { v: u32 }
 struct H { p: *T }
 struct Holder { p: *T }        // element type for the nested-aggregate channel
+struct ArrayHolder { arr: [1]*T } // non-nameable nested array-literal channel
 struct Outer { h: Holder }     // struct-of-struct, for the nested-decl channel
 struct Deep { o: Outer }       // struct-of-struct-of-struct, for the triple-nested channel
 
@@ -104,27 +106,28 @@ fn reject_call_launder_used() -> u32 {
 // case has exactly one diagnostic to assert.
 // ---------------------------------------------------------------------------
 
-// 4. borrow laundered into an ARRAY-LITERAL element (the newly-closed gap).
+// 4. borrow laundered into an ARRAY-LITERAL element (precise stale-alias path).
 // Before the fix, `let arr: [1]*T = .{ &t }` did NOT route the array-literal element
 // through the escape-into-memory hook, so the move of t was accepted and a later
-// pk(arr[0]) read a dangling borrow — a SILENT use-after-move. The element now marks t
-// escaped, so the move is refused, symmetric with `arr[0] = &t` (assignment) and
-// `.{ .p = &t }` (struct literal).
+// pk(arr[0]) read a dangling borrow — a SILENT use-after-move. The element is now tracked
+// as a precise alias slot, symmetric with `arr[0] = &t` (assignment) and `.{ .p = &t }`
+// (struct literal).
 fn reject_array_literal_element() -> u32 {
     let t: T = mk();
     let arr: [1]*T = .{ &t };     // &t escapes into arr[0] at init
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let a: u32 = cn(t);          // moving t would leave arr[0] dangling — refused
-    return a + arr[0].v;
+    let a: u32 = cn(t);
+    return a + arr[0].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
-// 5. borrow laundered into a struct-FIELD ASSIGNMENT, then moved
-fn reject_struct_field_assign() -> u32 {
+// 5. borrow stored into a nameable struct-FIELD ASSIGNMENT, read before move, then dead.
+// This used to be conservatively rejected at the move; the field alias is now tracked
+// precisely, so the move is allowed when h.p is not read afterwards.
+fn accept_struct_field_assign_before_move() -> u32 {
     let t: T = mk();
     var h: H = .{ .p = &t };
-    h.p = &t;                     // re-laundered by assignment
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(t);                // moving t refused while h.p holds the borrow
+    h.p = &t;
+    let b: u32 = h.p.v;
+    return cn(t) + b;
 }
 
 // 6. borrow laundered into an array-ELEMENT ASSIGNMENT, then moved
@@ -132,8 +135,46 @@ fn reject_array_element_assign() -> u32 {
     let t: T = mk();
     var arr: [1]*T = .{ &t };
     arr[0] = &t;
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(t);
+    let a: u32 = cn(t);
+    return a + arr[0].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
+}
+
+// 6b. borrow laundered into a singleton dynamic array-ELEMENT ASSIGNMENT, then read after move.
+// A successful dynamic index into `[1]*T` denotes element zero, so the checker can keep this
+// precise instead of refusing the move conservatively.
+fn reject_dynamic_singleton_array_element_assign(i: usize) -> u32 {
+    let t: T = mk();
+    var arr: [1]*T = .{ &t };
+    arr[i] = &t;
+    let a: u32 = cn(t);
+    return a + arr[i].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
+}
+
+// 6c. borrow laundered into a multi-element dynamic array-ELEMENT ASSIGNMENT, then read
+// after move. The write may have targeted any element, so later element reads consult the
+// wildcard arr[*] alias and reject once the referent moves.
+fn reject_dynamic_multi_array_element_assign(i: usize) -> u32 {
+    let t: T = mk();
+    var arr: [2]*T = .{ &t, &t };
+    arr[i] = &t;
+    let a: u32 = cn(t);
+    return a + arr[i].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
+}
+
+fn reject_dynamic_multi_array_element_constant_read(i: usize) -> u32 {
+    let t: T = mk();
+    var arr: [2]*T = .{ &t, &t };
+    arr[i] = &t;
+    let a: u32 = cn(t);
+    return a + arr[0].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
+}
+
+fn reject_dynamic_multi_array_element_laundered(i: usize) -> u32 {
+    let t: T = mk();
+    var arr: [2]*T = .{ &t, &t };
+    arr[i] = id(&t);
+    let a: u32 = cn(t);
+    return a + arr[i].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 7. subfield borrow `&t.v`, whole value then moved
@@ -145,18 +186,36 @@ fn reject_subfield_alias() -> u32 {
     return a + rd(p);
 }
 
-// 9. borrow laundered into a NESTED aggregate literal (array of struct holding &t). The
-// escape scan was flat — it saw `&t` only at the TOP level of an aggregate literal, so a
-// borrow buried one level deeper (`.{ .{ .p = &t } }`) escaped silently and a later
-// arr[0].p read a dangling borrow. The escape scan now recurses through nested
-// aggregate/array literals, so the borrow escapes into array memory we cannot prove dead
-// and the move of t is refused — symmetric with the flat `.{ .p = &t }` / `.{ &t }` cases.
+// 9. borrow laundered into a NESTED aggregate literal (array of struct holding &t).
+// Constant array element fields are now nameable (`arr[0].p`), so the borrow is tracked
+// precisely and rejected at the stale read after `t` moves.
 fn reject_nested_aggregate_element() -> u32 {
     let t: T = mk();
-    let arr: [1]Holder = .{ .{ .p = &t } };   // &t escapes NESTED into arr[0].p
+    let arr: [1]Holder = .{ .{ .p = &t } };   // &t is tracked precisely as arr[0].p
+    let a: u32 = cn(t);                       // t moved
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let a: u32 = cn(t);          // moving t would leave arr[0].p dangling — refused
     return a + arr[0].p.v;
+}
+
+// 9a. borrow laundered into a nested array literal. The precise array-element scan recurses
+// through array literals too, registering `arr[0][0] -> t` instead of conservatively refusing
+// the move just because the borrow was nested under another array literal.
+fn reject_nested_array_literal_element() -> u32 {
+    let t: T = mk();
+    let arr: [1][1]*T = .{ .{ &t } };
+    let a: u32 = cn(t);
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + arr[0][0].v;
+}
+
+// 9b. borrow buried in a struct field whose value is an array literal. The nested place is
+// nameable as `h.arr[0]`, so the checker tracks it precisely and rejects the stale read after
+// `t` moves instead of conservatively refusing the move.
+fn reject_struct_field_array_literal_element() -> u32 {
+    let t: T = mk();
+    let h: ArrayHolder = .{ .arr = .{ &t } };
+    let a: u32 = cn(t);
+    return a + h.arr[0].v;        // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 10. borrow laundered through a ptr-to-int round-trip. `&t as usize` drops the provenance
@@ -295,6 +354,24 @@ fn accept_nested_struct_field_used_before_move() -> u32 {
     let o: Outer = .{ .h = .{ .p = &t } };
     let b: u32 = pk(o.h.p);       // read BEFORE the move
     return cn(t) + b;            // o.h.p never read again — t may be moved
+}
+
+// NESTED array-literal element borrow, USED before the move. This proves the recursive
+// array-place scan is precise and does not keep rejecting once `arr[0][0]` is dead.
+fn accept_nested_array_literal_element_used_before_move() -> u32 {
+    let t: T = mk();
+    let arr: [1][1]*T = .{ .{ &t } };
+    let b: u32 = pk(arr[0][0]);
+    return cn(t) + b;
+}
+
+// Struct-field array literal element borrow, USED before the move. This is the accepted
+// counterpart to `reject_struct_field_array_literal_element`.
+fn accept_struct_field_array_literal_element_used_before_move() -> u32 {
+    let t: T = mk();
+    let h: ArrayHolder = .{ .arr = .{ &t } };
+    let b: u32 = pk(h.arr[0]);
+    return cn(t) + b;
 }
 
 // a transient borrow passed as a BARE call argument (not inside an aggregate), used and dead

@@ -146,6 +146,17 @@ fn call_indirect_global_param_alias() -> u32 {
     return f(&shared_counter);
 }
 
+fn consume_indirect_local_param(p: *mut u32) -> u32 {
+    // EXPECT: lower-llvm keeps a scalar param plain when every local function-pointer alias call passes direct local storage.
+    return p.*;
+}
+
+fn call_indirect_local_param_alias() -> u32 {
+    var local: u32 = 9;
+    let f: fn(*mut u32) -> u32 = consume_indirect_local_param;
+    return f(&local);
+}
+
 fn consume_alias_copy_param(p: *mut u32) -> u32 {
     // EXPECT: lower-llvm emits unordered atomic load because a local function-pointer alias copy preserves the internal target.
     return p.*;
@@ -221,7 +232,7 @@ fn call_mixed_param_with_local() -> u32 {
 }
 
 fn consume_local_only_param(p: *mut u32) -> u32 {
-    // EXPECT: lower-llvm: stack-passing callers do not give the callee a positive local proof for the param; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: every visible internal caller passes local storage, so the param carries a local_storage proof and the deref stays plain.
     return p.*;
 }
 
@@ -321,12 +332,12 @@ fn nested_aggregate_stack_pointer_field_lowers_atomic() -> u32 {
     return p.*;
 }
 
-fn aggregate_pointer_alias_stack_pointer_field_lowers_atomic() -> u32 {
+fn aggregate_pointer_alias_stack_pointer_field_stays_plain() -> u32 {
     var local: u32 = 19;
     var holder: PointerHolder = .{ .ptr = &local, .tag = 15 };
     let hp: *mut PointerHolder = &holder;
     let p: *mut u32 = hp.ptr;
-    // EXPECT: lower-llvm: a pointer loaded through a local aggregate pointer alias carries no positive local proof; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: a pointer loaded through a local aggregate pointer alias carries a local_storage proof and the deref stays plain.
     return p.*;
 }
 
@@ -342,13 +353,13 @@ fn aggregate_pointer_alias_field_assignment_clears_direct_field_fact() -> u32 {
     return p.*;
 }
 
-fn aggregate_pointer_alias_field_assignment_clears_alias_field_fact() -> u32 {
+fn aggregate_pointer_alias_field_assignment_establishes_alias_local_fact() -> u32 {
     var local: u32 = 28;
     var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 30 };
     let hp: *mut PointerHolder = &holder;
     hp.ptr = &local;
     let p: *mut u32 = hp.ptr;
-    // EXPECT: lower-llvm: the alias write clears the alias field fact, leaving the loaded pointer unproven; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: the alias write establishes a local_storage alias field fact, so the deref stays plain.
     return p.*;
 }
 
@@ -397,6 +408,31 @@ fn call_aggregate_array_global_param(index: usize) -> u32 {
     return consume_aggregate_array_global_param(&holder, index);
 }
 
+fn consume_aggregate_local_param(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm: every visible direct call passes a local aggregate whose pointer field is local-backed, so the deref stays plain.
+    return p.*;
+}
+
+fn call_aggregate_local_param() -> u32 {
+    var local: u32 = 32;
+    var holder: PointerHolder = .{ .ptr = &local, .tag = 35 };
+    return consume_aggregate_local_param(&holder);
+}
+
+fn consume_indirect_aggregate_local_param(hp: *mut PointerHolder) -> u32 {
+    let p: *mut u32 = hp.ptr;
+    // EXPECT: lower-llvm: every visible local function-pointer alias call passes a local aggregate whose pointer field is local-backed, so the deref stays plain.
+    return p.*;
+}
+
+fn call_indirect_aggregate_local_param() -> u32 {
+    var local: u32 = 33;
+    var holder: PointerHolder = .{ .ptr = &local, .tag = 36 };
+    let f: fn(*mut PointerHolder) -> u32 = consume_indirect_aggregate_local_param;
+    return f(&holder);
+}
+
 fn consume_aggregate_mixed_param(hp: *mut PointerHolder) -> u32 {
     let p: *mut u32 = hp.ptr;
     // EXPECT: lower-llvm: mixed callers leave the aggregate param field unproven; the deref lowers conservatively to an unordered atomic.
@@ -404,13 +440,13 @@ fn consume_aggregate_mixed_param(hp: *mut PointerHolder) -> u32 {
 }
 
 fn call_aggregate_mixed_param_with_global() -> u32 {
-    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 35 };
+    var holder: PointerHolder = .{ .ptr = &shared_counter, .tag = 37 };
     return consume_aggregate_mixed_param(&holder);
 }
 
 fn call_aggregate_mixed_param_with_local() -> u32 {
-    var local: u32 = 31;
-    var holder: PointerHolder = .{ .ptr = &local, .tag = 36 };
+    var local: u32 = 34;
+    var holder: PointerHolder = .{ .ptr = &local, .tag = 38 };
     return consume_aggregate_mixed_param(&holder);
 }
 
@@ -609,6 +645,12 @@ fn returned_pointer_holder_via_assignment() -> PointerHolder {
     return holder;
 }
 
+fn returned_pointer_holder_local_only() -> PointerHolder {
+    var local: u32 = 63;
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return .{ .ptr = &local, .tag = 63 };
+}
+
 fn returned_pointer_holder_via_if(cond: bool) -> PointerHolder {
     if cond {
         return .{ .ptr = &shared_counter, .tag = 64 };
@@ -769,6 +811,13 @@ fn aggregate_return_local_assignment_pointer_field_load() -> u32 {
     let holder: PointerHolder = returned_pointer_holder_via_assignment();
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm emits unordered atomic load after aggregate initialization from a summarized internal assigned local return.
+    return p.*;
+}
+
+fn aggregate_return_local_only_pointer_field_lowers_atomic() -> u32 {
+    let holder: PointerHolder = returned_pointer_holder_local_only();
+    let p: *mut u32 = holder.ptr;
+    // EXPECT: lower-llvm does not treat callee-local storage returned inside an aggregate as caller-local; the deref stays conservative.
     return p.*;
 }
 
@@ -954,11 +1003,11 @@ fn aggregate_array_dynamic_index_partial_pointer_elements_load(index: usize) -> 
     return p.*;
 }
 
-fn aggregate_array_dynamic_index_all_local_pointer_elements_lowers_atomic(index: usize) -> u32 {
+fn aggregate_array_dynamic_index_all_local_pointer_elements_stays_plain(index: usize) -> u32 {
     var local: u32 = 45;
     let holder: PointerArrayHolder = .{ .ptrs = .{ &local, &local }, .tag = 45 };
     let p: *mut u32 = holder.ptrs[index];
-    // EXPECT: lower-llvm: a dynamic-index aggregate element read carries no positive local proof; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: a dynamic-index aggregate element read over all-local tracked elements propagates a local_storage proof and the deref stays plain.
     return p.*;
 }
 
@@ -988,12 +1037,12 @@ fn aggregate_pointer_alias_array_dynamic_index_all_global_pointer_elements_load(
     return p.*;
 }
 
-fn aggregate_pointer_alias_array_stack_pointer_element_lowers_atomic() -> u32 {
+fn aggregate_pointer_alias_array_stack_pointer_element_stays_plain() -> u32 {
     var local: u32 = 25;
     var holder: PointerArrayHolder = .{ .ptrs = .{ &local, &local }, .tag = 26 };
     let hp: *mut PointerArrayHolder = &holder;
     let p: *mut u32 = hp.ptrs[0];
-    // EXPECT: lower-llvm: a pointer loaded through an alias array element carries no positive local proof; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: a pointer loaded through an alias array element with local_storage provenance stays plain.
     return p.*;
 }
 
@@ -1006,12 +1055,12 @@ fn aggregate_pointer_alias_array_dynamic_index_partial_pointer_elements_load(ind
     return p.*;
 }
 
-fn aggregate_pointer_alias_array_dynamic_index_all_local_pointer_elements_lowers_atomic(index: usize) -> u32 {
+fn aggregate_pointer_alias_array_dynamic_index_all_local_pointer_elements_stays_plain(index: usize) -> u32 {
     var local: u32 = 46;
     var holder: PointerArrayHolder = .{ .ptrs = .{ &local, &local }, .tag = 46 };
     let hp: *mut PointerArrayHolder = &holder;
     let p: *mut u32 = hp.ptrs[index];
-    // EXPECT: lower-llvm: a dynamic-index alias element read carries no positive local proof; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: a dynamic-index alias element read over all-local tracked elements propagates a local_storage proof and the deref stays plain.
     return p.*;
 }
 
@@ -1102,7 +1151,7 @@ fn aggregate_pointer_alias_slice_global_pointer_element_load(index: usize) -> u3
     return p.*;
 }
 
-fn aggregate_slice_stack_pointer_element_lowers_atomic(index: usize) -> u32 {
+fn aggregate_slice_stack_pointer_element_stays_plain(index: usize) -> u32 {
     var local: u32 = 36;
     let holder: PointerArrayHolder = .{ .ptrs = .{ &local, &local }, .tag = 40 };
     let s: []mut *mut u32 = holder.ptrs[0..2];
@@ -1139,12 +1188,12 @@ fn aggregate_slice_partial_constant_global_element_load() -> u32 {
     return p.*;
 }
 
-fn aggregate_slice_partial_constant_stack_element_lowers_atomic() -> u32 {
+fn aggregate_slice_partial_constant_stack_element_stays_plain() -> u32 {
     var local: u32 = 51;
     let holder: PointerArrayHolder = .{ .ptrs = .{ &shared_counter, &local }, .tag = 51 };
     let s: []mut *mut u32 = holder.ptrs[0..2];
     let p: *mut u32 = s[1];
-    // EXPECT: lower-llvm: the constant-index slice element maps to a stack-backed pointer with no positive local proof; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: the constant-index slice element maps to a tracked local_storage pointer and the deref stays plain.
     return p.*;
 }
 
@@ -1176,23 +1225,23 @@ fn aggregate_slice_partial_range_constant_global_element_load() -> u32 {
     return p.*;
 }
 
-fn aggregate_slice_partial_range_constant_stack_element_lowers_atomic() -> u32 {
+fn aggregate_slice_partial_range_constant_stack_element_stays_plain() -> u32 {
     var local: u32 = 55;
     let holder: PointerArrayHolder3 = .{ .ptrs = .{ &local, &shared_counter, &local }, .tag = 54 };
     let s: []mut *mut u32 = holder.ptrs[1..3];
     let p: *mut u32 = s[1];
-    // EXPECT: lower-llvm: the partial-range constant slice element maps to a stack-backed pointer with no positive local proof; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: the partial-range constant slice element maps to a tracked local_storage pointer and the deref stays plain.
     return p.*;
 }
 
-fn aggregate_slice_partial_range_all_local_lowers_atomic(index: usize) -> u32 {
+fn aggregate_slice_partial_range_all_local_stays_plain(index: usize) -> u32 {
     var a: u32 = 56;
     var b: u32 = 57;
     var c: u32 = 58;
     let holder: PointerArrayHolder3 = .{ .ptrs = .{ &a, &b, &c }, .tag = 55 };
     let s: []mut *mut u32 = holder.ptrs[1..3];
     let p: *mut u32 = s[index];
-    // EXPECT: lower-llvm: an all-local partial slice carries no positive local proof for the loaded pointer; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: an all-local partial slice carries local_storage proofs for every possible loaded pointer and the deref stays plain.
     return p.*;
 }
 
@@ -1319,11 +1368,11 @@ fn array_dynamic_index_partial_pointer_elements_load(index: usize) -> u32 {
     return p.*;
 }
 
-fn array_dynamic_index_all_local_pointer_elements_lowers_atomic(index: usize) -> u32 {
+fn array_dynamic_index_all_local_pointer_elements_stays_plain(index: usize) -> u32 {
     var local: u32 = 47;
     let ptrs: [2]*mut u32 = .{ &local, &local };
     let p: *mut u32 = ptrs[index];
-    // EXPECT: lower-llvm: a dynamic-index element read has no constant-index MIR fact to propagate; the loaded pointer is unproven and the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: a dynamic-index read over all-local tracked pointer elements propagates a local_storage proof and the deref stays plain.
     return p.*;
 }
 
@@ -1345,12 +1394,12 @@ fn pointer_to_array_dynamic_index_all_global_pointer_elements_load(index: usize)
     return p.*;
 }
 
-fn pointer_to_array_stack_pointer_elements_lowers_atomic(index: usize) -> u32 {
+fn pointer_to_array_stack_pointer_elements_stays_plain(index: usize) -> u32 {
     var local: u32 = 21;
     var ptrs: [2]*mut u32 = .{ &local, &local };
     let pa: *mut [2]*mut u32 = &ptrs;
     let p: *mut u32 = pa.*[index];
-    // EXPECT: lower-llvm: an element read through a pointer-to-array carries no positive local proof; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: an element read through a pointer-to-array over all-local tracked pointer elements propagates a local_storage proof and the deref stays plain.
     return p.*;
 }
 
@@ -1402,12 +1451,12 @@ fn slice_assigned_global_pointer_element_load(index: usize) -> u32 {
     return p.*;
 }
 
-fn slice_stack_pointer_element_lowers_atomic(index: usize) -> u32 {
+fn slice_stack_pointer_element_stays_plain(index: usize) -> u32 {
     var local: u32 = 22;
     let ptrs: [2]*mut u32 = .{ &local, &local };
     let s: []mut *mut u32 = ptrs[0..2];
     let p: *mut u32 = s[index];
-    // EXPECT: lower-llvm: a pointer loaded from a stack-backed local slice carries no positive local proof; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: a pointer loaded from an all-local tracked slice carries a local_storage proof and the deref stays plain.
     return p.*;
 }
 
@@ -1429,12 +1478,12 @@ fn slice_partial_constant_global_element_load() -> u32 {
     return p.*;
 }
 
-fn slice_partial_constant_stack_element_lowers_atomic() -> u32 {
+fn slice_partial_constant_stack_element_stays_plain() -> u32 {
     var local: u32 = 30;
     let ptrs: [2]*mut u32 = .{ &shared_counter, &local };
     let s: []mut *mut u32 = ptrs[0..2];
     let p: *mut u32 = s[1];
-    // EXPECT: lower-llvm: the constant-index slice element maps to a stack-backed pointer with no positive local proof; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: the constant-index slice element maps to a tracked local_storage pointer and the deref stays plain.
     return p.*;
 }
 
@@ -1458,24 +1507,24 @@ fn slice_partial_range_constant_global_element_load() -> u32 {
     return p.*;
 }
 
-fn slice_partial_range_constant_stack_element_lowers_atomic() -> u32 {
+fn slice_partial_range_constant_stack_element_stays_plain() -> u32 {
     var a: u32 = 56;
     var b: u32 = 57;
     let ptrs: [3]*mut u32 = .{ &a, &shared_counter, &b };
     let s: []mut *mut u32 = ptrs[1..3];
     let p: *mut u32 = s[1];
-    // EXPECT: lower-llvm: the partial-range constant slice element maps to a stack-backed pointer with no positive local proof; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: the partial-range constant slice element maps to a tracked local_storage pointer and the deref stays plain.
     return p.*;
 }
 
-fn slice_partial_range_all_local_lowers_atomic(index: usize) -> u32 {
+fn slice_partial_range_all_local_stays_plain(index: usize) -> u32 {
     var a: u32 = 58;
     var b: u32 = 59;
     var c: u32 = 60;
     let ptrs: [3]*mut u32 = .{ &a, &b, &c };
     let s: []mut *mut u32 = ptrs[1..3];
     let p: *mut u32 = s[index];
-    // EXPECT: lower-llvm: an all-local partial slice carries no positive local proof for the loaded pointer; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: an all-local partial slice carries local_storage proofs for every possible loaded pointer and the deref stays plain.
     return p.*;
 }
 
@@ -1499,24 +1548,24 @@ fn slice_dynamic_end_constant_global_element_load(end: usize) -> u32 {
     return p.*;
 }
 
-fn slice_dynamic_end_constant_stack_element_lowers_atomic(end: usize) -> u32 {
+fn slice_dynamic_end_constant_stack_element_stays_plain(end: usize) -> u32 {
     var a: u32 = 65;
     var b: u32 = 66;
     let ptrs: [3]*mut u32 = .{ &a, &b, &shared_counter };
     let s: []mut *mut u32 = ptrs[1..end];
     let p: *mut u32 = s[0];
-    // EXPECT: lower-llvm: the dynamic-end slice element maps to a stack-backed pointer with no positive local proof; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: the dynamic-end slice element maps to a tracked local_storage pointer and the deref stays plain.
     return p.*;
 }
 
-fn slice_dynamic_end_all_local_lowers_atomic(index: usize, end: usize) -> u32 {
+fn slice_dynamic_end_all_local_stays_plain(index: usize, end: usize) -> u32 {
     var a: u32 = 67;
     var b: u32 = 68;
     var c: u32 = 69;
     let ptrs: [3]*mut u32 = .{ &a, &b, &c };
     let s: []mut *mut u32 = ptrs[1..end];
     let p: *mut u32 = s[index];
-    // EXPECT: lower-llvm: an all-local dynamic-end slice carries no positive local proof for the loaded pointer; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: an all-local dynamic-end slice carries local_storage proofs for every possible loaded pointer and the deref stays plain.
     return p.*;
 }
 
@@ -1540,14 +1589,14 @@ fn slice_dynamic_start_constant_index_is_conservative(start: usize) -> u32 {
     return p.*;
 }
 
-fn slice_dynamic_start_all_local_lowers_atomic(start: usize, index: usize) -> u32 {
+fn slice_dynamic_start_all_local_stays_plain(start: usize, index: usize) -> u32 {
     var a: u32 = 74;
     var b: u32 = 75;
     var c: u32 = 76;
     let ptrs: [3]*mut u32 = .{ &a, &b, &c };
     let s: []mut *mut u32 = ptrs[start..2];
     let p: *mut u32 = s[index];
-    // EXPECT: lower-llvm: an all-local dynamic-start slice carries no positive local proof for the loaded pointer; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: an all-local dynamic-start slice carries local_storage proofs for every possible loaded pointer and the deref stays plain.
     return p.*;
 }
 
@@ -1601,14 +1650,14 @@ fn slice_element_assignment_clears_fact(index: usize) -> u32 {
     return p.*;
 }
 
-fn slice_reassignment_clears_fact(index: usize) -> u32 {
+fn slice_reassignment_to_local_stays_plain(index: usize) -> u32 {
     var local: u32 = 28;
     let ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
     let other: [2]*mut u32 = .{ &local, &local };
     var s: []mut *mut u32 = ptrs[0..2];
     s = other[0..2];
     let p: *mut u32 = s[index];
-    // EXPECT: lower-llvm: slice reassignment to unproven storage clears the fact; the deref lowers conservatively to an unordered atomic.
+    // EXPECT: lower-llvm: slice reassignment to an all-local tracked slice carries local_storage proofs and the deref stays plain.
     return p.*;
 }
 

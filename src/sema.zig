@@ -22,6 +22,7 @@ const sema_type = @import("sema_type.zig");
 
 pub const Context = sema_model.Context;
 pub const MoveSlot = sema_model.MoveSlot;
+pub const LoopMoveFrame = sema_model.LoopMoveFrame;
 pub const TypeClass = sema_model.TypeClass;
 const LoopLabelNode = sema_model.LoopLabelNode;
 const MmioStruct = sema_model.MmioStruct;
@@ -345,11 +346,10 @@ pub const Checker = struct {
     // A module-level Context used during the move pass to infer a switch subject's Result
     // type, so an arm binding (`ok(p)`) can be recognized as a linear `move` value.
     move_ctx: ?*const Context = null,
-    // A stack of "names live at loop entry", one frame per enclosing loop, maintained
-    // during the move pass. A `break`/`continue` exits the current iteration, so any
-    // loop-body-local `move` value live at that edge (a name not in the top frame) is a
-    // leak — the same check `return` does at function exit, but scoped to the loop body.
-    move_loop_stack: std.ArrayListUnmanaged(std.StringHashMap(void)) = .empty,
+    // A stack of loop-entry move snapshots, one frame per enclosing loop, maintained
+    // during the move pass. A `break`/`continue` exits the current iteration, so the edge
+    // checks both loop-body-local leaks and changes to outer move/place ownership.
+    move_loop_stack: std.ArrayListUnmanaged(LoopMoveFrame) = .empty,
     // Owns the synthetic place-key strings (`binding.field`) the move pass inserts into
     // its state to track a `move` field that has been moved out of its aggregate. Freed at
     // the end of each function's analysis.
@@ -642,6 +642,8 @@ pub const Checker = struct {
                 .structs = &structs,
                 .enums = &enums,
                 .tagged_unions = &tagged_unions,
+                .const_fns = &const_fns,
+                .const_globals = &const_globals,
             };
             self.move_ctx = &move_ctx;
             defer self.move_ctx = null;
@@ -972,9 +974,6 @@ pub const Checker = struct {
             .overlay_union_decl => |overlay_union_decl| self.checkOverlayUnion(overlay_union_decl, type_ctx),
             .type_alias => |alias| {
                 self.checkType(alias.ty, .normal, type_ctx);
-                if (self.typeIsMoveArray(alias.ty, type_aliases)) {
-                    self.errorCode(alias.ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable (element moves need place analysis); hold the resources behind pointers or in a `move` container instead");
-                }
             },
             .opaque_decl => {},
             // Trait / impl-trait conformance checks run as their own pass (checkTraits);
@@ -985,7 +984,7 @@ pub const Checker = struct {
                 if (global.ty) |ty| {
                     self.checkType(ty, .storage, type_ctx);
                     if (self.typeIsMoveArray(ty, type_aliases)) {
-                        self.errorCode(ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable (element moves need place analysis); hold the resources behind pointers or in a `move` container instead");
+                        self.errorCode(ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "global storage cannot own an array of linear `move` values by value; hold the resources behind pointers or in a `move` container instead");
                     }
                 } else {
                     self.errorCode(global.name.span, "E_GLOBAL_REQUIRES_TYPE", "global declarations require an explicit storage type");
@@ -1070,13 +1069,11 @@ pub const Checker = struct {
             // container hole — `Pool<Token, N>`, `Arc<Token>`, etc. monomorphize to a
             // non-move struct with a move-typed field and are rejected here. Hold a move
             // resource in another `move` type, or store it behind a pointer.
-            if (self.typeIsMoveArray(field.ty, aliases)) {
-                // An array of a `move` type as a field is not yet trackable — element moves need
-                // the indexed-place model the checker does not have. Reject it in *any* struct,
-                // including a `move` struct: otherwise `s.items[i]` could be moved out twice with
-                // no use-after-move diagnostic (a double free). Hold the resources behind
-                // pointers, or in a `move` container, until indexed move places exist.
-                self.errorCode(field.ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable as a struct field (element moves need place analysis); hold the resources behind pointers or in a `move` container instead");
+            if (!struct_decl.is_move and self.typeIsMoveArray(field.ty, aliases)) {
+                // A copyable struct cannot own move resources by value. Move structs can
+                // track array field elements as places, but a non-move aggregate could be
+                // copied or leaked outside the linear checker.
+                self.errorCode(field.ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "a non-`move` struct cannot store an array of linear `move` values by value; make the struct `move`, or hold the resources behind pointers");
             } else if (!struct_decl.is_move and self.typeEmbedsMoveByValue(field.ty, aliases)) {
                 self.errorCode(field.ty.span, "E_MOVE_FIELD_IN_NONMOVE", "a linear `move` value cannot be stored by value in a non-`move` struct (it would be duplicated or leaked); make the struct `move`, or store the resource behind a pointer");
             }
@@ -1388,8 +1385,8 @@ pub const Checker = struct {
 
         for (fn_decl.params) |param| {
             self.checkType(param.ty, .storage, sig_ctx);
-            if (self.typeIsMoveArray(param.ty, type_aliases)) {
-                self.errorCode(param.ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable (element moves need place analysis); pass the resources behind pointers or in a `move` container instead");
+            if (abi_boundary and self.typeIsMoveArray(param.ty, type_aliases)) {
+                self.errorCode(param.ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "extern/export ABI parameters cannot pass arrays of linear `move` values by value; pass the resources behind pointers or in a `move` container instead");
             }
             if (isCBackendReservedLocalName(param.name.text)) {
                 self.errorCode(param.name.span, "E_RESERVED_C_IDENTIFIER", "parameter name is reserved by the C backend or C headers; choose a different source name");
@@ -1413,8 +1410,8 @@ pub const Checker = struct {
         const return_kind = if (fn_decl.return_type) |ty| classifyTypeCtx(ty, sig_ctx) else TypeClass.void;
         const returns_never = if (fn_decl.return_type) |ty| blk: {
             self.checkType(ty, .return_type, sig_ctx);
-            if (self.typeIsMoveArray(ty, type_aliases)) {
-                self.errorCode(ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable as a function return value (element moves need place analysis); return resources behind pointers or in a `move` container instead");
+            if (abi_boundary and self.typeIsMoveArray(ty, type_aliases)) {
+                self.errorCode(ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "extern/export ABI returns cannot carry arrays of linear `move` values by value; return resources behind pointers or in a `move` container instead");
             }
             break :blk isTypeName(ty, "never");
         } else false;

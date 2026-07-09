@@ -2,11 +2,10 @@
 // SPEC: milestone=linear-move
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_USE_AFTER_MOVE,E_RESOURCE_LEAK,E_MOVE_ARRAY_UNSUPPORTED,E_DROP_LINEAR_RESOURCE
+// SPEC: check=E_USE_AFTER_MOVE,E_RESOURCE_LEAK,E_DROP_LINEAR_RESOURCE
 
-// A linear `move` resource embedded by value in a built-in container — a Result payload, a
-// nullable, or an array — must still be tracked. A binding of such a type is consumed once;
-// an array of a move type is rejected until element-place analysis exists.
+// A linear `move` resource embedded by value in a built-in container — a Result payload,
+// nullable, or fixed array — must still be tracked and consumed exactly once.
 
 move struct Token { v: u32 }
 enum E { Bad }
@@ -61,11 +60,13 @@ fn reject_opt_leak() -> u32 {
     return 0;
 }
 
-// --- rejected: an array of a move type is not yet trackable ---
-fn reject_move_array() -> u32 {
-    // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+// --- accepted: fixed array elements are tracked as constant-index places ---
+fn accept_move_array_elements() -> u32 {
     var arr: [2]Token = .{ make(), make() };
-    return 0;
+    let a: Token = arr[0];
+    let b: Token = arr[1];
+    unsafe { forget_unchecked(arr); }
+    return consume(a) + consume(b);
 }
 
 // --- rejected: drop of a wrapper that embeds a move resource frees nothing (recursive
