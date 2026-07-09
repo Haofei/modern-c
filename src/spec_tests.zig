@@ -1607,26 +1607,82 @@ const coverage_exempt = [_][]const u8{
     // (tests/llvm/void_indirect_calls.mc, the std alloc/arena tests), not a semantic fixture.
     "9.1",
     // Rationale / final-contract prose — nothing to execute.
-    "26", "26.1", "26.2", "26.3", "27",
+    "26",
+    "26.1",
+    "26.2",
+    "26.3",
+    "27",
     // §29 tuples — desugar to structs; the type/literal/access/destructure/lowering rules are
     // exercised by the lower_c.zig unit tests (tuple desugaring + destructuring) and both-backend
     // run checks. The n>=2 arity rule is a parse-time error (not a sema diagnostic fixture).
-    "29", "29.1", "29.2",
+    "29",
+    "29.1",
+    "29.2",
     // §28 driver-library profile — exercised by the runtime suite (sync-test, stack-test,
     // ring/endian/time/barrier tests under tools/), not by semantic fixtures.
-    "28",  "28.1", "28.2", "28.3", "28.4", "28.5", "28.6", "28.7",
+    "28",
+    "28.1",
+    "28.2",
+    "28.3",
+    "28.4",
+    "28.5",
+    "28.6",
+    "28.7",
     // Implementation & conformance annex (Part II). Verifier passes (D.*) are exercised by the
     // section fixtures whose rules they enforce; MIR/lowering (E.*, I.*) by the C-emit sweep and
     // the llvm sweeps; the LLVM and debug backends (M, N) by tests/llvm; the rest is prose.
-    "A",  "A.1", "B", "C", "C.1", "C.2", "C.3",
-    "D",  "D.1", "D.2", "D.3", "D.4", "D.5", "D.6", "D.7",
+    "A",
+    "A.1",
+    "B",
+    "C",
+    "C.1",
+    "C.2",
+    "C.3",
+    "D",
+    "D.1",
+    "D.2",
+    "D.3",
+    "D.4",
+    "D.5",
+    "D.6",
+    "D.7",
     // E.4 fact-gated optimizer is exercised by the dedicated `opt-test` (not a sema fixture).
-    "E",  "E.1", "E.2", "E.3", "E.4", "F", "G", "H",
-    "I",  "I.1", "I.2", "I.3", "I.4", "I.5", "I.6", "I.7", "I.8",
-    "I.9", "I.10", "I.11", "I.12", "I.13", "I.14", "I.15",
+    "E",
+    "E.1",
+    "E.2",
+    "E.3",
+    "E.4",
+    "F",
+    "G",
+    "H",
+    "I",
+    "I.1",
+    "I.2",
+    "I.3",
+    "I.4",
+    "I.5",
+    "I.6",
+    "I.7",
+    "I.8",
+    "I.9",
+    "I.10",
+    "I.11",
+    "I.12",
+    "I.13",
+    "I.14",
+    "I.15",
     // N.1 (editor tooling — formatter + language server) is exercised by `fmt-test` and
     // `lsp-test`, not by a semantic fixture.
-    "J", "K", "L", "L.1", "L.2", "L.3", "M", "N", "N.1", "O",
+    "J",
+    "K",
+    "L",
+    "L.1",
+    "L.2",
+    "L.3",
+    "M",
+    "N",
+    "N.1",
+    "O",
     // §33 async/await is a PRE-SEMA source transform (src/async_lower.zig, run in
     // parseModuleOrReport). This harness's parseSpecModule only parses + monomorphizes, so it
     // never applies that transform — `async fn`/`await` can't reach sema here, and the transform's
@@ -1635,7 +1691,15 @@ const coverage_exempt = [_][]const u8{
     // cancel, branch, loop, ufcs, try, safe-borrow, plus bad/ reject fixtures, all on BOTH
     // backends) and the 14 QEMU kernel gates (async{,-irq,-cancel,-pollmany,-future,-select,-agent}
     // × C/LLVM), not by a tests/spec semantic fixture.
-    "33", "33.1", "33.2", "33.3", "33.4", "33.5", "33.6", "33.7", "33.8",
+    "33",
+    "33.1",
+    "33.2",
+    "33.3",
+    "33.4",
+    "33.5",
+    "33.6",
+    "33.7",
+    "33.8",
 };
 
 fn coverageIsAllDigits(s: []const u8) bool {

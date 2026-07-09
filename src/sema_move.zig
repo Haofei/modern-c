@@ -475,19 +475,19 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                         moveConsume(self, a.value, state, aliases);
                         markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
                         _ = state.remove(key);
-	                    } else if (wildcardMoveIndexedPlaceKey(self, a.target, state, aliases)) |key| {
-	                        if (state.contains(key) or wildcardMoveConflictsWithConcreteSubplace(key, state)) {
-	                            self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "cannot assign a linear `move` array element through an unknown dynamic index after an overlapping element was moved out");
-	                        } else {
-	                            self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot assign a linear `move` array element through an unknown dynamic index; the selected live element must be consumed first");
-	                        }
-	                        markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
-	                        moveConsume(self, a.value, state, aliases);
-	                    } else if (arrayIndexEmbedsMove(self, a.target, state, aliases)) {
-	                        self.errorCode(a.target.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot assign a linear `move` array element through a non-constant index; element ownership is only tracked for constant indexes");
-	                        markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
-	                        moveConsume(self, a.value, state, aliases);
-	                    } else {
+                    } else if (wildcardMoveIndexedPlaceKey(self, a.target, state, aliases)) |key| {
+                        if (state.contains(key) or wildcardMoveConflictsWithConcreteSubplace(key, state)) {
+                            self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "cannot assign a linear `move` array element through an unknown dynamic index after an overlapping element was moved out");
+                        } else {
+                            self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot assign a linear `move` array element through an unknown dynamic index; the selected live element must be consumed first");
+                        }
+                        markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
+                        moveConsume(self, a.value, state, aliases);
+                    } else if (arrayIndexEmbedsMove(self, a.target, state, aliases)) {
+                        self.errorCode(a.target.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot assign a linear `move` array element through a non-constant index; element ownership is only tracked for constant indexes");
+                        markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
+                        moveConsume(self, a.value, state, aliases);
+                    } else {
                         recordAssignedAliasPlaceOrEscape(self, a.target, a.value, a.target.span, state, aliases);
                         markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
                         moveConsume(self, a.value, state, aliases);
@@ -1628,7 +1628,8 @@ fn symbolicIndexDivideExact(self: *Checker, symbol: []const u8, divisor: usize) 
         var count: usize = 1;
         while (idx + count < parsed.len and
             term.sign == parsed.terms[idx + count].sign and
-            std.mem.eql(u8, term.name, parsed.terms[idx + count].name)) : (count += 1) {}
+            std.mem.eql(u8, term.name, parsed.terms[idx + count].name)) : (count += 1)
+        {}
         if (@mod(count, divisor) != 0) return null;
         var repeat: usize = 0;
         while (repeat < count / divisor) : (repeat += 1) {
