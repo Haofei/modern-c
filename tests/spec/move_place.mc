@@ -1168,6 +1168,28 @@ fn reject_non_exact_symbolic_modulo_dynamic_multi_array_element_move(i: usize) -
     return consume(x) + consume(y);
 }
 
+// Accepted: exact symbolic modulo-zero identities compose through move-struct
+// array fields, not only direct array roots.
+fn accept_reinitialize_symbolic_modulo_zero_array_field_element(i: usize) -> u32 {
+    var box: ResArrayBox = mkbox();
+    let x: Res = box.items[(i + i) % 2];
+    box.items[0] = mkres(3);
+    let y: Res = box.items[0];
+    unsafe { forget_unchecked(box); }
+    return consume(x) + consume(y);
+}
+
+// Accepted: the same concrete-zero identity composes through nested array
+// suffixes, so the outer dynamic expression names `matrix[0][0]`.
+fn accept_reinitialize_symbolic_modulo_zero_nested_array_element(i: usize) -> u32 {
+    var matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
+    let x: Res = matrix[(i + i) % 2][0];
+    matrix[0][0] = mkres(3);
+    let y: Res = matrix[0][0];
+    unsafe { forget_unchecked(matrix); }
+    return consume(x) + consume(y);
+}
+
 // Rejected: multiplication by zero has the same concrete identity, so a later
 // `arr[0]` move overlaps the earlier dynamic-looking move.
 fn reject_duplicate_mul_zero_dynamic_multi_array_element_move(i: usize) -> u32 {
