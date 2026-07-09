@@ -1500,6 +1500,27 @@ fn reject_non_exact_symbolic_shift_right_dynamic_multi_array_element_move(i: usi
     return consume(x) + consume(y);
 }
 
+// Accepted: scale and shift operations that are algebraic identities keep the
+// same symbolic dynamic place instead of falling back to wildcard ownership.
+fn accept_reinitialize_symbolic_scale_identity_dynamic_multi_array_element(i: usize) -> u32 {
+    var arr: ResArray = .{ mkres(1), mkres(2) };
+    let x: Res = arr[i * 1];
+    arr[1 * i] = mkres(3);
+    let y: Res = arr[i / 1];
+    unsafe { forget_unchecked(arr); }
+    return consume(x) + consume(y);
+}
+
+// Accepted: zero-width symbolic shifts are also stable place identities.
+fn accept_reinitialize_symbolic_zero_shift_identity_dynamic_multi_array_element(i: usize) -> u32 {
+    var arr: ResArray = .{ mkres(1), mkres(2) };
+    let x: Res = arr[i << 0];
+    arr[i] = mkres(3);
+    let y: Res = arr[i >> 0];
+    unsafe { forget_unchecked(arr); }
+    return consume(x) + consume(y);
+}
+
 // Accepted: bitwise identity expressions with zero keep the same symbolic
 // dynamic place identity.
 fn accept_reinitialize_symbolic_bitwise_identity_dynamic_multi_array_element(i: usize) -> u32 {
