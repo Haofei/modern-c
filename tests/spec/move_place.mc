@@ -2076,6 +2076,13 @@ fn reject_return_after_symbolic_matrix_param_element_move(matrix: ResMatrix, i: 
     return consume(x);
 }
 
+// Rejected: return-edge leak checks also preserve parameter-rooted concrete
+// places reached through exact symbolic modulo-zero indexes.
+fn reject_return_after_symbolic_modulo_zero_array_param_element_move(arr: ResArray, i: usize) -> u32 { // EXPECT_ERROR: E_RESOURCE_LEAK
+    let x: Res = arr[(i + i) % 2];
+    return consume(x);
+}
+
 // Rejected: return-edge leak checks preserve bounded symbolic offset places.
 fn reject_return_after_symbolic_offset_array_element_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) }; // EXPECT_ERROR: E_RESOURCE_LEAK
@@ -2645,6 +2652,17 @@ fn reject_move_after_defer_symbolic_offset_multi_array_element(i: usize) -> u32 
     defer consume(arr[i + 1]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = arr[1 + i];
+    unsafe { forget_unchecked(arr); }
+    return consume(x);
+}
+
+// Rejected: exact symbolic modulo-zero defer reserves the concrete element
+// place, so a later concrete move would duplicate the deferred resource.
+fn reject_move_after_defer_symbolic_modulo_zero_multi_array_element(i: usize) -> u32 {
+    let arr: ResArray = .{ mkres(1), mkres(2) };
+    defer consume(arr[(i + i) % 2]);
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let x: Res = arr[0];
     unsafe { forget_unchecked(arr); }
     return consume(x);
 }
@@ -4663,6 +4681,17 @@ fn reject_short_circuit_symbolic_matrix_param_element_move(matrix: ResMatrix, fl
     return 0;
 }
 
+// Rejected: short-circuit RHS joins preserve parameter-rooted concrete places
+// reached through exact symbolic modulo-zero indexes.
+fn reject_short_circuit_symbolic_modulo_zero_array_param_element_move(arr: ResArray, flag: bool, i: usize) -> u32 {
+    if flag && consume(arr[(i + i) % 2]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+        unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
+        return 1;
+    }
+    unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return 0;
+}
+
 // Rejected: short-circuit RHS place checks also include move-struct array field
 // elements.
 fn reject_short_circuit_array_field_element_move(flag: bool) -> u32 {
@@ -5088,6 +5117,15 @@ fn reject_while_condition_dynamic_matrix_param_element_move(matrix: ResMatrix, i
     while consume(matrix[i][0]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     }
     unsafe { forget_unchecked(matrix); } // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return 0;
+}
+
+// Rejected: while-condition checks preserve parameter-rooted concrete places
+// reached through exact symbolic modulo-zero indexes.
+fn reject_while_condition_symbolic_modulo_zero_array_param_element_move(arr: ResArray, i: usize) -> u32 {
+    while consume(arr[(i + i) % 2]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    }
+    unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
     return 0;
 }
 
