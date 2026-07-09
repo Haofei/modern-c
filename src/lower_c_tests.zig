@@ -4685,6 +4685,15 @@ test "lower-c aggregate pointer reads without MIR destination fact lower conserv
         \\    }
         \\}
         \\
+        \\fn c_aggregate_field_casted_noalias_copy_direct_deref_requires_mir_field_fact() -> u32 {
+        \\    let holder: Holder = .{ .ptr = &shared_counter };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        let copied: Holder = compiler.assume_noalias_unchecked(holder, 4) as Holder;
+        \\        return copied.ptr.*;
+        \\    }
+        \\}
+        \\
         \\fn c_aggregate_field_local_direct_deref_requires_mir_field_fact() -> u32 {
         \\    var local: u32 = 0;
         \\    let holder: Holder = .{ .ptr = &local };
@@ -4917,6 +4926,11 @@ test "lower-c aggregate pointer reads without MIR destination fact lower conserv
     try expectContains(normal_noalias_copy_body, "return ((uint32_t)mc_race_load_u32(copied.ptr));");
     try expectNotContains(normal_noalias_copy_body, "return *copied.ptr;");
 
+    const normal_casted_noalias_copy_body = try cFunctionBody(normal_output.items, "static uint32_t c_aggregate_field_casted_noalias_copy_direct_deref_requires_mir_field_fact(void)");
+    try expectContains(normal_casted_noalias_copy_body, "/* mir pointer_provenance consumed fn=c_aggregate_field_casted_noalias_copy_direct_deref_requires_mir_field_fact subject=copied field=ptr provenance=global_storage reason=none source=");
+    try expectContains(normal_casted_noalias_copy_body, "return ((uint32_t)mc_race_load_u32(copied.ptr));");
+    try expectNotContains(normal_casted_noalias_copy_body, "return *copied.ptr;");
+
     const normal_nested_assignment_copy_body = try cFunctionBody(normal_output.items, "static uint32_t c_nested_aggregate_field_assignment_copy_direct_deref_requires_mir_field_fact(void)");
     try expectContains(normal_nested_assignment_copy_body, "/* mir pointer_provenance consumed fn=c_nested_aggregate_field_assignment_copy_direct_deref_requires_mir_field_fact subject=assigned field=inner.ptr provenance=global_storage reason=reassignment source=");
     try expectContains(normal_nested_assignment_copy_body, "return ((uint32_t)mc_race_load_u32(assigned.inner.ptr));");
@@ -5016,6 +5030,14 @@ test "lower-c aggregate pointer reads without MIR destination fact lower conserv
     try expectNotContains(missing_noalias_copy_field_body, "/* mir pointer_provenance consumed fn=c_aggregate_field_noalias_copy_direct_deref_requires_mir_field_fact subject=copied field=ptr provenance");
     try expectContains(missing_noalias_copy_field_body, "return ((uint32_t)mc_race_load_u32(copied.ptr));");
     try expectNotContains(missing_noalias_copy_field_body, "return *copied.ptr;");
+
+    var missing_casted_noalias_copy_field_output: std.ArrayList(u8) = .empty;
+    defer missing_casted_noalias_copy_field_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutPointerProvenanceFactsForSubjectField("emit_c_aggregate_field_missing_casted_noalias_copy_field_provenance.mc", field_source, "c_aggregate_field_casted_noalias_copy_direct_deref_requires_mir_field_fact", "copied", "ptr", &missing_casted_noalias_copy_field_output);
+    const missing_casted_noalias_copy_field_body = try cFunctionBody(missing_casted_noalias_copy_field_output.items, "static uint32_t c_aggregate_field_casted_noalias_copy_direct_deref_requires_mir_field_fact(void)");
+    try expectNotContains(missing_casted_noalias_copy_field_body, "/* mir pointer_provenance consumed fn=c_aggregate_field_casted_noalias_copy_direct_deref_requires_mir_field_fact subject=copied field=ptr provenance");
+    try expectContains(missing_casted_noalias_copy_field_body, "return ((uint32_t)mc_race_load_u32(copied.ptr));");
+    try expectNotContains(missing_casted_noalias_copy_field_body, "return *copied.ptr;");
 
     var missing_noalias_read_field_output: std.ArrayList(u8) = .empty;
     defer missing_noalias_read_field_output.deinit(std.testing.allocator);

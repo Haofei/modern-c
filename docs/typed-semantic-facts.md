@@ -445,6 +445,9 @@ whole-aggregate copies through `compiler.assume_noalias_unchecked(holder, n)`
 now use the MIR aggregate `field_path` fact path as well: MIR treats the wrapper
 as transparent in `directAggregateCopySourceName`, and C/LLVM consume the
 matching subject source point for noalias-wrapped direct aggregate copies.
+The same direct aggregate-copy path now also covers same-struct cast wrappers
+around that noalias expression; LLVM treats the identical resolved aggregate type
+cast as a no-op instead of failing or re-deriving copy provenance.
 Nested aggregate member copies are path-aware too: MIR can copy live facts from
 `src.inner.*` into `dst.inner.*` for
 `dst.inner = compiler.assume_noalias_unchecked(src.inner, n)`, and backends

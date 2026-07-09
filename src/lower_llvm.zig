@@ -7920,6 +7920,13 @@ const LlvmEmitter = struct {
         {
             return value;
         }
+        if (std.mem.eql(u8, source_llvm, target_llvm)) {
+            const source_name = typeName(self.resolveAliasType(source_ty));
+            const target_name = typeName(self.resolveAliasType(target_ty));
+            if (source_name != null and target_name != null and std.mem.eql(u8, source_name.?, target_name.?)) {
+                return value;
+            }
+        }
         // A `[]mut T as []const T` const-narrowing cast is a no-op: both slices lower to the
         // identical `{ ptr, i64 }` LLVM type (LLVM pointers carry no constness).
         if (std.mem.eql(u8, source_llvm, target_llvm) and

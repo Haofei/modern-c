@@ -1680,6 +1680,16 @@ test "MIR records aggregate pointer assignments from pointer-local copy facts" {
         \\    }
         \\}
         \\
+        \\fn aggregate_copy_from_casted_noalias() {
+        \\    let holder: Holder = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &shared_counter } };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        let copied: Holder = compiler.assume_noalias_unchecked(holder, 4) as Holder;
+        \\        let p: *mut u32 = copied.ptr;
+        \\        let q: *mut u32 = copied.ptrs[0];
+        \\    }
+        \\}
+        \\
         \\fn aggregate_literal_from_raw_many_zero() {
         \\    unsafe {
         \\        var local: u32 = 0;
@@ -1834,6 +1844,12 @@ test "MIR records aggregate pointer assignments from pointer-local copy facts" {
     try std.testing.expect(hasPointerProvenanceFieldFact(noalias_copy_function, "copied", "ptrs", 0, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(noalias_copy_function, "p", null, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(noalias_copy_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const casted_noalias_copy_function = functionByName(typed_mir, "aggregate_copy_from_casted_noalias").?;
+    try std.testing.expect(hasPointerProvenanceFieldFact(casted_noalias_copy_function, "copied", "ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(casted_noalias_copy_function, "copied", "ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(casted_noalias_copy_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(casted_noalias_copy_function, "q", null, .global_storage, .none, "shared_counter"));
 
     const raw_literal_function = functionByName(typed_mir, "aggregate_literal_from_raw_many_zero").?;
     try std.testing.expect(hasPointerProvenanceFact(raw_literal_function, "gp", null, .global_storage, .none, "shared_counter"));

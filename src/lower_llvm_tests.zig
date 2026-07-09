@@ -3089,6 +3089,15 @@ test "LLVM aggregate pointer-field reads without MIR destination fact lower cons
         \\    }
         \\}
         \\
+        \\fn aggregate_field_casted_noalias_copy_direct_deref_requires_mir_field_fact() -> u32 {
+        \\    let holder: Holder = .{ .ptr = &shared_counter };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        let copied: Holder = compiler.assume_noalias_unchecked(holder, 4) as Holder;
+        \\        return copied.ptr.*;
+        \\    }
+        \\}
+        \\
         \\fn aggregate_field_local_copy_direct_deref_requires_mir_field_fact() -> u32 {
         \\    var local: u32 = 0;
         \\    let holder: Holder = .{ .ptr = &local };
@@ -3327,6 +3336,12 @@ test "LLVM aggregate pointer-field reads without MIR destination fact lower cons
     try expectContains(normal_noalias_copy_body, "load atomic i32, ptr %");
     try expectContains(normal_noalias_copy_body, " unordered, align 4");
 
+    const normal_casted_noalias_copy_body = try llvmFunctionBody(normal_output.items, "define internal i32 @aggregate_field_casted_noalias_copy_direct_deref_requires_mir_field_fact");
+    try expectContains(normal_casted_noalias_copy_body, "; mir pointer_provenance consumed fn=aggregate_field_casted_noalias_copy_direct_deref_requires_mir_field_fact subject=copied field=ptr provenance=global_storage reason=none");
+    try expectContains(normal_casted_noalias_copy_body, "load atomic i32, ptr %");
+    try expectContains(normal_casted_noalias_copy_body, " unordered, align 4");
+    try expectNotContains(normal_casted_noalias_copy_body, "load i32, ptr %");
+
     const normal_local_copy_body = try llvmFunctionBody(normal_output.items, "define internal i32 @aggregate_field_local_copy_direct_deref_requires_mir_field_fact");
     try expectContains(normal_local_copy_body, "; mir pointer_provenance consumed fn=aggregate_field_local_copy_direct_deref_requires_mir_field_fact subject=copied field=ptr provenance=local_storage reason=none");
     try expectContains(normal_local_copy_body, "load i32, ptr %");
@@ -3543,6 +3558,16 @@ test "LLVM aggregate pointer-field reads without MIR destination fact lower cons
     try expectContains(missing_noalias_copy_field_body, "load atomic i32, ptr %");
     try expectContains(missing_noalias_copy_field_body, " unordered, align 4");
     try expectNotContains(missing_noalias_copy_field_body, "load i32, ptr %");
+
+    var missing_casted_noalias_copy_field_output: std.ArrayList(u8) = .empty;
+    defer missing_casted_noalias_copy_field_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubjectField("llvm_aggregate_field_missing_casted_noalias_copy_field_provenance.mc", source, "aggregate_field_casted_noalias_copy_direct_deref_requires_mir_field_fact", "copied", "ptr", &missing_casted_noalias_copy_field_output);
+
+    const missing_casted_noalias_copy_field_body = try llvmFunctionBody(missing_casted_noalias_copy_field_output.items, "define internal i32 @aggregate_field_casted_noalias_copy_direct_deref_requires_mir_field_fact");
+    try expectNotContains(missing_casted_noalias_copy_field_body, "; mir pointer_provenance consumed fn=aggregate_field_casted_noalias_copy_direct_deref_requires_mir_field_fact subject=copied field=ptr provenance");
+    try expectContains(missing_casted_noalias_copy_field_body, "load atomic i32, ptr %");
+    try expectContains(missing_casted_noalias_copy_field_body, " unordered, align 4");
+    try expectNotContains(missing_casted_noalias_copy_field_body, "load i32, ptr %");
 
     var missing_noalias_read_field_output: std.ArrayList(u8) = .empty;
     defer missing_noalias_read_field_output.deinit(std.testing.allocator);
