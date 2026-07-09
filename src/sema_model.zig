@@ -128,6 +128,10 @@ pub const StructInfo = struct {
 pub const MoveSlot = struct {
     live: bool,
     span: diagnostics.Span,
+    // Structured identity for tracked root places. Synthetic subplace entries and
+    // alias/defer references remain on the compatibility path until the state-map
+    // migration is complete.
+    place: ?MovePlace = null,
     // Reserved by a `defer` to be consumed at scope end: not a leak, not movable.
     deferred: bool = false,
     // A place borrowed by a deferred expression. Unlike `deferred`, this does not

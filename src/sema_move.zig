@@ -34,7 +34,7 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
     }
     for (fn_decl.params) |param| {
         if (self.typeEmbedsMoveByValue(param.ty, aliases)) {
-            state.put(param.name.text, .{ .live = true, .span = param.name.span, .ty = param.ty }) catch {
+            state.put(param.name.text, .{ .live = true, .span = param.name.span, .place = .{ .root = param.name.text }, .ty = param.ty }) catch {
                 self.oom = true;
             };
         } else if (isUsizeType(param.ty)) {
@@ -236,7 +236,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                     if (self.typeEmbedsMoveByValue(ty, aliases)) {
                         // A binding whose type embeds a `move` resource by value — a `move`
                         // struct, a `Result<…move…, …>`, or a `?move` — must be consumed.
-                        state.put(decl.names[0].text, .{ .live = true, .span = decl.names[0].span, .ty = ty }) catch {
+                        state.put(decl.names[0].text, .{ .live = true, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .ty = ty }) catch {
                             self.oom = true;
                         };
                         bound_as_move = true;
