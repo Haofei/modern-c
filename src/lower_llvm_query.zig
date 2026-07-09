@@ -122,13 +122,14 @@ pub fn isDeclassifyCall(call: anytype) bool {
 }
 
 pub fn isAssumeNoaliasCall(call: anytype) bool {
-    return switch (call.callee.kind) {
+    return isAssumeNoaliasCallee(call.callee.*);
+}
+
+fn isAssumeNoaliasCallee(callee: ast.Expr) bool {
+    return switch (callee.kind) {
         .member => |member| std.mem.eql(u8, member.name.text, "assume_noalias_unchecked") and ast_query.isIdentNamed(member.base.*, "compiler"),
         .ident => |ident| std.mem.eql(u8, ident.text, "compiler.assume_noalias_unchecked") or std.mem.eql(u8, ident.text, "assume_noalias_unchecked"),
-        .grouped => |inner| switch (inner.kind) {
-            .call => |inner_call| isAssumeNoaliasCall(inner_call),
-            else => false,
-        },
+        .grouped => |inner| isAssumeNoaliasCallee(inner.*),
         else => false,
     };
 }

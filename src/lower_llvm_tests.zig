@@ -3,6 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const lower_llvm = @import("lower_llvm.zig");
+const lower_llvm_query = @import("lower_llvm_query.zig");
 const mir = @import("mir.zig");
 const test_support = @import("test_support.zig");
 
@@ -11,6 +12,26 @@ fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.Arra
     defer parsed.deinit();
 
     try lower_llvm.appendLlvm(std.testing.allocator, parsed.module, output);
+}
+
+test "LLVM noalias query rejects grouped call callees" {
+    const source =
+        \\fn probe(p: *mut u32, n: usize) -> *mut u32 {
+        \\    return (compiler.assume_noalias_unchecked(p, n))(p, n);
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_noalias_grouped_call_callee.mc", source);
+    defer parsed.deinit();
+
+    const fn_decl = parsed.module.decls[0].kind.fn_decl;
+    const ret_expr = fn_decl.body.?.items[0].kind.@"return".?;
+    const outer_call = ret_expr.kind.call;
+    try std.testing.expect(!lower_llvm_query.isAssumeNoaliasCall(outer_call));
+
+    const grouped_callee = outer_call.callee.*.kind.grouped;
+    const inner_call = grouped_callee.kind.call;
+    try std.testing.expect(lower_llvm_query.isAssumeNoaliasCall(inner_call));
 }
 
 fn clearPointerProvenanceFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {

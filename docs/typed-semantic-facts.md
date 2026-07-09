@@ -498,8 +498,9 @@ the provenance kind as well: returned `global_storage` fields can still seed
 caller aggregate facts, but returned callee-local `local_storage` fields are not
 converted into caller-local or false global proofs. LLVM's remaining
 backend-local noalias wrapper checks now require the real builtin shape, so
-malformed same-named calls cannot seed fallback parameter, return, direct
-provenance, or expression-type facts outside the MIR-owned classifier. The
+malformed same-named calls and grouped call-callee impostors cannot seed
+fallback parameter, return, direct provenance, or expression-type facts outside
+the MIR-owned classifier. The
 shared LLVM raw-many `.offset` classifier now also requires the real no-type-arg,
 one-offset-argument shape before fallback typing or provenance can use the base
 expression. MIR pointer provenance now uses the builder's compile-time `usize`
