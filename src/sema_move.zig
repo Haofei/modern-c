@@ -954,7 +954,7 @@ fn fullDerefMoveSubplaceAlias(self: *Checker, expr: ast.Expr, state: *const std.
     const pp = placeKeyAndType(self, target, state) orelse {
         return wildcardMoveIndexedPlaceKey(self, target, state, aliases);
     };
-    if (!isMoveSubplaceKey(pp.key)) return null;
+    if (!pp.place.isSubplace()) return null;
     if (!self.typeEmbedsMoveByValue(pp.ty, aliases)) return null;
     return pp.key;
 }
@@ -1341,10 +1341,41 @@ fn sameIndexFact(left: MoveSlot, right: MoveSlot) bool {
 // This lets the checker reject a duplicate field move, a borrow of a moved-out field,
 // and a whole-aggregate move after a field was taken (which would duplicate it).
 
-// If `expr` is `<binding>.<field>` where the field is a `move` type and the base is a
-// tracked move binding, return the place key `binding.field` (allocated once, owned by
-// `move_place_keys`); otherwise null.
-pub const PlaceKeyTy = struct { key: []const u8, ty: ast.TypeExpr };
+// Move-place construction is now structured. The state map still uses `key` as a
+// compatibility adapter while the checker is migrated, but field/index identity is
+// no longer discovered by reparsing that string at the construction boundary.
+const max_move_place_projections = 16;
+
+const MoveProjection = union(enum) {
+    field: []const u8,
+    constant_index: usize,
+    symbolic_index: []const u8,
+    wildcard_index,
+};
+
+pub const MovePlace = struct {
+    root: []const u8,
+    projections: [max_move_place_projections]MoveProjection = undefined,
+    projection_count: usize = 0,
+
+    fn isSubplace(self: MovePlace) bool {
+        return self.projection_count != 0;
+    }
+
+    fn project(self: MovePlace, projection: MoveProjection) ?MovePlace {
+        if (self.projection_count == max_move_place_projections) return null;
+        var result = self;
+        result.projections[result.projection_count] = projection;
+        result.projection_count += 1;
+        return result;
+    }
+};
+
+pub const PlaceKeyTy = struct {
+    key: []const u8,
+    place: MovePlace,
+    ty: ast.TypeExpr,
+};
 
 // Build the dotted place key and leaf type for a place expression (`x`, `x.f`, `x.f.g`)
 // whose root is a tracked move binding — so nested fields, not just one level, are
@@ -1356,7 +1387,7 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const std.StringH
         .ident => |id| {
             const slot = state.get(id.text) orelse return null;
             const ty = slot.ty orelse return null;
-            return .{ .key = id.text, .ty = ty }; // root key = binding name (AST-owned)
+            return .{ .key = id.text, .place = .{ .root = id.text }, .ty = ty };
         },
         .member => |m| {
             const base = placeKeyAndType(self, m.base.*, state) orelse return null;
@@ -1369,7 +1400,8 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const std.StringH
             self.move_place_keys.append(self.reporter.allocator, key) catch {
                 self.oom = true;
             };
-            return .{ .key = key, .ty = field_ty };
+            const place = base.place.project(.{ .field = m.name.text }) orelse return null;
+            return .{ .key = key, .place = place, .ty = field_ty };
         },
         .index => |ix| {
             const base = placeKeyAndType(self, ix.base.*, state) orelse return null;
@@ -1392,7 +1424,8 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const std.StringH
                         self.reporter.allocator.free(key);
                         return null;
                     };
-                    return .{ .key = key, .ty = child_ty };
+                    const place = base.place.project(.{ .symbolic_index = symbol }) orelse return null;
+                    return .{ .key = key, .place = place, .ty = child_ty };
                 }
                 if (len != 1) return null;
                 break :blk 0;
@@ -1405,7 +1438,8 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const std.StringH
             self.move_place_keys.append(self.reporter.allocator, key) catch {
                 self.oom = true;
             };
-            return .{ .key = key, .ty = child_ty };
+            const place = base.place.project(.{ .constant_index = k }) orelse return null;
+            return .{ .key = key, .place = place, .ty = child_ty };
         },
         else => return null,
     }
@@ -1940,7 +1974,8 @@ fn nestedWildcardIndexedPlaceKeyAndType(self: *Checker, expr: ast.Expr, state: *
                     self.reporter.allocator.free(key);
                     return null;
                 };
-                return .{ .key = key, .ty = direct_array.child.* };
+                const place = direct_base.place.project(.wildcard_index) orelse return null;
+                return .{ .key = key, .place = place, .ty = direct_array.child.* };
             };
             const base_ty = resolveAliasType(base.ty, ctx.*);
             const array = switch (base_ty.kind) {
@@ -1972,7 +2007,15 @@ fn nestedWildcardIndexedPlaceKeyAndType(self: *Checker, expr: ast.Expr, state: *
                 self.reporter.allocator.free(key);
                 return null;
             };
-            return .{ .key = key, .ty = child_ty };
+            const index_value = constIndexValue(self, ix.index.*, state, ctx.*);
+            const projection: MoveProjection = if (index_value) |index|
+                .{ .constant_index = index }
+            else if (len == 1)
+                .{ .constant_index = 0 }
+            else
+                .wildcard_index;
+            const place = base.place.project(projection) orelse return null;
+            return .{ .key = key, .place = place, .ty = child_ty };
         },
         else => return null,
     }
