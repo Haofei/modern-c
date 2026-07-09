@@ -1332,6 +1332,17 @@ fn accept_reinitialize_symbolic_identity_expr_dynamic_multi_array_element(i: usi
     return consume(x) + consume(y);
 }
 
+// Accepted: bitwise identity expressions over a symbolic index keep the same
+// dynamic place identity.
+fn accept_reinitialize_bitwise_identity_expr_dynamic_multi_array_element(i: usize) -> u32 {
+    var arr: ResArray = .{ mkres(1), mkres(2) };
+    let x: Res = arr[i];
+    arr[i | 0] = mkres(3);
+    let y: Res = arr[i & i];
+    unsafe { forget_unchecked(arr); }
+    return consume(x) + consume(y);
+}
+
 // Accepted: copied symbolic facts can also come from identity-preserving index
 // expressions, so `j` still names the same dynamic element as `i`.
 fn accept_reinitialize_copied_symbolic_identity_expr_dynamic_multi_array_element(i: usize) -> u32 {

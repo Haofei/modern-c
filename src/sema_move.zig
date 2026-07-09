@@ -1466,6 +1466,10 @@ fn constIndexValue(self: *Checker, expr: ast.Expr, state: *const std.StringHashM
     }
 }
 
+fn stableIndexPlaceKnown(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), ctx: Context) bool {
+    return constIndexValue(self, expr, state, ctx) != null or symbolicIndexValue(self, expr, state, ctx) != null;
+}
+
 fn sameIndexIdent(left: ast.Expr, right: ast.Expr) bool {
     const left_name = indexIdentName(left) orelse return false;
     const right_name = indexIdentName(right) orelse return false;
@@ -1894,7 +1898,7 @@ fn wildcardMoveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const std
             };
             const len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse return null;
             if (len <= 1) return null;
-            if (constIndexValue(self, ix.index.*, state, ctx.*) != null or symbolicIndexValue(self, ix.index.*, state, ctx.*) != null) return null;
+            if (stableIndexPlaceKnown(self, ix.index.*, state, ctx.*)) return null;
             if (!self.typeEmbedsMoveByValue(array.child.*, aliases)) return null;
             const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[*]", .{base.key}) catch {
                 self.oom = true;
@@ -1925,7 +1929,7 @@ fn nestedWildcardIndexedPlaceKeyAndType(self: *Checker, expr: ast.Expr, state: *
                 };
                 const direct_len = parseArrayLen(direct_array.len, ctx.const_fns, ctx.const_globals) orelse return null;
                 if (direct_len <= 1) return null;
-                if (constIndexValue(self, ix.index.*, state, ctx.*) != null or symbolicIndexValue(self, ix.index.*, state, ctx.*) != null) return null;
+                if (stableIndexPlaceKnown(self, ix.index.*, state, ctx.*)) return null;
                 if (!self.typeEmbedsMoveByValue(direct_array.child.*, aliases)) return null;
                 const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[*]", .{direct_base.key}) catch {
                     self.oom = true;
