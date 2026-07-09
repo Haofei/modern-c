@@ -71,6 +71,26 @@ fn clearRangeFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
     return error.TestUnexpectedResult;
 }
 
+fn clearRepresentationFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        module_mir.allocator.free(function.representation_facts);
+        function.representation_facts = try module_mir.allocator.alloc(mir.RepresentationFact, 0);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn retargetRepresentationFactsForFunction(module_mir: *mir.Module, name: []const u8, value_id: []const u8) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        if (function.representation_facts.len == 0) return error.TestUnexpectedResult;
+        function.representation_facts[0].value_id = value_id;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn retargetRangeFactsForFunction(module_mir: *mir.Module, name: []const u8, target: []const u8) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -148,6 +168,48 @@ fn appendLlvmTestWithoutRangeFacts(source_name: []const u8, source: []const u8, 
     }
 
     try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, output, source_name, .{}, false, .riscv64, null);
+}
+
+test "LLVM rejects prebuilt MIR with missing representation facts" {
+    const source =
+        \\fn representation_fact_gate(p: *mut u32) -> u32 {
+        \\    unsafe { return p.*; }
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_missing_representation_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearRepresentationFactsForFunction(&module_mir, "representation_fact_gate");
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirRepresentationFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_representation_facts.mc", .{}, false, .riscv64, null),
+    );
+}
+
+test "LLVM rejects prebuilt MIR with stale representation facts" {
+    const source =
+        \\fn representation_fact_gate(p: *mut u32) -> u32 {
+        \\    unsafe { return p.*; }
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_stale_representation_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try retargetRepresentationFactsForFunction(&module_mir, "representation_fact_gate", "stale_value");
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirRepresentationFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_stale_representation_facts.mc", .{}, false, .riscv64, null),
+    );
 }
 
 fn appendLlvmTestWithRetargetedRangeFacts(source_name: []const u8, source: []const u8, function_name: []const u8, target: []const u8, output: *std.ArrayList(u8)) !void {

@@ -85,6 +85,7 @@ ANCHORS: dict[str, list[str]] = {
         "representation_facts: std.ArrayList(RepresentationFact)",
         "const resolved_value_id = value_id orelse",
         "fn representationFactKind",
+        "pub fn validateRepresentationFactsForLowering",
         "fn addRangeFactForUncheckedCall",
         "fn addAggregateRangeFactForUncheckedExpr",
         "fn invalidateFacts",

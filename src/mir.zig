@@ -793,6 +793,57 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
     }
 }
 
+/// Backends consume the owned representation fact table as an admission gate.
+/// A prebuilt MIR module must retain a one-to-one record for every
+/// representation-sensitive instruction; otherwise lowering fails closed rather
+/// than treating the raw AST as an alternative source of representation truth.
+pub fn validateRepresentationFactsForLowering(module: Module) error{InvalidMirRepresentationFacts}!void {
+    for (module.functions) |function| {
+        for (function.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (!representationFactKind(instruction.kind, instruction.result_ty)) continue;
+                if (!functionHasMatchingRepresentationFact(function, instruction)) return error.InvalidMirRepresentationFacts;
+            }
+        }
+        for (function.representation_facts) |fact| {
+            if (!functionHasMatchingRepresentationInstruction(function, fact)) return error.InvalidMirRepresentationFacts;
+        }
+    }
+}
+
+fn functionHasMatchingRepresentationFact(function: Function, instruction: Instruction) bool {
+    const value_id = instruction.value_id orelse "none";
+    for (function.representation_facts) |fact| {
+        if (fact.kind != instruction.kind) continue;
+        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
+        if (fact.source.line != instruction.line or fact.source.column != instruction.column) continue;
+        if (!std.mem.eql(u8, fact.detail, instruction.detail)) continue;
+        if (!std.mem.eql(u8, fact.value_id, value_id)) continue;
+        return true;
+    }
+    return false;
+}
+
+fn functionHasMatchingRepresentationInstruction(function: Function, fact: RepresentationFact) bool {
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (!representationFactKind(instruction.kind, instruction.result_ty)) continue;
+            if (instruction.kind != fact.kind) continue;
+            if (!sameRepresentationValueType(instruction.result_ty, fact.result_ty)) continue;
+            if (instruction.line != fact.source.line or instruction.column != fact.source.column) continue;
+            if (!std.mem.eql(u8, instruction.detail, fact.detail)) continue;
+            if (!std.mem.eql(u8, instruction.value_id orelse "none", fact.value_id)) continue;
+            return true;
+        }
+    }
+    return false;
+}
+
+fn sameRepresentationValueType(left: ValueType, right: ValueType) bool {
+    return std.meta.activeTag(left) == std.meta.activeTag(right) and
+        std.mem.eql(u8, left.name(), right.name());
+}
+
 const MutableBlock = struct {
     id: usize,
     kind: []const u8,

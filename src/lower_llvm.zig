@@ -251,6 +251,7 @@ fn appendLlvmCheckedReport(allocator: std.mem.Allocator, module: ast.Module, out
 }
 
 pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, reporter: ?*diagnostics.Reporter) !void {
+    try mir.validateRepresentationFactsForLowering(module_mir.*);
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;
