@@ -1133,15 +1133,27 @@ const LlvmEmitter = struct {
         }
     }
 
+    const SimpleAggregateReturnPath = struct {
+        prefix: ast.Block,
+        return_path: ast.Block,
+    };
+
     const SimpleAggregateReturnPaths = struct {
-        paths: [8]ast.Block = undefined,
+        paths: [8]SimpleAggregateReturnPath = undefined,
         len: usize = 0,
 
-        fn append(self: *SimpleAggregateReturnPaths, path: ast.Block) bool {
+        fn append(self: *SimpleAggregateReturnPaths, path: SimpleAggregateReturnPath) bool {
             if (self.len >= self.paths.len) return false;
             self.paths[self.len] = path;
             self.len += 1;
             return true;
+        }
+
+        fn appendReturnPath(self: *SimpleAggregateReturnPaths, path: ast.Block) bool {
+            return self.append(.{
+                .prefix = .{ .span = path.span, .items = path.items[0..0] },
+                .return_path = path,
+            });
         }
     };
 
@@ -1163,11 +1175,12 @@ const LlvmEmitter = struct {
         var common_fields: ?std.StringHashMap(mir.PointerProvenance) = null;
         defer if (common_fields) |*fields| self.deinitOwnedStringProvenanceMap(fields);
 
-        for (control_flow.return_paths.paths[0..control_flow.return_paths.len]) |return_path| {
+        for (control_flow.return_paths.paths[0..control_flow.return_paths.len]) |path| {
             self.resetTransientPointerProvenance();
             try self.seedAggregateReturnSummaryParams(fn_decl.params);
             if (!try self.trackSimpleAggregateReturnStatements(control_flow.prefix.items)) return false;
-            var branch_fields = (try self.aggregateReturnPointerFieldPathsForReturnPathWithCurrentFacts(struct_decl, return_path, summary_local)) orelse return false;
+            if (!try self.trackSimpleAggregateReturnStatements(path.prefix.items)) return false;
+            var branch_fields = (try self.aggregateReturnPointerFieldPathsForReturnPathWithCurrentFacts(struct_decl, path.return_path, summary_local)) orelse return false;
             errdefer self.deinitOwnedStringProvenanceMap(&branch_fields);
             if (common_fields) |*common| {
                 try self.intersectOwnedStringProvenanceMap(common, &branch_fields);
@@ -1215,7 +1228,7 @@ const LlvmEmitter = struct {
                 .expr => return false,
             };
             if (!self.aggregateReturnPathHasReturn(block)) return false;
-            if (!paths.append(block)) return false;
+            if (!paths.appendReturnPath(block)) return false;
         }
         return true;
     }
@@ -1251,15 +1264,26 @@ const LlvmEmitter = struct {
             };
             if (block.items.len == 0) {
                 fallthrough_arms += 1;
+                if (!paths.append(.{
+                    .prefix = .{ .span = block.span, .items = block.items },
+                    .return_path = trailing_path,
+                })) return false;
                 continue;
             }
-            if (!self.aggregateReturnPathHasReturn(block)) return false;
+            if (!self.aggregateReturnPathHasReturn(block)) {
+                fallthrough_arms += 1;
+                if (!paths.append(.{
+                    .prefix = block,
+                    .return_path = trailing_path,
+                })) return false;
+                continue;
+            }
             returned_arms += 1;
-            if (!paths.append(block)) return false;
+            if (!paths.appendReturnPath(block)) return false;
         }
         if (returned_arms == 0 or fallthrough_arms == 0) return false;
         if (!self.aggregateReturnPathHasReturn(trailing_path)) return false;
-        return paths.append(trailing_path);
+        return true;
     }
 
     fn aggregateReturnPathHasReturn(self: *LlvmEmitter, block: ast.Block) bool {
