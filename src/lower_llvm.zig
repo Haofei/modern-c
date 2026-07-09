@@ -1241,7 +1241,7 @@ const LlvmEmitter = struct {
         trailing_path: ast.Block,
         paths: *SimpleAggregateReturnPaths,
     ) bool {
-        if (!self.isSimpleBoolIfSwitch(switch_node)) return false;
+        if (!self.switchAggregateReturnPathsAreExhaustive(switch_node)) return false;
         var returned_arms: usize = 0;
         for (switch_node.arms) |arm| {
             const block = switch (arm.body) {
