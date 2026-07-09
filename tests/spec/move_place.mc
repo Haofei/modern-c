@@ -2469,6 +2469,14 @@ fn reject_duplicate_symbolic_linear_multi_array_param_element_move(arr: ResArray
     return consume(x) + consume(y);
 }
 
+// Accepted: exact symbolic modulo-zero parameter-rooted indexes fold to the
+// concrete element place, matching local arrays.
+fn accept_symbolic_modulo_zero_multi_array_param_element_move(arr: ResArray, i: usize) -> u32 {
+    let x: Res = arr[(i + i) % 2];
+    unsafe { forget_unchecked(arr); }
+    return consume(x);
+}
+
 // Accepted: parameter-rooted nested move arrays also support stable symbolic
 // dynamic places when the suffix remains nameable.
 fn accept_symbolic_matrix_param_element_move(matrix: ResMatrix, i: usize) -> u32 {
@@ -2530,6 +2538,14 @@ fn reject_duplicate_symbolic_linear_matrix_param_element_move(matrix: ResMatrix,
     let y: Res = matrix[1 + j + i][0];
     unsafe { forget_unchecked(matrix); }
     return consume(x) + consume(y);
+}
+
+// Accepted: exact symbolic modulo-zero also composes through parameter-rooted
+// nested array places.
+fn accept_symbolic_modulo_zero_matrix_param_element_move(matrix: ResMatrix, i: usize) -> u32 {
+    let x: Res = matrix[(i + i) % 2][0];
+    unsafe { forget_unchecked(matrix); }
+    return consume(x);
 }
 
 // Rejected: a later parameter-rooted concrete move conflicts with the wildcard
