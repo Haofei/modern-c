@@ -7016,6 +7016,7 @@ const LlvmEmitter = struct {
                 };
                 const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
                 const base_ptr = try self.aggregateBasePointer(member.base.*);
+                try self.requireMirBoundsFact(.index, (node.index.*).span);
                 try self.emitBoundsCheck(index, len);
                 const result = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(element_ty), base_ptr, index });
@@ -7029,6 +7030,7 @@ const LlvmEmitter = struct {
                 // OPT (annex E): skip the bounds check when the optimized MIR proved this
                 // constant index in range (consumes the optimizer's `elided_bounds`).
                 if (!self.mirCheckElided((node.index.*).span)) {
+                    try self.requireMirBoundsFact(.index, (node.index.*).span);
                     try self.emitBoundsCheck(index, len);
                 }
                 const result = try self.nextTemp();
@@ -7042,6 +7044,7 @@ const LlvmEmitter = struct {
                 const len = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ ptr, base_llvm, base });
                 try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ len, base_llvm, base });
+                try self.requireMirBoundsFact(.index, (node.index.*).span);
                 try self.emitDynamicBoundsCheck(index, len);
                 const result = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(slice.child.*), ptr, index });
@@ -7109,6 +7112,14 @@ const LlvmEmitter = struct {
         return false;
     }
 
+    fn requireMirBoundsFact(self: *LlvmEmitter, kind: mir.BoundsFactKind, span: ast.Span) !void {
+        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
+        for (function.bounds_facts) |fact| {
+            if (fact.kind == kind and fact.source.line == span.line and fact.source.column == span.column) return;
+        }
+        return error.UnsupportedLlvmEmission;
+    }
+
     fn requireMirNoOverflowRangeFact(self: *LlvmEmitter, op: []const u8, span: ast.Span) !void {
         const function_name = self.current_function orelse return error.UnsupportedLlvmEmission;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
@@ -7174,7 +7185,10 @@ const LlvmEmitter = struct {
                 const array_ptr = try self.arrayBasePointer(node.base.*);
                 const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
                 const elem_ptr = try self.nextTemp();
-                if (!elide) try self.emitSliceBoundsCheck(start, end, try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{len}));
+                if (!elide) {
+                    try self.requireMirBoundsFact(.slice, slice_span);
+                    try self.emitSliceBoundsCheck(start, end, try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{len}));
+                }
                 try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {s}\n", .{ elem_ptr, try self.llvmType(base_ty), array_ptr, start });
                 break :blk elem_ptr;
             },
@@ -7186,7 +7200,10 @@ const LlvmEmitter = struct {
                 const elem_ptr = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ ptr, base_llvm, base });
                 try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ len, base_llvm, base });
-                if (!elide) try self.emitSliceBoundsCheck(start, end, len);
+                if (!elide) {
+                    try self.requireMirBoundsFact(.slice, slice_span);
+                    try self.emitSliceBoundsCheck(start, end, len);
+                }
                 try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ elem_ptr, try self.llvmType(slice.child.*), ptr, start });
                 break :blk elem_ptr;
             },

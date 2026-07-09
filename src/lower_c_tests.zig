@@ -33,6 +33,16 @@ fn clearRangeFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
     return error.TestUnexpectedResult;
 }
 
+fn clearBoundsFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        if (function.bounds_facts.len != 0) module_mir.allocator.free(function.bounds_facts);
+        function.bounds_facts = &.{};
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn clearRepresentationFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -117,6 +127,22 @@ fn appendCheckedCTestWithoutRangeFacts(source_name: []const u8, source: []const 
     }
 
     try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, output, .kernel, source_name, .{}, false, null);
+}
+
+test "lower-c rejects prebuilt MIR with missing bounds facts" {
+    const source =
+        \\fn bounds_fact_gate(a: [2]u32, i: usize) -> u32 {
+        \\    return a[i];
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_missing_bounds_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try clearBoundsFactsForFunction(&module_mir, "bounds_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_bounds_facts.mc", .{}, false, null));
 }
 
 test "lower-c rejects prebuilt MIR with missing representation facts" {

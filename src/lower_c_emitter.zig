@@ -3678,6 +3678,7 @@ const CEmitter = struct {
     }
 
     fn emitSliceIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), slice: SliceAccess) anyerror!void {
+        try self.requireMirBoundsFact(.index, node.index.span);
         try self.emitExpr(node.base.*, locals);
         try self.out.print(self.allocator, ".{s}[mc_check_index_usize(", .{slice.ptr_field});
         try self.emitExpr(node.index.*, locals);
@@ -3694,6 +3695,7 @@ const CEmitter = struct {
             try self.out.appendSlice(self.allocator, "]");
             return;
         }
+        try self.requireMirBoundsFact(.index, node.index.span);
         try self.out.appendSlice(self.allocator, ".elems[mc_check_index_usize(");
         try self.emitExpr(node.index.*, locals);
         const len = try self.arrayLenTextForExpr(base_arr.kind.array.len);
@@ -4620,6 +4622,7 @@ const CEmitter = struct {
         if (self.mirCheckElided(slice_span)) {
             try self.out.print(self.allocator, "; (void)mc_len{d}; ({s}){{ .ptr = ", .{ temp_id, slice_name });
         } else {
+            try self.requireMirBoundsFact(.slice, slice_span);
             try self.out.print(self.allocator, "; if (mc_start{d} > mc_end{d} || mc_end{d} > mc_len{d}) mc_trap_Bounds(); ({s}){{ .ptr = ", .{ temp_id, temp_id, temp_id, temp_id, slice_name });
         }
     }
@@ -4914,6 +4917,14 @@ const CEmitter = struct {
             }
         }
         return false;
+    }
+
+    fn requireMirBoundsFact(self: *CEmitter, kind: mir.BoundsFactKind, span: ast.Span) !void {
+        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+        for (function.bounds_facts) |fact| {
+            if (fact.kind == kind and fact.source.line == span.line and fact.source.column == span.column) return;
+        }
+        return error.UnsupportedCEmission;
     }
 
     fn currentMirFunction(self: *CEmitter) ?*const mir.Function {

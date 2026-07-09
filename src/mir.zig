@@ -60,6 +60,8 @@ pub const Terminator = mir_model.Terminator;
 pub const TrapEdge = mir_model.TrapEdge;
 pub const ContractRegion = mir_model.ContractRegion;
 pub const RangeFact = mir_model.RangeFact;
+pub const BoundsFact = mir_model.BoundsFact;
+pub const BoundsFactKind = mir_model.BoundsFactKind;
 pub const SourcePoint = mir_model.SourcePoint;
 pub const PointerProvenance = mir_model.PointerProvenance;
 pub const PointerProvenanceFact = mir_model.PointerProvenanceFact;
@@ -306,6 +308,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
                         .trap_edges = try allocator.alloc(TrapEdge, 0),
                         .contract_regions = try allocator.alloc(ContractRegion, 0),
                         .range_facts = try allocator.alloc(RangeFact, 0),
+                        .bounds_facts = try allocator.alloc(BoundsFact, 0),
                         .pointer_provenance_facts = try allocator.alloc(PointerProvenanceFact, 0),
                         .representation_facts = try allocator.alloc(RepresentationFact, 0),
                         .elided_bounds = try allocator.alloc(SourcePoint, 0),
@@ -969,6 +972,7 @@ const FunctionBuilder = struct {
     trap_edges: std.ArrayList(TrapEdge),
     contract_regions: std.ArrayList(ContractRegion),
     range_facts: std.ArrayList(RangeFact),
+    bounds_facts: std.ArrayList(BoundsFact),
     pointer_provenance_facts: std.ArrayList(PointerProvenanceFact),
     representation_facts: std.ArrayList(RepresentationFact),
     live_pointer_provenance: std.ArrayList(LivePointerProvenance),
@@ -1035,6 +1039,7 @@ const FunctionBuilder = struct {
             .trap_edges = .empty,
             .contract_regions = .empty,
             .range_facts = .empty,
+            .bounds_facts = .empty,
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -1091,6 +1096,7 @@ const FunctionBuilder = struct {
             .trap_edges = .empty,
             .contract_regions = .empty,
             .range_facts = .empty,
+            .bounds_facts = .empty,
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -1127,6 +1133,7 @@ const FunctionBuilder = struct {
         self.trap_edges.deinit(self.allocator);
         self.contract_regions.deinit(self.allocator);
         self.range_facts.deinit(self.allocator);
+        self.bounds_facts.deinit(self.allocator);
         self.pointer_provenance_facts.deinit(self.allocator);
         self.representation_facts.deinit(self.allocator);
         self.live_pointer_provenance.deinit(self.allocator);
@@ -1172,6 +1179,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(contract_regions);
         const range_facts = try self.range_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(range_facts);
+        const bounds_facts = try self.bounds_facts.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(bounds_facts);
         const pointer_provenance_facts = try self.pointer_provenance_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(pointer_provenance_facts);
         const representation_facts = try self.representation_facts.toOwnedSlice(self.allocator);
@@ -1218,6 +1227,7 @@ const FunctionBuilder = struct {
             .trap_edges = trap_edges,
             .contract_regions = contract_regions,
             .range_facts = range_facts,
+            .bounds_facts = bounds_facts,
             .pointer_provenance_facts = pointer_provenance_facts,
             .representation_facts = representation_facts,
             .elided_bounds = elided_bounds,
@@ -2503,6 +2513,7 @@ const FunctionBuilder = struct {
                 } else {
                     try self.addInstr(.cmp_bounds, "i < len", .bool, expr.span);
                     try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
+                    try self.bounds_facts.append(self.allocator, .{ .kind = .index, .source = .{ .line = node.index.span.line, .column = node.index.span.column } });
                 }
                 const ty = self.exprType(expr);
                 try self.addInstr(.index, if (elide_bounds) "const_in_bounds" else "bounds_checked", ty, expr.span);
@@ -2530,6 +2541,7 @@ const FunctionBuilder = struct {
                 } else {
                     try self.addInstr(.cmp_bounds, "start <= end <= len", .bool, expr.span);
                     try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
+                    try self.bounds_facts.append(self.allocator, .{ .kind = .slice, .source = .{ .line = expr.span.line, .column = expr.span.column } });
                 }
                 try self.addInstr(.index, if (elide_slice) "range_slice_const_in_bounds" else "range_slice", self.exprType(expr), expr.span);
                 try self.buildExpr(node.base.*);
@@ -4549,6 +4561,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     allocator.free(function.trap_edges);
     allocator.free(function.contract_regions);
     allocator.free(function.range_facts);
+    if (function.bounds_facts.len != 0) allocator.free(function.bounds_facts);
     for (function.pointer_provenance_facts) |fact| {
         if (fact.field_path) |field_path| allocator.free(field_path);
     }

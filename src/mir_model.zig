@@ -209,6 +209,13 @@ pub const RangeFact = struct {
     column: usize,
 };
 
+pub const BoundsFactKind = enum { index, slice };
+
+pub const BoundsFact = struct {
+    kind: BoundsFactKind,
+    source: SourcePoint,
+};
+
 pub const SourcePoint = struct {
     line: usize,
     column: usize,
@@ -270,6 +277,7 @@ pub const Function = struct {
     trap_edges: []TrapEdge,
     contract_regions: []ContractRegion,
     range_facts: []RangeFact,
+    bounds_facts: []BoundsFact = &.{},
     pointer_provenance_facts: []PointerProvenanceFact,
     representation_facts: []RepresentationFact,
     // OPT (annex E): operand source points of checks the optimizer proved dead and elided
@@ -294,6 +302,7 @@ pub const Module = struct {
             self.allocator.free(function.trap_edges);
             self.allocator.free(function.contract_regions);
             self.allocator.free(function.range_facts);
+            if (function.bounds_facts.len != 0) self.allocator.free(function.bounds_facts);
             for (function.pointer_provenance_facts) |fact| {
                 if (fact.field_path) |field_path| self.allocator.free(field_path);
             }
