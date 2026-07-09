@@ -264,6 +264,12 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
         .reflect_ctx = &reflect_env,
     });
 
+    // This deliberately covers only the unambiguous internal form `return &global`.
+    // Callers receive ordinary pointer-provenance facts, so backend lowering does not
+    // need to rediscover this provenance from the AST.
+    var pointer_return_summaries = try collectDirectGlobalPointerReturnSummaries(allocator, module, &globals, &enums, &structs, &packed_bits, &aliases);
+    defer pointer_return_summaries.deinit();
+
     var functions: std.ArrayList(Function) = .empty;
     errdefer {
         for (functions.items) |function| freeFunction(allocator, function);
@@ -275,7 +281,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
             .global_decl => |global| {
                 if (global.ty) |ty| {
                     if (global.init) |initializer| {
-                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals, &globals, &global_type_exprs);
+                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals, &globals, &global_type_exprs, &pointer_return_summaries);
                         builder.optimize = options.optimize;
                         errdefer builder.deinit();
                         try builder.buildGlobalInitializer(ty, initializer);
@@ -285,7 +291,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
             },
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
-                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals, &globals, &global_type_exprs);
+                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals, &globals, &global_type_exprs, &pointer_return_summaries);
                     builder.optimize = options.optimize;
                     errdefer builder.deinit();
                     try builder.buildBody(body);
@@ -880,6 +886,51 @@ const DirectPointerProvenance = struct {
     storage: []const u8,
 };
 
+const PointerReturnProvenanceSummary = struct {
+    pointer_shape: PointerShape,
+    provenance: DirectPointerProvenance,
+};
+
+fn collectDirectGlobalPointerReturnSummaries(allocator: std.mem.Allocator, module: ast.Module, globals: *const std.StringHashMap(ValueType), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr)) !std.StringHashMap(PointerReturnProvenanceSummary) {
+    var summaries = std.StringHashMap(PointerReturnProvenanceSummary).init(allocator);
+    errdefer summaries.deinit();
+    for (module.decls) |decl| {
+        if (decl.kind != .fn_decl) continue;
+        const fn_decl = decl.kind.fn_decl;
+        if (fn_decl.exported) continue;
+        const return_ty = fn_decl.return_type orelse continue;
+        const pointer_shape = pointerShapeFromValueType(valueTypeFromTypeAlias(return_ty, enums, structs, packed_bits, aliases)) orelse continue;
+        const body = fn_decl.body orelse continue;
+        const storage = directGlobalAddressStorage(body, globals) orelse continue;
+        try summaries.put(fn_decl.name.text, .{
+            .pointer_shape = pointer_shape,
+            .provenance = .{ .kind = .global_storage, .storage = storage },
+        });
+    }
+    return summaries;
+}
+
+fn directGlobalAddressStorage(body: ast.Block, globals: *const std.StringHashMap(ValueType)) ?[]const u8 {
+    if (body.items.len != 1) return null;
+    const value = switch (body.items[0].kind) {
+        .@"return" => |maybe_value| maybe_value orelse return null,
+        else => return null,
+    };
+    return directGlobalAddressStorageExpr(value, globals);
+}
+
+fn directGlobalAddressStorageExpr(expr: ast.Expr, globals: *const std.StringHashMap(ValueType)) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| directGlobalAddressStorageExpr(inner.*, globals),
+        .cast => |node| directGlobalAddressStorageExpr(node.value.*, globals),
+        .address_of => |inner| switch (inner.kind) {
+            .ident => |ident| if (globals.contains(ident.text)) ident.text else null,
+            else => null,
+        },
+        else => null,
+    };
+}
+
 const IndexedAssignmentTarget = struct {
     subject: []const u8,
     base: ast.Expr,
@@ -913,6 +964,7 @@ const FunctionBuilder = struct {
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
     globals: *const std.StringHashMap(ValueType),
     global_type_exprs: *const std.StringHashMap(ast.TypeExpr),
+    pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary),
     blocks: std.ArrayList(MutableBlock),
     trap_edges: std.ArrayList(TrapEdge),
     contract_regions: std.ArrayList(ContractRegion),
@@ -953,7 +1005,7 @@ const FunctionBuilder = struct {
     semantic_expr_depth: usize = 0,
     next_contract_region_id: usize = 1,
 
-    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr)) !FunctionBuilder {
+    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "entry" });
@@ -978,6 +1030,7 @@ const FunctionBuilder = struct {
             .const_globals = const_globals,
             .globals = globals,
             .global_type_exprs = global_type_exprs,
+            .pointer_return_summaries = pointer_return_summaries,
             .blocks = blocks,
             .trap_edges = .empty,
             .contract_regions = .empty,
@@ -1011,7 +1064,7 @@ const FunctionBuilder = struct {
         return builder;
     }
 
-    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr)) !FunctionBuilder {
+    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "global_init" });
@@ -1033,6 +1086,7 @@ const FunctionBuilder = struct {
             .const_globals = const_globals,
             .globals = globals,
             .global_type_exprs = global_type_exprs,
+            .pointer_return_summaries = pointer_return_summaries,
             .blocks = blocks,
             .trap_edges = .empty,
             .contract_regions = .empty,
@@ -3416,6 +3470,13 @@ const FunctionBuilder = struct {
             .call => |call| {
                 if (isAssumeNoaliasDirectCall(call) and call.type_args.len == 0 and call.args.len == 2) {
                     return self.directPointerProvenance(call.args[0], target_shape, target_subject);
+                }
+                if (call.type_args.len == 0 and call.args.len == 0) {
+                    if (directCalleeName(call.callee.*)) |callee| {
+                        if (self.pointer_return_summaries.get(callee)) |summary| {
+                            if (samePointerShape(summary.pointer_shape, target_shape)) return summary.provenance;
+                        }
+                    }
                 }
             },
             else => {},

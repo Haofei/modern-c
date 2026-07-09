@@ -708,7 +708,12 @@ const LlvmEmitter = struct {
             if (fn_decl.exported) continue;
             const body = fn_decl.body orelse continue;
             const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
-            if (self.isPointerLikeType(ret_ty) and self.bodyReturnsOnlyVisibleGlobalPointers(body)) {
+            // The direct `return &global` form is summarized in MIR. Keep this
+            // backend fallback only for the broader legacy return shapes.
+            if (self.isPointerLikeType(ret_ty) and
+                self.bodyReturnsOnlyVisibleGlobalPointers(body) and
+                !self.bodyReturnsDirectGlobalPointer(body))
+            {
                 try self.global_pointer_return_fns.put(fn_decl.name.text, {});
             }
         }
@@ -6537,6 +6542,24 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn bodyReturnsDirectGlobalPointer(self: *LlvmEmitter, body: ast.Block) bool {
+        if (body.items.len != 1) return false;
+        const value = switch (body.items[0].kind) {
+            .@"return" => |maybe_value| maybe_value orelse return false,
+            else => return false,
+        };
+        return self.directGlobalPointerReturnExpr(value);
+    }
+
+    fn directGlobalPointerReturnExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directGlobalPointerReturnExpr(inner.*),
+            .cast => |node| self.directGlobalPointerReturnExpr(node.value.*),
+            .address_of => |inner| self.directGlobalStorageRoot(inner.*),
+            else => false,
+        };
+    }
+
     fn isPointerLikeType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
         return switch (self.resolveAliasType(ty).kind) {
             .pointer, .raw_many_pointer => true,
@@ -6570,6 +6593,10 @@ const LlvmEmitter = struct {
             _ = self.pointer_local_provenance.remove(name);
             return;
         }
+        // This includes direct calls covered by MIR pointer-return summaries.
+        // If that fact is later absent, the matching AST fallback was removed
+        // above, so the pointer remains unknown and dereferences lower safely.
+        if (try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, init.span, comment_mode)) return;
         if (self.mirPointerProvenanceCoversDirectLocalUpdate(ty, init)) {
             const matched = try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, init.span, comment_mode);
             if (!matched) _ = self.pointer_local_provenance.remove(name);
@@ -6583,10 +6610,13 @@ const LlvmEmitter = struct {
             _ = self.pointer_local_provenance.remove(name);
             return;
         }
+        const matched_value = try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, value_expr.span, .emit_comment);
+        _ = try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, span, .emit_comment);
+        if (matched_value) return;
         if (self.mirPointerProvenanceCoversDirectLocalUpdate(ty, value_expr)) {
-            const matched_value = try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, value_expr.span, .emit_comment);
+            const direct_matched_value = try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, value_expr.span, .emit_comment);
             _ = try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, span, .emit_comment);
-            if (!matched_value) _ = self.pointer_local_provenance.remove(name);
+            if (!direct_matched_value) _ = self.pointer_local_provenance.remove(name);
             return;
         }
         try self.updatePointerGlobalProvenance(name, ty, value_expr);

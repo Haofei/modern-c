@@ -442,6 +442,41 @@ test "LLVM unchecked arithmetic requires MIR no-overflow range fact" {
     );
 }
 
+test "LLVM consumes MIR facts for direct internal global pointer returns" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\fn returned_global_pointer() -> *mut u32 {
+        \\    return &shared_counter;
+        \\}
+        \\fn uses_returned_global_pointer() -> u32 {
+        \\    let gp: *mut u32 = returned_global_pointer();
+        \\    return gp.*;
+        \\}
+        \\fn assigns_returned_global_pointer() -> u32 {
+        \\    var gp: *mut u32 = &shared_counter;
+        \\    gp = returned_global_pointer();
+        \\    return gp.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_pointer_return_provenance.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @uses_returned_global_pointer");
+    try expectContains(body, "; mir pointer_provenance consumed fn=uses_returned_global_pointer subject=gp provenance=global_storage reason=none");
+    try expectContains(body, "load atomic i32, ptr %");
+
+    const assignment_body = try llvmFunctionBody(output.items, "define internal i32 @assigns_returned_global_pointer");
+    try expectContains(assignment_body, "; mir pointer_provenance consumed fn=assigns_returned_global_pointer subject=gp provenance=global_storage reason=reassignment");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_pointer_return_provenance.mc", source, "uses_returned_global_pointer", "gp", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @uses_returned_global_pointer");
+    try expectNotContains(missing_body, "; mir pointer_provenance consumed fn=uses_returned_global_pointer subject=gp provenance=global_storage reason=none");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+}
+
 test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/spec/data_race_semantics.mc", std.testing.allocator, .limited(1 << 20));
     defer std.testing.allocator.free(source);

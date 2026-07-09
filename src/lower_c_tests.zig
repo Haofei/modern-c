@@ -4075,6 +4075,37 @@ test "lower-c pointer-local copies without MIR destination facts lower conservat
     try expectNotContains(missing_raw_assignment_body, "return *q;");
 }
 
+test "lower-c consumes MIR facts for direct internal global pointer returns" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\fn returned_global_pointer() -> *mut u32 {
+        \\    return &shared_counter;
+        \\}
+        \\fn c_uses_returned_global_pointer() -> u32 {
+        \\    let gp: *mut u32 = returned_global_pointer();
+        \\    return gp.*;
+        \\}
+        \\fn c_assigns_returned_global_pointer() -> u32 {
+        \\    var gp: *mut u32 = &shared_counter;
+        \\    gp = returned_global_pointer();
+        \\    return gp.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("emit_c_pointer_return_provenance.mc", source, &output);
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=c_uses_returned_global_pointer subject=gp provenance=global_storage reason=none source=");
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=c_assigns_returned_global_pointer subject=gp provenance=global_storage reason=reassignment source=");
+    try expectContains(output.items, "mc_race_load_u32(gp)");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutPointerProvenanceFactsForSubject("emit_c_pointer_return_provenance.mc", source, "c_uses_returned_global_pointer", "gp", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir pointer_provenance consumed fn=c_uses_returned_global_pointer subject=gp provenance=global_storage reason=none source=");
+    try expectContains(missing_output.items, "mc_race_load_u32(gp)");
+}
+
 test "lower-c direct pointer locals without MIR destination facts lower conservatively" {
     const source =
         \\global shared_counter: u32 = 0;

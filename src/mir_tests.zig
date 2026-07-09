@@ -1405,6 +1405,34 @@ test "MIR records typed pointer provenance facts for direct globals and pointer 
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=assigned_outer element=0 provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptrs") != null);
 }
 
+test "MIR records direct internal global pointer return provenance in callers" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\fn returned_global_pointer() -> *mut u32 {
+        \\    return &shared_counter;
+        \\}
+        \\fn uses_returned_global_pointer() -> u32 {
+        \\    let gp: *mut u32 = returned_global_pointer();
+        \\    return gp.*;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_pointer_return_provenance.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "uses_returned_global_pointer").?;
+    try std.testing.expect(hasPointerProvenanceFact(function, "gp", null, .global_storage, .none, "shared_counter"));
+}
+
 test "MIR pointer provenance facts fail closed on reassignment dynamic writes calls and address escape" {
     const source =
         \\global shared_counter: u32 = 0;
