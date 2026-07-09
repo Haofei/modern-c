@@ -1650,6 +1650,19 @@ test "MIR records aggregate pointer assignments from pointer-local copy facts" {
         \\    let q: *mut u32 = dst.ptrs[0];
         \\}
         \\
+        \\fn aggregate_update_from_casted_noalias_reads() {
+        \\    var local: u32 = 0;
+        \\    let src: Holder = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &local } };
+        \\    var dst: Holder = .{ .ptr = &local, .ptrs = .{ &local, &local } };
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        dst.ptr = compiler.assume_noalias_unchecked(src.ptr, 4) as *mut u32;
+        \\        dst.ptrs[0] = compiler.assume_noalias_unchecked(src.ptrs[0], 4) as *mut u32;
+        \\    }
+        \\    let p: *mut u32 = dst.ptr;
+        \\    let q: *mut u32 = dst.ptrs[0];
+        \\}
+        \\
         \\fn nested_aggregate_member_copy_from_noalias() {
         \\    var local: u32 = 0;
         \\    let src: Outer = .{ .inner = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &local } } };
@@ -1835,6 +1848,14 @@ test "MIR records aggregate pointer assignments from pointer-local copy facts" {
     try std.testing.expect(hasPointerProvenanceFieldFact(noalias_update_function, "dst", "ptrs", 0, .global_storage, .reassignment, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(noalias_update_function, "p", null, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(noalias_update_function, "q", null, .global_storage, .none, "shared_counter"));
+
+    const casted_noalias_update_function = functionByName(typed_mir, "aggregate_update_from_casted_noalias_reads").?;
+    try std.testing.expect(hasPointerProvenanceFieldFact(casted_noalias_update_function, "src", "ptr", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(casted_noalias_update_function, "src", "ptrs", 0, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(casted_noalias_update_function, "dst", "ptr", null, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFieldFact(casted_noalias_update_function, "dst", "ptrs", 0, .global_storage, .reassignment, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(casted_noalias_update_function, "p", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(casted_noalias_update_function, "q", null, .global_storage, .none, "shared_counter"));
 
     const noalias_nested_member_copy_function = functionByName(typed_mir, "nested_aggregate_member_copy_from_noalias").?;
     try std.testing.expect(hasPointerProvenanceFieldFact(noalias_nested_member_copy_function, "src", "inner.ptr", null, .global_storage, .none, "shared_counter"));

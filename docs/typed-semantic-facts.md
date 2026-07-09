@@ -201,7 +201,8 @@ Implemented shape:
   transfers and noalias-wrapped direct addresses, struct-literal aggregate
   pointer fields/elements initialized from those same direct expressions, and
   those reached through direct same-struct local aggregate initializer/assignment
-  copies and nested direct aggregate member paths;
+  copies, nested direct aggregate member paths, and casted noalias-wrapped
+  aggregate pointer-field or pointer-array-element read updates;
   raw-many zero transfers propagate both live `global_storage` and live
   `local_storage` from the base pointer. Computed values, dynamic reads,
   nonzero/dynamic offsets, call-produced bases, unsupported paths, or stale
@@ -250,8 +251,9 @@ locals including noalias-wrapped pointer-local copies, direct raw-many local
 `.offset(0)` transfers including noalias-wrapped zero-offset transfers, direct
 fixed local pointer-array elements including noalias-wrapped constant-index
 element reads, and covered direct aggregate `field_path` rows including
-struct-literal initializer, whole-aggregate reassignment, and nested aggregate
-member reassignment facts. The Phase 4 C narrow
+struct-literal initializer, whole-aggregate reassignment, aggregate-read update,
+casted noalias aggregate-read update, and nested aggregate member reassignment
+facts. The Phase 4 C narrow
 subset is also complete for scalar pointer deref load/store decisions. The
 bounded Phase 5 direct-local cleanup is complete, but removal of duplicated
 broader LLVM inference remains pending.
