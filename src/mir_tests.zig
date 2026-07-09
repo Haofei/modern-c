@@ -1964,6 +1964,8 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
         \\        let q: [*]mut u32 = p.offset(0);
         \\        let r: [*]mut u32 = p.offset(REFLECT_ZERO_OFFSET);
         \\        let s: [*]mut u32 = p.offset(field_offset<ZeroField>(.value));
+        \\        let grouped: [*]mut u32 = (p.offset(0));
+        \\        let casted: [*]mut u32 = p.offset(0) as [*]mut u32;
         \\        #[unsafe_contract(noalias)]
         \\        {
         \\            let t: [*]mut u32 = compiler.assume_noalias_unchecked(p.offset(0), 4);
@@ -1978,6 +1980,8 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
         \\        var q: [*]mut u32 = (&local) as [*]mut u32;
         \\        q = p;
         \\        q = p.offset(ZERO_OFFSET);
+        \\        q = (p.offset(0));
+        \\        q = p.offset(0) as [*]mut u32;
         \\    }
         \\}
         \\
@@ -2016,6 +2020,8 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
     try std.testing.expect(hasPointerProvenanceFact(zero_fn, "q", null, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(zero_fn, "r", null, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(zero_fn, "s", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(zero_fn, "grouped", null, .global_storage, .none, "shared_counter"));
+    try std.testing.expect(hasPointerProvenanceFact(zero_fn, "casted", null, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFact(zero_fn, "t", null, .global_storage, .none, "shared_counter"));
 
     const assignment_fn = functionByName(typed_mir, "raw_many_zero_assignment_fact").?;

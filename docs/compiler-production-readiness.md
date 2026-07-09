@@ -2,12 +2,14 @@
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
 Current ledger: **updated 2026-07-09, based on the current compiler worktree**.
-Ledger count: **383 finished or in-worktree, 0 in progress, 3 pending umbrella workstreams**.
+Ledger count: **375 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
 > this ledger as the current source of truth for goal progress; treat older ranked
-> tables as historical evidence unless the item is repeated under "Pending".
+> tables as historical evidence unless the item is repeated under "Pending". The
+> count is a row count, not a percentage or a claim that the three architectural
+> umbrellas are nearly complete.
 
 ## 0. Current Progress Ledger
 
@@ -16,8 +18,9 @@ Ledger count: **383 finished or in-worktree, 0 in progress, 3 pending umbrella w
 This ledger uses reviewable production-readiness slices, not vague percentage
 progress.
 
-- A **finished** row means one bounded behavior is implemented, locally verified,
-  and tied to concrete evidence.
+- A **finished** row means one bounded behavior or regression-evidence slice is
+  locally verified and tied to concrete evidence. Evidence-only rows must say so;
+  they do not advance an umbrella's closure matrix by themselves.
 - An **in progress** row means one bounded behavior is actively being changed and
   still needs evidence before it can move to finished.
 - A **pending umbrella workstream** is larger than one implementation slice. Its
@@ -389,6 +392,7 @@ progress.
 | Move checker noalias full-deref aliases preserve place identity | `compiler.assume_noalias_unchecked(&place, n)` is now transparent to the full-deref move-place model. Immediate derefs and pointer locals initialized from noalias-wrapped tracked addresses consume the same concrete or wildcard place as `&place`, so later overlapping moves still report `E_USE_AFTER_MOVE` instead of falling back to unknown-pointee handling. | `src/sema_move.zig` `fullDerefMoveSubplaceAlias` / `isAssumeNoaliasCall`; `tests/spec/move_place.mc` `accept_move_dynamic_array_element_through_noalias_full_deref` / `reject_constant_after_noalias_dynamic_array_element_full_deref_move` / `accept_move_dynamic_array_element_through_noalias_full_alias`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `zig test src/sema_tests.zig`; `git diff --check`. |
 | Typed semantic facts cover noalias-wrapped pointer-local copies | `compiler.assume_noalias_unchecked(p, n)` is now transparent to MIR direct pointer-local copy provenance when `p` is a live proven pointer local. C and LLVM classify that RHS as MIR-owned, so removing the destination fact keeps conservative race-tolerant lowering instead of reconstructing pointer-copy provenance through backend-local noalias inference. | `src/mir.zig` `directLocalPointerCopyBaseName`; `src/lower_c_emitter.zig` / `src/lower_llvm.zig` `directMirPointerLocalCopyExpr`; `src/mir_tests.zig` `noalias_q`; `src/lower_c_tests.zig` `c_noalias_pointer_copy_requires_mir_fact`; `src/lower_llvm_tests.zig` `noalias_pointer_copy_requires_mir_fact`; focused MIR/C/LLVM pointer provenance tests. |
 | Typed semantic facts cover noalias-wrapped raw-many zero transfers | `compiler.assume_noalias_unchecked(p.offset(0), n)` is now transparent to MIR raw-many zero-offset provenance when `p` is a live proven raw-many pointer local. C and LLVM classify that RHS as MIR-owned, so removing the destination fact keeps conservative race-tolerant lowering instead of reconstructing the zero-offset transfer through backend-local noalias inference. | `src/mir.zig` `rawManyZeroOffsetProvenance`; `src/lower_c_emitter.zig` / `src/lower_llvm.zig` `directMirRawManyZeroOffsetExpr`; `src/mir_tests.zig` `t`; `src/lower_c_tests.zig` `pointer_fact_raw_many_zero_noalias_load`; `src/lower_llvm_tests.zig` `raw_many_zero_noalias_requires_mir_fact`; focused MIR/C/LLVM raw-many zero tests. |
+| Regression coverage: grouped and casted raw-many zero transfers | Evidence-only slice for existing direct-local behavior. MIR emits destination `PointerProvenanceFact` rows for `(p.offset(0))` and `p.offset(0) as [*]mut T`; C/LLVM consume them for loads and stores, while removing the destination fact keeps both access kinds race-tolerant without backend-local reconstruction. | `src/mir.zig` `rawManyZeroOffsetProvenance`; `src/mir_tests.zig` `grouped` / `casted` in `MIR records narrow raw-many zero offset pointer provenance facts`; `src/lower_c_emitter.zig` / `src/lower_llvm.zig` `directMirRawManyZeroOffsetExpr`; `src/lower_c_tests.zig` `lower-c raw-many zero wrappers without MIR destination facts lower conservatively`; `src/lower_llvm_tests.zig` `LLVM raw-many zero direct local without MIR fact lowers conservatively`; focused MIR/C/LLVM raw-many zero tests; `git diff --check`. |
 | Typed semantic facts cover noalias-wrapped fixed pointer-array element reads | `compiler.assume_noalias_unchecked(ptrs[0], n)` is now transparent to MIR constant-index fixed pointer-array element-read provenance. C and LLVM classify the wrapped read as MIR-owned, so removing the destination pointer fact keeps conservative race-tolerant lowering instead of reconstructing the destination through backend-local array-element inference. | `src/mir.zig` `directPointerProvenance`; `src/lower_c_emitter.zig` / `src/lower_llvm.zig` `directMirPointerContainerValueExpr`; `src/mir_tests.zig` `noalias_from_global_element`; `src/lower_c_tests.zig` `c_pointer_array_element_noalias_read_requires_mir_fact`; `src/lower_llvm_tests.zig` `pointer_array_element_noalias_read_requires_mir_fact`; focused MIR/C/LLVM fixed pointer-array tests. |
 | Typed semantic facts cover noalias-wrapped aggregate pointer updates | `compiler.assume_noalias_unchecked(&storage, n)` is now MIR-owned when it initializes or reassigns direct aggregate pointer fields and direct aggregate pointer-array elements, including nested aggregate member paths. C and LLVM consume the aggregate `field_path` rows for those wrapped updates; removing the aggregate field fact keeps conservative race-tolerant lowering instead of reconstructing aggregate provenance from backend-local noalias inference. | `src/mir.zig` `directPointerProvenance`; `src/lower_c_emitter.zig` / `src/lower_llvm.zig` `directMirPointerContainerValueExpr`; `src/mir_tests.zig` `aggregate_assignment_from_noalias` / `aggregate_literal_from_noalias` / `aggregate_literal_reassignment_from_noalias` / `nested_aggregate_literal_reassignment_from_noalias`; `src/lower_c_tests.zig` `c_aggregate_field_noalias_direct_deref_requires_mir_field_fact` / `c_aggregate_array_element_noalias_direct_deref_requires_mir_field_fact`; `src/lower_llvm_tests.zig` noalias aggregate field and pointer-array field-fact fixtures; focused MIR/C/LLVM aggregate provenance tests. |
 | Typed semantic facts cover noalias-wrapped aggregate pointer reads | `compiler.assume_noalias_unchecked(holder.ptr, n)` and `compiler.assume_noalias_unchecked(holder.ptrs[0], n)` now preserve MIR provenance from direct aggregate pointer fields and direct aggregate pointer-array element reads into the destination pointer. C and LLVM treat those wrapped reads as MIR-owned; removing the destination `p` fact keeps conservative race-tolerant lowering without reconstructing destination provenance from backend-local aggregate inference. | `src/mir.zig` `directPointerProvenance`; `src/lower_c_emitter.zig` / `src/lower_llvm.zig` `directMirPointerContainerValueExpr`; `src/mir_tests.zig` `aggregate_noalias_read_from_fields`; `src/lower_c_tests.zig` `c_aggregate_field_noalias_read_requires_mir_fact` / `c_aggregate_array_element_noalias_read_requires_mir_fact`; `src/lower_llvm_tests.zig` `aggregate_field_noalias_read_requires_mir_fact` / `aggregate_array_element_noalias_read_requires_mir_fact`; focused MIR/C/LLVM aggregate read tests. |
@@ -414,69 +418,62 @@ progress.
 
 ### Pending Umbrella Workstreams
 
-These are **not three small TODOs**. Each item below is an umbrella workstream
-with many finished slices above and a remaining acceptance boundary here.
-
-Operationally, a new implementation slice should usually add one row to
-"Finished Or In Worktree" while the pending umbrella count remains unchanged.
-The count drops only when an entire umbrella's remaining boundary is closed.
+These are **not three small TODOs**. Each item has a finite closure matrix below.
+The umbrella count drops only when every remaining matrix row is either completed
+or explicitly accepted as a limitation by project decision. Adding a regression
+fixture or another expression identity case is evidence-only unless it closes a
+named matrix row.
 
 #### Broader Pointer-Provenance Race Lowering
 
-Acceptance boundary: every pointer-mediated ordinary access that could race must
-be one of:
+Closure matrix:
 
-- proven local/raw/MMIO and emitted through the plain or special-case path;
-- proven global/shared and emitted through unordered race-tolerant lowering;
-- ambiguous but safely decomposed to race-tolerant scalar/pointer leaves; or
-- explicitly fail-closed when no sound lowering exists, especially union-like
-  aggregate value copies.
+| Remaining boundary | Close condition |
+|---|---|
+| Escaped and externally produced scalar pointers | Every scalar load/store path defaults to race-tolerant lowering unless it has a positive local/raw/MMIO proof; add C/LLVM positive and missing-proof fixtures. |
+| Higher-order and returned pointer flow | Classify direct returns, callback/function-pointer returns, and exported ambiguity from MIR facts or lower their scalar leaves conservatively. |
+| Aggregate return flow across arbitrary CFG | Replace the current shape summaries with a CFG join, or fail closed for every aggregate-return form outside the summary domain. |
+| Union-like aggregate value copies | Keep explicit fail-closed diagnostics and a complete fixture inventory for overlay/C unions and tagged unions. |
+| Legacy provenance fallback register | Every remaining backend-local provenance ladder is listed here or migrated to the typed-facts matrix; no unnamed fallback is allowed. |
 
-Current status: many scalar, pointer-member, slice, pointer-to-array, aggregate
-field, aggregate element, raw-many zero-offset, local-only parameter, aggregate
-return, struct/fixed-array aggregate copy, C, and LLVM cases are covered by the
-finished ledger rows. Overlay/C union and tagged-union aggregate value copies
-are deliberately fail-closed. Remaining work is broader alias-flow distinction,
-escaped or higher-order provenance, arbitrary-CFG aggregate returns, and any
-shape still relying on backend-local ladders without a typed source of truth.
-
-Next reviewable slice: add one fixture for a currently unsupported UB-bearing
-shape, then either add typed MIR provenance, use conservative race-tolerant
-lowering, or add a fail-closed diagnostic.
+Current status: the finished rows cover direct scalar/member/index/aggregate
+accesses and many direct provenance paths. The matrix rows above remain open;
+new fixtures that only broaden an already-covered direct shape are evidence-only.
 
 #### Typed Semantic Fact Table / Typed MIR
 
-Acceptance boundary: backend safety decisions that depend on semantic facts must
-come from typed MIR facts, or must be explicitly classified as legacy fallback
-for an unsupported shape.
+Closure matrix:
 
-Current status: the design, inventory, narrow pointer-provenance facts, C/LLVM
-consumption for covered direct cases, no-overflow `RangeFact` consumption,
-`elided_bounds` artifact rows, instruction `value_id`, and owned
-`RepresentationFact` rows are implemented and documented in
-[`typed-semantic-facts.md`](typed-semantic-facts.md). The remaining boundary is
-duplicated backend-local inference for unsupported provenance shapes plus fact
-families that are still backend-local or textual.
+| Remaining boundary | Close condition |
+|---|---|
+| Provenance fallback register | The pointer-provenance fallback families named in the race-lowering matrix are either MIR-owned or explicitly fail closed; C and LLVM have matching missing-fact tests. |
+| Bounds and range facts | Bounds/range safety decisions use typed MIR facts with producer, consumer, and stale/missing-fact gates on both backends. |
+| Integer/default facts | Integer representation/defaulting decisions used by lowering have typed producers, consumers, and parity gates. |
+| Representation-check facts | `RepresentationFact` is consumed by production backend decisions or is removed as a non-production artifact. |
+| Legacy AST inference register | Each remaining semantic backend inference is named, owned, and either migrated or designated an accepted unsupported fallback. |
 
-Next reviewable slice: pick one duplicated LLVM/C inference path whose equivalent
-typed fact already exists, remove or bypass the duplicate inference, and add a
-negative test proving missing typed facts fall back conservatively.
+Current status: the narrow foundation is complete: pointer provenance for covered
+direct shapes, no-overflow `RangeFact` consumption, `elided_bounds`, value IDs,
+and owned `RepresentationFact` rows. The umbrella remains open only for the
+matrix rows above. See [`typed-semantic-facts.md`](typed-semantic-facts.md) for
+the phase-level contract.
 
 #### CFG/Place-Based Move Checker
 
-Acceptance boundary: move checking must operate over explicit places and CFG
-edges, not over a growing list of expression special cases.
+Closure matrix:
 
-Current status: the checker now covers many concrete, symbolic, wildcard,
-parameter-rooted, nested array, field, alias, defer, branch, switch, short-circuit,
-loop, return, and scoped-block cases, with unsupported move-array ownership
-channels failing closed. The remaining boundary is a full place model for
-unknown pointer-pointee ownership, arbitrary non-nameable aggregate/array
-storage, arbitrary dynamic expression identity, and full arbitrary-CFG modeling.
+| Remaining boundary | Close condition |
+|---|---|
+| Explicit place representation | Replace string-key place identity with a typed place model for locals, fields, derefs, and array elements. |
+| CFG dataflow engine | Build CFG blocks and a worklist join over move state; route `if`, `switch`, loops, short-circuit, `defer`, and exits through it. |
+| Dynamic-place policy | Support stable dynamic expressions through typed place projections; retain wildcard conflict rules only for genuinely unknown indexes. |
+| Pointer-pointee and non-nameable storage | Either track a sound place or reject the complete unsupported category with `E_MOVE_ARRAY_UNSUPPORTED`. |
+| Unsupported-channel inventory | Globals, ABI boundaries, multi-element non-nameable arrays, and arbitrary pointers each have an explicit accept or fail-closed decision and fixture. |
 
-Next reviewable slice: define or migrate one more checker path onto the explicit
-place/CFG model, keeping `E_MOVE_ARRAY_UNSUPPORTED` only where the checker still
-lacks sound place identity.
+Current status: the current checker is still AST/state-map based. Symbolic-index
+rows above are regression coverage for that implementation; they are not CFG
+rewrite progress. The first closure slice must introduce the typed place model or
+the CFG engine, not another expression-identity rule.
 
 ### Current Working Rules
 
@@ -485,6 +482,12 @@ lacks sound place identity.
 - Verify locally before treating a slice as finished.
 - Do not mark the goal complete until every pending item is either implemented
   end-to-end or explicitly accepted as a limitation by project decision.
+
+Release publication is intentionally outside these three compiler implementation
+umbrellas. Artifact qualification and publication controls remain documented in
+[`release-process.md`](release-process.md); the absence of a public stable release
+must not be represented as compiler-code completion, and publication may be
+reintroduced as a separate operational workstream by project decision.
 
 This is the compiler-side companion to
 [`production-readiness-plan.md`](production-readiness-plan.md), which qualifies the
@@ -514,7 +517,13 @@ fix before any production claim. **P2** = polish/hygiene.
 
 ---
 
-## 1. The bar
+## Historical Audit Snapshot (2026-07-02, superseded)
+
+Sections 1-10 below preserve the original audit verbatim enough to retain its
+evidence trail. Their present-tense verdicts, grades, blockers, and roadmap are
+not current status; the ledger and closure matrices above are authoritative.
+
+### 1. The bar
 
 "Production grade" for `mcc` means a competent external team could adopt it:
 
@@ -531,7 +540,7 @@ fix before any production claim. **P2** = polish/hygiene.
 `README.md` already says, honestly: "MC is still a prototype … it is not a production
 C replacement." This document quantifies the distance and lays out the path.
 
-## 2. Verdict
+### 2. Verdict
 
 **mcc is an unusually disciplined prototype — roughly C+ overall against the bar
 above — with the gap concentrated in four enumerable classes, not diffuse decay:**
@@ -569,7 +578,7 @@ extern ABI, incremental compilation).
 | Testing & CI | **B-** | Hosted CI, ~570 gates, systematic negative tests, differential fuzzing — but independent oracles ungated, fixed-seed fuzzing, coverage unmeasured, no release qualification. |
 | Security & supply chain | **C+** | No shell-outs, injection closed, exemplary BearSSL vendoring — but no CVE process for 3 of 4 vendored engines, no SECURITY.md, unverified toolchain downloads. |
 
-## 3. What is already strong (protect it)
+### 3. What is already strong (protect it)
 
 These are production-grade properties today; regressions here would be expensive.
 
@@ -629,7 +638,7 @@ These are production-grade properties today; regressions here would be expensive
   enforced spec-section coverage gate; `docs/README.md` maps which documents to
   trust. Zero `TODO`/`FIXME` in 67k lines; invariant comments are exceptional.
 
-## 4. Top blockers, ranked
+### 4. Top blockers, ranked
 
 The shortest path to "production grade" runs through these. Details in §5.
 
@@ -648,7 +657,7 @@ The shortest path to "production grade" runs through these. Details in §5.
 | 11 | P1 | Error-UX floor: Zig traces after every failed compile, first-error parser bail, no snippets **[confirmed]** | Front-end | S-L |
 | 12 | P1 | LLVM major unpinned in CI/Docker; no toolchain support matrix | Testing/Backends | M |
 
-## 5. Findings by dimension
+### 5. Findings by dimension
 
 Format: severity, title, evidence, impact, fix (effort), confidence.
 
@@ -1154,7 +1163,7 @@ secrets hygiene; compatible licenses).
   binaries shipped tomorrow. Minimal bar: recorded dep versions+hashes, SHA-256 +
   minisign/cosign signature, generated SBOM. Effort M.
 
-## 6. Cross-cutting root causes
+### 6. Cross-cutting root causes
 
 Four structural facts generate most of the findings above; fixing findings without
 acknowledging these treats symptoms.
@@ -1182,7 +1191,7 @@ acknowledging these treats symptoms.
    protection, stability statement, security channel, or dependency process. All
    cheap to add; none exist.
 
-## 7. Roadmap
+### 7. Roadmap
 
 Phased so that each phase is independently shippable and every item lands with a
 gate, in repo idiom. Efforts: S = hours-to-a-day, M = days, L = week(s)+.
@@ -1262,7 +1271,7 @@ per §Method.
 | C ABI classification for extern struct-by-value (if the feature is kept) | Re-enable the Phase 0 rejection | L |
 | Honest MIR naming or a typed MIR | Stop over-promising "verified MIR" (S for docs; L folds into fact table) | S/L |
 
-## 8. Explicit non-goals / accepted limitations (for now)
+### 8. Explicit non-goals / accepted limitations (for now)
 
 Reasonable to defer, but say so in user-facing docs:
 
@@ -1277,7 +1286,7 @@ Reasonable to defer, but say so in user-facing docs:
 - **The `lower-hir`/`lower-ir`/`facts` dump surfaces** — audit consumers; retire or
   document (§5.4).
 
-## 9. Open probes (run before fixing the [inspected] P0/P1s)
+### 9. Open probes (run before fixing the [inspected] P0/P1s)
 
 1. Closure miscompile PoC: mismatched `bind` signature → run both backends, observe
    miscast call (§5.2).
@@ -1292,7 +1301,7 @@ Reasonable to defer, but say so in user-facing docs:
 7. Whether checked-in MC sources pass `mcc fmt --check` (§5.5, open question from
    review).
 
-## 10. Related documents
+### 10. Related documents
 
 | Document | Relation |
 |---|---|

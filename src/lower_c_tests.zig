@@ -3614,6 +3614,22 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
         \\    }
         \\}
         \\
+        \\fn pointer_fact_raw_many_zero_grouped_load() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = (p.offset(0));
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
+        \\fn pointer_fact_raw_many_zero_casted_load() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = p.offset(0) as [*]mut u32;
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
         \\fn pointer_fact_raw_many_zero_noalias_load() -> u32 {
         \\    unsafe {
         \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
@@ -3748,6 +3764,14 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
     try expectContains(raw_many_zero_reflect_load_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_zero_reflect_load subject=q provenance=global_storage reason=none source=");
     try expectContains(raw_many_zero_reflect_load_body, "return ((uint32_t)mc_race_load_u32(q));");
 
+    const raw_many_zero_grouped_load_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_zero_grouped_load(void)");
+    try expectContains(raw_many_zero_grouped_load_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_zero_grouped_load subject=q provenance=global_storage reason=none source=");
+    try expectContains(raw_many_zero_grouped_load_body, "return ((uint32_t)mc_race_load_u32(q));");
+
+    const raw_many_zero_casted_load_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_zero_casted_load(void)");
+    try expectContains(raw_many_zero_casted_load_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_zero_casted_load subject=q provenance=global_storage reason=none source=");
+    try expectContains(raw_many_zero_casted_load_body, "return ((uint32_t)mc_race_load_u32(q));");
+
     const raw_many_zero_noalias_load_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_zero_noalias_load(void)");
     try expectContains(raw_many_zero_noalias_load_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_zero_noalias_load subject=p provenance=global_storage reason=none source=");
     try expectContains(raw_many_zero_noalias_load_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_zero_noalias_load subject=q provenance=global_storage reason=none source=");
@@ -3810,6 +3834,103 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
     );
     defer std.testing.allocator.free(llvm_comment);
     try expectContains(llvm_output.items, llvm_comment);
+}
+
+test "lower-c raw-many zero wrappers without MIR destination facts lower conservatively" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn c_raw_many_zero_grouped_requires_mir_fact() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = (p.offset(0));
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
+        \\fn c_raw_many_zero_casted_requires_mir_fact() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = p.offset(0) as [*]mut u32;
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
+        \\fn c_raw_many_zero_grouped_store_requires_mir_fact() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        var q: [*]mut u32 = (p.offset(0));
+        \\        q.* = 9;
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
+        \\fn c_raw_many_zero_casted_store_requires_mir_fact() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        var q: [*]mut u32 = p.offset(0) as [*]mut u32;
+        \\        q.* = 9;
+        \\        return q.*;
+        \\    }
+        \\}
+    ;
+
+    var normal_output: std.ArrayList(u8) = .empty;
+    defer normal_output.deinit(std.testing.allocator);
+    try appendCheckedCTest("emit_c_raw_many_zero_wrappers.mc", source, &normal_output);
+    const grouped_body = try cFunctionBody(normal_output.items, "static uint32_t c_raw_many_zero_grouped_requires_mir_fact(void)");
+    try expectContains(grouped_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_grouped_requires_mir_fact subject=p provenance=global_storage reason=none source=");
+    try expectContains(grouped_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_grouped_requires_mir_fact subject=q provenance=global_storage reason=none source=");
+    try expectContains(grouped_body, "return ((uint32_t)mc_race_load_u32(q));");
+
+    const casted_body = try cFunctionBody(normal_output.items, "static uint32_t c_raw_many_zero_casted_requires_mir_fact(void)");
+    try expectContains(casted_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_casted_requires_mir_fact subject=p provenance=global_storage reason=none source=");
+    try expectContains(casted_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_casted_requires_mir_fact subject=q provenance=global_storage reason=none source=");
+    try expectContains(casted_body, "return ((uint32_t)mc_race_load_u32(q));");
+
+    const grouped_store_body = try cFunctionBody(normal_output.items, "static uint32_t c_raw_many_zero_grouped_store_requires_mir_fact(void)");
+    try expectContains(grouped_store_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_grouped_store_requires_mir_fact subject=q provenance=global_storage reason=none source=");
+    try expectContains(grouped_store_body, "mc_race_store_u32(q, (uint32_t)9);");
+
+    const casted_store_body = try cFunctionBody(normal_output.items, "static uint32_t c_raw_many_zero_casted_store_requires_mir_fact(void)");
+    try expectContains(casted_store_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_casted_store_requires_mir_fact subject=q provenance=global_storage reason=none source=");
+    try expectContains(casted_store_body, "mc_race_store_u32(q, (uint32_t)9);");
+
+    var missing_grouped_output: std.ArrayList(u8) = .empty;
+    defer missing_grouped_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutPointerProvenanceFactsForSubject("emit_c_raw_many_zero_grouped_missing_provenance.mc", source, "c_raw_many_zero_grouped_requires_mir_fact", "q", &missing_grouped_output);
+    const missing_grouped_body = try cFunctionBody(missing_grouped_output.items, "static uint32_t c_raw_many_zero_grouped_requires_mir_fact(void)");
+    try expectContains(missing_grouped_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_grouped_requires_mir_fact subject=p provenance=global_storage reason=none source=");
+    try expectNotContains(missing_grouped_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_grouped_requires_mir_fact subject=q");
+    try expectContains(missing_grouped_body, "return ((uint32_t)mc_race_load_u32(q));");
+    try expectNotContains(missing_grouped_body, "return *q;");
+
+    var missing_casted_output: std.ArrayList(u8) = .empty;
+    defer missing_casted_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutPointerProvenanceFactsForSubject("emit_c_raw_many_zero_casted_missing_provenance.mc", source, "c_raw_many_zero_casted_requires_mir_fact", "q", &missing_casted_output);
+    const missing_casted_body = try cFunctionBody(missing_casted_output.items, "static uint32_t c_raw_many_zero_casted_requires_mir_fact(void)");
+    try expectContains(missing_casted_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_casted_requires_mir_fact subject=p provenance=global_storage reason=none source=");
+    try expectNotContains(missing_casted_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_casted_requires_mir_fact subject=q");
+    try expectContains(missing_casted_body, "return ((uint32_t)mc_race_load_u32(q));");
+    try expectNotContains(missing_casted_body, "return *q;");
+
+    var missing_grouped_store_output: std.ArrayList(u8) = .empty;
+    defer missing_grouped_store_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutPointerProvenanceFactsForSubject("emit_c_raw_many_zero_grouped_store_missing_provenance.mc", source, "c_raw_many_zero_grouped_store_requires_mir_fact", "q", &missing_grouped_store_output);
+    const missing_grouped_store_body = try cFunctionBody(missing_grouped_store_output.items, "static uint32_t c_raw_many_zero_grouped_store_requires_mir_fact(void)");
+    try expectContains(missing_grouped_store_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_grouped_store_requires_mir_fact subject=p provenance=global_storage reason=none source=");
+    try expectNotContains(missing_grouped_store_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_grouped_store_requires_mir_fact subject=q");
+    try expectContains(missing_grouped_store_body, "mc_race_store_u32(q, (uint32_t)9);");
+    try expectNotContains(missing_grouped_store_body, "*q =");
+
+    var missing_casted_store_output: std.ArrayList(u8) = .empty;
+    defer missing_casted_store_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutPointerProvenanceFactsForSubject("emit_c_raw_many_zero_casted_store_missing_provenance.mc", source, "c_raw_many_zero_casted_store_requires_mir_fact", "q", &missing_casted_store_output);
+    const missing_casted_store_body = try cFunctionBody(missing_casted_store_output.items, "static uint32_t c_raw_many_zero_casted_store_requires_mir_fact(void)");
+    try expectContains(missing_casted_store_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_casted_store_requires_mir_fact subject=p provenance=global_storage reason=none source=");
+    try expectNotContains(missing_casted_store_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_casted_store_requires_mir_fact subject=q");
+    try expectContains(missing_casted_store_body, "mc_race_store_u32(q, (uint32_t)9);");
+    try expectNotContains(missing_casted_store_body, "*q =");
 }
 
 test "lower-c pointer-local copies without MIR destination facts lower conservatively" {

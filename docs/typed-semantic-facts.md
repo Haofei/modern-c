@@ -3,6 +3,9 @@
 This is the design slice for the compiler-production-readiness Phase 4 bucket
 "Typed fact table: sema resolves once, backends consume". It turns the current
 architecture note into implementable phases with invariants and evidence gates.
+"Phase 4" names the completed narrow foundation, not the broader remaining
+typed-fact migration umbrella. The current closure matrix for that umbrella lives
+in [`compiler-production-readiness.md`](compiler-production-readiness.md).
 
 ## Current state
 
@@ -517,7 +520,11 @@ MIR's reflection-aware compile-time folding path, so reflected constants such as
 `REFLECT_ZERO_OFFSET = field_offset<ZeroField>(.value)` and
 `REFLECT_INDEX = field_offset<ZeroField>(.value)` are also fact-owned by MIR when
 used in `p.offset(REFLECT_ZERO_OFFSET)` or `ptrs[REFLECT_INDEX]`, rather than a
-backend-local index classifier. Direct well-shaped reflection calls inside those
+backend-local index classifier. Grouped and casted direct raw-many zero-offset
+transfers such as `(p.offset(0))` and `p.offset(0) as [*]mut T` are also
+MIR-owned for the covered direct-local shape; C and LLVM missing-destination
+tests keep those forms conservative instead of rebuilding destination
+provenance from backend-local wrapper handling. Direct well-shaped reflection calls inside those
 same expressions are also provenance-preserving in MIR: `field_offset`,
 `bit_offset`, `sizeof`/`size_of`, `alignof`, `repr_of`, and `field_type` no
 longer invalidate live pointer facts merely because they use call syntax, so
@@ -630,9 +637,10 @@ Backend gates:
 - both artifact tests print the same fact id/source point for the same source
   operation.
 
-These backend gates remain Phase 3/4 work. Current production backends still use
-their existing inference paths and must fail closed when this typed fact family is
-absent or not yet consumed.
+These backend gates were the Phase 3/4 migration work and are complete for the
+narrow fact families described above. Current production backends still use
+legacy inference only for the explicitly listed unsupported fallback families;
+the readiness closure matrix owns their migration or fail-closed disposition.
 
 ## Non-goals
 
@@ -648,9 +656,9 @@ absent or not yet consumed.
 - Do not promise a fully typed MIR verifier until operands, dominance,
   def-before-use, and value typing are actually verified.
 
-## Acceptance criteria for closing the bucket
+## Acceptance criteria for the completed Phase 4 foundation
 
-The Phase 4 typed fact table bucket can close when all of these are true:
+The narrow Phase 4 foundation is complete because all of these are true:
 
 - a checked module or MIR carries typed facts produced from sema/MIR, not
   backend-local AST inference;
@@ -661,5 +669,9 @@ The Phase 4 typed fact table bucket can close when all of these are true:
 - `mcc facts`, `lower-ir`, or `lower-mir` exposes a stable debug view of the
   typed facts for fixtures;
 - `zig build test` gates the migrated family;
-- remaining semantic fact families are tracked as follow-up buckets rather than
-  hidden inside the original vague architecture item.
+- remaining semantic fact families are tracked in the explicit closure matrix,
+  rather than hidden inside the original vague architecture item.
+
+These criteria do not close the broader typed semantic fact migration umbrella.
+That umbrella closes only when its finite readiness matrix is complete or its
+remaining rows are explicitly accepted as limitations.

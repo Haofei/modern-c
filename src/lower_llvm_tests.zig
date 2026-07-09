@@ -2664,6 +2664,40 @@ test "LLVM raw-many zero direct local without MIR fact lowers conservatively" {
         \\    }
         \\}
         \\
+        \\fn raw_many_zero_grouped_requires_mir_fact() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = (p.offset(0));
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
+        \\fn raw_many_zero_casted_requires_mir_fact() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        let q: [*]mut u32 = p.offset(0) as [*]mut u32;
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
+        \\fn raw_many_zero_grouped_store_requires_mir_fact() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        var q: [*]mut u32 = (p.offset(0));
+        \\        q.* = 9;
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
+        \\fn raw_many_zero_casted_store_requires_mir_fact() -> u32 {
+        \\    unsafe {
+        \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
+        \\        var q: [*]mut u32 = p.offset(0) as [*]mut u32;
+        \\        q.* = 9;
+        \\        return q.*;
+        \\    }
+        \\}
+        \\
         \\fn raw_many_zero_noalias_requires_mir_fact() -> u32 {
         \\    unsafe {
         \\        let p: [*]mut u32 = (&shared_counter) as [*]mut u32;
@@ -2716,6 +2750,26 @@ test "LLVM raw-many zero direct local without MIR fact lowers conservatively" {
     try expectContains(reflect_body, "load atomic i32, ptr %");
     try expectContains(reflect_body, " unordered, align 4");
 
+    const grouped_body = try llvmFunctionBody(normal_output.items, "define internal i32 @raw_many_zero_grouped_requires_mir_fact");
+    try expectContains(grouped_body, "; mir pointer_provenance consumed fn=raw_many_zero_grouped_requires_mir_fact subject=q provenance=global_storage reason=none");
+    try expectContains(grouped_body, "load atomic i32, ptr %");
+    try expectContains(grouped_body, " unordered, align 4");
+
+    const casted_body = try llvmFunctionBody(normal_output.items, "define internal i32 @raw_many_zero_casted_requires_mir_fact");
+    try expectContains(casted_body, "; mir pointer_provenance consumed fn=raw_many_zero_casted_requires_mir_fact subject=q provenance=global_storage reason=none");
+    try expectContains(casted_body, "load atomic i32, ptr %");
+    try expectContains(casted_body, " unordered, align 4");
+
+    const grouped_store_body = try llvmFunctionBody(normal_output.items, "define internal i32 @raw_many_zero_grouped_store_requires_mir_fact");
+    try expectContains(grouped_store_body, "; mir pointer_provenance consumed fn=raw_many_zero_grouped_store_requires_mir_fact subject=q provenance=global_storage reason=none");
+    try expectContains(grouped_store_body, "store atomic i32 9, ptr %");
+    try expectContains(grouped_store_body, " unordered, align 4");
+
+    const casted_store_body = try llvmFunctionBody(normal_output.items, "define internal i32 @raw_many_zero_casted_store_requires_mir_fact");
+    try expectContains(casted_store_body, "; mir pointer_provenance consumed fn=raw_many_zero_casted_store_requires_mir_fact subject=q provenance=global_storage reason=none");
+    try expectContains(casted_store_body, "store atomic i32 9, ptr %");
+    try expectContains(casted_store_body, " unordered, align 4");
+
     const noalias_body = try llvmFunctionBody(normal_output.items, "define internal i32 @raw_many_zero_noalias_requires_mir_fact");
     try expectContains(noalias_body, "; mir pointer_provenance consumed fn=raw_many_zero_noalias_requires_mir_fact subject=p provenance=global_storage reason=none");
     try expectContains(noalias_body, "; mir pointer_provenance consumed fn=raw_many_zero_noalias_requires_mir_fact subject=q provenance=global_storage reason=none");
@@ -2756,6 +2810,50 @@ test "LLVM raw-many zero direct local without MIR fact lowers conservatively" {
     try expectContains(reflect_missing_body, "load atomic i32, ptr %");
     try expectContains(reflect_missing_body, " unordered, align 4");
     try expectNotContains(reflect_missing_body, "load i32, ptr %");
+
+    var grouped_missing_output: std.ArrayList(u8) = .empty;
+    defer grouped_missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_raw_many_zero_grouped_missing_pointer_provenance.mc", source, "raw_many_zero_grouped_requires_mir_fact", "q", &grouped_missing_output);
+
+    const grouped_missing_body = try llvmFunctionBody(grouped_missing_output.items, "define internal i32 @raw_many_zero_grouped_requires_mir_fact");
+    try expectContains(grouped_missing_body, "; mir pointer_provenance consumed fn=raw_many_zero_grouped_requires_mir_fact subject=p provenance=global_storage reason=none");
+    try expectNotContains(grouped_missing_body, "; mir pointer_provenance consumed fn=raw_many_zero_grouped_requires_mir_fact subject=q");
+    try expectContains(grouped_missing_body, "load atomic i32, ptr %");
+    try expectContains(grouped_missing_body, " unordered, align 4");
+    try expectNotContains(grouped_missing_body, "load i32, ptr %");
+
+    var casted_missing_output: std.ArrayList(u8) = .empty;
+    defer casted_missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_raw_many_zero_casted_missing_pointer_provenance.mc", source, "raw_many_zero_casted_requires_mir_fact", "q", &casted_missing_output);
+
+    const casted_missing_body = try llvmFunctionBody(casted_missing_output.items, "define internal i32 @raw_many_zero_casted_requires_mir_fact");
+    try expectContains(casted_missing_body, "; mir pointer_provenance consumed fn=raw_many_zero_casted_requires_mir_fact subject=p provenance=global_storage reason=none");
+    try expectNotContains(casted_missing_body, "; mir pointer_provenance consumed fn=raw_many_zero_casted_requires_mir_fact subject=q");
+    try expectContains(casted_missing_body, "load atomic i32, ptr %");
+    try expectContains(casted_missing_body, " unordered, align 4");
+    try expectNotContains(casted_missing_body, "load i32, ptr %");
+
+    var grouped_store_missing_output: std.ArrayList(u8) = .empty;
+    defer grouped_store_missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_raw_many_zero_grouped_store_missing_pointer_provenance.mc", source, "raw_many_zero_grouped_store_requires_mir_fact", "q", &grouped_store_missing_output);
+
+    const grouped_store_missing_body = try llvmFunctionBody(grouped_store_missing_output.items, "define internal i32 @raw_many_zero_grouped_store_requires_mir_fact");
+    try expectContains(grouped_store_missing_body, "; mir pointer_provenance consumed fn=raw_many_zero_grouped_store_requires_mir_fact subject=p provenance=global_storage reason=none");
+    try expectNotContains(grouped_store_missing_body, "; mir pointer_provenance consumed fn=raw_many_zero_grouped_store_requires_mir_fact subject=q");
+    try expectContains(grouped_store_missing_body, "store atomic i32 9, ptr %");
+    try expectContains(grouped_store_missing_body, " unordered, align 4");
+    try expectNotContains(grouped_store_missing_body, "store i32 9, ptr %");
+
+    var casted_store_missing_output: std.ArrayList(u8) = .empty;
+    defer casted_store_missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_raw_many_zero_casted_store_missing_pointer_provenance.mc", source, "raw_many_zero_casted_store_requires_mir_fact", "q", &casted_store_missing_output);
+
+    const casted_store_missing_body = try llvmFunctionBody(casted_store_missing_output.items, "define internal i32 @raw_many_zero_casted_store_requires_mir_fact");
+    try expectContains(casted_store_missing_body, "; mir pointer_provenance consumed fn=raw_many_zero_casted_store_requires_mir_fact subject=p provenance=global_storage reason=none");
+    try expectNotContains(casted_store_missing_body, "; mir pointer_provenance consumed fn=raw_many_zero_casted_store_requires_mir_fact subject=q");
+    try expectContains(casted_store_missing_body, "store atomic i32 9, ptr %");
+    try expectContains(casted_store_missing_body, " unordered, align 4");
+    try expectNotContains(casted_store_missing_body, "store i32 9, ptr %");
 
     var noalias_missing_output: std.ArrayList(u8) = .empty;
     defer noalias_missing_output.deinit(std.testing.allocator);
