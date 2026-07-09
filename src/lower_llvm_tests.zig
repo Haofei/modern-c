@@ -1304,6 +1304,36 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectNotContains(array_load_body, "load i32, ptr %");
 }
 
+test "LLVM call-produced scalar pointer derefs lower race-tolerantly" {
+    const source =
+        \\extern fn external_pointer() -> *mut u32;
+        \\
+        \\fn call_produced_pointer_lowers_atomic() -> u32 {
+        \\    return external_pointer().*;
+        \\}
+        \\
+        \\fn call_produced_pointer_store_lowers_atomic(value: u32) -> void {
+        \\    external_pointer().* = value;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_call_produced_pointer_deref.mc", source, &output);
+
+    const load_body = try llvmFunctionBody(output.items, "define internal i32 @call_produced_pointer_lowers_atomic");
+    try expectContains(load_body, "call ptr @external_pointer()");
+    try expectContains(load_body, "load atomic i32, ptr %");
+    try expectContains(load_body, " unordered, align 4");
+    try expectNotContains(load_body, "load i32, ptr %");
+
+    const store_body = try llvmFunctionBody(output.items, "define internal void @call_produced_pointer_store_lowers_atomic");
+    try expectContains(store_body, "call ptr @external_pointer()");
+    try expectContains(store_body, "store atomic i32 ");
+    try expectContains(store_body, " unordered, align 4");
+    try expectNotContains(store_body, "store i32 ");
+}
+
 test "LLVM pointer-member scalar access lowers race-tolerantly" {
     const source =
         \\struct Inner {
