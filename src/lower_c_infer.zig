@@ -284,7 +284,7 @@ pub fn resultTypeFromSourceExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?
 }
 
 pub fn assumeNoaliasReturnTypeForCall(ctx: TypeQueryContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    if (!isAssumeNoaliasCall(call) or call.args.len != 2) return null;
+    if (!isAssumeNoaliasCall(call)) return null;
     return ctx.source_type_for_expr(ctx.source_ctx, call.args[0], locals);
 }
 

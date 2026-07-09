@@ -500,7 +500,10 @@ converted into caller-local or false global proofs. LLVM's remaining
 backend-local noalias wrapper checks now require the real builtin shape, so
 malformed same-named calls and grouped call-callee impostors cannot seed
 fallback parameter, return, direct provenance, or expression-type facts outside
-the MIR-owned classifier. The
+the MIR-owned classifier. C uses the same strict shared noalias call-shape helper
+for emission, type inference, and MIR/fallback provenance classifiers, so its
+remaining noalias fallback paths do not carry separate argument-count/type-arg
+truth. The
 shared LLVM raw-many `.offset` classifier now also requires the real no-type-arg,
 one-offset-argument shape before fallback typing or provenance can use the base
 expression. MIR pointer provenance now uses the builder's compile-time `usize`

@@ -2,6 +2,7 @@ const std = @import("std");
 
 const diagnostics = @import("diagnostics.zig");
 const lower_c = @import("lower_c.zig");
+const lower_c_builtin = @import("lower_c_builtin.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const parser = @import("parser.zig");
@@ -193,6 +194,40 @@ fn cFunctionBody(output: []const u8, signature_prefix: []const u8) ![]const u8 {
     const body_start = std.mem.indexOfPos(u8, output, start, "{\n") orelse return error.TestExpectedEqual;
     const body_end = std.mem.indexOfPos(u8, output, body_start, "\n}\n\n") orelse return error.TestExpectedEqual;
     return output[body_start + 2 .. body_end];
+}
+
+test "C noalias query accepts only the real builtin call shape" {
+    const source =
+        \\fn probe(p: *mut u32, n: usize) -> *mut u32 {
+        \\    return (compiler.assume_noalias_unchecked(p, n))(p, n);
+        \\}
+        \\fn missing_size(p: *mut u32) -> *mut u32 {
+        \\    return compiler.assume_noalias_unchecked(p);
+        \\}
+        \\fn with_type_arg(p: *mut u32, n: usize) -> *mut u32 {
+        \\    return compiler.assume_noalias_unchecked<u32>(p, n);
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("c_noalias_grouped_call_callee.mc", source);
+    defer parsed.deinit();
+
+    const probe_fn = parsed.module.decls[0].kind.fn_decl;
+    const probe_ret = probe_fn.body.?.items[0].kind.@"return".?;
+    const outer_call = probe_ret.kind.call;
+    try std.testing.expect(!lower_c_builtin.isAssumeNoaliasCall(outer_call));
+
+    const grouped_callee = outer_call.callee.*.kind.grouped;
+    const inner_call = grouped_callee.kind.call;
+    try std.testing.expect(lower_c_builtin.isAssumeNoaliasCall(inner_call));
+
+    const missing_size_fn = parsed.module.decls[1].kind.fn_decl;
+    const missing_size_ret = missing_size_fn.body.?.items[0].kind.@"return".?;
+    try std.testing.expect(!lower_c_builtin.isAssumeNoaliasCall(missing_size_ret.kind.call));
+
+    const with_type_arg_fn = parsed.module.decls[2].kind.fn_decl;
+    const with_type_arg_ret = with_type_arg_fn.body.?.items[0].kind.@"return".?;
+    try std.testing.expect(!lower_c_builtin.isAssumeNoaliasCall(with_type_arg_ret.kind.call));
 }
 
 test "lower-c inspection markers for lowering-sensitive spec behavior" {

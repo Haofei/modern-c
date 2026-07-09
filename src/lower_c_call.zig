@@ -544,7 +544,6 @@ pub fn emitDeclassifyCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
 
 pub fn emitAssumeNoaliasCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     if (!isAssumeNoaliasCall(call)) return false;
-    if (call.args.len != 2) return error.UnsupportedCEmission;
     try ctx.out.appendSlice(ctx.allocator, "((void)(");
     try ctx.emit_expr(ctx.emit_ctx, call.args[1], locals);
     try ctx.out.appendSlice(ctx.allocator, "), ");
