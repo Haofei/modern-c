@@ -5237,6 +5237,36 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     defer store_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_union_store.mc", overlay_store_source, &store_output));
 
+    const c_union_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    value: u32,
+        \\    flag: bool,
+        \\}
+        \\
+        \\fn pointer_c_union_load(p: *mut CWord) -> CWord {
+        \\    return p.*;
+        \\}
+    ;
+    var c_union_load_output: std.ArrayList(u8) = .empty;
+    defer c_union_load_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_c_union_load.mc", c_union_load_source, &c_union_load_output));
+
+    const c_union_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    value: u32,
+        \\    flag: bool,
+        \\}
+        \\
+        \\fn pointer_c_union_store(p: *mut CWord, value: CWord) -> void {
+        \\    p.* = value;
+        \\}
+    ;
+    var c_union_store_output: std.ArrayList(u8) = .empty;
+    defer c_union_store_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_c_union_store.mc", c_union_store_source, &c_union_store_output));
+
     const overlay_raw_many_load_source =
         \\overlay union Word {
         \\    value: u32,
@@ -5268,6 +5298,40 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     var raw_many_store_output: std.ArrayList(u8) = .empty;
     defer raw_many_store_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_raw_many_union_store.mc", overlay_raw_many_store_source, &raw_many_store_output));
+
+    const c_union_raw_many_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    value: u32,
+        \\    flag: bool,
+        \\}
+        \\
+        \\fn raw_many_c_union_load(p: [*]mut CWord, i: usize) -> CWord {
+        \\    unsafe {
+        \\        return p.offset(i).*;
+        \\    }
+        \\}
+    ;
+    var c_union_raw_many_load_output: std.ArrayList(u8) = .empty;
+    defer c_union_raw_many_load_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_raw_many_c_union_load.mc", c_union_raw_many_load_source, &c_union_raw_many_load_output));
+
+    const c_union_raw_many_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    value: u32,
+        \\    flag: bool,
+        \\}
+        \\
+        \\fn raw_many_c_union_store(p: [*]mut CWord, i: usize, value: CWord) -> void {
+        \\    unsafe {
+        \\        p.offset(i).* = value;
+        \\    }
+        \\}
+    ;
+    var c_union_raw_many_store_output: std.ArrayList(u8) = .empty;
+    defer c_union_raw_many_store_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_raw_many_c_union_store.mc", c_union_raw_many_store_source, &c_union_raw_many_store_output));
 
     const tagged_load_source =
         \\union Token {
@@ -5362,6 +5426,42 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     var nested_overlay_store_output: std.ArrayList(u8) = .empty;
     defer nested_overlay_store_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_union_store.mc", nested_overlay_store_source, &nested_overlay_store_output));
+
+    const nested_c_union_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Holder {
+        \\    word: CWord,
+        \\}
+        \\
+        \\fn pointer_nested_c_union_load(p: *mut Holder) -> Holder {
+        \\    return p.*;
+        \\}
+    ;
+    var nested_c_union_load_output: std.ArrayList(u8) = .empty;
+    defer nested_c_union_load_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_c_union_load.mc", nested_c_union_load_source, &nested_c_union_load_output));
+
+    const nested_c_union_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Holder {
+        \\    word: CWord,
+        \\}
+        \\
+        \\fn pointer_nested_c_union_store(p: *mut Holder, value: Holder) -> void {
+        \\    p.* = value;
+        \\}
+    ;
+    var nested_c_union_store_output: std.ArrayList(u8) = .empty;
+    defer nested_c_union_store_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_c_union_store.mc", nested_c_union_store_source, &nested_c_union_store_output));
 
     const nested_tagged_load_source =
         \\union Token {

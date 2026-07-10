@@ -2250,6 +2250,32 @@ test "lower-c union aggregate pointer deref value copies fail closed" {
     ;
     try expectUnsupportedCheckedCEmission("emit_c_pointer_union_store.mc", overlay_store_source);
 
+    const c_union_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    value: u32,
+        \\    flag: bool,
+        \\}
+        \\
+        \\fn pointer_c_union_load(p: *mut CWord) -> CWord {
+        \\    return p.*;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_pointer_c_union_load.mc", c_union_load_source);
+
+    const c_union_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    value: u32,
+        \\    flag: bool,
+        \\}
+        \\
+        \\fn pointer_c_union_store(p: *mut CWord, value: CWord) -> void {
+        \\    p.* = value;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_pointer_c_union_store.mc", c_union_store_source);
+
     const overlay_raw_many_load_source =
         \\overlay union Word {
         \\    value: u32,
@@ -2277,6 +2303,36 @@ test "lower-c union aggregate pointer deref value copies fail closed" {
         \\}
     ;
     try expectUnsupportedCheckedCEmission("emit_c_raw_many_union_store.mc", overlay_raw_many_store_source);
+
+    const c_union_raw_many_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    value: u32,
+        \\    flag: bool,
+        \\}
+        \\
+        \\fn raw_many_c_union_load(p: [*]mut CWord, i: usize) -> CWord {
+        \\    unsafe {
+        \\        return p.offset(i).*;
+        \\    }
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_raw_many_c_union_load.mc", c_union_raw_many_load_source);
+
+    const c_union_raw_many_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    value: u32,
+        \\    flag: bool,
+        \\}
+        \\
+        \\fn raw_many_c_union_store(p: [*]mut CWord, i: usize, value: CWord) -> void {
+        \\    unsafe {
+        \\        p.offset(i).* = value;
+        \\    }
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_raw_many_c_union_store.mc", c_union_raw_many_store_source);
 
     const tagged_load_source =
         \\union Token {
@@ -2359,6 +2415,38 @@ test "lower-c union aggregate pointer deref value copies fail closed" {
         \\}
     ;
     try expectUnsupportedCheckedCEmission("emit_c_pointer_nested_union_store.mc", nested_overlay_store_source);
+
+    const nested_c_union_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Holder {
+        \\    word: CWord,
+        \\}
+        \\
+        \\fn pointer_nested_c_union_load(p: *mut Holder) -> Holder {
+        \\    return p.*;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_pointer_nested_c_union_load.mc", nested_c_union_load_source);
+
+    const nested_c_union_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Holder {
+        \\    word: CWord,
+        \\}
+        \\
+        \\fn pointer_nested_c_union_store(p: *mut Holder, value: Holder) -> void {
+        \\    p.* = value;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_pointer_nested_c_union_store.mc", nested_c_union_store_source);
 
     const nested_tagged_load_source =
         \\union Token {
