@@ -1012,8 +1012,12 @@ fn aliasReferentIsTracked(referent: AliasReferent, state: *const std.StringHashM
 }
 
 fn aliasReferentRoot(referent: AliasReferent) []const u8 {
-    if (referent.place) |place| return place.root;
-    return rootPlaceName(referent.key);
+    return referentRoot(referent.key, referent.place);
+}
+
+fn referentRoot(key: []const u8, place: ?MovePlace) []const u8 {
+    if (place) |typed| return typed.root;
+    return rootPlaceName(key);
 }
 
 fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
@@ -3558,7 +3562,7 @@ fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.Stri
 }
 
 fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    const root = if (place) |typed| typed.root else rootPlaceName(referent);
+    const root = referentRoot(referent, place);
     const root_slot = state.getPtr(root) orelse return;
     if (root_slot.cleanup_local) {
         checkStaleAlias(self, "", .{ .live = false, .span = span, .alias_of = referent, .alias_place = place }, span, state);
