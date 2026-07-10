@@ -4382,6 +4382,35 @@ test "LLVM local aggregate pointer aliases require MIR destination facts" {
     try expectNotContains(missing_element, "load i32, ptr %");
 }
 
+test "LLVM local pointer-array aliases require MIR destination facts" {
+    const source =
+        \\fn local_pointer_array_alias_requires_mir_fact() -> u32 {
+        \\    var local: u32 = 0;
+        \\    var ptrs: [2]*mut u32 = .{ &local, &local };
+        \\    let pa: *mut [2]*mut u32 = &ptrs;
+        \\    let p: *mut u32 = pa.*[0];
+        \\    return p.*;
+        \\}
+    ;
+
+    var normal_output: std.ArrayList(u8) = .empty;
+    defer normal_output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_local_pointer_array_alias_provenance.mc", source, &normal_output);
+    const normal_body = try llvmFunctionBody(normal_output.items, "define internal i32 @local_pointer_array_alias_requires_mir_fact");
+    try expectContains(normal_body, "; mir pointer_provenance consumed fn=local_pointer_array_alias_requires_mir_fact subject=p provenance=local_storage reason=none");
+    try expectContains(normal_body, "load i32, ptr %");
+    try expectNotContains(normal_body, "load atomic i32");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_local_pointer_array_alias_missing_provenance.mc", source, "local_pointer_array_alias_requires_mir_fact", "p", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @local_pointer_array_alias_requires_mir_fact");
+    try expectNotContains(missing_body, "; mir pointer_provenance consumed fn=local_pointer_array_alias_requires_mir_fact subject=p provenance");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+    try expectContains(missing_body, " unordered, align 4");
+    try expectNotContains(missing_body, "load i32, ptr %");
+}
+
 test "LLVM aggregate pointer-array element reads without MIR destination fact lower conservatively" {
     const source =
         \\global shared_counter: u32 = 0;

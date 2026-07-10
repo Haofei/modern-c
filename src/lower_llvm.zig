@@ -5589,7 +5589,10 @@ const LlvmEmitter = struct {
             .grouped => |inner| self.directMirFixedPointerArrayElementExpr(inner.*),
             .cast => |node| self.directMirFixedPointerArrayElementExpr(node.value.*),
             .call => |call| isAssumeNoaliasCall(call) and self.directMirFixedPointerArrayElementExpr(call.args[0]),
-            else => self.directLocalArrayElementPath(expr) != null,
+            .index => |node| self.directLocalArrayElementPath(expr) != null or
+                (self.localArrayConstIndexValue(node.index.*) != null and
+                    self.localPointerArrayAliasBaseName(node.base.*) != null),
+            else => false,
         };
     }
 

@@ -2188,6 +2188,47 @@ test "MIR records direct local aggregate pointer alias provenance facts" {
     try std.testing.expect(!hasPointerProvenanceFact(written, "direct_read", null, .local_storage, .none, "local"));
 }
 
+test "MIR records direct local pointer-array alias provenance facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn alias_constant_element() {
+        \\    var local: u32 = 0;
+        \\    var ptrs: [2]*mut u32 = .{ &local, &local };
+        \\    let pa: *mut [2]*mut u32 = &ptrs;
+        \\    let p: *mut u32 = pa.*[0];
+        \\}
+        \\
+        \\fn alias_write_invalidates_backing_array() {
+        \\    var local: u32 = 0;
+        \\    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+        \\    let pa: *mut [2]*mut u32 = &ptrs;
+        \\    pa.*[0] = &local;
+        \\    let p: *mut u32 = pa.*[0];
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_local_pointer_array_alias_provenance.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const direct = functionByName(typed_mir, "alias_constant_element").?;
+    try std.testing.expect(hasPointerProvenanceFact(direct, "p", null, .local_storage, .none, "local"));
+
+    const written = functionByName(typed_mir, "alias_write_invalidates_backing_array").?;
+    try std.testing.expect(hasPointerProvenanceFact(written, "ptrs", null, .unknown, .reassignment, null));
+    try std.testing.expect(!hasPointerProvenanceFact(written, "p", null, .local_storage, .none, "local"));
+}
+
 test "MIR records narrow raw-many zero offset pointer provenance facts" {
     const source =
         \\global shared_counter: u32 = 0;

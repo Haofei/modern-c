@@ -1142,6 +1142,11 @@ const FunctionBuilder = struct {
     // the resulting alias remains local and tracked. Do not invalidate the
     // aggregate's field facts merely for constructing that exact local alias.
     direct_local_aggregate_alias_initializer: ?[]const u8 = null,
+    // Direct aliases from `&local_pointer_array` to a pointer-to-array local.
+    // Copies, control-flow joins, escapes, and writes through the alias drop
+    // the map or invalidate the base array's element facts.
+    local_pointer_array_aliases: std.StringHashMap([]const u8),
+    direct_local_pointer_array_alias_initializer: ?[]const u8 = null,
     // Escape analysis (section 2): names declared as `let`/`var` locals (origin
     // .local), and names whose value is the address of local storage.
     let_local_names: std.StringHashMap(void),
@@ -1205,6 +1210,7 @@ const FunctionBuilder = struct {
             .local_mutability = std.StringHashMap(bool).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
             .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
+            .local_pointer_array_aliases = std.StringHashMap([]const u8).init(allocator),
             .let_local_names = std.StringHashMap(void).init(allocator),
             .local_address_origin = std.StringHashMap(void).init(allocator),
             .wrap_values = std.StringHashMap(void).init(allocator),
@@ -1264,6 +1270,7 @@ const FunctionBuilder = struct {
             .local_mutability = std.StringHashMap(bool).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
             .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
+            .local_pointer_array_aliases = std.StringHashMap([]const u8).init(allocator),
             .let_local_names = std.StringHashMap(void).init(allocator),
             .local_address_origin = std.StringHashMap(void).init(allocator),
             .wrap_values = std.StringHashMap(void).init(allocator),
@@ -1305,6 +1312,7 @@ const FunctionBuilder = struct {
         self.local_mutability.deinit();
         self.local_function_aliases.deinit();
         self.local_aggregate_pointer_aliases.deinit();
+        self.local_pointer_array_aliases.deinit();
         self.let_local_names.deinit();
         self.local_address_origin.deinit();
         self.wrap_values.deinit();
@@ -1369,6 +1377,8 @@ const FunctionBuilder = struct {
         self.local_function_aliases = std.StringHashMap([]const u8).init(self.allocator);
         self.local_aggregate_pointer_aliases.deinit();
         self.local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(self.allocator);
+        self.local_pointer_array_aliases.deinit();
+        self.local_pointer_array_aliases = std.StringHashMap([]const u8).init(self.allocator);
         self.let_local_names.deinit();
         self.let_local_names = std.StringHashMap(void).init(self.allocator);
         self.local_address_origin.deinit();
@@ -1546,6 +1556,7 @@ const FunctionBuilder = struct {
                     try self.let_local_names.put(name.text, {});
                     _ = self.local_function_aliases.remove(name.text);
                     _ = self.local_aggregate_pointer_aliases.remove(name.text);
+                    _ = self.local_pointer_array_aliases.remove(name.text);
                     if (local.init) |init_expr| {
                         if (self.addressOriginIsLocal(init_expr)) try self.local_address_origin.put(name.text, {});
                     }
@@ -1560,6 +1571,9 @@ const FunctionBuilder = struct {
                     const previous_alias_initializer = self.direct_local_aggregate_alias_initializer;
                     self.direct_local_aggregate_alias_initializer = self.directLocalAggregatePointerAliasBaseName(expr);
                     defer self.direct_local_aggregate_alias_initializer = previous_alias_initializer;
+                    const previous_array_alias_initializer = self.direct_local_pointer_array_alias_initializer;
+                    self.direct_local_pointer_array_alias_initializer = self.directLocalPointerArrayAliasBaseName(expr);
+                    defer self.direct_local_pointer_array_alias_initializer = previous_array_alias_initializer;
                     self.assignment_target = if (local.names.len > 0) local.names[0].text else null;
                     self.assignment_target_ty = ty;
                     try self.addNullabilityConversionCheck(ty, expr, expr.span);
@@ -1573,6 +1587,7 @@ const FunctionBuilder = struct {
                     try self.recordAggregatePointerFieldProvenanceForLocalInitializer(local.names, ty_expr, expr);
                     try self.recordLocalFunctionAliases(local.names, expr);
                     try self.recordLocalAggregatePointerAliases(local.names, expr);
+                    try self.recordLocalPointerArrayAliases(local.names, expr);
                     self.assignment_target = previous_target;
                     self.assignment_target_ty = previous_target_ty;
                 }
@@ -1607,6 +1622,12 @@ const FunctionBuilder = struct {
                 else
                     null;
                 defer self.direct_local_aggregate_alias_initializer = previous_alias_initializer;
+                const previous_array_alias_initializer = self.direct_local_pointer_array_alias_initializer;
+                self.direct_local_pointer_array_alias_initializer = if (assignmentTargetIdentName(node.target)) |target_name|
+                    if (self.local_types.contains(target_name)) self.directLocalPointerArrayAliasBaseName(node.value) else null
+                else
+                    null;
+                defer self.direct_local_pointer_array_alias_initializer = previous_array_alias_initializer;
                 self.assignment_target = exprText(node.target);
                 self.assignment_target_ty = self.typeForAssignmentTarget(node.target);
                 try self.addNullabilityConversionCheck(self.assignment_target_ty, node.value, node.value.span);
@@ -1619,6 +1640,7 @@ const FunctionBuilder = struct {
                 try self.recordPointerProvenanceForAssignment(node.target, node.value, stmt.span);
                 try self.recordLocalFunctionAliasAssignment(node.target, node.value);
                 try self.recordLocalAggregatePointerAliasAssignment(node.target, node.value);
+                try self.recordLocalPointerArrayAliasAssignment(node.target, node.value, stmt.span);
                 self.assignment_target = previous_target;
                 self.assignment_target_ty = previous_target_ty;
                 // OPT (annex E) — a store may change any fact operand; drop all facts (after the
@@ -1738,6 +1760,7 @@ const FunctionBuilder = struct {
         // aliases at a control-flow split rather than retaining one arm's map.
         self.local_function_aliases.clearRetainingCapacity();
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
+        self.local_pointer_array_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, patternText(node.pattern), .branch, span);
         try self.buildExpr(node.value);
         try self.addIfLetPatternCheck(node);
@@ -1902,6 +1925,7 @@ const FunctionBuilder = struct {
     fn buildSwitch(self: *FunctionBuilder, node: ast.Switch, span: ast.Span) anyerror!bool {
         self.local_function_aliases.clearRetainingCapacity();
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
+        self.local_pointer_array_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, "switch_subject", .branch, span);
         try self.buildExpr(node.subject);
         try self.addRepresentationUseForExpr("switch_subject", node.subject);
@@ -2338,6 +2362,7 @@ const FunctionBuilder = struct {
     fn buildLoop(self: *FunctionBuilder, node: ast.Loop, span: ast.Span) anyerror!bool {
         self.local_function_aliases.clearRetainingCapacity();
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
+        self.local_pointer_array_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, @tagName(node.kind), .branch, span);
         if (node.iterable) |iterable| {
             if (node.kind == .@"while") try self.addConversionCheck(.bool, iterable, .condition, iterable.span);
@@ -2467,7 +2492,7 @@ const FunctionBuilder = struct {
             .address_of => |inner| {
                 // OPT (annex E) — taking an address exposes the target to a later aliased write we
                 // cannot see; conservatively drop all facts so none is used past this point.
-                if (!self.isDirectLocalAggregateAliasInitializer(inner.*)) {
+                if (!self.isDirectLocalAggregateAliasInitializer(inner.*) and !self.isDirectLocalPointerArrayAliasInitializer(inner.*)) {
                     try self.recordPointerProvenanceAddressEscape(inner.*, expr.span);
                 }
                 // A callable local whose address escaped can be changed through
@@ -2475,9 +2500,11 @@ const FunctionBuilder = struct {
                 if (directIdentName(inner.*)) |name| {
                     _ = self.local_function_aliases.remove(name);
                     _ = self.local_aggregate_pointer_aliases.remove(name);
+                    _ = self.local_pointer_array_aliases.remove(name);
                 } else {
                     self.local_function_aliases.clearRetainingCapacity();
                     self.local_aggregate_pointer_aliases.clearRetainingCapacity();
+                    self.local_pointer_array_aliases.clearRetainingCapacity();
                 }
                 self.invalidateFacts();
                 try self.buildExpr(inner.*);
@@ -3251,6 +3278,95 @@ const FunctionBuilder = struct {
         return std.mem.eql(u8, name, expected);
     }
 
+    fn recordLocalPointerArrayAliases(self: *FunctionBuilder, names: []ast.Ident, initializer: ast.Expr) !void {
+        const base_name = self.directLocalPointerArrayAliasBaseName(initializer);
+        if (base_name == null and self.directExistingLocalPointerArrayAliasName(initializer) != null) {
+            self.local_pointer_array_aliases.clearRetainingCapacity();
+        }
+        for (names) |name| {
+            if (base_name) |base| {
+                try self.local_pointer_array_aliases.put(name.text, base);
+            } else {
+                _ = self.local_pointer_array_aliases.remove(name.text);
+            }
+        }
+    }
+
+    fn recordLocalPointerArrayAliasAssignment(self: *FunctionBuilder, target: ast.Expr, value: ast.Expr, span: ast.Span) !void {
+        const name = assignmentTargetIdentName(target) orelse {
+            if (self.directLocalPointerArrayAliasBaseNameForIndex(target)) |base_name| {
+                const ty = self.local_type_exprs.get(base_name) orelse return;
+                const shape = self.fixedPointerArrayElementShape(ty) orelse return;
+                try self.appendUnknownPointerProvenanceFact(base_name, null, shape, .reassignment, span);
+            } else {
+                self.local_pointer_array_aliases.clearRetainingCapacity();
+            }
+            return;
+        };
+        if (!self.local_types.contains(name)) {
+            self.local_pointer_array_aliases.clearRetainingCapacity();
+            return;
+        }
+        if (self.directLocalPointerArrayAliasBaseName(value)) |base| {
+            try self.local_pointer_array_aliases.put(name, base);
+        } else {
+            if (self.directExistingLocalPointerArrayAliasName(value) != null) {
+                self.local_pointer_array_aliases.clearRetainingCapacity();
+            }
+            _ = self.local_pointer_array_aliases.remove(name);
+        }
+    }
+
+    fn directLocalPointerArrayAliasBaseName(self: *FunctionBuilder, expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directLocalPointerArrayAliasBaseName(inner.*),
+            .cast => |node| self.directLocalPointerArrayAliasBaseName(node.value.*),
+            .call => |call| if (isAssumeNoaliasDirectCall(call) and call.type_args.len == 0 and call.args.len == 2)
+                self.directLocalPointerArrayAliasBaseName(call.args[0])
+            else
+                null,
+            .address_of => |inner| if (directIdentName(inner.*)) |name|
+                if (self.local_type_exprs.get(name)) |ty|
+                    if (self.fixedPointerArrayElementShape(ty) != null) name else null
+                else
+                    null
+            else
+                null,
+            else => null,
+        };
+    }
+
+    fn directExistingLocalPointerArrayAliasName(self: *FunctionBuilder, expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directExistingLocalPointerArrayAliasName(inner.*),
+            .cast => |node| self.directExistingLocalPointerArrayAliasName(node.value.*),
+            .call => |call| if (isAssumeNoaliasDirectCall(call) and call.type_args.len == 0 and call.args.len == 2)
+                self.directExistingLocalPointerArrayAliasName(call.args[0])
+            else
+                null,
+            .ident => |ident| if (self.local_pointer_array_aliases.contains(ident.text)) ident.text else null,
+            else => null,
+        };
+    }
+
+    fn directLocalPointerArrayAliasBaseNameForIndex(self: *FunctionBuilder, expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directLocalPointerArrayAliasBaseNameForIndex(inner.*),
+            .index => |node| self.directLocalPointerArrayAliasBaseNameForIndex(node.base.*),
+            .deref => |inner| if (self.directExistingLocalPointerArrayAliasName(inner.*)) |alias_name|
+                self.local_pointer_array_aliases.get(alias_name)
+            else
+                null,
+            else => null,
+        };
+    }
+
+    fn isDirectLocalPointerArrayAliasInitializer(self: *FunctionBuilder, expr: ast.Expr) bool {
+        const expected = self.direct_local_pointer_array_alias_initializer orelse return false;
+        const name = directIdentName(expr) orelse return false;
+        return std.mem.eql(u8, name, expected);
+    }
+
     fn recordAggregatePointerFieldProvenanceForLocalInitializer(self: *FunctionBuilder, names: []ast.Ident, ty_expr: ?ast.TypeExpr, initializer: ast.Expr) !void {
         const aggregate_ty = ty_expr orelse return;
         const struct_name = structTypeNameAlias(aggregate_ty, self.aliases) orelse return;
@@ -3916,7 +4032,7 @@ const FunctionBuilder = struct {
                 break :blk self.constantIndexLocalPointerElementProvenance(call.args[0], target_shape);
             },
             .index => |node| blk: {
-                const base_name = directIdentName(node.base.*) orelse break :blk null;
+                const base_name = directIdentName(node.base.*) orelse self.directLocalPointerArrayAliasBaseNameForIndex(node.base.*) orelse break :blk null;
                 const ty_expr = self.local_type_exprs.get(base_name) orelse break :blk null;
                 const shape = self.fixedPointerArrayElementShape(ty_expr) orelse break :blk null;
                 if (!samePointerShape(shape, target_shape)) break :blk null;

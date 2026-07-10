@@ -19,6 +19,11 @@ and fixed-array-element reads through an alias initialized directly from
 `&local_aggregate`; C and LLVM consume them and fail closed when a destination
 row is removed.
 
+The completed analogous direct local fixed-pointer-array alias slice covers a
+pointer initialized directly from `&ptrs` and then dereferenced at a constant
+index. MIR emits the destination fact, and both backends fail closed when that
+destination row is removed. Dynamic alias indexes remain outside this slice.
+
 The compiler already has several fact-like surfaces, but they are not a single
 typed semantic source of truth:
 
