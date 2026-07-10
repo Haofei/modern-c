@@ -2,7 +2,7 @@
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
 Current ledger: **updated 2026-07-09, based on the current compiler worktree**.
-Ledger count: **404 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
+Ledger count: **405 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -438,6 +438,7 @@ progress.
 | Move checker finds alias slots by typed storage place | Stale-alias reads now consult typed alias-storage places before formatted keys in both aggregate-field and general alias-place lookups. Exact storage matches use `MovePlace.eql`, and wildcard storage conflicts return only already-stale referents so dynamic mixed-alias scans still use the existing all-concrete rule. | `src/sema_move.zig` `aggregateFieldAliasSlot`, `aliasPlaceSlot`, `aliasSlotForStoragePlace`, and `staleAliasWildcardSlotForConcretePlace`; dynamic same-referent and mixed-referent array alias fixtures in `tests/spec/move_place.mc`; `zig test src/spec_tests.zig`; `zig test src/sema_tests.zig`; `zig build test`; `git diff --check`. |
 | Move checker shares typed stale-alias movement query | Stale-alias diagnostics now use the same `aliasSlotReferentMoved` query as typed alias scans, so moved-root, moved-subplace, child-place, and wildcard-conflict checks prefer `alias_place` before falling back to legacy formatted referents. This removes a duplicate string fallback branch from `checkStaleAlias` without changing diagnostics. | `src/sema_move.zig` `checkStaleAlias` and `aliasSlotReferentMoved`; stale direct, aggregate, array, dynamic, laundered, cleanup-local, and wildcard alias fixtures in `tests/spec/move_place.mc`; `zig test src/spec_tests.zig`; `zig test src/sema_tests.zig`; `zig build test`; `git diff --check`. |
 | Move checker centralizes moved referent queries | Stale-alias scans and deferred-borrow reservation now share `referentPlaceMoved`, which checks typed `MovePlace` roots/projections before falling back to formatted subplace and wildcard keys. This removes another duplicated legacy key-conflict expression while preserving deferred-borrow and stale-alias diagnostics. | `src/sema_move.zig` `referentPlaceMoved`, `aliasSlotReferentMoved`, and `markDeferredBorrowReferent`; stale alias, wildcard alias, deferred field/array/dynamic, cleanup-local, and laundered cases in `tests/spec/move_place.mc`; `zig test src/spec_tests.zig`; `zig test src/sema_tests.zig`; `zig build test`; `git diff --check`. |
+| Move checker rehydrates alias referent places before consumption | Full-deref alias consumption now recovers a typed `MovePlace` from state when `AliasReferent` lacks one, so stored typed subplace aliases consume through `consumeTrackedMovePlace` before the legacy formatted-subplace fallback. Diagnostics remain unchanged while fewer alias-consumption paths depend on string key parsing. | `src/sema_move.zig` `consumeTrackedMoveReferent` and `aliasPlaceForKey`; full-deref, copied, laundered, dynamic, stale, and duplicate alias cases in `tests/spec/move_place.mc`; `zig test src/spec_tests.zig`; `zig test src/sema_tests.zig`; `zig build test`; `git diff --check`. |
 
 ### In Progress
 

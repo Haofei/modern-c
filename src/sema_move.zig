@@ -1262,7 +1262,7 @@ fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics
 }
 
 fn consumeTrackedMoveReferent(self: *Checker, referent: AliasReferent, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    if (referent.place) |place| {
+    if (referent.place orelse aliasPlaceForKey(referent.key, state)) |place| {
         if (place.isSubplace()) {
             consumeTrackedMovePlace(self, referent.key, place, span, state);
         } else {
