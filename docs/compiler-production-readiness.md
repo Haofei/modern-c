@@ -717,54 +717,28 @@ resync; the loader dedups imports by canonical path so cycles and diamonds termi
 **[confirmed]**; sema accumulates many diagnostics per run with ~194 distinct
 greppable `E_*` codes across 410 call sites.
 
-- **[P0] Unbounded recursive descent → segfault on deep nesting.** No depth counter
-  anywhere in `src/parser.zig` (`parseExpr`→`parsePrefix`→`parsePrimary`→`parseExpr`
-  via `(`, :1370/:1416/:1471; also `parseType` :1226, `parseBlock` :786). Empirical:
-  ~600 nested parens OK, ~700 segfaults (Debug binary); also unary chains, nested
-  blocks, pointer types. Every downstream pass (sema `checkExpr`, hir/ir/mir walks,
-  both emitters) recurses the same tree shape. The `fuzz-robust` oracle cannot find
-  this: it byte-mutates valid seeds and never synthesizes deep balanced nesting.
-  Fix: one nesting-depth counter in the Parser (error past ~256 with a clean
-  "nesting too deep" diagnostic) bounds every downstream pass. Effort S.
-  **[confirmed]**
-- **[P1] Every failed compile prints a Zig error-return trace after the diagnostic.**
-  `run*` functions return `error.CheckFailed` etc. to `main` (`src/main.zig:262,370`),
-  so a one-character typo prints the correct diagnostic *followed by*
-  `error: CheckFailed` + a hex-address trace into mcc's own source — indistinguishable
-  from an ICE. Users will file every diagnostic as a compiler bug. Fix: catch the
-  expected error set in `main`, exit(1) silently (diagnostics already rendered);
-  reserve traces for unexpected errors. Effort S. **[confirmed]**
-- **[P1] Cross-file diagnostics: wrong file, flattened line numbers.** The Reporter
-  is constructed once with the root path + import-flattened source
-  (`src/main.zig:138`); `render()` prints `self.path:span.line`
-  (`src/diagnostics.zig:65-78`). The `FileBoundary` table exists but is consumed only
-  by the orphan rule and private-name mangling, never by rendering. An error in
-  `sub/lib.mc:2` reports as `root.mc:5` **[confirmed]** — at kernel scale,
-  `root.mc:48213`-style nonsense. The LSP inherits this. Fix: map `span.offset`
-  through `combined_boundaries` in `render()` (last boundary with `start <= offset`,
-  subtract its starting line). Effort S-M. **[confirmed]**
+- **[P0] Unbounded recursive descent → segfault on deep nesting** — **fixed**;
+  parser nesting is bounded and excessive expression/type/block nesting reports
+  `E_NESTING_TOO_DEEP` instead of crashing.
+- **[P1] Every failed compile prints a Zig error-return trace after the diagnostic**
+  — **fixed**; `main` catches the expected CLI failure set and exits with status 1
+  after the rendered MC diagnostic, reserving Zig traces for unexpected failures.
+- **[P1] Cross-file diagnostics: wrong file, flattened line numbers** — **fixed**;
+  diagnostics now consume file-boundary information so imported-file errors render
+  against the imported path and local line/column.
 - **[P1] Missing import ⇒ raw `error.ImportNotFound` + Zig trace, no path, no
-  location.** `src/loader.zig:140-142` swallows the failing path;
-  `scanImports` has the span in hand and discards it. One of the most common user
-  errors yields zero actionable information. Fix: thread the Reporter into
-  `expand`/`scanImports`; report `cannot find import "X"` at the import's span.
-  Effort S. **[confirmed]**
-- **[P1] Parser reports one error per run.** `fail()` (`src/parser.zig:1818-1821`)
-  unwinds the whole parse via `try`; there is no statement/decl-level resync
-  **[confirmed]** (two broken decls → only the first reported). Sema accumulates;
-  the gap is parser-only. Fix: synchronize to `;`/`}`/top-level keywords and
-  continue. Effort L.
-- **[P1] No source snippets, carets, notes, colors, JSON, or structured codes.**
-  `src/diagnostics.zig` is 80 lines; `Diagnostic` = severity/span/message (codes are
-  string-prefixed into messages by sema; lexer/parser messages have no codes). The
-  LSP scrapes text lines. Fix: add notes/related-spans/code fields, a caret renderer,
-  and `--json`. Effort M-L.
+  location** — **fixed**; import loading reports the missing path at the import span
+  with a user-facing diagnostic.
+- **[P1] Parser reports one error per run** — **fixed**; parser recovery now resyncs
+  across declarations, statements, module/impl/trait members, and aggregate fields
+  while still aborting semantic analysis for parse-failed modules.
+- **[P1] No source snippets, carets, notes, colors, JSON, or structured codes** —
+  **mostly fixed**; text diagnostics include snippets/carets and notes, `mcc check
+  --json` emits structured diagnostics, and the LSP consumes that JSON. Terminal
+  color remains polish, not a production blocker.
 - **[P2] Integer literals larger than u128 are silently accepted and emitted
-  verbatim.** `parseIntegerLiteral` returns null on u128 overflow and
-  `checkIntegerLiteralInitializer` treats null as "not checkable"
-  (`src/sema.zig:4131`, `src/numeric.zig:55-64`); `let x: u32 = 2^128` passes
-  `check` and emits garbage C **[confirmed]**. Fix: null-on-integer-syntax ⇒
-  `E_INTEGER_LITERAL_OUT_OF_RANGE`. Effort S.
+  verbatim** — **fixed**; oversized integer literal syntax now reports
+  `E_INTEGER_LITERAL_OUT_OF_RANGE` before defaulting or backend emission.
 - **[P2] UTF-8 BOM rejected as `unexpected byte`** — **fixed**; `Lexer.init`
   skips an initial UTF-8 BOM and `src/lexer_tests.zig` locks the first real
   token at line 1, column 1.
