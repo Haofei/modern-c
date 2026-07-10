@@ -455,7 +455,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                     moveBorrow(self, ix.base.*, state, aliases);
                     moveConsume(self, ix.index.*, state, aliases);
                     if (moveIndexedPlaceKey(self, a.target, state, aliases)) |pp| {
-                        if (indexedPlaceHasWildcardMove(self, a.target, state, aliases) or stateHasConflictingMovePlace(pp.place, state)) {
+                        if (indexedPlaceHasWildcardOrProjectionConflict(self, a.target, pp.place, state, aliases)) {
                             self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "cannot reinitialize a concrete array element after an unknown dynamic element was moved out");
                         } else if (!stateContainsMovePlace(pp.place, state)) {
                             self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot overwrite a live linear `move` array element; consume it first");
@@ -1149,7 +1149,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
             if (moveIndexedPlaceKey(self, expr, state, aliases)) |pp| {
                 if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` array element is borrowed by a deferred expression and cannot be moved before the defer runs");
-                } else if (stateHasActivePlaceOrConflict(pp.place, state) or indexedPlaceHasWildcardMove(self, expr, state, aliases)) {
+                } else if (indexedPlaceHasActiveOrWildcardConflict(self, expr, pp.place, state, aliases)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` array element after it was moved out");
                 } else {
                     state.put(pp.key, .{ .live = false, .span = expr.span, .place = pp.place }) catch {
@@ -2405,6 +2405,14 @@ fn stateHasConflictingMovePlace(place: MovePlace, state: *const std.StringHashMa
 
 fn stateHasActivePlaceOrConflict(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
     return stateContainsMovePlace(place, state) or stateHasConflictingMovePlace(place, state);
+}
+
+fn indexedPlaceHasActiveOrWildcardConflict(self: *Checker, expr: ast.Expr, place: MovePlace, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    return stateHasActivePlaceOrConflict(place, state) or indexedPlaceHasWildcardMove(self, expr, state, aliases);
+}
+
+fn indexedPlaceHasWildcardOrProjectionConflict(self: *Checker, expr: ast.Expr, place: MovePlace, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    return indexedPlaceHasWildcardMove(self, expr, state, aliases) or stateHasConflictingMovePlace(place, state);
 }
 
 fn stateHasMovedPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
@@ -3755,7 +3763,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
             if (moveIndexedPlaceKey(self, expr, state, aliases)) |pp| {
                 if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer cannot consume a linear `move` array element already borrowed by a deferred expression");
-                } else if (stateHasActivePlaceOrConflict(pp.place, state) or indexedPlaceHasWildcardMove(self, expr, state, aliases)) {
+                } else if (indexedPlaceHasActiveOrWildcardConflict(self, expr, pp.place, state, aliases)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer reserves a linear `move` array element already moved out");
                 } else {
                     state.put(pp.key, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }) catch {
