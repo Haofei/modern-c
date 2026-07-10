@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-10, based on the current compiler worktree**.
-Evidence register: **437 bounded implementation or regression entries, 1 active slice, 3 open architectural workstreams**.
+Evidence register: **438 bounded implementation or regression entries, 1 active slice, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -484,7 +484,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Item | Current state | Next evidence needed |
 |---|---|---|
-| MIR aggregate-return pointer-field facts | **In progress.** MIR now owns direct internal struct-literal returns, straight-line local aggregate returns initialized or whole-assigned from a direct literal, whole-local copies from one of those tracked values, and exhaustive bool/wildcard branches whose arms each reduce to one of those values. LLVM consumes the module facts, and a retained summary marker makes a missing field fact conservative instead of falling back to the LLVM AST collector. Trailing-fallthrough switches, pointer arrays, nested aggregates, exports, and arbitrary CFG remain on the legacy/unknown path. | Extend the producer through bounded trailing/fallthrough CFG joins, pointer-bearing aggregate fields, and matching C consumption, then remove the corresponding LLVM collector domain with missing-fact gates. |
+| MIR aggregate-return pointer-field facts | **In progress.** MIR now owns direct internal struct-literal returns, straight-line local aggregate returns initialized or whole-assigned from a direct literal, whole-local copies from one of those tracked values, and exhaustive bool/wildcard branches whose arms each reduce to one of those values. C and LLVM consume the module facts, and a retained summary marker makes a missing field fact conservative instead of falling back to backend-local inference. Trailing-fallthrough switches, pointer arrays, nested aggregates, exports, and arbitrary CFG remain on the legacy/unknown path. | Extend the producer through bounded trailing/fallthrough CFG joins and pointer-bearing aggregate fields, then remove the corresponding LLVM collector domain with missing-fact gates. |
 
 ### Open Architectural Workstreams
 

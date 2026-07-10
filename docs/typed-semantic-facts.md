@@ -728,14 +728,13 @@ field fact.
 
 ### Consumer and retirement rule
 
-At `let dst: Holder = callee()`, LLVM currently applies matching return-field
-facts to `dst` before its backend-local aggregate inference. For a call shape
-covered by an `AggregateReturnSummaryFact` but lacking a matching field fact,
-LLVM leaves the returned field unknown and final scalar dereferences use
-conservative race-tolerant lowering. C consumption is still pending. LLVM may
-delete `aggregate_return_pointer_fields` only after its supported source domain
-is represented by this producer and the missing-fact gate covers every migrated
-shape.
+At `let dst: Holder = callee()`, C and LLVM apply matching return-field facts to
+`dst` before backend-local aggregate inference. For a call shape covered by an
+`AggregateReturnSummaryFact` but lacking a matching field fact, both backends
+leave the returned field unknown and final scalar dereferences use conservative
+race-tolerant lowering. LLVM may delete `aggregate_return_pointer_fields` only
+after its supported source domain is represented by this producer and the
+missing-fact gate covers every migrated shape.
 
 ### Required evidence
 
@@ -745,13 +744,12 @@ shape.
    cover global, unknown, local initialization, whole-local reassignment,
    tracked whole-local copies, exhaustive branch joins, and pointer-array
    exclusion cases.
-3. Complete for LLVM direct literals and straight-line locals: normal
-   consumption is visible in lowering, and removing only the return-field fact
-   produces conservative lowering.
-4. Remaining: C consumption and missing-fact tests.
-5. Remaining: trailing-return/fallthrough branch joins, mixed, exported,
+3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
+   and exhaustive branches: normal consumption is visible in lowering, and
+   removing only the return-field fact produces conservative lowering.
+4. Remaining: trailing-return/fallthrough branch joins, mixed, exported,
    pointer-array, nested-aggregate, and local-storage return cases.
-6. Remaining: the semantic-facts inventory must reject the LLVM collector once
+5. Remaining: the semantic-facts inventory must reject the LLVM collector once
    no accepted legacy domain remains; then run `zig build test` and both backend
    suites after collector retirement.
 

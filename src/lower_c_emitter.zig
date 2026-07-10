@@ -5561,6 +5561,48 @@ const CEmitter = struct {
         _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span, locals);
     }
 
+    fn applyMirAggregateReturnPointerFacts(self: *CEmitter, dest_name: []const u8, dest_ty: ast.TypeExpr, initializer: ast.Expr) !bool {
+        const call = switch (initializer.kind) {
+            .call => |call| call,
+            .grouped => |inner| return self.applyMirAggregateReturnPointerFacts(dest_name, dest_ty, inner.*),
+            else => return false,
+        };
+        const callee = calleeIdentName(call.callee.*) orelse return false;
+        const fn_info = self.functions.get(callee) orelse return false;
+        const return_ty = fn_info.return_type orelse return false;
+        const source_struct = self.directStructTypeName(return_ty) orelse return false;
+        const dest_struct = self.directStructTypeName(dest_ty) orelse return false;
+        if (!std.mem.eql(u8, source_struct, dest_struct)) return false;
+        if (!self.mirOwnsAggregateReturnSummary(callee)) return false;
+
+        for (self.mir_module.aggregate_return_pointer_facts) |fact| {
+            if (!std.mem.eql(u8, fact.callee, callee)) continue;
+            if (fact.provenance != .global_storage) continue;
+            try self.setAggregatePointerFieldProvenance(dest_name, fact.field_path, fact.provenance);
+            try self.emitMirAggregateReturnPointerFactConsumedComment(fact);
+        }
+        // The summary marker owns this call shape even when it has no matching
+        // field fact, so a stale or removed fact stays unknown.
+        return true;
+    }
+
+    fn mirOwnsAggregateReturnSummary(self: *CEmitter, callee: []const u8) bool {
+        for (self.mir_module.aggregate_return_summaries) |summary| {
+            if (std.mem.eql(u8, summary.callee, callee)) return true;
+        }
+        return false;
+    }
+
+    fn emitMirAggregateReturnPointerFactConsumedComment(self: *CEmitter, fact: mir.AggregateReturnPointerFact) !void {
+        const caller = self.current_function orelse return;
+        try self.writeIndent();
+        try self.out.print(
+            self.allocator,
+            "/* mir aggregate_return_pointer consumed caller={s} callee={s} field={s} provenance={s} source={d}:{d} */\n",
+            .{ caller, fact.callee, fact.field_path, @tagName(fact.provenance), fact.source.line, fact.source.column },
+        );
+    }
+
     fn applyMirPointerProvenanceForLocalInitializer(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         if (isPointerLikeGlobalType(self.resolveAliasType(ty))) {
             try self.updatePointerProvenanceFromMir(name, ty, initializer, locals);
@@ -5568,6 +5610,7 @@ const CEmitter = struct {
         }
         if (self.isKnownStructType(ty)) {
             self.clearAggregatePointerFieldsForLocalPath(name, "");
+            if (try self.applyMirAggregateReturnPointerFacts(name, ty, initializer)) return;
             if (self.directAggregateCopySourceExpr(initializer, ty, locals)) {
                 _ = try self.applyMirAggregatePointerFieldFactsForSubjectAtSource(name, initializer.span, locals);
                 return;
@@ -5659,6 +5702,7 @@ const CEmitter = struct {
         }
         if (self.isKnownStructType(ty)) {
             self.clearAggregatePointerFieldsForLocalPath(name, "");
+            if (try self.applyMirAggregateReturnPointerFacts(name, ty, value)) return;
             if (self.directAggregateCopySourceExpr(value, ty, locals)) {
                 _ = try self.applyMirAggregatePointerFieldFactsForSubjectAtSource(name, value.span, locals);
                 return;

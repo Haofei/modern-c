@@ -116,6 +116,23 @@ fn clearPointerProvenanceFactsForFunctionSubjectField(module_mir: *mir.Module, n
     return error.TestUnexpectedResult;
 }
 
+fn clearAggregateReturnPointerFact(module_mir: *mir.Module, callee: []const u8, field_path: []const u8) !void {
+    var retained: std.ArrayList(mir.AggregateReturnPointerFact) = .empty;
+    errdefer retained.deinit(module_mir.allocator);
+    var removed = false;
+    for (module_mir.aggregate_return_pointer_facts) |fact| {
+        if (std.mem.eql(u8, fact.callee, callee) and std.mem.eql(u8, fact.field_path, field_path)) {
+            module_mir.allocator.free(fact.field_path);
+            removed = true;
+            continue;
+        }
+        try retained.append(module_mir.allocator, fact);
+    }
+    if (!removed) return error.TestUnexpectedResult;
+    module_mir.allocator.free(module_mir.aggregate_return_pointer_facts);
+    module_mir.aggregate_return_pointer_facts = try retained.toOwnedSlice(module_mir.allocator);
+}
+
 fn appendCheckedCTestWithoutRangeFacts(source_name: []const u8, source: []const u8, function_names: []const []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseCheckedModule(source_name, source);
     defer parsed.deinit();
@@ -220,6 +237,16 @@ fn appendCheckedCTestWithoutPointerProvenanceFactsForSubjectField(source_name: [
     try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, output, .kernel, source_name, .{}, false, null);
 }
 
+fn appendCheckedCTestWithoutAggregateReturnPointerFact(source_name: []const u8, source: []const u8, callee: []const u8, field_path: []const u8, output: *std.ArrayList(u8)) !void {
+    var parsed = try test_support.parseCheckedModule(source_name, source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearAggregateReturnPointerFact(&module_mir, callee, field_path);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, output, .kernel, source_name, .{}, false, null);
+}
+
 fn expectUnsupportedCheckedCEmission(source_name: []const u8, source: []const u8) !void {
     var parsed = try test_support.parseCheckedModule(source_name, source);
     defer parsed.deinit();
@@ -227,6 +254,33 @@ fn expectUnsupportedCheckedCEmission(source_name: []const u8, source: []const u8
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendC(std.testing.allocator, parsed.module, &output));
+}
+
+test "lower-c consumes MIR aggregate-return pointer facts and fails closed when absent" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder() -> Holder {
+        \\    return .{ .ptr = &shared_counter, .tag = 1 };
+        \\}
+        \\
+        \\fn use_returned_holder() -> u32 {
+        \\    let holder: Holder = returned_holder();
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_aggregate_return_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
 fn expectTaggedUnionRaceCopySupported(source_name: []const u8, source: []const u8) !void {
