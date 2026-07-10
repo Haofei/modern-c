@@ -187,9 +187,19 @@ ANCHORS: dict[str, list[str]] = {
 }
 
 EXACT_COUNTS: dict[str, dict[str, int]] = {
+    "src/lower_c_emitter.zig": {
+        "fn updatePointerProvenanceFromMirOrFallback": 1,
+        "try self.updatePointerProvenanceFromMirOrFallback(": 1,
+        "fn updatePointerProvenanceAssignmentFromMirOrFallback": 1,
+        "try self.updatePointerProvenanceAssignmentFromMirOrFallback(": 1,
+    },
     "src/lower_llvm.zig": {
         "fn updatePointerGlobalProvenance": 1,
         "try self.updatePointerGlobalProvenance(": 2,
+        "fn updatePointerProvenanceFromMirOrFallback": 1,
+        "try self.updatePointerProvenanceFromMirOrFallback(": 4,
+        "fn updatePointerProvenanceAssignmentFromMirOrFallback": 1,
+        "try self.updatePointerProvenanceAssignmentFromMirOrFallback(": 1,
     },
 }
 

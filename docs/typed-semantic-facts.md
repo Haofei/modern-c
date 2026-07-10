@@ -579,7 +579,9 @@ Gate:
   collector paths gate calls through `mirPointerProvenanceCoversDirectLocalUpdate`;
 - the Phase 1 inventory checker now enforces that LLVM keeps exactly one
   `updatePointerGlobalProvenance` helper definition and exactly two remaining
-  fallback calls through the shared MIR-or-fallback wrappers;
+  fallback calls through the shared MIR-or-fallback wrappers, and that both C
+  and LLVM keep a single shared pointer-provenance MIR-or-fallback helper pair
+  with the current explicit call counts;
 - the Phase 1 inventory checker anchors the C fixed pointer-array classifier so
   the MIR-owned pointer-container path remains visible;
 - the production readiness bucket links to the migration commits and parity
