@@ -527,6 +527,33 @@ test "lower-c consumes MIR trailing aggregate-return array element assignment fa
     try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
+test "lower-c aggregate-return dynamic-index fallthrough writes fail closed" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptrs: [2]*mut u32 }
+        \\
+        \\fn returned_holder(choice: u32, index: usize) -> Holder {
+        \\    var holder: Holder = .{ .ptrs = .{ &shared_counter, &shared_counter } };
+        \\    switch choice {
+        \\        0 => { return .{ .ptrs = .{ &shared_counter, &shared_counter } }; }
+        \\        _ => { holder.ptrs[index] = &shared_counter; }
+        \\    }
+        \\    return holder;
+        \\}
+        \\
+        \\fn use_returned_holder(choice: u32, index: usize) -> u32 {
+        \\    let holder: Holder = returned_holder(choice, index);
+        \\    return holder.ptrs[0].*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_trailing_aggregate_return_dynamic_index_assignment_fail_closed.mc", source, &output);
+    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptrs[0]");
+    try expectContains(output.items, "mc_race_load_u32");
+}
+
 test "lower-c consumes MIR trailing nested aggregate-return field assignment facts" {
     const source =
         \\global shared_counter: u32 = 0;
