@@ -584,6 +584,9 @@ Gate:
   with the current explicit call counts;
 - the Phase 1 inventory checker anchors the C fixed pointer-array classifier so
   the MIR-owned pointer-container path remains visible;
+- the Phase 1 inventory checker anchors oversized integer-literal syntax
+  overflow handling before defaulting, including initializer, targetless, and
+  binary-operand semantic gates plus exact reject-fixture counts;
 - the production readiness bucket links to the migration commits and parity
   tests for each bounded cleanup slice;
 - follow-up families are listed with owners/order: bounds/range facts, integer

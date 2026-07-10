@@ -46,6 +46,18 @@ ANCHORS: dict[str, list[str]] = {
         "try mir.appendDumpOpt",
         "try ir.appendLowerIr",
     ],
+    "src/numeric.zig": [
+        "pub fn parseIntegerLiteral",
+        "if (raw.len > cleaned.len) return null;",
+        "std.fmt.parseInt(u128",
+    ],
+    "src/sema.zig": [
+        "fn checkIntegerLiteralInitializer",
+        "fn checkTargetlessLiteralInitializer",
+        "fn checkLiteralOperandAgainstClass",
+        "fn integerLiteralSyntaxOverflow",
+        "E_INTEGER_LITERAL_OUT_OF_RANGE",
+    ],
     "src/mir_model.zig": [
         "pub const ValueType = union(enum)",
         "pub const Instruction = struct",
@@ -104,6 +116,19 @@ ANCHORS: dict[str, list[str]] = {
         "kind=representation_check detail=nonnull_pointer type=*mut value_id=p",
         "kind=representation_use detail=deref_base type=*mut value_id=p",
         "mir representation_fact fn=return_ptr_param",
+    ],
+    "tests/spec/no_implicit_conversion.mc": [
+        "reject_binary_operand_larger_than_u128",
+        "reject_literal_larger_than_u128",
+    ],
+    "tests/spec/initialization.mc": [
+        "reject_targetless_integer_larger_than_u128",
+    ],
+    "tests/spec/global_initializers.mc": [
+        "reject_out_of_range_initializer",
+    ],
+    "tests/spec/return_types.mc": [
+        "reject_out_of_range_literal_return",
     ],
     "src/lower_c_arith.zig": [
         "pub const MirCheckElidedFn",
@@ -193,6 +218,17 @@ ANCHORS: dict[str, list[str]] = {
 }
 
 EXACT_COUNTS: dict[str, dict[str, int]] = {
+    "src/numeric.zig": {
+        "pub fn parseIntegerLiteral": 1,
+        "std.fmt.parseInt(u128": 1,
+    },
+    "src/sema.zig": {
+        "fn checkIntegerLiteralInitializer": 1,
+        "fn checkTargetlessLiteralInitializer": 1,
+        "fn checkLiteralOperandAgainstClass": 1,
+        "fn integerLiteralSyntaxOverflow": 1,
+        "if (integerLiteralSyntaxOverflow(expr))": 4,
+    },
     "src/lower_c_emitter.zig": {
         "fn requireMirBoundsFact": 1,
         "try self.requireMirBoundsFact(": 3,
@@ -217,6 +253,18 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try self.updatePointerProvenanceFromMirOrFallback(": 4,
         "fn updatePointerProvenanceAssignmentFromMirOrFallback": 1,
         "try self.updatePointerProvenanceAssignmentFromMirOrFallback(": 1,
+    },
+    "tests/spec/no_implicit_conversion.mc": {
+        "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 9,
+    },
+    "tests/spec/initialization.mc": {
+        "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 1,
+    },
+    "tests/spec/global_initializers.mc": {
+        "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 1,
+    },
+    "tests/spec/return_types.mc": {
+        "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 1,
     },
 }
 
