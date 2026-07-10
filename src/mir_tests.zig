@@ -1448,6 +1448,7 @@ test "MIR records typed pointer provenance facts for direct globals and pointer 
 test "MIR records direct aggregate-return pointer facts and excludes legacy shapes" {
     const source =
         \\global shared_counter: u32 = 0;
+        \\extern fn cleanup() -> void;
         \\struct Holder { ptr: *mut u32, tag: u32 }
         \\
         \\fn direct_holder() -> Holder {
@@ -1552,6 +1553,10 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    }
         \\    return holder;
         \\}
+        \\fn defer_prefix_holder() -> Holder {
+        \\    defer cleanup();
+        \\    return .{ .ptr = &shared_counter, .tag = 26 };
+        \\}
         \\fn trailing_nested_field_updated_holder(choice: u32) -> Outer {
         \\    var holder: Outer = .{ .inner = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &shared_counter } }, .tag = 17 };
         \\    switch choice {
@@ -1653,6 +1658,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "nested_control_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "loop_prefix_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "sequential_switch_holder"));
+    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "defer_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_nested_field_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_deep_nested_field_updated_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "deref_updated_holder"));
