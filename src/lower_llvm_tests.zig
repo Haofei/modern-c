@@ -474,6 +474,9 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
         \\fn returned_global_pointer() -> *mut u32 {
         \\    return &shared_counter;
         \\}
+        \\fn forwarded_global_pointer() -> *mut u32 {
+        \\    return returned_global_pointer();
+        \\}
         \\fn branched_global_pointer(flag: bool) -> *mut u32 {
         \\    if flag { return &shared_counter; } else { return &shared_counter; }
         \\}
@@ -484,6 +487,10 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
         \\}
         \\fn uses_returned_global_pointer() -> u32 {
         \\    let gp: *mut u32 = returned_global_pointer();
+        \\    return gp.*;
+        \\}
+        \\fn uses_forwarded_global_pointer() -> u32 {
+        \\    let gp: *mut u32 = forwarded_global_pointer();
         \\    return gp.*;
         \\}
         \\fn uses_branched_global_pointer(flag: bool) -> u32 {
@@ -504,6 +511,10 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
     try expectContains(body, "; mir pointer_provenance consumed fn=uses_returned_global_pointer subject=gp provenance=global_storage reason=none");
     try expectContains(body, "load atomic i32, ptr %");
 
+    const forwarded_body = try llvmFunctionBody(output.items, "define internal i32 @uses_forwarded_global_pointer");
+    try expectContains(forwarded_body, "; mir pointer_provenance consumed fn=uses_forwarded_global_pointer subject=gp provenance=global_storage reason=none");
+    try expectContains(forwarded_body, "load atomic i32, ptr %");
+
     const alias_body = try llvmFunctionBody(output.items, "define internal i32 @uses_global_pointer_through_alias");
     try expectContains(alias_body, "; mir pointer_provenance consumed fn=uses_global_pointer_through_alias subject=gp provenance=global_storage reason=none");
     try expectContains(alias_body, "load atomic i32, ptr %");
@@ -521,6 +532,13 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
     const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @uses_returned_global_pointer");
     try expectNotContains(missing_body, "; mir pointer_provenance consumed fn=uses_returned_global_pointer subject=gp provenance=global_storage reason=none");
     try expectContains(missing_body, "load atomic i32, ptr %");
+
+    var missing_forwarded_output: std.ArrayList(u8) = .empty;
+    defer missing_forwarded_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_pointer_return_provenance.mc", source, "uses_forwarded_global_pointer", "gp", &missing_forwarded_output);
+    const missing_forwarded_body = try llvmFunctionBody(missing_forwarded_output.items, "define internal i32 @uses_forwarded_global_pointer");
+    try expectNotContains(missing_forwarded_body, "; mir pointer_provenance consumed fn=uses_forwarded_global_pointer subject=gp provenance=global_storage reason=none");
+    try expectContains(missing_forwarded_body, "load atomic i32, ptr %");
 }
 
 test "LLVM ordinary global scalar accesses lower to unordered atomics" {

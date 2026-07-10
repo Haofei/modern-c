@@ -539,9 +539,10 @@ covered direct local shapes, raw-many zero offsets outside the direct-local
 MIR-owned compile-time-zero shape, callback/exported/nontrivial returned
 pointers, broader parameter summary shapes, broader aggregate return summaries,
 and other fallback paths. The narrow internal `return &global` pointer-return
-form is no longer in that fallback: MIR records the call-result local's normal
-`PointerProvenanceFact`, and both backends consume it; a missing caller fact
-falls back to race-tolerant lowering.
+form, plus acyclic direct forwarding through already summarized internal
+helpers, is no longer in that fallback: MIR records the call-result local's
+normal `PointerProvenanceFact`, and both backends consume it; a missing caller
+fact falls back to race-tolerant lowering.
 C now keeps the fixed pointer-array destination-read boundary on the MIR-owned
 side: covered direct pointer-container shapes pass through
 `applyMirPointerProvenanceFactsAtSource` / the shared MIR-or-fallback helpers and

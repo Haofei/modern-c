@@ -904,24 +904,29 @@ const PointerReturnProvenanceSummary = struct {
 fn collectDirectGlobalPointerReturnSummaries(allocator: std.mem.Allocator, module: ast.Module, globals: *const std.StringHashMap(ValueType), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr)) !std.StringHashMap(PointerReturnProvenanceSummary) {
     var summaries = std.StringHashMap(PointerReturnProvenanceSummary).init(allocator);
     errdefer summaries.deinit();
-    for (module.decls) |decl| {
-        if (decl.kind != .fn_decl) continue;
-        const fn_decl = decl.kind.fn_decl;
-        if (fn_decl.exported) continue;
-        const return_ty = fn_decl.return_type orelse continue;
-        const pointer_shape = pointerShapeFromValueType(valueTypeFromTypeAlias(return_ty, enums, structs, packed_bits, aliases)) orelse continue;
-        const body = fn_decl.body orelse continue;
-        const storage = directGlobalAddressStorage(body, globals) orelse continue;
-        try summaries.put(fn_decl.name.text, .{
-            .pointer_shape = pointer_shape,
-            .provenance = .{ .kind = .global_storage, .storage = storage },
-        });
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (module.decls) |decl| {
+            if (decl.kind != .fn_decl) continue;
+            const fn_decl = decl.kind.fn_decl;
+            if (fn_decl.exported or summaries.contains(fn_decl.name.text)) continue;
+            const return_ty = fn_decl.return_type orelse continue;
+            const pointer_shape = pointerShapeFromValueType(valueTypeFromTypeAlias(return_ty, enums, structs, packed_bits, aliases)) orelse continue;
+            const body = fn_decl.body orelse continue;
+            const storage = directGlobalAddressStorage(body, globals, &summaries, pointer_shape) orelse continue;
+            try summaries.put(fn_decl.name.text, .{
+                .pointer_shape = pointer_shape,
+                .provenance = .{ .kind = .global_storage, .storage = storage },
+            });
+            changed = true;
+        }
     }
     return summaries;
 }
 
-fn directGlobalAddressStorage(body: ast.Block, globals: *const std.StringHashMap(ValueType)) ?[]const u8 {
-    const flow = directGlobalReturnFlowForBlock(body, globals);
+fn directGlobalAddressStorage(body: ast.Block, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) ?[]const u8 {
+    const flow = directGlobalReturnFlowForBlock(body, globals, summaries, pointer_shape);
     if (flow.can_fall_through or flow.unknown_return) return null;
     return flow.storage;
 }
@@ -937,43 +942,43 @@ const DirectGlobalReturnFlow = struct {
     unknown_return: bool = false,
 };
 
-fn directGlobalReturnFlowForBlock(block: ast.Block, globals: *const std.StringHashMap(ValueType)) DirectGlobalReturnFlow {
+fn directGlobalReturnFlowForBlock(block: ast.Block, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) DirectGlobalReturnFlow {
     var result: DirectGlobalReturnFlow = .{};
     for (block.items) |stmt| {
         if (!result.can_fall_through) break;
-        const statement_flow = directGlobalReturnFlowForStmt(stmt, globals);
+        const statement_flow = directGlobalReturnFlowForStmt(stmt, globals, summaries, pointer_shape);
         result = appendDirectGlobalReturnFlow(result, statement_flow);
     }
     return result;
 }
 
-fn directGlobalReturnFlowForStmt(stmt: ast.Stmt, globals: *const std.StringHashMap(ValueType)) DirectGlobalReturnFlow {
+fn directGlobalReturnFlowForStmt(stmt: ast.Stmt, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) DirectGlobalReturnFlow {
     return switch (stmt.kind) {
         .@"return" => |maybe_value| .{
             .can_fall_through = false,
-            .storage = if (maybe_value) |value| directGlobalAddressStorageExpr(value, globals) else null,
-            .unknown_return = maybe_value == null or directGlobalAddressStorageExpr(maybe_value.?, globals) == null,
+            .storage = if (maybe_value) |value| directGlobalAddressStorageExpr(value, globals, summaries, pointer_shape) else null,
+            .unknown_return = maybe_value == null or directGlobalAddressStorageExpr(maybe_value.?, globals, summaries, pointer_shape) == null,
         },
-        .block, .unsafe_block, .comptime_block => |block| directGlobalReturnFlowForBlock(block, globals),
-        .contract_block => |contract| directGlobalReturnFlowForBlock(contract.block, globals),
+        .block, .unsafe_block, .comptime_block => |block| directGlobalReturnFlowForBlock(block, globals, summaries, pointer_shape),
+        .contract_block => |contract| directGlobalReturnFlowForBlock(contract.block, globals, summaries, pointer_shape),
         .if_let => |node| blk: {
-            const then_flow = directGlobalReturnFlowForBlock(node.then_block, globals);
+            const then_flow = directGlobalReturnFlowForBlock(node.then_block, globals, summaries, pointer_shape);
             const else_flow = if (node.else_block) |else_block|
-                directGlobalReturnFlowForBlock(else_block, globals)
+                directGlobalReturnFlowForBlock(else_block, globals, summaries, pointer_shape)
             else
                 DirectGlobalReturnFlow{};
             break :blk joinDirectGlobalReturnFlows(then_flow, else_flow);
         },
-        .@"switch" => |node| directGlobalReturnFlowForSwitch(node, globals),
+        .@"switch" => |node| directGlobalReturnFlowForSwitch(node, globals, summaries, pointer_shape),
         else => .{},
     };
 }
 
-fn directGlobalReturnFlowForSwitch(node: ast.Switch, globals: *const std.StringHashMap(ValueType)) DirectGlobalReturnFlow {
+fn directGlobalReturnFlowForSwitch(node: ast.Switch, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) DirectGlobalReturnFlow {
     var result: DirectGlobalReturnFlow = .{ .can_fall_through = !directGlobalReturnSwitchIsExhaustive(node) };
     for (node.arms) |arm| {
         const arm_flow = switch (arm.body) {
-            .block => |block| directGlobalReturnFlowForBlock(block, globals),
+            .block => |block| directGlobalReturnFlowForBlock(block, globals, summaries, pointer_shape),
             .expr => DirectGlobalReturnFlow{},
         };
         if (arm_flow.can_fall_through) result.can_fall_through = true;
@@ -1043,13 +1048,20 @@ fn appendDirectGlobalReturnFlow(prefix: DirectGlobalReturnFlow, statement: Direc
     return result;
 }
 
-fn directGlobalAddressStorageExpr(expr: ast.Expr, globals: *const std.StringHashMap(ValueType)) ?[]const u8 {
+fn directGlobalAddressStorageExpr(expr: ast.Expr, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) ?[]const u8 {
     return switch (expr.kind) {
-        .grouped => |inner| directGlobalAddressStorageExpr(inner.*, globals),
-        .cast => |node| directGlobalAddressStorageExpr(node.value.*, globals),
+        .grouped => |inner| directGlobalAddressStorageExpr(inner.*, globals, summaries, pointer_shape),
+        .cast => |node| directGlobalAddressStorageExpr(node.value.*, globals, summaries, pointer_shape),
         .address_of => |inner| switch (inner.kind) {
             .ident => |ident| if (globals.contains(ident.text)) ident.text else null,
             else => null,
+        },
+        .call => |call| blk: {
+            if (call.type_args.len != 0) break :blk null;
+            const callee = directCalleeName(call.callee.*) orelse break :blk null;
+            const summary = summaries.get(callee) orelse break :blk null;
+            if (!samePointerShape(summary.pointer_shape, pointer_shape)) break :blk null;
+            break :blk summary.provenance.storage;
         },
         else => null,
     };

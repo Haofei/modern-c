@@ -1432,12 +1432,37 @@ test "MIR records typed pointer provenance facts for direct globals and pointer 
 test "MIR records direct internal global pointer return provenance in callers" {
     const source =
         \\global shared_counter: u32 = 0;
+        \\fn forwarded_global_pointer_twice() -> *mut u32 {
+        \\    return forwarded_global_pointer();
+        \\}
+        \\fn forwarded_global_pointer() -> *mut u32 {
+        \\    return returned_global_pointer();
+        \\}
+        \\extern fn external_pointer() -> *mut u32;
+        \\fn forwards_external_pointer() -> *mut u32 {
+        \\    return external_pointer();
+        \\}
+        \\fn recursive_pointer_forward() -> *mut u32 {
+        \\    return recursive_pointer_forward();
+        \\}
         \\fn returned_global_pointer() -> *mut u32 {
         \\    return &shared_counter;
         \\}
         \\fn uses_returned_global_pointer() -> u32 {
         \\    let gp: *mut u32 = returned_global_pointer();
         \\    return gp.*;
+        \\}
+        \\fn uses_forwarded_global_pointer() -> u32 {
+        \\    let gp: *mut u32 = forwarded_global_pointer_twice();
+        \\    return gp.*;
+        \\}
+        \\fn uses_external_pointer_forward() -> u32 {
+        \\    let p: *mut u32 = forwards_external_pointer();
+        \\    return p.*;
+        \\}
+        \\fn uses_recursive_pointer_forward() -> u32 {
+        \\    let p: *mut u32 = recursive_pointer_forward();
+        \\    return p.*;
         \\}
     ;
 
@@ -1455,6 +1480,12 @@ test "MIR records direct internal global pointer return provenance in callers" {
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "uses_returned_global_pointer").?;
     try std.testing.expect(hasPointerProvenanceFact(function, "gp", null, .global_storage, .none, "shared_counter"));
+    const forwarded = functionByName(typed_mir, "uses_forwarded_global_pointer").?;
+    try std.testing.expect(hasPointerProvenanceFact(forwarded, "gp", null, .global_storage, .none, "shared_counter"));
+    const external = functionByName(typed_mir, "uses_external_pointer_forward").?;
+    try std.testing.expect(!hasPointerProvenanceFact(external, "p", null, .global_storage, .none, "shared_counter"));
+    const recursive = functionByName(typed_mir, "uses_recursive_pointer_forward").?;
+    try std.testing.expect(!hasPointerProvenanceFact(recursive, "p", null, .global_storage, .none, "shared_counter"));
 }
 
 test "MIR records internal global pointer return provenance through local function aliases" {
