@@ -554,6 +554,28 @@ test "lower-c aggregate-return dynamic-index fallthrough writes fail closed" {
     try expectContains(output.items, "mc_race_load_u32");
 }
 
+test "lower-c aggregate-return nested pointer arrays fail closed" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptrs: [2][2]*mut u32 }
+        \\
+        \\fn returned_holder() -> Holder {
+        \\    return .{ .ptrs = .{ .{ &shared_counter, &shared_counter }, .{ &shared_counter, &shared_counter } } };
+        \\}
+        \\
+        \\fn use_returned_holder() -> u32 {
+        \\    let holder: Holder = returned_holder();
+        \\    return holder.ptrs[0][0].*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_nested_pointer_array_aggregate_return_fail_closed.mc", source, &output);
+    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
+    try expectContains(output.items, "mc_race_load_u32");
+}
+
 test "lower-c consumes MIR trailing nested aggregate-return field assignment facts" {
     const source =
         \\global shared_counter: u32 = 0;

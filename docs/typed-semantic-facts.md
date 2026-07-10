@@ -731,8 +731,8 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
 
 Every other shape remains outside the MIR-owned domain. That includes loops,
 direct or indirect calls in a prefix, exports, unions, aggregate/array element
-nesting beyond the direct field model, fallthrough dynamic-index writes, nested
-arrays beyond fixed struct elements, dereference writes or nested control flow,
+nesting beyond the direct field model, fallthrough dynamic-index writes,
+dereference writes or nested control flow,
 and any path with a missing or ambiguous field fact. Fallthrough dynamic-index
 writes are an explicit fail-closed boundary: MIR emits no owned aggregate-return
 summary, and C/LLVM keep returned fields unknown.
@@ -740,6 +740,9 @@ Callee-local storage returned inside an aggregate is not a producer obligation
 for checked code because sema rejects the local-address escape. The diagnostic
 fixture remains covered as a negative MIR case: unchecked MIR construction must
 not emit a `global_storage` aggregate-return pointer fact for that field.
+Nested pointer arrays beyond fixed struct-element arrays are also an explicit
+fail-closed boundary: MIR emits no owned aggregate-return summary for the
+diagnostic shape, and both backends keep the final scalar load conservative.
 
 ### Consumer and retirement rule
 
@@ -765,10 +768,10 @@ missing-fact gate covers every migrated shape.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
-4. Remaining: prefix calls, nested arrays beyond fixed struct elements,
-   dereference writes or nested control flow, mixed, exported, and
-   aggregate/array element nesting beyond the direct field model. Fallthrough
-   dynamic-index writes are covered as fail-closed rather than inferred.
+4. Remaining: prefix calls, dereference writes or nested control flow, mixed,
+   exported, and aggregate/array element nesting beyond the direct field model.
+   Fallthrough dynamic-index writes and nested pointer arrays beyond fixed
+   struct-element arrays are covered as fail-closed rather than inferred.
 5. Remaining: the semantic-facts inventory must reject the LLVM collector once
    no accepted legacy domain remains; then run `zig build test` and both backend
    suites after collector retirement.
