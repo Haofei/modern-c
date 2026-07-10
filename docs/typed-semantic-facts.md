@@ -709,7 +709,8 @@ Current producer boundary:
   dereference writes, and other control flow are outside the
   producer domain, except for exhaustive bool/wildcard switches whose arms each
   independently reduce to an already-supported return value, or have direct
-  returning arms plus empty fallthrough arms to a checked trailing return;
+  returning arms plus fallthrough arms that contain only supported whole-local
+  declarations or assignments before a checked trailing return;
 - return structs with scalar pointer fields or fixed arrays of scalar pointer
   elements, including recursively nested struct literals; arrays whose elements
   are aggregates or arrays, slices, and other pointer-bearing field shapes
@@ -728,8 +729,8 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
 
 Every other shape remains outside the MIR-owned domain. That includes loops,
 indirect calls, exports, unions, aggregate/array element nesting beyond the
-direct field model, non-empty fallthrough branch effects, and any path with a
-missing or ambiguous field fact.
+direct field model, fallthrough member/dereference writes or nested control
+flow, and any path with a missing or ambiguous field fact.
 
 ### Consumer and retirement rule
 
@@ -752,9 +753,9 @@ missing-fact gate covers every migrated shape.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
-4. Remaining: non-empty fallthrough branch effects, mixed, exported,
-   aggregate/array element nesting beyond the direct field model, and
-   local-storage return cases.
+4. Remaining: fallthrough member/dereference writes or nested control flow,
+   mixed, exported, aggregate/array element nesting beyond the direct field
+   model, and local-storage return cases.
 5. Remaining: the semantic-facts inventory must reject the LLVM collector once
    no accepted legacy domain remains; then run `zig build test` and both backend
    suites after collector retirement.

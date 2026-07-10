@@ -1486,6 +1486,14 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    }
         \\    return .{ .ptr = &shared_counter, .tag = 11 };
         \\}
+        \\fn trailing_updated_holder(choice: u32) -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 12 };
+        \\    switch choice {
+        \\        0 => { return .{ .ptr = &shared_counter, .tag = 13 }; }
+        \\        _ => { holder = .{ .ptr = &shared_counter, .tag = 14 }; }
+        \\    }
+        \\    return holder;
+        \\}
         \\
         \\fn helper() -> void {}
         \\fn call_before_return() -> Holder {
@@ -1527,6 +1535,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "branched_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "mixed_branched_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "unknown_holder"));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "direct_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "local_holder", "ptr", .global_storage));
@@ -1534,6 +1543,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "copied_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "branched_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_holder", "ptr", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_updated_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "mixed_branched_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "unknown_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "call_before_return"));

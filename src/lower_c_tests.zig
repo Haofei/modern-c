@@ -369,6 +369,38 @@ test "lower-c consumes MIR trailing aggregate-return facts" {
     try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
+test "lower-c consumes MIR trailing aggregate-return assignment facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder(choice: u32) -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 1 };
+        \\    switch choice {
+        \\        0 => { return .{ .ptr = &shared_counter, .tag = 2 }; }
+        \\        _ => { holder = .{ .ptr = &shared_counter, .tag = 3 }; }
+        \\    }
+        \\    return holder;
+        \\}
+        \\
+        \\fn use_returned_holder(choice: u32) -> u32 {
+        \\    let holder: Holder = returned_holder(choice);
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_trailing_aggregate_return_assignment_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_trailing_aggregate_return_assignment_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_output.items, "mc_race_load_u32");
+}
+
 fn expectTaggedUnionRaceCopySupported(source_name: []const u8, source: []const u8) !void {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
