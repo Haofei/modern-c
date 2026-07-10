@@ -196,6 +196,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/lower_c_emitter.zig": {
         "fn requireMirBoundsFact": 1,
         "try self.requireMirBoundsFact(": 3,
+        "fn hasMirNoOverflowRangeFactForArith": 1,
+        "return self.hasMirNoOverflowRangeFact(": 1,
+        "fn hasMirNoOverflowRangeFact(self": 1,
         "fn updatePointerProvenanceFromMirOrFallback": 1,
         "try self.updatePointerProvenanceFromMirOrFallback(": 1,
         "fn updatePointerProvenanceAssignmentFromMirOrFallback": 1,
@@ -204,6 +207,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/lower_llvm.zig": {
         "fn requireMirBoundsFact": 1,
         "try self.requireMirBoundsFact(": 5,
+        "fn requireMirNoOverflowRangeFact": 1,
+        "try self.requireMirNoOverflowRangeFact(": 1,
+        "current_mir_range_target": 5,
+        "mir range_fact consumed": 1,
         "fn updatePointerGlobalProvenance": 1,
         "try self.updatePointerGlobalProvenance(": 2,
         "fn updatePointerProvenanceFromMirOrFallback": 1,
