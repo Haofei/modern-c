@@ -516,6 +516,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
             // loop-body locals (which leak on an early exit) from outer resources, and
             // compare outer move/place ownership on that early-exit edge.
             var frame = LoopMoveFrame{
+                .label = if (l.loop_label) |label| label.text else null,
                 .entry_names = std.StringHashMap(void).init(self.reporter.allocator),
                 .entry_state = cloneMoveState(self, state),
                 .invalidated_const_indexes = std.StringHashMap(void).init(self.reporter.allocator),
@@ -658,8 +659,12 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
             // The switch diverges only if it has arms and every arm diverges.
             return any_arm and all_diverge;
         },
-        .@"break", .@"continue" => {
-            checkLoopExitLeaks(self, state);
+        .@"break" => |target| {
+            checkLoopExitLeaks(self, state, target);
+            return true; // the rest of the loop body is unreachable
+        },
+        .@"continue" => |target| {
+            checkLoopExitLeaks(self, state, target);
             return true; // the rest of the loop body is unreachable
         },
         .asm_stmt => return false,
@@ -716,9 +721,8 @@ pub fn joinMoveBranches(
 // value still live (a name not present at loop entry, and not reserved by a defer)
 // leaks on that edge — the iteration exits without consuming it. Mirrors
 // `checkMoveExit` for `return`, but bounded to the innermost loop's body locals.
-pub fn checkLoopExitLeaks(self: *Checker, state: *std.StringHashMap(MoveSlot)) void {
-    if (self.move_loop_stack.items.len == 0) return; // a stray break/continue (parser rejects)
-    const frame = &self.move_loop_stack.items[self.move_loop_stack.items.len - 1];
+pub fn checkLoopExitLeaks(self: *Checker, state: *std.StringHashMap(MoveSlot), target: ?ast.Ident) void {
+    const frame = moveLoopTargetFrame(self, target) orelse return;
     // `break`/`continue` is terminal in its block, so this is the only visit; we do
     // NOT clear the slot, which would corrupt the live state the enclosing branch
     // merges back (producing spurious branch-mismatch / use-after-move downstream).
@@ -732,6 +736,25 @@ pub fn checkLoopExitLeaks(self: *Checker, state: *std.StringHashMap(MoveSlot)) v
     defer entry_state.deinit();
     reportLoopOuterResourceChanges(self, &entry_state, state);
     recordLoopEarlyExitConstIndexInvalidations(self, frame, state);
+}
+
+// Semantic checking already rejects a missing loop label. The move pass resolves
+// the same target so ownership checks run on the actual control-flow edge rather
+// than accidentally treating `break :outer` as an exit from the inner loop.
+fn moveLoopTargetFrame(self: *Checker, target: ?ast.Ident) ?*LoopMoveFrame {
+    if (self.move_loop_stack.items.len == 0) return null;
+    if (target) |label| {
+        var i = self.move_loop_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            const frame = &self.move_loop_stack.items[i];
+            if (frame.label) |name| {
+                if (std.mem.eql(u8, name, label.text)) return frame;
+            }
+        }
+        return null;
+    }
+    return &self.move_loop_stack.items[self.move_loop_stack.items.len - 1];
 }
 
 fn recordLoopEarlyExitConstIndexInvalidations(self: *Checker, frame: *LoopMoveFrame, state: *const std.StringHashMap(MoveSlot)) void {

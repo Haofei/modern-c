@@ -244,6 +244,10 @@ pub const MoveSlot = struct {
 };
 
 pub const LoopMoveFrame = struct {
+    // Source loop label (`outer:`), when present. The move pass uses this to
+    // route a labeled break/continue to the same loop edge as semantic checking
+    // and backend lowering.
+    label: ?[]const u8 = null,
     entry_names: std.StringHashMap(void),
     entry_state: std.StringHashMap(MoveSlot),
     invalidated_const_indexes: std.StringHashMap(void),

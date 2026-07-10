@@ -4424,6 +4424,32 @@ fn reject_branch_partial_field_move(cond: bool) -> u32 {
     return 0;
 }
 
+// Rejected: this is an exit from `outer`, not merely the inner loop. The
+// outer-iteration local must be leak-checked on that labeled control-flow edge.
+fn reject_labeled_break_outer_move_local_leak(cond: bool) -> u32 {
+    outer: while cond {
+        let r: Res = mkres(1); // EXPECT_ERROR: E_RESOURCE_LEAK
+        while cond {
+            break :outer;
+        }
+        let v: u32 = consume(r);
+    }
+    return 0;
+}
+
+// Rejected: a labeled continue also leaves the named outer iteration, so its
+// local must be checked before control returns to that loop's condition.
+fn reject_labeled_continue_outer_move_local_leak(cond: bool) -> u32 {
+    outer: while cond {
+        let r: Res = mkres(1); // EXPECT_ERROR: E_RESOURCE_LEAK
+        while cond {
+            continue :outer;
+        }
+        let v: u32 = consume(r);
+    }
+    return 0;
+}
+
 // Rejected: array element place state must also agree across branch joins.
 fn reject_branch_array_element_move(cond: bool) -> u32 {
     let arr: [2]Res = .{ mkres(1), mkres(2) };
