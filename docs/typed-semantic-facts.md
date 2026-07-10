@@ -760,10 +760,10 @@ are explicit fail-closed boundaries too: MIR emits no summary for the callee, so
 both backends keep the returned field unknown. Nested control flow inside an
 aggregate-return candidate path is also an explicit fail-closed boundary: MIR
 emits no summary for that callee, and C/LLVM keep the returned field
-conservative. Loop prefixes, deferred cleanup prefixes, and multiple sequential
-CFG joins before a final aggregate return are handled the same way: they remain
-outside the producer domain, MIR emits no summary, and both backends keep
-returned fields conservative.
+conservative. Loop prefixes, `for` prefixes, deferred cleanup prefixes, and
+multiple sequential CFG joins before a final aggregate return are handled the
+same way: they remain outside the producer domain, MIR emits no summary, and
+both backends keep returned fields conservative.
 
 ### Consumer and retirement rule
 
@@ -789,11 +789,11 @@ MIR-populated cache; the AST collector is gone.
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
 4. Complete for named unsupported producer shapes: nested control flow, loop
-   prefixes, deferred cleanup prefixes, sequential CFG joins, exported aggregate
-   returns, mixed paths, prefix calls, fallthrough dynamic-index writes,
-   dereference writes, nested pointer arrays, and nested arrays of
-   pointer-bearing structs beyond fixed struct-element arrays are covered as
-   fail-closed rather than inferred.
+   prefixes, `for` prefixes, deferred cleanup prefixes, sequential CFG joins,
+   exported aggregate returns, mixed paths, prefix calls, fallthrough
+   dynamic-index writes, dereference writes, nested pointer arrays, and nested
+   arrays of pointer-bearing structs beyond fixed struct-element arrays are
+   covered as fail-closed rather than inferred.
 5. Complete: the semantic-facts inventory rejects the retired LLVM
    aggregate-return AST collector, and LLVM loads aggregate-return pointer-field
    cache entries only from MIR facts.
