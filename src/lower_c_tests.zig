@@ -433,6 +433,30 @@ test "lower-c consumes MIR trailing aggregate-return facts" {
     try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
+test "lower-c aggregate-return mixed branches fail closed" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder(flag: bool, fallback: *mut u32) -> Holder {
+        \\    if flag { return .{ .ptr = &shared_counter, .tag = 1 }; } else { return .{ .ptr = fallback, .tag = 2 }; }
+        \\}
+        \\
+        \\fn use_returned_holder(flag: bool) -> u32 {
+        \\    var local: u32 = 3;
+        \\    let holder: Holder = returned_holder(flag, &local);
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mixed_branch_aggregate_return_fail_closed.mc", source, &output);
+    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    const body = try cFunctionBody(output.items, "static uint32_t use_returned_holder(bool flag)");
+    try expectContains(body, "mc_race_load_u32");
+}
+
 test "lower-c consumes MIR trailing aggregate-return assignment facts" {
     const source =
         \\global shared_counter: u32 = 0;

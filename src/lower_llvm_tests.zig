@@ -1095,8 +1095,18 @@ test "LLVM consumes MIR aggregate-return facts across exhaustive direct-return b
         \\    if flag { return .{ .ptr = &shared_counter, .tag = 1 }; } else { return .{ .ptr = &shared_counter, .tag = 2 }; }
         \\}
         \\
+        \\fn mixed_branched_holder(flag: bool, fallback: *mut u32) -> Holder {
+        \\    if flag { return .{ .ptr = &shared_counter, .tag = 3 }; } else { return .{ .ptr = fallback, .tag = 4 }; }
+        \\}
+        \\
         \\fn use_branched_holder(flag: bool) -> u32 {
         \\    let holder: Holder = branched_holder(flag);
+        \\    return holder.ptr.*;
+        \\}
+        \\
+        \\fn use_mixed_branched_holder(flag: bool) -> u32 {
+        \\    var local: u32 = 5;
+        \\    let holder: Holder = mixed_branched_holder(flag, &local);
         \\    return holder.ptr.*;
         \\}
     ;
@@ -1113,6 +1123,10 @@ test "LLVM consumes MIR aggregate-return facts across exhaustive direct-return b
     const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_branched_holder");
     try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_branched_holder callee=branched_holder field=ptr");
     try expectContains(missing_body, "load atomic i32, ptr %");
+
+    const mixed_body = try llvmFunctionBody(output.items, "define internal i32 @use_mixed_branched_holder");
+    try expectNotContains(mixed_body, "; mir aggregate_return_pointer consumed caller=use_mixed_branched_holder callee=mixed_branched_holder field=ptr");
+    try expectContains(mixed_body, "load atomic i32, ptr %");
 }
 
 test "LLVM ordinary global scalar accesses lower to unordered atomics" {
