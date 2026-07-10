@@ -997,6 +997,11 @@ fn aliasReferentIsTracked(referent: AliasReferent, state: *const std.StringHashM
     return state.contains(referent.key) or isMoveSubplaceKey(referent.key);
 }
 
+fn aliasReferentRoot(referent: AliasReferent) []const u8 {
+    if (referent.place) |place| return place.root;
+    return rootPlaceName(referent.key);
+}
+
 fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
     if (fullDerefMoveSubplace(self, expr, state, aliases)) |pp| {
         return .{ .key = pp.key, .place = pp.place, .full_deref = true };
@@ -3696,17 +3701,14 @@ fn moveDeferBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(Mo
     replaceMoveState(self, state, &scoped);
 }
 
-fn cleanupLocalAliasReferent(self: *Checker, init: ast.Expr, state: *const std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+fn cleanupLocalAliasReferent(self: *Checker, init: ast.Expr, state: *const std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
     switch (init.kind) {
         .grouped => |inner| return cleanupLocalAliasReferent(self, inner.*, state, outer, aliases),
         else => {},
     }
-    const referent = fullDerefMoveSubplaceAlias(self, init, state, aliases) orelse
-        callLaunderedMoveReferent(self, init, state, aliases) orelse
-        spine.aliasReferentOf(init, state) orelse
-        return null;
-    if (outer.contains(rootPlaceName(referent))) return null;
-    if (!state.contains(rootPlaceName(referent)) and !isMoveSubplaceKey(referent)) return null;
+    const referent = aliasReferentForExpr(self, init, state, aliases) orelse return null;
+    if (outer.contains(aliasReferentRoot(referent))) return null;
+    if (!aliasReferentIsTracked(referent, state)) return null;
     return referent;
 }
 
