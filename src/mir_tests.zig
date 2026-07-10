@@ -1589,6 +1589,10 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\fn nested_array_holder() -> CellHolder {
         \\    return .{ .cells = .{ .{ .ptr = &shared_counter }, .{ .ptr = &shared_counter } } };
         \\}
+        \\struct CellMatrixHolder { groups: [2][2]Cell }
+        \\fn cell_matrix_holder() -> CellMatrixHolder {
+        \\    return .{ .groups = .{ .{ .{ .ptr = &shared_counter }, .{ .ptr = &shared_counter } }, .{ .{ .ptr = &shared_counter }, .{ .ptr = &shared_counter } } } };
+        \\}
         \\struct NestedPointerArrayHolder { ptrs: [2][2]*mut u32 }
         \\fn nested_pointer_array_holder() -> NestedPointerArrayHolder {
         \\    return .{ .ptrs = .{ .{ &shared_counter, &shared_counter }, .{ &shared_counter, &shared_counter } } };
@@ -1649,6 +1653,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_holder", "inner.ptrs[0]", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_array_holder", "cells[0].ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_array_holder", "cells[1].ptr", .global_storage));
+    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "cell_matrix_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "nested_pointer_array_holder"));
 
     var dump: std.ArrayList(u8) = .empty;

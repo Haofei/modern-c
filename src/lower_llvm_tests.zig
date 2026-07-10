@@ -932,6 +932,30 @@ test "LLVM aggregate-return nested pointer arrays fail closed" {
     try expectContains(body, "load atomic i32, ptr %");
 }
 
+test "LLVM aggregate-return nested struct arrays fail closed" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Cell { ptr: *mut u32 }
+        \\struct Holder { groups: [2][2]Cell }
+        \\
+        \\fn returned_holder() -> Holder {
+        \\    return .{ .groups = .{ .{ .{ .ptr = &shared_counter }, .{ .ptr = &shared_counter } }, .{ .{ .ptr = &shared_counter }, .{ .ptr = &shared_counter } } } };
+        \\}
+        \\
+        \\fn use_returned_holder() -> u32 {
+        \\    let holder: Holder = returned_holder();
+        \\    return holder.groups[0][0].ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_nested_struct_array_aggregate_return_fail_closed.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
+    try expectNotContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
+    try expectContains(body, "load atomic i32, ptr %");
+}
+
 test "LLVM aggregate-return dereference writes fail closed" {
     const source =
         \\global shared_counter: u32 = 0;

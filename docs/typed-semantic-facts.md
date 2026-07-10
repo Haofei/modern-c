@@ -751,9 +751,10 @@ Callee-local storage returned inside an aggregate is not a producer obligation
 for checked code because sema rejects the local-address escape. The diagnostic
 fixture remains covered as a negative MIR case: unchecked MIR construction must
 not emit a `global_storage` aggregate-return pointer fact for that field.
-Nested pointer arrays beyond fixed struct-element arrays are also an explicit
-fail-closed boundary: MIR emits no owned aggregate-return summary for the
-diagnostic shape, and both backends keep the final scalar load conservative.
+Nested pointer arrays and nested arrays of pointer-bearing structs beyond fixed
+struct-element arrays are also explicit fail-closed boundaries: MIR emits no
+owned aggregate-return summary for those diagnostic shapes, and both backends
+keep the final scalar load conservative.
 Dereference writes through aggregate aliases, such as `alias.*.ptr = &global`,
 are explicit fail-closed boundaries too: MIR emits no summary for the callee, so
 both backends keep the returned field unknown.
@@ -782,10 +783,10 @@ missing-fact gate covers every migrated shape.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
-4. Remaining: nested control flow and aggregate/array element nesting beyond the
-   direct field model. Exported aggregate returns, mixed paths, prefix calls, fallthrough
-   dynamic-index writes, dereference writes, and nested pointer arrays beyond
-   fixed struct-element arrays are covered as fail-closed rather than inferred.
+4. Remaining: nested control flow. Exported aggregate returns, mixed paths,
+   prefix calls, fallthrough dynamic-index writes, dereference writes, nested
+   pointer arrays, and nested arrays of pointer-bearing structs beyond fixed
+   struct-element arrays are covered as fail-closed rather than inferred.
 5. Remaining: the semantic-facts inventory must reject the LLVM collector once
    no accepted legacy domain remains; then run `zig build test` and both backend
    suites after collector retirement.
