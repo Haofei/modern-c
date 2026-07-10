@@ -1192,6 +1192,10 @@ fn aggregateReturnLiteralPaths(allocator: std.mem.Allocator, body: ast.Block) !?
         }
 
         const trailing_items = body.items[switch_index + 1 ..];
+        if (try collectSequentialSwitchAggregateReturnLiteralPaths(allocator, &paths, body.span, prefix, switch_node, trailing_items)) {
+            keep_paths = true;
+            return paths;
+        }
         var returned_arms: usize = 0;
         var fallthrough_arms: usize = 0;
         for (switch_node.arms) |arm| {
@@ -1243,6 +1247,60 @@ fn aggregateReturnLiteralFieldsForPath(
     try items.appendSlice(allocator, branch);
     try items.appendSlice(allocator, trailing);
     return directOrStraightLineLocalAggregateReturnLiteralFields(allocator, paths, .{ .span = span, .items = items.items });
+}
+
+fn collectSequentialSwitchAggregateReturnLiteralPaths(
+    allocator: std.mem.Allocator,
+    paths: *AggregateReturnLiteralPaths,
+    span: ast.Span,
+    prefix: []const ast.Stmt,
+    first_switch: ast.Switch,
+    trailing: []const ast.Stmt,
+) !bool {
+    var second_switch_index: ?usize = null;
+    for (trailing, 0..) |stmt, index| {
+        if (stmt.kind == .@"switch") {
+            second_switch_index = index;
+            break;
+        }
+    }
+    const index = second_switch_index orelse return false;
+    const second_switch = trailing[index].kind.@"switch";
+    if (!aggregateReturnSwitchIsExhaustive(second_switch)) return false;
+
+    const between = trailing[0..index];
+    if (aggregateReturnStatementsContainControlFlow(between)) return false;
+    const after_second = trailing[index + 1 ..];
+    for (first_switch.arms) |first_arm| {
+        const first_block = switch (first_arm.body) {
+            .block => |block| block,
+            .expr => return false,
+        };
+        if (aggregateReturnStatementsContainControlFlow(first_block.items)) return false;
+        for (second_switch.arms) |second_arm| {
+            const second_block = switch (second_arm.body) {
+                .block => |block| block,
+                .expr => return false,
+            };
+            if (aggregateReturnStatementsContainControlFlow(second_block.items)) return false;
+            var branch: std.ArrayList(ast.Stmt) = .empty;
+            defer branch.deinit(allocator);
+            try branch.appendSlice(allocator, first_block.items);
+            try branch.appendSlice(allocator, between);
+            try branch.appendSlice(allocator, second_block.items);
+            const fields = (try aggregateReturnLiteralFieldsForPath(allocator, paths, span, prefix, branch.items, after_second)) orelse return false;
+            if (!paths.append(fields)) return false;
+        }
+    }
+    return true;
+}
+
+fn aggregateReturnStatementsContainControlFlow(statements: []const ast.Stmt) bool {
+    for (statements) |stmt| switch (stmt.kind) {
+        .@"return", .@"switch", .loop, .if_let, .@"break", .@"continue", .@"defer", .block, .unsafe_block, .comptime_block, .contract_block => return true,
+        else => {},
+    };
+    return false;
 }
 
 fn aggregateReturnSwitchIsExhaustive(node: ast.Switch) bool {
