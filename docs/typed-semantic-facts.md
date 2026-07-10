@@ -757,7 +757,10 @@ owned aggregate-return summary for those diagnostic shapes, and both backends
 keep the final scalar load conservative.
 Dereference writes through aggregate aliases, such as `alias.*.ptr = &global`,
 are explicit fail-closed boundaries too: MIR emits no summary for the callee, so
-both backends keep the returned field unknown.
+both backends keep the returned field unknown. Nested control flow inside an
+aggregate-return candidate path is also an explicit fail-closed boundary: MIR
+emits no summary for that callee, and C/LLVM keep the returned field
+conservative.
 
 ### Consumer and retirement rule
 
@@ -783,10 +786,11 @@ missing-fact gate covers every migrated shape.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
-4. Remaining: nested control flow. Exported aggregate returns, mixed paths,
-   prefix calls, fallthrough dynamic-index writes, dereference writes, nested
-   pointer arrays, and nested arrays of pointer-bearing structs beyond fixed
-   struct-element arrays are covered as fail-closed rather than inferred.
+4. Complete for named unsupported producer shapes: nested control flow,
+   exported aggregate returns, mixed paths, prefix calls, fallthrough
+   dynamic-index writes, dereference writes, nested pointer arrays, and nested
+   arrays of pointer-bearing structs beyond fixed struct-element arrays are
+   covered as fail-closed rather than inferred.
 5. Remaining: the semantic-facts inventory must reject the LLVM collector once
    no accepted legacy domain remains; then run `zig build test` and both backend
    suites after collector retirement.
