@@ -2532,26 +2532,7 @@ pub fn exprMoveTypeName(self: *Checker, expr: ast.Expr, state: *const std.String
 // referent's moved-out state that poisons reads through the alias.
 pub fn checkStaleAlias(self: *Checker, name: []const u8, slot: MoveSlot, span: diagnostics.Span, state: *const std.StringHashMap(MoveSlot)) void {
     _ = name;
-    if (slot.alias_place) |place| {
-        if (state.get(place.root)) |root| {
-            if (!root.live) {
-                self.errorCode(span, "E_USE_AFTER_MOVE", "use of an alias derived from a linear `move` value after that value was moved (the alias is now stale)");
-                return;
-            }
-        }
-        if (stateHasMovedPlace(place, state) or stateHasMovedChildPlace(place, state) or stateHasMovedConflictingPlace(place, state)) {
-            self.errorCode(span, "E_USE_AFTER_MOVE", "use of an alias derived from a linear `move` value after that value was moved (the alias is now stale)");
-        }
-        return;
-    }
-    const referent = slot.alias_of orelse return;
-    if (state.get(referent)) |r| {
-        if (!r.live) {
-            self.errorCode(span, "E_USE_AFTER_MOVE", "use of an alias derived from a linear `move` value after that value was moved (the alias is now stale)");
-            return;
-        }
-    }
-    if (isMoveSubplaceKey(referent) and (concretePlaceHasWildcardMove(referent, state) or wildcardMoveConflictsWithConcreteSubplace(referent, state))) {
+    if (aliasSlotReferentMoved(slot, state)) {
         self.errorCode(span, "E_USE_AFTER_MOVE", "use of an alias derived from a linear `move` value after that value was moved (the alias is now stale)");
     }
 }
