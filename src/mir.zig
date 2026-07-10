@@ -65,6 +65,8 @@ pub const BoundsFactKind = mir_model.BoundsFactKind;
 pub const SourcePoint = mir_model.SourcePoint;
 pub const PointerProvenance = mir_model.PointerProvenance;
 pub const PointerProvenanceFact = mir_model.PointerProvenanceFact;
+pub const AggregateReturnSummaryFact = mir_model.AggregateReturnSummaryFact;
+pub const AggregateReturnPointerFact = mir_model.AggregateReturnPointerFact;
 pub const RepresentationFact = mir_model.RepresentationFact;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
@@ -272,6 +274,9 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
     var pointer_return_summaries = try collectDirectGlobalPointerReturnSummaries(allocator, module, &globals, &enums, &structs, &packed_bits, &aliases);
     defer pointer_return_summaries.deinit();
 
+    var aggregate_return_facts = try collectDirectAggregateReturnPointerFacts(allocator, module, &globals, &enums, &structs, &packed_bits, &aliases, &pointer_return_summaries);
+    errdefer aggregate_return_facts.deinit(allocator);
+
     var functions: std.ArrayList(Function) = .empty;
     errdefer {
         for (functions.items) |function| freeFunction(allocator, function);
@@ -319,7 +324,12 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
         }
     }
 
-    return .{ .allocator = allocator, .functions = try functions.toOwnedSlice(allocator) };
+    return .{
+        .allocator = allocator,
+        .functions = try functions.toOwnedSlice(allocator),
+        .aggregate_return_summaries = aggregate_return_facts.summaries,
+        .aggregate_return_pointer_facts = aggregate_return_facts.pointer_facts,
+    };
 }
 
 pub fn appendDump(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
@@ -437,6 +447,29 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
                 .{ function.name, fact.line, fact.column },
             );
         }
+    }
+    for (mir.aggregate_return_summaries) |summary| {
+        try out.print(
+            allocator,
+            "mir aggregate_return_summary_fact callee={s} recorded=true line={} column={}\n",
+            .{ summary.callee, summary.source.line, summary.source.column },
+        );
+    }
+    for (mir.aggregate_return_pointer_facts) |fact| {
+        try out.print(
+            allocator,
+            "mir aggregate_return_pointer_fact callee={s} field={s} provenance={s} pointer_kind={s} mutability={s} child={s} recorded=true line={} column={}\n",
+            .{
+                fact.callee,
+                fact.field_path,
+                @tagName(fact.provenance),
+                @tagName(fact.pointer_shape.kind),
+                @tagName(fact.pointer_shape.mutability),
+                fact.pointer_shape.child,
+                fact.source.line,
+                fact.source.column,
+            },
+        );
     }
 }
 
@@ -900,6 +933,117 @@ const PointerReturnProvenanceSummary = struct {
     pointer_shape: PointerShape,
     provenance: DirectPointerProvenance,
 };
+
+const AggregateReturnFactCollection = struct {
+    summaries: []AggregateReturnSummaryFact,
+    pointer_facts: []AggregateReturnPointerFact,
+
+    fn deinit(self: AggregateReturnFactCollection, allocator: std.mem.Allocator) void {
+        if (self.summaries.len != 0) allocator.free(self.summaries);
+        for (self.pointer_facts) |fact| allocator.free(fact.field_path);
+        if (self.pointer_facts.len != 0) allocator.free(self.pointer_facts);
+    }
+};
+
+// This is the first aggregate-return MIR domain. It owns internal helpers whose
+// complete body is one direct struct-literal return and whose struct has no
+// unmodeled pointer-bearing fields. More involved return flow remains outside
+// this domain and continues through the explicitly listed legacy collector.
+fn collectDirectAggregateReturnPointerFacts(
+    allocator: std.mem.Allocator,
+    module: ast.Module,
+    globals: *const std.StringHashMap(ValueType),
+    enums: *const std.StringHashMap(EnumSummary),
+    structs: *const std.StringHashMap(StructSummary),
+    packed_bits: *const std.StringHashMap(PackedBitsSummary),
+    aliases: *const std.StringHashMap(ast.TypeExpr),
+    pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary),
+) !AggregateReturnFactCollection {
+    var summaries: std.ArrayList(AggregateReturnSummaryFact) = .empty;
+    errdefer summaries.deinit(allocator);
+    var pointer_facts: std.ArrayList(AggregateReturnPointerFact) = .empty;
+    errdefer {
+        for (pointer_facts.items) |fact| allocator.free(fact.field_path);
+        pointer_facts.deinit(allocator);
+    }
+
+    for (module.decls) |decl| {
+        if (decl.kind != .fn_decl) continue;
+        const fn_decl = decl.kind.fn_decl;
+        if (fn_decl.exported) continue;
+        const return_ty = fn_decl.return_type orelse continue;
+        const struct_name = switch (valueTypeFromTypeAlias(return_ty, enums, structs, packed_bits, aliases)) {
+            .struct_ => |name| name,
+            else => continue,
+        };
+        const struct_summary = structs.get(struct_name) orelse continue;
+        const body = fn_decl.body orelse continue;
+        const literal_fields = directAggregateReturnLiteralFields(body) orelse continue;
+        if (aggregateReturnHasUnmodeledPointerField(struct_summary, enums, structs, packed_bits, aliases)) continue;
+
+        try summaries.append(allocator, .{
+            .callee = fn_decl.name.text,
+            .source = .{ .line = fn_decl.name.span.line, .column = fn_decl.name.span.column },
+        });
+        for (struct_summary.fields) |field| {
+            const shape = pointerShapeFromValueType(valueTypeFromTypeAlias(field.ty, enums, structs, packed_bits, aliases)) orelse continue;
+            const value = aggregateLiteralFieldValue(literal_fields, field.name.text) orelse continue;
+            _ = directGlobalAddressStorageExpr(value, globals, pointer_return_summaries, shape) orelse continue;
+            const field_path = try allocator.dupe(u8, field.name.text);
+            errdefer allocator.free(field_path);
+            try pointer_facts.append(allocator, .{
+                .callee = fn_decl.name.text,
+                .field_path = field_path,
+                .provenance = .global_storage,
+                .pointer_shape = shape,
+                .source = .{ .line = value.span.line, .column = value.span.column },
+            });
+        }
+    }
+
+    return .{
+        .summaries = try summaries.toOwnedSlice(allocator),
+        .pointer_facts = try pointer_facts.toOwnedSlice(allocator),
+    };
+}
+
+fn directAggregateReturnLiteralFields(body: ast.Block) ?[]ast.StructLiteralField {
+    if (body.items.len != 1) return null;
+    var value = switch (body.items[0].kind) {
+        .@"return" => |maybe_value| maybe_value orelse return null,
+        else => return null,
+    };
+    while (value.kind == .grouped) value = value.kind.grouped.*;
+    return switch (value.kind) {
+        .struct_literal => |fields| fields,
+        else => null,
+    };
+}
+
+fn aggregateLiteralFieldValue(fields: []ast.StructLiteralField, name: []const u8) ?ast.Expr {
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name.text, name)) return field.value;
+    }
+    return null;
+}
+
+fn aggregateReturnHasUnmodeledPointerField(
+    struct_summary: StructSummary,
+    enums: *const std.StringHashMap(EnumSummary),
+    structs: *const std.StringHashMap(StructSummary),
+    packed_bits: *const std.StringHashMap(PackedBitsSummary),
+    aliases: *const std.StringHashMap(ast.TypeExpr),
+) bool {
+    for (struct_summary.fields) |field| {
+        const ty = valueTypeFromTypeAlias(field.ty, enums, structs, packed_bits, aliases);
+        if (pointerShapeFromValueType(ty) != null) continue;
+        switch (ty) {
+            .array, .slice, .struct_, .unknown => return true,
+            else => {},
+        }
+    }
+    return false;
+}
 
 fn collectDirectGlobalPointerReturnSummaries(allocator: std.mem.Allocator, module: ast.Module, globals: *const std.StringHashMap(ValueType), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr)) !std.StringHashMap(PointerReturnProvenanceSummary) {
     var summaries = std.StringHashMap(PointerReturnProvenanceSummary).init(allocator);

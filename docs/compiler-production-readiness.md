@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-10, based on the current compiler worktree**.
-Evidence register: **433 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **434 bounded implementation or regression entries, 1 active slice, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -484,7 +484,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Item | Current state | Next evidence needed |
 |---|---|---|
-| None currently assigned | No focused slice is currently active in this document. | Pick the next closure-matrix row and land a bounded implementation slice. |
+| MIR aggregate-return pointer-field facts | **In progress.** MIR now owns direct internal single-return struct-literal helpers whose returned struct has only scalar fields, including scalar pointer fields. LLVM consumes the module facts, and a retained summary marker makes a missing field fact conservative instead of falling back to the LLVM AST collector. Local aggregate values, assignments, branches, switches, pointer arrays, nested aggregates, exports, and arbitrary CFG remain on the legacy/unknown path. | Extend the producer through tracked local aggregates and bounded CFG joins, add matching C consumption, then remove the corresponding LLVM collector domain with missing-fact gates. |
 
 ### Open Architectural Workstreams
 
@@ -516,6 +516,11 @@ The direct local fixed-pointer-array-alias constant-index subcase is also
 complete. Its dynamic all-elements subcase is also complete. Mixed,
 invalidated, reassigned, and broader alias/return-flow/CFG boundaries remain
 open.
+The aggregate-return migration is active but only owns direct internal
+single-return struct literals with scalar fields. Its missing-fact gate
+is deliberate: an MIR-owned return summary prevents LLVM from rebuilding a
+removed fact from the AST. The wider local-return and CFG summary collector is
+still legacy code and remains an open matrix row.
 
 #### Typed Semantic Fact Table / Typed MIR
 
@@ -536,6 +541,9 @@ replaces the corresponding LLVM-local proof at the final pointer read and both
 backends fail closed when the destination fact is absent. The umbrella remains
 open for every matrix row above. See
 [`typed-semantic-facts.md`](typed-semantic-facts.md) for the phase-level contract.
+The aggregate-return fact family is now partially implemented for the narrow
+direct-literal domain; it is not yet a replacement for the full LLVM
+aggregate-return collector.
 
 #### CFG/Place-Based Move Checker
 

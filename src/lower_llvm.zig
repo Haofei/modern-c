@@ -683,10 +683,12 @@ const LlvmEmitter = struct {
 
     fn collectAggregateReturnPointerFieldSummaries(self: *LlvmEmitter, module: ast.Module) !void {
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.aggregate_return_pointer_fields);
+        try self.collectMirAggregateReturnPointerFieldFacts();
         for (module.decls) |decl| {
             if (decl.kind != .fn_decl) continue;
             const fn_decl = decl.kind.fn_decl;
             if (fn_decl.exported) continue;
+            if (self.mirOwnsAggregateReturnSummary(fn_decl.name.text)) continue;
             const body = fn_decl.body orelse continue;
             const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
             const struct_decl = self.structDeclForType(ret_ty) orelse continue;
@@ -694,6 +696,21 @@ const LlvmEmitter = struct {
             try self.collectAggregateReturnPointerFieldsForFunction(fn_decl, struct_decl, body);
         }
         self.resetTransientPointerProvenance();
+    }
+
+    fn mirOwnsAggregateReturnSummary(self: *LlvmEmitter, callee: []const u8) bool {
+        for (self.mir_module.aggregate_return_summaries) |summary| {
+            if (std.mem.eql(u8, summary.callee, callee)) return true;
+        }
+        return false;
+    }
+
+    fn collectMirAggregateReturnPointerFieldFacts(self: *LlvmEmitter) !void {
+        for (self.mir_module.aggregate_return_pointer_facts) |fact| {
+            const key = try self.aggregateReturnPointerFieldKey(fact.callee, fact.field_path);
+            errdefer self.allocator.free(key);
+            try self.aggregate_return_pointer_fields.put(key, fact.provenance);
+        }
     }
 
     fn collectAggregateReturnPointerFieldsForFunction(
@@ -5028,12 +5045,33 @@ const LlvmEmitter = struct {
                 .path = try scratch.dupe(u8, field_path),
                 .provenance = entry.value_ptr.*,
             });
+            if (self.mirAggregateReturnPointerFact(callee, field_path)) |fact| {
+                try self.emitMirAggregateReturnPointerFactConsumedComment(fact);
+            }
         }
 
         for (copied_fields.items) |field| {
             try self.setAggregatePointerFieldProvenance(dest_name, field.path, field.provenance);
         }
         return copied_fields.items.len != 0;
+    }
+
+    fn mirAggregateReturnPointerFact(self: *LlvmEmitter, callee: []const u8, field_path: []const u8) ?mir.AggregateReturnPointerFact {
+        for (self.mir_module.aggregate_return_pointer_facts) |fact| {
+            if (!std.mem.eql(u8, fact.callee, callee)) continue;
+            if (!std.mem.eql(u8, fact.field_path, field_path)) continue;
+            return fact;
+        }
+        return null;
+    }
+
+    fn emitMirAggregateReturnPointerFactConsumedComment(self: *LlvmEmitter, fact: mir.AggregateReturnPointerFact) !void {
+        const caller = self.current_function orelse return;
+        try self.out.print(
+            self.allocator,
+            "  ; mir aggregate_return_pointer consumed caller={s} callee={s} field={s} provenance={s} source={d}:{d}\n",
+            .{ caller, fact.callee, fact.field_path, @tagName(fact.provenance), fact.source.line, fact.source.column },
+        );
     }
 
     fn pointerExprStorageProvenance(self: *LlvmEmitter, expr: ast.Expr) mir.PointerProvenance {

@@ -252,6 +252,22 @@ pub const PointerProvenanceFact = struct {
     source: SourcePoint,
 };
 
+// A summary marker says that MIR owns the aggregate-return provenance domain for
+// this callee. Consumers must treat an absent field fact under that marker as
+// unknown rather than reconstructing provenance from the AST.
+pub const AggregateReturnSummaryFact = struct {
+    callee: []const u8,
+    source: SourcePoint,
+};
+
+pub const AggregateReturnPointerFact = struct {
+    callee: []const u8,
+    field_path: []const u8,
+    provenance: PointerProvenance,
+    pointer_shape: PointerShape,
+    source: SourcePoint,
+};
+
 pub const RepresentationFact = struct {
     kind: Instruction.Kind,
     detail: []const u8,
@@ -291,6 +307,8 @@ pub const Function = struct {
 pub const Module = struct {
     allocator: std.mem.Allocator,
     functions: []Function,
+    aggregate_return_summaries: []AggregateReturnSummaryFact = &.{},
+    aggregate_return_pointer_facts: []AggregateReturnPointerFact = &.{},
 
     pub fn deinit(self: *Module) void {
         for (self.functions) |function| {
@@ -311,6 +329,9 @@ pub const Module = struct {
             self.allocator.free(function.elided_bounds);
         }
         self.allocator.free(self.functions);
+        if (self.aggregate_return_summaries.len != 0) self.allocator.free(self.aggregate_return_summaries);
+        for (self.aggregate_return_pointer_facts) |fact| self.allocator.free(fact.field_path);
+        if (self.aggregate_return_pointer_facts.len != 0) self.allocator.free(self.aggregate_return_pointer_facts);
     }
 };
 

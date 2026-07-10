@@ -154,6 +154,23 @@ fn clearPointerProvenanceFactsForFunctionSubjectField(module_mir: *mir.Module, n
     return error.TestUnexpectedResult;
 }
 
+fn clearAggregateReturnPointerFact(module_mir: *mir.Module, callee: []const u8, field_path: []const u8) !void {
+    var retained: std.ArrayList(mir.AggregateReturnPointerFact) = .empty;
+    errdefer retained.deinit(module_mir.allocator);
+    var removed = false;
+    for (module_mir.aggregate_return_pointer_facts) |fact| {
+        if (std.mem.eql(u8, fact.callee, callee) and std.mem.eql(u8, fact.field_path, field_path)) {
+            module_mir.allocator.free(fact.field_path);
+            removed = true;
+            continue;
+        }
+        try retained.append(module_mir.allocator, fact);
+    }
+    if (!removed) return error.TestUnexpectedResult;
+    module_mir.allocator.free(module_mir.aggregate_return_pointer_facts);
+    module_mir.aggregate_return_pointer_facts = try retained.toOwnedSlice(module_mir.allocator);
+}
+
 fn appendLlvmTestWithoutPointerProvenanceFacts(source_name: []const u8, source: []const u8, function_names: []const []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();
@@ -268,6 +285,16 @@ fn appendLlvmTestWithoutPointerProvenanceFactsForSubjectField(source_name: []con
     defer module_mir.deinit();
     try clearPointerProvenanceFactsForFunctionSubjectField(&module_mir, function_name, subject, field_path);
 
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, output, source_name, .{}, false, .riscv64, null);
+}
+
+fn appendLlvmTestWithoutAggregateReturnPointerFact(source_name: []const u8, source: []const u8, callee: []const u8, field_path: []const u8, output: *std.ArrayList(u8)) !void {
+    var parsed = try test_support.parseModule(source_name, source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearAggregateReturnPointerFact(&module_mir, callee, field_path);
     try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, output, source_name, .{}, false, .riscv64, null);
 }
 
@@ -560,6 +587,37 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
     const missing_noalias_body = try llvmFunctionBody(missing_noalias_output.items, "define internal i32 @uses_noalias_global_pointer");
     try expectNotContains(missing_noalias_body, "; mir pointer_provenance consumed fn=uses_noalias_global_pointer subject=gp provenance=global_storage reason=none");
     try expectContains(missing_noalias_body, "load atomic i32, ptr %");
+}
+
+test "LLVM aggregate-return pointer facts are MIR-owned and fail closed when absent" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn direct_holder() -> Holder {
+        \\    return .{ .ptr = &shared_counter, .tag = 1 };
+        \\}
+        \\
+        \\fn use_direct_holder() -> u32 {
+        \\    let holder: Holder = direct_holder();
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_aggregate_return_mir_fact.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_direct_holder");
+    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_direct_holder callee=direct_holder field=ptr provenance=global_storage");
+    try expectContains(body, "load atomic i32, ptr %");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_aggregate_return_mir_fact.mc", source, "direct_holder", "ptr", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_direct_holder");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_direct_holder callee=direct_holder field=ptr");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+    try expectNotContains(missing_body, "load i32, ptr %");
 }
 
 test "LLVM ordinary global scalar accesses lower to unordered atomics" {

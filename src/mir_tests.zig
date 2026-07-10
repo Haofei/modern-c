@@ -84,6 +84,22 @@ fn countPointerProvenanceFacts(function: mir.Function, subject: []const u8, prov
     return count;
 }
 
+fn hasAggregateReturnSummaryFact(module: mir.Module, callee: []const u8) bool {
+    for (module.aggregate_return_summaries) |fact| {
+        if (std.mem.eql(u8, fact.callee, callee)) return true;
+    }
+    return false;
+}
+
+fn hasAggregateReturnPointerFact(module: mir.Module, callee: []const u8, field_path: []const u8, provenance: PointerProvenance) bool {
+    for (module.aggregate_return_pointer_facts) |fact| {
+        if (!std.mem.eql(u8, fact.callee, callee)) continue;
+        if (!std.mem.eql(u8, fact.field_path, field_path)) continue;
+        if (fact.provenance == provenance) return true;
+    }
+    return false;
+}
+
 fn valueTypeName(ty: mir.ValueType) []const u8 {
     return switch (ty) {
         .void => "void",
@@ -1427,6 +1443,55 @@ test "MIR records typed pointer provenance facts for direct globals and pointer 
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=copied_outer element=0 provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptrs") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=assigned_outer element=none provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptr") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=assigned_outer element=0 provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptrs") != null);
+}
+
+test "MIR records direct aggregate-return pointer facts and excludes legacy shapes" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn direct_holder() -> Holder {
+        \\    return .{ .ptr = &shared_counter, .tag = 1 };
+        \\}
+        \\
+        \\fn local_holder() -> Holder {
+        \\    let holder: Holder = .{ .ptr = &shared_counter, .tag = 2 };
+        \\    return holder;
+        \\}
+        \\
+        \\fn unknown_holder(ptr: *mut u32) -> Holder {
+        \\    return .{ .ptr = ptr, .tag = 3 };
+        \\}
+        \\
+        \\struct PointerArrayHolder { ptrs: [2]*mut u32 }
+        \\fn pointer_array_holder() -> PointerArrayHolder {
+        \\    return .{ .ptrs = .{ &shared_counter, &shared_counter } };
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_aggregate_return_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "direct_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "unknown_holder"));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "direct_holder", "ptr", .global_storage));
+    try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "unknown_holder", "ptr", .global_storage));
+    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "local_holder"));
+    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "pointer_array_holder"));
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, module, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_summary_fact callee=direct_holder recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=direct_holder field=ptr provenance=global_storage pointer_kind=single") != null);
 }
 
 test "MIR records direct internal global pointer return provenance in callers" {
