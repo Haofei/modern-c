@@ -433,6 +433,38 @@ test "lower-c consumes MIR trailing aggregate-return field assignment facts" {
     try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
+test "lower-c consumes MIR trailing aggregate-return array element assignment facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptrs: [2]*mut u32 }
+        \\
+        \\fn returned_holder(choice: u32) -> Holder {
+        \\    var holder: Holder = .{ .ptrs = .{ &shared_counter, &shared_counter } };
+        \\    switch choice {
+        \\        0 => { return .{ .ptrs = .{ &shared_counter, &shared_counter } }; }
+        \\        _ => { holder.ptrs[0] = &shared_counter; }
+        \\    }
+        \\    return holder;
+        \\}
+        \\
+        \\fn use_returned_holder(choice: u32) -> u32 {
+        \\    let holder: Holder = returned_holder(choice);
+        \\    return holder.ptrs[0].*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_trailing_aggregate_return_array_element_assignment_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptrs[0] provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_trailing_aggregate_return_array_element_assignment_mir_fact.mc", source, "returned_holder", "ptrs[0]", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptrs[0]");
+    try expectContains(missing_output.items, "mc_race_load_u32");
+}
+
 fn expectTaggedUnionRaceCopySupported(source_name: []const u8, source: []const u8) !void {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);

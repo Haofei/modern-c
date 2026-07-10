@@ -711,7 +711,8 @@ Current producer boundary:
   independently reduce to an already-supported return value, or have direct
   returning arms plus fallthrough arms that contain only supported whole-local
   declarations, whole-local assignments, or direct top-level aggregate field
-  assignments before a checked trailing return;
+  assignments or direct constant-index fixed pointer-array element assignments
+  before a checked trailing return;
 - return structs with scalar pointer fields or fixed arrays of scalar pointer
   elements, including recursively nested struct literals; arrays whose elements
   are aggregates or arrays, slices, and other pointer-bearing field shapes
@@ -730,7 +731,7 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
 
 Every other shape remains outside the MIR-owned domain. That includes loops,
 indirect calls, exports, unions, aggregate/array element nesting beyond the
-direct field model, fallthrough array-element or nested-member/dereference
+direct field model, fallthrough dynamic-index, nested-member, or dereference
 writes or nested control flow, and any path with a missing or ambiguous field
 fact.
 
@@ -755,7 +756,7 @@ missing-fact gate covers every migrated shape.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
-4. Remaining: fallthrough array-element or nested-member/dereference writes or
+4. Remaining: fallthrough dynamic-index, nested-member/dereference writes, or
    nested control flow, mixed, exported, aggregate/array element nesting beyond
    the direct field model, and local-storage return cases.
 5. Remaining: the semantic-facts inventory must reject the LLVM collector once

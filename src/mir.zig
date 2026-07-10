@@ -1114,10 +1114,13 @@ const AggregateReturnLiteralPaths = struct {
     paths: [8][]ast.StructLiteralField = undefined,
     len: usize = 0,
     owned_fields: std.ArrayList([]ast.StructLiteralField) = .empty,
+    owned_array_items: std.ArrayList([]ast.Expr) = .empty,
 
     fn deinit(self: *AggregateReturnLiteralPaths, allocator: std.mem.Allocator) void {
         for (self.owned_fields.items) |fields| allocator.free(fields);
         self.owned_fields.deinit(allocator);
+        for (self.owned_array_items.items) |array_items| allocator.free(array_items);
+        self.owned_array_items.deinit(allocator);
     }
 
     fn append(self: *AggregateReturnLiteralPaths, fields: []ast.StructLiteralField) bool {
@@ -1269,13 +1272,45 @@ fn directOrStraightLineLocalAggregateReturnLiteralFields(
                     try tryTrackAggregateReturnLiteralLocal(&local_literals, target, assignment.value);
                     continue;
                 }
-                const target = aggregateReturnLocalFieldAssignmentTarget(assignment.target) orelse return null;
-                try tryTrackAggregateReturnLiteralLocalFieldAssignment(allocator, &local_literals, paths, target.local_name, target.field_name, assignment.value);
+                if (aggregateReturnLocalFieldAssignmentTarget(assignment.target)) |target| {
+                    try tryTrackAggregateReturnLiteralLocalFieldAssignment(allocator, &local_literals, paths, target.local_name, target.field_name, assignment.value);
+                    continue;
+                }
+                const target = aggregateReturnLocalArrayElementAssignmentTarget(assignment.target) orelse return null;
+                try tryTrackAggregateReturnLiteralLocalArrayElementAssignment(allocator, &local_literals, paths, target.local_name, target.field_name, target.index, assignment.value);
             },
             else => return null,
         }
     }
     return local_literals.get(returned_local);
+}
+
+const AggregateReturnLocalArrayElementAssignmentTarget = struct {
+    local_name: []const u8,
+    field_name: []const u8,
+    index: usize,
+};
+
+fn aggregateReturnLocalArrayElementAssignmentTarget(expr: ast.Expr) ?AggregateReturnLocalArrayElementAssignmentTarget {
+    return switch (expr.kind) {
+        .grouped => |inner| aggregateReturnLocalArrayElementAssignmentTarget(inner.*),
+        .index => |node| blk: {
+            const member = switch (node.base.*.kind) {
+                .member => |value| value,
+                else => break :blk null,
+            };
+            const literal = switch (node.index.*.kind) {
+                .int_literal => |text| text,
+                else => break :blk null,
+            };
+            break :blk .{
+                .local_name = directIdentName(member.base.*) orelse break :blk null,
+                .field_name = member.name.text,
+                .index = std.fmt.parseUnsigned(usize, literal, 10) catch break :blk null,
+            };
+        },
+        else => null,
+    };
 }
 
 const AggregateReturnLocalFieldAssignmentTarget = struct {
@@ -1314,6 +1349,36 @@ fn tryTrackAggregateReturnLiteralLocalFieldAssignment(
         return;
     }
     allocator.free(updated);
+    _ = locals.remove(local_name);
+}
+
+fn tryTrackAggregateReturnLiteralLocalArrayElementAssignment(
+    allocator: std.mem.Allocator,
+    locals: *std.StringHashMap([]ast.StructLiteralField),
+    paths: *AggregateReturnLiteralPaths,
+    local_name: []const u8,
+    field_name: []const u8,
+    index: usize,
+    value: ast.Expr,
+) !void {
+    const previous = locals.get(local_name) orelse return;
+    const updated_fields = try allocator.alloc(ast.StructLiteralField, previous.len);
+    errdefer allocator.free(updated_fields);
+    @memcpy(updated_fields, previous);
+    for (updated_fields) |*field| {
+        if (!std.mem.eql(u8, field.name.text, field_name)) continue;
+        const previous_items = arrayLiteralItems(field.value) orelse break;
+        if (index >= previous_items.len) break;
+        const updated_items = try allocator.dupe(ast.Expr, previous_items);
+        errdefer allocator.free(updated_items);
+        updated_items[index] = value;
+        field.value = .{ .span = field.value.span, .kind = .{ .array_literal = updated_items } };
+        try paths.owned_array_items.append(allocator, updated_items);
+        try paths.owned_fields.append(allocator, updated_fields);
+        try locals.put(local_name, updated_fields);
+        return;
+    }
+    allocator.free(updated_fields);
     _ = locals.remove(local_name);
 }
 
