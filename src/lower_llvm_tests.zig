@@ -477,6 +477,12 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
         \\fn forwarded_global_pointer() -> *mut u32 {
         \\    return returned_global_pointer();
         \\}
+        \\fn noalias_global_pointer() -> *mut u32 {
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        return compiler.assume_noalias_unchecked(&shared_counter, 4);
+        \\    }
+        \\}
         \\fn branched_global_pointer(flag: bool) -> *mut u32 {
         \\    if flag { return &shared_counter; } else { return &shared_counter; }
         \\}
@@ -491,6 +497,10 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
         \\}
         \\fn uses_forwarded_global_pointer() -> u32 {
         \\    let gp: *mut u32 = forwarded_global_pointer();
+        \\    return gp.*;
+        \\}
+        \\fn uses_noalias_global_pointer() -> u32 {
+        \\    let gp: *mut u32 = noalias_global_pointer();
         \\    return gp.*;
         \\}
         \\fn uses_branched_global_pointer(flag: bool) -> u32 {
@@ -514,6 +524,10 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
     const forwarded_body = try llvmFunctionBody(output.items, "define internal i32 @uses_forwarded_global_pointer");
     try expectContains(forwarded_body, "; mir pointer_provenance consumed fn=uses_forwarded_global_pointer subject=gp provenance=global_storage reason=none");
     try expectContains(forwarded_body, "load atomic i32, ptr %");
+
+    const noalias_body = try llvmFunctionBody(output.items, "define internal i32 @uses_noalias_global_pointer");
+    try expectContains(noalias_body, "; mir pointer_provenance consumed fn=uses_noalias_global_pointer subject=gp provenance=global_storage reason=none");
+    try expectContains(noalias_body, "load atomic i32, ptr %");
 
     const alias_body = try llvmFunctionBody(output.items, "define internal i32 @uses_global_pointer_through_alias");
     try expectContains(alias_body, "; mir pointer_provenance consumed fn=uses_global_pointer_through_alias subject=gp provenance=global_storage reason=none");
@@ -539,6 +553,13 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
     const missing_forwarded_body = try llvmFunctionBody(missing_forwarded_output.items, "define internal i32 @uses_forwarded_global_pointer");
     try expectNotContains(missing_forwarded_body, "; mir pointer_provenance consumed fn=uses_forwarded_global_pointer subject=gp provenance=global_storage reason=none");
     try expectContains(missing_forwarded_body, "load atomic i32, ptr %");
+
+    var missing_noalias_output: std.ArrayList(u8) = .empty;
+    defer missing_noalias_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_pointer_return_provenance.mc", source, "uses_noalias_global_pointer", "gp", &missing_noalias_output);
+    const missing_noalias_body = try llvmFunctionBody(missing_noalias_output.items, "define internal i32 @uses_noalias_global_pointer");
+    try expectNotContains(missing_noalias_body, "; mir pointer_provenance consumed fn=uses_noalias_global_pointer subject=gp provenance=global_storage reason=none");
+    try expectContains(missing_noalias_body, "load atomic i32, ptr %");
 }
 
 test "LLVM ordinary global scalar accesses lower to unordered atomics" {

@@ -4110,6 +4110,12 @@ test "lower-c consumes MIR facts for direct internal global pointer returns" {
         \\fn forwarded_global_pointer() -> *mut u32 {
         \\    return returned_global_pointer();
         \\}
+        \\fn noalias_global_pointer() -> *mut u32 {
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        return compiler.assume_noalias_unchecked(&shared_counter, 4);
+        \\    }
+        \\}
         \\fn branched_global_pointer(flag: bool) -> *mut u32 {
         \\    if flag { return &shared_counter; } else { return &shared_counter; }
         \\}
@@ -4124,6 +4130,10 @@ test "lower-c consumes MIR facts for direct internal global pointer returns" {
         \\}
         \\fn c_uses_forwarded_global_pointer() -> u32 {
         \\    let gp: *mut u32 = forwarded_global_pointer();
+        \\    return gp.*;
+        \\}
+        \\fn c_uses_noalias_global_pointer() -> u32 {
+        \\    let gp: *mut u32 = noalias_global_pointer();
         \\    return gp.*;
         \\}
         \\fn c_uses_branched_global_pointer(flag: bool) -> u32 {
@@ -4144,6 +4154,7 @@ test "lower-c consumes MIR facts for direct internal global pointer returns" {
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=c_assigns_returned_global_pointer subject=gp provenance=global_storage reason=reassignment source=");
     try expectContains(output.items, "mc_race_load_u32(gp)");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=c_uses_forwarded_global_pointer subject=gp provenance=global_storage reason=none source=");
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=c_uses_noalias_global_pointer subject=gp provenance=global_storage reason=none source=");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=c_uses_branched_global_pointer subject=gp provenance=global_storage reason=none source=");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=c_uses_global_pointer_through_alias subject=gp provenance=global_storage reason=none source=");
 
@@ -4158,6 +4169,12 @@ test "lower-c consumes MIR facts for direct internal global pointer returns" {
     try appendCheckedCTestWithoutPointerProvenanceFactsForSubject("emit_c_pointer_return_provenance.mc", source, "c_uses_forwarded_global_pointer", "gp", &missing_forwarded_output);
     try expectNotContains(missing_forwarded_output.items, "/* mir pointer_provenance consumed fn=c_uses_forwarded_global_pointer subject=gp provenance=global_storage reason=none source=");
     try expectContains(missing_forwarded_output.items, "mc_race_load_u32(gp)");
+
+    var missing_noalias_output: std.ArrayList(u8) = .empty;
+    defer missing_noalias_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutPointerProvenanceFactsForSubject("emit_c_pointer_return_provenance.mc", source, "c_uses_noalias_global_pointer", "gp", &missing_noalias_output);
+    try expectNotContains(missing_noalias_output.items, "/* mir pointer_provenance consumed fn=c_uses_noalias_global_pointer subject=gp provenance=global_storage reason=none source=");
+    try expectContains(missing_noalias_output.items, "mc_race_load_u32(gp)");
 }
 
 test "lower-c direct pointer locals without MIR destination facts lower conservatively" {

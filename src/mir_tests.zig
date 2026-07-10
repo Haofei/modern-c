@@ -1445,6 +1445,15 @@ test "MIR records direct internal global pointer return provenance in callers" {
         \\fn recursive_pointer_forward() -> *mut u32 {
         \\    return recursive_pointer_forward();
         \\}
+        \\fn noalias_global_pointer() -> *mut u32 {
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        return compiler.assume_noalias_unchecked(&shared_counter, 4);
+        \\    }
+        \\}
+        \\fn malformed_noalias_global_pointer() -> *mut u32 {
+        \\    return compiler.assume_noalias_unchecked(&shared_counter);
+        \\}
         \\fn returned_global_pointer() -> *mut u32 {
         \\    return &shared_counter;
         \\}
@@ -1462,6 +1471,14 @@ test "MIR records direct internal global pointer return provenance in callers" {
         \\}
         \\fn uses_recursive_pointer_forward() -> u32 {
         \\    let p: *mut u32 = recursive_pointer_forward();
+        \\    return p.*;
+        \\}
+        \\fn uses_noalias_global_pointer() -> u32 {
+        \\    let p: *mut u32 = noalias_global_pointer();
+        \\    return p.*;
+        \\}
+        \\fn uses_malformed_noalias_global_pointer() -> u32 {
+        \\    let p: *mut u32 = malformed_noalias_global_pointer();
         \\    return p.*;
         \\}
     ;
@@ -1486,6 +1503,10 @@ test "MIR records direct internal global pointer return provenance in callers" {
     try std.testing.expect(!hasPointerProvenanceFact(external, "p", null, .global_storage, .none, "shared_counter"));
     const recursive = functionByName(typed_mir, "uses_recursive_pointer_forward").?;
     try std.testing.expect(!hasPointerProvenanceFact(recursive, "p", null, .global_storage, .none, "shared_counter"));
+    const noalias_function = functionByName(typed_mir, "uses_noalias_global_pointer").?;
+    try std.testing.expect(hasPointerProvenanceFact(noalias_function, "p", null, .global_storage, .none, "shared_counter"));
+    const malformed_noalias = functionByName(typed_mir, "uses_malformed_noalias_global_pointer").?;
+    try std.testing.expect(!hasPointerProvenanceFact(malformed_noalias, "p", null, .global_storage, .none, "shared_counter"));
 }
 
 test "MIR records internal global pointer return provenance through local function aliases" {

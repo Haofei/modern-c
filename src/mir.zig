@@ -1057,6 +1057,10 @@ fn directGlobalAddressStorageExpr(expr: ast.Expr, globals: *const std.StringHash
             else => null,
         },
         .call => |call| blk: {
+            if (isAssumeNoaliasDirectCall(call)) {
+                if (call.type_args.len != 0 or call.args.len != 2) break :blk null;
+                break :blk directGlobalAddressStorageExpr(call.args[0], globals, summaries, pointer_shape);
+            }
             if (call.type_args.len != 0) break :blk null;
             const callee = directCalleeName(call.callee.*) orelse break :blk null;
             const summary = summaries.get(callee) orelse break :blk null;
