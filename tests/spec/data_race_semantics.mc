@@ -147,7 +147,7 @@ fn call_indirect_global_param_alias() -> u32 {
 }
 
 fn consume_indirect_local_param(p: *mut u32) -> u32 {
-    // EXPECT: lower-llvm keeps a scalar param plain when every local function-pointer alias call passes direct local storage.
+    // EXPECT: scalar pointer parameters without a MIR fact lower atomically, even when visible function-pointer-alias calls pass direct local storage.
     return p.*;
 }
 
@@ -232,7 +232,7 @@ fn call_mixed_param_with_local() -> u32 {
 }
 
 fn consume_local_only_param(p: *mut u32) -> u32 {
-    // EXPECT: lower-llvm: every visible internal caller passes local storage, so the param carries a local_storage proof and the deref stays plain.
+    // EXPECT: scalar pointer parameters without a MIR fact lower atomically, even when every visible direct caller passes local storage.
     return p.*;
 }
 

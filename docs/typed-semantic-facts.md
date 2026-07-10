@@ -490,10 +490,9 @@ tracking now records direct and aggregate-backed all-local pointer-element range
 as positive local proofs too, so constant-index and dynamic-index reads through
 those tracked slices keep the final scalar deref plain. Broader alias-flow
 local-storage distinctions outside these tracked direct slice shapes remain
-conservative. LLVM also now keeps scalar pointer parameters plain when every
-visible internal direct or local function-pointer-alias call passes direct local
-storage, while mixed/escaped/uncalled/exported parameter shapes remain
-conservative. Aggregate member local provenance now feeds the same fallback
+conservative. Scalar pointer parameter call-site summaries are retired: without
+a typed MIR parameter fact, LLVM matches C by lowering their scalar dereferences
+race-tolerantly. Aggregate member local provenance still feeds the fallback
 ladder for local aggregate aliases, alias member writes to local storage, and
 local-only aggregate pointer parameter summaries: intersected `local_storage`
 fields seed destination pointer locals as proven local, while mixed/global or
@@ -537,7 +536,7 @@ backend-local provenance mechanics for unsupported shapes: aggregate aliases
 outside the covered direct local shapes, pointer-array aliases outside the
 covered direct local shapes, raw-many zero offsets outside the direct-local
 MIR-owned compile-time-zero shape, callback/exported/nontrivial returned
-pointers, broader parameter summary shapes, broader aggregate return summaries,
+pointers, aggregate pointer-parameter summary shapes, broader aggregate return summaries,
 and other fallback paths. The narrow internal `return &global` pointer-return
 form, acyclic direct forwarding through already summarized internal helpers,
 and well-formed `assume_noalias_unchecked` wrappers around either form are no

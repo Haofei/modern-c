@@ -652,8 +652,8 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectNotContains(indirect_param_pointer_body, "load i32, ptr %p");
 
     const indirect_local_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_indirect_local_param");
-    try expectContains(indirect_local_param_body, "load i32, ptr %p");
-    try expectNotContains(indirect_local_param_body, "load atomic i32");
+    try expectContains(indirect_local_param_body, "load atomic i32, ptr %p unordered, align 4");
+    try expectNotContains(indirect_local_param_body, "load i32, ptr %p");
 
     const alias_copy_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_alias_copy_param");
     try expectContains(alias_copy_param_body, "load atomic i32, ptr %p unordered, align 4");
@@ -684,8 +684,8 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectNotContains(mixed_param_body, "load i32, ptr %p");
 
     const local_only_param_body = try llvmFunctionBody(output.items, "define internal i32 @consume_local_only_param");
-    try expectContains(local_only_param_body, "load i32, ptr %p");
-    try expectNotContains(local_only_param_body, "load atomic i32");
+    try expectContains(local_only_param_body, "load atomic i32, ptr %p unordered, align 4");
+    try expectNotContains(local_only_param_body, "load i32, ptr %p");
 
     const unproven_param_store_body = try llvmFunctionBody(output.items, "define internal void @unproven_param_pointer_store_lowers_atomic");
     try expectContains(unproven_param_store_body, "store atomic i32 %x, ptr %p unordered, align 4");
