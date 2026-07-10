@@ -13,6 +13,7 @@ const rawScalarSuffix = lower_c_type.rawScalarSuffix;
 const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
 const intTypeRange = lower_c_type.intTypeRange;
 const isCReservedWord = lower_c_type.isCReservedWord;
+const cPayloadFieldName = lower_c_type.cPayloadFieldName;
 const floatCTypeName = lower_c_type.floatCTypeName;
 const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const isCVoidType = lower_c_type.isCVoidType;
@@ -661,7 +662,6 @@ const CEmitter = struct {
             .void, .tag, .bytes, .array, .@"struct" => null,
         };
     }
-
 
     fn emitConstGlobalInitializer(self: *CEmitter, ty: ast.TypeExpr, expr: ast.Expr) !bool {
         const value = self.foldConstGlobalValue(expr) orelse return false;
@@ -3729,7 +3729,7 @@ const CEmitter = struct {
         if (try self.emitRaceTolerantIndexedMemberLoadExpr(node, locals)) return true;
         if (try self.emitRaceTolerantNestedIndexedMemberLoadExpr(node, locals)) return true;
         if (try self.emitRaceTolerantPointerMemberLoadExpr(node, locals)) return true;
-        if (try self.emitRaceTolerantNestedPointerMemberLoadExpr(node, locals)) return true;
+        if (!self.suppress_load_hook and try self.emitRaceTolerantNestedPointerMemberLoadExpr(node, locals)) return true;
         if (self.memberChainHasRaceTolerantIndexedBase(node.base.*, locals)) return error.UnsupportedCEmission;
         try self.emitOrdinaryMemberLoadExpr(node, locals);
         return true;
@@ -5731,6 +5731,10 @@ const CEmitter = struct {
         pointer: GlobalInfo,
         @"struct": ast.StructDecl,
         array: ast.TypeExpr,
+        dyn_trait: []const u8,
+        closure: []const u8,
+        result: struct { ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr },
+        tagged_union: ast.UnionDecl,
     };
 
     // Positive locality proof for the bare pointer-deref access class (spec I.13):
@@ -5878,8 +5882,19 @@ const CEmitter = struct {
             return .{ .scalar = info };
         }
         const resolved = self.resolveAliasType(ty);
+        if (resolved.kind == .dyn_trait) return .{ .dyn_trait = try self.cTypeFor(resolved, .typedef_name) };
+        if (resolved.kind == .closure_type) return .{ .closure = try self.cTypeFor(resolved, .typedef_name) };
+        if (typeName(resolved)) |name| {
+            if (self.tagged_unions.get(name)) |union_decl| return .{ .tagged_union = union_decl };
+        }
         switch (resolved.kind) {
             .array => return .{ .array = resolved },
+            .generic => |node| {
+                if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {
+                    return .{ .result = .{ .ok_ty = node.args[0], .err_ty = node.args[1] } };
+                }
+                return error.UnsupportedCEmission;
+            },
             .name => |name| {
                 const decl = self.structs.get(name.text) orelse return error.UnsupportedCEmission;
                 if (decl.is_c_union) return error.UnsupportedCEmission;
@@ -5889,7 +5904,7 @@ const CEmitter = struct {
         }
     }
 
-    fn emitRaceTolerantAggregateLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr) !void {
+    fn emitRaceTolerantAggregateLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr) anyerror!void {
         switch (try self.raceAggregateKind(ty)) {
             .scalar => |info| try self.out.print(self.allocator, "(({s})mc_race_load_{s}({s}))", .{ info.c_type, info.race_type_name, ptr_expr }),
             .pointer => |info| try self.out.print(self.allocator, "(({s})__atomic_load_n({s}, __ATOMIC_RELAXED))", .{ info.c_type, ptr_expr }),
@@ -5915,10 +5930,22 @@ const CEmitter = struct {
                 }
                 try self.out.appendSlice(self.allocator, " } }");
             },
+            .dyn_trait => |dyn_ty| try self.out.print(self.allocator, "(({s}){{ .data = __atomic_load_n(&(({s})->data), __ATOMIC_RELAXED), .vtable = __atomic_load_n(&(({s})->vtable), __ATOMIC_RELAXED) }})", .{
+                dyn_ty,
+                ptr_expr,
+                ptr_expr,
+            }),
+            .closure => |closure_ty| try self.out.print(self.allocator, "(({s}){{ .code = __atomic_load_n(&(({s})->code), __ATOMIC_RELAXED), .env = __atomic_load_n(&(({s})->env), __ATOMIC_RELAXED) }})", .{
+                closure_ty,
+                ptr_expr,
+                ptr_expr,
+            }),
+            .result => |result| try self.emitRaceTolerantResultLoadFromPtr(ptr_expr, ty, result.ok_ty, result.err_ty),
+            .tagged_union => |decl| try self.emitRaceTolerantTaggedUnionLoadFromPtr(ptr_expr, ty, decl),
         }
     }
 
-    fn emitRaceTolerantAggregateStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr, value_expr: []const u8) !void {
+    fn emitRaceTolerantAggregateStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr, value_expr: []const u8) anyerror!void {
         switch (try self.raceAggregateKind(ty)) {
             .scalar => |info| {
                 try self.writeIndent();
@@ -5945,7 +5972,119 @@ const CEmitter = struct {
                     try self.emitRaceTolerantAggregateStoreFromPtr(elem_ptr, array.child.*, elem_value);
                 }
             },
+            .dyn_trait => try self.emitRaceTolerantDynTraitStoreFromPtr(ptr_expr, value_expr),
+            .closure => try self.emitRaceTolerantClosureStoreFromPtr(ptr_expr, value_expr),
+            .result => |result| try self.emitRaceTolerantResultStoreFromPtr(ptr_expr, value_expr, result.ok_ty, result.err_ty),
+            .tagged_union => |decl| try self.emitRaceTolerantTaggedUnionStoreFromPtr(ptr_expr, decl, value_expr),
         }
+    }
+
+    fn emitRaceTolerantDynTraitStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, value_expr: []const u8) !void {
+        try self.writeIndent();
+        try self.out.print(self.allocator, "__atomic_store_n(&(({s})->data), {s}.data, __ATOMIC_RELAXED);\n", .{ ptr_expr, value_expr });
+        try self.writeIndent();
+        try self.out.print(self.allocator, "__atomic_store_n(&(({s})->vtable), {s}.vtable, __ATOMIC_RELAXED);\n", .{ ptr_expr, value_expr });
+    }
+
+    fn emitRaceTolerantClosureStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, value_expr: []const u8) !void {
+        try self.writeIndent();
+        try self.out.print(self.allocator, "__atomic_store_n(&(({s})->env), {s}.env, __ATOMIC_RELAXED);\n", .{ ptr_expr, value_expr });
+        try self.writeIndent();
+        try self.out.print(self.allocator, "__atomic_store_n(&(({s})->code), {s}.code, __ATOMIC_RELAXED);\n", .{ ptr_expr, value_expr });
+    }
+
+    fn emitRaceTolerantResultLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror!void {
+        const result_ty = try self.cTypeFor(ty, .typedef_name);
+        const value_name = try self.nextTempName();
+        const tag_name = try self.nextTempName();
+        try self.out.print(self.allocator, "({{ {s} {s} = ({s}){{0}}; bool {s} = mc_race_load_bool(&(({s})->is_ok)); {s}.is_ok = {s}; if ({s}) {{ {s}.payload.ok = ", .{
+            result_ty,
+            value_name,
+            result_ty,
+            tag_name,
+            ptr_expr,
+            value_name,
+            tag_name,
+            tag_name,
+            value_name,
+        });
+        const ok_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->payload.ok)", .{ptr_expr});
+        try self.emitRaceTolerantAggregateLoadFromPtr(ok_ptr, ok_ty);
+        try self.out.print(self.allocator, "; }} else {{ {s}.payload.err = ", .{value_name});
+        const err_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->payload.err)", .{ptr_expr});
+        try self.emitRaceTolerantAggregateLoadFromPtr(err_ptr, err_ty);
+        try self.out.print(self.allocator, "; }} {s}; }})", .{value_name});
+    }
+
+    fn emitRaceTolerantResultStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, value_expr: []const u8, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror!void {
+        try self.writeIndent();
+        try self.out.print(self.allocator, "if ({s}.is_ok) {{\n", .{value_expr});
+        self.indent += 1;
+        const ok_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->payload.ok)", .{ptr_expr});
+        const ok_value = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.payload.ok", .{value_expr});
+        try self.emitRaceTolerantAggregateStoreFromPtr(ok_ptr, ok_ty, ok_value);
+        self.indent -= 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "} else {\n");
+        self.indent += 1;
+        const err_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->payload.err)", .{ptr_expr});
+        const err_value = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.payload.err", .{value_expr});
+        try self.emitRaceTolerantAggregateStoreFromPtr(err_ptr, err_ty, err_value);
+        self.indent -= 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "}\n");
+        try self.writeIndent();
+        try self.out.print(self.allocator, "mc_race_store_bool(&(({s})->is_ok), (bool){s}.is_ok);\n", .{ ptr_expr, value_expr });
+    }
+
+    fn emitRaceTolerantTaggedUnionLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr, union_decl: ast.UnionDecl) anyerror!void {
+        const union_ty = try self.cTypeFor(ty, .typedef_name);
+        const union_name = union_decl.name.text;
+        const value_name = try self.nextTempName();
+        const tag_name = try self.nextTempName();
+
+        try self.out.print(self.allocator, "({{ {s} {s} = ({s}){{0}}; {s}Tag {s} = __atomic_load_n(&(({s})->tag), __ATOMIC_RELAXED); {s}.tag = {s}; switch ({s}) {{ ", .{
+            union_ty,
+            value_name,
+            union_ty,
+            union_name,
+            tag_name,
+            ptr_expr,
+            value_name,
+            tag_name,
+            tag_name,
+        });
+        for (union_decl.cases) |case| {
+            try self.out.print(self.allocator, "case {s}Tag_{s}: ", .{ union_name, case.name.text });
+            if (case.ty) |payload_ty| {
+                const payload_name = try cPayloadFieldName(self.scratch.allocator(), case.name.text);
+                const payload_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->payload.{s})", .{ ptr_expr, payload_name });
+                try self.out.print(self.allocator, "{s}.payload.{s} = ", .{ value_name, payload_name });
+                try self.emitRaceTolerantAggregateLoadFromPtr(payload_ptr, payload_ty);
+                try self.out.appendSlice(self.allocator, "; ");
+            }
+            try self.out.appendSlice(self.allocator, "break; ");
+        }
+        try self.out.print(self.allocator, "default: break; }} {s}; }})", .{value_name});
+    }
+
+    fn emitRaceTolerantTaggedUnionStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, union_decl: ast.UnionDecl, value_expr: []const u8) anyerror!void {
+        const union_name = union_decl.name.text;
+        for (union_decl.cases) |case| {
+            const payload_ty = case.ty orelse continue;
+            const payload_name = try cPayloadFieldName(self.scratch.allocator(), case.name.text);
+            try self.writeIndent();
+            try self.out.print(self.allocator, "if ({s}.tag == {s}Tag_{s}) {{\n", .{ value_expr, union_name, case.name.text });
+            self.indent += 1;
+            const payload_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->payload.{s})", .{ ptr_expr, payload_name });
+            const payload_value = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.payload.{s}", .{ value_expr, payload_name });
+            try self.emitRaceTolerantAggregateStoreFromPtr(payload_ptr, payload_ty, payload_value);
+            self.indent -= 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "}\n");
+        }
+        try self.writeIndent();
+        try self.out.print(self.allocator, "__atomic_store_n(&(({s})->tag), {s}.tag, __ATOMIC_RELAXED);\n", .{ ptr_expr, value_expr });
     }
 
     fn constArrayLen(self: *CEmitter, expr: ast.Expr) ?usize {

@@ -278,8 +278,36 @@ pub fn emitUncheckedAddValueTempFromCall(ctx: Context, call: anytype, call_span:
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "/* MC_MIR_RANGE no_overflow target={s} op={s} */\n", .{ range_target, op });
 
-    const left_temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, call.args[0], locals, target_ty);
-    const right_temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, call.args[1], locals, target_ty);
+    const left_temp = try emitUncheckedOperandTemp(ctx, call.args[0], locals, target_ty);
+    const right_temp = try emitUncheckedOperandTemp(ctx, call.args[1], locals, target_ty);
+    const result_temp = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
+    ctx.temp_index.* += 1;
+
+    try writeIndent(ctx);
+    try ctx.out.print(ctx.allocator, "{s} {s} = ({s} {s} {s});\n", .{ try ctx.c_type(ctx.emit_ctx, target_ty), result_temp, left_temp.name, uncheckedNoOverflowOperator(op), right_temp.name });
+    return .{ .name = result_temp, .ty = target_ty };
+}
+
+fn emitUncheckedOperandTemp(ctx: Context, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+    switch (expr.kind) {
+        .grouped => |inner| return emitUncheckedOperandTemp(ctx, inner.*, locals, target_ty),
+        .cast => |node| return emitUncheckedOperandTemp(ctx, node.value.*, locals, node.ty.*),
+        .call => |call| {
+            if (uncheckedNoOverflowCallOp(call)) |_| {
+                if (call.args.len != 2) return error.UnsupportedCEmission;
+                const temp = try emitUncheckedOperandCallTemp(ctx, call, locals, target_ty);
+                return temp;
+            }
+        },
+        else => {},
+    }
+    return ctx.emit_sequenced_arg_temp(ctx.emit_ctx, expr, locals, target_ty);
+}
+
+fn emitUncheckedOperandCallTemp(ctx: Context, call: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+    const op = uncheckedNoOverflowCallOp(call) orelse return error.UnsupportedCEmission;
+    const left_temp = try emitUncheckedOperandTemp(ctx, call.args[0], locals, target_ty);
+    const right_temp = try emitUncheckedOperandTemp(ctx, call.args[1], locals, target_ty);
     const result_temp = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
 

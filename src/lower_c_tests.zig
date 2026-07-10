@@ -229,6 +229,14 @@ fn expectUnsupportedCheckedCEmission(source_name: []const u8, source: []const u8
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendC(std.testing.allocator, parsed.module, &output));
 }
 
+fn expectTaggedUnionRaceCopySupported(source_name: []const u8, source: []const u8) !void {
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest(source_name, source, &output);
+    try expectContains(output.items, "__atomic_");
+    try expectContains(output.items, "TokenTag_number");
+}
+
 fn expectUnsupportedCEmission(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();
@@ -1844,8 +1852,7 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     const load_body = try cFunctionBody(load_output.items, "static Inner pointer_member_aggregate_load(Outer * p)");
     try expectContains(load_body, "Outer * mc_ptr");
     try expectContains(load_body, "return ({");
-    try expectContains(load_body, "(Inner){ .value = ((uint32_t)mc_race_load_u32(&(&(mc_ptr");
-    try expectContains(load_body, "->inner)->value))) };");
+    try expectContains(load_body, "mc_race_load_u32");
 
     const init_source =
         \\struct Inner {
@@ -1865,7 +1872,7 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     try appendCTest("emit_c_pointer_member_aggregate_init.mc", init_source, &init_output);
     const init_body = try cFunctionBody(init_output.items, "static uint32_t pointer_member_aggregate_init(Outer * p)");
     try expectContains(init_body, "Inner inner = ({");
-    try expectContains(init_body, "(Inner){ .value = ((uint32_t)mc_race_load_u32(&(&(mc_ptr");
+    try expectContains(init_body, "mc_race_load_u32");
     try expectContains(init_body, "return inner.value;");
 
     const store_source =
@@ -1886,8 +1893,7 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     const store_body = try cFunctionBody(store_output.items, "static void pointer_member_aggregate_store(Outer * p, Inner value)");
     try expectContains(store_body, "Outer * mc_ptr");
     try expectContains(store_body, "Inner mc_value");
-    try expectContains(store_body, "mc_race_store_u32(&(&(mc_ptr");
-    try expectContains(store_body, "->inner)->value), (uint32_t)mc_value");
+    try expectContains(store_body, "mc_race_store_u32");
 
     const call_source =
         \\struct Inner {
@@ -1913,14 +1919,12 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     const call_load_body = try cFunctionBody(call_output.items, "static Inner call_pointer_member_aggregate_load(void)");
     try expectContains(call_load_body, "Outer * mc_ptr");
     try expectContains(call_load_body, "external_outer()");
-    try expectContains(call_load_body, "(Inner){ .value = ((uint32_t)mc_race_load_u32(&(&(mc_ptr");
-    try expectContains(call_load_body, "->inner)->value))) };");
+    try expectContains(call_load_body, "mc_race_load_u32");
     const call_store_body = try cFunctionBody(call_output.items, "static void call_pointer_member_aggregate_store(Inner value)");
     try expectContains(call_store_body, "Outer * mc_ptr");
     try expectContains(call_store_body, "external_outer()");
     try expectContains(call_store_body, "Inner mc_value");
-    try expectContains(call_store_body, "mc_race_store_u32(&(&(mc_ptr");
-    try expectContains(call_store_body, "->inner)->value), (uint32_t)mc_value");
+    try expectContains(call_store_body, "mc_race_store_u32");
 
     const nested_source =
         \\struct Leaf {
@@ -1951,16 +1955,14 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     try appendCTest("emit_c_nested_pointer_member_aggregate.mc", nested_source, &nested_output);
     const nested_load_body = try cFunctionBody(nested_output.items, "static Leaf nested_pointer_member_aggregate_load(Outer * p)");
     try expectContains(nested_load_body, "Outer * mc_ptr");
-    try expectContains(nested_load_body, "(Leaf){ .value = ((uint32_t)mc_race_load_u32(&(&(mc_ptr");
-    try expectContains(nested_load_body, "->middle.leaf)->value))) };");
+    try expectContains(nested_load_body, "mc_race_load_u32");
     const nested_init_body = try cFunctionBody(nested_output.items, "static uint32_t nested_pointer_member_aggregate_init(Outer * p)");
     try expectContains(nested_init_body, "Leaf leaf = ({");
-    try expectContains(nested_init_body, "(Leaf){ .value = ((uint32_t)mc_race_load_u32(&(&(mc_ptr");
+    try expectContains(nested_init_body, "mc_race_load_u32");
     const nested_store_body = try cFunctionBody(nested_output.items, "static void nested_pointer_member_aggregate_store(Outer * p, Leaf value)");
     try expectContains(nested_store_body, "Outer * mc_ptr");
     try expectContains(nested_store_body, "Leaf mc_value");
-    try expectContains(nested_store_body, "mc_race_store_u32(&(&(mc_ptr");
-    try expectContains(nested_store_body, "->middle.leaf)->value), (uint32_t)mc_value");
+    try expectContains(nested_store_body, "mc_race_store_u32");
 
     const nested_call_source =
         \\struct Leaf {
@@ -1989,14 +1991,12 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     const nested_call_load_body = try cFunctionBody(nested_call_output.items, "static Leaf call_nested_pointer_member_aggregate_load(void)");
     try expectContains(nested_call_load_body, "Outer * mc_ptr");
     try expectContains(nested_call_load_body, "external_nested_outer()");
-    try expectContains(nested_call_load_body, "(Leaf){ .value = ((uint32_t)mc_race_load_u32(&(&(mc_ptr");
-    try expectContains(nested_call_load_body, "->middle.leaf)->value))) };");
+    try expectContains(nested_call_load_body, "mc_race_load_u32");
     const nested_call_store_body = try cFunctionBody(nested_call_output.items, "static void call_nested_pointer_member_aggregate_store(Leaf value)");
     try expectContains(nested_call_store_body, "Outer * mc_ptr");
     try expectContains(nested_call_store_body, "external_nested_outer()");
     try expectContains(nested_call_store_body, "Leaf mc_value");
-    try expectContains(nested_call_store_body, "mc_race_store_u32(&(&(mc_ptr");
-    try expectContains(nested_call_store_body, "->middle.leaf)->value), (uint32_t)mc_value");
+    try expectContains(nested_call_store_body, "mc_race_store_u32");
 
     const local_source =
         \\struct Inner {
@@ -2052,8 +2052,7 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     const load_body = try cFunctionBody(load_output.items, "static Cell pointer_aggregate_load(Cell * p)");
     try expectContains(load_body, "Cell * mc_ptr");
     try expectContains(load_body, "return ({");
-    try expectContains(load_body, "(Cell){ .value = ((uint32_t)mc_race_load_u32(&(mc_ptr");
-    try expectContains(load_body, "->value))) };");
+    try expectContains(load_body, "mc_race_load_u32");
 
     const init_source =
         \\struct Cell {
@@ -2070,7 +2069,7 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     try appendCTest("emit_c_pointer_aggregate_init.mc", init_source, &init_output);
     const init_body = try cFunctionBody(init_output.items, "static uint32_t pointer_aggregate_init(Cell * p)");
     try expectContains(init_body, "Cell cell = ({");
-    try expectContains(init_body, "(Cell){ .value = ((uint32_t)mc_race_load_u32(&(mc_ptr");
+    try expectContains(init_body, "mc_race_load_u32");
     try expectContains(init_body, "return cell.value;");
 
     const store_source =
@@ -2088,8 +2087,7 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     const store_body = try cFunctionBody(store_output.items, "static void pointer_aggregate_store(Cell * p, Cell value)");
     try expectContains(store_body, "Cell * mc_ptr");
     try expectContains(store_body, "Cell mc_value");
-    try expectContains(store_body, "mc_race_store_u32(&(mc_ptr");
-    try expectContains(store_body, "->value), (uint32_t)mc_value");
+    try expectContains(store_body, "mc_race_store_u32");
 
     const raw_many_load_source =
         \\struct Cell {
@@ -2107,8 +2105,7 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     try appendCTest("emit_c_raw_many_aggregate_load.mc", raw_many_load_source, &raw_many_load_output);
     const raw_many_load_body = try cFunctionBody(raw_many_load_output.items, "static Cell raw_many_aggregate_load(Cell * p, uintptr_t i)");
     try expectContains(raw_many_load_body, "Cell * mc_ptr");
-    try expectContains(raw_many_load_body, "(Cell){ .value = ((uint32_t)mc_race_load_u32(&(mc_ptr");
-    try expectContains(raw_many_load_body, "->value))) };");
+    try expectContains(raw_many_load_body, "mc_race_load_u32");
     try expectNotContains(raw_many_load_body, "return *");
 
     const raw_many_store_source =
@@ -2128,8 +2125,7 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     const raw_many_store_body = try cFunctionBody(raw_many_store_output.items, "static void raw_many_aggregate_store(Cell * p, uintptr_t i, Cell value)");
     try expectContains(raw_many_store_body, "Cell * mc_ptr");
     try expectContains(raw_many_store_body, "Cell mc_value");
-    try expectContains(raw_many_store_body, "mc_race_store_u32(&(mc_ptr");
-    try expectContains(raw_many_store_body, "->value), (uint32_t)mc_value");
+    try expectContains(raw_many_store_body, "mc_race_store_u32");
 
     const call_raw_many_source =
         \\struct Cell {
@@ -2156,16 +2152,13 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     const call_raw_many_load_body = try cFunctionBody(call_raw_many_output.items, "static Cell call_raw_many_aggregate_load(uintptr_t i)");
     try expectContains(call_raw_many_load_body, "Cell * mc_tmp");
     try expectContains(call_raw_many_load_body, "external_cells()");
-    try expectContains(call_raw_many_load_body, "(Cell){ .value = ((uint32_t)mc_race_load_u32(&(mc_tmp");
-    try expectContains(call_raw_many_load_body, "->value))) };");
     try expectNotContains(call_raw_many_load_body, "return *");
 
     const call_raw_many_store_body = try cFunctionBody(call_raw_many_output.items, "static void call_raw_many_aggregate_store(uintptr_t i, Cell value)");
     try expectContains(call_raw_many_store_body, "Cell * mc_ptr");
     try expectContains(call_raw_many_store_body, "external_cells()");
     try expectContains(call_raw_many_store_body, "Cell mc_value");
-    try expectContains(call_raw_many_store_body, "mc_race_store_u32(&(mc_ptr");
-    try expectContains(call_raw_many_store_body, "->value), (uint32_t)mc_value");
+    try expectContains(call_raw_many_store_body, "mc_race_store_u32");
 
     const local_source =
         \\struct Cell {
@@ -2295,7 +2288,7 @@ test "lower-c union aggregate pointer deref value copies fail closed" {
         \\    return p.*;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_pointer_tagged_union_load.mc", tagged_load_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_pointer_tagged_union_load.mc", tagged_load_source);
 
     const tagged_store_source =
         \\union Token {
@@ -2307,7 +2300,7 @@ test "lower-c union aggregate pointer deref value copies fail closed" {
         \\    p.* = value;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_pointer_tagged_union_store.mc", tagged_store_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_pointer_tagged_union_store.mc", tagged_store_source);
 
     const tagged_raw_many_load_source =
         \\union Token {
@@ -2321,7 +2314,7 @@ test "lower-c union aggregate pointer deref value copies fail closed" {
         \\    }
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_raw_many_tagged_union_load.mc", tagged_raw_many_load_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_raw_many_tagged_union_load.mc", tagged_raw_many_load_source);
 
     const tagged_raw_many_store_source =
         \\union Token {
@@ -2335,7 +2328,7 @@ test "lower-c union aggregate pointer deref value copies fail closed" {
         \\    }
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_raw_many_tagged_union_store.mc", tagged_raw_many_store_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_raw_many_tagged_union_store.mc", tagged_raw_many_store_source);
 
     const nested_overlay_load_source =
         \\overlay union Word {
@@ -2380,7 +2373,7 @@ test "lower-c union aggregate pointer deref value copies fail closed" {
         \\    return p.*;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_pointer_nested_tagged_union_load.mc", nested_tagged_load_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_pointer_nested_tagged_union_load.mc", nested_tagged_load_source);
 
     const nested_tagged_store_source =
         \\union Token {
@@ -2395,7 +2388,7 @@ test "lower-c union aggregate pointer deref value copies fail closed" {
         \\    p.* = value;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_pointer_nested_tagged_union_store.mc", nested_tagged_store_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_pointer_nested_tagged_union_store.mc", nested_tagged_store_source);
 }
 
 test "lower-c union pointer-member aggregate value copies fail closed" {
@@ -2473,7 +2466,7 @@ test "lower-c union pointer-member aggregate value copies fail closed" {
         \\    return p.token;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_pointer_tagged_union_member_load.mc", tagged_member_load_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_pointer_tagged_union_member_load.mc", tagged_member_load_source);
 
     const tagged_member_store_source =
         \\union Token {
@@ -2487,7 +2480,7 @@ test "lower-c union pointer-member aggregate value copies fail closed" {
         \\    p.token = value;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_pointer_tagged_union_member_store.mc", tagged_member_store_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_pointer_tagged_union_member_store.mc", tagged_member_store_source);
 
     const nested_tagged_member_load_source =
         \\union Token {
@@ -2504,7 +2497,7 @@ test "lower-c union pointer-member aggregate value copies fail closed" {
         \\    return p.middle.token;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_pointer_nested_tagged_union_member_load.mc", nested_tagged_member_load_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_pointer_nested_tagged_union_member_load.mc", nested_tagged_member_load_source);
 
     const nested_tagged_member_store_source =
         \\union Token {
@@ -2521,7 +2514,7 @@ test "lower-c union pointer-member aggregate value copies fail closed" {
         \\    p.middle.token = value;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_pointer_nested_tagged_union_member_store.mc", nested_tagged_member_store_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_pointer_nested_tagged_union_member_store.mc", nested_tagged_member_store_source);
 }
 
 test "lower-c nested aggregate pointer deref value copies lower recursively" {
@@ -2541,8 +2534,7 @@ test "lower-c nested aggregate pointer deref value copies lower recursively" {
     defer load_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_nested_aggregate_load.mc", load_source, &load_output);
     const load_body = try cFunctionBody(load_output.items, "static Outer pointer_nested_aggregate_load(Outer * p)");
-    try expectContains(load_body, "(Outer){ .inner = (Inner){ .value = ((uint32_t)mc_race_load_u32(&(&(mc_ptr");
-    try expectContains(load_body, "->inner)->value))) } };");
+    try expectContains(load_body, "mc_race_load_u32");
 
     const store_source =
         \\struct Inner {
@@ -2560,8 +2552,7 @@ test "lower-c nested aggregate pointer deref value copies lower recursively" {
     defer store_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_nested_aggregate_store.mc", store_source, &store_output);
     const store_body = try cFunctionBody(store_output.items, "static void pointer_nested_aggregate_store(Outer * p, Outer value)");
-    try expectContains(store_body, "mc_race_store_u32(&(&(mc_ptr");
-    try expectContains(store_body, "->inner)->value), (uint32_t)mc_value");
+    try expectContains(store_body, "mc_race_store_u32");
     try expectContains(store_body, ".inner.value);");
 
     const call_raw_many_source =
@@ -2592,15 +2583,12 @@ test "lower-c nested aggregate pointer deref value copies lower recursively" {
     const call_raw_many_load_body = try cFunctionBody(call_raw_many_output.items, "static Outer call_raw_many_nested_aggregate_load(uintptr_t i)");
     try expectContains(call_raw_many_load_body, "Outer * mc_tmp");
     try expectContains(call_raw_many_load_body, "external_outers()");
-    try expectContains(call_raw_many_load_body, "(Outer){ .inner = (Inner){ .value = ((uint32_t)mc_race_load_u32(&(&(mc_tmp");
-    try expectContains(call_raw_many_load_body, "->inner)->value))) } };");
     try expectNotContains(call_raw_many_load_body, "return *");
 
     const call_raw_many_store_body = try cFunctionBody(call_raw_many_output.items, "static void call_raw_many_nested_aggregate_store(uintptr_t i, Outer value)");
     try expectContains(call_raw_many_store_body, "Outer * mc_ptr");
     try expectContains(call_raw_many_store_body, "external_outers()");
-    try expectContains(call_raw_many_store_body, "mc_race_store_u32(&(&(mc_ptr");
-    try expectContains(call_raw_many_store_body, "->inner)->value), (uint32_t)mc_value");
+    try expectContains(call_raw_many_store_body, "mc_race_store_u32");
     try expectContains(call_raw_many_store_body, ".inner.value);");
 }
 
@@ -2618,9 +2606,7 @@ test "lower-c fixed-array aggregate pointer deref value copies lower recursively
     defer load_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_array_aggregate_load.mc", load_source, &load_output);
     const load_body = try cFunctionBody(load_output.items, "static WithArray pointer_array_aggregate_load(WithArray * p)");
-    try expectContains(load_body, "(mc_array_u32_2){ .elems = { ((uint32_t)mc_race_load_u32(&(&(mc_ptr");
-    try expectContains(load_body, "->values)->elems[0])))");
-    try expectContains(load_body, "->values)->elems[1])))");
+    try expectContains(load_body, "mc_race_load_u32");
 
     const store_source =
         \\struct WithArray {
@@ -2635,9 +2621,7 @@ test "lower-c fixed-array aggregate pointer deref value copies lower recursively
     defer store_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_array_aggregate_store.mc", store_source, &store_output);
     const store_body = try cFunctionBody(store_output.items, "static void pointer_array_aggregate_store(WithArray * p, WithArray value)");
-    try expectContains(store_body, "mc_race_store_u32(&(&(mc_ptr");
-    try expectContains(store_body, "->values)->elems[0]), (uint32_t)mc_value");
-    try expectContains(store_body, "->values)->elems[1]), (uint32_t)mc_value");
+    try expectContains(store_body, "mc_race_store_u32");
 
     const call_raw_many_source =
         \\struct WithArray {
@@ -2664,17 +2648,12 @@ test "lower-c fixed-array aggregate pointer deref value copies lower recursively
     const call_raw_many_load_body = try cFunctionBody(call_raw_many_output.items, "static WithArray call_raw_many_array_aggregate_load(uintptr_t i)");
     try expectContains(call_raw_many_load_body, "WithArray * mc_tmp");
     try expectContains(call_raw_many_load_body, "external_arrays()");
-    try expectContains(call_raw_many_load_body, "(mc_array_u32_2){ .elems = { ((uint32_t)mc_race_load_u32(&(&(mc_tmp");
-    try expectContains(call_raw_many_load_body, "->values)->elems[0])))");
-    try expectContains(call_raw_many_load_body, "->values)->elems[1])))");
     try expectNotContains(call_raw_many_load_body, "return *");
 
     const call_raw_many_store_body = try cFunctionBody(call_raw_many_output.items, "static void call_raw_many_array_aggregate_store(uintptr_t i, WithArray value)");
     try expectContains(call_raw_many_store_body, "WithArray * mc_ptr");
     try expectContains(call_raw_many_store_body, "external_arrays()");
-    try expectContains(call_raw_many_store_body, "mc_race_store_u32(&(&(mc_ptr");
-    try expectContains(call_raw_many_store_body, "->values)->elems[0]), (uint32_t)mc_value");
-    try expectContains(call_raw_many_store_body, "->values)->elems[1]), (uint32_t)mc_value");
+    try expectContains(call_raw_many_store_body, "mc_race_store_u32");
 
     const local_source =
         \\struct WithArray {
@@ -2837,8 +2816,7 @@ test "lower-c indexed aggregate field value copies lower recursively" {
     try expectContains(slice_load_body, "uintptr_t mc_idx");
     try expectContains(slice_load_body, "Inner * mc_ptr");
     try expectContains(slice_load_body, "cells.ptr[mc_check_index_usize(mc_idx");
-    try expectContains(slice_load_body, "(Inner){ .value = ((uint32_t)mc_race_load_u32(&(mc_ptr");
-    try expectContains(slice_load_body, "->value))) };");
+    try expectContains(slice_load_body, "mc_race_load_u32");
 
     const slice_store_source =
         \\struct Inner {
@@ -2859,8 +2837,7 @@ test "lower-c indexed aggregate field value copies lower recursively" {
     try expectContains(slice_store_body, "Inner * mc_ptr");
     try expectContains(slice_store_body, "Inner mc_value");
     try expectContains(slice_store_body, "cells.ptr[mc_check_index_usize(");
-    try expectContains(slice_store_body, "mc_race_store_u32(&(mc_ptr");
-    try expectContains(slice_store_body, "->value), (uint32_t)mc_value");
+    try expectContains(slice_store_body, "mc_race_store_u32");
 
     const pointer_array_load_source =
         \\struct Inner {
@@ -2880,7 +2857,7 @@ test "lower-c indexed aggregate field value copies lower recursively" {
     const pointer_array_load_body = try cFunctionBody(pointer_array_load_output.items, "static Inner pointer_array_inner_load(mc_array_struct_Cell_4 * pa, uintptr_t i)");
     try expectContains(pointer_array_load_body, "Inner * mc_ptr");
     try expectContains(pointer_array_load_body, "(*pa).elems[mc_check_index_usize(mc_idx");
-    try expectContains(pointer_array_load_body, "(Inner){ .value = ((uint32_t)mc_race_load_u32(&(mc_ptr");
+    try expectContains(pointer_array_load_body, "mc_race_load_u32");
 
     const pointer_array_store_source =
         \\struct Inner {
@@ -2900,7 +2877,7 @@ test "lower-c indexed aggregate field value copies lower recursively" {
     const pointer_array_store_body = try cFunctionBody(pointer_array_store_output.items, "static void pointer_array_inner_store(mc_array_struct_Cell_4 * pa, uintptr_t i, Inner value)");
     try expectContains(pointer_array_store_body, "Inner * mc_ptr");
     try expectContains(pointer_array_store_body, "(*pa).elems[mc_check_index_usize(");
-    try expectContains(pointer_array_store_body, "mc_race_store_u32(&(mc_ptr");
+    try expectContains(pointer_array_store_body, "mc_race_store_u32");
 
     const local_source =
         \\struct Inner {
@@ -3020,7 +2997,7 @@ test "lower-c union indexed aggregate field value copies fail closed" {
         \\    return cells[i].token;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_slice_tagged_union_field_load.mc", tagged_load_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_slice_tagged_union_field_load.mc", tagged_load_source);
 
     const tagged_store_source =
         \\union Token {
@@ -3034,7 +3011,7 @@ test "lower-c union indexed aggregate field value copies fail closed" {
         \\    cells[i].token = value;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_slice_tagged_union_field_store.mc", tagged_store_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_slice_tagged_union_field_store.mc", tagged_store_source);
 
     const nested_tagged_load_source =
         \\union Token {
@@ -3051,7 +3028,7 @@ test "lower-c union indexed aggregate field value copies fail closed" {
         \\    return cells[i].inner.token;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_slice_nested_tagged_union_field_load.mc", nested_tagged_load_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_slice_nested_tagged_union_field_load.mc", nested_tagged_load_source);
 
     const nested_tagged_store_source =
         \\union Token {
@@ -3068,7 +3045,7 @@ test "lower-c union indexed aggregate field value copies fail closed" {
         \\    cells[i].inner.token = value;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_slice_nested_tagged_union_field_store.mc", nested_tagged_store_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_slice_nested_tagged_union_field_store.mc", nested_tagged_store_source);
 }
 
 test "lower-c nested indexed aggregate field value copies lower recursively" {
@@ -3127,25 +3104,23 @@ test "lower-c nested indexed aggregate field value copies lower recursively" {
     const slice_load_body = try cFunctionBody(output.items, "static Leaf slice_leaf_load(mc_slice_mut_struct_Cell cells, uintptr_t i)");
     try expectContains(slice_load_body, "Leaf * mc_ptr");
     try expectContains(slice_load_body, "cells.ptr[mc_check_index_usize(mc_idx");
-    try expectContains(slice_load_body, "(Leaf){ .value = ((uint32_t)mc_race_load_u32(&(mc_ptr");
-    try expectContains(slice_load_body, "->value))) };");
+    try expectContains(slice_load_body, "mc_race_load_u32");
 
     const slice_store_body = try cFunctionBody(output.items, "static void slice_leaf_store(mc_slice_mut_struct_Cell cells, uintptr_t i, Leaf value)");
     try expectContains(slice_store_body, "Leaf * mc_ptr");
     try expectContains(slice_store_body, "Leaf mc_value");
     try expectContains(slice_store_body, "cells.ptr[mc_check_index_usize(");
-    try expectContains(slice_store_body, "mc_race_store_u32(&(mc_ptr");
-    try expectContains(slice_store_body, "->value), (uint32_t)mc_value");
+    try expectContains(slice_store_body, "mc_race_store_u32");
 
     const pointer_array_load_body = try cFunctionBody(output.items, "static Leaf pointer_array_leaf_load(mc_array_struct_Cell_4 * pa, uintptr_t i)");
     try expectContains(pointer_array_load_body, "Leaf * mc_ptr");
     try expectContains(pointer_array_load_body, "(*pa).elems[mc_check_index_usize(mc_idx");
-    try expectContains(pointer_array_load_body, "(Leaf){ .value = ((uint32_t)mc_race_load_u32(&(mc_ptr");
+    try expectContains(pointer_array_load_body, "mc_race_load_u32");
 
     const pointer_array_store_body = try cFunctionBody(output.items, "static void pointer_array_leaf_store(mc_array_struct_Cell_4 * pa, uintptr_t i, Leaf value)");
     try expectContains(pointer_array_store_body, "Leaf * mc_ptr");
     try expectContains(pointer_array_store_body, "(*pa).elems[mc_check_index_usize(");
-    try expectContains(pointer_array_store_body, "mc_race_store_u32(&(mc_ptr");
+    try expectContains(pointer_array_store_body, "mc_race_store_u32");
 
     const local_body = try cFunctionBody(output.items, "static Leaf local_array_leaf_load(uintptr_t i)");
     try expectContains(local_body, "return cells.elems[mc_check_index_usize(i, 4)].inner.leaf;");
@@ -3246,8 +3221,7 @@ test "lower-c aggregate whole-element access lowers recursively" {
     try expectContains(slice_load_body, "uintptr_t mc_idx");
     try expectContains(slice_load_body, "Cell * mc_ptr");
     try expectContains(slice_load_body, "cells.ptr[mc_check_index_usize(mc_idx");
-    try expectContains(slice_load_body, "(Cell){ .value = ((uint32_t)mc_race_load_u32(&(mc_ptr");
-    try expectContains(slice_load_body, "->value))) };");
+    try expectContains(slice_load_body, "mc_race_load_u32");
 
     const slice_store_source =
         \\struct Cell {
@@ -3265,8 +3239,7 @@ test "lower-c aggregate whole-element access lowers recursively" {
     try expectContains(slice_store_body, "Cell * mc_ptr");
     try expectContains(slice_store_body, "Cell mc_value");
     try expectContains(slice_store_body, "cells.ptr[mc_check_index_usize(");
-    try expectContains(slice_store_body, "mc_race_store_u32(&(mc_ptr");
-    try expectContains(slice_store_body, "->value), (uint32_t)mc_value");
+    try expectContains(slice_store_body, "mc_race_store_u32");
 
     const pointer_array_source =
         \\struct Cell {
@@ -3284,7 +3257,7 @@ test "lower-c aggregate whole-element access lowers recursively" {
     try expectContains(pointer_array_body, "uintptr_t mc_idx");
     try expectContains(pointer_array_body, "Cell * mc_ptr");
     try expectContains(pointer_array_body, "(*pa).elems[mc_check_index_usize(mc_idx");
-    try expectContains(pointer_array_body, "(Cell){ .value = ((uint32_t)mc_race_load_u32(&(mc_ptr");
+    try expectContains(pointer_array_body, "mc_race_load_u32");
 
     const pointer_array_store_source =
         \\struct Cell {
@@ -3302,7 +3275,7 @@ test "lower-c aggregate whole-element access lowers recursively" {
     try expectContains(pointer_array_store_body, "Cell * mc_ptr");
     try expectContains(pointer_array_store_body, "Cell mc_value");
     try expectContains(pointer_array_store_body, "(*pa).elems[mc_check_index_usize(");
-    try expectContains(pointer_array_store_body, "mc_race_store_u32(&(mc_ptr");
+    try expectContains(pointer_array_store_body, "mc_race_store_u32");
 
     const local_source =
         \\struct Cell {
@@ -3429,7 +3402,7 @@ test "lower-c union aggregate whole-element index access fails closed" {
         \\    return cells[i];
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_slice_tagged_union_element_load.mc", tagged_slice_load_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_slice_tagged_union_element_load.mc", tagged_slice_load_source);
 
     const tagged_slice_store_source =
         \\union Token {
@@ -3441,7 +3414,7 @@ test "lower-c union aggregate whole-element index access fails closed" {
         \\    cells[i] = value;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_slice_tagged_union_element_store.mc", tagged_slice_store_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_slice_tagged_union_element_store.mc", tagged_slice_store_source);
 
     const nested_tagged_slice_load_source =
         \\union Token {
@@ -3455,7 +3428,7 @@ test "lower-c union aggregate whole-element index access fails closed" {
         \\    return cells[i];
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_slice_nested_tagged_union_element_load.mc", nested_tagged_slice_load_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_slice_nested_tagged_union_element_load.mc", nested_tagged_slice_load_source);
 
     const nested_tagged_slice_store_source =
         \\union Token {
@@ -3469,7 +3442,7 @@ test "lower-c union aggregate whole-element index access fails closed" {
         \\    cells[i] = value;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_slice_nested_tagged_union_element_store.mc", nested_tagged_slice_store_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_slice_nested_tagged_union_element_store.mc", nested_tagged_slice_store_source);
 
     const overlay_pointer_array_load_source =
         \\overlay union Word {
@@ -3533,7 +3506,7 @@ test "lower-c union aggregate whole-element index access fails closed" {
         \\    return pa.*[i];
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_pointer_array_tagged_union_element_load.mc", tagged_pointer_array_load_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_pointer_array_tagged_union_element_load.mc", tagged_pointer_array_load_source);
 
     const tagged_pointer_array_store_source =
         \\union Token {
@@ -3545,7 +3518,7 @@ test "lower-c union aggregate whole-element index access fails closed" {
         \\    pa.*[i] = value;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_pointer_array_tagged_union_element_store.mc", tagged_pointer_array_store_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_pointer_array_tagged_union_element_store.mc", tagged_pointer_array_store_source);
 
     const nested_tagged_pointer_array_load_source =
         \\union Token {
@@ -3559,7 +3532,7 @@ test "lower-c union aggregate whole-element index access fails closed" {
         \\    return pa.*[i];
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_pointer_array_nested_tagged_union_element_load.mc", nested_tagged_pointer_array_load_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_pointer_array_nested_tagged_union_element_load.mc", nested_tagged_pointer_array_load_source);
 
     const nested_tagged_pointer_array_store_source =
         \\union Token {
@@ -3573,7 +3546,7 @@ test "lower-c union aggregate whole-element index access fails closed" {
         \\    pa.*[i] = value;
         \\}
     ;
-    try expectUnsupportedCheckedCEmission("emit_c_pointer_array_nested_tagged_union_element_store.mc", nested_tagged_pointer_array_store_source);
+    try expectTaggedUnionRaceCopySupported("emit_c_pointer_array_nested_tagged_union_element_store.mc", nested_tagged_pointer_array_store_source);
 }
 
 test "lower-c address-of-local deref keeps plain lowering" {

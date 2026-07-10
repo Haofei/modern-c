@@ -300,7 +300,7 @@ pub fn nullableInnerCTypeForType(ctx: Context, ty: ast.TypeExpr) anyerror!?[]con
 pub fn isAggregateGlobalType(ctx: Context, ty: ast.TypeExpr) bool {
     const resolved_ty = resolveAliasType(ctx, ty);
     return switch (resolved_ty.kind) {
-        .array, .slice, .closure_type => true,
+        .array, .slice, .closure_type, .dyn_trait => true,
         .generic => |node| {
             if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1) {
                 return isAggregateGlobalType(ctx, node.args[0]);
