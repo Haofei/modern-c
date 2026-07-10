@@ -2,7 +2,7 @@
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
 Current ledger: **updated 2026-07-09, based on the current compiler worktree**.
-Ledger count: **379 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
+Ledger count: **380 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -413,6 +413,7 @@ progress.
 | C bitcast fallback shares the strict builtin call shape | C's shared `isBitcastCall` helper now means the real bitcast call shape, not merely the callee name: one target type argument and one value argument. C expression typing, conversion emission, sequenced call temps, and inspection metadata no longer repeat that shape check, while malformed `bitcast` local initializers still fail closed through `isBitcastCallee`. | `src/lower_c_expr.zig` `isBitcastCall` / `isBitcastCallee`; `src/lower_c_call.zig` bitcast temp/local-init paths; `src/lower_c_convert.zig`; `src/lower_c_inspect.zig`; `src/lower_c_tests.zig` `C bitcast query accepts only the real builtin call shape`; `zig test src/lower_c_tests.zig --test-filter "C bitcast query accepts only the real builtin call shape"`. |
 | Move checker stable index place classification is explicit | The move checker now routes wildcard dynamic array-place decisions through a shared `stableIndexPlaceKnown` helper instead of duplicating the concrete-or-symbolic index test in each wildcard path. Bitwise identity expressions such as `i | 0` and `i & i` are covered as stable symbolic places, keeping reinitialization and later moves on the same explicit dynamic place instead of falling into wildcard handling. | `src/sema_move.zig` `stableIndexPlaceKnown`; `tests/spec/move_place.mc` `accept_reinitialize_bitwise_identity_expr_dynamic_multi_array_element`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `zig fmt --check src/sema_move.zig`. |
 | Move checker direct ownership conflicts use structured places | Direct move/defer ownership paths now carry `MovePlace` values for roots, field projections, concrete indexes, symbolic indexes, and wildcard indexes. Duplicate-move, partial-move, dynamic-index overlap, and deferred-borrow checks compare these projections rather than parsing or prefix-matching their display keys. The `StringHashMap` and alias compatibility paths still exist, so this is the first explicit-place closure slice, not the CFG rewrite. | `src/sema_model.zig` `MovePlace` equality/prefix/conflict relations and `MoveSlot.place`; `src/sema_move.zig` `placeKeyAndType`, direct move/defer state writes, `stateContainsMovePlace`, `stateHasConflictingMovePlace`, and `deferredBorrowConflictsWithTrackedPlace`; `tests/spec/move_place.mc` deferred nested-array and symbolic-index move cases; `zig build test`; `git diff --check`. |
+| Move checker aliases retain typed referent places | Local aliases, reassignments, aggregate-held aliases, array-element aliases, and deferred-cleanup aliases now retain a typed `MovePlace` referent alongside their compatibility key. Stale-alias checks and branch/loop/short-circuit join comparisons use that referent, so field/index aliases no longer need string-key parsing to detect a moved owner, moved child, or wildcard overlap. The state map and legacy fallback lookups remain until the full place-map migration. | `src/sema_model.zig` `MoveSlot.alias_place`; `src/sema_move.zig` `AliasReferent`, `aliasReferentForExpr`, `checkStaleAlias`, typed deferred-borrow joins, and aggregate/cleanup alias registration; `tests/spec/move_place.mc` alias, nested-array, deferred, branch, and loop cases; `zig build test`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `git diff --check`. |
 
 ### In Progress
 
@@ -475,11 +476,12 @@ Closure matrix:
 | Unsupported-channel inventory | Globals, ABI boundaries, multi-element non-nameable arrays, and arbitrary pointers each have an explicit accept or fail-closed decision and fixture. |
 
 Current status: the checker is still AST/state-map based, but direct ownership
-paths now carry and compare typed `MovePlace` roots/projections for fields and
-array elements, including deferred-borrow conflicts. String map keys and
-alias/defer compatibility references still exist, and no CFG/worklist engine
-exists. Symbolic-index rows above are regression coverage; they do not close the
-remaining map migration or CFG rewrite.
+paths and tracked aliases now carry and compare typed `MovePlace`
+roots/projections for fields and array elements, including deferred-borrow
+conflicts. String map keys remain a compatibility index and some fallback
+lookups remain; no CFG/worklist engine exists. Symbolic-index rows above are
+regression coverage; they do not close the remaining map migration or CFG
+rewrite.
 
 ### Current Working Rules
 

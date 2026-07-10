@@ -215,6 +215,10 @@ pub const MoveSlot = struct {
     // - but reading through it (`*p`, `peek(p)`) after the referent was moved out is a
     // use-after-move (a stale derived alias). Null for non-alias bindings.
     alias_of: ?[]const u8 = null,
+    // Typed identity of `alias_of` when the referent is a nameable move place.
+    // `alias_of` remains a map-lookup/display compatibility key during the
+    // transition; stale-alias ownership checks use this structured value.
+    alias_place: ?MovePlace = null,
     // T1.2 (conservative rejection): a borrow of this move binding (or of one of its
     // subfields/elements) has been stored into MEMORY - an aggregate field, an array
     // element, or aliased through a subfield place - somewhere we cannot prove dead. Unlike

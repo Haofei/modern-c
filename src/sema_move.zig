@@ -145,11 +145,12 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *std.StringHa
             continue;
         };
         const before = entry.value_ptr.*;
-        if (before.live != after.live or before.deferred != after.deferred or !sameMaybeKey(before.deferred_borrow, after.deferred_borrow)) {
+        if (before.live != after.live or before.deferred != after.deferred or !sameMaybeKey(before.deferred_borrow, after.deferred_borrow) or !sameMaybePlace(before.deferred_borrow_place, after.deferred_borrow_place)) {
             self.errorCode(before.span, "E_MOVE_LOOP_RESOURCE", "cannot consume or reserve an outer linear `move` value inside a loop; the loop may run zero or multiple times");
             entry.value_ptr.live = false;
             entry.value_ptr.deferred = false;
             entry.value_ptr.deferred_borrow = null;
+            entry.value_ptr.deferred_borrow_place = null;
         } else if (!sameAliasFact(before, after)) {
             entry.value_ptr.* = divergentAliasSlot(entry.key_ptr.*, before);
         } else if (isPureIndexFactSlot(before) and !sameIndexFact(before, after)) {
@@ -274,32 +275,17 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
             // a by-value resource, so it is only registered when the binding was not already
             // classed as a move resource above.
             if (!bound_as_move and !bound_as_index_fact and decl.names.len > 0 and decl.init != null) {
-                if (fullDerefMoveSubplaceAlias(self, decl.init.?, state, aliases)) |referent| {
-                    state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .alias_of = referent, .full_deref_alias = true }) catch {
-                        self.oom = true;
-                    };
-                } else if (callLaunderedMoveReferent(self, decl.init.?, state, aliases)) |referent| {
+                if (aliasReferentForExpr(self, decl.init.?, state, aliases)) |referent| {
                     // Gap #2: `let q = f(&t)` where `f` returns a pointer — `q` may alias a
                     // borrow of the move binding `t`, or a tracked subplace such as `t.a`,
                     // laundered through the callee's result.
                     // Register it as a derived alias so a USE of `q` after `t` is moved is a
                     // stale-alias use-after-move (and nothing fires if `q` is dead first).
-                    state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .alias_of = referent }) catch {
-                        self.oom = true;
-                    };
-                } else if (spine.aliasReferentOf(decl.init.?, state)) |referent| {
-                    if (state.contains(referent) or isMoveSubplaceKey(referent)) {
-                        // Is `*<this alias>` the whole move binding? True when the initializer
-                        // is `&<ident>` directly (`let p = &o` ⇒ `*p` IS `o`), or when copying
-                        // an existing full alias (`let q = p`). A `&o.field`/`&o[i]` initializer
-                        // is NOT a full alias (its referent resolves to `o` for stale-tracking,
-                        // but `*p` is the field, not `o`).
-                        const full = isDirectIdentAddressOf(decl.init.?) or
-                            inheritedFullDerefAlias(decl.init.?, state);
+                    if (state.contains(referent.key) or isMoveSubplaceKey(referent.key)) {
                         // `live = false`: the alias is a borrow, not a linear resource, so
                         // leak/exit checks (which only fire on `live` slots) must skip it.
                         // Its referent's moved-out state is what the stale check consults.
-                        state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .alias_of = referent, .full_deref_alias = full }) catch {
+                        state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .alias_of = referent.key, .alias_place = referent.place, .full_deref_alias = referent.full_deref }) catch {
                             self.oom = true;
                         };
                     }
@@ -381,21 +367,15 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                         // is not an alias of a tracked move binding, drop the slot entirely
                         // (it is no longer a meaningful borrow); leaving it live would be the
                         // phantom-leak false positive this fixes.
-                        const direct_subplace_ref = fullDerefMoveSubplaceAlias(self, a.value, state, aliases);
-                        const new_ref = direct_subplace_ref orelse
-                            callLaunderedMoveReferent(self, a.value, state, aliases) orelse
-                            spine.aliasReferentOf(a.value, state);
-                        const new_full_deref_alias = direct_subplace_ref != null or
-                            isDirectIdentAddressOf(a.value) or
-                            inheritedFullDerefAlias(a.value, state);
-                        if (new_ref) |referent| {
-                            if (state.contains(referent) or isMoveSubplaceKey(referent)) {
+                        if (aliasReferentForExpr(self, a.value, state, aliases)) |referent| {
+                            if (state.contains(referent.key) or isMoveSubplaceKey(referent.key)) {
                                 if (state.getPtr(id.text)) |slot| {
-                                    slot.alias_of = referent;
+                                    slot.alias_of = referent.key;
+                                    slot.alias_place = referent.place;
                                     slot.live = false;
-                                    slot.full_deref_alias = new_full_deref_alias;
+                                    slot.full_deref_alias = referent.full_deref;
                                 } else {
-                                    state.put(id.text, .{ .live = false, .span = a.target.span, .alias_of = referent, .full_deref_alias = new_full_deref_alias }) catch {
+                                    state.put(id.text, .{ .live = false, .span = a.target.span, .place = .{ .root = id.text }, .alias_of = referent.key, .alias_place = referent.place, .full_deref_alias = referent.full_deref }) catch {
                                         self.oom = true;
                                     };
                                 }
@@ -417,6 +397,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                             slot.ty = null;
                             slot.type_only = false;
                             slot.alias_of = null;
+                            slot.alias_place = null;
                             slot.escaped_borrow = null;
                             slot.full_deref_alias = false;
                         } else if (if (self.move_ctx) |mctx| symbolicIndexValue(self, a.value, state, mctx.*) else null) |symbol| {
@@ -426,6 +407,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                             slot.ty = null;
                             slot.type_only = false;
                             slot.alias_of = null;
+                            slot.alias_place = null;
                             slot.escaped_borrow = null;
                             slot.full_deref_alias = false;
                         } else if ((slot.const_index != null or slot.symbolic_index != null) and slot.ty == null and slot.alias_of == null) {
@@ -434,6 +416,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                             slot.live = false;
                             slot.symbolic_index = null;
                             slot.alias_of = null;
+                            slot.alias_place = null;
                             slot.escaped_borrow = null;
                             slot.full_deref_alias = false;
                         } else {
@@ -839,11 +822,12 @@ pub fn mergeMoveBranches(
             continue;
         };
         var slot = entry.value_ptr.*;
-        if (slot.live != other.live or slot.deferred != other.deferred or !sameMaybeKey(slot.deferred_borrow, other.deferred_borrow)) {
+        if (slot.live != other.live or slot.deferred != other.deferred or !sameMaybeKey(slot.deferred_borrow, other.deferred_borrow) or !sameMaybePlace(slot.deferred_borrow_place, other.deferred_borrow_place)) {
             self.errorCode(slot.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` value has inconsistent ownership across control-flow branches");
             slot.live = false;
             slot.deferred = false;
             slot.deferred_borrow = null;
+            slot.deferred_borrow_place = null;
         } else if (!sameAliasFact(slot, other)) {
             slot = divergentAliasSlot(entry.key_ptr.*, slot);
         } else if (isPureIndexFactSlot(slot) and !sameIndexFact(slot, other)) {
@@ -874,6 +858,7 @@ fn sameAliasFact(left: MoveSlot, right: MoveSlot) bool {
     if (left.alias_of == null and right.alias_of == null) return true;
     if (left.alias_of == null or right.alias_of == null) return false;
     return std.mem.eql(u8, left.alias_of.?, right.alias_of.?) and
+        sameMaybePlace(left.alias_place, right.alias_place) and
         left.full_deref_alias == right.full_deref_alias;
 }
 
@@ -941,22 +926,51 @@ fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const std
     }
 }
 
-fn fullDerefMoveSubplaceAlias(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+fn fullDerefMoveSubplace(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
     const target = switch (expr.kind) {
         .address_of => |inner| inner.*,
-        .grouped => |inner| return fullDerefMoveSubplaceAlias(self, inner.*, state, aliases),
+        .grouped => |inner| return fullDerefMoveSubplace(self, inner.*, state, aliases),
         .call => |call| {
             if (!isAssumeNoaliasCall(call)) return null;
-            return fullDerefMoveSubplaceAlias(self, call.args[0], state, aliases);
+            return fullDerefMoveSubplace(self, call.args[0], state, aliases);
         },
         else => return null,
     };
-    const pp = placeKeyAndType(self, target, state) orelse {
-        return if (wildcardMoveIndexedPlaceKey(self, target, state, aliases)) |pp| pp.key else null;
-    };
+    const pp = placeKeyAndType(self, target, state) orelse
+        wildcardMoveIndexedPlaceKey(self, target, state, aliases) orelse
+        return null;
     if (!pp.place.isSubplace()) return null;
     if (!self.typeEmbedsMoveByValue(pp.ty, aliases)) return null;
-    return pp.key;
+    return pp;
+}
+
+fn fullDerefMoveSubplaceAlias(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+    return if (fullDerefMoveSubplace(self, expr, state, aliases)) |pp| pp.key else null;
+}
+
+fn aliasPlaceForKey(key: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
+    const slot = state.get(key) orelse return null;
+    return slot.place orelse slot.alias_place;
+}
+
+const AliasReferent = struct {
+    key: []const u8,
+    place: ?MovePlace,
+    full_deref: bool,
+};
+
+fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
+    if (fullDerefMoveSubplace(self, expr, state, aliases)) |pp| {
+        return .{ .key = pp.key, .place = pp.place, .full_deref = true };
+    }
+    const key = callLaunderedMoveReferent(self, expr, state, aliases) orelse
+        spine.aliasReferentOf(expr, state) orelse
+        return null;
+    return .{
+        .key = key,
+        .place = aliasPlaceForKey(key, state),
+        .full_deref = isDirectIdentAddressOf(expr) or inheritedFullDerefAlias(expr, state),
+    };
 }
 
 fn isAssumeNoaliasCall(call: anytype) bool {
@@ -1219,12 +1233,13 @@ fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringH
             continue;
         };
         const before = entry.value_ptr.*;
-        if (before.live != after.live or before.deferred != after.deferred or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow) or !sameMaybeKey(before.deferred_borrow, after.deferred_borrow)) {
+        if (before.live != after.live or before.deferred != after.deferred or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow) or !sameMaybeKey(before.deferred_borrow, after.deferred_borrow) or !sameMaybePlace(before.deferred_borrow_place, after.deferred_borrow_place)) {
             self.errorCode(rhs.span, "E_MOVE_BRANCH_MISMATCH", "cannot consume, reserve, or escape an outer linear `move` value only on one side of a short-circuit expression");
             entry.value_ptr.live = false;
             entry.value_ptr.deferred = false;
             entry.value_ptr.escaped_borrow = null;
             entry.value_ptr.deferred_borrow = null;
+            entry.value_ptr.deferred_borrow_place = null;
         } else if (!sameAliasFact(before, after)) {
             entry.value_ptr.* = divergentAliasSlot(entry.key_ptr.*, before);
         } else if (isPureIndexFactSlot(before) and !sameIndexFact(before, after)) {
@@ -1268,12 +1283,13 @@ fn moveDeferShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHas
             continue;
         };
         const before = entry.value_ptr.*;
-        if (before.live != after.live or before.deferred != after.deferred or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow) or !sameMaybeKey(before.deferred_borrow, after.deferred_borrow)) {
+        if (before.live != after.live or before.deferred != after.deferred or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow) or !sameMaybeKey(before.deferred_borrow, after.deferred_borrow) or !sameMaybePlace(before.deferred_borrow_place, after.deferred_borrow_place)) {
             self.errorCode(rhs.span, "E_MOVE_BRANCH_MISMATCH", "cannot consume, reserve, or defer-borrow an outer linear `move` value only on one side of a short-circuit expression");
             entry.value_ptr.live = false;
             entry.value_ptr.deferred = false;
             entry.value_ptr.escaped_borrow = null;
             entry.value_ptr.deferred_borrow = null;
+            entry.value_ptr.deferred_borrow_place = null;
         } else if (!sameAliasFact(before, after)) {
             entry.value_ptr.* = divergentAliasSlot(entry.key_ptr.*, before);
         } else if (isPureIndexFactSlot(before) and !sameIndexFact(before, after)) {
@@ -1295,6 +1311,7 @@ fn moveDeferShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHas
             root_slot.deferred = false;
             root_slot.escaped_borrow = null;
             root_slot.deferred_borrow = null;
+            root_slot.deferred_borrow_place = null;
         }
     }
 }
@@ -1311,6 +1328,12 @@ fn sameMaybeKey(left: ?[]const u8, right: ?[]const u8) bool {
     if (left == null and right == null) return true;
     if (left == null or right == null) return false;
     return std.mem.eql(u8, left.?, right.?);
+}
+
+fn sameMaybePlace(left: ?MovePlace, right: ?MovePlace) bool {
+    if (left == null and right == null) return true;
+    if (left == null or right == null) return false;
+    return left.?.eql(right.?);
 }
 
 fn isPureIndexFactSlot(slot: MoveSlot) bool {
@@ -2222,6 +2245,38 @@ fn stateHasConflictingMovePlace(place: MovePlace, state: *const std.StringHashMa
     return false;
 }
 
+fn stateHasMovedPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (slot.live or slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) continue;
+        if (slot.place) |tracked| if (tracked.eql(place)) return true;
+    }
+    return false;
+}
+
+fn stateHasMovedConflictingPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (slot.live or slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) continue;
+        if (slot.place) |tracked| {
+            if (!tracked.eql(place) and tracked.conflicts(place)) return true;
+        }
+    }
+    return false;
+}
+
+fn stateHasMovedChildPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (slot.live or slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) continue;
+        if (slot.place) |tracked| if (place.isPrefixOf(tracked)) return true;
+    }
+    return false;
+}
+
 fn deferredBorrowConflictsWithTrackedPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
     const root_slot = state.get(place.root) orelse return false;
     const borrowed = root_slot.deferred_borrow_place orelse return false;
@@ -2355,6 +2410,18 @@ pub fn exprMoveTypeName(self: *Checker, expr: ast.Expr, state: *const std.String
 // referent's moved-out state that poisons reads through the alias.
 pub fn checkStaleAlias(self: *Checker, name: []const u8, slot: MoveSlot, span: diagnostics.Span, state: *const std.StringHashMap(MoveSlot)) void {
     _ = name;
+    if (slot.alias_place) |place| {
+        if (state.get(place.root)) |root| {
+            if (!root.live) {
+                self.errorCode(span, "E_USE_AFTER_MOVE", "use of an alias derived from a linear `move` value after that value was moved (the alias is now stale)");
+                return;
+            }
+        }
+        if (stateHasMovedPlace(place, state) or stateHasMovedChildPlace(place, state) or stateHasMovedConflictingPlace(place, state)) {
+            self.errorCode(span, "E_USE_AFTER_MOVE", "use of an alias derived from a linear `move` value after that value was moved (the alias is now stale)");
+        }
+        return;
+    }
     const referent = slot.alias_of orelse return;
     if (state.get(referent)) |r| {
         if (!r.live) {
@@ -2686,13 +2753,11 @@ pub fn registerAggregateFieldAliases(
         // CONSERVATIVE escape: mark the move root escaped (reject-at-move). This composes
         // the precise and conservative scans in one traversal so no nested borrow is lost.
         // (A plain non-borrow field value `.v = 5` has no move root, so this is a no-op there.)
-        const referent = fullDerefMoveSubplaceAlias(self, field.value, state, aliases) orelse
-            callLaunderedMoveReferent(self, field.value, state, aliases) orelse
-            spine.aliasReferentOf(field.value, state) orelse {
+        const referent = aliasReferentForExpr(self, field.value, state, aliases) orelse {
             markBorrowEscape(self, field.value, escape_span, state);
             continue;
         };
-        if (!state.contains(referent) and !isMoveSubplaceKey(referent)) continue;
+        if (!state.contains(referent.key) and !isMoveSubplaceKey(referent.key)) continue;
         const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base, field.name.text }) catch {
             self.oom = true;
             continue;
@@ -2702,7 +2767,7 @@ pub fn registerAggregateFieldAliases(
             self.reporter.allocator.free(key);
             continue;
         };
-        state.put(key, .{ .live = false, .span = field.value.span, .alias_of = referent }) catch {
+        state.put(key, .{ .live = false, .span = field.value.span, .alias_of = referent.key, .alias_place = referent.place }) catch {
             self.oom = true;
         };
     }
@@ -2758,22 +2823,20 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
         return;
     };
 
-    const referent = fullDerefMoveSubplaceAlias(self, value, state, aliases) orelse
-        callLaunderedMoveReferent(self, value, state, aliases) orelse
-        spine.aliasReferentOf(value, state) orelse {
+    const referent = aliasReferentForExpr(self, value, state, aliases) orelse {
         _ = state.remove(key);
         self.reporter.allocator.free(key);
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    if (!state.contains(referent) and !isMoveSubplaceKey(referent)) {
+    if (!state.contains(referent.key) and !isMoveSubplaceKey(referent.key)) {
         _ = state.remove(key);
         self.reporter.allocator.free(key);
         return;
     }
 
     if (state.getPtr(key)) |slot| {
-        slot.* = .{ .live = false, .span = value.span, .alias_of = referent };
+        slot.* = .{ .live = false, .span = value.span, .alias_of = referent.key, .alias_place = referent.place };
         self.reporter.allocator.free(key);
         return;
     }
@@ -2783,7 +2846,7 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
         self.reporter.allocator.free(key);
         return;
     };
-    state.put(key, .{ .live = false, .span = value.span, .alias_of = referent }) catch {
+    state.put(key, .{ .live = false, .span = value.span, .alias_of = referent.key, .alias_place = referent.place }) catch {
         self.oom = true;
     };
 }
@@ -2856,22 +2919,20 @@ fn recordAliasPlaceOrEscapeWithKey(
     state: *std.StringHashMap(MoveSlot),
     aliases: *const std.StringHashMap(ast.TypeExpr),
 ) void {
-    const referent = fullDerefMoveSubplaceAlias(self, value, state, aliases) orelse
-        callLaunderedMoveReferent(self, value, state, aliases) orelse
-        spine.aliasReferentOf(value, state) orelse {
+    const referent = aliasReferentForExpr(self, value, state, aliases) orelse {
         _ = state.remove(key);
         self.reporter.allocator.free(key);
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    if (!state.contains(referent) and !isMoveSubplaceKey(referent)) {
+    if (!state.contains(referent.key) and !isMoveSubplaceKey(referent.key)) {
         _ = state.remove(key);
         self.reporter.allocator.free(key);
         return;
     }
 
     if (state.getPtr(key)) |slot| {
-        slot.* = .{ .live = false, .span = value.span, .alias_of = referent };
+        slot.* = .{ .live = false, .span = value.span, .alias_of = referent.key, .alias_place = referent.place };
         self.reporter.allocator.free(key);
         return;
     }
@@ -2881,7 +2942,7 @@ fn recordAliasPlaceOrEscapeWithKey(
         self.reporter.allocator.free(key);
         return;
     };
-    state.put(key, .{ .live = false, .span = value.span, .alias_of = referent }) catch {
+    state.put(key, .{ .live = false, .span = value.span, .alias_of = referent.key, .alias_place = referent.place }) catch {
         self.oom = true;
     };
 }
@@ -3533,21 +3594,15 @@ fn cleanupLocalAliasReferent(self: *Checker, init: ast.Expr, state: *const std.S
 }
 
 fn recordDeferredIdentAssignmentAlias(self: *Checker, name: ast.Ident, value: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    const direct_subplace_ref = fullDerefMoveSubplaceAlias(self, value, state, aliases);
-    const new_ref = direct_subplace_ref orelse
-        callLaunderedMoveReferent(self, value, state, aliases) orelse
-        spine.aliasReferentOf(value, state);
-    const new_full_deref_alias = direct_subplace_ref != null or
-        isDirectIdentAddressOf(value) or
-        inheritedFullDerefAlias(value, state);
-    if (new_ref) |referent| {
-        if (state.contains(referent) or isMoveSubplaceKey(referent)) {
+    if (aliasReferentForExpr(self, value, state, aliases)) |referent| {
+        if (state.contains(referent.key) or isMoveSubplaceKey(referent.key)) {
             if (state.getPtr(name.text)) |slot| {
-                slot.alias_of = referent;
+                slot.alias_of = referent.key;
+                slot.alias_place = referent.place;
                 slot.live = false;
-                slot.full_deref_alias = new_full_deref_alias;
+                slot.full_deref_alias = referent.full_deref;
             } else {
-                state.put(name.text, .{ .live = false, .span = name.span, .alias_of = referent, .cleanup_local = true, .full_deref_alias = new_full_deref_alias }) catch {
+                state.put(name.text, .{ .live = false, .span = name.span, .place = .{ .root = name.text }, .alias_of = referent.key, .alias_place = referent.place, .cleanup_local = true, .full_deref_alias = referent.full_deref }) catch {
                     self.oom = true;
                 };
             }
@@ -3652,18 +3707,9 @@ fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *std.St
         }
     }
     if (decl.init) |init| {
-        if (fullDerefMoveSubplaceAlias(self, init, state, aliases)) |referent| {
-            state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .alias_of = referent, .cleanup_local = true, .full_deref_alias = true }) catch {
-                self.oom = true;
-            };
-        } else if (callLaunderedMoveReferent(self, init, state, aliases)) |referent| {
-            state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .alias_of = referent, .cleanup_local = true }) catch {
-                self.oom = true;
-            };
-        } else if (spine.aliasReferentOf(init, state)) |referent| {
-            if (state.contains(referent) or isMoveSubplaceKey(referent)) {
-                const full = isDirectIdentAddressOf(init) or inheritedFullDerefAlias(init, state);
-                state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .alias_of = referent, .cleanup_local = true, .full_deref_alias = full }) catch {
+        if (aliasReferentForExpr(self, init, state, aliases)) |referent| {
+            if (state.contains(referent.key) or isMoveSubplaceKey(referent.key)) {
+                state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .alias_of = referent.key, .alias_place = referent.place, .cleanup_local = true, .full_deref_alias = referent.full_deref }) catch {
                     self.oom = true;
                 };
             }
