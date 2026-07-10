@@ -280,7 +280,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                     // laundered through the callee's result.
                     // Register it as a derived alias so a USE of `q` after `t` is moved is a
                     // stale-alias use-after-move (and nothing fires if `q` is dead first).
-                    if (state.contains(referent.key) or isMoveSubplaceKey(referent.key)) {
+                    if (aliasReferentIsTracked(referent, state)) {
                         // `live = false`: the alias is a borrow, not a linear resource, so
                         // leak/exit checks (which only fire on `live` slots) must skip it.
                         // Its referent's moved-out state is what the stale check consults.
@@ -367,7 +367,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                         // (it is no longer a meaningful borrow); leaving it live would be the
                         // phantom-leak false positive this fixes.
                         if (aliasReferentForExpr(self, a.value, state, aliases)) |referent| {
-                            if (state.contains(referent.key) or isMoveSubplaceKey(referent.key)) {
+                            if (aliasReferentIsTracked(referent, state)) {
                                 if (state.getPtr(id.text)) |slot| {
                                     slot.alias_of = referent.key;
                                     slot.alias_place = referent.place;
@@ -991,6 +991,11 @@ const AliasReferent = struct {
     place: ?MovePlace,
     full_deref: bool,
 };
+
+fn aliasReferentIsTracked(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot)) bool {
+    if (referent.place) |place| return state.contains(place.root);
+    return state.contains(referent.key) or isMoveSubplaceKey(referent.key);
+}
 
 fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
     if (fullDerefMoveSubplace(self, expr, state, aliases)) |pp| {
@@ -2855,7 +2860,7 @@ pub fn registerAggregateFieldAliases(
             markBorrowEscape(self, field.value, escape_span, state);
             continue;
         };
-        if (!state.contains(referent.key) and !isMoveSubplaceKey(referent.key)) continue;
+        if (!aliasReferentIsTracked(referent, state)) continue;
         const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base, field.name.text }) catch {
             self.oom = true;
             continue;
@@ -2927,7 +2932,7 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    if (!state.contains(referent.key) and !isMoveSubplaceKey(referent.key)) {
+    if (!aliasReferentIsTracked(referent, state)) {
         _ = state.remove(key);
         self.reporter.allocator.free(key);
         return;
@@ -3023,7 +3028,7 @@ fn recordAliasPlaceOrEscapeWithKey(
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    if (!state.contains(referent.key) and !isMoveSubplaceKey(referent.key)) {
+    if (!aliasReferentIsTracked(referent, state)) {
         _ = state.remove(key);
         self.reporter.allocator.free(key);
         return;
@@ -3707,7 +3712,7 @@ fn cleanupLocalAliasReferent(self: *Checker, init: ast.Expr, state: *const std.S
 
 fn recordDeferredIdentAssignmentAlias(self: *Checker, name: ast.Ident, value: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     if (aliasReferentForExpr(self, value, state, aliases)) |referent| {
-        if (state.contains(referent.key) or isMoveSubplaceKey(referent.key)) {
+        if (aliasReferentIsTracked(referent, state)) {
             if (state.getPtr(name.text)) |slot| {
                 slot.alias_of = referent.key;
                 slot.alias_place = referent.place;
@@ -3820,7 +3825,7 @@ fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *std.St
     }
     if (decl.init) |init| {
         if (aliasReferentForExpr(self, init, state, aliases)) |referent| {
-            if (state.contains(referent.key) or isMoveSubplaceKey(referent.key)) {
+            if (aliasReferentIsTracked(referent, state)) {
                 state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .alias_of = referent.key, .alias_place = referent.place, .cleanup_local = true, .full_deref_alias = referent.full_deref }) catch {
                     self.oom = true;
                 };
