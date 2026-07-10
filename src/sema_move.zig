@@ -83,7 +83,7 @@ pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *std.StringHashM
     defer scoped.deinit();
     var it = before.iterator();
     while (it.next()) |entry| {
-        if (isMoveSubplaceKey(entry.key_ptr.*) and !state.contains(entry.key_ptr.*)) {
+        if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*) and !state.contains(entry.key_ptr.*)) {
             continue;
         }
         const slot = state.get(entry.key_ptr.*) orelse entry.value_ptr.*;
@@ -94,7 +94,7 @@ pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *std.StringHashM
     var state_it = state.iterator();
     while (state_it.next()) |entry| {
         if (before.contains(entry.key_ptr.*)) continue;
-        if (!moveSubplaceRootInOuter(entry.key_ptr.*, &before)) continue;
+        if (!moveSubplaceRootInOuter(entry.value_ptr.*, entry.key_ptr.*, &before)) continue;
         scoped.put(entry.key_ptr.*, entry.value_ptr.*) catch {
             self.oom = true;
         };
@@ -678,7 +678,7 @@ pub fn finalizeBranchLocals(self: *Checker, branch: *std.StringHashMap(MoveSlot)
     var it = branch.iterator();
     while (it.next()) |entry| {
         if (outer.contains(entry.key_ptr.*)) continue;
-        if (moveSubplaceRootInOuter(entry.key_ptr.*, outer)) continue;
+        if (moveSubplaceRootInOuter(entry.value_ptr.*, entry.key_ptr.*, outer)) continue;
         if (report and entry.value_ptr.live and !entry.value_ptr.deferred) {
             self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value declared in this branch is never consumed before the branch exits");
         }
@@ -813,7 +813,7 @@ pub fn mergeMoveBranches(
         const other = right.get(entry.key_ptr.*) orelse {
             if (entry.value_ptr.live and !entry.value_ptr.deferred) {
                 self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value created in only one branch is never consumed before the branch exits");
-            } else if (isMoveSubplaceKey(entry.key_ptr.*)) {
+            } else if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*)) {
                 self.errorCode(entry.value_ptr.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` field has inconsistent ownership across control-flow branches");
                 merged.put(entry.key_ptr.*, entry.value_ptr.*) catch {
                     self.oom = true;
@@ -843,7 +843,7 @@ pub fn mergeMoveBranches(
         if (left.contains(entry.key_ptr.*)) continue;
         if (entry.value_ptr.live and !entry.value_ptr.deferred) {
             self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value created in only one branch is never consumed before the branch exits");
-        } else if (isMoveSubplaceKey(entry.key_ptr.*)) {
+        } else if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*)) {
             self.errorCode(entry.value_ptr.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` field has inconsistent ownership across control-flow branches");
             merged.put(entry.key_ptr.*, entry.value_ptr.*) catch {
                 self.oom = true;
@@ -875,7 +875,12 @@ fn isMoveSubplaceKey(key: []const u8) bool {
     return firstSubplaceSeparator(key) != null;
 }
 
-fn moveSubplaceRootInOuter(key: []const u8, outer: *const std.StringHashMap(MoveSlot)) bool {
+fn isTrackedMoveSubplace(slot: MoveSlot, key: []const u8) bool {
+    return if (slot.place) |place| place.isSubplace() else isMoveSubplaceKey(key);
+}
+
+fn moveSubplaceRootInOuter(slot: MoveSlot, key: []const u8, outer: *const std.StringHashMap(MoveSlot)) bool {
+    if (slot.place) |place| return outer.contains(place.root);
     const sep = firstSubplaceSeparator(key) orelse return false;
     return outer.contains(key[0..sep]);
 }
@@ -3596,7 +3601,7 @@ fn moveDeferBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(Mo
     defer scoped.deinit();
     var it = before.iterator();
     while (it.next()) |entry| {
-        if (isMoveSubplaceKey(entry.key_ptr.*) and !state.contains(entry.key_ptr.*)) {
+        if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*) and !state.contains(entry.key_ptr.*)) {
             continue;
         }
         const slot = state.get(entry.key_ptr.*) orelse entry.value_ptr.*;
@@ -3607,7 +3612,7 @@ fn moveDeferBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(Mo
     var state_it = state.iterator();
     while (state_it.next()) |entry| {
         if (before.contains(entry.key_ptr.*)) continue;
-        if (!moveSubplaceRootInOuter(entry.key_ptr.*, &before)) continue;
+        if (!moveSubplaceRootInOuter(entry.value_ptr.*, entry.key_ptr.*, &before)) continue;
         scoped.put(entry.key_ptr.*, entry.value_ptr.*) catch {
             self.oom = true;
         };
