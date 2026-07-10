@@ -620,6 +620,43 @@ test "LLVM aggregate-return pointer facts are MIR-owned and fail closed when abs
     try expectNotContains(missing_body, "load i32, ptr %");
 }
 
+test "LLVM aggregate-return literal prefixes are MIR-owned only when call-free" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\fn helper() -> void {}
+        \\
+        \\fn call_free_prefix_holder() -> Holder {
+        \\    let noise: u32 = shared_counter;
+        \\    return .{ .ptr = &shared_counter, .tag = noise };
+        \\}
+        \\
+        \\fn call_prefix_holder() -> Holder {
+        \\    helper();
+        \\    return .{ .ptr = &shared_counter, .tag = 1 };
+        \\}
+        \\
+        \\fn use_call_free_prefix_holder() -> u32 {
+        \\    let holder: Holder = call_free_prefix_holder();
+        \\    return holder.ptr.*;
+        \\}
+        \\
+        \\fn use_call_prefix_holder() -> u32 {
+        \\    let holder: Holder = call_prefix_holder();
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_aggregate_return_literal_prefix_mir_fact.mc", source, &output);
+    const call_free_body = try llvmFunctionBody(output.items, "define internal i32 @use_call_free_prefix_holder");
+    try expectContains(call_free_body, "; mir aggregate_return_pointer consumed caller=use_call_free_prefix_holder callee=call_free_prefix_holder field=ptr provenance=global_storage");
+    const call_body = try llvmFunctionBody(output.items, "define internal i32 @use_call_prefix_holder");
+    try expectNotContains(call_body, "; mir aggregate_return_pointer consumed caller=use_call_prefix_holder callee=call_prefix_holder field=ptr");
+    try expectContains(call_body, "load atomic i32, ptr %");
+}
+
 test "LLVM consumes MIR aggregate-return pointer-array element facts" {
     const source =
         \\global shared_counter: u32 = 0;

@@ -1283,7 +1283,10 @@ fn directOrStraightLineLocalAggregateReturnLiteralFields(
         .@"return" => |maybe_value| maybe_value orelse return null,
         else => return null,
     };
-    if (structLiteralFieldsForAggregateReturn(final_value)) |fields| return fields;
+    if (structLiteralFieldsForAggregateReturn(final_value)) |fields| {
+        if (!aggregateReturnPrefixStatementsAreSupported(body.items[0 .. body.items.len - 1])) return null;
+        return fields;
+    }
 
     const returned_local = directIdentName(final_value) orelse return null;
     var local_literals = std.StringHashMap([]ast.StructLiteralField).init(allocator);
@@ -1320,6 +1323,25 @@ fn directOrStraightLineLocalAggregateReturnLiteralFields(
         }
     }
     return local_literals.get(returned_local);
+}
+
+fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) bool {
+    for (statements) |stmt| {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| {
+                if (local.names.len != 1) return false;
+                if (local.init) |initializer| {
+                    if (aggregateReturnPrefixExprHasCallOrExit(initializer)) return false;
+                }
+            },
+            .assignment => |assignment| {
+                if (assignmentTargetIdentName(assignment.target) == null) return false;
+                if (aggregateReturnPrefixExprHasCallOrExit(assignment.value)) return false;
+            },
+            else => return false,
+        }
+    }
+    return true;
 }
 
 const AggregateReturnLocalNestedFieldAssignmentTarget = struct {

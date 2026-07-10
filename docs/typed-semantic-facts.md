@@ -705,10 +705,10 @@ Current producer boundary:
 - non-exported functions with a direct struct-literal return, or a final return
   of a local initialized or whole-assigned from a direct struct literal or a
   tracked copy of one;
-- straight-line declaration and assignment prefixes only; calls, member writes,
-  dereference writes, and other control flow are outside the
-  producer domain, except for exhaustive bool/wildcard switches whose arms each
-  independently reduce to an already-supported return value, or have direct
+- straight-line call-free declaration and whole-local assignment prefixes only;
+  calls, member writes, dereference writes, and other control flow are outside
+  the producer domain, except for exhaustive bool/wildcard switches whose arms
+  each independently reduce to an already-supported return value, or have direct
   returning arms plus fallthrough arms that contain only supported whole-local
   declarations, whole-local assignments, direct bounded nested aggregate member
   assignments, or direct constant-index fixed pointer-array element assignments
@@ -730,10 +730,10 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
   path agrees on `global_storage` and pointer shape.
 
 Every other shape remains outside the MIR-owned domain. That includes loops,
-indirect calls, exports, unions, aggregate/array element nesting beyond the
-direct field model, fallthrough dynamic-index, nested arrays beyond fixed
-struct elements, dereference writes or nested control flow, and any path with a
-missing or ambiguous field fact.
+direct or indirect calls in a prefix, exports, unions, aggregate/array element
+nesting beyond the direct field model, fallthrough dynamic-index, nested arrays
+beyond fixed struct elements, dereference writes or nested control flow, and any
+path with a missing or ambiguous field fact.
 
 ### Consumer and retirement rule
 
@@ -753,13 +753,15 @@ missing-fact gate covers every migrated shape.
    cover global, unknown, local initialization, whole-local reassignment,
    tracked whole-local copies, exhaustive branch joins, direct fixed
    pointer-array elements, nested aggregate field paths, and fixed arrays of
-   struct elements with pointer-bearing fields.
+   struct elements with pointer-bearing fields. Direct literal returns after
+   call-free prefixes are covered, and literal returns after call prefixes are
+   explicitly excluded.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
-4. Remaining: fallthrough dynamic-index, nested arrays beyond fixed struct
-   elements, dereference writes or nested control flow, mixed, exported,
-   aggregate/array element nesting beyond the direct field model, and
+4. Remaining: prefix calls, fallthrough dynamic-index, nested arrays beyond
+   fixed struct elements, dereference writes or nested control flow, mixed,
+   exported, aggregate/array element nesting beyond the direct field model, and
    local-storage return cases.
 5. Remaining: the semantic-facts inventory must reject the LLVM collector once
    no accepted legacy domain remains; then run `zig build test` and both backend
