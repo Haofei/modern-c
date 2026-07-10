@@ -1273,38 +1273,87 @@ fn collectSequentialSwitchAggregateReturnLiteralPaths(
     first_switch: ast.Switch,
     trailing: []const ast.Stmt,
 ) anyerror!bool {
-    var second_switch_index: ?usize = null;
-    for (trailing, 0..) |stmt, index| {
-        if (stmt.kind == .@"switch") {
-            second_switch_index = index;
-            break;
-        }
-    }
-    const index = second_switch_index orelse return false;
-    const second_switch = trailing[index].kind.@"switch";
-    if (!aggregateReturnSwitchIsExhaustive(second_switch)) return false;
+    const second = findNextAggregateReturnSwitch(trailing) orelse return false;
+    if (!aggregateReturnSwitchIsExhaustive(first_switch)) return false;
+    return try collectSequentialSwitchAggregateReturnLiteralPathsFrom(
+        allocator,
+        paths,
+        span,
+        prefix,
+        first_switch,
+        trailing,
+        &.{},
+        second.index,
+    );
+}
 
-    const between = trailing[0..index];
+const AggregateReturnSwitchPosition = struct {
+    index: usize,
+    node: ast.Switch,
+};
+
+fn findNextAggregateReturnSwitch(statements: []const ast.Stmt) ?AggregateReturnSwitchPosition {
+    for (statements, 0..) |stmt, index| {
+        if (stmt.kind == .@"switch") return .{ .index = index, .node = stmt.kind.@"switch" };
+    }
+    return null;
+}
+
+fn collectSequentialSwitchAggregateReturnLiteralPathsFrom(
+    allocator: std.mem.Allocator,
+    paths: *AggregateReturnLiteralPaths,
+    span: ast.Span,
+    prefix: []const ast.Stmt,
+    current_switch: ast.Switch,
+    trailing: []const ast.Stmt,
+    accumulated: []const ast.Stmt,
+    next_switch_index: usize,
+) anyerror!bool {
+    const next_switch = trailing[next_switch_index].kind.@"switch";
+    if (!aggregateReturnSwitchIsExhaustive(next_switch)) return false;
+    const between = trailing[0..next_switch_index];
     if (aggregateReturnStatementsContainControlFlow(between)) return false;
-    const after_second = trailing[index + 1 ..];
-    for (first_switch.arms) |first_arm| {
-        const first_block = switch (first_arm.body) {
+    const after_next = trailing[next_switch_index + 1 ..];
+    const maybe_next = findNextAggregateReturnSwitch(after_next);
+
+    for (current_switch.arms) |arm| {
+        const block = switch (arm.body) {
             .block => |block| block,
             .expr => return false,
         };
-        if (aggregateReturnStatementsContainControlFlow(first_block.items)) return false;
-        for (second_switch.arms) |second_arm| {
-            const second_block = switch (second_arm.body) {
-                .block => |block| block,
+        if (aggregateReturnStatementsContainControlFlow(block.items)) return false;
+
+        var branch: std.ArrayList(ast.Stmt) = .empty;
+        defer branch.deinit(allocator);
+        try branch.appendSlice(allocator, accumulated);
+        try branch.appendSlice(allocator, block.items);
+        try branch.appendSlice(allocator, between);
+
+        if (maybe_next) |next_position| {
+            if (!try collectSequentialSwitchAggregateReturnLiteralPathsFrom(
+                allocator,
+                paths,
+                span,
+                prefix,
+                next_switch,
+                after_next,
+                branch.items,
+                next_position.index,
+            )) return false;
+            continue;
+        }
+
+        for (next_switch.arms) |next_arm| {
+            const next_block = switch (next_arm.body) {
+                .block => |arm_block| arm_block,
                 .expr => return false,
             };
-            if (aggregateReturnStatementsContainControlFlow(second_block.items)) return false;
-            var branch: std.ArrayList(ast.Stmt) = .empty;
-            defer branch.deinit(allocator);
-            try branch.appendSlice(allocator, first_block.items);
-            try branch.appendSlice(allocator, between);
-            try branch.appendSlice(allocator, second_block.items);
-            if (!try appendAggregateReturnLiteralFieldsForPath(allocator, paths, span, prefix, branch.items, after_second)) return false;
+            if (aggregateReturnStatementsContainControlFlow(next_block.items)) return false;
+            var final_branch: std.ArrayList(ast.Stmt) = .empty;
+            defer final_branch.deinit(allocator);
+            try final_branch.appendSlice(allocator, branch.items);
+            try final_branch.appendSlice(allocator, next_block.items);
+            if (!try appendAggregateReturnLiteralFieldsForPath(allocator, paths, span, prefix, final_branch.items, after_next)) return false;
         }
     }
     return true;
