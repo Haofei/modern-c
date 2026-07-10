@@ -1093,7 +1093,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
             if (moveFieldPlaceKey(self, expr, m, state, aliases)) |pp| {
                 if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` field is borrowed by a deferred expression and cannot be moved before the defer runs");
-                } else if (stateContainsMovePlace(pp.place, state) or hasMovedSubplace(pp.place, state)) {
+                } else if (stateHasMovedPlaceOrChild(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` field after it was moved out");
                 } else {
                     state.put(pp.key, .{ .live = false, .span = expr.span, .place = pp.place }) catch {
@@ -2443,6 +2443,10 @@ fn stateHasMovedPlaceChildOrConflict(place: MovePlace, state: *const std.StringH
     return stateHasMovedPlaceOrConflict(place, state) or stateHasMovedChildPlace(place, state);
 }
 
+fn stateHasMovedPlaceOrChild(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+    return stateContainsMovePlace(place, state) or hasMovedSubplace(place, state);
+}
+
 fn deferredBorrowConflictsWithTrackedPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
     const root_slot = state.get(place.root) orelse return false;
     const borrowed = root_slot.deferred_borrow_place orelse return false;
@@ -3726,7 +3730,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
             if (moveFieldPlaceKey(self, expr, m, state, aliases)) |pp| {
                 if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer cannot consume a linear `move` field already borrowed by a deferred expression");
-                } else if (stateContainsMovePlace(pp.place, state) or hasMovedSubplace(pp.place, state)) {
+                } else if (stateHasMovedPlaceOrChild(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer reserves a linear `move` field already moved out");
                 } else {
                     state.put(pp.key, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }) catch {
