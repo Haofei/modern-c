@@ -662,6 +662,7 @@ const CEmitter = struct {
         };
     }
 
+
     fn emitConstGlobalInitializer(self: *CEmitter, ty: ast.TypeExpr, expr: ast.Expr) !bool {
         const value = self.foldConstGlobalValue(expr) orelse return false;
         try self.out.appendSlice(self.allocator, " = ");
@@ -5898,7 +5899,7 @@ const CEmitter = struct {
                     if (i != 0) try self.out.appendSlice(self.allocator, ", ");
                     const field_name = try self.cIdent(field.name.text);
                     try self.out.print(self.allocator, ".{s} = ", .{field_name});
-                    const field_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&({s}->{s})", .{ ptr_expr, field_name });
+                    const field_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->{s})", .{ ptr_expr, field_name });
                     try self.emitRaceTolerantAggregateLoadFromPtr(field_ptr, field.ty);
                 }
                 try self.out.appendSlice(self.allocator, " }");
@@ -5909,7 +5910,7 @@ const CEmitter = struct {
                 try self.out.print(self.allocator, "({s}){{ .elems = {{ ", .{try self.cTypeFor(array_ty, .typedef_name)});
                 for (0..len) |i| {
                     if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-                    const elem_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&({s}->elems[{d}])", .{ ptr_expr, i });
+                    const elem_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->elems[{d}])", .{ ptr_expr, i });
                     try self.emitRaceTolerantAggregateLoadFromPtr(elem_ptr, array.child.*);
                 }
                 try self.out.appendSlice(self.allocator, " } }");
@@ -5930,7 +5931,7 @@ const CEmitter = struct {
             .@"struct" => |decl| {
                 for (decl.fields) |field| {
                     const field_name = try self.cIdent(field.name.text);
-                    const field_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&({s}->{s})", .{ ptr_expr, field_name });
+                    const field_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->{s})", .{ ptr_expr, field_name });
                     const field_value = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.{s}", .{ value_expr, field_name });
                     try self.emitRaceTolerantAggregateStoreFromPtr(field_ptr, field.ty, field_value);
                 }
@@ -5939,7 +5940,7 @@ const CEmitter = struct {
                 const array = array_ty.kind.array;
                 const len = self.constArrayLen(array.len) orelse return error.UnsupportedCEmission;
                 for (0..len) |i| {
-                    const elem_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&({s}->elems[{d}])", .{ ptr_expr, i });
+                    const elem_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->elems[{d}])", .{ ptr_expr, i });
                     const elem_value = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.elems[{d}]", .{ value_expr, i });
                     try self.emitRaceTolerantAggregateStoreFromPtr(elem_ptr, array.child.*, elem_value);
                 }

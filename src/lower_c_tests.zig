@@ -7655,6 +7655,23 @@ test "lower-c emits unsafe contract blocks as scoped blocks" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, " = (mc_tmp") != null);
 }
 
+test "C race-tolerant aggregate slice loads parenthesize generated pointer expressions" {
+    const source =
+        \\struct Inner { x: u32 }
+        \\extern fn make_inner_slice() -> []const Inner;
+        \\fn read_slice_element() -> u32 {
+        \\    let inner = make_inner_slice()[0];
+        \\    return inner.x;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("emit_c_aggregate_slice_race_parentheses.mc", source, &output);
+    try expectContains(output.items, "mc_race_load_u32(&((&mc_tmp0.ptr[mc_check_index_usize(");
+    try expectContains(output.items, ")])->x)))");
+}
+
 test "lower-c unchecked arithmetic requires MIR no-overflow range fact" {
     const source =
         \\struct Counter {
