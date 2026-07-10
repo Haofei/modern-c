@@ -3317,18 +3317,24 @@ fn aliasIndexExprType(self: *Checker, expr: ast.Expr, state: *const std.StringHa
 }
 
 fn aliasSlotReferentMoved(slot: MoveSlot, state: *const std.StringHashMap(MoveSlot)) bool {
-    if (slot.alias_place) |place| {
-        if (state.get(place.root)) |root| {
-            if (!root.live) return true;
-        }
-        return stateHasMovedPlace(place, state) or stateHasMovedChildPlace(place, state) or stateHasMovedConflictingPlace(place, state);
-    }
     const referent = slot.alias_of orelse return false;
+    if (referentPlaceMoved(referent, slot.alias_place, state)) return true;
+    if (slot.alias_place != null) return false;
     if (state.get(referent)) |r| {
         if (!r.live) return true;
     }
+    return false;
+}
+
+fn referentPlaceMoved(referent: []const u8, place: ?MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+    if (place) |typed| {
+        if (state.get(typed.root)) |root| {
+            if (!root.live) return true;
+        }
+        return stateHasMovedPlace(typed, state) or stateHasMovedChildPlace(typed, state) or stateHasMovedConflictingPlace(typed, state);
+    }
     return isMoveSubplaceKey(referent) and
-        (concretePlaceHasWildcardMove(referent, state) or wildcardMoveConflictsWithConcreteSubplace(referent, state));
+        (state.contains(referent) or concretePlaceHasWildcardMove(referent, state) or wildcardMoveConflictsWithConcreteSubplace(referent, state));
 }
 
 pub fn aliasPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?[]const u8 {
@@ -3572,11 +3578,9 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
             self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after one of its fields or elements was moved out");
             return;
         }
-    } else if (isMoveSubplaceKey(referent)) {
-        if (state.contains(referent) or concretePlaceHasWildcardMove(referent, state) or wildcardMoveConflictsWithConcreteSubplace(referent, state)) {
-            self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` field or array element after it was moved out");
-            return;
-        }
+    } else if (referentPlaceMoved(referent, null, state)) {
+        self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` field or array element after it was moved out");
+        return;
     } else if (state.get(referent)) |referent_slot| {
         if (referent_slot.place != null and hasMovedSubplace(referent_slot.place.?, state)) {
             self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after one of its fields or elements was moved out");
