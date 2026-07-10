@@ -97,6 +97,11 @@ RULES: tuple[Rule, ...] = (
         "development gate selector changes need focused routing contract coverage",
     ),
     Rule(
+        ("tools/toolchain/move-unsupported-inventory.py",),
+        ("move-unsupported-inventory-test",),
+        "move unsupported-channel inventory changes need its focused drift gate",
+    ),
+    Rule(
         ("tools/test/contract-lint.py",),
         ("test-lint",),
         "fixture contract linter changes need the fixture-contract lint gate",
@@ -296,6 +301,12 @@ RULES: tuple[Rule, ...] = (
         ("tools/toolchain/diagnostics-reference.py", "tools/toolchain/diagnostic-code-inventory.py", "docs/diagnostics.md", "docs/diagnostic-code-inventory.md"),
         ("diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "mcc-cli-test"),
         "diagnostic inventory changes need generated reference, ownership checks, and the installed explain CLI smoke",
+    ),
+    Rule(
+        ("tests/spec/bad/move_cfg_arrays_reject.mc",),
+        ("move-unsupported-inventory-test",),
+        "move checker unsupported-channel evidence needs the focused fail-closed inventory gate",
+        ("git diff --check",),
     ),
     Rule(
         ("tools/toolchain/spec-*-sweep.py", "tools/toolchain/llvm-opt-sweep.py"),

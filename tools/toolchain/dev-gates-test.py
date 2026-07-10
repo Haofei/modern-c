@@ -146,6 +146,13 @@ def main() -> None:
     assert_gates(module, ["tests/spec/does-not-exist.mc"], ["test"])
     assert_gates(module, ["tools/dev-gates.py"], ["dev-gates-test"])
     assert_gates(module, ["tools/toolchain/dev-gates-test.py"], ["dev-gates-test"])
+    assert_gates(module, ["tools/toolchain/move-unsupported-inventory.py"], ["move-unsupported-inventory-test"])
+    assert_route(
+        module,
+        ["tests/spec/bad/move_cfg_arrays_reject.mc"],
+        ["move-unsupported-inventory-test"],
+        ["git diff --check"],
+    )
     assert_gates(module, ["tools/ci/pass-gates.py"], ["ci-pass-gates-test"])
     assert_gates(module, ["build/tiers.zig"], ["fast"])
     assert_gates(module, ["tools/m0-parallel.sh"], ["fast"])

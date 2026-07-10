@@ -48,6 +48,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTestOpts(ctx, "diagnostics-reference-test", "Check docs/diagnostics.md covers every compiler E_* diagnostic code", &.{ "python3", "tools/toolchain/diagnostics-reference.py", "--check" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "diagnostic-code-inventory-test", "Check every emitted E_* diagnostic has a negative fixture or documented allowlist entry", &.{ "python3", "tools/toolchain/diagnostic-code-inventory.py", "--check" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "move-unsupported-inventory-test", "Check fail-closed move-array unsupported channels have fixed emission and fixture coverage", &.{ "python3", "tools/toolchain/move-unsupported-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "std-api-docs-test", "Check docs/std-api.md covers exported stdlib declarations", &.{ "python3", "tools/toolchain/std-api-docs.py", "--check" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "vendoring-test", "Check vendored dependency provenance and CVE process docs", &.{ "python3", "tools/toolchain/vendoring-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "third-party-licenses-test", "Check the aggregated third-party license manifest", &.{ "python3", "tools/toolchain/third-party-licenses-test.py" }, .{ .install = false });
