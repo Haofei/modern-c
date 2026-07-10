@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-10, based on the current compiler worktree**.
-Evidence register: **430 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **431 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -30,13 +30,17 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
   locally verified and tied to concrete evidence. Evidence-only rows must say so;
   they do not advance an umbrella's closure matrix by themselves.
 - An **active** row means one bounded behavior is actively being changed and
-  still needs evidence before it can move to finished.
+  still needs evidence before it can move to finished. It is not counted as
+  completed evidence and must not change the supported-subset claim.
 - An **open architectural workstream** is larger than one implementation slice. Its
   count should not drop just because another narrow case lands; it drops only
   when the workstream's acceptance boundary is either fully closed or explicitly
   narrowed by project decision.
 - Historical sections after the evidence register are audit context. When they
   conflict with this assessment, this assessment is the current source of truth.
+- The open-workstream count is not a percentage. The workstreams overlap but
+  are not interchangeable; progress is reported by closure-matrix rows, not by
+  adding completed evidence entries.
 
 ### Evidence Register
 
@@ -61,6 +65,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | LLVM returned global-pointer race lowering is no longer UB-bearing | Internal helpers proven to return visible global-backed pointer expressions now preserve that provenance at call sites, so scalar derefs of the returned pointer lower to unordered atomics. | `0fb49f96 Lower returned global pointers atomically in LLVM`; `tests/spec/data_race_semantics.mc` `returned_global_pointer`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig`. |
 | LLVM scalar pointer-return fallback is retired | LLVM no longer scans function bodies into `global_pointer_return_fns` or treats returned-call expressions as backend-local global proofs. Supported direct, forwarded, noalias-wrapped, branched, and local-function-alias return flows are represented by caller MIR facts; missing or unsupported return facts remain unknown and final scalar dereferences use the atomic default. Aggregate-return summaries remain separate. | `src/lower_llvm.zig` removal of `global_pointer_return_fns` and `collectGlobalPointerProvenanceSummaries`; `src/mir.zig` `collectDirectGlobalPointerReturnSummaries`; `src/lower_llvm_tests.zig` `LLVM consumes MIR facts for direct internal global pointer returns`; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig test src/lower_llvm_tests.zig`; `git diff --check`. |
 | LLVM global pointer-local fallback is retired | C pointer-like local initialization and reassignment are MIR-only. LLVM removes its final `updatePointerGlobalProvenance` ladder: covered direct forms without a MIR fact remain unknown and lower atomically. LLVM retains only a registered local-storage proof for non-MIR aggregate-alias shapes, preserving plain access to storage already proven local without recreating a global proof. Aggregate aliases, field facts, arrays, slices, and aggregate-return summaries remain separate bounded mechanisms. | `src/lower_llvm.zig` `updatePointerProvenanceFromMirOrLocalProof` / `updatePointerProvenanceAssignmentFromMirOrLocalProof`; `src/lower_c_emitter.zig` MIR-only matching helpers; `src/lower_llvm_tests.zig` and `src/lower_c_tests.zig` missing-pointer-provenance suites; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig test src/lower_llvm_tests.zig`; `zig test src/lower_c_tests.zig`; `git diff --check`. |
+| Direct local aggregate-pointer aliases are MIR-owned | MIR now emits normal destination facts for direct field and constant-index pointer-array reads through a local alias initialized from `&local_aggregate`. Alias writes retain an alias-scoped field fact while invalidating the original aggregate path, so direct and alias reads remain conservative where the existing semantics require it. C and LLVM consume the destination facts; deleting one makes the final scalar access race-tolerant rather than rebuilding an alias proof. | `src/mir.zig` local aggregate alias map and alias-scoped field facts; `src/mir_tests.zig` `MIR records direct local aggregate pointer alias provenance facts`; `src/lower_c_tests.zig` / `src/lower_llvm_tests.zig` local aggregate alias missing-destination suites; `zig test src/mir_tests.zig`; `zig test src/lower_c_tests.zig`; `zig test src/lower_llvm_tests.zig`; `zig build test`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
 | LLVM scalar pointer parameters fail closed without MIR facts | Scalar pointer parameter call-site summaries, including direct and function-pointer-alias call paths, no longer seed LLVM-local global/local provenance. In the absence of a typed MIR parameter fact, scalar parameter derefs use the established unordered-atomic default, matching the aggregate parameter policy. | `src/lower_llvm.zig` removal of scalar parameter summary collection/seeding; `tests/spec/data_race_semantics.mc` `consume_global_param` / `consume_local_only_param` / `consume_indirect_local_param`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig --test-filter "ordinary global scalar accesses"`; `zig build test`; `git diff --check`. |
 | LLVM direct scalar parameter summaries are retired | A direct internal call that passes `&global` or `&local` no longer grants the callee's scalar pointer parameter a backend-local provenance proof. Both paths lower atomically unless a future typed MIR parameter fact supplies a positive local proof. | `src/lower_llvm.zig` removal of `global_pointer_params` and scalar parameter seeding; `tests/spec/data_race_semantics.mc` `consume_global_param` / `consume_local_only_param`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig --test-filter "ordinary global scalar accesses"`; `zig build test`; `git diff --check`. |
 | LLVM scalar function-pointer parameter inference is retired | Local function-pointer aliases no longer form backend-local scalar parameter provenance proofs. Direct, copied, reassigned, escaped, mixed, and uncalled scalar parameter shapes all remain safe through atomic lowering until a typed MIR parameter-summary family exists. | `src/lower_llvm.zig` removal of scalar parameter call-site collector; `tests/spec/data_race_semantics.mc` scalar parameter fixtures; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig --test-filter "ordinary global scalar accesses"`; `zig build test`; `git diff --check`. |
@@ -477,7 +482,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Item | Current state | Next evidence needed |
 |---|---|---|
-| None currently assigned | No focused slice is currently active in this document. | Pick the next open workstream and land a bounded slice. |
+| None currently assigned | No focused slice is currently active in this document. | Pick the next closure-matrix row and land a bounded implementation slice. |
 
 ### Open Architectural Workstreams
 
@@ -502,6 +507,9 @@ Closure matrix:
 Current status: the finished rows cover direct scalar/member/index/aggregate
 accesses and many direct provenance paths. The matrix rows above remain open;
 new fixtures that only broaden an already-covered direct shape are evidence-only.
+The direct local aggregate-pointer-alias field/element subcase is complete:
+its destination facts are consumed by both backends and missing-fact tests are
+conservative. The broader alias, return-flow, and CFG boundaries remain open.
 
 #### Typed Semantic Fact Table / Typed MIR
 
@@ -517,9 +525,11 @@ Closure matrix:
 Current status: the narrow foundation is complete: pointer provenance for covered
 direct shapes, no-overflow `RangeFact` consumption, `elided_bounds`, value IDs,
 owned `RepresentationFact` rows, and C/LLVM representation-fact admission gates.
-The umbrella remains open only for the
-matrix rows above. See [`typed-semantic-facts.md`](typed-semantic-facts.md) for
-the phase-level contract.
+The direct local aggregate-alias destination-fact migration is complete: it
+replaces the corresponding LLVM-local proof at the final pointer read and both
+backends fail closed when the destination fact is absent. The umbrella remains
+open for every matrix row above. See
+[`typed-semantic-facts.md`](typed-semantic-facts.md) for the phase-level contract.
 
 #### CFG/Place-Based Move Checker
 
@@ -541,6 +551,10 @@ lookups remain; no CFG/worklist engine exists. Symbolic-index rows above are
 regression coverage; they do not close the remaining map migration or CFG
 rewrite.
 
+There is no active move-checker slice. The next slice must reduce a named
+string-key compatibility path or introduce a CFG/worklist boundary; additional
+symbolic-expression fixtures alone are evidence-only.
+
 ### Production-Ready Exit Rule
 
 The compiler may be labelled generally production-ready only when all three
@@ -557,10 +571,11 @@ a regression test.
   end-to-end or explicitly accepted as a limitation by project decision.
 
 Release publication is intentionally outside these three compiler implementation
-umbrellas. Artifact qualification and publication controls remain documented in
-[`release-process.md`](release-process.md); the absence of a public stable release
-must not be represented as compiler-code completion, and publication may be
-reintroduced as a separate operational workstream by project decision.
+umbrellas. Artifact qualification and publication controls are already covered
+by the finished release-artifact evidence row and
+[`release-process.md`](release-process.md). Public-release policy is an
+operational decision, not unfinished compiler implementation work; it must not
+be counted as a fourth compiler blocker.
 
 This is the compiler-side companion to
 [`production-readiness-plan.md`](production-readiness-plan.md), which qualifies the

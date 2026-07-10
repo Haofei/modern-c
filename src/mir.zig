@@ -1087,6 +1087,12 @@ const AggregatePointerFieldPath = struct {
     field_path: []const u8,
 };
 
+const AggregatePointerAliasFieldPath = struct {
+    alias_name: []const u8,
+    local_name: []const u8,
+    field_path: []const u8,
+};
+
 const FunctionBuilder = struct {
     allocator: std.mem.Allocator,
     name: []const u8,
@@ -1129,6 +1135,13 @@ const FunctionBuilder = struct {
     // proven pointer-return summary. This is intentionally narrow: unknown
     // locals, indirect stores, and control-flow joins drop the mapping.
     local_function_aliases: std.StringHashMap([]const u8),
+    // Local aggregate-pointer aliases initialized directly from `&local_aggregate`.
+    // Like function aliases, control-flow joins and address escape drop the map.
+    local_aggregate_pointer_aliases: std.StringHashMap([]const u8),
+    // While building a direct `&local_aggregate` alias initializer/assignment,
+    // the resulting alias remains local and tracked. Do not invalidate the
+    // aggregate's field facts merely for constructing that exact local alias.
+    direct_local_aggregate_alias_initializer: ?[]const u8 = null,
     // Escape analysis (section 2): names declared as `let`/`var` locals (origin
     // .local), and names whose value is the address of local storage.
     let_local_names: std.StringHashMap(void),
@@ -1191,6 +1204,7 @@ const FunctionBuilder = struct {
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
             .local_mutability = std.StringHashMap(bool).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
+            .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
             .let_local_names = std.StringHashMap(void).init(allocator),
             .local_address_origin = std.StringHashMap(void).init(allocator),
             .wrap_values = std.StringHashMap(void).init(allocator),
@@ -1249,6 +1263,7 @@ const FunctionBuilder = struct {
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
             .local_mutability = std.StringHashMap(bool).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
+            .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
             .let_local_names = std.StringHashMap(void).init(allocator),
             .local_address_origin = std.StringHashMap(void).init(allocator),
             .wrap_values = std.StringHashMap(void).init(allocator),
@@ -1289,6 +1304,7 @@ const FunctionBuilder = struct {
         self.local_type_exprs.deinit();
         self.local_mutability.deinit();
         self.local_function_aliases.deinit();
+        self.local_aggregate_pointer_aliases.deinit();
         self.let_local_names.deinit();
         self.local_address_origin.deinit();
         self.wrap_values.deinit();
@@ -1351,6 +1367,8 @@ const FunctionBuilder = struct {
         self.local_mutability = std.StringHashMap(bool).init(self.allocator);
         self.local_function_aliases.deinit();
         self.local_function_aliases = std.StringHashMap([]const u8).init(self.allocator);
+        self.local_aggregate_pointer_aliases.deinit();
+        self.local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(self.allocator);
         self.let_local_names.deinit();
         self.let_local_names = std.StringHashMap(void).init(self.allocator);
         self.local_address_origin.deinit();
@@ -1527,6 +1545,7 @@ const FunctionBuilder = struct {
                     try self.local_mutability.put(name.text, mutable);
                     try self.let_local_names.put(name.text, {});
                     _ = self.local_function_aliases.remove(name.text);
+                    _ = self.local_aggregate_pointer_aliases.remove(name.text);
                     if (local.init) |init_expr| {
                         if (self.addressOriginIsLocal(init_expr)) try self.local_address_origin.put(name.text, {});
                     }
@@ -1538,6 +1557,9 @@ const FunctionBuilder = struct {
                 if (local.init) |expr| {
                     const previous_target = self.assignment_target;
                     const previous_target_ty = self.assignment_target_ty;
+                    const previous_alias_initializer = self.direct_local_aggregate_alias_initializer;
+                    self.direct_local_aggregate_alias_initializer = self.directLocalAggregatePointerAliasBaseName(expr);
+                    defer self.direct_local_aggregate_alias_initializer = previous_alias_initializer;
                     self.assignment_target = if (local.names.len > 0) local.names[0].text else null;
                     self.assignment_target_ty = ty;
                     try self.addNullabilityConversionCheck(ty, expr, expr.span);
@@ -1550,6 +1572,7 @@ const FunctionBuilder = struct {
                     try self.recordPointerProvenanceForLocalInitializer(local.names, ty_expr, ty, expr);
                     try self.recordAggregatePointerFieldProvenanceForLocalInitializer(local.names, ty_expr, expr);
                     try self.recordLocalFunctionAliases(local.names, expr);
+                    try self.recordLocalAggregatePointerAliases(local.names, expr);
                     self.assignment_target = previous_target;
                     self.assignment_target_ty = previous_target_ty;
                 }
@@ -1578,6 +1601,12 @@ const FunctionBuilder = struct {
                 try self.buildExpr(node.target);
                 const previous_target = self.assignment_target;
                 const previous_target_ty = self.assignment_target_ty;
+                const previous_alias_initializer = self.direct_local_aggregate_alias_initializer;
+                self.direct_local_aggregate_alias_initializer = if (assignmentTargetIdentName(node.target)) |target_name|
+                    if (self.local_types.contains(target_name)) self.directLocalAggregatePointerAliasBaseName(node.value) else null
+                else
+                    null;
+                defer self.direct_local_aggregate_alias_initializer = previous_alias_initializer;
                 self.assignment_target = exprText(node.target);
                 self.assignment_target_ty = self.typeForAssignmentTarget(node.target);
                 try self.addNullabilityConversionCheck(self.assignment_target_ty, node.value, node.value.span);
@@ -1589,6 +1618,7 @@ const FunctionBuilder = struct {
                 try self.addRepresentationUseForValue(self.assignment_target_ty, "assignment", node.value.span, exprText(node.value));
                 try self.recordPointerProvenanceForAssignment(node.target, node.value, stmt.span);
                 try self.recordLocalFunctionAliasAssignment(node.target, node.value);
+                try self.recordLocalAggregatePointerAliasAssignment(node.target, node.value);
                 self.assignment_target = previous_target;
                 self.assignment_target_ty = previous_target_ty;
                 // OPT (annex E) — a store may change any fact operand; drop all facts (after the
@@ -1707,6 +1737,7 @@ const FunctionBuilder = struct {
         // function-pointer return summaries sound by dropping local callable
         // aliases at a control-flow split rather than retaining one arm's map.
         self.local_function_aliases.clearRetainingCapacity();
+        self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, patternText(node.pattern), .branch, span);
         try self.buildExpr(node.value);
         try self.addIfLetPatternCheck(node);
@@ -1870,6 +1901,7 @@ const FunctionBuilder = struct {
 
     fn buildSwitch(self: *FunctionBuilder, node: ast.Switch, span: ast.Span) anyerror!bool {
         self.local_function_aliases.clearRetainingCapacity();
+        self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, "switch_subject", .branch, span);
         try self.buildExpr(node.subject);
         try self.addRepresentationUseForExpr("switch_subject", node.subject);
@@ -2305,6 +2337,7 @@ const FunctionBuilder = struct {
 
     fn buildLoop(self: *FunctionBuilder, node: ast.Loop, span: ast.Span) anyerror!bool {
         self.local_function_aliases.clearRetainingCapacity();
+        self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, @tagName(node.kind), .branch, span);
         if (node.iterable) |iterable| {
             if (node.kind == .@"while") try self.addConversionCheck(.bool, iterable, .condition, iterable.span);
@@ -2434,13 +2467,17 @@ const FunctionBuilder = struct {
             .address_of => |inner| {
                 // OPT (annex E) — taking an address exposes the target to a later aliased write we
                 // cannot see; conservatively drop all facts so none is used past this point.
-                try self.recordPointerProvenanceAddressEscape(inner.*, expr.span);
+                if (!self.isDirectLocalAggregateAliasInitializer(inner.*)) {
+                    try self.recordPointerProvenanceAddressEscape(inner.*, expr.span);
+                }
                 // A callable local whose address escaped can be changed through
                 // an opaque pointer path, so its direct-target summary is dead.
                 if (directIdentName(inner.*)) |name| {
                     _ = self.local_function_aliases.remove(name);
+                    _ = self.local_aggregate_pointer_aliases.remove(name);
                 } else {
                     self.local_function_aliases.clearRetainingCapacity();
+                    self.local_aggregate_pointer_aliases.clearRetainingCapacity();
                 }
                 self.invalidateFacts();
                 try self.buildExpr(inner.*);
@@ -3141,6 +3178,79 @@ const FunctionBuilder = struct {
         }
     }
 
+    fn recordLocalAggregatePointerAliases(self: *FunctionBuilder, names: []ast.Ident, initializer: ast.Expr) !void {
+        const base_name = self.directLocalAggregatePointerAliasBaseName(initializer);
+        if (base_name == null and self.directExistingLocalAggregatePointerAliasName(initializer) != null) {
+            // A copied aggregate pointer can mutate the same aggregate through
+            // an untracked name. Drop all direct-alias proofs until a future
+            // place/CFG alias model represents the copy explicitly.
+            self.local_aggregate_pointer_aliases.clearRetainingCapacity();
+        }
+        for (names) |name| {
+            if (base_name) |base| {
+                try self.local_aggregate_pointer_aliases.put(name.text, base);
+            } else {
+                _ = self.local_aggregate_pointer_aliases.remove(name.text);
+            }
+        }
+    }
+
+    fn recordLocalAggregatePointerAliasAssignment(self: *FunctionBuilder, target: ast.Expr, value: ast.Expr) !void {
+        const name = assignmentTargetIdentName(target) orelse {
+            if (self.directLocalAggregateMemberPath(target) == null and self.directLocalAggregateArrayElementPath(target) == null) {
+                self.local_aggregate_pointer_aliases.clearRetainingCapacity();
+            }
+            return;
+        };
+        if (!self.local_types.contains(name)) {
+            self.local_aggregate_pointer_aliases.clearRetainingCapacity();
+            return;
+        }
+        if (self.directLocalAggregatePointerAliasBaseName(value)) |base| {
+            try self.local_aggregate_pointer_aliases.put(name, base);
+        } else {
+            if (self.directExistingLocalAggregatePointerAliasName(value) != null) {
+                self.local_aggregate_pointer_aliases.clearRetainingCapacity();
+            }
+            _ = self.local_aggregate_pointer_aliases.remove(name);
+        }
+    }
+
+    fn directLocalAggregatePointerAliasBaseName(self: *FunctionBuilder, expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directLocalAggregatePointerAliasBaseName(inner.*),
+            .cast => |node| self.directLocalAggregatePointerAliasBaseName(node.value.*),
+            .call => |call| if (isAssumeNoaliasDirectCall(call) and call.type_args.len == 0 and call.args.len == 2)
+                self.directLocalAggregatePointerAliasBaseName(call.args[0])
+            else
+                null,
+            .address_of => |inner| if (directIdentName(inner.*)) |name|
+                if (self.directLocalAggregateTypeName(inner.*) != null) name else null
+            else
+                null,
+            else => null,
+        };
+    }
+
+    fn directExistingLocalAggregatePointerAliasName(self: *FunctionBuilder, expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directExistingLocalAggregatePointerAliasName(inner.*),
+            .cast => |node| self.directExistingLocalAggregatePointerAliasName(node.value.*),
+            .call => |call| if (isAssumeNoaliasDirectCall(call) and call.type_args.len == 0 and call.args.len == 2)
+                self.directExistingLocalAggregatePointerAliasName(call.args[0])
+            else
+                null,
+            .ident => |ident| if (self.local_aggregate_pointer_aliases.contains(ident.text)) ident.text else null,
+            else => null,
+        };
+    }
+
+    fn isDirectLocalAggregateAliasInitializer(self: *FunctionBuilder, expr: ast.Expr) bool {
+        const expected = self.direct_local_aggregate_alias_initializer orelse return false;
+        const name = directIdentName(expr) orelse return false;
+        return std.mem.eql(u8, name, expected);
+    }
+
     fn recordAggregatePointerFieldProvenanceForLocalInitializer(self: *FunctionBuilder, names: []ast.Ident, ty_expr: ?ast.TypeExpr, initializer: ast.Expr) !void {
         const aggregate_ty = ty_expr orelse return;
         const struct_name = structTypeNameAlias(aggregate_ty, self.aliases) orelse return;
@@ -3209,12 +3319,17 @@ const FunctionBuilder = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directLocalAggregateMemberPath(inner.*),
             .member => |node| blk: {
+                if (directIdentName(node.base.*)) |local_name| {
+                    if (self.directLocalAggregateTypeName(node.base.*) != null) {
+                        break :blk .{ .local_name = local_name, .field_path = node.name.text };
+                    }
+                    if (self.local_aggregate_pointer_aliases.get(local_name)) |base_name| {
+                        break :blk .{ .local_name = base_name, .field_path = node.name.text };
+                    }
+                    break :blk null;
+                }
                 _ = self.typeExprForExpr(node.base.*) orelse break :blk null;
                 _ = self.typeExprForExpr(expr) orelse break :blk null;
-                if (directIdentName(node.base.*)) |local_name| {
-                    _ = self.directLocalAggregateTypeName(node.base.*) orelse break :blk null;
-                    break :blk .{ .local_name = local_name, .field_path = node.name.text };
-                }
                 const base_path = self.directLocalAggregateMemberPath(node.base.*) orelse break :blk null;
                 break :blk .{
                     .local_name = base_path.local_name,
@@ -3236,6 +3351,25 @@ const FunctionBuilder = struct {
                 break :blk .{
                     .local_name = base_path.local_name,
                     .field_path = self.aggregatePointerArrayElementPath(base_path.field_path, element_index) catch break :blk null,
+                };
+            },
+            else => null,
+        };
+    }
+
+    fn directLocalAggregatePointerAliasMemberPath(self: *FunctionBuilder, expr: ast.Expr) ?AggregatePointerAliasFieldPath {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directLocalAggregatePointerAliasMemberPath(inner.*),
+            .member => |node| blk: {
+                if (directIdentName(node.base.*)) |alias_name| {
+                    const local_name = self.local_aggregate_pointer_aliases.get(alias_name) orelse break :blk null;
+                    break :blk .{ .alias_name = alias_name, .local_name = local_name, .field_path = node.name.text };
+                }
+                const base_path = self.directLocalAggregatePointerAliasMemberPath(node.base.*) orelse break :blk null;
+                break :blk .{
+                    .alias_name = base_path.alias_name,
+                    .local_name = base_path.local_name,
+                    .field_path = self.joinAggregatePointerFieldPath(base_path.field_path, node.name.text) catch break :blk null,
                 };
             },
             else => null,
@@ -3296,6 +3430,20 @@ const FunctionBuilder = struct {
                 if (maybe_member) |_| {
                     const field_ty = self.typeExprForExpr(index_node.base.*) orelse return;
                     const shape = self.fixedPointerArrayElementShape(field_ty) orelse return;
+                    if (self.directLocalAggregatePointerAliasMemberPath(index_node.base.*)) |alias_path| {
+                        const element_index = self.constUsizeValue(index_node.index.*) orelse {
+                            try self.invalidatePointerFieldsForLocalPath(alias_path.local_name, alias_path.field_path, .dynamic_index_write, span);
+                            try self.invalidatePointerFieldsForLocalPath(alias_path.alias_name, alias_path.field_path, .dynamic_index_write, span);
+                            return;
+                        };
+                        try self.appendUnknownPointerFieldProvenanceFact(alias_path.local_name, alias_path.field_path, element_index, shape, .reassignment, span);
+                        if (self.directPointerProvenance(value, shape, null)) |provenance| {
+                            try self.appendPointerFieldProvenanceFact(alias_path.alias_name, alias_path.field_path, element_index, provenance, shape, .reassignment, value.span);
+                        } else {
+                            try self.appendUnknownPointerFieldProvenanceFact(alias_path.alias_name, alias_path.field_path, element_index, shape, .reassignment, span);
+                        }
+                        return;
+                    }
                     const path = self.directLocalAggregateMemberPath(index_node.base.*) orelse return;
                     const element_index = self.constUsizeValue(index_node.index.*) orelse {
                         try self.invalidatePointerFieldsForLocalPath(path.local_name, path.field_path, .dynamic_index_write, span);
@@ -3310,9 +3458,18 @@ const FunctionBuilder = struct {
                 }
             },
             .member => {
-                const path = self.directLocalAggregateMemberPath(target) orelse return;
                 const field_ty = self.typeExprForExpr(target) orelse return;
                 if (self.pointerShapeFromTypeExpr(field_ty)) |shape| {
+                    if (self.directLocalAggregatePointerAliasMemberPath(target)) |alias_path| {
+                        try self.appendUnknownPointerFieldProvenanceFact(alias_path.local_name, alias_path.field_path, null, shape, .reassignment, span);
+                        if (self.directPointerProvenance(value, shape, null)) |provenance| {
+                            try self.appendPointerFieldProvenanceFact(alias_path.alias_name, alias_path.field_path, null, provenance, shape, .reassignment, value.span);
+                        } else {
+                            try self.appendUnknownPointerFieldProvenanceFact(alias_path.alias_name, alias_path.field_path, null, shape, .reassignment, span);
+                        }
+                        return;
+                    }
+                    const path = self.directLocalAggregateMemberPath(target) orelse return;
                     if (self.directPointerProvenance(value, shape, null)) |provenance| {
                         try self.appendPointerFieldProvenanceFact(path.local_name, path.field_path, null, provenance, shape, .reassignment, value.span);
                     } else {
@@ -3320,6 +3477,7 @@ const FunctionBuilder = struct {
                     }
                     return;
                 }
+                const path = self.directLocalAggregateMemberPath(target) orelse return;
                 if (structTypeNameAlias(field_ty, self.aliases)) |struct_name| {
                     try self.invalidatePointerFieldsForLocalPath(path.local_name, path.field_path, .reassignment, span);
                     if (structLiteralFields(value)) |fields| {
@@ -3781,6 +3939,14 @@ const FunctionBuilder = struct {
                 break :blk self.directAggregatePointerFieldProvenance(call.args[0], target_shape);
             },
             .member => blk: {
+                if (self.directLocalAggregatePointerAliasMemberPath(expr)) |alias_path| {
+                    const live = self.livePointerProvenanceForField(alias_path.alias_name, alias_path.field_path) orelse
+                        self.livePointerProvenanceForField(alias_path.local_name, alias_path.field_path) orelse break :blk null;
+                    if (live.provenance != .local_storage and live.provenance != .global_storage) break :blk null;
+                    if (!samePointerShape(live.pointer_shape, target_shape)) break :blk null;
+                    const storage = live.storage orelse break :blk null;
+                    break :blk .{ .kind = live.provenance, .storage = storage };
+                }
                 const path = self.directLocalAggregateMemberPath(expr) orelse break :blk null;
                 const live = self.livePointerProvenanceForField(path.local_name, path.field_path) orelse break :blk null;
                 if (live.provenance != .local_storage and live.provenance != .global_storage) break :blk null;
@@ -3801,6 +3967,17 @@ const FunctionBuilder = struct {
                 break :blk self.directAggregatePointerArrayElementProvenance(call.args[0], target_shape);
             },
             .index => |node| blk: {
+                if (self.directLocalAggregatePointerAliasMemberPath(node.base.*)) |alias_path| {
+                    const field_ty = self.typeExprForExpr(node.base.*) orelse break :blk null;
+                    _ = self.fixedPointerArrayElementShape(field_ty) orelse break :blk null;
+                    const element_index = self.constUsizeValue(node.index.*) orelse break :blk null;
+                    const live = self.livePointerProvenanceForFieldElement(alias_path.alias_name, alias_path.field_path, element_index) orelse
+                        self.livePointerProvenanceForFieldElement(alias_path.local_name, alias_path.field_path, element_index) orelse break :blk null;
+                    if (live.provenance != .local_storage and live.provenance != .global_storage) break :blk null;
+                    if (!samePointerShape(live.pointer_shape, target_shape)) break :blk null;
+                    const storage = live.storage orelse break :blk null;
+                    break :blk .{ .kind = live.provenance, .storage = storage };
+                }
                 const path = self.directLocalAggregateMemberPath(node.base.*) orelse break :blk null;
                 const field_ty = self.typeExprForExpr(node.base.*) orelse break :blk null;
                 _ = self.fixedPointerArrayElementShape(field_ty) orelse break :blk null;

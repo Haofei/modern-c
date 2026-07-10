@@ -4328,6 +4328,60 @@ test "LLVM aggregate pointer-field reads without MIR destination fact lower cons
     try expectNotContains(missing_copy_field_body, "load i32, ptr %");
 }
 
+test "LLVM local aggregate pointer aliases require MIR destination facts" {
+    const source =
+        \\struct Holder { ptr: *mut u32, ptrs: [2]*mut u32 }
+        \\
+        \\fn local_alias_field_requires_mir_fact() -> u32 {
+        \\    var local: u32 = 0;
+        \\    let holder: Holder = .{ .ptr = &local, .ptrs = .{ &local, &local } };
+        \\    let hp: *mut Holder = &holder;
+        \\    let p: *mut u32 = hp.ptr;
+        \\    return p.*;
+        \\}
+        \\
+        \\fn local_alias_element_requires_mir_fact() -> u32 {
+        \\    var local: u32 = 0;
+        \\    let holder: Holder = .{ .ptr = &local, .ptrs = .{ &local, &local } };
+        \\    let hp: *mut Holder = &holder;
+        \\    let q: *mut u32 = hp.ptrs[0];
+        \\    return q.*;
+        \\}
+    ;
+
+    var normal_output: std.ArrayList(u8) = .empty;
+    defer normal_output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_local_aggregate_pointer_alias_provenance.mc", source, &normal_output);
+
+    const normal_field = try llvmFunctionBody(normal_output.items, "define internal i32 @local_alias_field_requires_mir_fact");
+    try expectContains(normal_field, "; mir pointer_provenance consumed fn=local_alias_field_requires_mir_fact subject=p provenance=local_storage reason=none");
+    try expectContains(normal_field, "load i32, ptr %");
+    try expectNotContains(normal_field, "load atomic i32");
+
+    const normal_element = try llvmFunctionBody(normal_output.items, "define internal i32 @local_alias_element_requires_mir_fact");
+    try expectContains(normal_element, "; mir pointer_provenance consumed fn=local_alias_element_requires_mir_fact subject=q provenance=local_storage reason=none");
+    try expectContains(normal_element, "load i32, ptr %");
+    try expectNotContains(normal_element, "load atomic i32");
+
+    var missing_field_output: std.ArrayList(u8) = .empty;
+    defer missing_field_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_local_aggregate_pointer_alias_missing_field_fact.mc", source, "local_alias_field_requires_mir_fact", "p", &missing_field_output);
+    const missing_field = try llvmFunctionBody(missing_field_output.items, "define internal i32 @local_alias_field_requires_mir_fact");
+    try expectNotContains(missing_field, "; mir pointer_provenance consumed fn=local_alias_field_requires_mir_fact subject=p");
+    try expectContains(missing_field, "load atomic i32, ptr %");
+    try expectContains(missing_field, " unordered, align 4");
+    try expectNotContains(missing_field, "load i32, ptr %");
+
+    var missing_element_output: std.ArrayList(u8) = .empty;
+    defer missing_element_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_local_aggregate_pointer_alias_missing_element_fact.mc", source, "local_alias_element_requires_mir_fact", "q", &missing_element_output);
+    const missing_element = try llvmFunctionBody(missing_element_output.items, "define internal i32 @local_alias_element_requires_mir_fact");
+    try expectNotContains(missing_element, "; mir pointer_provenance consumed fn=local_alias_element_requires_mir_fact subject=q");
+    try expectContains(missing_element, "load atomic i32, ptr %");
+    try expectContains(missing_element, " unordered, align 4");
+    try expectNotContains(missing_element, "load i32, ptr %");
+}
+
 test "LLVM aggregate pointer-array element reads without MIR destination fact lower conservatively" {
     const source =
         \\global shared_counter: u32 = 0;

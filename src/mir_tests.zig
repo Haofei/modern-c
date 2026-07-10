@@ -2141,6 +2141,53 @@ test "MIR records aggregate pointer assignments from pointer-local copy facts" {
     try std.testing.expect(hasPointerProvenanceFact(noalias_nested_literal_reassignment_function, "q", null, .global_storage, .none, "shared_counter"));
 }
 
+test "MIR records direct local aggregate pointer alias provenance facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, ptrs: [2]*mut u32 }
+        \\
+        \\fn alias_field_and_element() {
+        \\    var local: u32 = 0;
+        \\    let holder: Holder = .{ .ptr = &local, .ptrs = .{ &local, &local } };
+        \\    let hp: *mut Holder = &holder;
+        \\    let p: *mut u32 = hp.ptr;
+        \\    let q: *mut u32 = hp.ptrs[0];
+        \\}
+        \\
+        \\fn alias_write_preserves_only_alias_fact() {
+        \\    var local: u32 = 0;
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .ptrs = .{ &local, &local } };
+        \\    let hp: *mut Holder = &holder;
+        \\    hp.ptr = &local;
+        \\    let alias_read: *mut u32 = hp.ptr;
+        \\    let direct_read: *mut u32 = holder.ptr;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_local_aggregate_pointer_alias_provenance.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const direct = functionByName(typed_mir, "alias_field_and_element").?;
+    try std.testing.expect(hasPointerProvenanceFact(direct, "p", null, .local_storage, .none, "local"));
+    try std.testing.expect(hasPointerProvenanceFact(direct, "q", null, .local_storage, .none, "local"));
+
+    const written = functionByName(typed_mir, "alias_write_preserves_only_alias_fact").?;
+    try std.testing.expect(hasPointerProvenanceFieldFact(written, "holder", "ptr", null, .unknown, .reassignment, null));
+    try std.testing.expect(hasPointerProvenanceFieldFact(written, "hp", "ptr", null, .local_storage, .reassignment, "local"));
+    try std.testing.expect(hasPointerProvenanceFact(written, "alias_read", null, .local_storage, .none, "local"));
+    try std.testing.expect(!hasPointerProvenanceFact(written, "direct_read", null, .local_storage, .none, "local"));
+}
+
 test "MIR records narrow raw-many zero offset pointer provenance facts" {
     const source =
         \\global shared_counter: u32 = 0;

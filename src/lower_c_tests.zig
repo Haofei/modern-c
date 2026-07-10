@@ -6556,6 +6556,58 @@ test "lower-c aggregate pointer reads without MIR destination fact lower conserv
     try expectNotContains(missing_nested_array_casted_noalias_member_copy_field_body, "return *dst.inner.ptrs.elems[mc_check_index_usize(0, 2)];");
 }
 
+test "lower-c local aggregate pointer aliases require MIR destination facts" {
+    const source =
+        \\struct Holder { ptr: *mut u32, ptrs: [2]*mut u32 }
+        \\
+        \\fn c_local_alias_field_requires_mir_fact() -> u32 {
+        \\    var local: u32 = 0;
+        \\    var holder: Holder = .{ .ptr = &local, .ptrs = .{ &local, &local } };
+        \\    let hp: *mut Holder = &holder;
+        \\    let p: *mut u32 = hp.ptr;
+        \\    return p.*;
+        \\}
+        \\
+        \\fn c_local_alias_element_requires_mir_fact() -> u32 {
+        \\    var local: u32 = 0;
+        \\    var holder: Holder = .{ .ptr = &local, .ptrs = .{ &local, &local } };
+        \\    let hp: *mut Holder = &holder;
+        \\    let q: *mut u32 = hp.ptrs[0];
+        \\    return q.*;
+        \\}
+    ;
+
+    var normal_output: std.ArrayList(u8) = .empty;
+    defer normal_output.deinit(std.testing.allocator);
+    try appendCheckedCTest("emit_c_local_aggregate_pointer_alias_provenance.mc", source, &normal_output);
+
+    const normal_field = try cFunctionBody(normal_output.items, "static uint32_t c_local_alias_field_requires_mir_fact(void)");
+    try expectContains(normal_field, "/* mir pointer_provenance consumed fn=c_local_alias_field_requires_mir_fact subject=p provenance=local_storage reason=none source=");
+    try expectContains(normal_field, "return *p;");
+    try expectNotContains(normal_field, "mc_race_load_u32(p)");
+
+    const normal_element = try cFunctionBody(normal_output.items, "static uint32_t c_local_alias_element_requires_mir_fact(void)");
+    try expectContains(normal_element, "/* mir pointer_provenance consumed fn=c_local_alias_element_requires_mir_fact subject=q provenance=local_storage reason=none source=");
+    try expectContains(normal_element, "return *q;");
+    try expectNotContains(normal_element, "mc_race_load_u32(q)");
+
+    var missing_field_output: std.ArrayList(u8) = .empty;
+    defer missing_field_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutPointerProvenanceFactsForSubject("emit_c_local_aggregate_pointer_alias_missing_field_fact.mc", source, "c_local_alias_field_requires_mir_fact", "p", &missing_field_output);
+    const missing_field = try cFunctionBody(missing_field_output.items, "static uint32_t c_local_alias_field_requires_mir_fact(void)");
+    try expectNotContains(missing_field, "/* mir pointer_provenance consumed fn=c_local_alias_field_requires_mir_fact subject=p");
+    try expectContains(missing_field, "return ((uint32_t)mc_race_load_u32(p));");
+    try expectNotContains(missing_field, "return *p;");
+
+    var missing_element_output: std.ArrayList(u8) = .empty;
+    defer missing_element_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutPointerProvenanceFactsForSubject("emit_c_local_aggregate_pointer_alias_missing_element_fact.mc", source, "c_local_alias_element_requires_mir_fact", "q", &missing_element_output);
+    const missing_element = try cFunctionBody(missing_element_output.items, "static uint32_t c_local_alias_element_requires_mir_fact(void)");
+    try expectNotContains(missing_element, "/* mir pointer_provenance consumed fn=c_local_alias_element_requires_mir_fact subject=q");
+    try expectContains(missing_element, "return ((uint32_t)mc_race_load_u32(q));");
+    try expectNotContains(missing_element, "return *q;");
+}
+
 test "lower-c emits while loops and loop control" {
     const source =
         \\fn loop_once(flag: bool) -> u32 {

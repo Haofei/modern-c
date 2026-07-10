@@ -5598,7 +5598,8 @@ const LlvmEmitter = struct {
             .grouped => |inner| self.directMirAggregatePointerFieldExpr(inner.*),
             .cast => |node| self.directMirAggregatePointerFieldExpr(node.value.*),
             .call => |call| isAssumeNoaliasCall(call) and self.directMirAggregatePointerFieldExpr(call.args[0]),
-            else => self.directLocalAggregateMemberPath(expr) != null,
+            else => self.directLocalAggregateMemberPath(expr) != null or
+                self.aggregatePointerAliasMemberPath(expr) != null,
         };
     }
 
@@ -5607,7 +5608,8 @@ const LlvmEmitter = struct {
             .grouped => |inner| self.directMirAggregatePointerArrayElementExpr(inner.*),
             .cast => |node| self.directMirAggregatePointerArrayElementExpr(node.value.*),
             .call => |call| isAssumeNoaliasCall(call) and self.directMirAggregatePointerArrayElementExpr(call.args[0]),
-            else => self.directLocalAggregateArrayElementPath(expr) != null,
+            else => self.directLocalAggregateArrayElementPath(expr) != null or
+                self.aggregatePointerAliasArrayElementPath(expr) != null,
         };
     }
 

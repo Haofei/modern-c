@@ -9,6 +9,16 @@ in [`compiler-production-readiness.md`](compiler-production-readiness.md).
 
 ## Current state
 
+### Status boundary
+
+Completed statements in this document describe verified, committed fact-family
+work. An active implementation slice is not evidence and does not extend the
+claimed supported subset until its focused gates pass. The completed direct local
+aggregate-alias slice emits ordinary MIR `PointerProvenanceFact` rows for member
+and fixed-array-element reads through an alias initialized directly from
+`&local_aggregate`; C and LLVM consume them and fail closed when a destination
+row is removed.
+
 The compiler already has several fact-like surfaces, but they are not a single
 typed semantic source of truth:
 
@@ -534,6 +544,14 @@ side: covered direct pointer-container shapes pass through
 `applyMirPointerProvenanceFactsAtSource` / the shared MIR admission helpers and
 the missing-MIR-fact tests, and missing destination facts leave the destination
 provenance unknown instead of using a backend-local fixed-array fallback.
+
+The direct local aggregate-alias slice is a completed bounded Phase 5 migration
+of the first listed fallback family. MIR emits the destination
+`PointerProvenanceFact` for direct alias member and constant-index
+pointer-array reads; C and LLVM consume it; and removing it makes both backends
+use conservative scalar lowering. Alias writes retain alias-scoped facts while
+invalidating the direct aggregate path, preserving the established conservative
+boundary for direct reads after alias mutation.
 
 C and LLVM also consume the existing MIR no-overflow `RangeFact` family for the
 bounded unchecked arithmetic shape: `unchecked.add/sub/mul` must match a
