@@ -3337,6 +3337,10 @@ fn referentPlaceMoved(referent: []const u8, place: ?MovePlace, state: *const std
         }
         return stateHasMovedPlace(typed, state) or stateHasMovedChildPlace(typed, state) or stateHasMovedConflictingPlace(typed, state);
     }
+    return legacySubplaceReferentMoved(referent, state);
+}
+
+fn legacySubplaceReferentMoved(referent: []const u8, state: *const std.StringHashMap(MoveSlot)) bool {
     return isMoveSubplaceKey(referent) and
         (state.contains(referent) or concretePlaceHasWildcardMove(referent, state) or wildcardMoveConflictsWithConcreteSubplace(referent, state));
 }
