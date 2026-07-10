@@ -220,7 +220,9 @@ pub const MoveSlot = struct {
     alias_of: ?[]const u8 = null,
     // Typed identity of `alias_of` when the referent is a nameable move place.
     // `alias_of` remains a map-lookup/display compatibility key during the
-    // transition; stale-alias ownership checks use this structured value.
+    // transition; stale-alias ownership checks use this structured value. For
+    // alias slots, `place` is the storage place containing the alias and
+    // `alias_place` is the move place the alias points at.
     alias_place: ?MovePlace = null,
     // T1.2 (conservative rejection): a borrow of this move binding (or of one of its
     // subfields/elements) has been stored into MEMORY - an aggregate field, an array

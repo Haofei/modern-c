@@ -295,9 +295,9 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                     // The scan recurses through nested struct literals (`o.h.p`) for precise
                     // tracking, and conservatively marks the move root escaped where the borrow
                     // is buried in a non-nameable place (a nested array literal).
-                    registerAggregateFieldAliases(self, decl.names[0].text, decl.names[0].span, decl.init.?, state, aliases);
+                    registerAggregateFieldAliases(self, decl.names[0].text, .{ .root = decl.names[0].text }, decl.names[0].span, decl.init.?, state, aliases);
                 } else if (decl.init.?.kind == .array_literal) {
-                    registerArrayElementAliases(self, decl.names[0].text, decl.names[0].span, decl.init.?, state, aliases);
+                    registerArrayElementAliases(self, decl.names[0].text, .{ .root = decl.names[0].text }, decl.names[0].span, decl.init.?, state, aliases);
                 } else {
                     // T1.2: `let p = &t.inner;` borrows a SUBFIELD/element of the move binding
                     // `t`. The whole-binding stale-alias machinery keys on the bare referent
@@ -951,12 +951,29 @@ fn inheritedFullDerefAlias(expr: ast.Expr, state: *const std.StringHashMap(MoveS
 fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) void {
     const key = aliasPlaceKey(self, expr, state) orelse memberPlaceKey(self, expr) orelse return;
     defer self.reporter.allocator.free(key);
+    const place = aliasStoragePlaceForExpr(self, expr, state);
     var it = state.iterator();
     while (it.next()) |entry| {
         if (entry.value_ptr.alias_of == null) continue;
+        if (place) |arg_place| {
+            if (entry.value_ptr.place) |slot_place| {
+                if (!slot_place.eql(arg_place) and !arg_place.isPrefixOf(slot_place)) continue;
+                checkStaleAlias(self, "", entry.value_ptr.*, expr.span, state);
+                continue;
+            }
+        }
         if (!std.mem.eql(u8, entry.key_ptr.*, key) and !isPlacePrefix(key, entry.key_ptr.*)) continue;
         checkStaleAlias(self, "", entry.value_ptr.*, expr.span, state);
     }
+}
+
+fn aliasStoragePlaceForExpr(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
+    if (placeKeyAndType(self, expr, state)) |pp| return pp.place;
+    if (aliasPlaceKey(self, expr, state)) |key| {
+        defer self.reporter.allocator.free(key);
+        if (state.get(key)) |slot| return slot.place;
+    }
+    return null;
 }
 
 fn fullDerefMoveSubplace(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
@@ -979,7 +996,8 @@ fn fullDerefMoveSubplace(self: *Checker, expr: ast.Expr, state: *const std.Strin
 
 fn aliasPlaceForKey(key: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
     const slot = state.get(key) orelse return null;
-    return slot.place orelse slot.alias_place;
+    if (slot.alias_of != null) return slot.alias_place;
+    return slot.place;
 }
 
 const AliasReferent = struct {
@@ -2821,6 +2839,7 @@ fn callLaunderedMoveAliasReferent(self: *Checker, init_expr: ast.Expr, state: *c
 pub fn registerAggregateFieldAliases(
     self: *Checker,
     base: []const u8,
+    base_place: ?MovePlace,
     escape_span: diagnostics.Span,
     init_expr: ast.Expr,
     state: *std.StringHashMap(MoveSlot),
@@ -2828,10 +2847,11 @@ pub fn registerAggregateFieldAliases(
 ) void {
     const fields = switch (init_expr.kind) {
         .struct_literal => |f| f,
-        .grouped => |inner| return registerAggregateFieldAliases(self, base, escape_span, inner.*, state, aliases),
+        .grouped => |inner| return registerAggregateFieldAliases(self, base, base_place, escape_span, inner.*, state, aliases),
         else => return,
     };
     for (fields) |field| {
+        const field_place = if (base_place) |place| place.project(.{ .field = field.name.text }) else null;
         // A nested struct literal: descend so a borrow buried at `base.f.g…` is tracked at its
         // dotted place. The dotted `key` is owned by `move_place_keys` (so the recursive call
         // can borrow it as the new base, and it is freed at function end).
@@ -2845,7 +2865,7 @@ pub fn registerAggregateFieldAliases(
                 self.reporter.allocator.free(key);
                 continue;
             };
-            registerAggregateFieldAliases(self, key, escape_span, field.value, state, aliases);
+            registerAggregateFieldAliases(self, key, field_place, escape_span, field.value, state, aliases);
             continue;
         }
         if (fieldExprIsArrayLiteral(field.value)) {
@@ -2853,7 +2873,7 @@ pub fn registerAggregateFieldAliases(
                 self.oom = true;
                 continue;
             };
-            registerArrayElementAliases(self, key, escape_span, field.value, state, aliases);
+            registerArrayElementAliases(self, key, field_place, escape_span, field.value, state, aliases);
             self.reporter.allocator.free(key);
             continue;
         }
@@ -2876,7 +2896,7 @@ pub fn registerAggregateFieldAliases(
             self.reporter.allocator.free(key);
             continue;
         };
-        state.put(key, .{ .live = false, .span = field.value.span, .alias_of = referent.key, .alias_place = referent.place }) catch {
+        state.put(key, .{ .live = false, .span = field.value.span, .place = field_place, .alias_of = referent.key, .alias_place = referent.place }) catch {
             self.oom = true;
         };
     }
@@ -2931,6 +2951,7 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
+    const key_place = aliasStoragePlaceForExpr(self, target, state);
 
     const referent = aliasReferentForExpr(self, value, state, aliases) orelse {
         _ = state.remove(key);
@@ -2945,7 +2966,7 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
     }
 
     if (state.getPtr(key)) |slot| {
-        slot.* = .{ .live = false, .span = value.span, .alias_of = referent.key, .alias_place = referent.place };
+        slot.* = .{ .live = false, .span = value.span, .place = key_place, .alias_of = referent.key, .alias_place = referent.place };
         self.reporter.allocator.free(key);
         return;
     }
@@ -2955,7 +2976,7 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
         self.reporter.allocator.free(key);
         return;
     };
-    state.put(key, .{ .live = false, .span = value.span, .alias_of = referent.key, .alias_place = referent.place }) catch {
+    state.put(key, .{ .live = false, .span = value.span, .place = key_place, .alias_of = referent.key, .alias_place = referent.place }) catch {
         self.oom = true;
     };
 }
@@ -2963,6 +2984,7 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
 pub fn registerArrayElementAliases(
     self: *Checker,
     base: []const u8,
+    base_place: ?MovePlace,
     escape_span: diagnostics.Span,
     init_expr: ast.Expr,
     state: *std.StringHashMap(MoveSlot),
@@ -2970,10 +2992,11 @@ pub fn registerArrayElementAliases(
 ) void {
     const items = switch (init_expr.kind) {
         .array_literal => |array_items| array_items,
-        .grouped => |inner| return registerArrayElementAliases(self, base, escape_span, inner.*, state, aliases),
+        .grouped => |inner| return registerArrayElementAliases(self, base, base_place, escape_span, inner.*, state, aliases),
         else => return,
     };
     for (items, 0..) |item, index| {
+        const element_place = if (base_place) |place| place.project(.{ .constant_index = index }) else null;
         const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[{d}]", .{ base, index }) catch {
             self.oom = true;
             continue;
@@ -2984,15 +3007,15 @@ pub fn registerArrayElementAliases(
                 self.reporter.allocator.free(key);
                 continue;
             };
-            registerAggregateFieldAliases(self, key, escape_span, item, state, aliases);
+            registerAggregateFieldAliases(self, key, element_place, escape_span, item, state, aliases);
             continue;
         }
         if (fieldExprIsArrayLiteral(item)) {
-            registerArrayElementAliases(self, key, escape_span, item, state, aliases);
+            registerArrayElementAliases(self, key, element_place, escape_span, item, state, aliases);
             self.reporter.allocator.free(key);
             continue;
         }
-        recordAliasPlaceOrEscapeWithKey(self, key, item, escape_span, state, aliases);
+        recordAliasPlaceOrEscapeWithKey(self, key, element_place, item, escape_span, state, aliases);
     }
 }
 
@@ -3017,12 +3040,14 @@ pub fn recordAssignedAliasPlaceOrEscape(
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    recordAliasPlaceOrEscapeWithKey(self, key, value, escape_span, state, aliases);
+    const key_place = aliasStoragePlaceForExpr(self, target, state);
+    recordAliasPlaceOrEscapeWithKey(self, key, key_place, value, escape_span, state, aliases);
 }
 
 fn recordAliasPlaceOrEscapeWithKey(
     self: *Checker,
     key: []const u8,
+    key_place: ?MovePlace,
     value: ast.Expr,
     escape_span: diagnostics.Span,
     state: *std.StringHashMap(MoveSlot),
@@ -3041,7 +3066,7 @@ fn recordAliasPlaceOrEscapeWithKey(
     }
 
     if (state.getPtr(key)) |slot| {
-        slot.* = .{ .live = false, .span = value.span, .alias_of = referent.key, .alias_place = referent.place };
+        slot.* = .{ .live = false, .span = value.span, .place = key_place, .alias_of = referent.key, .alias_place = referent.place };
         self.reporter.allocator.free(key);
         return;
     }
@@ -3051,7 +3076,7 @@ fn recordAliasPlaceOrEscapeWithKey(
         self.reporter.allocator.free(key);
         return;
     };
-    state.put(key, .{ .live = false, .span = value.span, .alias_of = referent.key, .alias_place = referent.place }) catch {
+    state.put(key, .{ .live = false, .span = value.span, .place = key_place, .alias_of = referent.key, .alias_place = referent.place }) catch {
         self.oom = true;
     };
 }
@@ -3854,9 +3879,9 @@ fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *std.St
                 };
             }
         } else if (init.kind == .struct_literal) {
-            registerAggregateFieldAliases(self, decl.names[0].text, decl.names[0].span, init, state, aliases);
+            registerAggregateFieldAliases(self, decl.names[0].text, .{ .root = decl.names[0].text }, decl.names[0].span, init, state, aliases);
         } else if (init.kind == .array_literal) {
-            registerArrayElementAliases(self, decl.names[0].text, decl.names[0].span, init, state, aliases);
+            registerArrayElementAliases(self, decl.names[0].text, .{ .root = decl.names[0].text }, decl.names[0].span, init, state, aliases);
         }
         markBorrowEscapeCapturedCallResult(self, init, decl.names[0].span, state, aliases);
     }

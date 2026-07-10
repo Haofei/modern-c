@@ -2,7 +2,7 @@
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
 Current ledger: **updated 2026-07-09, based on the current compiler worktree**.
-Ledger count: **400 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
+Ledger count: **401 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -434,6 +434,7 @@ progress.
 | Move checker deferred-borrow reservation uses typed roots | Deferred-borrow registration now derives the owner root and pre-existing moved-subplace conflicts from `MovePlace` when the caller has one, including cleanup-local stale-alias checks. Formatted referent parsing remains only for legacy untyped reservations. | `src/sema_move.zig` `markDeferredBorrowReferent`, `stateHasMovedPlace`, `stateHasMovedChildPlace`, and `stateHasMovedConflictingPlace`; deferred root, field, array, dynamic, alias, cleanup-local, and laundered cases in `tests/spec/move_place.mc`; `zig build test`; `git diff --check`. |
 | Move checker retires full-deref string alias helper | Full-deref subplace alias handling no longer needs the string-only `fullDerefMoveSubplaceAlias` helper; callers use typed `PlaceKeyTy`/`AliasReferent` flows instead. This removes one legacy helper from the explicit-place migration without changing diagnostics. | `src/sema_move.zig` removal of `fullDerefMoveSubplaceAlias`; full-deref field, array, dynamic, noalias, copied, and duplicate-move cases in `tests/spec/move_place.mc`; `zig build test`; `git diff --check`. |
 | Move checker consumes alias referents through typed places | Full-deref move consumption now routes `AliasReferent` through a single helper that consumes `MovePlace` data first and falls back to formatted subplace keys only for legacy untyped referents. This removes the inline string-subplace branch from deref consumption while preserving existing diagnostics. | `src/sema_move.zig` `consumeTrackedMoveReferent` and `.deref` handling in `moveConsume`; full-deref field, array, dynamic, noalias, copied, and duplicate-move cases in `tests/spec/move_place.mc`; `zig test src/spec_tests.zig`; `zig test src/sema_tests.zig`; `zig build test`; `git diff --check`. |
+| Move checker records alias storage places | Aggregate and array alias slots now carry typed storage `MovePlace` data separately from the typed referent `alias_place`, and aggregate call-argument stale-alias scans compare typed storage prefixes before falling back to formatted keys. This moves another alias-container path away from string-prefix identity while preserving legacy untyped compatibility. | `src/sema_model.zig` `MoveSlot` alias-place contract; `src/sema_move.zig` `registerAggregateFieldAliases`, `registerArrayElementAliases`, `recordAliasPlaceOrEscapeWithKey`, `aliasStoragePlaceForExpr`, and `checkAggregateAliasArgument`; aggregate/array alias cases in `tests/spec/move_place.mc`; `zig test src/spec_tests.zig`; `zig test src/sema_tests.zig`; `zig build test`; `git diff --check`. |
 
 ### In Progress
 
