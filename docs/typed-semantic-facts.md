@@ -670,8 +670,9 @@ This fact family is now implemented only for a narrow initial domain. MIR owns
 direct internal struct-literal helpers and straight-line local aggregate returns
 when the returned local is initialized or whole-assigned from a direct literal,
 or copied from another such tracked local. Returned structs may contain scalar
-pointer fields and fixed arrays of scalar pointer elements. C and LLVM consume
-those facts. All other aggregate-return shapes
+pointer fields, fixed arrays of scalar pointer elements, and recursively nested
+struct literals made from those shapes. C and LLVM consume those facts. All
+other aggregate-return shapes
 still use `aggregate_return_pointer_fields`, the LLVM-local AST pre-scan; that
 collector has **not** been retired.
 
@@ -709,8 +710,9 @@ Current producer boundary:
   producer domain, except for exhaustive bool/wildcard switches whose arms each
   independently reduce to an already-supported return value;
 - return structs with scalar pointer fields or fixed arrays of scalar pointer
-  elements; nested aggregates, nested arrays, slices, and other pointer-bearing
-  field shapes remain outside the domain;
+  elements, including recursively nested struct literals; arrays whose elements
+  are aggregates or arrays, slices, and other pointer-bearing field shapes
+  remain outside the domain;
 - pointer fields directly proven global by the existing MIR direct-address or
   direct internal pointer-return summary.
 

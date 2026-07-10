@@ -310,6 +310,34 @@ test "lower-c consumes MIR aggregate-return pointer-array element facts" {
     try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
+test "lower-c consumes MIR nested aggregate-return pointer facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Inner { ptr: *mut u32, ptrs: [2]*mut u32 }
+        \\struct Outer { inner: Inner }
+        \\
+        \\fn returned_outer() -> Outer {
+        \\    return .{ .inner = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &shared_counter } } };
+        \\}
+        \\
+        \\fn use_returned_outer() -> u32 {
+        \\    let outer: Outer = returned_outer();
+        \\    return outer.inner.ptrs[0].*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_nested_aggregate_return_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_outer callee=returned_outer field=inner.ptrs[0] provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_nested_aggregate_return_mir_fact.mc", source, "returned_outer", "inner.ptrs[0]", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_outer callee=returned_outer field=inner.ptrs[0]");
+    try expectContains(missing_output.items, "mc_race_load_u32");
+}
+
 fn expectTaggedUnionRaceCopySupported(source_name: []const u8, source: []const u8) !void {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
