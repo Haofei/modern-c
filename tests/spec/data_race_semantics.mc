@@ -410,7 +410,7 @@ fn call_aggregate_array_global_param(index: usize) -> u32 {
 
 fn consume_aggregate_local_param(hp: *mut PointerHolder) -> u32 {
     let p: *mut u32 = hp.ptr;
-    // EXPECT: lower-llvm: every visible direct call passes a local aggregate whose pointer field is local-backed, so the deref stays plain.
+    // EXPECT: aggregate pointer parameters without a MIR fact lower atomically, even when every visible direct call passes a local-backed field.
     return p.*;
 }
 
@@ -422,7 +422,7 @@ fn call_aggregate_local_param() -> u32 {
 
 fn consume_indirect_aggregate_local_param(hp: *mut PointerHolder) -> u32 {
     let p: *mut u32 = hp.ptr;
-    // EXPECT: lower-llvm: every visible local function-pointer alias call passes a local aggregate whose pointer field is local-backed, so the deref stays plain.
+    // EXPECT: aggregate pointer parameters without a MIR fact lower atomically, even when visible function-pointer-alias calls pass local-backed fields.
     return p.*;
 }
 
