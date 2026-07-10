@@ -1208,6 +1208,30 @@ test "MIR dump exposes elided bounds facts" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir elided_bounds_fact fn=divide_const_nonzero check=bounds_elided recorded=true") != null);
 }
 
+test "MIR dump emits non-elided bounds facts" {
+    const source =
+        \\fn read_at(values: [2]u32, index: usize) -> u32 {
+        \\    return values[index];
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_bounds_dump.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, module, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "bounds_facts=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir bounds_fact fn=read_at kind=index recorded=true") != null);
+}
+
 test "MIR dump exposes representation value identities" {
     const source =
         \\fn return_ptr_param(p: *mut u8) -> *mut u8 {

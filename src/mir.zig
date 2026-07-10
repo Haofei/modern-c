@@ -333,8 +333,8 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
     for (mir.functions) |function| {
         try out.print(
             allocator,
-            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
-            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
+            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
+            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
         );
         for (function.contract_regions) |region| {
             try out.print(
@@ -398,6 +398,13 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
                 allocator,
                 "mir range_fact fn={s} region_id={} target={s} op={s} left={s} right={s} result_type={s} assumption=no_overflow recorded=true line={} column={}\n",
                 .{ function.name, fact.region_id, fact.target, fact.op, fact.left, fact.right, fact.result_ty.name(), fact.line, fact.column },
+            );
+        }
+        for (function.bounds_facts) |fact| {
+            try out.print(
+                allocator,
+                "mir bounds_fact fn={s} kind={s} recorded=true line={} column={}\n",
+                .{ function.name, @tagName(fact.kind), fact.source.line, fact.source.column },
             );
         }
         for (function.pointer_provenance_facts) |fact| {
