@@ -1466,6 +1466,12 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    return holder;
         \\}
         \\
+        \\fn copied_holder() -> Holder {
+        \\    let source: Holder = .{ .ptr = &shared_counter, .tag = 5 };
+        \\    let holder: Holder = source;
+        \\    return holder;
+        \\}
+        \\
         \\fn helper() -> void {}
         \\fn call_before_return() -> Holder {
         \\    let holder: Holder = .{ .ptr = &shared_counter, .tag = 5 };
@@ -1497,10 +1503,12 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "direct_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "local_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "assigned_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "copied_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "unknown_holder"));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "direct_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "local_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "assigned_holder", "ptr", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "copied_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "unknown_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "call_before_return"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "pointer_array_holder"));

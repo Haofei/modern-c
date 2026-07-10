@@ -979,7 +979,7 @@ fn collectDirectAggregateReturnPointerFacts(
         };
         const struct_summary = structs.get(struct_name) orelse continue;
         const body = fn_decl.body orelse continue;
-        const literal_fields = directOrStraightLineLocalAggregateReturnLiteralFields(body) orelse continue;
+        const literal_fields = (try directOrStraightLineLocalAggregateReturnLiteralFields(allocator, body)) orelse continue;
         if (aggregateReturnHasUnmodeledPointerField(struct_summary, enums, structs, packed_bits, aliases)) continue;
 
         try summaries.append(allocator, .{
@@ -1008,7 +1008,7 @@ fn collectDirectAggregateReturnPointerFacts(
     };
 }
 
-fn directOrStraightLineLocalAggregateReturnLiteralFields(body: ast.Block) ?[]ast.StructLiteralField {
+fn directOrStraightLineLocalAggregateReturnLiteralFields(allocator: std.mem.Allocator, body: ast.Block) !?[]ast.StructLiteralField {
     if (body.items.len == 0) return null;
     const final_value = switch (body.items[body.items.len - 1].kind) {
         .@"return" => |maybe_value| maybe_value orelse return null,
@@ -1017,27 +1017,42 @@ fn directOrStraightLineLocalAggregateReturnLiteralFields(body: ast.Block) ?[]ast
     if (structLiteralFieldsForAggregateReturn(final_value)) |fields| return fields;
 
     const returned_local = directIdentName(final_value) orelse return null;
-    var final_fields: ?[]ast.StructLiteralField = null;
+    var local_literals = std.StringHashMap([]ast.StructLiteralField).init(allocator);
+    defer local_literals.deinit();
     for (body.items[0 .. body.items.len - 1]) |stmt| {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| {
-                if (local.init) |initializer| {
-                    if (aggregateReturnPrefixExprHasCallOrExit(initializer)) return null;
-                }
-                if (local.names.len != 1 or !std.mem.eql(u8, local.names[0].text, returned_local)) continue;
-                const initializer = local.init orelse return null;
-                final_fields = structLiteralFieldsForAggregateReturn(initializer) orelse return null;
+                if (local.names.len != 1) return null;
+                const initializer = local.init orelse {
+                    _ = local_literals.remove(local.names[0].text);
+                    continue;
+                };
+                if (aggregateReturnPrefixExprHasCallOrExit(initializer)) return null;
+                try tryTrackAggregateReturnLiteralLocal(&local_literals, local.names[0].text, initializer);
             },
             .assignment => |assignment| {
                 const target = assignmentTargetIdentName(assignment.target) orelse return null;
                 if (aggregateReturnPrefixExprHasCallOrExit(assignment.value)) return null;
-                if (!std.mem.eql(u8, target, returned_local)) continue;
-                final_fields = structLiteralFieldsForAggregateReturn(assignment.value) orelse return null;
+                try tryTrackAggregateReturnLiteralLocal(&local_literals, target, assignment.value);
             },
             else => return null,
         }
     }
-    return final_fields;
+    return local_literals.get(returned_local);
+}
+
+fn tryTrackAggregateReturnLiteralLocal(locals: *std.StringHashMap([]ast.StructLiteralField), name: []const u8, value: ast.Expr) !void {
+    if (structLiteralFieldsForAggregateReturn(value)) |fields| {
+        try locals.put(name, fields);
+        return;
+    }
+    if (directIdentName(value)) |source| {
+        if (locals.get(source)) |fields| {
+            try locals.put(name, fields);
+            return;
+        }
+    }
+    _ = locals.remove(name);
 }
 
 fn structLiteralFieldsForAggregateReturn(expr: ast.Expr) ?[]ast.StructLiteralField {

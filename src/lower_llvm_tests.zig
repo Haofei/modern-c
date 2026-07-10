@@ -637,6 +637,12 @@ test "LLVM consumes MIR aggregate-return facts through straight-line local value
         \\    return holder;
         \\}
         \\
+        \\fn copied_holder() -> Holder {
+        \\    let source: Holder = .{ .ptr = &shared_counter, .tag = 4 };
+        \\    let holder: Holder = source;
+        \\    return holder;
+        \\}
+        \\
         \\fn use_local_holder() -> u32 {
         \\    let holder: Holder = local_holder();
         \\    return holder.ptr.*;
@@ -644,6 +650,11 @@ test "LLVM consumes MIR aggregate-return facts through straight-line local value
         \\
         \\fn use_assigned_holder() -> u32 {
         \\    let holder: Holder = assigned_holder();
+        \\    return holder.ptr.*;
+        \\}
+        \\
+        \\fn use_copied_holder() -> u32 {
+        \\    let holder: Holder = copied_holder();
         \\    return holder.ptr.*;
         \\}
     ;
@@ -655,6 +666,8 @@ test "LLVM consumes MIR aggregate-return facts through straight-line local value
     try expectContains(local_body, "; mir aggregate_return_pointer consumed caller=use_local_holder callee=local_holder field=ptr provenance=global_storage");
     const assigned_body = try llvmFunctionBody(output.items, "define internal i32 @use_assigned_holder");
     try expectContains(assigned_body, "; mir aggregate_return_pointer consumed caller=use_assigned_holder callee=assigned_holder field=ptr provenance=global_storage");
+    const copied_body = try llvmFunctionBody(output.items, "define internal i32 @use_copied_holder");
+    try expectContains(copied_body, "; mir aggregate_return_pointer consumed caller=use_copied_holder callee=copied_holder field=ptr provenance=global_storage");
 
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
