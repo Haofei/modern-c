@@ -1553,15 +1553,22 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    }
         \\    return holder;
         \\}
+        \\fn if_join_holder(flag: bool) -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 26 };
+        \\    if flag {
+        \\        holder.ptr = &shared_counter;
+        \\    }
+        \\    return holder;
+        \\}
         \\fn defer_prefix_holder() -> Holder {
         \\    defer cleanup();
-        \\    return .{ .ptr = &shared_counter, .tag = 26 };
+        \\    return .{ .ptr = &shared_counter, .tag = 27 };
         \\}
         \\fn for_prefix_holder(values: [2]u32) -> Holder {
         \\    for value in values {
         \\        let ignored: u32 = value;
         \\    }
-        \\    return .{ .ptr = &shared_counter, .tag = 27 };
+        \\    return .{ .ptr = &shared_counter, .tag = 28 };
         \\}
         \\fn trailing_nested_field_updated_holder(choice: u32) -> Outer {
         \\    var holder: Outer = .{ .inner = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &shared_counter } }, .tag = 17 };
@@ -1664,6 +1671,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "nested_control_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "loop_prefix_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "sequential_switch_holder"));
+    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "if_join_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "defer_prefix_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "for_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_nested_field_updated_holder"));
