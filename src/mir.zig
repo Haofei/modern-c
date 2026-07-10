@@ -914,12 +914,126 @@ fn collectDirectGlobalPointerReturnSummaries(allocator: std.mem.Allocator, modul
 }
 
 fn directGlobalAddressStorage(body: ast.Block, globals: *const std.StringHashMap(ValueType)) ?[]const u8 {
-    if (body.items.len != 1) return null;
-    const value = switch (body.items[0].kind) {
-        .@"return" => |maybe_value| maybe_value orelse return null,
-        else => return null,
+    const flow = directGlobalReturnFlowForBlock(body, globals);
+    if (flow.can_fall_through or flow.unknown_return) return null;
+    return flow.storage;
+}
+
+// A deliberately narrow CFG summary for internal pointer-return helpers. It
+// accepts only paths whose explicit returns are all `&` of the same global, and
+// rejects a possible fallthrough or any other return expression. This extends
+// the original one-statement form across branches without treating arbitrary
+// return flow as proven provenance.
+const DirectGlobalReturnFlow = struct {
+    can_fall_through: bool = true,
+    storage: ?[]const u8 = null,
+    unknown_return: bool = false,
+};
+
+fn directGlobalReturnFlowForBlock(block: ast.Block, globals: *const std.StringHashMap(ValueType)) DirectGlobalReturnFlow {
+    var result: DirectGlobalReturnFlow = .{};
+    for (block.items) |stmt| {
+        if (!result.can_fall_through) break;
+        const statement_flow = directGlobalReturnFlowForStmt(stmt, globals);
+        result = appendDirectGlobalReturnFlow(result, statement_flow);
+    }
+    return result;
+}
+
+fn directGlobalReturnFlowForStmt(stmt: ast.Stmt, globals: *const std.StringHashMap(ValueType)) DirectGlobalReturnFlow {
+    return switch (stmt.kind) {
+        .@"return" => |maybe_value| .{
+            .can_fall_through = false,
+            .storage = if (maybe_value) |value| directGlobalAddressStorageExpr(value, globals) else null,
+            .unknown_return = maybe_value == null or directGlobalAddressStorageExpr(maybe_value.?, globals) == null,
+        },
+        .block, .unsafe_block, .comptime_block => |block| directGlobalReturnFlowForBlock(block, globals),
+        .contract_block => |contract| directGlobalReturnFlowForBlock(contract.block, globals),
+        .if_let => |node| blk: {
+            const then_flow = directGlobalReturnFlowForBlock(node.then_block, globals);
+            const else_flow = if (node.else_block) |else_block|
+                directGlobalReturnFlowForBlock(else_block, globals)
+            else
+                DirectGlobalReturnFlow{};
+            break :blk joinDirectGlobalReturnFlows(then_flow, else_flow);
+        },
+        .@"switch" => |node| directGlobalReturnFlowForSwitch(node, globals),
+        else => .{},
     };
-    return directGlobalAddressStorageExpr(value, globals);
+}
+
+fn directGlobalReturnFlowForSwitch(node: ast.Switch, globals: *const std.StringHashMap(ValueType)) DirectGlobalReturnFlow {
+    var result: DirectGlobalReturnFlow = .{ .can_fall_through = !directGlobalReturnSwitchIsExhaustive(node) };
+    for (node.arms) |arm| {
+        const arm_flow = switch (arm.body) {
+            .block => |block| directGlobalReturnFlowForBlock(block, globals),
+            .expr => DirectGlobalReturnFlow{},
+        };
+        if (arm_flow.can_fall_through) result.can_fall_through = true;
+        result = joinDirectGlobalReturnFlows(result, arm_flow);
+    }
+    return result;
+}
+
+fn directGlobalReturnSwitchIsExhaustive(node: ast.Switch) bool {
+    if (directGlobalReturnSwitchHasWildcard(node)) return true;
+    if (node.arms.len != 2) return false;
+    var saw_true = false;
+    var saw_false = false;
+    for (node.arms) |arm| {
+        if (arm.patterns.len != 1) return false;
+        const value = directGlobalReturnBoolPatternValue(arm.patterns[0]) orelse return false;
+        if (value) {
+            if (saw_true) return false;
+            saw_true = true;
+        } else {
+            if (saw_false) return false;
+            saw_false = true;
+        }
+    }
+    return saw_true and saw_false;
+}
+
+fn directGlobalReturnSwitchHasWildcard(node: ast.Switch) bool {
+    for (node.arms) |arm| for (arm.patterns) |pattern| {
+        if (pattern.kind == .wildcard) return true;
+    };
+    return false;
+}
+
+fn directGlobalReturnBoolPatternValue(pattern: ast.Pattern) ?bool {
+    return switch (pattern.kind) {
+        .literal => |expr| switch (expr.kind) {
+            .bool_literal => |value| value,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn joinDirectGlobalReturnFlows(left: DirectGlobalReturnFlow, right: DirectGlobalReturnFlow) DirectGlobalReturnFlow {
+    var result: DirectGlobalReturnFlow = .{
+        .can_fall_through = left.can_fall_through or right.can_fall_through,
+        .unknown_return = left.unknown_return or right.unknown_return,
+    };
+    if (left.storage) |storage| result.storage = storage;
+    if (right.storage) |storage| {
+        if (result.storage) |existing| {
+            if (!std.mem.eql(u8, existing, storage)) result.unknown_return = true;
+        } else {
+            result.storage = storage;
+        }
+    }
+    return result;
+}
+
+fn appendDirectGlobalReturnFlow(prefix: DirectGlobalReturnFlow, statement: DirectGlobalReturnFlow) DirectGlobalReturnFlow {
+    // `prefix` reaches `statement` only through its fallthrough edge. Return
+    // exits collected before that edge remain exits, while the resulting
+    // fallthrough is solely the statement's fallthrough.
+    var result = joinDirectGlobalReturnFlows(prefix, statement);
+    result.can_fall_through = statement.can_fall_through;
+    return result;
 }
 
 fn directGlobalAddressStorageExpr(expr: ast.Expr, globals: *const std.StringHashMap(ValueType)) ?[]const u8 {
@@ -3483,7 +3597,7 @@ const FunctionBuilder = struct {
                 if (isAssumeNoaliasDirectCall(call) and call.type_args.len == 0 and call.args.len == 2) {
                     return self.directPointerProvenance(call.args[0], target_shape, target_subject);
                 }
-                if (call.type_args.len == 0 and call.args.len == 0) {
+                if (call.type_args.len == 0) {
                     if (directCalleeName(call.callee.*)) |callee| {
                         if (self.pointer_return_summaries.get(callee)) |summary| {
                             if (samePointerShape(summary.pointer_shape, target_shape)) return summary.provenance;

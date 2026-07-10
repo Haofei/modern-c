@@ -474,8 +474,15 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
         \\fn returned_global_pointer() -> *mut u32 {
         \\    return &shared_counter;
         \\}
+        \\fn branched_global_pointer(flag: bool) -> *mut u32 {
+        \\    if flag { return &shared_counter; } else { return &shared_counter; }
+        \\}
         \\fn uses_returned_global_pointer() -> u32 {
         \\    let gp: *mut u32 = returned_global_pointer();
+        \\    return gp.*;
+        \\}
+        \\fn uses_branched_global_pointer(flag: bool) -> u32 {
+        \\    let gp: *mut u32 = branched_global_pointer(flag);
         \\    return gp.*;
         \\}
         \\fn assigns_returned_global_pointer() -> u32 {
@@ -494,6 +501,10 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
 
     const assignment_body = try llvmFunctionBody(output.items, "define internal i32 @assigns_returned_global_pointer");
     try expectContains(assignment_body, "; mir pointer_provenance consumed fn=assigns_returned_global_pointer subject=gp provenance=global_storage reason=reassignment");
+
+    const branched_body = try llvmFunctionBody(output.items, "define internal i32 @uses_branched_global_pointer");
+    try expectContains(branched_body, "; mir pointer_provenance consumed fn=uses_branched_global_pointer subject=gp provenance=global_storage reason=none");
+    try expectContains(branched_body, "load atomic i32, ptr %");
 
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);

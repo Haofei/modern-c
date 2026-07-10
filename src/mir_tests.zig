@@ -1433,6 +1433,43 @@ test "MIR records direct internal global pointer return provenance in callers" {
     try std.testing.expect(hasPointerProvenanceFact(function, "gp", null, .global_storage, .none, "shared_counter"));
 }
 
+test "MIR joins consistent internal global pointer returns across branches" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\fn branched_global_pointer(flag: bool) -> *mut u32 {
+        \\    if flag { return &shared_counter; } else { return &shared_counter; }
+        \\}
+        \\fn mixed_pointer_return(flag: bool, fallback: *mut u32) -> *mut u32 {
+        \\    if flag { return &shared_counter; } else { return fallback; }
+        \\}
+        \\fn uses_branched_global_pointer(flag: bool) -> u32 {
+        \\    let gp: *mut u32 = branched_global_pointer(flag);
+        \\    return gp.*;
+        \\}
+        \\fn uses_mixed_pointer_return(flag: bool, fallback: *mut u32) -> u32 {
+        \\    let p: *mut u32 = mixed_pointer_return(flag, fallback);
+        \\    return p.*;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_branched_pointer_return_provenance.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const branched = functionByName(typed_mir, "uses_branched_global_pointer").?;
+    try std.testing.expect(hasPointerProvenanceFact(branched, "gp", null, .global_storage, .none, "shared_counter"));
+    const mixed = functionByName(typed_mir, "uses_mixed_pointer_return").?;
+    try std.testing.expect(!hasPointerProvenanceFact(mixed, "p", null, .global_storage, .none, "shared_counter"));
+}
+
 test "MIR pointer provenance facts fail closed on reassignment dynamic writes calls and address escape" {
     const source =
         \\global shared_counter: u32 = 0;
