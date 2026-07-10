@@ -2343,21 +2343,25 @@ pub fn hasMovedSubplace(base: MovePlace, state: *const std.StringHashMap(MoveSlo
     return false;
 }
 
-// Remove every `base.field` place key when the whole aggregate leaves play (consumed or
-// forgotten), so a later same-named binding starts clean.
-pub fn clearSubplaces(base: []const u8, state: *std.StringHashMap(MoveSlot)) void {
-    // Remove every `base.field…` subplace. A HashMap iterator is invalidated by a removal,
-    // so rescan from the top after each one until none remain — rather than collecting into
-    // a fixed-size batch, which would silently leave stale subplace state behind once an
-    // aggregate had more moved-out fields than the batch could hold. The number of tracked
-    // subplaces per function is tiny, so the repeated scan is cheap.
+// Remove every child place when the whole aggregate leaves play (consumed or
+// forgotten), so a later same-named binding starts clean. Typed slots use
+// projection ancestry; legacy alias-only slots retain the display-key fallback
+// until the state-map migration is complete.
+pub fn clearSubplaces(base: MovePlace, state: *std.StringHashMap(MoveSlot)) void {
+    // A HashMap iterator is invalidated by a removal, so rescan from the top
+    // after each one. The number of tracked places per function is tiny.
     var removed_any = true;
     while (removed_any) {
         removed_any = false;
         var it = state.iterator();
         while (it.next()) |entry| {
             const k = entry.key_ptr.*;
-            if (k.len > base.len + 1 and std.mem.startsWith(u8, k, base) and isSubplaceSeparator(k[base.len])) {
+            const slot = entry.value_ptr.*;
+            const is_child = if (slot.place) |place|
+                base.isPrefixOf(place)
+            else
+                k.len > base.root.len + 1 and std.mem.startsWith(u8, k, base.root) and isSubplaceSeparator(k[base.root.len]);
+            if (is_child) {
                 _ = state.remove(k);
                 removed_any = true;
                 break; // the iterator is now invalid; rescan with a fresh one
@@ -2372,7 +2376,9 @@ pub fn clearSubplaces(base: []const u8, state: *std.StringHashMap(MoveSlot)) voi
 pub fn moveForget(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     switch (expr.kind) {
         .ident => |id| {
+            var root_place = MovePlace{ .root = id.text };
             if (state.getPtr(id.text)) |slot| {
+                if (slot.place) |place| root_place = place;
                 if (!slot.live) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");
                 } else if (slot.deferred) {
@@ -2384,7 +2390,7 @@ pub fn moveForget(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Move
                     slot.live = false;
                 }
             }
-            clearSubplaces(id.text, state);
+            clearSubplaces(root_place, state);
         },
         .grouped => |inner| moveForget(self, inner.*, state, aliases),
         else => moveConsume(self, expr, state, aliases),
