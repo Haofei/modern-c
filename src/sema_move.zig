@@ -164,8 +164,7 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *std.StringHa
     var iter_it = iteration_state.iterator();
     while (iter_it.next()) |entry| {
         if (entry_state.contains(entry.key_ptr.*)) continue;
-        const sep = firstSubplaceSeparator(entry.key_ptr.*) orelse continue;
-        const root = entry.key_ptr.*[0..sep];
+        const root = trackedSubplaceRoot(entry.value_ptr.*, entry.key_ptr.*) orelse continue;
         if (entry_state.getPtr(root)) |root_slot| {
             self.errorCode(entry.value_ptr.span, "E_MOVE_LOOP_RESOURCE", "cannot move an outer linear `move` place inside a loop; the loop may run zero or multiple times");
             root_slot.live = false;
@@ -885,6 +884,12 @@ fn moveSubplaceRootInOuter(slot: MoveSlot, key: []const u8, outer: *const std.St
     return outer.contains(key[0..sep]);
 }
 
+fn trackedSubplaceRoot(slot: MoveSlot, key: []const u8) ?[]const u8 {
+    if (slot.place) |place| return if (place.isSubplace()) place.root else null;
+    const sep = firstSubplaceSeparator(key) orelse return null;
+    return key[0..sep];
+}
+
 fn firstSubplaceSeparator(key: []const u8) ?usize {
     for (key, 0..) |c, i| {
         if (isSubplaceSeparator(c)) return i;
@@ -1288,8 +1293,7 @@ fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringH
     var rhs_it = rhs_state.iterator();
     while (rhs_it.next()) |entry| {
         if (state.contains(entry.key_ptr.*)) continue;
-        const sep = firstSubplaceSeparator(entry.key_ptr.*) orelse continue;
-        const root = entry.key_ptr.*[0..sep];
+        const root = trackedSubplaceRoot(entry.value_ptr.*, entry.key_ptr.*) orelse continue;
         if (state.getPtr(root)) |root_slot| {
             self.errorCode(rhs.span, "E_MOVE_BRANCH_MISMATCH", "cannot move a linear `move` place only on one side of a short-circuit expression");
             root_slot.live = false;
@@ -1338,8 +1342,7 @@ fn moveDeferShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHas
     var rhs_it = rhs_state.iterator();
     while (rhs_it.next()) |entry| {
         if (state.contains(entry.key_ptr.*)) continue;
-        const sep = firstSubplaceSeparator(entry.key_ptr.*) orelse continue;
-        const root = entry.key_ptr.*[0..sep];
+        const root = trackedSubplaceRoot(entry.value_ptr.*, entry.key_ptr.*) orelse continue;
         if (state.getPtr(root)) |root_slot| {
             self.errorCode(rhs.span, "E_MOVE_BRANCH_MISMATCH", "cannot defer-consume a linear `move` place only on one side of a short-circuit expression");
             root_slot.live = false;
