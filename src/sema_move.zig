@@ -2346,7 +2346,7 @@ fn nonNameableSingletonMoveIndex(self: *Checker, expr: ast.Expr, state: *const s
 // moved out.
 pub fn placeExprIsMoved(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) bool {
     const pp = placeKeyAndType(self, expr, state) orelse return false;
-    return stateHasMovedPlace(pp.place, state) or stateHasMovedConflictingPlace(pp.place, state);
+    return stateHasMovedPlaceOrConflict(pp.place, state);
 }
 
 fn concretePlaceHasWildcardMove(key: []const u8, state: *const std.StringHashMap(MoveSlot)) bool {
@@ -2425,6 +2425,10 @@ fn stateHasMovedConflictingPlace(place: MovePlace, state: *const std.StringHashM
     return false;
 }
 
+fn stateHasMovedPlaceOrConflict(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+    return stateHasMovedPlace(place, state) or stateHasMovedConflictingPlace(place, state);
+}
+
 fn stateHasMovedChildPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
@@ -2433,6 +2437,10 @@ fn stateHasMovedChildPlace(place: MovePlace, state: *const std.StringHashMap(Mov
         if (slot.place) |tracked| if (place.isPrefixOf(tracked)) return true;
     }
     return false;
+}
+
+fn stateHasMovedPlaceChildOrConflict(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+    return stateHasMovedPlaceOrConflict(place, state) or stateHasMovedChildPlace(place, state);
 }
 
 fn deferredBorrowConflictsWithTrackedPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
@@ -3373,7 +3381,7 @@ fn referentPlaceMoved(referent: []const u8, place: ?MovePlace, state: *const std
         if (state.get(typed.root)) |root| {
             if (!root.live) return true;
         }
-        return stateHasMovedPlace(typed, state) or stateHasMovedChildPlace(typed, state) or stateHasMovedConflictingPlace(typed, state);
+        return stateHasMovedPlaceChildOrConflict(typed, state);
     }
     return legacySubplaceReferentMoved(referent, state);
 }
@@ -3616,7 +3624,7 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
     }
     if (place) |borrowed| {
         if (borrowed.isSubplace()) {
-            if (stateHasMovedPlace(borrowed, state) or stateHasMovedChildPlace(borrowed, state) or stateHasMovedConflictingPlace(borrowed, state)) {
+            if (stateHasMovedPlaceChildOrConflict(borrowed, state)) {
                 self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` field or array element after it was moved out");
                 return;
             }
