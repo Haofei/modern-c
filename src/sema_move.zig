@@ -955,9 +955,9 @@ fn inheritedFullDerefAlias(expr: ast.Expr, state: *const std.StringHashMap(MoveS
 }
 
 fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) void {
-    const key = aliasPlaceKey(self, expr, state) orelse memberPlaceKey(self, expr) orelse return;
-    defer self.reporter.allocator.free(key);
     const place = aliasStoragePlaceForExpr(self, expr, state);
+    var key: ?[]const u8 = null;
+    defer if (key) |owned| self.reporter.allocator.free(owned);
     var it = state.iterator();
     while (it.next()) |entry| {
         if (entry.value_ptr.alias_of == null) continue;
@@ -968,8 +968,13 @@ fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const std
                 continue;
             }
         }
-        if (!std.mem.eql(u8, entry.key_ptr.*, key) and !isPlacePrefix(key, entry.key_ptr.*)) continue;
-        checkStaleAlias(self, "", entry.value_ptr.*, expr.span, state);
+        const fallback_key = key orelse blk: {
+            key = aliasPlaceKey(self, expr, state) orelse memberPlaceKey(self, expr) orelse return;
+            break :blk key.?;
+        };
+        if (std.mem.eql(u8, entry.key_ptr.*, fallback_key) or isPlacePrefix(fallback_key, entry.key_ptr.*)) {
+            checkStaleAlias(self, "", entry.value_ptr.*, expr.span, state);
+        }
     }
 }
 
