@@ -2,7 +2,7 @@
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
 Current ledger: **updated 2026-07-10, based on the current compiler worktree**.
-Ledger count: **425 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
+Ledger count: **426 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -459,6 +459,7 @@ progress.
 | Move checker rehydrates alias referent places before consumption | Full-deref alias consumption now recovers a typed `MovePlace` from state when `AliasReferent` lacks one, so stored typed subplace aliases consume through `consumeTrackedMovePlace` before the legacy formatted-subplace fallback. Diagnostics remain unchanged while fewer alias-consumption paths depend on string key parsing. | `src/sema_move.zig` `consumeTrackedMoveReferent` and `aliasPlaceForKey`; full-deref, copied, laundered, dynamic, stale, and duplicate alias cases in `tests/spec/move_place.mc`; `zig test src/spec_tests.zig`; `zig test src/sema_tests.zig`; `zig build test`; `git diff --check`. |
 | Move checker centralizes typed referent roots | Cleanup-local alias filtering and deferred-borrow reservation now share `referentRoot`, which derives the owner root from `MovePlace` before falling back to formatted keys. This removes another open-coded root parse from typed alias/defer flows without changing diagnostics. | `src/sema_move.zig` `referentRoot`, `aliasReferentRoot`, and `markDeferredBorrowReferent`; cleanup-local alias and deferred-borrow cases in `tests/spec/move_place.mc`; `zig test src/spec_tests.zig`; `zig test src/sema_tests.zig`; `zig build test`; `git diff --check`. |
 | Move checker isolates legacy subplace movement fallback | The remaining formatted subplace/wildcard moved-referent check is now isolated behind `legacySubplaceReferentMoved`, while `referentPlaceMoved` keeps typed `MovePlace` checks as the primary path. This makes the compatibility boundary explicit for the continuing explicit-place migration. | `src/sema_move.zig` `referentPlaceMoved` and `legacySubplaceReferentMoved`; stale alias, wildcard alias, deferred field/array/dynamic, cleanup-local, and laundered cases in `tests/spec/move_place.mc`; `zig test src/spec_tests.zig`; `zig test src/sema_tests.zig`; `zig build test`; `git diff --check`. |
+| Move checker drops direct indexed wildcard-key lookup | Concrete indexed move, reinitialization, and deferred-cleanup paths now rely solely on typed `MovePlace` equality/conflict state queries. The removed formatted `[*]` key construction was redundant for structured concrete, symbolic, and wildcard projections, so direct indexed ownership checks no longer allocate or look up display keys. Legacy untyped referent compatibility remains isolated outside these direct paths. | `src/sema_move.zig` index handling in `moveStmt`, `moveConsume`, and `moveDefer`, plus `stateHasActivePlaceOrConflict` / `stateHasConflictingMovePlace`; dynamic, symbolic, wildcard, reinitialization, and deferred indexed cases in `tests/spec/move_place.mc`; `zig test src/spec_tests.zig`; `zig test src/sema_tests.zig`; `zig build test`; `git diff --check`. |
 
 ### In Progress
 
