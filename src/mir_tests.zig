@@ -2206,6 +2206,15 @@ test "MIR records direct local pointer-array alias provenance facts" {
         \\    pa.*[0] = &local;
         \\    let p: *mut u32 = pa.*[0];
         \\}
+        \\
+        \\fn alias_reassignment_stays_unproven() {
+        \\    var local: u32 = 0;
+        \\    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+        \\    var other: [2]*mut u32 = .{ &local, &local };
+        \\    var pa: *mut [2]*mut u32 = &ptrs;
+        \\    pa = &other;
+        \\    let p: *mut u32 = pa.*[0];
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_local_pointer_array_alias_provenance.mc", source);
@@ -2227,6 +2236,9 @@ test "MIR records direct local pointer-array alias provenance facts" {
     const written = functionByName(typed_mir, "alias_write_invalidates_backing_array").?;
     try std.testing.expect(hasPointerProvenanceFact(written, "ptrs", null, .unknown, .reassignment, null));
     try std.testing.expect(!hasPointerProvenanceFact(written, "p", null, .local_storage, .none, "local"));
+
+    const reassigned = functionByName(typed_mir, "alias_reassignment_stays_unproven").?;
+    try std.testing.expect(!hasPointerProvenanceFact(reassigned, "p", null, .local_storage, .none, "local"));
 }
 
 test "MIR records narrow raw-many zero offset pointer provenance facts" {

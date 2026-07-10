@@ -3307,14 +3307,13 @@ const FunctionBuilder = struct {
             self.local_pointer_array_aliases.clearRetainingCapacity();
             return;
         }
-        if (self.directLocalPointerArrayAliasBaseName(value)) |base| {
-            try self.local_pointer_array_aliases.put(name, base);
-        } else {
-            if (self.directExistingLocalPointerArrayAliasName(value) != null) {
-                self.local_pointer_array_aliases.clearRetainingCapacity();
-            }
-            _ = self.local_pointer_array_aliases.remove(name);
+        if (self.directExistingLocalPointerArrayAliasName(value) != null) {
+            self.local_pointer_array_aliases.clearRetainingCapacity();
         }
+        // LLVM's registered pointer-to-array alias proof is initializer-only.
+        // Reassignment stays conservative until a separately modeled alias
+        // transfer has producer/consumer and missing-fact coverage.
+        _ = self.local_pointer_array_aliases.remove(name);
     }
 
     fn directLocalPointerArrayAliasBaseName(self: *FunctionBuilder, expr: ast.Expr) ?[]const u8 {
