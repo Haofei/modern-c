@@ -1560,6 +1560,11 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    return .{ .ptr = ptr, .tag = 3 };
         \\}
         \\
+        \\fn local_only_holder() -> Holder {
+        \\    var local: u32 = 4;
+        \\    return .{ .ptr = &local, .tag = 4 };
+        \\}
+        \\
         \\struct PointerArrayHolder { ptrs: [2]*mut u32 }
         \\fn pointer_array_holder() -> PointerArrayHolder {
         \\    return .{ .ptrs = .{ &shared_counter, &shared_counter } };
@@ -1616,6 +1621,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_deep_nested_field_updated_holder", "middle.leaf.ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "mixed_branched_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "unknown_holder", "ptr", .global_storage));
+    try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "local_only_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "call_before_return"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "call_before_literal_return"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "pointer_array_holder"));
