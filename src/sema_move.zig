@@ -2915,6 +2915,10 @@ pub fn fieldExprIsStructLiteral(expr: ast.Expr) bool {
 // (bug #3) If `expr` is a member access `base.f…` whose place-key names a registered
 // field-place borrow alias, return its slot — for the stale-alias check on member reads.
 pub fn aggregateFieldAliasSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+    if (aliasStoragePlaceForExpr(self, expr, state)) |place| {
+        if (aliasSlotForStoragePlace(place, state)) |slot| return slot;
+        if (staleAliasWildcardSlotForConcretePlace(place, state)) |slot| return slot;
+    }
     if (aliasPlaceKey(self, expr, state)) |key| {
         defer self.reporter.allocator.free(key);
         if (state.get(key)) |slot| {
@@ -3082,6 +3086,10 @@ fn recordAliasPlaceOrEscapeWithKey(
 }
 
 pub fn aliasPlaceSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+    if (aliasStoragePlaceForExpr(self, expr, state)) |place| {
+        if (aliasSlotForStoragePlace(place, state)) |slot| return slot;
+        if (staleAliasWildcardSlotForConcretePlace(place, state)) |slot| return slot;
+    }
     if (aliasPlaceKey(self, expr, state)) |key| {
         defer self.reporter.allocator.free(key);
         if (state.get(key)) |slot| {
@@ -3096,6 +3104,30 @@ pub fn aliasPlaceSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHa
         }
     }
     if (allConcreteAliasSlotForWildcardExpr(self, expr, state)) |slot| return slot;
+    return null;
+}
+
+fn aliasSlotForStoragePlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (slot.alias_of == null) continue;
+        if (slot.place) |stored| {
+            if (stored.eql(place)) return slot;
+        }
+    }
+    return null;
+}
+
+fn staleAliasWildcardSlotForConcretePlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (slot.alias_of == null) continue;
+        if (slot.place) |stored| {
+            if (!stored.eql(place) and stored.conflicts(place) and aliasSlotReferentMoved(slot, state)) return slot;
+        }
+    }
     return null;
 }
 
