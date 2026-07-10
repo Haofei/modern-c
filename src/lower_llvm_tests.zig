@@ -814,6 +814,41 @@ test "LLVM consumes MIR trailing aggregate-return array element assignment facts
     try expectContains(missing_body, "load atomic i32, ptr %");
 }
 
+test "LLVM consumes MIR trailing nested aggregate-return field assignment facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Inner { ptr: *mut u32 }
+        \\struct Outer { inner: Inner }
+        \\
+        \\fn returned_outer(choice: u32) -> Outer {
+        \\    var outer: Outer = .{ .inner = .{ .ptr = &shared_counter } };
+        \\    switch choice {
+        \\        0 => { return .{ .inner = .{ .ptr = &shared_counter } }; }
+        \\        _ => { outer.inner.ptr = &shared_counter; }
+        \\    }
+        \\    return outer;
+        \\}
+        \\
+        \\fn use_returned_outer(choice: u32) -> u32 {
+        \\    let outer: Outer = returned_outer(choice);
+        \\    return outer.inner.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_trailing_nested_aggregate_return_field_assignment_mir_fact.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_outer");
+    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_outer callee=returned_outer field=inner.ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_trailing_nested_aggregate_return_field_assignment_mir_fact.mc", source, "returned_outer", "inner.ptr", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_returned_outer");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_returned_outer callee=returned_outer field=inner.ptr");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+}
+
 test "LLVM consumes MIR aggregate-return facts through straight-line local values" {
     const source =
         \\global shared_counter: u32 = 0;

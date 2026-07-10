@@ -1272,6 +1272,10 @@ fn directOrStraightLineLocalAggregateReturnLiteralFields(
                     try tryTrackAggregateReturnLiteralLocal(&local_literals, target, assignment.value);
                     continue;
                 }
+                if (aggregateReturnLocalNestedFieldAssignmentTarget(assignment.target)) |target| {
+                    try tryTrackAggregateReturnLiteralLocalNestedFieldAssignment(allocator, &local_literals, paths, target.local_name, target.outer_field_name, target.inner_field_name, assignment.value);
+                    continue;
+                }
                 if (aggregateReturnLocalFieldAssignmentTarget(assignment.target)) |target| {
                     try tryTrackAggregateReturnLiteralLocalFieldAssignment(allocator, &local_literals, paths, target.local_name, target.field_name, assignment.value);
                     continue;
@@ -1283,6 +1287,30 @@ fn directOrStraightLineLocalAggregateReturnLiteralFields(
         }
     }
     return local_literals.get(returned_local);
+}
+
+const AggregateReturnLocalNestedFieldAssignmentTarget = struct {
+    local_name: []const u8,
+    outer_field_name: []const u8,
+    inner_field_name: []const u8,
+};
+
+fn aggregateReturnLocalNestedFieldAssignmentTarget(expr: ast.Expr) ?AggregateReturnLocalNestedFieldAssignmentTarget {
+    return switch (expr.kind) {
+        .grouped => |inner| aggregateReturnLocalNestedFieldAssignmentTarget(inner.*),
+        .member => |node| blk: {
+            const outer = switch (node.base.*.kind) {
+                .member => |value| value,
+                else => break :blk null,
+            };
+            break :blk .{
+                .local_name = directIdentName(outer.base.*) orelse break :blk null,
+                .outer_field_name = outer.name.text,
+                .inner_field_name = node.name.text,
+            };
+        },
+        else => null,
+    };
 }
 
 const AggregateReturnLocalArrayElementAssignmentTarget = struct {
@@ -1349,6 +1377,40 @@ fn tryTrackAggregateReturnLiteralLocalFieldAssignment(
         return;
     }
     allocator.free(updated);
+    _ = locals.remove(local_name);
+}
+
+fn tryTrackAggregateReturnLiteralLocalNestedFieldAssignment(
+    allocator: std.mem.Allocator,
+    locals: *std.StringHashMap([]ast.StructLiteralField),
+    paths: *AggregateReturnLiteralPaths,
+    local_name: []const u8,
+    outer_field_name: []const u8,
+    inner_field_name: []const u8,
+    value: ast.Expr,
+) !void {
+    const previous = locals.get(local_name) orelse return;
+    const updated_outer = try allocator.alloc(ast.StructLiteralField, previous.len);
+    errdefer allocator.free(updated_outer);
+    @memcpy(updated_outer, previous);
+    for (updated_outer) |*outer_field| {
+        if (!std.mem.eql(u8, outer_field.name.text, outer_field_name)) continue;
+        const previous_inner = structLiteralFieldsForAggregateReturn(outer_field.value) orelse break;
+        const updated_inner = try allocator.dupe(ast.StructLiteralField, previous_inner);
+        errdefer allocator.free(updated_inner);
+        for (updated_inner) |*inner_field| {
+            if (!std.mem.eql(u8, inner_field.name.text, inner_field_name)) continue;
+            inner_field.value = value;
+            outer_field.value = .{ .span = outer_field.value.span, .kind = .{ .struct_literal = updated_inner } };
+            try paths.owned_fields.append(allocator, updated_inner);
+            try paths.owned_fields.append(allocator, updated_outer);
+            try locals.put(local_name, updated_outer);
+            return;
+        }
+        allocator.free(updated_inner);
+        break;
+    }
+    allocator.free(updated_outer);
     _ = locals.remove(local_name);
 }
 
