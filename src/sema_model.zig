@@ -32,7 +32,61 @@ pub const MovePlace = struct {
         result.projection_count += 1;
         return result;
     }
+
+    pub fn eql(self: MovePlace, other: MovePlace) bool {
+        if (!std.mem.eql(u8, self.root, other.root) or self.projection_count != other.projection_count) return false;
+        for (self.projections[0..self.projection_count], other.projections[0..other.projection_count]) |left, right| {
+            if (!projectionEql(left, right)) return false;
+        }
+        return true;
+    }
+
+    // `self` is a strict ancestor of `other`, such as `packet.header` for
+    // `packet.header.payload`. Whole-place moves deliberately use this relation
+    // to reject partial-move aggregate reuse without reparsing display keys.
+    pub fn isPrefixOf(self: MovePlace, other: MovePlace) bool {
+        if (!std.mem.eql(u8, self.root, other.root) or self.projection_count >= other.projection_count) return false;
+        for (self.projections[0..self.projection_count], other.projections[0..self.projection_count]) |left, right| {
+            if (!projectionEql(left, right)) return false;
+        }
+        return true;
+    }
+
+    // A wildcard element represents an unknown element of the same array. It
+    // conflicts with every concrete/symbolic element at that projection level.
+    pub fn conflicts(self: MovePlace, other: MovePlace) bool {
+        if (!std.mem.eql(u8, self.root, other.root) or self.projection_count != other.projection_count) return false;
+        for (self.projections[0..self.projection_count], other.projections[0..other.projection_count]) |left, right| {
+            if (projectionEql(left, right)) continue;
+            if (projectionWildcardMatches(left, right)) continue;
+            return false;
+        }
+        return true;
+    }
 };
+
+fn projectionEql(left: MovePlaceProjection, right: MovePlaceProjection) bool {
+    return switch (left) {
+        .field => |left_name| switch (right) {
+            .field => |right_name| std.mem.eql(u8, left_name, right_name),
+            else => false,
+        },
+        .constant_index => |left_index| switch (right) {
+            .constant_index => |right_index| left_index == right_index,
+            else => false,
+        },
+        .symbolic_index => |left_name| switch (right) {
+            .symbolic_index => |right_name| std.mem.eql(u8, left_name, right_name),
+            else => false,
+        },
+        .wildcard_index => right == .wildcard_index,
+    };
+}
+
+fn projectionWildcardMatches(left: MovePlaceProjection, right: MovePlaceProjection) bool {
+    return (left == .wildcard_index and right != .field) or
+        (right == .wildcard_index and left != .field);
+}
 
 pub const Context = struct {
     no_lang_trap: bool = false,
@@ -128,9 +182,9 @@ pub const StructInfo = struct {
 pub const MoveSlot = struct {
     live: bool,
     span: diagnostics.Span,
-    // Structured identity for tracked root places. Synthetic subplace entries and
-    // alias/defer references remain on the compatibility path until the state-map
-    // migration is complete.
+    // Structured identity for the root, field, and element place represented by
+    // this slot. The state map retains a display key as a compatibility index,
+    // while ownership relations are evaluated from this value.
     place: ?MovePlace = null,
     // Reserved by a `defer` to be consumed at scope end: not a leak, not movable.
     deferred: bool = false,
@@ -138,6 +192,7 @@ pub const MoveSlot = struct {
     // consume the resource or suppress leak checks; it only prevents moving the
     // borrowed root/subplace before deferred cleanup runs.
     deferred_borrow: ?[]const u8 = null,
+    deferred_borrow_place: ?MovePlace = null,
     // The binding's declared/inferred type, when known - used to look up a `move` field's
     // type for place-sensitive field-move tracking. Null for synthetic field place keys.
     ty: ?ast.TypeExpr = null,

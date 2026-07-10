@@ -181,7 +181,7 @@ pub fn addIfLetMoveBinding(self: *Checker, pattern: ast.Pattern, value: ast.Expr
         .bind => |ident| {
             const payload_ty = spine.nullableInnerType(value_ty) orelse return null;
             if (!self.typeEmbedsMoveByValue(payload_ty, aliases)) return null;
-            state.put(ident.text, .{ .live = true, .span = ident.span, .ty = payload_ty }) catch {
+            state.put(ident.text, .{ .live = true, .span = ident.span, .place = .{ .root = ident.text }, .ty = payload_ty }) catch {
                 self.oom = true;
             };
             return ident.text;
@@ -189,7 +189,7 @@ pub fn addIfLetMoveBinding(self: *Checker, pattern: ast.Pattern, value: ast.Expr
         .tag_bind => |node| {
             const payload_ty = spine.resultPayloadType(value_ty, node.tag.text) orelse return null;
             if (!self.typeEmbedsMoveByValue(payload_ty, aliases)) return null;
-            state.put(node.binding.text, .{ .live = true, .span = node.binding.span, .ty = payload_ty }) catch {
+            state.put(node.binding.text, .{ .live = true, .span = node.binding.span, .place = .{ .root = node.binding.text }, .ty = payload_ty }) catch {
                 self.oom = true;
             };
             return node.binding.text;
@@ -448,35 +448,35 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                     // live `move` field (one not already moved out) would drop the old
                     // resource without consuming it.
                     moveBorrow(self, m.base.*, state, aliases);
-                    const key_opt = moveFieldPlaceKey(self, a.target, m, state, aliases);
-                    if (key_opt) |key| {
-                        if (hasMovedSubplace(key, state)) {
+                    const place_opt = moveFieldPlaceKey(self, a.target, m, state, aliases);
+                    if (place_opt) |pp| {
+                        if (hasMovedSubplace(pp.place, state)) {
                             self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "cannot overwrite a partially moved linear `move` field; consume or discard the owner instead");
-                        } else if (!state.contains(key)) {
+                        } else if (!stateContainsMovePlace(pp.place, state)) {
                             self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot overwrite a live linear `move` field; consume it first");
                         }
                     }
                     moveConsume(self, a.value, state, aliases);
                     markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
-                    if (key_opt) |key| {
-                        _ = state.remove(key); // the field now holds a fresh live resource
+                    if (place_opt) |pp| {
+                        _ = state.remove(pp.key); // the field now holds a fresh live resource
                     }
                     recordAssignedAggregateFieldAliasOrEscape(self, a.target, a.value, a.target.span, state, aliases);
                 },
                 .index => |ix| {
                     moveBorrow(self, ix.base.*, state, aliases);
                     moveConsume(self, ix.index.*, state, aliases);
-                    if (moveIndexedPlaceKey(self, a.target, state, aliases)) |key| {
-                        if (indexedPlaceHasWildcardMove(self, a.target, state, aliases) or concretePlaceHasWildcardMove(key, state) or wildcardMoveConflictsWithConcreteSubplace(key, state)) {
+                    if (moveIndexedPlaceKey(self, a.target, state, aliases)) |pp| {
+                        if (indexedPlaceHasWildcardMove(self, a.target, state, aliases) or stateHasConflictingMovePlace(pp.place, state)) {
                             self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "cannot reinitialize a concrete array element after an unknown dynamic element was moved out");
-                        } else if (!state.contains(key)) {
+                        } else if (!stateContainsMovePlace(pp.place, state)) {
                             self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot overwrite a live linear `move` array element; consume it first");
                         }
                         moveConsume(self, a.value, state, aliases);
                         markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
-                        _ = state.remove(key);
-                    } else if (wildcardMoveIndexedPlaceKey(self, a.target, state, aliases)) |key| {
-                        if (state.contains(key) or wildcardMoveConflictsWithConcreteSubplace(key, state)) {
+                        _ = state.remove(pp.key);
+                    } else if (wildcardMoveIndexedPlaceKey(self, a.target, state, aliases)) |pp| {
+                        if (stateContainsMovePlace(pp.place, state) or stateHasConflictingMovePlace(pp.place, state)) {
                             self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "cannot assign a linear `move` array element through an unknown dynamic index after an overlapping element was moved out");
                         } else {
                             self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot assign a linear `move` array element through an unknown dynamic index; the selected live element must be consumed first");
@@ -632,7 +632,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                             // `Result<…move…,…>` embeds a linear resource and must be tracked
                             // inside the arm too, not only a payload that is a move type name.
                             if (self.typeEmbedsMoveByValue(pty, aliases)) {
-                                arm_state.put(id.text, .{ .live = true, .span = id.span, .ty = pty }) catch {
+                                arm_state.put(id.text, .{ .live = true, .span = id.span, .place = .{ .root = id.text }, .ty = pty }) catch {
                                     self.oom = true;
                                 };
                                 bound_name = id.text;
@@ -952,7 +952,7 @@ fn fullDerefMoveSubplaceAlias(self: *Checker, expr: ast.Expr, state: *const std.
         else => return null,
     };
     const pp = placeKeyAndType(self, target, state) orelse {
-        return wildcardMoveIndexedPlaceKey(self, target, state, aliases);
+        return if (wildcardMoveIndexedPlaceKey(self, target, state, aliases)) |pp| pp.key else null;
     };
     if (!pp.place.isSubplace()) return null;
     if (!self.typeEmbedsMoveByValue(pp.ty, aliases)) return null;
@@ -983,7 +983,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
         .address_of => |inner| {
             moveBorrow(self, inner.*, state, aliases);
             if (placeKeyAndType(self, inner.*, state)) |pp| {
-                if (self.typeEmbedsMoveByValue(pp.ty, aliases) and hasMovedSubplace(pp.key, state)) {
+                if (self.typeEmbedsMoveByValue(pp.ty, aliases) and hasMovedSubplace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "borrow of linear `move` place after one of its child places was moved out");
                 }
             }
@@ -997,13 +997,13 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
             }
             // Moving a `move`-typed field out of a tracked aggregate: poison the field
             // so a second move (or a borrow) of it is caught.
-            if (moveFieldPlaceKey(self, expr, m, state, aliases)) |key| {
-                if (deferredBorrowConflictsWithTrackedPlace(key, state)) {
+            if (moveFieldPlaceKey(self, expr, m, state, aliases)) |pp| {
+                if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` field is borrowed by a deferred expression and cannot be moved before the defer runs");
-                } else if (state.contains(key) or hasMovedSubplace(key, state)) {
+                } else if (stateContainsMovePlace(pp.place, state) or hasMovedSubplace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` field after it was moved out");
                 } else {
-                    state.put(key, .{ .live = false, .span = expr.span }) catch {
+                    state.put(pp.key, .{ .live = false, .span = expr.span, .place = pp.place }) catch {
                         self.oom = true;
                     };
                 }
@@ -1052,23 +1052,23 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
             if (aliasPlaceSlot(self, expr, state)) |slot| {
                 checkStaleAlias(self, "", slot, expr.span, state);
             }
-            if (moveIndexedPlaceKey(self, expr, state, aliases)) |key| {
-                if (deferredBorrowConflictsWithTrackedPlace(key, state)) {
+            if (moveIndexedPlaceKey(self, expr, state, aliases)) |pp| {
+                if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` array element is borrowed by a deferred expression and cannot be moved before the defer runs");
-                } else if (state.contains(key) or indexedPlaceHasWildcardMove(self, expr, state, aliases) or concretePlaceHasWildcardMove(key, state) or wildcardMoveConflictsWithConcreteSubplace(key, state)) {
+                } else if (stateContainsMovePlace(pp.place, state) or indexedPlaceHasWildcardMove(self, expr, state, aliases) or stateHasConflictingMovePlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` array element after it was moved out");
                 } else {
-                    state.put(key, .{ .live = false, .span = expr.span }) catch {
+                    state.put(pp.key, .{ .live = false, .span = expr.span, .place = pp.place }) catch {
                         self.oom = true;
                     };
                 }
-            } else if (wildcardMoveIndexedPlaceKey(self, expr, state, aliases)) |key| {
-                if (deferredBorrowConflictsWithTrackedPlace(key, state)) {
+            } else if (wildcardMoveIndexedPlaceKey(self, expr, state, aliases)) |pp| {
+                if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` array element is borrowed by a deferred expression and cannot be moved before the defer runs");
-                } else if (state.contains(key) or wildcardMoveConflictsWithConcreteSubplace(key, state)) {
+                } else if (stateContainsMovePlace(pp.place, state) or stateHasConflictingMovePlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` array element after it was moved out");
                 } else {
-                    state.put(key, .{ .live = false, .span = expr.span }) catch {
+                    state.put(pp.key, .{ .live = false, .span = expr.span, .place = pp.place }) catch {
                         self.oom = true;
                     };
                 }
@@ -1166,7 +1166,7 @@ fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics
         } else if (slot.deferred_borrow != null) {
             self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` value is borrowed by a deferred expression and cannot be moved before the defer runs");
             slot.live = false;
-        } else if (hasMovedSubplace(name, state)) {
+        } else if (slot.place != null and hasMovedSubplace(slot.place.?, state)) {
             // Moving the whole aggregate would also move the field already taken
             // out of it — a duplicate move. (`forget_unchecked` discards the husk
             // instead and goes through moveForget, which is allowed.)
@@ -1873,7 +1873,7 @@ fn typeCanStoreBorrowAlias(ty: ast.TypeExpr, ctx: Context) bool {
 
 // The place key for a `move`-typed field access (at any nesting depth), or null if the
 // accessed place is not a tracked move field.
-pub fn moveFieldPlaceKey(self: *Checker, expr: ast.Expr, m: anytype, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+pub fn moveFieldPlaceKey(self: *Checker, expr: ast.Expr, m: anytype, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
     _ = m;
     const pp = placeKeyAndType(self, expr, state) orelse return null;
     // A field is a move place if its type *embeds* a move resource by value — not only a
@@ -1882,19 +1882,19 @@ pub fn moveFieldPlaceKey(self: *Checker, expr: ast.Expr, m: anytype, state: *con
     // move of the same field (a double free) would go undetected. (Move-typed array fields
     // are rejected at declaration, so a place leaf is never an untrackable array.)
     if (!self.typeEmbedsMoveByValue(pp.ty, aliases)) return null;
-    return pp.key;
+    return pp;
 }
 
-pub fn moveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+pub fn moveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
     const pp = placeKeyAndType(self, expr, state) orelse return null;
     if (!self.typeEmbedsMoveByValue(pp.ty, aliases)) return null;
-    return pp.key;
+    return pp;
 }
 
-fn wildcardMoveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+fn wildcardMoveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
     if (nestedWildcardIndexedPlaceKeyAndType(self, expr, state, aliases)) |pp| {
         if (!self.typeEmbedsMoveByValue(pp.ty, aliases)) return null;
-        return pp.key;
+        return pp;
     }
     switch (expr.kind) {
         .grouped => |inner| return wildcardMoveIndexedPlaceKey(self, inner.*, state, aliases),
@@ -1919,7 +1919,8 @@ fn wildcardMoveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const std
                 self.reporter.allocator.free(key);
                 return null;
             };
-            return key;
+            const place = base.place.project(.wildcard_index) orelse return null;
+            return .{ .key = key, .place = place, .ty = array.child.* };
         },
         else => return null,
     }
@@ -2199,19 +2200,41 @@ fn wildcardMoveKeyMatchesConcrete(wildcard_key: []const u8, concrete_key: []cons
     return std.mem.eql(u8, concrete_suffix, wildcard_suffix);
 }
 
-fn deferredBorrowConflictsWithTrackedPlace(move_key: []const u8, state: *const std.StringHashMap(MoveSlot)) bool {
-    const root = rootPlaceName(move_key);
-    const root_slot = state.get(root) orelse return false;
-    const borrow_key = root_slot.deferred_borrow orelse return false;
-    return deferredBorrowConflictsWithPlace(move_key, borrow_key);
+fn stateContainsMovePlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) continue;
+        if (slot.place) |tracked| if (tracked.eql(place)) return true;
+    }
+    return false;
 }
 
+fn stateHasConflictingMovePlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) continue;
+        if (slot.place) |tracked| {
+            if (!tracked.eql(place) and tracked.conflicts(place)) return true;
+        }
+    }
+    return false;
+}
+
+fn deferredBorrowConflictsWithTrackedPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+    const root_slot = state.get(place.root) orelse return false;
+    const borrowed = root_slot.deferred_borrow_place orelse return false;
+    return borrowed.eql(place) or borrowed.isPrefixOf(place) or place.isPrefixOf(borrowed) or borrowed.conflicts(place);
+}
+
+// Compatibility for aliases whose referent predates the structured state entry.
+// Direct move/defer paths use `deferredBorrowConflictsWithTrackedPlace` above.
 fn deferredBorrowConflictsWithPlace(move_key: []const u8, borrow_key: []const u8) bool {
     if (std.mem.eql(u8, move_key, borrow_key)) return true;
     if (isPlacePrefix(move_key, borrow_key) or isPlacePrefix(borrow_key, move_key)) return true;
     if (wildcardMoveKeyMatchesConcrete(move_key, borrow_key)) return true;
-    if (wildcardMoveKeyMatchesConcrete(borrow_key, move_key)) return true;
-    return false;
+    return wildcardMoveKeyMatchesConcrete(borrow_key, move_key);
 }
 
 fn rootPlaceName(key: []const u8) []const u8 {
@@ -2225,11 +2248,12 @@ fn isPlacePrefix(prefix: []const u8, key: []const u8) bool {
 }
 
 // Whether any field of `base` has been moved out (a partial move of the aggregate).
-pub fn hasMovedSubplace(base: []const u8, state: *const std.StringHashMap(MoveSlot)) bool {
+pub fn hasMovedSubplace(base: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
-        const k = entry.key_ptr.*;
-        if (k.len > base.len + 1 and std.mem.startsWith(u8, k, base) and isSubplaceSeparator(k[base.len])) return true;
+        const slot = entry.value_ptr.*;
+        if (slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) continue;
+        if (slot.place) |tracked| if (base.isPrefixOf(tracked)) return true;
     }
     return false;
 }
@@ -3244,7 +3268,7 @@ pub fn moveBorrow(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Move
         .address_of => |inner| {
             moveBorrow(self, inner.*, state, aliases);
             if (placeKeyAndType(self, inner.*, state)) |pp| {
-                if (self.typeEmbedsMoveByValue(pp.ty, aliases) and hasMovedSubplace(pp.key, state)) {
+                if (self.typeEmbedsMoveByValue(pp.ty, aliases) and hasMovedSubplace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "borrow of linear `move` place after one of its child places was moved out");
                 }
             }
@@ -3297,7 +3321,7 @@ pub fn moveBorrow(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Move
     }
 }
 
-fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
     switch (expr.kind) {
         .grouped => |inner| return deferredBorrowPlaceKey(self, inner.*, state, aliases),
         else => {},
@@ -3306,10 +3330,10 @@ fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.Stri
         return wildcardMoveIndexedPlaceKey(self, expr, state, aliases);
     };
     if (!self.typeEmbedsMoveByValue(pp.ty, aliases)) return null;
-    return pp.key;
+    return pp;
 }
 
-fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
     const root = rootPlaceName(referent);
     const root_slot = state.getPtr(root) orelse return;
     if (root_slot.cleanup_local) {
@@ -3325,16 +3349,22 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, span: diagno
             self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` field or array element after it was moved out");
             return;
         }
-    } else if (hasMovedSubplace(referent, state)) {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after one of its fields or elements was moved out");
-        return;
+    } else if (state.get(referent)) |referent_slot| {
+        if (referent_slot.place != null and hasMovedSubplace(referent_slot.place.?, state)) {
+            self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after one of its fields or elements was moved out");
+            return;
+        }
     }
     if (root_slot.deferred_borrow) |existing| {
         if (std.mem.eql(u8, existing, referent)) return;
         root_slot.deferred_borrow = root;
+        root_slot.deferred_borrow_place = root_slot.place;
         return;
     }
     root_slot.deferred_borrow = referent;
+    root_slot.deferred_borrow_place = place orelse
+        (if (state.get(referent)) |referent_slot| referent_slot.place else null) orelse
+        root_slot.place;
 }
 
 fn moveDeferSliceBase(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
@@ -3352,7 +3382,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
         .ident => |id| {
             if (state.getPtr(id.text)) |slot| {
                 if (slot.alias_of) |referent| {
-                    markDeferredBorrowReferent(self, referent, expr.span, state);
+                    markDeferredBorrowReferent(self, referent, null, expr.span, state);
                 } else if (slot.cleanup_local) {
                     consumeTrackedMoveBinding(self, id.text, expr.span, state);
                 } else if (!slot.live) {
@@ -3366,16 +3396,16 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
         .cast => |c| moveDefer(self, c.value.*, state, aliases),
         .unary => |u| moveDefer(self, u.expr.*, state, aliases),
         .address_of => |inner| {
-            if (deferredBorrowPlaceKey(self, inner.*, state, aliases)) |key| {
-                const root = rootPlaceName(key);
+            if (deferredBorrowPlaceKey(self, inner.*, state, aliases)) |pp| {
+                const root = pp.place.root;
                 if (state.get(root)) |slot| {
                     if (slot.cleanup_local) {
                         moveBorrow(self, inner.*, state, aliases);
                     } else {
-                        markDeferredBorrowReferent(self, key, expr.span, state);
+                        markDeferredBorrowReferent(self, pp.key, pp.place, expr.span, state);
                     }
                 } else {
-                    markDeferredBorrowReferent(self, key, expr.span, state);
+                    markDeferredBorrowReferent(self, pp.key, pp.place, expr.span, state);
                 }
             } else {
                 moveBorrow(self, inner.*, state, aliases);
@@ -3388,18 +3418,18 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
         .member => |m| {
             moveBorrow(self, m.base.*, state, aliases);
             if (aggregateFieldAliasSlot(self, expr, state)) |slot| {
-                if (slot.alias_of) |referent| markDeferredBorrowReferent(self, referent, expr.span, state);
+                if (slot.alias_of) |referent| markDeferredBorrowReferent(self, referent, null, expr.span, state);
                 return;
             }
             // `defer free(p.field)`: reserve the move field for lexical cleanup so it is
             // neither leaked at exit nor moved out before the defer runs.
-            if (moveFieldPlaceKey(self, expr, m, state, aliases)) |key| {
-                if (deferredBorrowConflictsWithTrackedPlace(key, state)) {
+            if (moveFieldPlaceKey(self, expr, m, state, aliases)) |pp| {
+                if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer cannot consume a linear `move` field already borrowed by a deferred expression");
-                } else if (state.contains(key) or hasMovedSubplace(key, state)) {
+                } else if (stateContainsMovePlace(pp.place, state) or hasMovedSubplace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer reserves a linear `move` field already moved out");
                 } else {
-                    state.put(key, .{ .live = true, .span = expr.span, .deferred = true }) catch {
+                    state.put(pp.key, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }) catch {
                         self.oom = true;
                     };
                 }
@@ -3409,28 +3439,28 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
             moveBorrow(self, ix.base.*, state, aliases);
             moveConsume(self, ix.index.*, state, aliases);
             if (aliasPlaceSlot(self, expr, state)) |slot| {
-                if (slot.alias_of) |referent| markDeferredBorrowReferent(self, referent, expr.span, state);
+                if (slot.alias_of) |referent| markDeferredBorrowReferent(self, referent, null, expr.span, state);
                 return;
             }
             // `defer free(arr[0])`: reserve a tracked constant-index element place for
             // lexical cleanup, matching field-place defer behavior.
-            if (moveIndexedPlaceKey(self, expr, state, aliases)) |key| {
-                if (deferredBorrowConflictsWithTrackedPlace(key, state)) {
+            if (moveIndexedPlaceKey(self, expr, state, aliases)) |pp| {
+                if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer cannot consume a linear `move` array element already borrowed by a deferred expression");
-                } else if (state.contains(key) or indexedPlaceHasWildcardMove(self, expr, state, aliases) or concretePlaceHasWildcardMove(key, state) or wildcardMoveConflictsWithConcreteSubplace(key, state)) {
+                } else if (stateContainsMovePlace(pp.place, state) or indexedPlaceHasWildcardMove(self, expr, state, aliases) or stateHasConflictingMovePlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer reserves a linear `move` array element already moved out");
                 } else {
-                    state.put(key, .{ .live = true, .span = expr.span, .deferred = true }) catch {
+                    state.put(pp.key, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }) catch {
                         self.oom = true;
                     };
                 }
-            } else if (wildcardMoveIndexedPlaceKey(self, expr, state, aliases)) |key| {
-                if (deferredBorrowConflictsWithTrackedPlace(key, state)) {
+            } else if (wildcardMoveIndexedPlaceKey(self, expr, state, aliases)) |pp| {
+                if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer cannot consume a linear `move` array element already borrowed by a deferred expression");
-                } else if (state.contains(key) or wildcardMoveConflictsWithConcreteSubplace(key, state)) {
+                } else if (stateContainsMovePlace(pp.place, state) or stateHasConflictingMovePlace(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer reserves a linear `move` array element already moved out");
                 } else {
-                    state.put(key, .{ .live = true, .span = expr.span, .deferred = true }) catch {
+                    state.put(pp.key, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }) catch {
                         self.oom = true;
                     };
                 }
@@ -3615,7 +3645,7 @@ fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *std.St
     }
     if (binding_ty) |ty| {
         if (self.typeEmbedsMoveByValue(ty, aliases)) {
-            state.put(decl.names[0].text, .{ .live = true, .span = decl.names[0].span, .ty = ty, .cleanup_local = true }) catch {
+            state.put(decl.names[0].text, .{ .live = true, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .ty = ty, .cleanup_local = true }) catch {
                 self.oom = true;
             };
             return;
