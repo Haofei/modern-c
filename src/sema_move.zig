@@ -41,6 +41,12 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
             state.put(param.name.text, .{ .live = false, .span = param.name.span, .symbolic_index = param.name.text }) catch {
                 self.oom = true;
             };
+        } else if (self.move_ctx) |ctx| {
+            if (typeCanStoreBorrowAlias(param.ty, ctx.*)) {
+                state.put(param.name.text, .{ .live = false, .span = param.name.span, .ty = param.ty, .type_only = true }) catch {
+                    self.oom = true;
+                };
+            }
         }
     }
     const fell_through = !moveBlock(self, body, &state, aliases);
@@ -1126,6 +1132,8 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
             }
             if (full_alias_referent) |referent| {
                 consumeTrackedMoveReferent(self, referent, expr.span, state);
+            } else if (arrayIndexEmbedsMove(self, inner.*, state, aliases)) {
+                self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot move a linear `move` array element through a non-constant index; element ownership is only tracked for constant indexes");
             } else if (exprIsMoveTyped(self, expr, state, aliases)) {
                 self.errorCode(expr.span, "E_USE_AFTER_MOVE", "cannot move a linear `move` value out through a pointer deref; move the owning binding directly (the pointee would be left moved-from, which the checker cannot track through the alias)");
             } else {
@@ -2015,6 +2023,26 @@ fn typeCanStoreBorrowAlias(ty: ast.TypeExpr, ctx: Context) bool {
     };
 }
 
+fn storageElementType(ty: ast.TypeExpr, ctx: Context) ?ast.TypeExpr {
+    return switch (resolveAliasType(ty, ctx).kind) {
+        .pointer => |node| node.child.*,
+        .raw_many_pointer => |node| node.child.*,
+        .slice => |node| node.child.*,
+        .array => |node| node.child.*,
+        .qualified => |node| storageElementType(node.child.*, ctx),
+        else => null,
+    };
+}
+
+fn derefPlaceElementType(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), ctx: Context) ?ast.TypeExpr {
+    const inner = switch (expr.kind) {
+        .deref => |node| node.*,
+        else => return null,
+    };
+    const base = placeKeyAndType(self, inner, state) orelse return null;
+    return storageElementType(base.ty, ctx);
+}
+
 // The place key for a `move`-typed field access (at any nesting depth), or null if the
 // accessed place is not a tracked move field.
 pub fn moveFieldPlaceKey(self: *Checker, expr: ast.Expr, m: anytype, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
@@ -2197,15 +2225,25 @@ fn arrayIndexEmbedsMove(self: *Checker, expr: ast.Expr, state: *const std.String
             const ctx = self.move_ctx orelse return false;
             const base_ty_expr = if (placeKeyAndType(self, ix.base.*, state)) |base|
                 base.ty
+            else if (derefPlaceElementType(self, ix.base.*, state, ctx.*)) |ty|
+                ty
             else
                 spine.exprResultType(ix.base.*, ctx.*) orelse {
                     if (arrayIndexEmbedsMove(self, ix.base.*, state, aliases)) return true;
                     return arrayLiteralElementEmbedsMove(self, ix.base.*, ctx.*, aliases) orelse false;
                 };
-            const base_ty = resolveAliasType(base_ty_expr, ctx.*);
-            const child_ty = switch (base_ty.kind) {
+            const resolved_base_ty = resolveAliasType(base_ty_expr, ctx.*);
+            const array_ty = switch (resolved_base_ty.kind) {
+                .array => resolved_base_ty,
+                else => storageElementType(base_ty_expr, ctx.*) orelse return false,
+            };
+            const resolved_array_ty = resolveAliasType(array_ty, ctx.*);
+            const child_ty = switch (array_ty.kind) {
                 .array => |node| node.child.*,
-                else => return false,
+                else => switch (resolved_array_ty.kind) {
+                    .array => |node| node.child.*,
+                    else => return false,
+                },
             };
             return self.typeEmbedsMoveByValue(child_ty, aliases);
         },

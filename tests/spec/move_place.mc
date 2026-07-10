@@ -961,6 +961,25 @@ fn accept_consume_returned_move_array() -> u32 {
     return consume(x) + consume(y);
 }
 
+// Rejected: an arbitrary pointer to a move array has no local owner place the
+// checker can update when a dynamic element is moved out.
+fn reject_dynamic_pointer_to_move_array_element(pa: *mut ResArray, i: usize) -> u32 {
+    let x: Res = pa.*[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+    return consume(x);
+}
+
+// Rejected: assignment through an arbitrary pointer-to-array dynamic element
+// cannot prove which pointee resource would be overwritten.
+fn reject_dynamic_pointer_to_move_array_element_assignment(pa: *mut ResArray, i: usize) -> void {
+    pa.*[i] = mkres(3); // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+}
+
+// Rejected: deferred cleanup needs a stable owner place too; an arbitrary
+// pointer-to-array dynamic element has no local place to reserve.
+fn reject_defer_dynamic_pointer_to_move_array_element(pa: *mut ResArray, i: usize) -> void {
+    defer consume(pa.*[i]); // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+}
+
 // Rejected: a returned move array is not a nameable local place, so a dynamic
 // element move cannot be tracked precisely and must fail closed.
 fn reject_dynamic_returned_move_array_element(i: usize) -> u32 {
