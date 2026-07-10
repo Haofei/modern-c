@@ -979,7 +979,8 @@ fn collectDirectAggregateReturnPointerFacts(
         };
         const struct_summary = structs.get(struct_name) orelse continue;
         const body = fn_decl.body orelse continue;
-        const literal_paths = (try aggregateReturnLiteralPaths(allocator, body)) orelse continue;
+        var literal_paths = (try aggregateReturnLiteralPaths(allocator, body)) orelse continue;
+        defer literal_paths.deinit(allocator);
         if (aggregateReturnHasUnmodeledPointerField(struct_summary, enums, structs, packed_bits, aliases)) continue;
 
         try summaries.append(allocator, .{
@@ -1112,6 +1113,12 @@ fn appendAggregateReturnPointerFact(
 const AggregateReturnLiteralPaths = struct {
     paths: [8][]ast.StructLiteralField = undefined,
     len: usize = 0,
+    owned_fields: std.ArrayList([]ast.StructLiteralField) = .empty,
+
+    fn deinit(self: *AggregateReturnLiteralPaths, allocator: std.mem.Allocator) void {
+        for (self.owned_fields.items) |fields| allocator.free(fields);
+        self.owned_fields.deinit(allocator);
+    }
 
     fn append(self: *AggregateReturnLiteralPaths, fields: []ast.StructLiteralField) bool {
         if (self.len == self.paths.len) return false;
@@ -1134,15 +1141,18 @@ fn aggregateReturnLiteralPaths(allocator: std.mem.Allocator, body: ast.Block) !?
         if (!aggregateReturnSwitchIsExhaustive(switch_node)) return null;
         const prefix = body.items[0..switch_index];
         var paths: AggregateReturnLiteralPaths = .{};
+        var keep_paths = false;
+        defer if (!keep_paths) paths.deinit(allocator);
         if (switch_index + 1 == body.items.len) {
             for (switch_node.arms) |arm| {
                 const arm_block = switch (arm.body) {
                     .block => |block| block,
                     .expr => return null,
                 };
-                const fields = (try aggregateReturnLiteralFieldsForPath(allocator, body.span, prefix, arm_block.items, &.{})) orelse return null;
+                const fields = (try aggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, arm_block.items, &.{})) orelse return null;
                 if (!paths.append(fields)) return null;
             }
+            keep_paths = true;
             return paths;
         }
 
@@ -1156,32 +1166,37 @@ fn aggregateReturnLiteralPaths(allocator: std.mem.Allocator, body: ast.Block) !?
             };
             if (arm_block.items.len == 0) {
                 fallthrough_arms += 1;
-                const fields = (try aggregateReturnLiteralFieldsForPath(allocator, body.span, prefix, &.{}, trailing_items)) orelse return null;
+                const fields = (try aggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, &.{}, trailing_items)) orelse return null;
                 if (!paths.append(fields)) return null;
                 continue;
             }
-            if (try aggregateReturnLiteralFieldsForPath(allocator, body.span, prefix, arm_block.items, &.{})) |fields| {
+            if (try aggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, arm_block.items, &.{})) |fields| {
                 returned_arms += 1;
                 if (!paths.append(fields)) return null;
                 continue;
             }
 
-            const fields = (try aggregateReturnLiteralFieldsForPath(allocator, body.span, prefix, arm_block.items, trailing_items)) orelse return null;
+            const fields = (try aggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, arm_block.items, trailing_items)) orelse return null;
             fallthrough_arms += 1;
             if (!paths.append(fields)) return null;
         }
         if (returned_arms == 0 or fallthrough_arms == 0) return null;
+        keep_paths = true;
         return paths;
     }
 
-    const fields = (try directOrStraightLineLocalAggregateReturnLiteralFields(allocator, body)) orelse return null;
     var paths: AggregateReturnLiteralPaths = .{};
+    var keep_paths = false;
+    defer if (!keep_paths) paths.deinit(allocator);
+    const fields = (try directOrStraightLineLocalAggregateReturnLiteralFields(allocator, &paths, body)) orelse return null;
     _ = paths.append(fields);
+    keep_paths = true;
     return paths;
 }
 
 fn aggregateReturnLiteralFieldsForPath(
     allocator: std.mem.Allocator,
+    paths: *AggregateReturnLiteralPaths,
     span: ast.Span,
     prefix: []const ast.Stmt,
     branch: []const ast.Stmt,
@@ -1192,7 +1207,7 @@ fn aggregateReturnLiteralFieldsForPath(
     try items.appendSlice(allocator, prefix);
     try items.appendSlice(allocator, branch);
     try items.appendSlice(allocator, trailing);
-    return directOrStraightLineLocalAggregateReturnLiteralFields(allocator, .{ .span = span, .items = items.items });
+    return directOrStraightLineLocalAggregateReturnLiteralFields(allocator, paths, .{ .span = span, .items = items.items });
 }
 
 fn aggregateReturnSwitchIsExhaustive(node: ast.Switch) bool {
@@ -1222,7 +1237,11 @@ fn aggregateReturnSwitchIsExhaustive(node: ast.Switch) bool {
     return saw_true and saw_false;
 }
 
-fn directOrStraightLineLocalAggregateReturnLiteralFields(allocator: std.mem.Allocator, body: ast.Block) !?[]ast.StructLiteralField {
+fn directOrStraightLineLocalAggregateReturnLiteralFields(
+    allocator: std.mem.Allocator,
+    paths: *AggregateReturnLiteralPaths,
+    body: ast.Block,
+) !?[]ast.StructLiteralField {
     if (body.items.len == 0) return null;
     const final_value = switch (body.items[body.items.len - 1].kind) {
         .@"return" => |maybe_value| maybe_value orelse return null,
@@ -1245,14 +1264,57 @@ fn directOrStraightLineLocalAggregateReturnLiteralFields(allocator: std.mem.Allo
                 try tryTrackAggregateReturnLiteralLocal(&local_literals, local.names[0].text, initializer);
             },
             .assignment => |assignment| {
-                const target = assignmentTargetIdentName(assignment.target) orelse return null;
                 if (aggregateReturnPrefixExprHasCallOrExit(assignment.value)) return null;
-                try tryTrackAggregateReturnLiteralLocal(&local_literals, target, assignment.value);
+                if (assignmentTargetIdentName(assignment.target)) |target| {
+                    try tryTrackAggregateReturnLiteralLocal(&local_literals, target, assignment.value);
+                    continue;
+                }
+                const target = aggregateReturnLocalFieldAssignmentTarget(assignment.target) orelse return null;
+                try tryTrackAggregateReturnLiteralLocalFieldAssignment(allocator, &local_literals, paths, target.local_name, target.field_name, assignment.value);
             },
             else => return null,
         }
     }
     return local_literals.get(returned_local);
+}
+
+const AggregateReturnLocalFieldAssignmentTarget = struct {
+    local_name: []const u8,
+    field_name: []const u8,
+};
+
+fn aggregateReturnLocalFieldAssignmentTarget(expr: ast.Expr) ?AggregateReturnLocalFieldAssignmentTarget {
+    return switch (expr.kind) {
+        .grouped => |inner| aggregateReturnLocalFieldAssignmentTarget(inner.*),
+        .member => |node| .{
+            .local_name = directIdentName(node.base.*) orelse return null,
+            .field_name = node.name.text,
+        },
+        else => null,
+    };
+}
+
+fn tryTrackAggregateReturnLiteralLocalFieldAssignment(
+    allocator: std.mem.Allocator,
+    locals: *std.StringHashMap([]ast.StructLiteralField),
+    paths: *AggregateReturnLiteralPaths,
+    local_name: []const u8,
+    field_name: []const u8,
+    value: ast.Expr,
+) !void {
+    const previous = locals.get(local_name) orelse return;
+    const updated = try allocator.alloc(ast.StructLiteralField, previous.len);
+    errdefer allocator.free(updated);
+    @memcpy(updated, previous);
+    for (updated) |*field| {
+        if (!std.mem.eql(u8, field.name.text, field_name)) continue;
+        field.value = value;
+        try paths.owned_fields.append(allocator, updated);
+        try locals.put(local_name, updated);
+        return;
+    }
+    allocator.free(updated);
+    _ = locals.remove(local_name);
 }
 
 fn tryTrackAggregateReturnLiteralLocal(locals: *std.StringHashMap([]ast.StructLiteralField), name: []const u8, value: ast.Expr) !void {
