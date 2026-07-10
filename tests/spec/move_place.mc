@@ -980,6 +980,32 @@ fn reject_defer_dynamic_pointer_to_move_array_element(pa: *mut ResArray, i: usiz
     defer consume(pa.*[i]); // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
 }
 
+// Rejected: an arbitrary pointer to a nested move array has no local owner
+// place for a dynamic outer element plus concrete suffix.
+fn reject_dynamic_pointer_to_move_matrix_outer_element(pm: *mut ResMatrix, i: usize) -> u32 {
+    let x: Res = pm.*[i][0]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+    return consume(x);
+}
+
+// Rejected: a concrete outer index still leaves an arbitrary pointee array with
+// no local owner place for the dynamic inner element.
+fn reject_dynamic_pointer_to_move_matrix_inner_element(pm: *mut ResMatrix, i: usize) -> u32 {
+    let x: Res = pm.*[0][i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+    return consume(x);
+}
+
+// Rejected: assigning through a nested arbitrary pointer-to-array element cannot
+// prove which pointee resource would be overwritten.
+fn reject_dynamic_pointer_to_move_matrix_element_assignment(pm: *mut ResMatrix, i: usize) -> void {
+    pm.*[i][0] = mkres(3); // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+}
+
+// Rejected: deferred cleanup cannot reserve a nested dynamic element behind an
+// arbitrary pointer-to-array pointee.
+fn reject_defer_dynamic_pointer_to_move_matrix_element(pm: *mut ResMatrix, i: usize) -> void {
+    defer consume(pm.*[i][0]); // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+}
+
 // Rejected: a returned move array is not a nameable local place, so a dynamic
 // element move cannot be tracked precisely and must fail closed.
 fn reject_dynamic_returned_move_array_element(i: usize) -> u32 {
