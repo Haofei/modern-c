@@ -303,7 +303,6 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
         .local_slice_global_pointer_arrays = std.StringHashMap([]const u8).init(allocator),
         .local_slice_pointer_array_ranges = std.StringHashMap(LocalSlicePointerArrayRange).init(allocator),
         .local_slice_aggregate_pointer_array_fields = std.StringHashMap([]const u8).init(allocator),
-        .global_pointer_return_fns = std.StringHashMap(void).init(allocator),
         .aggregate_return_pointer_fields = std.StringHashMap(mir.PointerProvenance).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
         .defer_stack = std.ArrayList(ast.Expr).empty,
@@ -376,7 +375,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
             else => {},
         }
     }
-    try ctx.collectGlobalPointerProvenanceSummaries(module);
+    try ctx.collectAggregateReturnPointerFieldSummaries(module);
     // Tier 2: one rodata vtable global per `impl Trait for Type` of an object-safe
     // trait. Function pointers may be forward-referenced in LLVM IR, so this can run
     // before the function bodies are emitted.
@@ -459,7 +458,6 @@ const LlvmEmitter = struct {
     local_slice_global_pointer_arrays: std.StringHashMap([]const u8) = undefined,
     local_slice_pointer_array_ranges: std.StringHashMap(LocalSlicePointerArrayRange) = undefined,
     local_slice_aggregate_pointer_array_fields: std.StringHashMap([]const u8) = undefined,
-    global_pointer_return_fns: std.StringHashMap(void) = undefined,
     aggregate_return_pointer_fields: std.StringHashMap(mir.PointerProvenance) = undefined,
     // While a function body is being emitted, `entry_allocas` collects every `alloca`
     // so they land at the TOP of the entry block (the LLVM rule: an alloca in a non-entry
@@ -542,7 +540,6 @@ const LlvmEmitter = struct {
         self.local_slice_global_pointer_arrays.deinit();
         self.local_slice_pointer_array_ranges.deinit();
         self.deinitOwnedStringValueMap(&self.local_slice_aggregate_pointer_array_fields);
-        self.global_pointer_return_fns.deinit();
         self.deinitOwnedStringProvenanceMap(&self.aggregate_return_pointer_fields);
         self.loop_stack.deinit(self.allocator);
         self.defer_stack.deinit(self.allocator);
@@ -670,28 +667,6 @@ const LlvmEmitter = struct {
         if (global.init) |expr| try self.global_initializers.put(global.name.text, expr);
     }
 
-    fn collectGlobalPointerProvenanceSummaries(self: *LlvmEmitter, module: ast.Module) !void {
-        self.global_pointer_return_fns.clearRetainingCapacity();
-        self.clearOwnedStringProvenanceMapRetainingCapacity(&self.aggregate_return_pointer_fields);
-        for (module.decls) |decl| {
-            if (decl.kind != .fn_decl) continue;
-            const fn_decl = decl.kind.fn_decl;
-            if (fn_decl.exported) continue;
-            const body = fn_decl.body orelse continue;
-            const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
-            // The direct `return &global` form is summarized in MIR. Keep this
-            // backend fallback only for the broader legacy return shapes.
-            if (self.isPointerLikeType(ret_ty) and
-                self.bodyReturnsOnlyVisibleGlobalPointers(body) and
-                !self.bodyReturnsDirectGlobalPointer(body))
-            {
-                try self.global_pointer_return_fns.put(fn_decl.name.text, {});
-            }
-        }
-
-        try self.collectAggregateReturnPointerFieldSummaries(module);
-    }
-
     fn aggregateReturnPointerFieldKey(self: *LlvmEmitter, fn_name: []const u8, field_path: []const u8) ![]const u8 {
         return try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ fn_name, field_path });
     }
@@ -707,6 +682,7 @@ const LlvmEmitter = struct {
     }
 
     fn collectAggregateReturnPointerFieldSummaries(self: *LlvmEmitter, module: ast.Module) !void {
+        self.clearOwnedStringProvenanceMapRetainingCapacity(&self.aggregate_return_pointer_fields);
         for (module.decls) |decl| {
             if (decl.kind != .fn_decl) continue;
             const fn_decl = decl.kind.fn_decl;
@@ -5716,47 +5692,6 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn exprIsVisibleGlobalPointer(self: *LlvmEmitter, expr: ast.Expr) bool {
-        return switch (expr.kind) {
-            .address_of => |inner| self.directGlobalStorageRoot(inner.*),
-            .grouped => |inner| self.exprIsVisibleGlobalPointer(inner.*),
-            .cast => |node| self.exprIsVisibleGlobalPointer(node.value.*),
-            .call => |call| if (isAssumeNoaliasCall(call))
-                self.exprIsVisibleGlobalPointer(call.args[0])
-            else if (self.directCallName(call.callee.*)) |callee|
-                self.global_pointer_return_fns.contains(callee)
-            else
-                false,
-            else => false,
-        };
-    }
-
-    fn bodyReturnsOnlyVisibleGlobalPointers(self: *LlvmEmitter, body: ast.Block) bool {
-        if (body.items.len != 1) return false;
-        return switch (body.items[0].kind) {
-            .@"return" => |maybe_expr| if (maybe_expr) |expr| self.exprIsVisibleGlobalPointer(expr) else false,
-            else => false,
-        };
-    }
-
-    fn bodyReturnsDirectGlobalPointer(self: *LlvmEmitter, body: ast.Block) bool {
-        if (body.items.len != 1) return false;
-        const value = switch (body.items[0].kind) {
-            .@"return" => |maybe_value| maybe_value orelse return false,
-            else => return false,
-        };
-        return self.directGlobalPointerReturnExpr(value);
-    }
-
-    fn directGlobalPointerReturnExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
-        return switch (expr.kind) {
-            .grouped => |inner| self.directGlobalPointerReturnExpr(inner.*),
-            .cast => |node| self.directGlobalPointerReturnExpr(node.value.*),
-            .address_of => |inner| self.directGlobalStorageRoot(inner.*),
-            else => false,
-        };
-    }
-
     fn isPointerLikeType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
         return switch (self.resolveAliasType(ty).kind) {
             .pointer, .raw_many_pointer => true,
@@ -5918,8 +5853,6 @@ const LlvmEmitter = struct {
                 call.args.len == 1 and
                     self.localArrayConstIndexValue(call.args[0]) == 0 and
                     self.pointerExprHasGlobalStorageProvenance(info.base)
-            else if (self.directCallName(call.callee.*)) |callee|
-                self.global_pointer_return_fns.contains(callee)
             else
                 false,
             else => false,
@@ -5977,10 +5910,8 @@ const LlvmEmitter = struct {
 
     // Spec I.13 conservative default for the bare pointer-deref class: ordinary
     // scalar derefs lower race-tolerantly (unordered atomic) unless positively
-    // proven local. Aggregate pointees stay on the plain path — the aggregate/
-    // member/index access classes are separate lowering classes (follow-up
-    // slices), and mirrors the C backend which never routes them through
-    // mc_race helpers.
+    // proven local. Unproven aggregate dereferences take the separate recursive
+    // race-tolerant path in emitDeref; this helper covers scalar atomics only.
     fn derefUsesRaceTolerantLowering(self: *LlvmEmitter, ptr_expr: ast.Expr, pointee_ty: ast.TypeExpr) bool {
         if (self.isAggregateType(pointee_ty)) return false;
         return !self.pointerExprHasProvenLocalStorage(ptr_expr);

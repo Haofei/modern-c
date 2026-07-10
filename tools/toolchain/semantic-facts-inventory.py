@@ -189,7 +189,6 @@ ANCHORS: dict[str, list[str]] = {
         "local_aggregate_pointer_aliases: std.StringHashMap([]const u8)",
         "local_array_global_pointer_elements: std.StringHashMap(mir.PointerProvenance)",
         "local_slice_global_pointer_arrays: std.StringHashMap([]const u8)",
-        "fn collectGlobalPointerProvenanceSummaries",
         "fn collectAggregateReturnPointerFieldSummaries",
         "fn resetTransientPointerProvenance",
         "fn updatePointerGlobalProvenance",
@@ -239,6 +238,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try self.updatePointerProvenanceFromMirOrFallback(": 1,
         "fn updatePointerProvenanceAssignmentFromMirOrFallback": 1,
         "try self.updatePointerProvenanceAssignmentFromMirOrFallback(": 1,
+        "global_pointer_return_fns": 0,
+        "fn collectGlobalPointerProvenanceSummaries": 0,
     },
     "src/lower_llvm.zig": {
         "fn requireMirBoundsFact": 1,
