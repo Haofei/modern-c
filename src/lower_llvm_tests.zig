@@ -620,6 +620,35 @@ test "LLVM aggregate-return pointer facts are MIR-owned and fail closed when abs
     try expectNotContains(missing_body, "load i32, ptr %");
 }
 
+test "LLVM consumes MIR aggregate-return pointer-array element facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptrs: [2]*mut u32 }
+        \\
+        \\fn returned_holder() -> Holder {
+        \\    return .{ .ptrs = .{ &shared_counter, &shared_counter } };
+        \\}
+        \\
+        \\fn use_returned_holder() -> u32 {
+        \\    let holder: Holder = returned_holder();
+        \\    return holder.ptrs[0].*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_aggregate_return_array_mir_fact.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
+    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptrs[0] provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_aggregate_return_array_mir_fact.mc", source, "returned_holder", "ptrs[0]", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_returned_holder");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptrs[0]");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+}
+
 test "LLVM consumes MIR aggregate-return facts through straight-line local values" {
     const source =
         \\global shared_counter: u32 = 0;

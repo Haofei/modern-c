@@ -1523,13 +1523,16 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "mixed_branched_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "unknown_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "call_before_return"));
-    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "pointer_array_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "pointer_array_holder"));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "pointer_array_holder", "ptrs[0]", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "pointer_array_holder", "ptrs[1]", .global_storage));
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
     try mir.appendDump(std.testing.allocator, module, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_summary_fact callee=direct_holder recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=direct_holder field=ptr provenance=global_storage pointer_kind=single") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=pointer_array_holder field=ptrs[0] provenance=global_storage pointer_kind=single") != null);
 }
 
 test "MIR records direct internal global pointer return provenance in callers" {

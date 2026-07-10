@@ -1006,6 +1006,33 @@ fn collectDirectAggregateReturnPointerFacts(
                 });
             }
         }
+        for (struct_summary.fields) |field| {
+            const shape = aggregateReturnFixedPointerArrayElementShape(field.ty, enums, structs, packed_bits, aliases) orelse continue;
+            const first_value = aggregateLiteralFieldValue(literal_paths.items()[0], field.name.text) orelse continue;
+            const first_items = arrayLiteralItems(first_value) orelse continue;
+            for (first_items, 0..) |_, index| {
+                var source: ?SourcePoint = null;
+                for (literal_paths.items()) |literal_fields| {
+                    const value = aggregateLiteralFieldValue(literal_fields, field.name.text) orelse break;
+                    const items = arrayLiteralItems(value) orelse break;
+                    if (index >= items.len) break;
+                    const item = items[index];
+                    _ = directGlobalAddressStorageExpr(item, globals, pointer_return_summaries, shape) orelse break;
+                    if (source == null) source = .{ .line = item.span.line, .column = item.span.column };
+                } else {
+                    const fact_source = source orelse continue;
+                    const field_path = try std.fmt.allocPrint(allocator, "{s}[{d}]", .{ field.name.text, index });
+                    errdefer allocator.free(field_path);
+                    try pointer_facts.append(allocator, .{
+                        .callee = fn_decl.name.text,
+                        .field_path = field_path,
+                        .provenance = .global_storage,
+                        .pointer_shape = shape,
+                        .source = fact_source,
+                    });
+                }
+            }
+        }
     }
 
     return .{
@@ -1175,11 +1202,26 @@ fn aggregateReturnHasUnmodeledPointerField(
         const ty = valueTypeFromTypeAlias(field.ty, enums, structs, packed_bits, aliases);
         if (pointerShapeFromValueType(ty) != null) continue;
         switch (ty) {
-            .array, .slice, .struct_, .unknown => return true,
+            .array => if (aggregateReturnFixedPointerArrayElementShape(field.ty, enums, structs, packed_bits, aliases) == null) return true,
+            .slice, .struct_, .unknown => return true,
             else => {},
         }
     }
     return false;
+}
+
+fn aggregateReturnFixedPointerArrayElementShape(
+    ty: ast.TypeExpr,
+    enums: *const std.StringHashMap(EnumSummary),
+    structs: *const std.StringHashMap(StructSummary),
+    packed_bits: *const std.StringHashMap(PackedBitsSummary),
+    aliases: *const std.StringHashMap(ast.TypeExpr),
+) ?PointerShape {
+    const array = switch (aggregateTargetTypeAlias(ty, aliases).kind) {
+        .array => |node| node,
+        else => return null,
+    };
+    return pointerShapeFromValueType(valueTypeFromTypeAlias(array.child.*, enums, structs, packed_bits, aliases));
 }
 
 fn collectDirectGlobalPointerReturnSummaries(allocator: std.mem.Allocator, module: ast.Module, globals: *const std.StringHashMap(ValueType), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr)) !std.StringHashMap(PointerReturnProvenanceSummary) {
