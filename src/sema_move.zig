@@ -1097,28 +1097,26 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
             // derived alias (`p = f(&o)`, `p = &o.field`) is NOT flagged, so reading its
             // non-move pointee (`p.* + 1` on a `*mut u32`) stays an ordinary borrow.
             const direct_subplace = fullDerefMoveSubplace(self, inner.*, state, aliases);
-            var full_alias_referent: ?[]const u8 = if (direct_subplace) |pp| pp.key else immediateFullDerefMoveReferent(self, inner.*, state, aliases);
-            var full_alias_place: ?MovePlace = if (direct_subplace) |pp| pp.place else null;
+            var full_alias_referent: ?AliasReferent = if (direct_subplace) |pp| .{ .key = pp.key, .place = pp.place, .full_deref = true } else immediateFullDerefMoveReferent(self, inner.*, state, aliases);
             switch (inner.*.kind) {
                 .ident => |id| if (state.get(id.text)) |s| {
                     if (s.full_deref_alias) {
-                        full_alias_referent = s.alias_of;
-                        full_alias_place = s.alias_place;
+                        full_alias_referent = if (s.alias_of) |referent| .{ .key = referent, .place = s.alias_place, .full_deref = true } else null;
                     }
                 },
                 else => {},
             }
             if (full_alias_referent) |referent| {
-                if (full_alias_place) |place| {
+                if (referent.place) |place| {
                     if (place.isSubplace()) {
-                        consumeTrackedMovePlace(self, referent, place, expr.span, state);
+                        consumeTrackedMovePlace(self, referent.key, place, expr.span, state);
                     } else {
-                        consumeTrackedMoveBinding(self, referent, expr.span, state);
+                        consumeTrackedMoveBinding(self, referent.key, expr.span, state);
                     }
-                } else if (isMoveSubplaceKey(referent)) {
-                    consumeTrackedMoveSubplace(self, referent, expr.span, state);
+                } else if (isMoveSubplaceKey(referent.key)) {
+                    consumeTrackedMoveSubplace(self, referent.key, expr.span, state);
                 } else {
-                    consumeTrackedMoveBinding(self, referent, expr.span, state);
+                    consumeTrackedMoveBinding(self, referent.key, expr.span, state);
                 }
             } else if (exprIsMoveTyped(self, expr, state, aliases)) {
                 self.errorCode(expr.span, "E_USE_AFTER_MOVE", "cannot move a linear `move` value out through a pointer deref; move the owning binding directly (the pointee would be left moved-from, which the checker cannot track through the alias)");
@@ -1215,9 +1213,10 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
     }
 }
 
-fn immediateFullDerefMoveReferent(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
-    if (fullDerefMoveSubplaceAlias(self, expr, state, aliases)) |referent| return referent;
-    return spine.borrowedMoveRoot(expr, state);
+fn immediateFullDerefMoveReferent(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
+    if (fullDerefMoveSubplace(self, expr, state, aliases)) |referent| return .{ .key = referent.key, .place = referent.place, .full_deref = true };
+    const root = spine.borrowedMoveRoot(expr, state) orelse return null;
+    return .{ .key = root, .place = aliasPlaceForKey(root, state), .full_deref = true };
 }
 
 fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {

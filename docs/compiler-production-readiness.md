@@ -2,7 +2,7 @@
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
 Current ledger: **updated 2026-07-09, based on the current compiler worktree**.
-Ledger count: **395 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
+Ledger count: **396 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -429,6 +429,7 @@ progress.
 | Move checker moved-place queries use typed conflicts | Borrow/use checks for nameable fields and array elements now ask the typed `MovePlace` state whether the exact place or any conflicting moved place exists, instead of using the formatted key as a wildcard-overlap parser. This keeps borrow-after-move diagnostics aligned with the same symbolic, concrete, and wildcard projection rules used by direct moves and deferred borrows. | `src/sema_move.zig` `placeExprIsMoved`, `stateHasMovedPlace`, and `stateHasMovedConflictingPlace`; existing moved field, array, symbolic, wildcard, alias, and deferred cases in `tests/spec/move_place.mc`; `zig build test`; `git diff --check`. |
 | Move checker alias registration admits typed referents by root | Local, assignment, aggregate-field, array-element, and cleanup-block alias registration now asks a shared `AliasReferent` helper whether the structured referent place is rooted in live tracked state before falling back to legacy formatted subplace keys. This removes another class of repeated string-shape checks from the alias path while preserving compatibility for untyped referents. | `src/sema_move.zig` `AliasReferent`, `aliasReferentIsTracked`, local/assignment alias registration, `recordAssignedAggregateFieldAliasOrEscape`, `recordAliasPlaceOrEscapeWithKey`, `recordDeferredIdentAssignmentAlias`, and `trackDeferredCleanupLocal`; existing alias and cleanup alias cases in `tests/spec/move_place.mc`; `zig build test`; `git diff --check`. |
 | Move checker cleanup-local alias detection uses typed roots | Deferred cleanup block initializers now classify cleanup-local aliases through `AliasReferent` and `MovePlace.root` before falling back to formatted referent roots. Cleanup-local borrows still avoid reserving outer deferred borrows, while outer aliases continue through normal deferred-borrow reservation. | `src/sema_move.zig` `aliasReferentRoot` and `cleanupLocalAliasReferent`; cleanup-local and outer deferred alias cases in `tests/spec/move_place.mc`; `zig build test`; `git diff --check`. |
+| Move checker full-deref alias consumption uses typed referents | Moving through `*alias` now routes immediate address expressions, noalias-wrapped address expressions, and copied full-deref aliases through `AliasReferent` before consuming a root or subplace. Typed `MovePlace` data drives field/array element consumption when present, with the formatted subplace fallback retained only for legacy referents. | `src/sema_move.zig` `.deref` handling in `moveConsume` and `immediateFullDerefMoveReferent`; full field, array element, dynamic, noalias, copied, and duplicate-move cases in `tests/spec/move_place.mc`; `zig build test`; `git diff --check`. |
 
 ### In Progress
 
