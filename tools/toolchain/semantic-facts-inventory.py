@@ -52,6 +52,8 @@ ANCHORS: dict[str, list[str]] = {
         "value_id: ?[]const u8",
         "contract_region_id: ?usize",
         "pub const RangeFact = struct",
+        "pub const BoundsFactKind = enum",
+        "pub const BoundsFact = struct",
         "pub const SourcePoint = struct",
         "pub const PointerProvenance = enum",
         "pub const PointerProvenanceFact = struct",
@@ -59,6 +61,7 @@ ANCHORS: dict[str, list[str]] = {
         "pub const PointerProvenanceInvalidationReason = enum",
         "pub const RepresentationFact = struct",
         "range_facts: []RangeFact",
+        "bounds_facts: []BoundsFact",
         "pointer_provenance_facts: []PointerProvenanceFact",
         "representation_facts: []RepresentationFact",
         "elided_bounds: []SourcePoint",
@@ -66,6 +69,7 @@ ANCHORS: dict[str, list[str]] = {
     "src/mir.zig": [
         "pub fn appendDumpOpt",
         '"mir range_fact',
+        '"mir bounds_fact',
         '"mir representation_fact',
         '"mir pointer_provenance_fact',
         "field={s}",
@@ -117,6 +121,7 @@ ANCHORS: dict[str, list[str]] = {
         ".has_mir_no_overflow_range_fact = hasMirNoOverflowRangeFactForArith",
         "fn hasMirNoOverflowRangeFact",
         "fn mirCheckElided",
+        "fn requireMirBoundsFact",
         "fn applyMirPointerProvenanceForLocalInitializer",
         "fn applyMirPointerProvenanceForAssignment",
         "fn applyMirPointerProvenanceForIndexAssignment",
@@ -177,6 +182,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn applyMirPointerProvenanceForIndexAssignment",
         "fn applyMirPointerProvenanceInvalidationsAtCall",
         "fn requireMirNoOverflowRangeFact",
+        "fn requireMirBoundsFact",
         "fn pointerExprHasGlobalStorageProvenance",
         "fn mirCheckElided",
         "mir range_fact consumed",
@@ -188,12 +194,16 @@ ANCHORS: dict[str, list[str]] = {
 
 EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/lower_c_emitter.zig": {
+        "fn requireMirBoundsFact": 1,
+        "try self.requireMirBoundsFact(": 3,
         "fn updatePointerProvenanceFromMirOrFallback": 1,
         "try self.updatePointerProvenanceFromMirOrFallback(": 1,
         "fn updatePointerProvenanceAssignmentFromMirOrFallback": 1,
         "try self.updatePointerProvenanceAssignmentFromMirOrFallback(": 1,
     },
     "src/lower_llvm.zig": {
+        "fn requireMirBoundsFact": 1,
+        "try self.requireMirBoundsFact(": 5,
         "fn updatePointerGlobalProvenance": 1,
         "try self.updatePointerGlobalProvenance(": 2,
         "fn updatePointerProvenanceFromMirOrFallback": 1,
