@@ -664,6 +664,72 @@ narrow fact families described above. Current production backends still use
 legacy inference only for the explicitly listed unsupported fallback families;
 the readiness closure matrix owns their migration or fail-closed disposition.
 
+## Next Migration Contract: Aggregate Returns (Not Implemented)
+
+This section is a design contract for the next typed-fact family. It describes
+work that does **not** exist in the current compiler. Current LLVM lowering still
+uses `aggregate_return_pointer_fields`, an AST pre-scan of non-exported aggregate
+return bodies. The completion of this contract is what permits that collector to
+be removed.
+
+### Fact shape
+
+The owned MIR module should carry an `AggregateReturnPointerFact` for each
+returned pointer field that is proven across every modeled return path:
+
+```zig
+pub const AggregateReturnPointerFact = struct {
+    callee: []const u8,
+    field_path: []const u8,
+    provenance: enum { global_storage },
+    pointer_shape: PointerShape,
+    source: SourcePoint,
+};
+```
+
+`local_storage` is deliberately excluded: callee-local storage cannot become a
+caller-local proof through an aggregate return. Absent, mixed, exported,
+recursive, callback, or otherwise unmodeled return flow records no fact.
+
+### Producer boundary
+
+The MIR producer must operate on the checked module and derive its result from
+the same direct pointer/aggregate facts used by ordinary MIR construction. It
+must model the current bounded domain before LLVM may retire its equivalent
+collector:
+
+- direct struct-literal returns and returns of tracked local aggregates;
+- straight-line local declaration and assignment prefixes;
+- exhaustive bool/wildcard switches with bounded return/fallthrough paths;
+- intersection of field facts across paths, retaining a field only when every
+  path agrees on `global_storage` and pointer shape.
+
+Every other shape must emit no return fact. That includes loops, indirect calls,
+exports, unions, unmodeled fallthrough effects, and any path with a missing or
+ambiguous field fact.
+
+### Consumer and retirement rule
+
+At `let dst: Holder = callee()`, C and LLVM must apply matching return-field
+facts to `dst` before any backend-local aggregate inference. For a call shape
+covered by this family but lacking a matching MIR fact, the backend must leave
+the returned field unknown and final scalar dereferences must use conservative
+race-tolerant lowering. LLVM may delete `aggregate_return_pointer_fields` only
+after its supported source domain is represented by this producer and the
+missing-fact gate covers every migrated shape.
+
+### Required evidence
+
+1. `lower-mir` dumps owned return-field facts with callee, field path, shape,
+   provenance, and source point.
+2. MIR tests cover direct, local, assignment, branch, switch, trailing-return,
+   mixed, exported, and local-storage return cases.
+3. C and LLVM tests prove normal consumption and removal of a caller-side or
+   return-field fact produces conservative lowering.
+4. The semantic-facts inventory rejects any remaining LLVM aggregate-return
+   collector or records the exact explicitly accepted fallback count.
+5. `zig build test` and both backend suites pass after the collector retirement.
+
 ## Non-goals
 
 - Do not replace the parser, AST, HIR, MIR, and all backend type queries in one
