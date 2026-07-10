@@ -6636,6 +6636,34 @@ test "lower-c local pointer-array aliases require MIR destination facts" {
     try expectNotContains(missing_body, "return *p;");
 }
 
+test "lower-c dynamic local pointer-array aliases require MIR destination facts" {
+    const source =
+        \\fn c_dynamic_local_pointer_array_alias_requires_mir_fact(index: usize) -> u32 {
+        \\    var local: u32 = 0;
+        \\    var ptrs: [2]*mut u32 = .{ &local, &local };
+        \\    let pa: *mut [2]*mut u32 = &ptrs;
+        \\    let p: *mut u32 = pa.*[index];
+        \\    return p.*;
+        \\}
+    ;
+
+    var normal_output: std.ArrayList(u8) = .empty;
+    defer normal_output.deinit(std.testing.allocator);
+    try appendCheckedCTest("emit_c_dynamic_local_pointer_array_alias_provenance.mc", source, &normal_output);
+    const normal_body = try cFunctionBody(normal_output.items, "static uint32_t c_dynamic_local_pointer_array_alias_requires_mir_fact(uintptr_t index)");
+    try expectContains(normal_body, "/* mir pointer_provenance consumed fn=c_dynamic_local_pointer_array_alias_requires_mir_fact subject=p provenance=local_storage reason=none source=");
+    try expectContains(normal_body, "return *p;");
+    try expectNotContains(normal_body, "mc_race_load_u32(p)");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutPointerProvenanceFactsForSubject("emit_c_dynamic_local_pointer_array_alias_missing_provenance.mc", source, "c_dynamic_local_pointer_array_alias_requires_mir_fact", "p", &missing_output);
+    const missing_body = try cFunctionBody(missing_output.items, "static uint32_t c_dynamic_local_pointer_array_alias_requires_mir_fact(uintptr_t index)");
+    try expectNotContains(missing_body, "/* mir pointer_provenance consumed fn=c_dynamic_local_pointer_array_alias_requires_mir_fact subject=p provenance");
+    try expectContains(missing_body, "return ((uint32_t)mc_race_load_u32(p));");
+    try expectNotContains(missing_body, "return *p;");
+}
+
 test "lower-c emits while loops and loop control" {
     const source =
         \\fn loop_once(flag: bool) -> u32 {

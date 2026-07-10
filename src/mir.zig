@@ -3956,6 +3956,7 @@ const FunctionBuilder = struct {
             self.rawManyZeroOffsetProvenance(expr, target_shape) orelse
             self.directLocalPointerCopyProvenance(expr, target_shape, target_subject) orelse
             self.constantIndexLocalPointerElementProvenance(expr, target_shape) orelse
+            self.dynamicLocalPointerArrayAliasElementProvenance(expr, target_shape) orelse
             self.directAggregatePointerFieldProvenance(expr, target_shape) orelse
             self.directAggregatePointerArrayElementProvenance(expr, target_shape);
     }
@@ -4043,6 +4044,50 @@ const FunctionBuilder = struct {
             },
             else => null,
         };
+    }
+
+    fn dynamicLocalPointerArrayAliasElementProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape) ?DirectPointerProvenance {
+        return switch (expr.kind) {
+            .grouped => |inner| self.dynamicLocalPointerArrayAliasElementProvenance(inner.*, target_shape),
+            .cast => |node| self.dynamicLocalPointerArrayAliasElementProvenance(node.value.*, target_shape),
+            .call => |call| blk: {
+                if (!isAssumeNoaliasDirectCall(call) or call.type_args.len != 0 or call.args.len != 2) break :blk null;
+                break :blk self.dynamicLocalPointerArrayAliasElementProvenance(call.args[0], target_shape);
+            },
+            .index => |node| blk: {
+                if (self.constUsizeValue(node.index.*) != null) break :blk null;
+                const base_name = self.directLocalPointerArrayAliasBaseNameForIndex(node.base.*) orelse break :blk null;
+                break :blk self.allLivePointerArrayElementProvenance(base_name, target_shape);
+            },
+            else => null,
+        };
+    }
+
+    fn allLivePointerArrayElementProvenance(self: *FunctionBuilder, base_name: []const u8, target_shape: PointerShape) ?DirectPointerProvenance {
+        const ty_expr = self.local_type_exprs.get(base_name) orelse return null;
+        const array = switch (aggregateTargetTypeAlias(ty_expr, self.aliases).kind) {
+            .array => |node| node,
+            else => return null,
+        };
+        const element_shape = self.fixedPointerArrayElementShape(ty_expr) orelse return null;
+        if (!samePointerShape(element_shape, target_shape)) return null;
+        const len = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse return null;
+        if (len == 0) return null;
+
+        var result: ?DirectPointerProvenance = null;
+        for (0..len) |index| {
+            const live = self.livePointerProvenanceForElement(base_name, index) orelse return null;
+            if (live.provenance != .local_storage and live.provenance != .global_storage) return null;
+            if (!samePointerShape(live.pointer_shape, target_shape)) return null;
+            const storage = live.storage orelse return null;
+            const current: DirectPointerProvenance = .{ .kind = live.provenance, .storage = storage };
+            if (result) |previous| {
+                if (previous.kind != current.kind) return null;
+            } else {
+                result = current;
+            }
+        }
+        return result;
     }
 
     fn directAggregatePointerFieldProvenance(self: *FunctionBuilder, expr: ast.Expr, target_shape: PointerShape) ?DirectPointerProvenance {

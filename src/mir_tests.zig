@@ -2215,6 +2215,26 @@ test "MIR records direct local pointer-array alias provenance facts" {
         \\    pa = &other;
         \\    let p: *mut u32 = pa.*[0];
         \\}
+        \\
+        \\fn dynamic_alias_all_local(index: usize) {
+        \\    var local: u32 = 0;
+        \\    var ptrs: [2]*mut u32 = .{ &local, &local };
+        \\    let pa: *mut [2]*mut u32 = &ptrs;
+        \\    let p: *mut u32 = pa.*[index];
+        \\}
+        \\
+        \\fn dynamic_alias_all_global(index: usize) {
+        \\    var ptrs: [2]*mut u32 = .{ &shared_counter, &shared_counter };
+        \\    let pa: *mut [2]*mut u32 = &ptrs;
+        \\    let p: *mut u32 = pa.*[index];
+        \\}
+        \\
+        \\fn dynamic_alias_mixed(index: usize) {
+        \\    var local: u32 = 0;
+        \\    var ptrs: [2]*mut u32 = .{ &shared_counter, &local };
+        \\    let pa: *mut [2]*mut u32 = &ptrs;
+        \\    let p: *mut u32 = pa.*[index];
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_local_pointer_array_alias_provenance.mc", source);
@@ -2239,6 +2259,14 @@ test "MIR records direct local pointer-array alias provenance facts" {
 
     const reassigned = functionByName(typed_mir, "alias_reassignment_stays_unproven").?;
     try std.testing.expect(!hasPointerProvenanceFact(reassigned, "p", null, .local_storage, .none, "local"));
+
+    const all_local = functionByName(typed_mir, "dynamic_alias_all_local").?;
+    try std.testing.expect(hasPointerProvenanceFact(all_local, "p", null, .local_storage, .none, "local"));
+    const all_global = functionByName(typed_mir, "dynamic_alias_all_global").?;
+    try std.testing.expect(hasPointerProvenanceFact(all_global, "p", null, .global_storage, .none, "shared_counter"));
+    const mixed = functionByName(typed_mir, "dynamic_alias_mixed").?;
+    try std.testing.expect(!hasPointerProvenanceFact(mixed, "p", null, .local_storage, .none, "local"));
+    try std.testing.expect(!hasPointerProvenanceFact(mixed, "p", null, .global_storage, .none, "shared_counter"));
 }
 
 test "MIR records narrow raw-many zero offset pointer provenance facts" {

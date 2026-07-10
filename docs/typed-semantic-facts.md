@@ -24,6 +24,10 @@ pointer initialized directly from `&ptrs` and then dereferenced at a constant
 index. MIR emits the destination fact, and both backends fail closed when that
 destination row is removed. Dynamic alias indexes remain outside this slice.
 
+The completed dynamic extension emits a destination fact only when every backing
+pointer-array element has the same live provenance kind. Mixed, invalidated, and
+reassigned shapes remain unknown.
+
 The compiler already has several fact-like surfaces, but they are not a single
 typed semantic source of truth:
 
