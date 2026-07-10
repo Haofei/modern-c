@@ -2275,8 +2275,7 @@ fn nonNameableSingletonMoveIndex(self: *Checker, expr: ast.Expr, state: *const s
 // moved out.
 pub fn placeExprIsMoved(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) bool {
     const pp = placeKeyAndType(self, expr, state) orelse return false;
-    if (state.contains(pp.key)) return true;
-    return concretePlaceHasWildcardMove(pp.key, state);
+    return stateHasMovedPlace(pp.place, state) or stateHasMovedConflictingPlace(pp.place, state);
 }
 
 fn concretePlaceHasWildcardMove(key: []const u8, state: *const std.StringHashMap(MoveSlot)) bool {
