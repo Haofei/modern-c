@@ -186,6 +186,13 @@ ANCHORS: dict[str, list[str]] = {
     ],
 }
 
+EXACT_COUNTS: dict[str, dict[str, int]] = {
+    "src/lower_llvm.zig": {
+        "fn updatePointerGlobalProvenance": 1,
+        "try self.updatePointerGlobalProvenance(": 2,
+    },
+}
+
 
 def main() -> int:
     missing: list[str] = []
@@ -203,6 +210,12 @@ def main() -> int:
             checked += 1
             if anchor not in text:
                 missing.append(f"{relative}: missing anchor {anchor!r}")
+
+        for needle, expected in EXACT_COUNTS.get(relative, {}).items():
+            checked += 1
+            actual = text.count(needle)
+            if actual != expected:
+                missing.append(f"{relative}: expected {expected} occurrences of {needle!r}, found {actual}")
 
     if missing:
         print("semantic facts inventory anchor check failed:", file=sys.stderr)
