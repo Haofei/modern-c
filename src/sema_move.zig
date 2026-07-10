@@ -980,6 +980,14 @@ fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const std
 
 fn aliasStoragePlaceForExpr(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
     if (placeKeyAndType(self, expr, state)) |pp| return pp.place;
+    switch (expr.kind) {
+        .grouped => |inner| return aliasStoragePlaceForExpr(self, inner.*, state),
+        .ident => |id| {
+            const slot = state.get(id.text) orelse return null;
+            return slot.place;
+        },
+        else => {},
+    }
     if (aliasPlaceKey(self, expr, state)) |key| {
         defer self.reporter.allocator.free(key);
         if (state.get(key)) |slot| return slot.place;
