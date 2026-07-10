@@ -1021,7 +1021,7 @@ fn collectAggregateReturnPointerFactsForStruct(
     packed_bits: *const std.StringHashMap(PackedBitsSummary),
     aliases: *const std.StringHashMap(ast.TypeExpr),
     pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary),
-) !void {
+) anyerror!void {
     for (struct_summary.fields) |field| {
         const field_path = if (path_prefix) |prefix|
             try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, field.name.text })
@@ -1059,36 +1059,21 @@ fn collectAggregateReturnPointerFactsForStruct(
             continue;
         }
 
-        if (aggregateReturnFixedStructArrayElementName(field.ty, enums, structs, packed_bits, aliases)) |element_struct_name| {
-            const nested_summary = structs.get(element_struct_name) orelse continue;
-            const first_value = aggregateLiteralFieldValue(literal_paths[0], field.name.text) orelse continue;
-            const first_items = arrayLiteralItems(first_value) orelse continue;
-            for (first_items, 0..) |_, element_index| {
-                var nested_paths: [8][]ast.StructLiteralField = undefined;
-                for (literal_paths, 0..) |literal_fields, path_index| {
-                    const value = aggregateLiteralFieldValue(literal_fields, field.name.text) orelse break;
-                    const items = arrayLiteralItems(value) orelse break;
-                    if (element_index >= items.len) break;
-                    nested_paths[path_index] = structLiteralFieldsForAggregateReturn(items[element_index]) orelse break;
-                } else {
-                    const element_path = try std.fmt.allocPrint(allocator, "{s}[{d}]", .{ field_path, element_index });
-                    defer allocator.free(element_path);
-                    try collectAggregateReturnPointerFactsForStruct(
-                        allocator,
-                        pointer_facts,
-                        callee,
-                        nested_summary,
-                        nested_paths[0..literal_paths.len],
-                        element_path,
-                        globals,
-                        enums,
-                        structs,
-                        packed_bits,
-                        aliases,
-                        pointer_return_summaries,
-                    );
-                }
-            }
+        if (try collectAggregateReturnPointerFactsForStructArray(
+            allocator,
+            pointer_facts,
+            callee,
+            field.ty,
+            literal_paths,
+            field.name.text,
+            field_path,
+            globals,
+            enums,
+            structs,
+            packed_bits,
+            aliases,
+            pointer_return_summaries,
+        )) {
             continue;
         }
 
@@ -1117,6 +1102,120 @@ fn collectAggregateReturnPointerFactsForStruct(
                 pointer_return_summaries,
             );
         }
+    }
+}
+
+fn collectAggregateReturnPointerFactsForStructArray(
+    allocator: std.mem.Allocator,
+    pointer_facts: *std.ArrayList(AggregateReturnPointerFact),
+    callee: []const u8,
+    ty: ast.TypeExpr,
+    literal_paths: []const []ast.StructLiteralField,
+    field_name: []const u8,
+    field_path: []const u8,
+    globals: *const std.StringHashMap(ValueType),
+    enums: *const std.StringHashMap(EnumSummary),
+    structs: *const std.StringHashMap(StructSummary),
+    packed_bits: *const std.StringHashMap(PackedBitsSummary),
+    aliases: *const std.StringHashMap(ast.TypeExpr),
+    pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary),
+) anyerror!bool {
+    var array_values: [8]ast.Expr = undefined;
+    for (literal_paths, 0..) |literal_fields, index| {
+        array_values[index] = aggregateLiteralFieldValue(literal_fields, field_name) orelse return false;
+    }
+    return try collectAggregateReturnPointerFactsForStructArrayValues(
+        allocator,
+        pointer_facts,
+        callee,
+        ty,
+        array_values[0..literal_paths.len],
+        field_path,
+        globals,
+        enums,
+        structs,
+        packed_bits,
+        aliases,
+        pointer_return_summaries,
+    );
+}
+
+fn collectAggregateReturnPointerFactsForStructArrayValues(
+    allocator: std.mem.Allocator,
+    pointer_facts: *std.ArrayList(AggregateReturnPointerFact),
+    callee: []const u8,
+    ty: ast.TypeExpr,
+    values: []const ast.Expr,
+    field_path: []const u8,
+    globals: *const std.StringHashMap(ValueType),
+    enums: *const std.StringHashMap(EnumSummary),
+    structs: *const std.StringHashMap(StructSummary),
+    packed_bits: *const std.StringHashMap(PackedBitsSummary),
+    aliases: *const std.StringHashMap(ast.TypeExpr),
+    pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary),
+) anyerror!bool {
+    const array = switch (aggregateTargetTypeAlias(ty, aliases).kind) {
+        .array => |node| node,
+        else => return false,
+    };
+    const first_items = arrayLiteralItems(values[0]) orelse return false;
+    switch (valueTypeFromTypeAlias(array.child.*, enums, structs, packed_bits, aliases)) {
+        .struct_ => |name| {
+            const nested_summary = structs.get(name) orelse return false;
+            for (first_items, 0..) |_, element_index| {
+                var nested_paths: [8][]ast.StructLiteralField = undefined;
+                for (values, 0..) |value, path_index| {
+                    const items = arrayLiteralItems(value) orelse return false;
+                    if (element_index >= items.len) return false;
+                    nested_paths[path_index] = structLiteralFieldsForAggregateReturn(items[element_index]) orelse return false;
+                }
+                const element_path = try std.fmt.allocPrint(allocator, "{s}[{d}]", .{ field_path, element_index });
+                defer allocator.free(element_path);
+                try collectAggregateReturnPointerFactsForStruct(
+                    allocator,
+                    pointer_facts,
+                    callee,
+                    nested_summary,
+                    nested_paths[0..values.len],
+                    element_path,
+                    globals,
+                    enums,
+                    structs,
+                    packed_bits,
+                    aliases,
+                    pointer_return_summaries,
+                );
+            }
+            return true;
+        },
+        .array => {
+            for (first_items, 0..) |_, element_index| {
+                var nested_values: [8]ast.Expr = undefined;
+                for (values, 0..) |value, path_index| {
+                    const items = arrayLiteralItems(value) orelse return false;
+                    if (element_index >= items.len) return false;
+                    nested_values[path_index] = items[element_index];
+                }
+                const element_path = try std.fmt.allocPrint(allocator, "{s}[{d}]", .{ field_path, element_index });
+                defer allocator.free(element_path);
+                if (!try collectAggregateReturnPointerFactsForStructArrayValues(
+                    allocator,
+                    pointer_facts,
+                    callee,
+                    array.child.*,
+                    nested_values[0..values.len],
+                    element_path,
+                    globals,
+                    enums,
+                    structs,
+                    packed_bits,
+                    aliases,
+                    pointer_return_summaries,
+                )) return false;
+            }
+            return true;
+        },
+        else => return false,
     }
 }
 
@@ -1863,6 +1962,7 @@ fn aggregateReturnFixedStructArrayElementName(
     };
     return switch (valueTypeFromTypeAlias(array.child.*, enums, structs, packed_bits, aliases)) {
         .struct_ => |name| name,
+        .array => aggregateReturnFixedStructArrayElementName(array.child.*, enums, structs, packed_bits, aliases),
         else => null,
     };
 }

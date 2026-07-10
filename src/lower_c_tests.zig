@@ -970,7 +970,7 @@ test "lower-c aggregate-return nested pointer arrays with missing leaf facts fai
     try expectContains(output.items, "mc_race_load_u32");
 }
 
-test "lower-c aggregate-return nested struct arrays fail closed" {
+test "lower-c consumes MIR aggregate-return nested struct-array facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Cell { ptr: *mut u32 }
@@ -988,9 +988,14 @@ test "lower-c aggregate-return nested struct arrays fail closed" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_nested_struct_array_aggregate_return_fail_closed.mc", source, &output);
-    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
-    try expectContains(output.items, "mc_race_load_u32");
+    try appendCheckedCTest("c_nested_struct_array_aggregate_return_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=groups[0][0].ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_nested_struct_array_aggregate_return_mir_fact.mc", source, "returned_holder", "groups[0][0].ptr", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=groups[0][0].ptr");
+    try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
 test "lower-c aggregate-return dereference writes fail closed" {

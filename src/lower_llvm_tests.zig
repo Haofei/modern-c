@@ -1318,7 +1318,7 @@ test "LLVM aggregate-return nested pointer arrays with missing leaf facts fail c
     try expectContains(body, "load atomic i32, ptr %");
 }
 
-test "LLVM aggregate-return nested struct arrays fail closed" {
+test "LLVM consumes MIR aggregate-return nested struct-array facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Cell { ptr: *mut u32 }
@@ -1336,10 +1336,16 @@ test "LLVM aggregate-return nested struct arrays fail closed" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_nested_struct_array_aggregate_return_fail_closed.mc", source, &output);
+    try appendLlvmTest("llvm_nested_struct_array_aggregate_return_mir_fact.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
-    try expectNotContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
-    try expectContains(body, "load atomic i32, ptr %");
+    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=groups[0][0].ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_nested_struct_array_aggregate_return_mir_fact.mc", source, "returned_holder", "groups[0][0].ptr", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_returned_holder");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=groups[0][0].ptr");
+    try expectContains(missing_body, "load atomic i32, ptr %");
 }
 
 test "LLVM aggregate-return dereference writes fail closed" {

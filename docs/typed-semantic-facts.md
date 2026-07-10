@@ -671,8 +671,9 @@ internal struct-literal helpers and straight-line local aggregate returns when
 the returned local is initialized or whole-assigned from a direct literal, or
 copied from another such tracked local. Returned structs may contain scalar
 pointer fields, fixed arrays of scalar pointer elements, recursively nested
-struct literals, and fixed arrays of struct elements made from those shapes. C
-and LLVM consume those facts. Unsupported aggregate-return shapes stay
+struct literals, fixed arrays of struct elements made from those shapes, and
+nested fixed arrays of those struct elements. C and LLVM consume those facts.
+Unsupported aggregate-return shapes stay
 conservative; LLVM no longer has an AST pre-scan that can recreate returned
 pointer-field facts outside MIR.
 
@@ -717,9 +718,10 @@ Current producer boundary:
   top-level exhaustive switch joins, or bounded nested exhaustive switch/`if`
   return paths whose expanded paths stay within the aggregate-return path cap;
 - return structs with scalar pointer fields, fixed arrays of scalar pointer
-  elements, recursively nested struct literals, and fixed arrays of struct
-  elements containing those shapes; dynamic-index reads and arrays nested beyond
-  that fixed struct-element domain remain outside the domain;
+  elements, recursively nested struct literals, fixed arrays of struct elements
+  containing those shapes, and nested fixed arrays of those struct elements;
+  dynamic-index reads and aggregate array nesting beyond those fixed domains
+  remain outside the domain;
 - pointer fields directly proven global by the existing MIR direct-address or
   direct internal pointer-return summary.
 
@@ -757,9 +759,9 @@ Callee-local storage returned inside an aggregate is not a producer obligation
 for checked code because sema rejects the local-address escape. The diagnostic
 fixture remains covered as a negative MIR case: unchecked MIR construction must
 not emit a `global_storage` aggregate-return pointer fact for that field.
-Nested pointer arrays and nested arrays of pointer-bearing structs beyond fixed
-struct-element arrays are also explicit fail-closed boundaries: MIR emits no
-owned aggregate-return summary for those diagnostic shapes, and both backends
+Unsupported aggregate array nesting beyond the named fixed pointer-array and
+fixed struct-array domains is also an explicit fail-closed boundary: MIR emits
+no owned aggregate-return summary for those diagnostic shapes, and both backends
 keep the final scalar load conservative.
 Dereference writes through aggregate aliases, such as `alias.*.ptr = &global`,
 are explicit fail-closed boundaries too: MIR emits no summary for the callee, so
@@ -788,19 +790,20 @@ MIR-populated cache; the AST collector is gone.
 2. Complete for the direct-literal and straight-line-local boundary: MIR tests
    cover global, unknown, local initialization, whole-local reassignment,
    tracked whole-local copies, exhaustive branch joins, direct fixed
-   pointer-array elements, nested aggregate field paths, and fixed arrays of
-   struct elements with pointer-bearing fields. Direct literal returns after
-   call-free prefixes are covered, and literal returns after call prefixes are
-   explicitly excluded.
+   pointer-array elements including nested fixed pointer arrays, nested
+   aggregate field paths, fixed arrays of struct elements with pointer-bearing
+   fields, and nested fixed arrays of those struct elements. Direct literal
+   returns after call-free prefixes are covered, and literal returns after call
+   prefixes are explicitly excluded.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
 4. Complete for named unsupported producer shapes: loop prefixes, `for`
    prefixes, deferred cleanup prefixes, unsupported nested CFG joins,
    path-count-overflow CFG joins, exported aggregate returns, mixed paths,
-   prefix calls, fallthrough dynamic-index writes, dereference writes, nested
-   pointer arrays, and nested arrays of pointer-bearing structs beyond fixed
-   struct-element arrays are covered as fail-closed rather than inferred.
+   prefix calls, fallthrough dynamic-index writes, dereference writes, and
+   aggregate array nesting beyond the fixed pointer-array/struct-array domains
+   are covered as fail-closed rather than inferred.
 5. Complete: the semantic-facts inventory rejects the retired LLVM
    aggregate-return AST collector, and LLVM loads aggregate-return pointer-field
    cache entries only from MIR facts.
