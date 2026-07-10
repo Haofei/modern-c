@@ -1,36 +1,44 @@
 # Production readiness: the MC compiler (`mcc`)
 
-Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
-Current ledger: **updated 2026-07-10, based on the current compiler worktree**.
-Ledger count: **428 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
+Status: **qualified subset, not generally production-ready**.
+Current assessment: **updated 2026-07-10, based on the current compiler worktree**.
+Evidence register: **428 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
-> This file started as a point-in-time audit. The sections below the ledger preserve
-> that original review context, including findings that have since been fixed. Treat
-> this ledger as the current source of truth for goal progress; treat older ranked
-> tables as historical evidence unless the item is repeated under "Pending". The
-> count is a row count, not a percentage or a claim that the three architectural
-> umbrellas are nearly complete.
+The compiler has locally verified behavior across its supported subset. It is not
+ready for an unrestricted production claim because pointer-provenance race
+lowering, typed-MIR ownership of semantic facts, and CFG/place-based move analysis
+still have open architectural closure boundaries.
 
-## 0. Current Progress Ledger
+The evidence count is an audit register, not a completion percentage. The three
+closure matrices below, rather than the evidence count, define the exit criteria
+for a general production-ready claim.
 
-### Ledger Operating Model
+## 0. Current Assessment
 
-This ledger uses reviewable production-readiness slices, not vague percentage
-progress.
+### Current Guarantee
+
+Within the tested supported subset, the compiler either emits the documented
+lowering or rejects unsupported cases explicitly. Unknown scalar pointer
+dereferences use conservative race-tolerant lowering where supported.
+
+This document does not claim complete correctness for arbitrary pointer-return
+flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
+
+### Evidence Model
 
 - A **finished** row means one bounded behavior or regression-evidence slice is
   locally verified and tied to concrete evidence. Evidence-only rows must say so;
   they do not advance an umbrella's closure matrix by themselves.
-- An **in progress** row means one bounded behavior is actively being changed and
+- An **active** row means one bounded behavior is actively being changed and
   still needs evidence before it can move to finished.
-- A **pending umbrella workstream** is larger than one implementation slice. Its
+- An **open architectural workstream** is larger than one implementation slice. Its
   count should not drop just because another narrow case lands; it drops only
   when the workstream's acceptance boundary is either fully closed or explicitly
   narrowed by project decision.
-- Historical sections after the ledger are audit context. When they conflict
-  with this ledger, the ledger is the current source of truth.
+- Historical sections after the evidence register are audit context. When they
+  conflict with this assessment, this assessment is the current source of truth.
 
-### Finished Or In Worktree
+### Evidence Register
 
 | Item | Why it matters | Evidence |
 |---|---|---|
@@ -59,7 +67,7 @@ progress.
 | LLVM aggregate whole-copy pointer field provenance is bounded and conservative | Direct same-struct local-to-local aggregate assignment/init copies now propagate already-proven pointer-field facts, so copied global-backed fields continue to lower derefs as unordered atomics while stack-backed and computed aggregate sources remain plain. | `352be47f Propagate aggregate copy pointer provenance`; `tests/spec/data_race_semantics.mc` `aggregate_whole_copy_pointer_field_load` / `aggregate_init_copy_pointer_field_load` / `aggregate_whole_copy_stack_pointer_field_stays_plain` / `aggregate_computed_copy_pointer_field_stays_plain`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig`. |
 | LLVM nested aggregate pointer field provenance is bounded and conservative | Direct local named member paths such as `outer.inner.ptr` now carry proven global-backed pointer-field facts through struct-literal init and direct nested field assignment; stack-backed and reassigned-stack nested paths remain plain. | `fd48f50a Track nested aggregate pointer provenance`; `tests/spec/data_race_semantics.mc` `nested_aggregate_global_pointer_field_load` / `nested_aggregate_assigned_global_pointer_field_load` / `nested_aggregate_stack_pointer_field_stays_plain` / `nested_aggregate_reassigned_stack_pointer_field_stays_plain`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig`. |
 | LLVM local pointer-array provenance is bounded and conservative | Direct local fixed arrays of pointer-like elements now carry proven global-backed facts for constant-index literal elements and constant-index assignments; stack-backed elements and dynamic-index reads/writes remain plain. | `9f24297e Track LLVM local array pointer provenance`; `tests/spec/data_race_semantics.mc` `array_global_pointer_element_load` / `array_assigned_global_pointer_element_load` / `array_stack_pointer_element_stays_plain` / `array_dynamic_index_pointer_element_stays_plain` / `array_dynamic_assignment_clears_pointer_element_fact`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig`. |
-| LLVM local aggregate-pointer aliases are bounded and conservative | Local pointer variables declared directly from `&local_aggregate` now resolve member-path pointer facts through the original aggregate, including nested paths; stack-backed fields, returned/external aggregate pointers, aggregate pointer params, and reassigned unknown aliases remain plain. | `f4f13294 Track local aggregate pointer aliases in LLVM`; `tests/spec/data_race_semantics.mc` `aggregate_pointer_alias_global_pointer_field_load` / `nested_aggregate_pointer_alias_global_pointer_field_load` / `aggregate_pointer_alias_stack_pointer_field_stays_plain` / `aggregate_pointer_alias_returned_unknown_stays_plain` / `aggregate_pointer_param_field_stays_plain` / `aggregate_pointer_alias_reassigned_unknown_stays_plain`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig`. |
+| LLVM local aggregate-pointer aliases are bounded and conservative | Local pointer variables declared directly from `&local_aggregate` now resolve member-path pointer facts through the original aggregate, including nested paths; stack-backed fields, returned/external aggregate pointers, and reassigned unknown aliases remain plain. Aggregate pointer parameters without MIR facts are not local aliases and lower final scalar dereferences atomically. | `f4f13294 Track local aggregate pointer aliases in LLVM`; `tests/spec/data_race_semantics.mc` `aggregate_pointer_alias_global_pointer_field_load` / `nested_aggregate_pointer_alias_global_pointer_field_load` / `aggregate_pointer_alias_stack_pointer_field_stays_plain` / `aggregate_pointer_alias_returned_unknown_stays_plain` / `aggregate_pointer_param_field_lowers_atomic` / `aggregate_pointer_alias_reassigned_unknown_lowers_atomic`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig`. |
 | LLVM aggregate array pointer provenance is bounded and conservative | Direct local aggregate fields whose type is a fixed array of pointer-like elements now carry proven global-backed facts for constant-index literal elements and constant-index assignments; stack-backed elements, dynamic-index reads, and dynamic-index writes remain plain. | `5f493f09 Track aggregate array pointer provenance`; `tests/spec/data_race_semantics.mc` `aggregate_array_global_pointer_element_load` / `aggregate_array_assigned_global_pointer_element_load` / `aggregate_array_stack_pointer_element_stays_plain` / `aggregate_array_dynamic_index_pointer_element_stays_plain` / `aggregate_array_dynamic_assignment_clears_pointer_element_fact`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig`. |
 | LLVM all-global dynamic-index pointer array reads are bounded and conservative | Direct local fixed pointer arrays and direct local aggregate pointer-array fields now lower dynamic-index derefs as unordered atomics only when every possible element is proven global-backed; partial arrays and arrays invalidated by dynamic writes remain plain, and the proof fails fast for large/incomplete arrays. | `0e1ae09d Lower dynamic global-backed pointer array reads`; `tests/spec/data_race_semantics.mc` `array_dynamic_index_all_global_pointer_elements_load` / `array_dynamic_index_assigned_all_global_pointer_elements_load` / `array_dynamic_index_partial_pointer_elements_stays_plain` / `array_dynamic_assignment_clears_pointer_element_fact` / `aggregate_array_dynamic_index_all_global_pointer_elements_load` / `aggregate_array_dynamic_index_assigned_all_global_pointer_elements_load` / `aggregate_array_dynamic_index_partial_pointer_elements_stays_plain` / `aggregate_array_dynamic_assignment_clears_pointer_element_fact`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig`. |
 | LLVM aggregate pointer aliases compose with pointer-array fields | Local aggregate pointer aliases from direct `&local_aggregate` now resolve fixed pointer-array field element facts through the original aggregate for constant-index reads and all-global dynamic-index reads, while stack-backed, partial dynamic, returned/external, and reassigned aliases remain plain. | `f5223b8e Handle alias aggregate pointer arrays`; `tests/spec/data_race_semantics.mc` `aggregate_pointer_alias_array_global_pointer_element_load` / `aggregate_pointer_alias_array_dynamic_index_all_global_pointer_elements_load` / `aggregate_pointer_alias_array_stack_pointer_element_stays_plain` / `aggregate_pointer_alias_array_dynamic_index_partial_pointer_elements_stays_plain` / `aggregate_pointer_alias_array_returned_unknown_stays_plain` / `aggregate_pointer_alias_array_reassigned_unknown_stays_plain`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig`. |
@@ -99,7 +107,7 @@ progress.
 | Typed semantic facts Phase 2 pointer-provenance table is in MIR | MIR now owns a narrow typed `PointerProvenanceFact` slice for direct pointer-like locals, direct pointer-local copies from live global-backed locals, direct raw-many local `.offset(0)` transfers from live global-backed bases, and direct fixed local pointer-array elements initialized or assigned from visible address expressions, with explicit `global_storage`/`local_storage`/`unknown`, source points, optional element indexes, and fail-closed invalidation rows for reassignment, dynamic-index writes, calls, indirect calls, and address escape. This closes only the Phase 2 table/artifact/test slice; broader typed provenance remains pending. | `src/mir_model.zig` `PointerProvenanceFact`; `src/mir.zig` `recordPointerProvenanceForLocalInitializer`, `recordPointerProvenanceForAssignment`, `directPointerProvenance`, `directLocalPointerCopyProvenance`, `rawManyZeroOffsetProvenance`, `recordPointerProvenanceCallInvalidation`, and `mir pointer_provenance_fact`; `src/mir_tests.zig` pointer provenance tests; `docs/typed-semantic-facts.md` Phase 2 status; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig test src/mir_tests.zig`; `zig build test`; `git diff --check`. |
 | Typed semantic facts Phase 3 LLVM narrow pointer-provenance consumption is complete | LLVM lowering now consumes MIR `PointerProvenanceFact` rows for direct pointer-like locals, direct pointer-local copies from live global-backed locals, direct raw-many local `.offset(0)` transfers, and direct fixed local pointer-array elements, seeding unordered atomic pointer-mediated global loads only for live `global_storage` rows and clearing/avoiding facts for `local_storage`, `unknown`, dynamic-index invalidation, and call invalidation. This closes only the LLVM narrow subset; broader LLVM provenance cleanup remains pending. | `src/lower_llvm.zig` `applyMirPointerProvenanceForLocalInitializer`, `applyMirPointerProvenanceForAssignment`, `applyMirPointerProvenanceForIndexAssignment`, `applyMirPointerProvenanceInvalidationsAtCall`, `directMirPointerLocalCopyExpr`, and `directMirRawManyZeroOffsetExpr`; `src/lower_llvm_tests.zig`; `tests/spec/data_race_semantics.mc` `possibly_racing_raw_many_offset_zero_pointer_load` / `pointer_global_invalidated_by_call_stays_plain`; `docs/typed-semantic-facts.md` Phase 3 status; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig test src/lower_llvm_tests.zig`; `zig build test`; `git diff --check`. |
 | Typed semantic facts Phase 4 C narrow pointer-provenance consumption is complete | C lowering now consumes MIR `PointerProvenanceFact` rows for direct pointer-like locals, direct pointer-local copies from live global-backed locals, direct raw-many local `.offset(0)` transfers, direct fixed local pointer-array elements, direct aggregate pointer-field destination reads, and direct aggregate pointer-array element destination reads at initializer, assignment, index-assignment, and call-invalidation source points. Live `global_storage` facts route scalar pointer deref loads/stores through `mc_race_load_*` / `mc_race_store_*` using the pointer expression; `local_storage` keeps proven-local plain derefs, while `unknown`, invalidated facts, absent facts, non-constant indexes, nonzero/dynamic raw-many offsets, and call-produced raw-many bases do not establish global provenance and rely on the conservative race-tolerant scalar deref default where that access class is supported. This closes only the narrow C typed-fact slice; broader typed provenance remains pending. | `src/lower_c_emitter.zig` `applyMirPointerProvenanceForLocalInitializer`, `applyMirPointerProvenanceForAssignment`, `applyMirPointerProvenanceForIndexAssignment`, `applyMirPointerProvenanceInvalidationsAtCall`, `directMirPointerLocalCopyExpr`, and `mirPointerProvenanceDerefRaceInfo`; `src/lower_c_infer.zig` `derefPointeeType`; `src/lower_c_tests.zig` `lower-c consumes MIR pointer provenance facts for direct scalar pointer derefs` / `lower-c consumes MIR pointer provenance facts for fixed pointer-array elements` / `lower-c consumes MIR pointer provenance facts for aggregate pointer reads`; `docs/typed-semantic-facts.md` Phase 4 status; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig test src/lower_c_tests.zig`; `zig build test`; `git diff --check`. |
-| Typed semantic facts Phase 5 narrow LLVM direct-local cleanup is complete | LLVM emission no longer runs `updatePointerGlobalProvenance` for direct pointer-like local initializer/assignment RHS forms already represented by MIR direct address, direct pointer-local copy, or direct raw-many zero-offset `PointerProvenanceFact` rows. Those cases now require the MIR fact/comment source point to seed global-backed deref lowering; missing facts stay plain, including pointer-local copy and raw-many zero destination facts removed while their base facts remain live. This closes only the bounded direct-local cleanup, not the broader LLVM provenance family. | `src/lower_llvm.zig` `mirPointerProvenanceCoversDirectLocalUpdate`, `directMirPointerLocalCopyExpr`, `directMirRawManyZeroOffsetExpr`, `applyMirPointerProvenanceForLocalInitializer`, and `applyMirPointerProvenanceForAssignment`; `src/lower_llvm_tests.zig` `LLVM direct pointer locals require MIR provenance facts` / `LLVM direct pointer-local copies require MIR destination provenance facts` / `LLVM raw-many zero direct local requires MIR provenance fact`; `docs/typed-semantic-facts.md` Phase 5 status; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig test src/lower_llvm_tests.zig`; `zig build test`; `git diff --check`. |
+| Typed semantic facts Phase 5 narrow LLVM direct-local cleanup is complete | LLVM emission no longer runs `updatePointerGlobalProvenance` for direct pointer-like local initializer/assignment RHS forms already represented by MIR direct address, direct pointer-local copy, or direct raw-many zero-offset `PointerProvenanceFact` rows. Those cases now require the MIR fact/comment source point to seed a storage proof; missing facts leave provenance unknown, and final scalar dereferences lower conservatively as unordered atomics rather than rebuilding backend-local provenance. This closes only the bounded direct-local cleanup, not the broader LLVM provenance family. | `src/lower_llvm.zig` `mirPointerProvenanceCoversDirectLocalUpdate`, `directMirPointerLocalCopyExpr`, `directMirRawManyZeroOffsetExpr`, `applyMirPointerProvenanceForLocalInitializer`, and `applyMirPointerProvenanceForAssignment`; `src/lower_llvm_tests.zig` `LLVM direct pointer locals without MIR facts lower conservatively` / `LLVM pointer-local copies without MIR destination facts lower conservatively` / `LLVM raw-many zero direct local without MIR fact lowers conservatively`; `docs/typed-semantic-facts.md` Phase 5 status; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig test src/lower_llvm_tests.zig`; `zig build test`; `git diff --check`. |
 | Typed semantic facts inventory pins pointer-provenance fallback entry points | The semantic-facts inventory now exact-counts the shared C and LLVM pointer-provenance MIR-or-fallback helper definitions and call sites, plus LLVM's remaining `updatePointerGlobalProvenance` fallback helper and its two fallback calls. New backend-local pointer-provenance fallback entry points now fail the inventory gate unless they are deliberately added to the register. | `tools/toolchain/semantic-facts-inventory.py` `EXACT_COUNTS`; `docs/typed-semantic-facts.md` Phase 5 gate; `src/lower_c_emitter.zig` `updatePointerProvenanceFromMirOrFallback` / `updatePointerProvenanceAssignmentFromMirOrFallback`; `src/lower_llvm.zig` `updatePointerGlobalProvenance` / `updatePointerProvenanceFromMirOrFallback` / `updatePointerProvenanceAssignmentFromMirOrFallback`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
 | Typed semantic facts preserve raw-many zero local provenance | MIR raw-many local `.offset(0)` transfers now propagate live `local_storage` as well as `global_storage`. C and LLVM consume the resulting destination fact, keeping proven-local raw-many zero deref loads/stores plain while missing destination facts and nonzero/dynamic/unknown raw-many offsets stay conservative. | `src/mir.zig` `rawManyZeroOffsetProvenance`; `src/mir_tests.zig` `MIR records narrow raw-many zero offset pointer provenance facts`; `src/lower_llvm_tests.zig` `LLVM raw-many zero direct local without MIR fact lowers conservatively`; `src/lower_c_tests.zig` `lower-c consumes MIR pointer provenance facts for direct scalar pointer derefs`; focused `zig test` filters for those tests; `git diff --check`. |
 | Typed semantic facts cover noalias-wrapped direct pointer provenance | `compiler.assume_noalias_unchecked(&storage, n)` is now transparent to the MIR direct-address provenance producer for the direct pointer-local subset, so noalias-wrapped globals and locals emit the same typed `PointerProvenanceFact` rows as direct address expressions. C and LLVM treat that shape as MIR-owned; removing the destination fact in LLVM leaves conservative scalar deref lowering without recreating backend-local provenance. | `src/mir.zig` `directAddressProvenance` and `isAssumeNoaliasDirectCall`; `src/lower_llvm.zig` `directMirAddressProvenanceExpr`; `src/lower_c_emitter.zig` `directMirAddressProvenanceExpr`; `src/mir_tests.zig` noalias pointer facts in `MIR records typed pointer provenance facts for direct globals and pointer arrays`; `src/lower_llvm_tests.zig` noalias cases in `LLVM direct pointer locals without MIR facts lower conservatively`; `src/lower_c_tests.zig` `pointer_fact_noalias_global_load`; `zig test src/mir_tests.zig`; `zig test src/lower_llvm_tests.zig`; `zig test src/lower_c_tests.zig`. |
@@ -463,13 +471,13 @@ progress.
 | LLVM scalar pointer parameter fallback is retired | LLVM no longer scans direct or local function-pointer-alias call sites to seed scalar parameter provenance. Scalar pointer parameters without a typed MIR fact now use the conservative atomic dereference path, matching C and the aggregate parameter policy. | `src/lower_llvm.zig` removed scalar parameter provenance maps and collector; `tests/spec/data_race_semantics.mc` `consume_local_only_param` / `consume_indirect_local_param`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig --test-filter "ordinary global scalar accesses"`; `zig build test`; `git diff --check`. |
 | LLVM aggregate pointer parameter fallback is retired | LLVM no longer scans direct or local function-pointer-alias call sites to seed aggregate parameter field provenance. Aggregate pointer parameters without a typed MIR fact now use the conservative atomic dereference path, matching C; direct local aggregate provenance and aggregate-return summaries remain separate. | `src/lower_llvm.zig` removed `aggregate_pointer_param_fields` and aggregate parameter collectors; `tests/spec/data_race_semantics.mc` `consume_aggregate_local_param` / `consume_indirect_aggregate_local_param`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig --test-filter "ordinary global scalar accesses"`; `zig build test`; `git diff --check`. |
 
-### In Progress
+### Active Work
 
 | Item | Current state | Next evidence needed |
 |---|---|---|
-| None currently assigned | No focused slice is currently marked in progress in this document. | Pick the next pending item and land a bounded slice. |
+| None currently assigned | No focused slice is currently active in this document. | Pick the next open workstream and land a bounded slice. |
 
-### Pending Umbrella Workstreams
+### Open Architectural Workstreams
 
 These are **not three small TODOs**. Each item has a finite closure matrix below.
 The umbrella count drops only when every remaining matrix row is either completed
@@ -531,12 +539,19 @@ lookups remain; no CFG/worklist engine exists. Symbolic-index rows above are
 regression coverage; they do not close the remaining map migration or CFG
 rewrite.
 
+### Production-Ready Exit Rule
+
+The compiler may be labelled generally production-ready only when all three
+closure matrices are closed, or every remaining limitation is explicitly
+accepted, diagnosed, documented in the supported-subset contract, and covered by
+a regression test.
+
 ### Current Working Rules
 
 - Keep implementation slices small and update this ledger from local code evidence.
 - Do not create PRs or long-lived integration branches unless explicitly requested.
 - Verify locally before treating a slice as finished.
-- Do not mark the goal complete until every pending item is either implemented
+- Do not mark the goal complete until every open workstream is either implemented
   end-to-end or explicitly accepted as a limitation by project decision.
 
 Release publication is intentionally outside these three compiler implementation

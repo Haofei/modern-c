@@ -11,8 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PATH = ROOT / "docs/compiler-production-readiness.md"
 HEADER = re.compile(
-    r"^Ledger count: \*\*(\d+) finished or in-worktree evidence slices, "
-    r"(\d+) in progress, (\d+) pending umbrella workstreams\*\*\.\s*$"
+    r"^Evidence register: \*\*(\d+) bounded implementation or regression entries, "
+    r"(\d+) active slices, (\d+) open architectural workstreams\*\*\.\s*$"
 )
 
 
@@ -24,26 +24,26 @@ def fail(message: str) -> int:
 def main() -> int:
     text = PATH.read_text(encoding="utf-8")
     lines = text.splitlines()
-    header = next((HEADER.match(line) for line in lines if line.startswith("Ledger count:")), None)
+    header = next((HEADER.match(line) for line in lines if line.startswith("Evidence register:")), None)
     if header is None:
-        return fail("ledger header is missing or does not use the evidence-slice format")
+        return fail("evidence-register header is missing or does not use the required format")
 
-    finished, in_progress, pending = map(int, header.groups())
+    evidence, active, open_workstreams = map(int, header.groups())
     try:
-        start = lines.index("### Finished Or In Worktree") + 1
-        end = lines.index("### In Progress")
+        start = lines.index("### Evidence Register") + 1
+        end = lines.index("### Active Work")
     except ValueError:
-        return fail("finished or in-progress ledger headings are missing")
+        return fail("evidence-register or active-work headings are missing")
 
     rows = [line for line in lines[start:end] if line.startswith("| ") and not line.startswith("| Item |")]
-    if finished != len(rows):
-        return fail(f"header says {finished} finished/in-worktree rows, table contains {len(rows)}")
-    if in_progress != 0:
-        return fail(f"header says {in_progress} in-progress rows; update the table and this guard together")
-    if pending != 3:
-        return fail(f"header says {pending} pending umbrellas; update the closure matrix and this guard together")
+    if evidence != len(rows):
+        return fail(f"header says {evidence} evidence entries, table contains {len(rows)}")
+    if active != 0:
+        return fail(f"header says {active} active slices; update the table and this guard together")
+    if open_workstreams != 3:
+        return fail(f"header says {open_workstreams} open workstreams; update the closure matrices and this guard together")
 
-    print(f"PASS: readiness-ledger-test - {finished} evidence slices, {pending} pending umbrellas")
+    print(f"PASS: readiness-ledger-test - {evidence} evidence entries, {open_workstreams} open workstreams")
     return 0
 
 
