@@ -4110,6 +4110,11 @@ test "lower-c consumes MIR facts for direct internal global pointer returns" {
         \\fn branched_global_pointer(flag: bool) -> *mut u32 {
         \\    if flag { return &shared_counter; } else { return &shared_counter; }
         \\}
+        \\fn c_uses_global_pointer_through_alias() -> u32 {
+        \\    let producer: fn() -> *mut u32 = returned_global_pointer;
+        \\    let gp: *mut u32 = producer();
+        \\    return gp.*;
+        \\}
         \\fn c_uses_returned_global_pointer() -> u32 {
         \\    let gp: *mut u32 = returned_global_pointer();
         \\    return gp.*;
@@ -4132,6 +4137,7 @@ test "lower-c consumes MIR facts for direct internal global pointer returns" {
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=c_assigns_returned_global_pointer subject=gp provenance=global_storage reason=reassignment source=");
     try expectContains(output.items, "mc_race_load_u32(gp)");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=c_uses_branched_global_pointer subject=gp provenance=global_storage reason=none source=");
+    try expectContains(output.items, "/* mir pointer_provenance consumed fn=c_uses_global_pointer_through_alias subject=gp provenance=global_storage reason=none source=");
 
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);

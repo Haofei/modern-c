@@ -1457,6 +1457,60 @@ test "MIR records direct internal global pointer return provenance in callers" {
     try std.testing.expect(hasPointerProvenanceFact(function, "gp", null, .global_storage, .none, "shared_counter"));
 }
 
+test "MIR records internal global pointer return provenance through local function aliases" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\fn returned_global_pointer() -> *mut u32 {
+        \\    return &shared_counter;
+        \\}
+        \\extern fn unknown_pointer() -> *mut u32;
+        \\fn uses_global_pointer_through_alias() -> u32 {
+        \\    let producer: fn() -> *mut u32 = returned_global_pointer;
+        \\    let gp: *mut u32 = producer();
+        \\    return gp.*;
+        \\}
+        \\fn reassigns_returned_global_pointer_alias() -> u32 {
+        \\    var producer: fn() -> *mut u32 = returned_global_pointer;
+        \\    producer = unknown_pointer;
+        \\    let gp: *mut u32 = producer();
+        \\    return gp.*;
+        \\}
+        \\fn branches_after_returned_global_pointer_alias(flag: bool) -> u32 {
+        \\    var producer: fn() -> *mut u32 = returned_global_pointer;
+        \\    if flag { producer = unknown_pointer; }
+        \\    let gp: *mut u32 = producer();
+        \\    return gp.*;
+        \\}
+        \\fn loops_after_returned_global_pointer_alias(flag: bool) -> u32 {
+        \\    let producer: fn() -> *mut u32 = returned_global_pointer;
+        \\    while flag {}
+        \\    let gp: *mut u32 = producer();
+        \\    return gp.*;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_pointer_return_alias_provenance.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const aliased = functionByName(typed_mir, "uses_global_pointer_through_alias").?;
+    try std.testing.expect(hasPointerProvenanceFact(aliased, "gp", null, .global_storage, .none, "shared_counter"));
+    const reassigned = functionByName(typed_mir, "reassigns_returned_global_pointer_alias").?;
+    try std.testing.expect(!hasPointerProvenanceFact(reassigned, "gp", null, .global_storage, .none, "shared_counter"));
+    const branched = functionByName(typed_mir, "branches_after_returned_global_pointer_alias").?;
+    try std.testing.expect(!hasPointerProvenanceFact(branched, "gp", null, .global_storage, .none, "shared_counter"));
+    const looped = functionByName(typed_mir, "loops_after_returned_global_pointer_alias").?;
+    try std.testing.expect(!hasPointerProvenanceFact(looped, "gp", null, .global_storage, .none, "shared_counter"));
+}
+
 test "MIR joins consistent internal global pointer returns across branches" {
     const source =
         \\global shared_counter: u32 = 0;
