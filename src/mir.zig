@@ -1063,6 +1063,39 @@ fn collectAggregateReturnPointerFactsForStruct(
             continue;
         }
 
+        if (aggregateReturnFixedStructArrayElementName(field.ty, enums, structs, packed_bits, aliases)) |element_struct_name| {
+            const nested_summary = structs.get(element_struct_name) orelse continue;
+            const first_value = aggregateLiteralFieldValue(literal_paths[0], field.name.text) orelse continue;
+            const first_items = arrayLiteralItems(first_value) orelse continue;
+            for (first_items, 0..) |_, element_index| {
+                var nested_paths: [8][]ast.StructLiteralField = undefined;
+                for (literal_paths, 0..) |literal_fields, path_index| {
+                    const value = aggregateLiteralFieldValue(literal_fields, field.name.text) orelse break;
+                    const items = arrayLiteralItems(value) orelse break;
+                    if (element_index >= items.len) break;
+                    nested_paths[path_index] = structLiteralFieldsForAggregateReturn(items[element_index]) orelse break;
+                } else {
+                    const element_path = try std.fmt.allocPrint(allocator, "{s}[{d}]", .{ field_path, element_index });
+                    defer allocator.free(element_path);
+                    try collectAggregateReturnPointerFactsForStruct(
+                        allocator,
+                        pointer_facts,
+                        callee,
+                        nested_summary,
+                        nested_paths[0..literal_paths.len],
+                        element_path,
+                        globals,
+                        enums,
+                        structs,
+                        packed_bits,
+                        aliases,
+                        pointer_return_summaries,
+                    );
+                }
+            }
+            continue;
+        }
+
         const nested_name = switch (valueTypeFromTypeAlias(field.ty, enums, structs, packed_bits, aliases)) {
             .struct_ => |name| name,
             else => continue,
@@ -1543,7 +1576,12 @@ fn aggregateReturnHasUnmodeledPointerFieldDepth(
         const ty = valueTypeFromTypeAlias(field.ty, enums, structs, packed_bits, aliases);
         if (pointerShapeFromValueType(ty) != null) continue;
         switch (ty) {
-            .array => if (aggregateReturnFixedPointerArrayElementShape(field.ty, enums, structs, packed_bits, aliases) == null) return true,
+            .array => {
+                if (aggregateReturnFixedPointerArrayElementShape(field.ty, enums, structs, packed_bits, aliases) != null) continue;
+                const element_struct_name = aggregateReturnFixedStructArrayElementName(field.ty, enums, structs, packed_bits, aliases) orelse return true;
+                const nested_summary = structs.get(element_struct_name) orelse return true;
+                if (aggregateReturnHasUnmodeledPointerFieldDepth(nested_summary, enums, structs, packed_bits, aliases, depth + 1)) return true;
+            },
             .struct_ => |name| {
                 const nested_summary = structs.get(name) orelse return true;
                 if (aggregateReturnHasUnmodeledPointerFieldDepth(nested_summary, enums, structs, packed_bits, aliases, depth + 1)) return true;
@@ -1567,6 +1605,23 @@ fn aggregateReturnFixedPointerArrayElementShape(
         else => return null,
     };
     return pointerShapeFromValueType(valueTypeFromTypeAlias(array.child.*, enums, structs, packed_bits, aliases));
+}
+
+fn aggregateReturnFixedStructArrayElementName(
+    ty: ast.TypeExpr,
+    enums: *const std.StringHashMap(EnumSummary),
+    structs: *const std.StringHashMap(StructSummary),
+    packed_bits: *const std.StringHashMap(PackedBitsSummary),
+    aliases: *const std.StringHashMap(ast.TypeExpr),
+) ?[]const u8 {
+    const array = switch (aggregateTargetTypeAlias(ty, aliases).kind) {
+        .array => |node| node,
+        else => return null,
+    };
+    return switch (valueTypeFromTypeAlias(array.child.*, enums, structs, packed_bits, aliases)) {
+        .struct_ => |name| name,
+        else => null,
+    };
 }
 
 fn collectDirectGlobalPointerReturnSummaries(allocator: std.mem.Allocator, module: ast.Module, globals: *const std.StringHashMap(ValueType), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr)) !std.StringHashMap(PointerReturnProvenanceSummary) {
@@ -4113,7 +4168,9 @@ const FunctionBuilder = struct {
                 }
                 _ = self.typeExprForExpr(node.base.*) orelse break :blk null;
                 _ = self.typeExprForExpr(expr) orelse break :blk null;
-                const base_path = self.directLocalAggregateMemberPath(node.base.*) orelse break :blk null;
+                const base_path = self.directLocalAggregateMemberPath(node.base.*) orelse
+                    self.directLocalAggregateArrayElementPath(node.base.*) orelse
+                    break :blk null;
                 break :blk .{
                     .local_name = base_path.local_name,
                     .field_path = self.joinAggregatePointerFieldPath(base_path.field_path, node.name.text) catch break :blk null,
@@ -4129,7 +4186,7 @@ const FunctionBuilder = struct {
             .index => |node| blk: {
                 const base_path = self.directLocalAggregateMemberPath(node.base.*) orelse break :blk null;
                 const field_ty = self.typeExprForExpr(node.base.*) orelse break :blk null;
-                _ = self.fixedPointerArrayElementShape(field_ty) orelse break :blk null;
+                if (self.fixedPointerArrayElementShape(field_ty) == null and self.fixedStructArrayElementName(field_ty) == null) break :blk null;
                 const element_index = self.constUsizeValue(node.index.*) orelse break :blk null;
                 break :blk .{
                     .local_name = base_path.local_name,
@@ -4953,6 +5010,19 @@ const FunctionBuilder = struct {
         if (parseArrayLen(array.len, self.const_fns, self.const_globals) == null) return null;
         const child_ty = valueTypeFromTypeAlias(array.child.*, self.enums, self.structs, self.packed_bits, self.aliases);
         return pointerShapeFromValueType(child_ty);
+    }
+
+    fn fixedStructArrayElementName(self: *FunctionBuilder, ty: ast.TypeExpr) ?[]const u8 {
+        const normalized = aggregateTargetTypeAlias(ty, self.aliases);
+        const array = switch (normalized.kind) {
+            .array => |node| node,
+            else => return null,
+        };
+        if (parseArrayLen(array.len, self.const_fns, self.const_globals) == null) return null;
+        return switch (valueTypeFromTypeAlias(array.child.*, self.enums, self.structs, self.packed_bits, self.aliases)) {
+            .struct_ => |name| name,
+            else => null,
+        };
     }
 
     fn pointerShapeFromTypeExpr(self: *FunctionBuilder, ty: ast.TypeExpr) ?PointerShape {

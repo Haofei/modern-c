@@ -679,6 +679,36 @@ test "LLVM consumes MIR nested aggregate-return pointer facts" {
     try expectContains(missing_body, "load atomic i32, ptr %");
 }
 
+test "LLVM consumes MIR nested array aggregate-return pointer facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Cell { ptr: *mut u32 }
+        \\struct Holder { cells: [2]Cell }
+        \\
+        \\fn returned_holder() -> Holder {
+        \\    return .{ .cells = .{ .{ .ptr = &shared_counter }, .{ .ptr = &shared_counter } } };
+        \\}
+        \\
+        \\fn use_returned_holder() -> u32 {
+        \\    let holder: Holder = returned_holder();
+        \\    return holder.cells[0].ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_nested_array_aggregate_return_mir_fact.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
+    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=cells[0].ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_nested_array_aggregate_return_mir_fact.mc", source, "returned_holder", "cells[0].ptr", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_returned_holder");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=cells[0].ptr");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+}
+
 test "LLVM consumes MIR trailing aggregate-return facts" {
     const source =
         \\global shared_counter: u32 = 0;

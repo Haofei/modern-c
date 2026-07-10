@@ -4557,7 +4557,9 @@ const LlvmEmitter = struct {
                 if (self.directLocalAggregateBaseName(node.base.*)) |local_name| {
                     break :blk .{ .local_name = local_name, .field_path = node.name.text };
                 }
-                const base_path = self.directLocalAggregateMemberPath(node.base.*) orelse break :blk null;
+                const base_path = self.directLocalAggregateMemberPath(node.base.*) orelse
+                    self.directLocalAggregateArrayElementPath(node.base.*) orelse
+                    break :blk null;
                 break :blk .{
                     .local_name = base_path.local_name,
                     .field_path = self.joinAggregatePointerFieldPath(base_path.field_path, node.name.text) catch break :blk null,
@@ -4577,7 +4579,7 @@ const LlvmEmitter = struct {
                     .array => |array| array,
                     else => break :blk null,
                 };
-                if (!self.isPointerLikeType(array.child.*)) break :blk null;
+                if (!self.isPointerLikeType(array.child.*) and self.directStructTypeName(array.child.*) == null) break :blk null;
                 const index = self.localArrayConstIndexValue(node.index.*) orelse break :blk null;
                 const len = self.arrayLenValue(array.len) orelse break :blk null;
                 if (index >= len) break :blk null;

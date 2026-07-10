@@ -5140,7 +5140,9 @@ const CEmitter = struct {
                     _ = self.memberFieldTypeFromAggregate(info.source_ty orelse break :blk null, node.name.text) orelse break :blk null;
                     break :blk .{ .local_name = local_name, .field_path = node.name.text };
                 }
-                const base_path = self.directLocalAggregateMemberPath(node.base.*, locals) orelse break :blk null;
+                const base_path = self.directLocalAggregateMemberPath(node.base.*, locals) orelse
+                    self.directLocalAggregateArrayElementPath(node.base.*, locals) orelse
+                    break :blk null;
                 _ = self.memberFieldType(node.base.*, node.name.text, locals) orelse break :blk null;
                 break :blk .{
                     .local_name = base_path.local_name,
