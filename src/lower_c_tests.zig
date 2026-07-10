@@ -315,6 +315,8 @@ test "lower-c aggregate-return literal prefixes are MIR-owned only when call-fre
     try appendCheckedCTest("c_aggregate_return_literal_prefix_mir_fact.mc", source, &output);
     try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_call_free_prefix_holder callee=call_free_prefix_holder field=ptr provenance=global_storage");
     try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_call_prefix_holder callee=call_prefix_holder field=ptr");
+    const call_body = try cFunctionBody(output.items, "static uint32_t use_call_prefix_holder(void)");
+    try expectContains(call_body, "mc_race_load_u32");
 }
 
 test "lower-c consumes MIR aggregate-return pointer-array element facts" {
