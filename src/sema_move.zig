@@ -1103,17 +1103,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
                 else => {},
             }
             if (full_alias_referent) |referent| {
-                if (referent.place) |place| {
-                    if (place.isSubplace()) {
-                        consumeTrackedMovePlace(self, referent.key, place, expr.span, state);
-                    } else {
-                        consumeTrackedMoveBinding(self, referent.key, expr.span, state);
-                    }
-                } else if (isMoveSubplaceKey(referent.key)) {
-                    consumeTrackedMoveSubplace(self, referent.key, expr.span, state);
-                } else {
-                    consumeTrackedMoveBinding(self, referent.key, expr.span, state);
-                }
+                consumeTrackedMoveReferent(self, referent, expr.span, state);
             } else if (exprIsMoveTyped(self, expr, state, aliases)) {
                 self.errorCode(expr.span, "E_USE_AFTER_MOVE", "cannot move a linear `move` value out through a pointer deref; move the owning binding directly (the pointee would be left moved-from, which the checker cannot track through the alias)");
             } else {
@@ -1250,6 +1240,22 @@ fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics
         } else {
             slot.live = false;
         }
+    }
+}
+
+fn consumeTrackedMoveReferent(self: *Checker, referent: AliasReferent, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+    if (referent.place) |place| {
+        if (place.isSubplace()) {
+            consumeTrackedMovePlace(self, referent.key, place, span, state);
+        } else {
+            consumeTrackedMoveBinding(self, referent.key, span, state);
+        }
+        return;
+    }
+    if (isMoveSubplaceKey(referent.key)) {
+        consumeTrackedMoveSubplace(self, referent.key, span, state);
+    } else {
+        consumeTrackedMoveBinding(self, referent.key, span, state);
     }
 }
 
