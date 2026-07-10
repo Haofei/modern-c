@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-10, based on the current compiler worktree**.
-Evidence register: **434 bounded implementation or regression entries, 1 active slice, 3 open architectural workstreams**.
+Evidence register: **435 bounded implementation or regression entries, 1 active slice, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -484,7 +484,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Item | Current state | Next evidence needed |
 |---|---|---|
-| MIR aggregate-return pointer-field facts | **In progress.** MIR now owns direct internal single-return struct-literal helpers whose returned struct has only scalar fields, including scalar pointer fields. LLVM consumes the module facts, and a retained summary marker makes a missing field fact conservative instead of falling back to the LLVM AST collector. Local aggregate values, assignments, branches, switches, pointer arrays, nested aggregates, exports, and arbitrary CFG remain on the legacy/unknown path. | Extend the producer through tracked local aggregates and bounded CFG joins, add matching C consumption, then remove the corresponding LLVM collector domain with missing-fact gates. |
+| MIR aggregate-return pointer-field facts | **In progress.** MIR now owns direct internal struct-literal returns and straight-line local aggregate returns where the local is initialized or whole-assigned from a direct struct literal. LLVM consumes the module facts, and a retained summary marker makes a missing field fact conservative instead of falling back to the LLVM AST collector. Aggregate copies, branches, switches, pointer arrays, nested aggregates, exports, and arbitrary CFG remain on the legacy/unknown path. | Extend the producer through tracked aggregate copies and bounded CFG joins, add matching C consumption, then remove the corresponding LLVM collector domain with missing-fact gates. |
 
 ### Open Architectural Workstreams
 
@@ -516,11 +516,12 @@ The direct local fixed-pointer-array-alias constant-index subcase is also
 complete. Its dynamic all-elements subcase is also complete. Mixed,
 invalidated, reassigned, and broader alias/return-flow/CFG boundaries remain
 open.
-The aggregate-return migration is active but only owns direct internal
-single-return struct literals with scalar fields. Its missing-fact gate
-is deliberate: an MIR-owned return summary prevents LLVM from rebuilding a
-removed fact from the AST. The wider local-return and CFG summary collector is
-still legacy code and remains an open matrix row.
+The aggregate-return migration is active and owns direct internal struct-literal
+returns plus straight-line local initialization and whole-local reassignment from
+such literals, for structs with scalar fields. Its missing-fact gate is
+deliberate: an MIR-owned return summary prevents LLVM from rebuilding a removed
+fact from the AST. Aggregate copies and the CFG summary collector are still
+legacy code and remain open matrix rows.
 
 #### Typed Semantic Fact Table / Typed MIR
 

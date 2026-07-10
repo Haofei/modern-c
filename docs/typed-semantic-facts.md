@@ -667,10 +667,11 @@ the readiness closure matrix owns their migration or fail-closed disposition.
 ## Aggregate Returns (Partial Implementation)
 
 This fact family is now implemented only for a narrow initial domain. MIR owns
-direct internal single-return struct-literal helpers whose return structs contain
-only scalar fields. LLVM consumes those facts. All other
-aggregate-return shapes still use `aggregate_return_pointer_fields`, the
-LLVM-local AST pre-scan; that collector has **not** been retired.
+direct internal struct-literal helpers and straight-line local aggregate returns
+when the returned local is initialized or whole-assigned from a direct literal;
+the return struct must contain only scalar fields. LLVM consumes those facts.
+All other aggregate-return shapes still use `aggregate_return_pointer_fields`,
+the LLVM-local AST pre-scan; that collector has **not** been retired.
 
 ### Fact shape
 
@@ -698,8 +699,11 @@ storage cannot become a caller-local proof through an aggregate return.
 
 Current producer boundary:
 
-- non-exported functions with a body containing exactly one direct struct-literal
-  return;
+- non-exported functions with a direct struct-literal return, or a final return
+  of a local initialized or whole-assigned from a direct struct literal;
+- straight-line declaration and assignment prefixes only; calls, copies,
+  branches, switches, member writes, dereference writes, and other control flow
+  are outside the producer domain;
 - return structs with scalar pointer fields and no nested, array, or slice
   pointer-bearing field;
 - pointer fields directly proven global by the existing MIR direct-address or
@@ -714,8 +718,8 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
 - intersection of field facts across paths, retaining a field only when every
   path agrees on `global_storage` and pointer shape.
 
-Every other shape remains outside the MIR-owned domain. That includes tracked
-locals today, loops, indirect calls, exports, unions, pointer arrays, nested
+Every other shape remains outside the MIR-owned domain. That includes aggregate
+copies, loops, indirect calls, exports, unions, pointer arrays, nested
 aggregates, unmodeled fallthrough effects, and any path with a missing or
 ambiguous field fact.
 
@@ -734,13 +738,15 @@ shape.
 
 1. Complete: `lower-mir` dumps owned summary and return-field facts with callee,
    field path, shape, provenance, and source point.
-2. Complete for the direct-literal boundary: MIR tests cover global, unknown,
-   local-return, and pointer-array exclusion cases.
-3. Complete for LLVM direct literals: normal consumption is visible in lowering,
-   and removing only the return-field fact produces conservative lowering.
+2. Complete for the direct-literal and straight-line-local boundary: MIR tests
+   cover global, unknown, local initialization, whole-local reassignment, and
+   pointer-array exclusion cases.
+3. Complete for LLVM direct literals and straight-line locals: normal
+   consumption is visible in lowering, and removing only the return-field fact
+   produces conservative lowering.
 4. Remaining: C consumption and missing-fact tests.
-5. Remaining: tracked-local, assignment, branch, switch, trailing-return,
-   mixed, exported, and local-storage return cases.
+5. Remaining: aggregate-copy, branch, switch, trailing-return, mixed, exported,
+   and local-storage return cases.
 6. Remaining: the semantic-facts inventory must reject the LLVM collector once
    no accepted legacy domain remains; then run `zig build test` and both backend
    suites after collector retirement.

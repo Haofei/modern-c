@@ -946,9 +946,10 @@ const AggregateReturnFactCollection = struct {
 };
 
 // This is the first aggregate-return MIR domain. It owns internal helpers whose
-// complete body is one direct struct-literal return and whose struct has no
-// unmodeled pointer-bearing fields. More involved return flow remains outside
-// this domain and continues through the explicitly listed legacy collector.
+// return is either a direct struct literal or a local set by a direct struct
+// literal through a straight-line declaration/whole-local-assignment path. The
+// producer rejects control flow, calls, copies, and indirect mutation; those
+// shapes remain outside this domain and use the explicitly listed legacy path.
 fn collectDirectAggregateReturnPointerFacts(
     allocator: std.mem.Allocator,
     module: ast.Module,
@@ -978,7 +979,7 @@ fn collectDirectAggregateReturnPointerFacts(
         };
         const struct_summary = structs.get(struct_name) orelse continue;
         const body = fn_decl.body orelse continue;
-        const literal_fields = directAggregateReturnLiteralFields(body) orelse continue;
+        const literal_fields = directOrStraightLineLocalAggregateReturnLiteralFields(body) orelse continue;
         if (aggregateReturnHasUnmodeledPointerField(struct_summary, enums, structs, packed_bits, aliases)) continue;
 
         try summaries.append(allocator, .{
@@ -1007,16 +1008,64 @@ fn collectDirectAggregateReturnPointerFacts(
     };
 }
 
-fn directAggregateReturnLiteralFields(body: ast.Block) ?[]ast.StructLiteralField {
-    if (body.items.len != 1) return null;
-    var value = switch (body.items[0].kind) {
+fn directOrStraightLineLocalAggregateReturnLiteralFields(body: ast.Block) ?[]ast.StructLiteralField {
+    if (body.items.len == 0) return null;
+    const final_value = switch (body.items[body.items.len - 1].kind) {
         .@"return" => |maybe_value| maybe_value orelse return null,
         else => return null,
     };
+    if (structLiteralFieldsForAggregateReturn(final_value)) |fields| return fields;
+
+    const returned_local = directIdentName(final_value) orelse return null;
+    var final_fields: ?[]ast.StructLiteralField = null;
+    for (body.items[0 .. body.items.len - 1]) |stmt| {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| {
+                if (local.init) |initializer| {
+                    if (aggregateReturnPrefixExprHasCallOrExit(initializer)) return null;
+                }
+                if (local.names.len != 1 or !std.mem.eql(u8, local.names[0].text, returned_local)) continue;
+                const initializer = local.init orelse return null;
+                final_fields = structLiteralFieldsForAggregateReturn(initializer) orelse return null;
+            },
+            .assignment => |assignment| {
+                const target = assignmentTargetIdentName(assignment.target) orelse return null;
+                if (aggregateReturnPrefixExprHasCallOrExit(assignment.value)) return null;
+                if (!std.mem.eql(u8, target, returned_local)) continue;
+                final_fields = structLiteralFieldsForAggregateReturn(assignment.value) orelse return null;
+            },
+            else => return null,
+        }
+    }
+    return final_fields;
+}
+
+fn structLiteralFieldsForAggregateReturn(expr: ast.Expr) ?[]ast.StructLiteralField {
+    var value = expr;
     while (value.kind == .grouped) value = value.kind.grouped.*;
     return switch (value.kind) {
         .struct_literal => |fields| fields,
         else => null,
+    };
+}
+
+fn aggregateReturnPrefixExprHasCallOrExit(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .call, .block, .try_expr, .await_expr, .unreachable_expr => true,
+        .array_literal => |items| for (items) |item| {
+            if (aggregateReturnPrefixExprHasCallOrExit(item)) break true;
+        } else false,
+        .struct_literal => |fields| for (fields) |field| {
+            if (aggregateReturnPrefixExprHasCallOrExit(field.value)) break true;
+        } else false,
+        .grouped, .address_of, .deref => |inner| aggregateReturnPrefixExprHasCallOrExit(inner.*),
+        .unary => |node| aggregateReturnPrefixExprHasCallOrExit(node.expr.*),
+        .binary => |node| aggregateReturnPrefixExprHasCallOrExit(node.left.*) or aggregateReturnPrefixExprHasCallOrExit(node.right.*),
+        .cast => |node| aggregateReturnPrefixExprHasCallOrExit(node.value.*),
+        .index => |node| aggregateReturnPrefixExprHasCallOrExit(node.base.*) or aggregateReturnPrefixExprHasCallOrExit(node.index.*),
+        .slice => |node| aggregateReturnPrefixExprHasCallOrExit(node.base.*) or aggregateReturnPrefixExprHasCallOrExit(node.start.*) or aggregateReturnPrefixExprHasCallOrExit(node.end.*),
+        .member => |node| aggregateReturnPrefixExprHasCallOrExit(node.base.*),
+        else => false,
     };
 }
 

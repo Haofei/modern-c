@@ -1459,6 +1459,20 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    return holder;
         \\}
         \\
+        \\fn assigned_holder() -> Holder {
+        \\    var local: u32 = 3;
+        \\    var holder: Holder = .{ .ptr = &local, .tag = 3 };
+        \\    holder = .{ .ptr = &shared_counter, .tag = 4 };
+        \\    return holder;
+        \\}
+        \\
+        \\fn helper() -> void {}
+        \\fn call_before_return() -> Holder {
+        \\    let holder: Holder = .{ .ptr = &shared_counter, .tag = 5 };
+        \\    helper();
+        \\    return holder;
+        \\}
+        \\
         \\fn unknown_holder(ptr: *mut u32) -> Holder {
         \\    return .{ .ptr = ptr, .tag = 3 };
         \\}
@@ -1481,10 +1495,14 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "direct_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "local_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "assigned_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "unknown_holder"));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "direct_holder", "ptr", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "local_holder", "ptr", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "assigned_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "unknown_holder", "ptr", .global_storage));
-    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "local_holder"));
+    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "call_before_return"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "pointer_array_holder"));
 
     var dump: std.ArrayList(u8) = .empty;

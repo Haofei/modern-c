@@ -620,6 +620,50 @@ test "LLVM aggregate-return pointer facts are MIR-owned and fail closed when abs
     try expectNotContains(missing_body, "load i32, ptr %");
 }
 
+test "LLVM consumes MIR aggregate-return facts through straight-line local values" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn local_holder() -> Holder {
+        \\    let holder: Holder = .{ .ptr = &shared_counter, .tag = 1 };
+        \\    return holder;
+        \\}
+        \\
+        \\fn assigned_holder() -> Holder {
+        \\    var local: u32 = 2;
+        \\    var holder: Holder = .{ .ptr = &local, .tag = 2 };
+        \\    holder = .{ .ptr = &shared_counter, .tag = 3 };
+        \\    return holder;
+        \\}
+        \\
+        \\fn use_local_holder() -> u32 {
+        \\    let holder: Holder = local_holder();
+        \\    return holder.ptr.*;
+        \\}
+        \\
+        \\fn use_assigned_holder() -> u32 {
+        \\    let holder: Holder = assigned_holder();
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_aggregate_return_local_mir_fact.mc", source, &output);
+    const local_body = try llvmFunctionBody(output.items, "define internal i32 @use_local_holder");
+    try expectContains(local_body, "; mir aggregate_return_pointer consumed caller=use_local_holder callee=local_holder field=ptr provenance=global_storage");
+    const assigned_body = try llvmFunctionBody(output.items, "define internal i32 @use_assigned_holder");
+    try expectContains(assigned_body, "; mir aggregate_return_pointer consumed caller=use_assigned_holder callee=assigned_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_aggregate_return_local_mir_fact.mc", source, "assigned_holder", "ptr", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_assigned_holder");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_assigned_holder callee=assigned_holder field=ptr");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+}
+
 test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/spec/data_race_semantics.mc", std.testing.allocator, .limited(1 << 20));
     defer std.testing.allocator.free(source);
