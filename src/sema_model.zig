@@ -85,7 +85,10 @@ fn projectionEql(left: MovePlaceProjection, right: MovePlaceProjection) bool {
 
 fn projectionWildcardMatches(left: MovePlaceProjection, right: MovePlaceProjection) bool {
     return (left == .wildcard_index and right != .field) or
-        (right == .wildcard_index and left != .field);
+        (right == .wildcard_index and left != .field) or
+        (left == .symbolic_index and right == .symbolic_index) or
+        (left == .symbolic_index and right == .constant_index) or
+        (left == .constant_index and right == .symbolic_index);
 }
 
 pub const Context = struct {

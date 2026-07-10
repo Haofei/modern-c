@@ -996,12 +996,24 @@ fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.String
     if (fullDerefMoveSubplace(self, expr, state, aliases)) |pp| {
         return .{ .key = pp.key, .place = pp.place, .full_deref = true };
     }
-    const key = callLaunderedMoveReferent(self, expr, state, aliases) orelse
-        spine.aliasReferentOf(expr, state) orelse
+    if (callLaunderedMoveAliasReferent(self, expr, state, aliases)) |referent| return referent;
+    const key = spine.aliasReferentOf(expr, state) orelse
         return null;
+    var place = aliasPlaceForKey(key, state);
+    switch (expr.kind) {
+        .ident => |id| if (state.get(id.text)) |slot| {
+            if (slot.alias_of) |alias_of| {
+                if (std.mem.eql(u8, alias_of, key) and place == null) place = slot.alias_place;
+            }
+        },
+        .grouped => |inner| if (aliasReferentForExpr(self, inner.*, state, aliases)) |inner_ref| {
+            if (std.mem.eql(u8, inner_ref.key, key) and place == null) place = inner_ref.place;
+        },
+        else => {},
+    }
     return .{
         .key = key,
-        .place = aliasPlaceForKey(key, state),
+        .place = place,
         .full_deref = isDirectIdentAddressOf(expr) or inheritedFullDerefAlias(expr, state),
     };
 }
@@ -1395,6 +1407,21 @@ fn sameMaybePlace(left: ?MovePlace, right: ?MovePlace) bool {
     if (left == null and right == null) return true;
     if (left == null or right == null) return false;
     return left.?.eql(right.?);
+}
+
+fn deferredAliasBorrowPlace(place: ?MovePlace) ?MovePlace {
+    var result = place orelse return null;
+    for (result.projections[0..result.projection_count]) |*projection| {
+        if (projection.* == .symbolic_index) projection.* = .wildcard_index;
+    }
+    return result;
+}
+
+fn placeHasWildcardProjection(place: MovePlace) bool {
+    for (place.projections[0..place.projection_count]) |projection| {
+        if (projection == .wildcard_index) return true;
+    }
+    return false;
 }
 
 fn isPureIndexFactSlot(slot: MoveSlot) bool {
@@ -2728,11 +2755,16 @@ fn layoutFieldsCanCarryBorrow(fields: std.StringHashMap(ast.TypeExpr), ctx: Cont
 // (`pk(&t) -> u32`) — which cannot retain the borrow — does not register an alias and the
 // legit case still accepts.
 pub fn callLaunderedMoveReferent(self: *Checker, init_expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+    if (callLaunderedMoveAliasReferent(self, init_expr, state, aliases)) |referent| return referent.key;
+    return null;
+}
+
+fn callLaunderedMoveAliasReferent(self: *Checker, init_expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
     const ctx = self.move_ctx orelse return null;
     const call = switch (init_expr.kind) {
         .call => |c| c,
-        .grouped => |inner| return callLaunderedMoveReferent(self, inner.*, state, aliases),
-        .cast => |c| return callLaunderedMoveReferent(self, c.value.*, state, aliases),
+        .grouped => |inner| return callLaunderedMoveAliasReferent(self, inner.*, state, aliases),
+        .cast => |c| return callLaunderedMoveAliasReferent(self, c.value.*, state, aliases),
         else => return null,
     };
     // `drop`/`forget_unchecked` are not borrow-laundering pointer factories.
@@ -2740,11 +2772,11 @@ pub fn callLaunderedMoveReferent(self: *Checker, init_expr: ast.Expr, state: *co
     const ret_ty = spine.directCallReturnType(call.callee.*, ctx.*) orelse return null;
     if (!spine.isPointerLike(spine.classifyTypeCtx(ret_ty, ctx.*))) return null;
     for (call.args) |arg| {
-        if (fullDerefMoveSubplaceAlias(self, arg, state, aliases)) |referent| {
-            if (state.get(referent)) |slot| {
+        if (fullDerefMoveSubplace(self, arg, state, aliases)) |referent| {
+            if (state.get(referent.key)) |slot| {
                 if (!slot.live) continue;
             }
-            return referent;
+            return .{ .key = referent.key, .place = referent.place, .full_deref = false };
         }
         const root = spine.borrowedMoveRoot(arg, state) orelse blk: {
             // an alias local `p` passed by value (→ its referent `t`)
@@ -2758,7 +2790,7 @@ pub fn callLaunderedMoveReferent(self: *Checker, init_expr: ast.Expr, state: *co
         // by moveBorrow at the call — registering an alias here would double-report on the
         // later `q.*` use.
         if (state.getPtr(root)) |slot| {
-            if (slot.live and slot.alias_of == null) return root;
+            if (slot.live and slot.alias_of == null) return .{ .key = root, .place = slot.place, .full_deref = false };
         }
     }
     return null;
@@ -3484,7 +3516,17 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
         }
     }
     if (root_slot.deferred_borrow) |existing| {
-        if (std.mem.eql(u8, existing, referent)) return;
+        if (std.mem.eql(u8, existing, referent)) {
+            if (place) |new_place| {
+                if (root_slot.deferred_borrow_place == null or placeHasWildcardProjection(new_place)) {
+                    root_slot.deferred_borrow_place = new_place;
+                }
+            } else if (root_slot.deferred_borrow_place == null) {
+                root_slot.deferred_borrow_place = place orelse
+                    (if (state.get(referent)) |referent_slot| referent_slot.place else null);
+            }
+            return;
+        }
         root_slot.deferred_borrow = root;
         root_slot.deferred_borrow_place = root_slot.place;
         return;
@@ -3510,7 +3552,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
         .ident => |id| {
             if (state.getPtr(id.text)) |slot| {
                 if (slot.alias_of) |referent| {
-                    markDeferredBorrowReferent(self, referent, null, expr.span, state);
+                    markDeferredBorrowReferent(self, referent, deferredAliasBorrowPlace(slot.alias_place), expr.span, state);
                 } else if (slot.cleanup_local) {
                     consumeTrackedMoveBinding(self, id.text, expr.span, state);
                 } else if (!slot.live) {
@@ -3541,12 +3583,16 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
         },
         .call => |c| for (c.args) |arg| {
             checkAggregateAliasArgument(self, arg, state);
+            if (callLaunderedMoveAliasReferent(self, arg, state, aliases)) |referent| {
+                markDeferredBorrowReferent(self, referent.key, deferredAliasBorrowPlace(referent.place), arg.span, state);
+                continue;
+            }
             moveDefer(self, arg, state, aliases);
         },
         .member => |m| {
             moveBorrow(self, m.base.*, state, aliases);
             if (aggregateFieldAliasSlot(self, expr, state)) |slot| {
-                if (slot.alias_of) |referent| markDeferredBorrowReferent(self, referent, null, expr.span, state);
+                if (slot.alias_of) |referent| markDeferredBorrowReferent(self, referent, deferredAliasBorrowPlace(slot.alias_place), expr.span, state);
                 return;
             }
             // `defer free(p.field)`: reserve the move field for lexical cleanup so it is
@@ -3567,7 +3613,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
             moveBorrow(self, ix.base.*, state, aliases);
             moveConsume(self, ix.index.*, state, aliases);
             if (aliasPlaceSlot(self, expr, state)) |slot| {
-                if (slot.alias_of) |referent| markDeferredBorrowReferent(self, referent, null, expr.span, state);
+                if (slot.alias_of) |referent| markDeferredBorrowReferent(self, referent, deferredAliasBorrowPlace(slot.alias_place), expr.span, state);
                 return;
             }
             // `defer free(arr[0])`: reserve a tracked constant-index element place for

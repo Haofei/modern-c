@@ -2298,8 +2298,7 @@ fn reject_whole_after_dynamic_multi_array_element_move(i: usize) -> u32 {
 fn reject_reinitialize_constant_after_dynamic_multi_array_element_move(i: usize) -> u32 {
     var arr: [2]Res = .{ mkres(1), mkres(2) };
     let x: Res = arr[i];
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    arr[0] = mkres(3);
+    arr[0] = mkres(3); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(arr); }
     return consume(x);
 }
@@ -2393,8 +2392,7 @@ fn reject_whole_after_dynamic_nested_array_element_move(i: usize) -> u32 {
 fn reject_reinitialize_constant_after_dynamic_nested_array_element_move(i: usize) -> u32 {
     var matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
     let x: Res = matrix[i][0];
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    matrix[0][0] = mkres(3);
+    matrix[0][0] = mkres(3); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(matrix); }
     return consume(x);
 }
