@@ -5157,7 +5157,9 @@ const CEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directLocalAggregateArrayElementPath(inner.*, locals),
             .index => |node| blk: {
-                const base_path = self.directLocalAggregateMemberPath(node.base.*, locals) orelse break :blk null;
+                const base_path = self.directLocalAggregateMemberPath(node.base.*, locals) orelse
+                    self.directLocalAggregateArrayElementPath(node.base.*, locals) orelse
+                    break :blk null;
                 const index = localArrayConstIndexValue(node.index.*, locals orelse break :blk null) orelse break :blk null;
                 break :blk .{
                     .local_name = base_path.local_name,

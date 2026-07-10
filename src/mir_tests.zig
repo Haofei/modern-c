@@ -1776,7 +1776,9 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_array_holder", "cells[0].ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_array_holder", "cells[1].ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "cell_matrix_holder"));
-    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "nested_pointer_array_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_pointer_array_holder"));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_pointer_array_holder", "ptrs[0][0]", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_pointer_array_holder", "ptrs[1][1]", .global_storage));
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
@@ -1787,6 +1789,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=nested_holder field=inner.ptrs[0] provenance=global_storage pointer_kind=single") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=trailing_deep_nested_field_updated_holder field=middle.leaf.ptr provenance=global_storage pointer_kind=single") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=nested_array_holder field=cells[0].ptr provenance=global_storage pointer_kind=single") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=nested_pointer_array_holder field=ptrs[0][0] provenance=global_storage pointer_kind=single") != null);
 }
 
 test "MIR records direct internal global pointer return provenance in callers" {

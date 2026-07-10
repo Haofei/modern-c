@@ -4150,13 +4150,16 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directLocalAggregateArrayElementPath(inner.*),
             .index => |node| blk: {
-                const base_path = self.directLocalAggregateMemberPath(node.base.*) orelse break :blk null;
+                const base_path = self.directLocalAggregateMemberPath(node.base.*) orelse
+                    self.directLocalAggregateArrayElementPath(node.base.*) orelse
+                    break :blk null;
                 const base_ty = self.resolveAliasType(self.exprType(node.base.*) orelse break :blk null);
                 const array = switch (base_ty.kind) {
                     .array => |array| array,
                     else => break :blk null,
                 };
-                if (!self.isPointerLikeType(array.child.*) and self.directStructTypeName(array.child.*) == null) break :blk null;
+                const child_ty = self.resolveAliasType(array.child.*);
+                if (!self.isPointerLikeType(child_ty) and self.directStructTypeName(child_ty) == null and child_ty.kind != .array) break :blk null;
                 const index = self.localArrayConstIndexValue(node.index.*) orelse break :blk null;
                 const len = self.arrayLenValue(array.len) orelse break :blk null;
                 if (index >= len) break :blk null;
