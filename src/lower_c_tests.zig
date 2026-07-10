@@ -665,7 +665,7 @@ test "lower-c aggregate-return sequential switches fail closed" {
     try expectContains(output.items, "mc_race_load_u32");
 }
 
-test "lower-c aggregate-return if join prefix fails closed" {
+test "lower-c consumes MIR aggregate-return if join facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Holder { ptr: *mut u32, tag: u32 }
@@ -686,9 +686,14 @@ test "lower-c aggregate-return if join prefix fails closed" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_if_join_prefix_aggregate_return_fail_closed.mc", source, &output);
-    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
-    try expectContains(output.items, "mc_race_load_u32");
+    try appendCheckedCTest("c_if_join_prefix_aggregate_return_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_if_join_prefix_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
 test "lower-c aggregate-return defer prefix fails closed" {

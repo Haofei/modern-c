@@ -946,10 +946,9 @@ const AggregateReturnFactCollection = struct {
 };
 
 // This is the first aggregate-return MIR domain. It owns internal helpers whose
-// return is either a direct struct literal or a local set by a direct struct
-// literal through a straight-line declaration/whole-local-assignment path. The
-// producer rejects control flow, calls, copies, and indirect mutation; those
-// shapes remain outside this domain and use the explicitly listed legacy path.
+// return is a direct struct literal, a tracked local aggregate, or a bounded
+// exhaustive switch path reducible to those forms. Calls, loops, indirect
+// mutation, and arbitrary CFG joins remain outside this domain.
 fn collectDirectAggregateReturnPointerFacts(
     allocator: std.mem.Allocator,
     module: ast.Module,
@@ -1216,7 +1215,7 @@ fn aggregateReturnLiteralPaths(allocator: std.mem.Allocator, body: ast.Block) !?
             fallthrough_arms += 1;
             if (!paths.append(fields)) return null;
         }
-        if (returned_arms == 0 or fallthrough_arms == 0) return null;
+        if (fallthrough_arms == 0) return null;
         keep_paths = true;
         return paths;
     }
