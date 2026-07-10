@@ -1534,6 +1534,12 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    }
         \\    return .{ .ptr = &shared_counter, .tag = 23 };
         \\}
+        \\fn loop_prefix_holder(flag: bool) -> Holder {
+        \\    while flag {
+        \\        break;
+        \\    }
+        \\    return .{ .ptr = &shared_counter, .tag = 24 };
+        \\}
         \\fn trailing_nested_field_updated_holder(choice: u32) -> Outer {
         \\    var holder: Outer = .{ .inner = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &shared_counter } }, .tag = 17 };
         \\    switch choice {
@@ -1633,6 +1639,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_array_updated_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "trailing_dynamic_array_updated_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "nested_control_holder"));
+    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "loop_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_nested_field_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_deep_nested_field_updated_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "deref_updated_holder"));

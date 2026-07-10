@@ -609,6 +609,31 @@ test "lower-c aggregate-return nested control flow fails closed" {
     try expectContains(output.items, "mc_race_load_u32");
 }
 
+test "lower-c aggregate-return loop prefix fails closed" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder(flag: bool) -> Holder {
+        \\    while flag {
+        \\        break;
+        \\    }
+        \\    return .{ .ptr = &shared_counter, .tag = 1 };
+        \\}
+        \\
+        \\fn use_returned_holder(flag: bool) -> u32 {
+        \\    let holder: Holder = returned_holder(flag);
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_loop_prefix_aggregate_return_fail_closed.mc", source, &output);
+    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
+    try expectContains(output.items, "mc_race_load_u32");
+}
+
 test "lower-c aggregate-return nested pointer arrays fail closed" {
     const source =
         \\global shared_counter: u32 = 0;
