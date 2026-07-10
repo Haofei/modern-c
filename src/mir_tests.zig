@@ -1543,6 +1543,12 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    }
         \\    return holder;
         \\}
+        \\fn deref_updated_holder() -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 19 };
+        \\    let alias: *mut Holder = &holder;
+        \\    alias.*.ptr = &shared_counter;
+        \\    return holder;
+        \\}
         \\
         \\fn helper() -> void {}
         \\fn call_before_return() -> Holder {
@@ -1610,6 +1616,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "trailing_dynamic_array_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_nested_field_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_deep_nested_field_updated_holder"));
+    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "deref_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "unknown_holder"));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "direct_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "direct_holder_after_noise", "ptr", .global_storage));
