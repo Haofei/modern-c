@@ -685,24 +685,17 @@ These are production-grade properties today; regressions here would be expensive
   enforced spec-section coverage gate; `docs/README.md` maps which documents to
   trust. Zero `TODO`/`FIXME` in 67k lines; invariant comments are exceptional.
 
-### 4. Top blockers, ranked
+### 4. Current residual blockers
 
-The shortest path to "production grade" runs through these. Details in §5.
+The old ranked blocker list was a review snapshot. The current compiler-side
+residual work is the three umbrella workstreams below; details and closure
+matrices are in §5.
 
-| # | Sev | Item | Dimension | Effort |
+| # | Sev | Workstream | Dimension | Closure shape |
 |---|---|---|---|---|
-| 1 | P0 | Parser recursion segfaults at ~600-deep nesting **[confirmed]** | Front-end | S |
-| 2 | P0 | Closures accepted with no type checking (miscast indirect calls, dangling env) **[inspected]** | Sema | M |
-| 3 | P0 | Move checker misses `while`-condition consumption → accepts double-free **[inspected]** | Sema | S |
-| 4 | P0 | LLVM emits first-class aggregates at `extern` boundaries — no C ABI classification **[inspected]** | Backends | S (forbid) / L (implement) |
-| 5 | P0 | No releases, no version, no install path, no `mcc build` driver | Distribution | M |
-| 6 | P1 | Monomorphization has no instantiation/depth cap → hang/OOM on polymorphic recursion **[inspected]** | Sema | S |
-| 7 | P1 | Cross-file diagnostics report the wrong file + flattened line numbers **[confirmed]** | Front-end | S-M |
-| 8 | P1 | Release-mode check elision matches span-only on LLVM (C filters by function) — parity divergence **[inspected]** | Backends | S |
-| 9 | P1 | Both backends re-derive semantics from the AST — the standing drift class | Architecture | L |
-| 10 | P1 | Lowering-coverage instrument rotted after the file split; independent fuzz oracles not gated | Testing | S-M |
-| 11 | P1 | Error-UX floor: Zig traces after every failed compile, first-error parser bail, no snippets **[confirmed]** | Front-end | S-L |
-| 12 | P1 | LLVM major unpinned in CI/Docker; no toolchain support matrix | Testing/Backends | M |
+| 1 | P0 | Broader pointer-provenance race lowering | Backends / MIR | Finish conservative scalar-pointer lowering and retire or register remaining backend-local provenance ladders. |
+| 2 | P1 | Typed semantic fact table / typed MIR | Architecture | Move remaining backend semantic decisions behind typed MIR facts or explicitly accepted fail-closed fallbacks. |
+| 3 | P1 | CFG/place-based move checker | Sema | Replace compatibility string-key move state with typed places and a CFG/worklist join model. |
 
 ### 5. Findings by dimension
 
