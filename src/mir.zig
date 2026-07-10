@@ -1126,11 +1126,11 @@ const AggregateReturnLiteralPaths = struct {
 };
 
 fn aggregateReturnLiteralPaths(allocator: std.mem.Allocator, body: ast.Block) !?AggregateReturnLiteralPaths {
-    if (body.items.len == 1) {
-        if (body.items[0].kind == .@"switch") {
-            const switch_node = body.items[0].kind.@"switch";
-            if (!aggregateReturnSwitchIsExhaustive(switch_node)) return null;
-            var paths: AggregateReturnLiteralPaths = .{};
+    if (body.items.len != 0 and body.items[0].kind == .@"switch") {
+        const switch_node = body.items[0].kind.@"switch";
+        if (!aggregateReturnSwitchIsExhaustive(switch_node)) return null;
+        var paths: AggregateReturnLiteralPaths = .{};
+        if (body.items.len == 1) {
             for (switch_node.arms) |arm| {
                 const arm_block = switch (arm.body) {
                     .block => |block| block,
@@ -1141,6 +1141,27 @@ fn aggregateReturnLiteralPaths(allocator: std.mem.Allocator, body: ast.Block) !?
             }
             return paths;
         }
+
+        const trailing_block: ast.Block = .{ .span = body.span, .items = body.items[1..] };
+        const trailing_fields = (try directOrStraightLineLocalAggregateReturnLiteralFields(allocator, trailing_block)) orelse return null;
+        var returned_arms: usize = 0;
+        var fallthrough_arms: usize = 0;
+        for (switch_node.arms) |arm| {
+            const arm_block = switch (arm.body) {
+                .block => |block| block,
+                .expr => return null,
+            };
+            if (arm_block.items.len == 0) {
+                fallthrough_arms += 1;
+                if (!paths.append(trailing_fields)) return null;
+                continue;
+            }
+            const fields = (try directOrStraightLineLocalAggregateReturnLiteralFields(allocator, arm_block)) orelse return null;
+            returned_arms += 1;
+            if (!paths.append(fields)) return null;
+        }
+        if (returned_arms == 0 or fallthrough_arms == 0) return null;
+        return paths;
     }
 
     const fields = (try directOrStraightLineLocalAggregateReturnLiteralFields(allocator, body)) orelse return null;
