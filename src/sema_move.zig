@@ -3512,17 +3512,27 @@ fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.Stri
 }
 
 fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    const root = rootPlaceName(referent);
+    const root = if (place) |typed| typed.root else rootPlaceName(referent);
     const root_slot = state.getPtr(root) orelse return;
     if (root_slot.cleanup_local) {
-        checkStaleAlias(self, "", .{ .live = false, .span = span, .alias_of = referent }, span, state);
+        checkStaleAlias(self, "", .{ .live = false, .span = span, .alias_of = referent, .alias_place = place }, span, state);
         return;
     }
     if (!root_slot.live) {
         self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after it was moved");
         return;
     }
-    if (isMoveSubplaceKey(referent)) {
+    if (place) |borrowed| {
+        if (borrowed.isSubplace()) {
+            if (stateHasMovedPlace(borrowed, state) or stateHasMovedChildPlace(borrowed, state) or stateHasMovedConflictingPlace(borrowed, state)) {
+                self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` field or array element after it was moved out");
+                return;
+            }
+        } else if (hasMovedSubplace(borrowed, state)) {
+            self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after one of its fields or elements was moved out");
+            return;
+        }
+    } else if (isMoveSubplaceKey(referent)) {
         if (state.contains(referent) or concretePlaceHasWildcardMove(referent, state) or wildcardMoveConflictsWithConcreteSubplace(referent, state)) {
             self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` field or array element after it was moved out");
             return;
