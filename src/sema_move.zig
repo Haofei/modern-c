@@ -3102,6 +3102,7 @@ const AliasWildcardPattern = struct {
 const ConcreteAliasScan = struct {
     first_slot: ?MoveSlot = null,
     first_referent: ?[]const u8 = null,
+    first_place: ?MovePlace = null,
     all_present: bool = true,
     all_same: bool = true,
 };
@@ -3122,11 +3123,13 @@ fn scanConcreteAliasPattern(
             acc.all_present = false;
             return null;
         };
-        if (aliasReferentMoved(referent, state)) return slot;
+        if (aliasSlotReferentMoved(slot, state)) return slot;
         if (acc.first_referent) |seen| {
             if (!std.mem.eql(u8, seen, referent)) acc.all_same = false;
+            if (!sameMaybePlace(acc.first_place, slot.alias_place)) acc.all_same = false;
         } else {
             acc.first_referent = referent;
+            acc.first_place = slot.alias_place;
             acc.first_slot = slot;
         }
         return null;
@@ -3273,7 +3276,14 @@ fn aliasIndexExprType(self: *Checker, expr: ast.Expr, state: *const std.StringHa
     }
 }
 
-fn aliasReferentMoved(referent: []const u8, state: *const std.StringHashMap(MoveSlot)) bool {
+fn aliasSlotReferentMoved(slot: MoveSlot, state: *const std.StringHashMap(MoveSlot)) bool {
+    if (slot.alias_place) |place| {
+        if (state.get(place.root)) |root| {
+            if (!root.live) return true;
+        }
+        return stateHasMovedPlace(place, state) or stateHasMovedChildPlace(place, state) or stateHasMovedConflictingPlace(place, state);
+    }
+    const referent = slot.alias_of orelse return false;
     if (state.get(referent)) |r| {
         if (!r.live) return true;
     }
