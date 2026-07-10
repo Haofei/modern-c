@@ -2,7 +2,7 @@
 
 Status: **assessment + roadmap**, written 2026-07-02 at `311fdd18`.
 Current ledger: **updated 2026-07-09, based on the current compiler worktree**.
-Ledger count: **398 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
+Ledger count: **399 finished or in-worktree evidence slices, 0 in progress, 3 pending umbrella workstreams**.
 
 > This file started as a point-in-time audit. The sections below the ledger preserve
 > that original review context, including findings that have since been fixed. Treat
@@ -432,6 +432,7 @@ progress.
 | Move checker full-deref alias consumption uses typed referents | Moving through `*alias` now routes immediate address expressions, noalias-wrapped address expressions, and copied full-deref aliases through `AliasReferent` before consuming a root or subplace. Typed `MovePlace` data drives field/array element consumption when present, with the formatted subplace fallback retained only for legacy referents. | `src/sema_move.zig` `.deref` handling in `moveConsume` and `immediateFullDerefMoveReferent`; full field, array element, dynamic, noalias, copied, and duplicate-move cases in `tests/spec/move_place.mc`; `zig build test`; `git diff --check`. |
 | Move checker wildcard alias scans compare typed referents | The aggregate/array alias wildcard scan now checks stale referents from each slot's typed `alias_place` before falling back to formatted referent keys, and it requires matching typed places when deciding that all concrete aliases under a wildcard expression point to the same resource. | `src/sema_move.zig` `ConcreteAliasScan`, `scanConcreteAliasPattern`, and `aliasSlotReferentMoved`; wildcard aggregate/array alias cases in `tests/spec/move_place.mc`; `zig build test`; `git diff --check`. |
 | Move checker deferred-borrow reservation uses typed roots | Deferred-borrow registration now derives the owner root and pre-existing moved-subplace conflicts from `MovePlace` when the caller has one, including cleanup-local stale-alias checks. Formatted referent parsing remains only for legacy untyped reservations. | `src/sema_move.zig` `markDeferredBorrowReferent`, `stateHasMovedPlace`, `stateHasMovedChildPlace`, and `stateHasMovedConflictingPlace`; deferred root, field, array, dynamic, alias, cleanup-local, and laundered cases in `tests/spec/move_place.mc`; `zig build test`; `git diff --check`. |
+| Move checker retires full-deref string alias helper | Full-deref subplace alias handling no longer needs the string-only `fullDerefMoveSubplaceAlias` helper; callers use typed `PlaceKeyTy`/`AliasReferent` flows instead. This removes one legacy helper from the explicit-place migration without changing diagnostics. | `src/sema_move.zig` removal of `fullDerefMoveSubplaceAlias`; full-deref field, array, dynamic, noalias, copied, and duplicate-move cases in `tests/spec/move_place.mc`; `zig build test`; `git diff --check`. |
 
 ### In Progress
 

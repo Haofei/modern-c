@@ -977,10 +977,6 @@ fn fullDerefMoveSubplace(self: *Checker, expr: ast.Expr, state: *const std.Strin
     return pp;
 }
 
-fn fullDerefMoveSubplaceAlias(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
-    return if (fullDerefMoveSubplace(self, expr, state, aliases)) |pp| pp.key else null;
-}
-
 fn aliasPlaceForKey(key: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
     const slot = state.get(key) orelse return null;
     return slot.place orelse slot.alias_place;
