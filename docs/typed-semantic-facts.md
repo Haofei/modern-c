@@ -743,6 +743,10 @@ Mixed return paths that do not agree on the same `global_storage` field are
 covered by the summary-without-field gate: MIR may record the callee as
 MIR-owned, but emits no field fact, and both backends keep the returned field
 unknown.
+Exported aggregate returns are not a provenance-producer obligation while
+extern/export by-value struct returns are rejected by sema. MIR still has
+negative coverage for the unchecked diagnostic fixture: exported aggregate
+return callees receive no aggregate-return summary.
 Callee-local storage returned inside an aggregate is not a producer obligation
 for checked code because sema rejects the local-address escape. The diagnostic
 fixture remains covered as a negative MIR case: unchecked MIR construction must
@@ -778,8 +782,8 @@ missing-fact gate covers every migrated shape.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
-4. Remaining: nested control flow, exported, and aggregate/array element nesting
-   beyond the direct field model. Mixed paths, prefix calls, fallthrough
+4. Remaining: nested control flow and aggregate/array element nesting beyond the
+   direct field model. Exported aggregate returns, mixed paths, prefix calls, fallthrough
    dynamic-index writes, dereference writes, and nested pointer arrays beyond
    fixed struct-element arrays are covered as fail-closed rather than inferred.
 5. Remaining: the semantic-facts inventory must reject the LLVM collector once
