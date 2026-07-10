@@ -2508,6 +2508,36 @@ test "lower-c union pointer-member aggregate value copies fail closed" {
     ;
     try expectUnsupportedCheckedCEmission("emit_c_pointer_union_member_store.mc", overlay_member_store_source);
 
+    const c_union_member_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Holder {
+        \\    word: CWord,
+        \\}
+        \\fn pointer_c_union_member_load(p: *mut Holder) -> CWord {
+        \\    return p.word;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_pointer_c_union_member_load.mc", c_union_member_load_source);
+
+    const c_union_member_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Holder {
+        \\    word: CWord,
+        \\}
+        \\fn pointer_c_union_member_store(p: *mut Holder, value: CWord) -> void {
+        \\    p.word = value;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_pointer_c_union_member_store.mc", c_union_member_store_source);
+
     const nested_overlay_member_load_source =
         \\overlay union Word {
         \\    bits: u32,
@@ -2541,6 +2571,42 @@ test "lower-c union pointer-member aggregate value copies fail closed" {
         \\}
     ;
     try expectUnsupportedCheckedCEmission("emit_c_pointer_nested_union_member_store.mc", nested_overlay_member_store_source);
+
+    const nested_c_union_member_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Middle {
+        \\    word: CWord,
+        \\}
+        \\struct Holder {
+        \\    middle: Middle,
+        \\}
+        \\fn pointer_nested_c_union_member_load(p: *mut Holder) -> CWord {
+        \\    return p.middle.word;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_pointer_nested_c_union_member_load.mc", nested_c_union_member_load_source);
+
+    const nested_c_union_member_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Middle {
+        \\    word: CWord,
+        \\}
+        \\struct Holder {
+        \\    middle: Middle,
+        \\}
+        \\fn pointer_nested_c_union_member_store(p: *mut Holder, value: CWord) -> void {
+        \\    p.middle.word = value;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_pointer_nested_c_union_member_store.mc", nested_c_union_member_store_source);
 
     const tagged_member_load_source =
         \\union Token {
@@ -3039,6 +3105,36 @@ test "lower-c union indexed aggregate field value copies fail closed" {
     ;
     try expectUnsupportedCheckedCEmission("emit_c_slice_union_field_store.mc", overlay_store_source);
 
+    const c_union_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Cell {
+        \\    word: CWord,
+        \\}
+        \\fn slice_c_union_field_load(cells: []mut Cell, i: usize) -> CWord {
+        \\    return cells[i].word;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_slice_c_union_field_load.mc", c_union_load_source);
+
+    const c_union_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Cell {
+        \\    word: CWord,
+        \\}
+        \\fn slice_c_union_field_store(cells: []mut Cell, i: usize, value: CWord) -> void {
+        \\    cells[i].word = value;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_slice_c_union_field_store.mc", c_union_store_source);
+
     const nested_overlay_load_source =
         \\overlay union Word {
         \\    bits: u32,
@@ -3072,6 +3168,42 @@ test "lower-c union indexed aggregate field value copies fail closed" {
         \\}
     ;
     try expectUnsupportedCheckedCEmission("emit_c_slice_nested_union_field_store.mc", nested_overlay_store_source);
+
+    const nested_c_union_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Inner {
+        \\    word: CWord,
+        \\}
+        \\struct Cell {
+        \\    inner: Inner,
+        \\}
+        \\fn slice_nested_c_union_field_load(cells: []mut Cell, i: usize) -> CWord {
+        \\    return cells[i].inner.word;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_slice_nested_c_union_field_load.mc", nested_c_union_load_source);
+
+    const nested_c_union_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Inner {
+        \\    word: CWord,
+        \\}
+        \\struct Cell {
+        \\    inner: Inner,
+        \\}
+        \\fn slice_nested_c_union_field_store(cells: []mut Cell, i: usize, value: CWord) -> void {
+        \\    cells[i].inner.word = value;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_slice_nested_c_union_field_store.mc", nested_c_union_store_source);
 
     const tagged_load_source =
         \\union Token {
@@ -3452,6 +3584,32 @@ test "lower-c union aggregate whole-element index access fails closed" {
     ;
     try expectUnsupportedCheckedCEmission("emit_c_slice_union_element_store.mc", overlay_slice_store_source);
 
+    const c_union_slice_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\
+        \\fn slice_c_union_load(cells: []mut CWord, i: usize) -> CWord {
+        \\    return cells[i];
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_slice_c_union_element_load.mc", c_union_slice_load_source);
+
+    const c_union_slice_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\
+        \\fn slice_c_union_store(cells: []mut CWord, i: usize, value: CWord) -> void {
+        \\    cells[i] = value;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_slice_c_union_element_store.mc", c_union_slice_store_source);
+
     const nested_overlay_slice_load_source =
         \\overlay union Word {
         \\    bits: u32,
@@ -3479,6 +3637,36 @@ test "lower-c union aggregate whole-element index access fails closed" {
         \\}
     ;
     try expectUnsupportedCheckedCEmission("emit_c_slice_nested_union_element_store.mc", nested_overlay_slice_store_source);
+
+    const nested_c_union_slice_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Holder {
+        \\    word: CWord,
+        \\}
+        \\fn slice_nested_c_union_element_load(cells: []mut Holder, i: usize) -> Holder {
+        \\    return cells[i];
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_slice_nested_c_union_element_load.mc", nested_c_union_slice_load_source);
+
+    const nested_c_union_slice_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Holder {
+        \\    word: CWord,
+        \\}
+        \\fn slice_nested_c_union_element_store(cells: []mut Holder, i: usize, value: Holder) -> void {
+        \\    cells[i] = value;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_slice_nested_c_union_element_store.mc", nested_c_union_slice_store_source);
 
     const tagged_slice_load_source =
         \\union Token {
@@ -3556,6 +3744,32 @@ test "lower-c union aggregate whole-element index access fails closed" {
     ;
     try expectUnsupportedCheckedCEmission("emit_c_pointer_array_overlay_union_element_store.mc", overlay_pointer_array_store_source);
 
+    const c_union_pointer_array_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\
+        \\fn pointer_array_c_union_load(pa: *mut [4]CWord, i: usize) -> CWord {
+        \\    return pa.*[i];
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_pointer_array_c_union_element_load.mc", c_union_pointer_array_load_source);
+
+    const c_union_pointer_array_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\
+        \\fn pointer_array_c_union_store(pa: *mut [4]CWord, i: usize, value: CWord) -> void {
+        \\    pa.*[i] = value;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_pointer_array_c_union_element_store.mc", c_union_pointer_array_store_source);
+
     const nested_overlay_pointer_array_load_source =
         \\overlay union Word {
         \\    bits: u32,
@@ -3583,6 +3797,36 @@ test "lower-c union aggregate whole-element index access fails closed" {
         \\}
     ;
     try expectUnsupportedCheckedCEmission("emit_c_pointer_array_nested_overlay_union_element_store.mc", nested_overlay_pointer_array_store_source);
+
+    const nested_c_union_pointer_array_load_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Holder {
+        \\    word: CWord,
+        \\}
+        \\fn pointer_array_nested_c_union_load(pa: *mut [4]Holder, i: usize) -> Holder {
+        \\    return pa.*[i];
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_pointer_array_nested_c_union_element_load.mc", nested_c_union_pointer_array_load_source);
+
+    const nested_c_union_pointer_array_store_source =
+        \\#[c_union]
+        \\struct CWord {
+        \\    bits: u32,
+        \\    flag: bool,
+        \\}
+        \\struct Holder {
+        \\    word: CWord,
+        \\}
+        \\fn pointer_array_nested_c_union_store(pa: *mut [4]Holder, i: usize, value: Holder) -> void {
+        \\    pa.*[i] = value;
+        \\}
+    ;
+    try expectUnsupportedCheckedCEmission("emit_c_pointer_array_nested_c_union_element_store.mc", nested_c_union_pointer_array_store_source);
 
     const tagged_pointer_array_load_source =
         \\union Token {
