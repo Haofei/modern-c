@@ -136,7 +136,7 @@ surfaces unless a backend is listed as consuming the in-memory MIR data directly
 | MIR no-overflow range facts | `src/mir_model.zig:201` `RangeFact` records `region_id`, `target`, `op`, operands, result type, and source point. Producers are `FunctionBuilder.addRangeFactForUncheckedCall` (`src/mir.zig:2491-2507`) and `addAggregateRangeFactForUncheckedExpr` (`src/mir.zig:2509-2530`) inside active `#[unsafe_contract(no_overflow)]` regions. | These facts are appended for unchecked no-overflow calls in contract regions. They are not the same as transient optimizer `proven_facts`; they persist in `Function.range_facts` until the MIR module is freed. | `appendDumpOpt` prints `mir range_fact ... assumption=no_overflow recorded=true` at `src/mir.zig:359-364`; MIR verification facts also scan `function.range_facts` at `src/mir.zig:534`. LLVM emission prints non-semantic `; mir range_fact consumed ... assumption=no_overflow` comments when it consumes a fact; C emission prints `/* MC_MIR_RANGE no_overflow ... */` comments from its MIR-gated unchecked paths. The inventory checker anchors the owned `RangeFact` model, the dump row, and exact C/LLVM no-overflow range consumer call counts. | The C backend wires `has_mir_no_overflow_range_fact` through `arithContext` (`src/lower_c_emitter.zig:1591-1610`) and matches facts in `hasMirNoOverflowRangeFact` (`src/lower_c_emitter.zig:4545-4557`); its generic builtin dispatcher now rejects unchecked no-overflow calls instead of emitting plain arithmetic without a matching fact. C and LLVM both have target-label coverage for return values, inferred locals, assignments, call arguments, binary operands, array literal elements, and struct literal fields. LLVM requires `requireMirNoOverflowRangeFact` for `unchecked.add/sub/mul` and matches target identity through `current_mir_range_target` for those contexts. Removing a matching `RangeFact`, or retargeting it to a different target label in a prebuilt MIR module, makes both C and LLVM fail closed instead of trusting the AST call, including non-`value` inferred-local, assignment, call-argument, binary-operand, aggregate-element, and aggregate-field targets; absence coverage now explicitly spans those non-`value` contexts in both backends. Broader range/bounds facts are still not a complete typed fact family. |
 | MIR bounds facts | `src/mir_model.zig` `BoundsFact` records index and slice checks that remain after MIR optimization; `FunctionBuilder.buildExpr` appends them with the same source point as the check. | Optimized proofs remain represented by `elided_bounds`; every non-elided array/slice check requires a `BoundsFact` instead of being accepted from AST shape alone. | `mcc lower-mir` prints the function `bounds_facts=N` count and stable `mir bounds_fact fn=... kind=index|slice recorded=true line=... column=...` rows. The inventory checker anchors the owned `BoundsFact` model, dump row, and C/LLVM `requireMirBoundsFact` consumers with exact call counts. | C and LLVM call `requireMirBoundsFact` before emitting non-elided array-index or slice bounds checks. Removing the matching fact from prebuilt MIR produces `UnsupportedCEmission` / `UnsupportedLlvmEmission`; direct missing-fact tests cover both backends. |
 | MIR check-elision source points | `src/mir_model.zig:212` `SourcePoint` and `Function.elided_bounds` (`src/mir_model.zig:234-239`) record checks proven dead by optimized MIR. Producers append source points for constant in-bounds index (`src/mir.zig:2263-2278`), constant in-bounds slice (`src/mir.zig:2293-2305`), and division/modulo elision (`src/mir.zig:2437`). | Transient `ProvenFact` guard/assert facts are recorded by `recordTrueCondFacts` (`src/mir.zig:2704-2730`), restricted by `factIdentAllowed` (`src/mir.zig:2743-2750`), and invalidated by new bindings, assignment, loops, and address-of (`src/mir.zig:1176-1178`, `src/mir.zig:1212-1214`, `src/mir.zig:1972-1982`, `src/mir.zig:2046-2049`, `src/mir.zig:2690-2697`). | `lower-mir --optimize` exposes absence of the original `cmp_bounds`/trap edge, records optimized instruction detail such as `const_in_bounds`, includes an `elided_bounds=N` summary count, and prints explicit `mir elided_bounds_fact ... recorded=true` rows from `Function.elided_bounds`. | Both backends consume the same MIR list and fail closed when absent. C uses `mirCheckElided` for array indexing and slice guards (`src/lower_c_emitter.zig:3574-3586`, `src/lower_c_emitter.zig:4272-4280`, `src/lower_c_emitter.zig:4564-4573`) and passes the hook into arithmetic lowering (`src/lower_c_arith.zig:58-59`, `src/lower_c_arith.zig:391`, `src/lower_c_arith.zig:467`, `src/lower_c_arith.zig:507`). LLVM uses function-filtered `mirCheckElided` for array indexing, slice guards, and div/rem checks (`src/lower_llvm.zig:6607-6616`, plus call sites), matching C's function-filtered source-point lookup. |
-| LLVM backend-local pointer/global race provenance | `LlvmEmitter` owns backend-local maps for pointer-local provenance, local function/aggregate/pointer-array aliases, aggregate field facts, array element facts, slice facts, and aggregate-return summaries (`src/lower_llvm.zig`). It collects only aggregate-return facts in `collectAggregateReturnPointerFieldSummaries` and updates local facts through `updatePointerGlobalProvenance`, `updatePointerProvenanceFromMirOrFallback`, `updateAggregatePointerAliasProvenance`, and array/field/slice helpers. | This remains the largest duplicated inference class. It clears facts at control-flow and escape boundaries, while scoped blocks preserve updates for outer bindings. The bounded Phase 5 cleanup consumes matching MIR `PointerProvenanceFact` rows for direct pointer-like locals, pointer-local copies, raw-many zero offsets, fixed pointer-array elements, aggregate pointer fields, and aggregate pointer-array elements; missing MIR facts leave covered direct forms unknown rather than rebuilding backend-local provenance. Unsupported shapes still use the conservative fallback. LLVM no longer keeps a backend-local scalar pointer-return summary: supported direct, forwarded, noalias-wrapped, branched, and local-function-alias return flows are caller MIR facts, while missing or unsupported return facts stay unknown. | `lower-mir` prints authoritative `mir pointer_provenance_fact ...` rows. C and LLVM tests cover fact consumption and missing-fact conservative lowering for direct locals and aggregate field paths. | LLVM defaults bare scalar pointer dereferences to unordered atomics unless a live `local_storage` fact or syntactic `&local` proves locality. Aggregate copies through unproven pointers lower recursively to race-tolerant leaves where supported. Scalar and aggregate pointer parameter call-site summaries, and the LLVM-local scalar pointer-return summary, are retired: absent a future typed MIR fact, parameter and unsupported-return dereferences use the atomic path. Direct local aggregate and aggregate-return provenance remain separate. |
+| LLVM backend-local pointer/global race provenance | `LlvmEmitter` owns backend-local maps for local function/aggregate/pointer-array aliases, aggregate field facts, array element facts, slice facts, and aggregate-return summaries (`src/lower_llvm.zig`). It collects only aggregate-return facts in `collectAggregateReturnPointerFieldSummaries`; C admits pointer-local provenance through MIR-only helpers, while LLVM uses `updatePointerProvenanceFromMirOrLocalProof` for its registered local-only alias proof. | This remains the largest duplicated inference class. The Phase 5 cleanup retires LLVM's global pointer-local AST fallback: covered direct forms without a MIR fact remain unknown, while non-MIR aggregate-alias shapes may preserve only an existing `local_storage` proof. LLVM also has no backend-local scalar pointer-return summary: supported direct, forwarded, noalias-wrapped, branched, and local-function-alias return flows are caller MIR facts. | `lower-mir` prints authoritative `mir pointer_provenance_fact ...` rows. C and LLVM tests cover fact consumption and missing-fact conservative lowering for direct locals and aggregate field paths. | LLVM defaults bare scalar pointer dereferences to unordered atomics unless a live `local_storage` fact or syntactic `&local` proves locality. Scalar and aggregate pointer parameter call-site summaries, scalar pointer-return summaries, and global AST fallback proofs are retired; only the registered local aggregate-alias proof remains outside MIR. Direct local aggregate and aggregate-return provenance remain separate. |
 | C backend global/race lowering helpers | `src/lower_c_global.zig` routes direct global scalar, array, and field accesses through race helpers or relaxed C atomics. Examples include `appendGlobalLoadExpr` (`src/lower_c_global.zig:142-150`), `appendGlobalStorePrefix` (`src/lower_c_global.zig:153-162`), `globalAssignmentTarget` (`src/lower_c_global.zig:176-183`), and array/member global access helpers (`src/lower_c_global.zig:219-242`, `src/lower_c_global.zig:270-315`). The Phase 4 C slice adds `src/lower_c_emitter.zig` MIR consumers such as `applyMirPointerProvenanceForLocalInitializer`, `applyMirPointerProvenanceForAssignment`, `applyMirPointerProvenanceForIndexAssignment`, `applyMirAggregatePointerFieldFactsAtSource`, `applyMirAggregatePointerFieldFactsForSubjectAtSource`, `applyMirPointerProvenanceInvalidationsAtCall`, and `derefAccessLowering`. | Direct global helper logic still keys from AST/global type information and `GlobalInfo`. For direct pointer-like locals, direct pointer-local copies from live global-backed locals, direct raw-many local `.offset(0)` transfers, direct fixed local pointer-array elements, direct aggregate pointer-field destination reads, constant-index direct aggregate pointer-array element destination reads, and direct aggregate `field_path` rows for covered direct struct-literal initializers, whole-aggregate and nested aggregate member struct-literal reassignments, field assignments, pointer-array element assignments, and same-struct aggregate copies, C consumes `Function.pointer_provenance_facts` at local initializer, assignment, index-assignment, and call-invalidation source points. Direct fixed pointer-array element destination reads now stay MIR-owned: if the destination fact is absent, C leaves the destination provenance unknown instead of reconstructing it from backend-local array-element state. Bare scalar pointee deref loads/stores default to `mc_race_load_*` / `mc_race_store_*` (or relaxed `__atomic_*_n` for pointer-shaped pointees); only a live `local_storage` fact or a syntactic `&local` keeps the plain path, and `unknown`/invalidated facts fall back to the race-tolerant default. The raw-many offset deref temp path delegates scalar loads through `emitRaceLoadTempFromPointerTemp`; pointer-member scalar fields, nested pointer-member scalar chains, slice scalar indexes, unproven pointer-to-array scalar indexes, scalar fields reached through pointer-backed indexed aggregate storage, and nested scalar member chains rooted in pointer-backed indexed aggregate storage also use race-tolerant load/store paths. Bare struct/fixed-array aggregate value copies through unproven pointer derefs, direct/nested pointer-member aggregate fields, proven-local pointer-member aggregate copies, indexed and nested indexed aggregate fields, aggregate slice storage, and unproven pointer-to-array aggregate storage now lower recursively to race-tolerant scalar/pointer leaves where every leaf is supported; unsupported union-like leaves still fail closed. | `src/lower_c_inspect.zig:455-492` prints `lower ordinary_access`, `lower race_backend`, `lower race_semantics`, `lower c_ub`, and `lower racing_load_semantics` rows for direct global inspection. C emission also prints non-semantic `/* mir pointer_provenance consumed ... */` comments for the narrow facts it consumes, including `field=...` and `element=N` for aggregate field and array element rows. | C consumes MIR `elided_bounds`, `range_facts`, and now the narrow direct pointer-like local/direct-copy/direct raw-many zero-offset/direct fixed pointer-array element/direct aggregate pointer-read/direct aggregate `field_path` subset of `PointerProvenanceFact` for scalar deref load/store decisions. Conservative scalar lowering also covers call/member/index pointers, direct raw-many offset deref temps, pointer-member scalar fields, nested pointer-member scalar chains, direct/nested pointer-member aggregate fields, proven-local pointer-member aggregate copies, slice scalar indexes, unproven pointer-to-array scalar indexes, indexed aggregate scalar fields, nested indexed aggregate scalar member chains, recursive indexed and nested indexed aggregate field value copies, recursive aggregate whole-element value copies, and recursive struct/fixed-array aggregate pointer derefs when locality is not proven; broader race/global helper decisions remain outside typed pointer-provenance facts. |
 
 ### Phase 2: add a typed fact table for one narrow fact family
@@ -286,7 +286,7 @@ Gate:
   chosen subset: done for the direct pointer-like local initializer/assignment
   RHS forms covered by MIR direct address, noalias-wrapped direct address,
   direct pointer-local copy, and direct raw-many zero-offset facts through
-  `mirPointerProvenanceCoversDirectLocalUpdate` plus
+  the MIR-only pointer-local helpers plus
   `applyMirPointerProvenanceForLocalInitializer`,
   `applyMirPointerProvenanceForAssignment`, and the existing
   `applyMirPointerProvenanceForIndexAssignment` consumer comments; duplicated
@@ -323,11 +323,10 @@ pointer fields and pointer-array elements, and
 nested direct aggregate paths, and invalidation rows that
 make those facts stale.
 The pointer-like local initializer and assignment paths route those direct
-shapes through `updatePointerProvenanceFromMirOrFallback` and
-`updatePointerProvenanceAssignmentFromMirOrFallback`, using
-`mirPointerProvenanceCoversDirectLocalUpdate` to keep MIR-owned direct updates
-out of the older inline fallback logic while preserving the conservative
-fallback for unsupported shapes.
+shapes through `updatePointerProvenanceFromMir` and
+`updatePointerProvenanceAssignmentFromMir`. Both backends clear the destination
+first and repopulate it only from a matching MIR fact; unsupported or missing
+facts remain unknown and use conservative lowering.
 It also consumes explicit aggregate `field_path` facts for direct struct-literal
 aggregate initializers, direct aggregate field assignments, direct aggregate
 pointer-array element assignments, and direct same-struct aggregate copies.
@@ -388,24 +387,13 @@ Gate:
 
 ### Phase 5: retire duplicated AST inference
 
-Status: complete only for bounded LLVM direct-local cleanup slices. LLVM no
-longer calls `updatePointerGlobalProvenance` for direct pointer-like local
-initializer/assignment RHS forms that MIR `PointerProvenanceFact` owns through
-direct address provenance, noalias-wrapped direct address provenance, direct pointer-local copy provenance, the narrow
-direct raw-many local `.offset(0)` transfer for both global and local storage, a constant-index fixed local
-pointer-array element read, a direct aggregate pointer-field read, or a
-constant-index direct aggregate pointer-array element read, including those
-direct aggregate reads through same-struct copied aggregate locals or nested
-direct aggregate member paths, in the direct emission path. The direct emission
-path and aggregate-return summary collector now use the
-same `updatePointerProvenanceFromMirOrFallback` decision helper for pointer-like
-local initializers, and direct assignment emission uses the matching
-`updatePointerProvenanceAssignmentFromMirOrFallback` helper so reassignment
-source-point comments remain visible while summary collection stays silent.
-The direct-local MIR consumption branches and
-`mirPointerProvenanceCoversDirectLocalUpdate` wrappers also share the
-`directMirPointerContainerValueExpr` classifier instead of spelling out the
-covered direct pointer-container shape list inline.
+Status: complete for retirement of global pointer-local AST inference. C clears
+the destination and repopulates it only through MIR. LLVM does the same for
+every MIR-owned direct form; for non-MIR aggregate-alias shapes it retains only
+an existing `local_storage` proof, never a global proof. Missing facts for the
+direct address, copy, raw-many-zero, array-element, and aggregate-field subsets
+remain unknown and lower conservatively. The aggregate-return summary collector
+uses the same silent helper while emission preserves consumed-fact comments.
 For fixed pointer-array element initializers/assignments from MIR-owned direct
 pointer values, the shared LLVM element-cache helper now consumes the MIR
 element fact before fallback; missing element facts clear LLVM's element cache
@@ -440,7 +428,7 @@ later scalar derefs after the block, while block-local facts are still discarded
 with the lexical scope. The
 aggregate-return summary collection now sets
 `current_function` while collecting and route the same covered direct-local
-forms through `updatePointerProvenanceFromMirOrFallback`, which applies matching
+forms through `updatePointerProvenanceFromMir`, which applies matching
 MIR source-point facts through the mode-aware
 `applyMirPointerProvenanceFactsAtSourceWithMode`.
 MIR now unwraps noalias calls even when they sit below casts for the covered
@@ -543,7 +531,7 @@ longer in that fallback: MIR records the call-result local's normal
 falls back to race-tolerant lowering.
 C now keeps the fixed pointer-array destination-read boundary on the MIR-owned
 side: covered direct pointer-container shapes pass through
-`applyMirPointerProvenanceFactsAtSource` / the shared MIR-or-fallback helpers and
+`applyMirPointerProvenanceFactsAtSource` / the shared MIR admission helpers and
 the missing-MIR-fact tests, and missing destination facts leave the destination
 provenance unknown instead of using a backend-local fixed-array fallback.
 
@@ -570,15 +558,9 @@ and source-location diagnostics.
 
 Gate:
 
-- for the bounded direct-local cleanup, `rg` still finds
-  `updatePointerGlobalProvenance` only as a fallback helper, while the direct
-  initializer/assignment emission path and the covered aggregate summary
-  collector paths gate calls through `mirPointerProvenanceCoversDirectLocalUpdate`;
-- the Phase 1 inventory checker now enforces that LLVM keeps exactly one
-  `updatePointerGlobalProvenance` helper definition and exactly two remaining
-  fallback calls through the shared MIR-or-fallback wrappers, and that both C
-  and LLVM keep a single shared pointer-provenance MIR-or-fallback helper pair
-  with the current explicit call counts;
+- the Phase 1 inventory checker enforces zero LLVM
+  `updatePointerGlobalProvenance` definitions and calls, pins the C MIR-only
+  helpers, and allows exactly one LLVM local-only proof classifier;
 - the Phase 1 inventory checker anchors the C fixed pointer-array classifier so
   the MIR-owned pointer-container path remains visible;
 - the Phase 1 inventory checker anchors oversized integer-literal syntax

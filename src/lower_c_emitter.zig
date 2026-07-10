@@ -5446,10 +5446,6 @@ const CEmitter = struct {
         };
     }
 
-    fn mirPointerProvenanceCoversDirectLocalUpdate(self: *CEmitter, ty: ast.TypeExpr, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
-        return isPointerLikeGlobalType(self.resolveAliasType(ty)) and self.directMirPointerContainerValueExpr(expr, locals);
-    }
-
     fn directMirRawManyZeroOffsetExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirRawManyZeroOffsetExpr(inner.*, locals),
@@ -5544,32 +5540,30 @@ const CEmitter = struct {
             self.directMirAggregatePointerArrayElementExpr(expr, locals);
     }
 
-    fn updatePointerProvenanceFromMirOrFallback(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+    fn updatePointerProvenanceFromMir(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         if (!isPointerLikeGlobalType(self.resolveAliasType(ty))) {
             _ = self.mir_pointer_local_provenance.remove(name);
             return;
         }
 
         _ = self.mir_pointer_local_provenance.remove(name);
-        const matched = try self.applyMirPointerProvenanceFactsAtSource(name, null, initializer.span, locals);
-        if (matched or self.mirPointerProvenanceCoversDirectLocalUpdate(ty, initializer, locals)) return;
+        _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, initializer.span, locals);
     }
 
-    fn updatePointerProvenanceAssignmentFromMirOrFallback(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, value: ast.Expr, span: ast.Span, locals: *std.StringHashMap(LocalInfo)) !void {
+    fn updatePointerProvenanceAssignmentFromMir(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, value: ast.Expr, span: ast.Span, locals: *std.StringHashMap(LocalInfo)) !void {
         if (!isPointerLikeGlobalType(self.resolveAliasType(ty))) {
             _ = self.mir_pointer_local_provenance.remove(name);
             return;
         }
 
         _ = self.mir_pointer_local_provenance.remove(name);
-        const matched_value = try self.applyMirPointerProvenanceFactsAtSource(name, null, value.span, locals);
+        _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, value.span, locals);
         _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span, locals);
-        if (matched_value or self.mirPointerProvenanceCoversDirectLocalUpdate(ty, value, locals)) return;
     }
 
     fn applyMirPointerProvenanceForLocalInitializer(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         if (isPointerLikeGlobalType(self.resolveAliasType(ty))) {
-            try self.updatePointerProvenanceFromMirOrFallback(name, ty, initializer, locals);
+            try self.updatePointerProvenanceFromMir(name, ty, initializer, locals);
             return;
         }
         if (self.isKnownStructType(ty)) {
@@ -5660,7 +5654,7 @@ const CEmitter = struct {
         const info = locals.get(name) orelse return;
         const ty = info.source_ty orelse return;
         if (isPointerLikeGlobalType(self.resolveAliasType(ty))) {
-            try self.updatePointerProvenanceAssignmentFromMirOrFallback(name, ty, value, span, locals);
+            try self.updatePointerProvenanceAssignmentFromMir(name, ty, value, span, locals);
             return;
         }
         if (self.isKnownStructType(ty)) {

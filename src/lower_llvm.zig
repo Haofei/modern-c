@@ -1064,7 +1064,7 @@ const LlvmEmitter = struct {
         self.clearLocalArrayPointerElementsForLocal(name);
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = "" });
-        try self.updatePointerProvenanceFromMirOrFallback(name, ty, init, .silent);
+        try self.updatePointerProvenanceFromMirOrLocalProof(name, ty, init, .silent);
         try self.updateAggregatePointerAliasProvenance(name, ty, init);
         try self.updateLocalPointerArrayAliasProvenanceFromInit(name, ty, init);
         try self.updateAggregatePointerFieldProvenanceFromInit(name, ty, init);
@@ -2764,7 +2764,7 @@ const LlvmEmitter = struct {
         try self.emitAlloca(ptr, llvm_ty);
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
-        try self.updatePointerProvenanceFromMirOrFallback(name, ty, init, .emit_comment);
+        try self.updatePointerProvenanceFromMirOrLocalProof(name, ty, init, .emit_comment);
         try self.updateAggregatePointerAliasProvenance(name, ty, init);
         try self.updateLocalPointerArrayAliasProvenanceFromInit(name, ty, init);
         try self.updateAggregatePointerFieldProvenanceFromInit(name, ty, init);
@@ -2818,7 +2818,7 @@ const LlvmEmitter = struct {
                 const llvm_ty = try self.llvmType(slot.ty);
                 const value = try self.emitExprWithMirRangeTarget(value_expr, slot.ty, ident.text);
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, slot.ptr, try self.debugCallSuffix() });
-                try self.updatePointerProvenanceAssignmentFromMirOrFallback(ident.text, slot.ty, value_expr, span);
+                try self.updatePointerProvenanceAssignmentFromMirOrLocalProof(ident.text, slot.ty, value_expr, span);
                 _ = self.local_aggregate_pointer_aliases.remove(ident.text);
                 _ = self.local_pointer_array_aliases.remove(ident.text);
                 self.clearLocalSlicesBackedByArray(ident.text);
@@ -5699,59 +5699,36 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn updatePointerGlobalProvenance(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
-        if (!self.isPointerLikeType(ty)) {
-            _ = self.pointer_local_provenance.remove(name);
-            return;
-        }
-        if (self.pointerExprHasGlobalStorageProvenance(init)) {
-            try self.pointer_local_provenance.put(name, .global_storage);
-        } else if (self.pointerExprHasProvenLocalStorage(init)) {
-            try self.pointer_local_provenance.put(name, .local_storage);
-        } else {
-            // The syntactic ladder proves only tracked global/local storage;
-            // anything else clears the entry back to unknown -> atomic.
-            _ = self.pointer_local_provenance.remove(name);
-        }
-    }
-
     const MirFactCommentMode = enum {
         silent,
         emit_comment,
     };
 
-    fn updatePointerProvenanceFromMirOrFallback(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr, comment_mode: MirFactCommentMode) !void {
+    fn updatePointerProvenanceFromMirOrLocalProof(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr, comment_mode: MirFactCommentMode) !void {
         if (!self.isPointerLikeType(ty)) {
             _ = self.pointer_local_provenance.remove(name);
             return;
         }
-        // This includes direct calls covered by MIR pointer-return summaries.
-        // If that fact is later absent, the matching AST fallback was removed
-        // above, so the pointer remains unknown and dereferences lower safely.
+        _ = self.pointer_local_provenance.remove(name);
         if (try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, init.span, comment_mode)) return;
-        if (self.mirPointerProvenanceCoversDirectLocalUpdate(ty, init)) {
-            const matched = try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, init.span, comment_mode);
-            if (!matched) _ = self.pointer_local_provenance.remove(name);
-            return;
+        if (self.mirPointerProvenanceCoversDirectLocalUpdate(ty, init)) return;
+        if (self.pointerExprHasProvenLocalStorage(init)) {
+            try self.pointer_local_provenance.put(name, .local_storage);
         }
-        try self.updatePointerGlobalProvenance(name, ty, init);
     }
 
-    fn updatePointerProvenanceAssignmentFromMirOrFallback(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, value_expr: ast.Expr, span: ast.Span) !void {
+    fn updatePointerProvenanceAssignmentFromMirOrLocalProof(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, value_expr: ast.Expr, span: ast.Span) !void {
         if (!self.isPointerLikeType(ty)) {
             _ = self.pointer_local_provenance.remove(name);
             return;
         }
+        _ = self.pointer_local_provenance.remove(name);
         const matched_value = try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, value_expr.span, .emit_comment);
         _ = try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, span, .emit_comment);
-        if (matched_value) return;
-        if (self.mirPointerProvenanceCoversDirectLocalUpdate(ty, value_expr)) {
-            const direct_matched_value = try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, value_expr.span, .emit_comment);
-            _ = try self.applyMirPointerProvenanceFactsAtSourceWithMode(name, null, span, .emit_comment);
-            if (!direct_matched_value) _ = self.pointer_local_provenance.remove(name);
-            return;
+        if (matched_value or self.mirPointerProvenanceCoversDirectLocalUpdate(ty, value_expr)) return;
+        if (self.pointerExprHasProvenLocalStorage(value_expr)) {
+            try self.pointer_local_provenance.put(name, .local_storage);
         }
-        try self.updatePointerGlobalProvenance(name, ty, value_expr);
     }
 
     fn clearAggregatePointerAliasesToLocal(self: *LlvmEmitter, local_name: []const u8) void {
