@@ -712,10 +712,10 @@ Current producer boundary:
   returning arms plus fallthrough arms that contain only supported whole-local
   declarations, whole-local assignments, direct bounded nested aggregate member
   assignments, or direct constant-index fixed pointer-array element assignments
-  before a checked trailing return, or exhaustive all-fallthrough switch/`if`
-  joins before the same kind of checked trailing return, or bounded sequential
-  top-level exhaustive switch joins whose expanded paths stay within the
-  aggregate-return path cap;
+  before a checked trailing return, exhaustive all-fallthrough switch/`if`
+  joins before the same kind of checked trailing return, bounded sequential
+  top-level exhaustive switch joins, or bounded nested exhaustive switch/`if`
+  return paths whose expanded paths stay within the aggregate-return path cap;
 - return structs with scalar pointer fields, fixed arrays of scalar pointer
   elements, recursively nested struct literals, and fixed arrays of struct
   elements containing those shapes; dynamic-index reads and arrays nested beyond
@@ -729,8 +729,9 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
 - direct struct-literal returns and returns of tracked local aggregates;
 - straight-line local declaration and assignment prefixes;
 - exhaustive bool/wildcard switches with bounded return/fallthrough paths,
-  including all-fallthrough switch/`if` joins before a supported trailing return
-  and bounded sequential top-level switch joins;
+  including all-fallthrough switch/`if` joins before a supported trailing return,
+  bounded sequential top-level switch joins, and bounded nested switch/`if`
+  return paths;
 - intersection of field facts across paths, retaining a field only when every
   path agrees on `global_storage` and pointer shape.
 
@@ -765,10 +766,11 @@ are explicit fail-closed boundaries too: MIR emits no summary for the callee, so
 both backends keep the returned field unknown. Nested control flow inside an
 aggregate-return candidate path is also an explicit fail-closed boundary: MIR
 emits no summary for that callee, and C/LLVM keep the returned field
-conservative. Loop prefixes, `for` prefixes, deferred cleanup prefixes, nested
-CFG joins, and path-count-overflow CFG joins before a final aggregate return are
-handled the same way: they remain outside the producer domain, MIR emits no
-summary, and both backends keep returned fields conservative.
+conservative. Loop prefixes, `for` prefixes, deferred cleanup prefixes,
+unsupported nested CFG joins, and path-count-overflow CFG joins before a final
+aggregate return are handled the same way: they remain outside the producer
+domain, MIR emits no summary, and both backends keep returned fields
+conservative.
 
 ### Consumer and retirement rule
 
@@ -793,8 +795,8 @@ MIR-populated cache; the AST collector is gone.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
-4. Complete for named unsupported producer shapes: nested control flow, loop
-   prefixes, `for` prefixes, deferred cleanup prefixes, nested CFG joins,
+4. Complete for named unsupported producer shapes: loop prefixes, `for`
+   prefixes, deferred cleanup prefixes, unsupported nested CFG joins,
    path-count-overflow CFG joins, exported aggregate returns, mixed paths,
    prefix calls, fallthrough dynamic-index writes, dereference writes, nested
    pointer arrays, and nested arrays of pointer-bearing structs beyond fixed
