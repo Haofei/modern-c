@@ -677,6 +677,35 @@ test "LLVM consumes MIR aggregate-return facts through straight-line local value
     try expectContains(missing_body, "load atomic i32, ptr %");
 }
 
+test "LLVM consumes MIR aggregate-return facts across exhaustive direct-return branches" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn branched_holder(flag: bool) -> Holder {
+        \\    if flag { return .{ .ptr = &shared_counter, .tag = 1 }; } else { return .{ .ptr = &shared_counter, .tag = 2 }; }
+        \\}
+        \\
+        \\fn use_branched_holder(flag: bool) -> u32 {
+        \\    let holder: Holder = branched_holder(flag);
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_aggregate_return_branch_mir_fact.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_branched_holder");
+    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_branched_holder callee=branched_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_aggregate_return_branch_mir_fact.mc", source, "branched_holder", "ptr", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_branched_holder");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_branched_holder callee=branched_holder field=ptr");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+}
+
 test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/spec/data_race_semantics.mc", std.testing.allocator, .limited(1 << 20));
     defer std.testing.allocator.free(source);

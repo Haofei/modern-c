@@ -979,7 +979,7 @@ fn collectDirectAggregateReturnPointerFacts(
         };
         const struct_summary = structs.get(struct_name) orelse continue;
         const body = fn_decl.body orelse continue;
-        const literal_fields = (try directOrStraightLineLocalAggregateReturnLiteralFields(allocator, body)) orelse continue;
+        const literal_paths = (try aggregateReturnLiteralPaths(allocator, body)) orelse continue;
         if (aggregateReturnHasUnmodeledPointerField(struct_summary, enums, structs, packed_bits, aliases)) continue;
 
         try summaries.append(allocator, .{
@@ -988,17 +988,23 @@ fn collectDirectAggregateReturnPointerFacts(
         });
         for (struct_summary.fields) |field| {
             const shape = pointerShapeFromValueType(valueTypeFromTypeAlias(field.ty, enums, structs, packed_bits, aliases)) orelse continue;
-            const value = aggregateLiteralFieldValue(literal_fields, field.name.text) orelse continue;
-            _ = directGlobalAddressStorageExpr(value, globals, pointer_return_summaries, shape) orelse continue;
-            const field_path = try allocator.dupe(u8, field.name.text);
-            errdefer allocator.free(field_path);
-            try pointer_facts.append(allocator, .{
-                .callee = fn_decl.name.text,
-                .field_path = field_path,
-                .provenance = .global_storage,
-                .pointer_shape = shape,
-                .source = .{ .line = value.span.line, .column = value.span.column },
-            });
+            var source: ?SourcePoint = null;
+            for (literal_paths.items()) |literal_fields| {
+                const value = aggregateLiteralFieldValue(literal_fields, field.name.text) orelse break;
+                _ = directGlobalAddressStorageExpr(value, globals, pointer_return_summaries, shape) orelse break;
+                if (source == null) source = .{ .line = value.span.line, .column = value.span.column };
+            } else {
+                const fact_source = source orelse continue;
+                const field_path = try allocator.dupe(u8, field.name.text);
+                errdefer allocator.free(field_path);
+                try pointer_facts.append(allocator, .{
+                    .callee = fn_decl.name.text,
+                    .field_path = field_path,
+                    .provenance = .global_storage,
+                    .pointer_shape = shape,
+                    .source = fact_source,
+                });
+            }
         }
     }
 
@@ -1006,6 +1012,73 @@ fn collectDirectAggregateReturnPointerFacts(
         .summaries = try summaries.toOwnedSlice(allocator),
         .pointer_facts = try pointer_facts.toOwnedSlice(allocator),
     };
+}
+
+const AggregateReturnLiteralPaths = struct {
+    paths: [8][]ast.StructLiteralField = undefined,
+    len: usize = 0,
+
+    fn append(self: *AggregateReturnLiteralPaths, fields: []ast.StructLiteralField) bool {
+        if (self.len == self.paths.len) return false;
+        self.paths[self.len] = fields;
+        self.len += 1;
+        return true;
+    }
+
+    fn items(self: *const AggregateReturnLiteralPaths) []const []ast.StructLiteralField {
+        return self.paths[0..self.len];
+    }
+};
+
+fn aggregateReturnLiteralPaths(allocator: std.mem.Allocator, body: ast.Block) !?AggregateReturnLiteralPaths {
+    if (body.items.len == 1) {
+        if (body.items[0].kind == .@"switch") {
+            const switch_node = body.items[0].kind.@"switch";
+            if (!aggregateReturnSwitchIsExhaustive(switch_node)) return null;
+            var paths: AggregateReturnLiteralPaths = .{};
+            for (switch_node.arms) |arm| {
+                const arm_block = switch (arm.body) {
+                    .block => |block| block,
+                    .expr => return null,
+                };
+                const fields = (try directOrStraightLineLocalAggregateReturnLiteralFields(allocator, arm_block)) orelse return null;
+                if (!paths.append(fields)) return null;
+            }
+            return paths;
+        }
+    }
+
+    const fields = (try directOrStraightLineLocalAggregateReturnLiteralFields(allocator, body)) orelse return null;
+    var paths: AggregateReturnLiteralPaths = .{};
+    _ = paths.append(fields);
+    return paths;
+}
+
+fn aggregateReturnSwitchIsExhaustive(node: ast.Switch) bool {
+    for (node.arms) |arm| for (arm.patterns) |pattern| {
+        if (pattern.kind == .wildcard) return true;
+    };
+    if (node.arms.len != 2) return false;
+    var saw_true = false;
+    var saw_false = false;
+    for (node.arms) |arm| {
+        if (arm.patterns.len != 1) return false;
+        const value = switch (arm.patterns[0].kind) {
+            .literal => |expr| switch (expr.kind) {
+                .bool_literal => |bool_value| bool_value,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (value) {
+            if (saw_true) return false;
+            saw_true = true;
+        } else {
+            if (saw_false) return false;
+            saw_false = true;
+        }
+    }
+    return saw_true and saw_false;
 }
 
 fn directOrStraightLineLocalAggregateReturnLiteralFields(allocator: std.mem.Allocator, body: ast.Block) !?[]ast.StructLiteralField {
