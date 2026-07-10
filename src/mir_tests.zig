@@ -1560,15 +1560,23 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    }
         \\    return holder;
         \\}
+        \\fn all_fallthrough_switch_holder(choice: u32) -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 27 };
+        \\    switch choice {
+        \\        0 => { holder.ptr = &shared_counter; }
+        \\        _ => { holder.ptr = &shared_counter; }
+        \\    }
+        \\    return holder;
+        \\}
         \\fn defer_prefix_holder() -> Holder {
         \\    defer cleanup();
-        \\    return .{ .ptr = &shared_counter, .tag = 27 };
+        \\    return .{ .ptr = &shared_counter, .tag = 28 };
         \\}
         \\fn for_prefix_holder(values: [2]u32) -> Holder {
         \\    for value in values {
         \\        let ignored: u32 = value;
         \\    }
-        \\    return .{ .ptr = &shared_counter, .tag = 28 };
+        \\    return .{ .ptr = &shared_counter, .tag = 29 };
         \\}
         \\fn trailing_nested_field_updated_holder(choice: u32) -> Outer {
         \\    var holder: Outer = .{ .inner = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &shared_counter } }, .tag = 17 };
@@ -1672,6 +1680,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "loop_prefix_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "sequential_switch_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "if_join_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "all_fallthrough_switch_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "defer_prefix_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "for_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_nested_field_updated_holder"));
@@ -1689,6 +1698,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_field_updated_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_array_updated_holder", "ptrs[0]", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "if_join_holder", "ptr", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "all_fallthrough_switch_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_nested_field_updated_holder", "inner.ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_deep_nested_field_updated_holder", "middle.leaf.ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "mixed_branched_holder", "ptr", .global_storage));

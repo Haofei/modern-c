@@ -712,7 +712,7 @@ Current producer boundary:
   returning arms plus fallthrough arms that contain only supported whole-local
   declarations, whole-local assignments, direct bounded nested aggregate member
   assignments, or direct constant-index fixed pointer-array element assignments
-  before a checked trailing return, or exhaustive all-fallthrough bool/`if`
+  before a checked trailing return, or exhaustive all-fallthrough switch/`if`
   joins before the same kind of checked trailing return;
 - return structs with scalar pointer fields, fixed arrays of scalar pointer
   elements, recursively nested struct literals, and fixed arrays of struct
@@ -727,7 +727,7 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
 - direct struct-literal returns and returns of tracked local aggregates;
 - straight-line local declaration and assignment prefixes;
 - exhaustive bool/wildcard switches with bounded return/fallthrough paths,
-  including all-fallthrough bool/`if` joins before a supported trailing return;
+  including all-fallthrough switch/`if` joins before a supported trailing return;
 - intersection of field facts across paths, retaining a field only when every
   path agrees on `global_storage` and pointer shape.
 
