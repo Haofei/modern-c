@@ -1041,15 +1041,26 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
             // cannot see this: the move Context does not carry local pointer-var types). A
             // derived alias (`p = f(&o)`, `p = &o.field`) is NOT flagged, so reading its
             // non-move pointee (`p.* + 1` on a `*mut u32`) stays an ordinary borrow.
-            var full_alias_referent: ?[]const u8 = immediateFullDerefMoveReferent(self, inner.*, state, aliases);
+            const direct_subplace = fullDerefMoveSubplace(self, inner.*, state, aliases);
+            var full_alias_referent: ?[]const u8 = if (direct_subplace) |pp| pp.key else immediateFullDerefMoveReferent(self, inner.*, state, aliases);
+            var full_alias_place: ?MovePlace = if (direct_subplace) |pp| pp.place else null;
             switch (inner.*.kind) {
                 .ident => |id| if (state.get(id.text)) |s| {
-                    if (s.full_deref_alias) full_alias_referent = s.alias_of;
+                    if (s.full_deref_alias) {
+                        full_alias_referent = s.alias_of;
+                        full_alias_place = s.alias_place;
+                    }
                 },
                 else => {},
             }
             if (full_alias_referent) |referent| {
-                if (isMoveSubplaceKey(referent)) {
+                if (full_alias_place) |place| {
+                    if (place.isSubplace()) {
+                        consumeTrackedMovePlace(self, referent, place, expr.span, state);
+                    } else {
+                        consumeTrackedMoveBinding(self, referent, expr.span, state);
+                    }
+                } else if (isMoveSubplaceKey(referent)) {
                     consumeTrackedMoveSubplace(self, referent, expr.span, state);
                 } else {
                     consumeTrackedMoveBinding(self, referent, expr.span, state);
@@ -1212,6 +1223,25 @@ fn consumeTrackedMoveSubplace(self: *Checker, key: []const u8, span: diagnostics
             self.oom = true;
         };
     }
+}
+
+fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+    const root = state.get(place.root) orelse return;
+    if (!root.live) {
+        self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` field after its owner was moved");
+        return;
+    }
+    if (deferredBorrowConflictsWithTrackedPlace(place, state)) {
+        self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` field is borrowed by a deferred expression and cannot be moved before the defer runs");
+        return;
+    }
+    if (stateContainsMovePlace(place, state) or stateHasConflictingMovePlace(place, state)) {
+        self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` field after it was moved out");
+        return;
+    }
+    state.put(key, .{ .live = false, .span = span, .place = place }) catch {
+        self.oom = true;
+    };
 }
 
 fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
