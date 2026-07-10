@@ -849,6 +849,42 @@ test "LLVM consumes MIR trailing nested aggregate-return field assignment facts"
     try expectContains(missing_body, "load atomic i32, ptr %");
 }
 
+test "LLVM consumes MIR trailing deep aggregate-return field assignment facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Leaf { ptr: *mut u32 }
+        \\struct Middle { leaf: Leaf }
+        \\struct Outer { middle: Middle }
+        \\
+        \\fn returned_outer(choice: u32) -> Outer {
+        \\    var outer: Outer = .{ .middle = .{ .leaf = .{ .ptr = &shared_counter } } };
+        \\    switch choice {
+        \\        0 => { return .{ .middle = .{ .leaf = .{ .ptr = &shared_counter } } }; }
+        \\        _ => { outer.middle.leaf.ptr = &shared_counter; }
+        \\    }
+        \\    return outer;
+        \\}
+        \\
+        \\fn use_returned_outer(choice: u32) -> u32 {
+        \\    let outer: Outer = returned_outer(choice);
+        \\    return outer.middle.leaf.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_trailing_deep_aggregate_return_field_assignment_mir_fact.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_outer");
+    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_outer callee=returned_outer field=middle.leaf.ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_trailing_deep_aggregate_return_field_assignment_mir_fact.mc", source, "returned_outer", "middle.leaf.ptr", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_returned_outer");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_returned_outer callee=returned_outer field=middle.leaf.ptr");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+}
+
 test "LLVM consumes MIR aggregate-return facts through straight-line local values" {
     const source =
         \\global shared_counter: u32 = 0;

@@ -1519,6 +1519,17 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    }
         \\    return holder;
         \\}
+        \\struct Leaf { ptr: *mut u32 }
+        \\struct Middle { leaf: Leaf }
+        \\struct DeepOuter { middle: Middle }
+        \\fn trailing_deep_nested_field_updated_holder(choice: u32) -> DeepOuter {
+        \\    var holder: DeepOuter = .{ .middle = .{ .leaf = .{ .ptr = &shared_counter } } };
+        \\    switch choice {
+        \\        0 => { return .{ .middle = .{ .leaf = .{ .ptr = &shared_counter } } }; }
+        \\        _ => { holder.middle.leaf.ptr = &shared_counter; }
+        \\    }
+        \\    return holder;
+        \\}
         \\
         \\fn helper() -> void {}
         \\fn call_before_return() -> Holder {
@@ -1564,6 +1575,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_field_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_array_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_nested_field_updated_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_deep_nested_field_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "unknown_holder"));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "direct_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "local_holder", "ptr", .global_storage));
@@ -1575,6 +1587,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_field_updated_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_array_updated_holder", "ptrs[0]", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_nested_field_updated_holder", "inner.ptr", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_deep_nested_field_updated_holder", "middle.leaf.ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "mixed_branched_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "unknown_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "call_before_return"));
@@ -1592,6 +1605,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=direct_holder field=ptr provenance=global_storage pointer_kind=single") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=pointer_array_holder field=ptrs[0] provenance=global_storage pointer_kind=single") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=nested_holder field=inner.ptrs[0] provenance=global_storage pointer_kind=single") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=trailing_deep_nested_field_updated_holder field=middle.leaf.ptr provenance=global_storage pointer_kind=single") != null);
 }
 
 test "MIR records direct internal global pointer return provenance in callers" {

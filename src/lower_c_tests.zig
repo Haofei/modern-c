@@ -498,6 +498,40 @@ test "lower-c consumes MIR trailing nested aggregate-return field assignment fac
     try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
+test "lower-c consumes MIR trailing deep aggregate-return field assignment facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Leaf { ptr: *mut u32 }
+        \\struct Middle { leaf: Leaf }
+        \\struct Outer { middle: Middle }
+        \\
+        \\fn returned_outer(choice: u32) -> Outer {
+        \\    var outer: Outer = .{ .middle = .{ .leaf = .{ .ptr = &shared_counter } } };
+        \\    switch choice {
+        \\        0 => { return .{ .middle = .{ .leaf = .{ .ptr = &shared_counter } } }; }
+        \\        _ => { outer.middle.leaf.ptr = &shared_counter; }
+        \\    }
+        \\    return outer;
+        \\}
+        \\
+        \\fn use_returned_outer(choice: u32) -> u32 {
+        \\    let outer: Outer = returned_outer(choice);
+        \\    return outer.middle.leaf.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_trailing_deep_aggregate_return_field_assignment_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_outer callee=returned_outer field=middle.leaf.ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_trailing_deep_aggregate_return_field_assignment_mir_fact.mc", source, "returned_outer", "middle.leaf.ptr", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_outer callee=returned_outer field=middle.leaf.ptr");
+    try expectContains(missing_output.items, "mc_race_load_u32");
+}
+
 fn expectTaggedUnionRaceCopySupported(source_name: []const u8, source: []const u8) !void {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
