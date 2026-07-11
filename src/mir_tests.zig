@@ -596,6 +596,42 @@ test "MIR const_get fixed indexing has no bounds trap edge" {
     try std.testing.expectEqual(@as(usize, 1), no_lang_count);
 }
 
+test "MIR records typed call target facts for reductions" {
+    const source =
+        \\fn checked(xs: []const u32) -> Result<u32, Overflow> {
+        \\    return reduce.sum_checked<u32>(xs);
+        \\}
+        \\
+        \\fn left(xs: []const f64) -> f64 {
+        \\    return reduce.sum_left<f64>(xs);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_reduce_call_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const checked = functionByName(typed_mir, "checked").?;
+    try std.testing.expectEqual(@as(usize, 1), checked.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.reduce_sum_checked, checked.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("Result", checked.call_target_facts[0].result_ty.name());
+
+    const left = functionByName(typed_mir, "left").?;
+    try std.testing.expectEqual(@as(usize, 1), left.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.reduce_sum_left, left.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("f64", left.call_target_facts[0].result_ty.name());
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+}
+
 test "MIR verifier reports no_lang_trap, fallthrough, contract, and irq findings" {
     const source =
         \\fn missing_return(flag: bool) -> u32 {

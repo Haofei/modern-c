@@ -4490,6 +4490,8 @@ const FunctionBuilder = struct {
                 const is_dyn_dispatch = self.isDynDispatchMember(node.callee.*);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
+                else if (reduceCallKind(node.callee.*) != null)
+                    self.exprType(expr)
                 else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
                 if (reduceCallKind(node.callee.*)) |kind| {
@@ -6908,8 +6910,8 @@ const FunctionBuilder = struct {
                 ty
             else if (mmioMapCallPayloadType(node)) |ty|
                 .{ .nullable_pointer = .{ .kind = .single, .mutability = .none, .child = typeText(ty) } }
-            else if (reduceCallReturnTypeExpr(node)) |ty|
-                valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
+            else if (reduceCallValueType(node, self.enums, self.structs, self.packed_bits, self.aliases)) |ty|
+                ty
             else if (self.isDynDispatchMember(node.callee.*))
                 .unknown
             else if (directCalleeName(node.callee.*)) |callee|
@@ -7279,6 +7281,15 @@ fn reduceCallReturnTypeExpr(call: anytype) ?ast.TypeExpr {
     return switch (kind) {
         .sum_checked => null,
         .sum_left, .sum_fast => call.type_args[0],
+    };
+}
+
+fn reduceCallValueType(call: anytype, enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr)) ?ValueType {
+    const kind = reduceCallKind(call.callee.*) orelse return null;
+    if (call.type_args.len != 1) return null;
+    return switch (kind) {
+        .sum_checked => .{ .result = .{ .ok = typeText(call.type_args[0]), .err = "Overflow" } },
+        .sum_left, .sum_fast => valueTypeFromTypeAlias(call.type_args[0], enums, structs, packed_bits, aliases),
     };
 }
 
