@@ -2349,38 +2349,6 @@ pub fn placeExprIsMoved(self: *Checker, expr: ast.Expr, state: *const std.String
     return stateHasMovedPlaceOrConflict(pp.place, state);
 }
 
-fn concretePlaceHasWildcardMove(key: []const u8, state: *const std.StringHashMap(MoveSlot)) bool {
-    var it = state.iterator();
-    while (it.next()) |entry| {
-        if (std.mem.eql(u8, entry.key_ptr.*, key)) continue;
-        if (entry.value_ptr.alias_of != null or entry.value_ptr.type_only or isPureIndexFactSlot(entry.value_ptr.*)) continue;
-        if (wildcardMoveKeyMatchesConcrete(entry.key_ptr.*, key)) return true;
-    }
-    return false;
-}
-
-fn wildcardMoveConflictsWithConcreteSubplace(wildcard_key: []const u8, state: *const std.StringHashMap(MoveSlot)) bool {
-    var it = state.iterator();
-    while (it.next()) |entry| {
-        if (std.mem.eql(u8, entry.key_ptr.*, wildcard_key)) continue;
-        if (entry.value_ptr.alias_of != null or entry.value_ptr.type_only or isPureIndexFactSlot(entry.value_ptr.*)) continue;
-        if (wildcardMoveKeyMatchesConcrete(wildcard_key, entry.key_ptr.*)) return true;
-    }
-    return false;
-}
-
-fn wildcardMoveKeyMatchesConcrete(wildcard_key: []const u8, concrete_key: []const u8) bool {
-    const marker = std.mem.indexOf(u8, wildcard_key, "[*]") orelse std.mem.indexOf(u8, wildcard_key, "[$") orelse return false;
-    const prefix = wildcard_key[0..marker];
-    if (!std.mem.startsWith(u8, concrete_key, prefix)) return false;
-    if (concrete_key.len <= prefix.len or concrete_key[prefix.len] != '[') return false;
-    const close_rel = std.mem.indexOfScalar(u8, concrete_key[prefix.len..], ']') orelse return false;
-    const concrete_suffix = concrete_key[prefix.len + close_rel + 1 ..];
-    const wildcard_close_rel = std.mem.indexOfScalar(u8, wildcard_key[marker..], ']') orelse return false;
-    const wildcard_suffix = wildcard_key[marker + wildcard_close_rel + 1 ..];
-    return std.mem.eql(u8, concrete_suffix, wildcard_suffix);
-}
-
 fn stateContainsMovePlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
@@ -3366,7 +3334,7 @@ fn aliasIndexExprType(self: *Checker, expr: ast.Expr, state: *const std.StringHa
 fn aliasSlotReferentMoved(slot: MoveSlot, state: *const std.StringHashMap(MoveSlot)) bool {
     const referent = slot.alias_of orelse return false;
     const place = slot.alias_place orelse movedReferentPlaceFromState(referent, state);
-    if (place) |typed| return referentPlaceMoved(referent, typed, state);
+    if (place) |typed| return referentPlaceMoved(typed, state);
     if (state.get(referent)) |r| {
         if (!r.live) return true;
     }
@@ -3379,19 +3347,11 @@ fn movedReferentPlaceFromState(referent: []const u8, state: *const std.StringHas
     return slot.place;
 }
 
-fn referentPlaceMoved(referent: []const u8, place: ?MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
-    if (place) |typed| {
-        if (state.get(typed.root)) |root| {
-            if (!root.live) return true;
-        }
-        return stateHasMovedPlaceChildOrConflict(typed, state);
+fn referentPlaceMoved(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+    if (state.get(place.root)) |root| {
+        if (!root.live) return true;
     }
-    return legacySubplaceReferentMoved(referent, state);
-}
-
-fn legacySubplaceReferentMoved(referent: []const u8, state: *const std.StringHashMap(MoveSlot)) bool {
-    return isMoveSubplaceKey(referent) and
-        (state.contains(referent) or concretePlaceHasWildcardMove(referent, state) or wildcardMoveConflictsWithConcreteSubplace(referent, state));
+    return stateHasMovedPlaceChildOrConflict(place, state);
 }
 
 pub fn aliasPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?[]const u8 {
@@ -3636,9 +3596,6 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
             self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after one of its fields or elements was moved out");
             return;
         }
-    } else if (referentPlaceMoved(referent, null, state)) {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` field or array element after it was moved out");
-        return;
     } else if (state.get(referent)) |referent_slot| {
         if (referent_slot.place != null and hasMovedSubplace(referent_slot.place.?, state)) {
             self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after one of its fields or elements was moved out");
