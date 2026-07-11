@@ -19,6 +19,7 @@ const lower_c_type = @import("lower_c_type.zig");
 const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
 const isDeclassifyCall = ast_query.isDeclassifyCall;
+const isPhysCall = ast_query.isPhysCall;
 const isBitcastCallee = lower_c_expr.isBitcastCallee;
 const isBitcastCall = lower_c_expr.isBitcastCall;
 const isIdentNamed = ast_query.isIdentNamed;
@@ -528,7 +529,7 @@ pub fn emitVaCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Local
 }
 
 pub fn emitPhysCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    if (!isIdentNamed(call.callee.*, "phys")) return false;
+    if (!isPhysCall(call.callee.*)) return false;
     if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
     try ctx.out.appendSlice(ctx.allocator, "((uintptr_t)(");
     try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);

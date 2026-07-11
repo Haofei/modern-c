@@ -429,6 +429,11 @@ pub fn resultConstructorCallTag(call: anytype) ?[]const u8 {
     return null;
 }
 
+/// Whether a callee names the `phys` physical-address constructor.
+pub fn isPhysCall(callee: ast.Expr) bool {
+    return isIdentNamed(callee, "phys");
+}
+
 /// The payload type and mode tag of a `DmaBuf<T, .mode>` type, or null.
 pub const DmaBufInfo = struct {
     payload: ast.TypeExpr,

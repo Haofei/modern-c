@@ -111,10 +111,12 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn isDeclassifyCallee(",
             "pub fn isDeclassifyCall(",
             "pub fn resultConstructorCallTag(",
+            "pub fn isPhysCall(",
         ],
         "src/lower_llvm_query.zig": [
             "ast_query.rawLoadCallReturnType(call)",
             "ast_query.rawPtrCallReturnType(call)",
+            "ast_query.isPhysCall(call.callee.*)",
         ],
         "src/lower_llvm.zig": [
             "fn exprType(",
@@ -707,6 +709,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/lower_llvm_query.zig": {
         "pub fn isDeclassifyCall(": 0,
         "pub fn isResultConstructorCall(": 0,
+        "pub fn isPhysCall(": 0,
     },
     "src/lower_c_emitter.zig": {
         "fn requireMirBoundsFact": 1,

@@ -96,7 +96,7 @@ pub fn packedBitsClearMask(info: PackedBitsInfo, bit_index: usize) ?u64 {
 }
 
 pub fn builtinCallReturnType(call: anytype) ?ast.TypeExpr {
-    if (isPhysCall(call.callee.*) and call.type_args.len == 0 and call.args.len == 1) return simpleType(call.callee.*.span, "PAddr");
+    if (ast_query.isPhysCall(call.callee.*) and call.type_args.len == 0 and call.args.len == 1) return simpleType(call.callee.*.span, "PAddr");
     if (isAssumeNoaliasCall(call)) return null;
     if (ast_query.rawLoadCallReturnType(call)) |ty| return ty;
     if (ast_query.rawPtrCallReturnType(call)) |ty| return ty;
@@ -113,14 +113,6 @@ fn isAssumeNoaliasCallee(callee: ast.Expr) bool {
         .member => |member| std.mem.eql(u8, member.name.text, "assume_noalias_unchecked") and ast_query.isIdentNamed(member.base.*, "compiler"),
         .ident => |ident| std.mem.eql(u8, ident.text, "compiler.assume_noalias_unchecked") or std.mem.eql(u8, ident.text, "assume_noalias_unchecked"),
         .grouped => |inner| isAssumeNoaliasCallee(inner.*),
-        else => false,
-    };
-}
-
-pub fn isPhysCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, "phys"),
-        .grouped => |inner| isPhysCall(inner.*),
         else => false,
     };
 }
