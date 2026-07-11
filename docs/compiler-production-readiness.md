@@ -650,6 +650,16 @@ deliberate: an MIR-owned return summary prevents LLVM from rebuilding a removed
 fact from the AST. Arbitrary, unsupported nested, and above-cap path-count-overflow CFG
 joins remain an open matrix row.
 
+Next actionable slices:
+
+| Slice | Action | Acceptance evidence | Not enough |
+|---|---|---|---|
+| Scalar deref default audit | Inventory every C/LLVM scalar pointer dereference path and classify it as positive local/raw/MMIO proof, race-tolerant default, or diagnostic rejection. | Machine-checkable inventory plus tests proving absent provenance facts do not produce plain racing scalar loads/stores. | Adding another direct syntactic provenance shape without proving the default for missing/escaped facts. |
+| Escaped pointer boundary | Add a fail-closed rule for pointer locals whose address, containing aggregate, or callback path escapes before dereference. | C and LLVM fixtures for escaped local pointer, escaped aggregate pointer field, indirect call escape, and missing-fact fallback. | Treating one escaped expression spelling as unknown while leaving unnamed escape routes untracked. |
+| Returned pointer facts | Define MIR facts or conservative defaults for scalar pointer returns through direct calls, local function aliases, callback/function-pointer calls, and exported ambiguity. | MIR artifact rows plus C/LLVM positive and missing-fact tests for direct, aliased, callback, and exported-return paths. | Reintroducing backend-local function-body scans. |
+| Aggregate-return CFG decision | Either implement a bounded CFG join for aggregate-return pointer facts or document every unsupported CFG class as conservative with fixtures. | One named CFG join implementation, or an unsupported-CFG matrix with negative MIR/C/LLVM tests for each class. | Continuing to add one-off transparent prefix cases without closing the arbitrary-CFG policy. |
+| Fallback register gate | Make the semantic-facts inventory reject any new backend-local global/local provenance entry point unless it is listed in this matrix. | Inventory script failure on an injected fallback name or exact-count drift. | Manual review-only tracking. |
+
 #### Typed Semantic Fact Table / Typed MIR
 
 Purpose: make typed semantic facts and MIR-owned state the compiler's authority
@@ -686,6 +696,16 @@ open for every matrix row above. See
 The aggregate-return fact family is now the only source for LLVM returned
 pointer-field facts; unsupported forms stay conservative instead of using an
 LLVM collector.
+
+Next actionable slices:
+
+| Slice | Action | Acceptance evidence | Not enough |
+|---|---|---|---|
+| Semantic inference inventory | Extend the inventory from provenance helpers to every backend semantic inference that affects type, ABI, representation, bounds, integer defaulting, call target, ownership, or effect lowering. | Generated inventory with named owner, consumer, migration status, and fail-closed policy for each inference family. | A prose list without a failing gate. |
+| Bounds/range fact family | Move one bounds/range decision family into typed MIR facts with stale/missing-fact behavior. | Producer tests, C/LLVM consumer tests, and mutation tests showing deleted/stale facts preserve checks or reject rather than eliding checks. | Only adding more range reasoning inside one backend. |
+| Integer/default fact family | Represent integer defaulting or representation-sensitive lowering decisions as typed facts consumed by both backends. | Fact artifact rows plus parity tests proving C and LLVM consume the same decision. | Backend-specific integer inference that happens to match today. |
+| Representation-fact hardening | Turn remaining representation admission checks into exact typed-fact consumers with missing-fact gates. | Tests that removing a required representation fact causes conservative fallback or a diagnostic on both backends. | More positive representation tests without negative missing-fact coverage. |
+| Backend AST-inference budget | Set a shrinking exact-count budget for accepted backend AST inference families. | Inventory exact counts and a documented target count for the next slice. | Saying "migrate more later" without a measurable count. |
 
 #### CFG/Place-Based Move Checker
 
@@ -732,6 +752,16 @@ string-key compatibility path or introduce a CFG/worklist boundary; additional
 symbolic-expression, stale-alias, typed-referent, deferred-borrow, or read-side
 alias fixtures alone are
 evidence-only.
+
+Next actionable slices:
+
+| Slice | Action | Acceptance evidence | Not enough |
+|---|---|---|---|
+| MovePlace identity hardening | Replace one remaining string-key compatibility path with typed `MovePlace` identity, keeping the string key only as a lookup/cache artifact. | Focused tests showing the removed string path cannot accept stale alias, field, deref, or array-element misuse; inventory or exact-count gate for the retired helper. | Adding another typed comparison while the old string path can still decide correctness. |
+| CFG skeleton | Introduce explicit CFG blocks and a worklist state type for move analysis, even if only a small statement subset routes through it first. | Unit tests for branch join, loop backedge, and early exit on the first routed subset; old checker remains only as compatibility for unrouted forms. | Refactoring statement traversal without CFG join semantics. |
+| Dynamic-place policy | Define stable dynamic-place projections versus unknown wildcard projections and route at least one existing wildcard conflict through the typed policy. | Tests for stable repeated index, genuinely unknown index, mixed index, and stale dynamic alias behavior. | More wildcard fixtures that do not distinguish stable from unknown indexes. |
+| Pointer-pointee boundary | Decide whether pointer pointees are tracked places or a rejected unsupported channel for move resources. | Either typed deref-place tests, or complete `E_MOVE_ARRAY_UNSUPPORTED`/equivalent diagnostics for unsupported pointer-pointee movement. | Partial rejection that leaves one pointer spelling accepted. |
+| Unsupported-channel inventory | List globals, ABI boundaries, multi-element non-nameable arrays, arbitrary pointers, and aggregate containment channels with accept/reject policy. | Inventory plus fixtures for each channel. | A single broad statement that arrays/pointers are unsupported. |
 
 ### Production-Ready Exit Rule
 
