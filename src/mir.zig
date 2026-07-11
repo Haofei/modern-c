@@ -897,10 +897,10 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
     for (module.functions) |function| {
         for (function.blocks) |block| for (block.instructions) |instruction| {
             const kind = callTargetKindForInstruction(instruction) orelse continue;
-            if (!functionHasMatchingCallTargetFact(function, kind, instruction)) return error.InvalidMirCallTargetFacts;
+            if (countMatchingCallTargetFacts(function, kind, instruction) != 1) return error.InvalidMirCallTargetFacts;
         };
         for (function.call_target_facts) |fact| {
-            if (!functionHasMatchingCallTargetInstruction(function, fact)) return error.InvalidMirCallTargetFacts;
+            if (countMatchingCallTargetInstructions(function, fact) != 1) return error.InvalidMirCallTargetFacts;
         }
     }
 }
@@ -914,23 +914,25 @@ fn callTargetKindForInstruction(instruction: Instruction) ?CallTargetKind {
     return null;
 }
 
-fn functionHasMatchingCallTargetFact(function: Function, kind: CallTargetKind, instruction: Instruction) bool {
+fn countMatchingCallTargetFacts(function: Function, kind: CallTargetKind, instruction: Instruction) usize {
+    var count: usize = 0;
     for (function.call_target_facts) |fact| {
         if (fact.kind != kind) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (fact.source.line == instruction.line and fact.source.column == instruction.column) return true;
+        if (fact.source.line == instruction.line and fact.source.column == instruction.column) count += 1;
     }
-    return false;
+    return count;
 }
 
-fn functionHasMatchingCallTargetInstruction(function: Function, fact: CallTargetFact) bool {
+fn countMatchingCallTargetInstructions(function: Function, fact: CallTargetFact) usize {
+    var count: usize = 0;
     for (function.blocks) |block| for (block.instructions) |instruction| {
         const kind = callTargetKindForInstruction(instruction) orelse continue;
         if (kind != fact.kind) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (fact.source.line == instruction.line and fact.source.column == instruction.column) return true;
+        if (fact.source.line == instruction.line and fact.source.column == instruction.column) count += 1;
     };
-    return false;
+    return count;
 }
 
 fn functionHasMatchingIntegerFact(function: Function, instruction: Instruction) bool {

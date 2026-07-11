@@ -20,8 +20,6 @@ const byteViewCallReturnType = ast_query.byteViewCallReturnType;
 const reflectionValueCallReturnType = ast_query.reflectionValueCallReturnType;
 const atomicCallMemberOp = ast_query.atomicCallMemberOp;
 const maybeUninitCallMemberOp = ast_query.maybeUninitCallMemberOp;
-const reduceCallKind = ast_query.reduceCallKind;
-const reduceCallOpName = ast_query.reduceCallOpName;
 const constGetCallTarget = ast_query.constGetCallTarget;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
@@ -4934,6 +4932,14 @@ const LlvmEmitter = struct {
         return null;
     }
 
+    fn mirCallTargetKindAt(self: *LlvmEmitter, span: ast.Span) ?mir.CallTargetKind {
+        const function = self.currentMirFunction() orelse return null;
+        for (function.call_target_facts) |fact| {
+            if (mirSourceMatches(span, fact.source)) return fact.kind;
+        }
+        return null;
+    }
+
     fn mirSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
         return span.line == source.line and span.column == source.column;
     }
@@ -8550,18 +8556,25 @@ const LlvmEmitter = struct {
     }
 
     fn reduceCallInfo(self: *LlvmEmitter, call: anytype) ?ReduceCallInfo {
-        const kind = reduceCallKind(call.callee.*) orelse return null;
-        const member = memberCallee(call) orelse return null;
+        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+        if (kind != .reduce_sum_checked and kind != .reduce_sum_left and kind != .reduce_sum_fast) return null;
         if (call.type_args.len != 1) return null;
         const element_ty = call.type_args[0];
-        const return_ty = if (kind == .sum_checked)
-            self.resultType(element_ty, simpleType(member.name.span, "Overflow"), member.name.span) catch return null
+        const return_ty = if (kind == .reduce_sum_checked)
+            self.resultType(element_ty, simpleType(call.callee.*.span, "Overflow"), call.callee.*.span) catch return null
         else
             element_ty;
-        return .{ .element_ty = element_ty, .return_ty = return_ty, .op = reduceCallOpName(kind) };
+        const op = switch (kind) {
+            .reduce_sum_checked => "sum_checked",
+            .reduce_sum_left => "sum_left",
+            .reduce_sum_fast => "sum_fast",
+            .const_get => return null,
+        };
+        return .{ .element_ty = element_ty, .return_ty = return_ty, .op = op };
     }
 
     fn constGetCallInfo(self: *LlvmEmitter, call: anytype) ?ConstGetCallInfo {
+        if (self.mirCallTargetKindAt(call.callee.*.span) != .const_get) return null;
         const target = constGetCallTarget(call) orelse return null;
         const base_ty = self.exprType(target.base.*) orelse return null;
         const array_ty = self.resolveAliasType(base_ty);
