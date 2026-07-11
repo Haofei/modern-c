@@ -2009,7 +2009,8 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "local_only_holder", "ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "exported_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "call_before_return"));
-    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "call_before_literal_return"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "call_before_literal_return"));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "call_before_literal_return", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "pointer_array_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_array_holder"));

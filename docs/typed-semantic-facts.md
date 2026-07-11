@@ -741,7 +741,8 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
   scoped blocks and transparent unsafe blocks whose contents reduce to those
   supported prefix statements, plus pure comptime blocks whose contents are
   compile-time expression/assert statements, contract blocks whose contents
-  reduce to supported aggregate updates, and transparent `while`/`for` prefixes
+  reduce to supported aggregate updates, ordinary direct-literal call prefixes
+  that have no exits, and transparent `while`/`for` prefixes
   whose condition or iterable and body have no calls/exits or pointer-bearing
   tracked aggregate mutation;
 - exhaustive bool/wildcard switches with bounded return/fallthrough paths,
@@ -755,15 +756,17 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
 
 Every other shape remains outside the MIR-owned domain. That includes loop calls
 or exits, non-stable pointer-bearing tracked aggregate mutation inside loops,
-direct or indirect calls in a prefix, exports, unions, aggregate/array element nesting
-beyond the direct field model, fallthrough dynamic-index writes, dereference
-writes or non-transparent nested control flow, and any path with a missing or
-ambiguous field fact. Fallthrough dynamic-index writes are an explicit
+tracked-local prefix calls, direct or indirect calls in nested aggregate-return
+control prefixes, exports, unions, aggregate/array element nesting beyond the
+direct field model, fallthrough dynamic-index writes, dereference writes or
+non-transparent nested control flow, and any path with a missing or ambiguous
+field fact. Fallthrough dynamic-index writes are an explicit
 fail-closed boundary: MIR emits no owned aggregate-return summary, and C/LLVM
 keep returned fields unknown.
-Callees with direct or indirect calls in a prefix are also explicit fail-closed
-boundaries: MIR emits no owned aggregate-return summary for the callee, and both
-backends keep the returned field unknown.
+Callees with tracked-local prefix calls or direct/indirect calls in nested
+aggregate-return control prefixes are also explicit fail-closed boundaries: MIR
+emits no owned aggregate-return summary for the callee, and both backends keep
+the returned field unknown.
 Mixed return paths that do not agree on the same `global_storage` field are
 covered by the summary-without-field gate: MIR may record the callee as
 MIR-owned, but emits no field fact, and both backends keep the returned field
@@ -816,8 +819,10 @@ outside the producer. Pure comptime-block prefixes are supported only when their
 contents are compile-time expression/assert statements;
 runtime-affecting contents remain outside the producer. Call-free runtime
 expression/assert prefixes are also transparent and do not mutate aggregate
-facts; expressions containing calls, `try`, `await`, block expressions, or
-`unreachable` remain outside the producer. Transparent `while`/`for` prefixes
+facts for tracked-local returns. Ordinary call expressions before a direct
+struct-literal return are transparent when they contain no `try`, `await`,
+block expressions, or `unreachable`; the literal itself still supplies the
+returned pointer-field provenance. Transparent `while`/`for` prefixes
 are supported only when the condition or iterable has no calls/exits and the
 loop body has no calls/exits or pointer-bearing tracked aggregate mutation;
 local `break`/`continue`, scalar-local assignments, and scalar aggregate-field
@@ -842,12 +847,12 @@ MIR-populated cache; the AST collector is gone.
    pointer-array elements including nested fixed pointer arrays, nested
    aggregate field paths, fixed arrays of struct elements with pointer-bearing
    fields, and nested fixed arrays of those struct elements. Direct literal
-   returns after call-free expression/assert/defer prefixes, transparent
+   returns after ordinary call prefixes without exits, call-free
+   expression/assert/defer prefixes, transparent
    `while`/`for` prefixes with local `break`/`continue`, and tracked-local
    aggregate returns with scalar-mutating loop locals, scalar aggregate-field
    loop mutations, or stable same-address pointer-field loop mutations are
-   covered. Literal returns after call prefixes are
-   explicitly excluded.
+   covered. Tracked-local returns after call prefixes are explicitly excluded.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
@@ -855,7 +860,7 @@ MIR-populated cache; the AST collector is gone.
    unsupported calls, non-stable pointer-bearing tracked aggregate mutations
    inside loop prefixes, loop calls/exits, effectful deferred cleanup prefixes,
    non-transparent nested CFG joins, above-cap path-count-overflow CFG joins,
-   exported aggregate returns, mixed paths, prefix calls, fallthrough
+   exported aggregate returns, mixed paths, tracked-local prefix calls, fallthrough
    dynamic-index writes, dereference writes, and aggregate array nesting beyond the fixed
    pointer-array/struct-array domains are covered as fail-closed rather than
    inferred.

@@ -620,7 +620,7 @@ test "LLVM aggregate-return pointer facts are MIR-owned and fail closed when abs
     try expectNotContains(missing_body, "load i32, ptr %");
 }
 
-test "LLVM aggregate-return literal prefixes are MIR-owned only when call-free" {
+test "LLVM aggregate-return direct literal call prefixes are MIR-owned" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Holder { ptr: *mut u32, tag: u32 }
@@ -636,6 +636,12 @@ test "LLVM aggregate-return literal prefixes are MIR-owned only when call-free" 
         \\    return .{ .ptr = &shared_counter, .tag = 1 };
         \\}
         \\
+        \\fn local_call_prefix_holder() -> Holder {
+        \\    let holder: Holder = .{ .ptr = &shared_counter, .tag = 2 };
+        \\    helper();
+        \\    return holder;
+        \\}
+        \\
         \\fn use_call_free_prefix_holder() -> u32 {
         \\    let holder: Holder = call_free_prefix_holder();
         \\    return holder.ptr.*;
@@ -643,6 +649,11 @@ test "LLVM aggregate-return literal prefixes are MIR-owned only when call-free" 
         \\
         \\fn use_call_prefix_holder() -> u32 {
         \\    let holder: Holder = call_prefix_holder();
+        \\    return holder.ptr.*;
+        \\}
+        \\
+        \\fn use_local_call_prefix_holder() -> u32 {
+        \\    let holder: Holder = local_call_prefix_holder();
         \\    return holder.ptr.*;
         \\}
     ;
@@ -653,8 +664,19 @@ test "LLVM aggregate-return literal prefixes are MIR-owned only when call-free" 
     const call_free_body = try llvmFunctionBody(output.items, "define internal i32 @use_call_free_prefix_holder");
     try expectContains(call_free_body, "; mir aggregate_return_pointer consumed caller=use_call_free_prefix_holder callee=call_free_prefix_holder field=ptr provenance=global_storage");
     const call_body = try llvmFunctionBody(output.items, "define internal i32 @use_call_prefix_holder");
-    try expectNotContains(call_body, "; mir aggregate_return_pointer consumed caller=use_call_prefix_holder callee=call_prefix_holder field=ptr");
-    try expectContains(call_body, "load atomic i32, ptr %");
+    try expectContains(call_body, "; mir aggregate_return_pointer consumed caller=use_call_prefix_holder callee=call_prefix_holder field=ptr provenance=global_storage");
+    const local_call_body = try llvmFunctionBody(output.items, "define internal i32 @use_local_call_prefix_holder");
+    try expectNotContains(local_call_body, "; mir aggregate_return_pointer consumed caller=use_local_call_prefix_holder callee=local_call_prefix_holder field=ptr");
+    try expectContains(local_call_body, "load atomic i32, ptr %");
+    try expectNotContains(local_call_body, "load i32, ptr %");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_aggregate_return_literal_prefix_mir_fact.mc", source, "call_prefix_holder", "ptr", &missing_output);
+    const missing_call_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_call_prefix_holder");
+    try expectNotContains(missing_call_body, "; mir aggregate_return_pointer consumed caller=use_call_prefix_holder callee=call_prefix_holder field=ptr");
+    try expectContains(missing_call_body, "load atomic i32, ptr %");
+    try expectNotContains(missing_call_body, "load i32, ptr %");
 }
 
 test "LLVM consumes MIR aggregate-return pointer-array element facts" {

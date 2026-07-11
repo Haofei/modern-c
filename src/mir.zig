@@ -978,7 +978,7 @@ fn collectDirectAggregateReturnPointerFacts(
         };
         const struct_summary = structs.get(struct_name) orelse continue;
         const body = fn_decl.body orelse continue;
-        var literal_paths = (try aggregateReturnLiteralPaths(allocator, body)) orelse continue;
+        var literal_paths = (try aggregateReturnLiteralPaths(allocator, body, true)) orelse continue;
         defer literal_paths.deinit(allocator);
         if (aggregateReturnHasUnmodeledPointerField(struct_summary, enums, structs, packed_bits, aliases)) continue;
 
@@ -1378,7 +1378,7 @@ const AggregateReturnLiteralPaths = struct {
     }
 };
 
-fn aggregateReturnLiteralPaths(allocator: std.mem.Allocator, body: ast.Block) anyerror!?AggregateReturnLiteralPaths {
+fn aggregateReturnLiteralPaths(allocator: std.mem.Allocator, body: ast.Block, allow_direct_literal_calls: bool) anyerror!?AggregateReturnLiteralPaths {
     for (body.items, 0..) |stmt, control_index| {
         switch (stmt.kind) {
             .@"switch" => |switch_node| return try aggregateReturnSwitchLiteralPaths(allocator, body, control_index, switch_node),
@@ -1390,7 +1390,7 @@ fn aggregateReturnLiteralPaths(allocator: std.mem.Allocator, body: ast.Block) an
     var paths: AggregateReturnLiteralPaths = .{};
     var keep_paths = false;
     defer if (!keep_paths) paths.deinit(allocator);
-    const fields = (try directOrStraightLineLocalAggregateReturnLiteralFields(allocator, &paths, body)) orelse return null;
+    const fields = (try directOrStraightLineLocalAggregateReturnLiteralFields(allocator, &paths, body, allow_direct_literal_calls)) orelse return null;
     _ = paths.append(fields);
     keep_paths = true;
     return paths;
@@ -1500,7 +1500,7 @@ fn appendAggregateReturnLiteralFieldsForPath(
     try items.appendSlice(allocator, prefix);
     try items.appendSlice(allocator, branch);
     try items.appendSlice(allocator, trailing);
-    var nested_paths = (try aggregateReturnLiteralPaths(allocator, .{ .span = span, .items = items.items })) orelse return false;
+    var nested_paths = (try aggregateReturnLiteralPaths(allocator, .{ .span = span, .items = items.items }, false)) orelse return false;
     var keep_nested = false;
     defer if (!keep_nested) nested_paths.deinit(allocator);
     if (!paths.appendAll(nested_paths.items())) return false;
@@ -1651,6 +1651,7 @@ fn directOrStraightLineLocalAggregateReturnLiteralFields(
     allocator: std.mem.Allocator,
     paths: *AggregateReturnLiteralPaths,
     body: ast.Block,
+    allow_direct_literal_calls: bool,
 ) !?[]ast.StructLiteralField {
     if (body.items.len == 0) return null;
     const final_value = switch (body.items[body.items.len - 1].kind) {
@@ -1658,7 +1659,10 @@ fn directOrStraightLineLocalAggregateReturnLiteralFields(
         else => return null,
     };
     if (structLiteralFieldsForAggregateReturn(final_value)) |fields| {
-        if (!aggregateReturnPrefixStatementsAreSupported(body.items[0 .. body.items.len - 1])) return null;
+        const prefix = body.items[0 .. body.items.len - 1];
+        if (allow_direct_literal_calls) {
+            if (!aggregateReturnDirectLiteralPrefixStatementsAreSupported(prefix)) return null;
+        } else if (!aggregateReturnPrefixStatementsAreSupported(prefix)) return null;
         return fields;
     }
 
@@ -1693,6 +1697,52 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
             },
             .unsafe_block => |block| {
                 if (!aggregateReturnPrefixStatementsAreSupported(block.items)) return false;
+            },
+            .comptime_block => |block| {
+                if (!aggregateReturnComptimeBlockIsTransparent(block)) return false;
+            },
+            .contract_block => |contract| {
+                if (!aggregateReturnContractPrefixStatementsAreSupported(contract)) return false;
+            },
+            .loop => |loop| {
+                if (!aggregateReturnLoopIsTransparent(loop)) return false;
+            },
+            .@"switch" => |switch_node| {
+                if (!aggregateReturnSwitchIsTransparent(switch_node)) return false;
+            },
+            .if_let => |if_let| {
+                if (!aggregateReturnIfLetIsTransparent(if_let)) return false;
+            },
+            else => return false,
+        }
+    }
+    return true;
+}
+
+fn aggregateReturnDirectLiteralPrefixStatementsAreSupported(statements: []const ast.Stmt) bool {
+    for (statements) |stmt| {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| {
+                if (local.names.len != 1) return false;
+                if (local.init) |initializer| {
+                    if (aggregateReturnPrefixExprHasExit(initializer)) return false;
+                }
+            },
+            .assignment => |assignment| {
+                if (assignmentTargetIdentName(assignment.target) == null) return false;
+                if (aggregateReturnPrefixExprHasExit(assignment.value)) return false;
+            },
+            .expr, .assert => |expr| {
+                if (aggregateReturnPrefixExprHasExit(expr)) return false;
+            },
+            .@"defer" => |expr| {
+                if (!aggregateReturnDeferIsTransparent(expr)) return false;
+            },
+            .block => |block| {
+                if (!aggregateReturnDirectLiteralPrefixStatementsAreSupported(block.items)) return false;
+            },
+            .unsafe_block => |block| {
+                if (!aggregateReturnDirectLiteralPrefixStatementsAreSupported(block.items)) return false;
             },
             .comptime_block => |block| {
                 if (!aggregateReturnComptimeBlockIsTransparent(block)) return false;
@@ -2341,6 +2391,33 @@ fn aggregateReturnPrefixExprHasCallOrExit(expr: ast.Expr) bool {
         .index => |node| aggregateReturnPrefixExprHasCallOrExit(node.base.*) or aggregateReturnPrefixExprHasCallOrExit(node.index.*),
         .slice => |node| aggregateReturnPrefixExprHasCallOrExit(node.base.*) or aggregateReturnPrefixExprHasCallOrExit(node.start.*) or aggregateReturnPrefixExprHasCallOrExit(node.end.*),
         .member => |node| aggregateReturnPrefixExprHasCallOrExit(node.base.*),
+        else => false,
+    };
+}
+
+fn aggregateReturnPrefixExprHasExit(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .block, .try_expr, .await_expr, .unreachable_expr => true,
+        .call => |call| {
+            if (aggregateReturnPrefixExprHasExit(call.callee.*)) return true;
+            for (call.args) |arg| {
+                if (aggregateReturnPrefixExprHasExit(arg)) return true;
+            }
+            return false;
+        },
+        .array_literal => |items| for (items) |item| {
+            if (aggregateReturnPrefixExprHasExit(item)) break true;
+        } else false,
+        .struct_literal => |fields| for (fields) |field| {
+            if (aggregateReturnPrefixExprHasExit(field.value)) break true;
+        } else false,
+        .grouped, .address_of, .deref => |inner| aggregateReturnPrefixExprHasExit(inner.*),
+        .unary => |node| aggregateReturnPrefixExprHasExit(node.expr.*),
+        .binary => |node| aggregateReturnPrefixExprHasExit(node.left.*) or aggregateReturnPrefixExprHasExit(node.right.*),
+        .cast => |node| aggregateReturnPrefixExprHasExit(node.value.*),
+        .index => |node| aggregateReturnPrefixExprHasExit(node.base.*) or aggregateReturnPrefixExprHasExit(node.index.*),
+        .slice => |node| aggregateReturnPrefixExprHasExit(node.base.*) or aggregateReturnPrefixExprHasExit(node.start.*) or aggregateReturnPrefixExprHasExit(node.end.*),
+        .member => |node| aggregateReturnPrefixExprHasExit(node.base.*),
         else => false,
     };
 }
