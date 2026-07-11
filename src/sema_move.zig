@@ -3661,17 +3661,18 @@ fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.Stri
 }
 
 fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    const root = referentRoot(referent, place);
+    const borrowed_place = place orelse movedReferentPlaceFromState(referent, state);
+    const root = referentRoot(referent, borrowed_place);
     const root_slot = state.getPtr(root) orelse return;
     if (root_slot.cleanup_local) {
-        checkStaleAlias(self, "", .{ .live = false, .span = span, .alias_of = referent, .alias_place = place }, span, state);
+        checkStaleAlias(self, "", .{ .live = false, .span = span, .alias_of = referent, .alias_place = borrowed_place }, span, state);
         return;
     }
     if (!root_slot.live) {
         self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after it was moved");
         return;
     }
-    if (place) |borrowed| {
+    if (borrowed_place) |borrowed| {
         if (borrowed.isSubplace()) {
             if (stateHasMovedPlaceChildOrConflict(borrowed, state)) {
                 self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` field or array element after it was moved out");
@@ -3692,13 +3693,12 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
     }
     if (root_slot.deferred_borrow) |existing| {
         if (std.mem.eql(u8, existing, referent)) {
-            if (place) |new_place| {
+            if (borrowed_place) |new_place| {
                 if (root_slot.deferred_borrow_place == null or placeHasWildcardProjection(new_place)) {
                     root_slot.deferred_borrow_place = new_place;
                 }
             } else if (root_slot.deferred_borrow_place == null) {
-                root_slot.deferred_borrow_place = place orelse
-                    (if (state.get(referent)) |referent_slot| referent_slot.place else null);
+                root_slot.deferred_borrow_place = borrowed_place;
             }
             return;
         }
@@ -3707,8 +3707,7 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
         return;
     }
     root_slot.deferred_borrow = referent;
-    root_slot.deferred_borrow_place = place orelse
-        (if (state.get(referent)) |referent_slot| referent_slot.place else null) orelse
+    root_slot.deferred_borrow_place = borrowed_place orelse
         root_slot.place;
 }
 
