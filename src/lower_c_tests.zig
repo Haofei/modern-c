@@ -1501,6 +1501,9 @@ test "lower-c consumes MIR aggregate-return effectful direct-literal defer prefi
         \\global shared_counter: u32 = 0;
         \\extern fn cleanup() -> void;
         \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\fn cleanup_holder(holder: *mut Holder) -> void {
+        \\    holder.*.tag = 0;
+        \\}
         \\
         \\fn returned_holder() -> Holder {
         \\    defer cleanup();
@@ -1513,6 +1516,12 @@ test "lower-c consumes MIR aggregate-return effectful direct-literal defer prefi
         \\    return holder;
         \\}
         \\
+        \\fn local_arg_returned_holder() -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 3 };
+        \\    defer cleanup_holder(&holder);
+        \\    return holder;
+        \\}
+        \\
         \\fn use_returned_holder() -> u32 {
         \\    let holder: Holder = returned_holder();
         \\    return holder.ptr.*;
@@ -1522,15 +1531,21 @@ test "lower-c consumes MIR aggregate-return effectful direct-literal defer prefi
         \\    let holder: Holder = local_returned_holder();
         \\    return holder.ptr.*;
         \\}
+        \\
+        \\fn use_local_arg_returned_holder() -> u32 {
+        \\    let holder: Holder = local_arg_returned_holder();
+        \\    return holder.ptr.*;
+        \\}
     ;
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTest("c_effectful_defer_prefix_aggregate_return_mir_fact.mc", source, &output);
     try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
-    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_local_returned_holder callee=local_returned_holder field=ptr");
-    const local_body = try cFunctionBody(output.items, "static uint32_t use_local_returned_holder(void)");
-    try expectContains(local_body, "mc_race_load_u32");
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_local_returned_holder callee=local_returned_holder field=ptr provenance=global_storage");
+    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_local_arg_returned_holder callee=local_arg_returned_holder field=ptr");
+    const local_arg_body = try cFunctionBody(output.items, "static uint32_t use_local_arg_returned_holder(void)");
+    try expectContains(local_arg_body, "mc_race_load_u32");
 
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
@@ -1538,6 +1553,13 @@ test "lower-c consumes MIR aggregate-return effectful direct-literal defer prefi
     try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
     const missing_body = try cFunctionBody(missing_output.items, "static uint32_t use_returned_holder(void)");
     try expectContains(missing_body, "mc_race_load_u32");
+
+    var missing_local_output: std.ArrayList(u8) = .empty;
+    defer missing_local_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_effectful_defer_prefix_aggregate_return_mir_fact.mc", source, "local_returned_holder", "ptr", &missing_local_output);
+    try expectNotContains(missing_local_output.items, "/* mir aggregate_return_pointer consumed caller=use_local_returned_holder callee=local_returned_holder field=ptr");
+    const missing_local_body = try cFunctionBody(missing_local_output.items, "static uint32_t use_local_returned_holder(void)");
+    try expectContains(missing_local_body, "mc_race_load_u32");
 }
 
 test "lower-c consumes MIR aggregate-return call-free defer prefix facts" {

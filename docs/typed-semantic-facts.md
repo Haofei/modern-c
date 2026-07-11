@@ -796,8 +796,9 @@ C/LLVM keep the returned field conservative. `defer` prefixes before direct
 struct-literal returns are transparent when their deferred expression has no
 exits/control flow; the literal itself supplies the returned pointer-field
 provenance even when the deferred cleanup is effectful. Tracked-local aggregate
-returns still require call-free `defer` prefixes because effectful deferred
-cleanup can invalidate local aggregate provenance. `while`/`for` loop prefixes, including nested loops inside
+returns also allow direct zero-argument deferred cleanup calls. Deferred calls
+that mention the returned local, member calls, indirect calls, and other
+argument-bearing cleanup shapes remain outside the producer. `while`/`for` loop prefixes, including nested loops inside
 otherwise transparent aggregate-return switch arms, are transparent when their
 bodies contain only provenance-transparent statements plus local
 `break`/`continue`; tracked local aggregate returns additionally allow scalar
@@ -850,8 +851,8 @@ MIR-populated cache; the AST collector is gone.
    aggregate field paths, fixed arrays of struct elements with pointer-bearing
    fields, and nested fixed arrays of those struct elements. Direct literal
    returns after ordinary call prefixes without exits, direct-literal
-   effectful defer prefixes without exits, call-free expression/assert/defer
-   prefixes, transparent
+   effectful defer prefixes without exits, tracked-local direct zero-argument
+   deferred cleanup calls, call-free expression/assert/defer prefixes, transparent
    `while`/`for` prefixes with local `break`/`continue`, and tracked-local
    aggregate returns with scalar-mutating loop locals, scalar aggregate-field
    loop mutations, or stable same-address pointer-field loop mutations are
@@ -861,7 +862,7 @@ MIR-populated cache; the AST collector is gone.
    removing only the return-field fact produces conservative lowering.
 4. Complete for named unsupported producer shapes: contract-block prefixes with
    unsupported calls, non-stable pointer-bearing tracked aggregate mutations
-   inside loop prefixes, loop calls/exits, tracked-local effectful deferred cleanup prefixes,
+   inside loop prefixes, loop calls/exits, tracked-local argument-bearing/member/indirect deferred cleanup prefixes,
    non-transparent nested CFG joins, above-cap path-count-overflow CFG joins,
    exported aggregate returns, mixed paths, tracked-local prefix calls, fallthrough
    dynamic-index writes, dereference writes, and aggregate array nesting beyond the fixed

@@ -2036,6 +2036,22 @@ fn aggregateReturnDeferIsTransparent(expr: ast.Expr) bool {
     return !aggregateReturnPrefixExprHasCallOrExit(expr);
 }
 
+fn aggregateReturnTrackedLocalDeferIsTransparent(expr: ast.Expr) bool {
+    if (aggregateReturnDeferIsTransparent(expr)) return true;
+    return aggregateReturnDirectZeroArgCallNoExit(expr);
+}
+
+fn aggregateReturnDirectZeroArgCallNoExit(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .grouped => |inner| aggregateReturnDirectZeroArgCallNoExit(inner.*),
+        .call => |call| call.type_args.len == 0 and
+            call.args.len == 0 and
+            call.callee.*.kind == .ident and
+            !aggregateReturnPrefixExprHasExit(call.callee.*),
+        else => false,
+    };
+}
+
 fn aggregateReturnContractDeferIsTransparent(expr: ast.Expr) bool {
     return !aggregateReturnContractPrefixExprHasCallOrExit(expr);
 }
@@ -2082,7 +2098,7 @@ fn processAggregateReturnLiteralLocalStatements(
                 if (aggregateReturnPrefixExprHasCallOrExit(expr)) return false;
             },
             .@"defer" => |expr| {
-                if (!aggregateReturnDeferIsTransparent(expr)) return false;
+                if (!aggregateReturnTrackedLocalDeferIsTransparent(expr)) return false;
             },
             .block => |block| {
                 if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, block.items, true)) return false;
