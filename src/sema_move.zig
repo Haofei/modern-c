@@ -894,6 +894,7 @@ fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
     return .{
         .live = false,
         .span = source.span,
+        .place = source.place,
         .alias_of = key,
         .cleanup_local = source.cleanup_local,
     };
@@ -968,6 +969,7 @@ fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const std
                 continue;
             }
         }
+        if (entry.value_ptr.place == null) continue;
         const fallback_key = key orelse blk: {
             key = aliasPlaceKey(self, expr, state) orelse memberPlaceKey(self, expr) orelse return;
             break :blk key.?;
@@ -3000,7 +3002,7 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    const key_place = aliasStoragePlaceForExpr(self, target, state);
+    const key_place = aliasStoragePlaceForExpr(self, target, state) orelse existingAliasStoragePlace(key, state);
 
     const referent = aliasReferentForExpr(self, value, state, aliases) orelse {
         _ = state.remove(key);
@@ -3089,8 +3091,14 @@ pub fn recordAssignedAliasPlaceOrEscape(
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    const key_place = aliasStoragePlaceForExpr(self, target, state);
+    const key_place = aliasStoragePlaceForExpr(self, target, state) orelse existingAliasStoragePlace(key, state);
     recordAliasPlaceOrEscapeWithKey(self, key, key_place, value, escape_span, state, aliases);
+}
+
+fn existingAliasStoragePlace(key: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
+    const slot = state.get(key) orelse return null;
+    if (slot.alias_of == null) return null;
+    return slot.place;
 }
 
 fn recordAliasPlaceOrEscapeWithKey(
