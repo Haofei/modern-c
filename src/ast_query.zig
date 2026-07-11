@@ -353,6 +353,32 @@ pub fn byteViewCallReturnType(call: anytype) ?ast.TypeExpr {
     };
 }
 
+pub const ReflectionValueCallKind = enum {
+    size,
+    repr,
+    alignment,
+    field_offset,
+    bit_offset,
+};
+
+/// Classify value-producing reflection intrinsics, or null for non-reflection and type-producing
+/// reflection forms such as `field_type`.
+pub fn reflectionValueCallKind(callee: ast.Expr) ?ReflectionValueCallKind {
+    const name = calleeIdentName(callee) orelse return null;
+    if (std.mem.eql(u8, name, "size_of") or std.mem.eql(u8, name, "sizeof")) return .size;
+    if (std.mem.eql(u8, name, "repr_of")) return .repr;
+    if (std.mem.eql(u8, name, "alignof")) return .alignment;
+    if (std.mem.eql(u8, name, "field_offset")) return .field_offset;
+    if (std.mem.eql(u8, name, "bit_offset")) return .bit_offset;
+    return null;
+}
+
+/// The result type of value-producing reflection intrinsics, or null when not recognized.
+pub fn reflectionValueCallReturnType(call: anytype) ?ast.TypeExpr {
+    _ = reflectionValueCallKind(call.callee.*) orelse return null;
+    return simpleNameType("usize", call.callee.*.span);
+}
+
 /// The payload type and mode tag of a `DmaBuf<T, .mode>` type, or null.
 pub const DmaBufInfo = struct {
     payload: ast.TypeExpr,

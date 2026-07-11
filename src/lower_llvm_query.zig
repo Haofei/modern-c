@@ -157,29 +157,6 @@ pub fn comptimeStructFieldValue(fields: []const eval.ComptimeStructField, name: 
     return null;
 }
 
-pub const ReflectionCallKind = enum {
-    size,
-    repr,
-    alignment,
-    field_offset,
-    bit_offset,
-};
-
-pub fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {
-    return switch (callee.kind) {
-        .ident => |ident| {
-            if (std.mem.eql(u8, ident.text, "size_of") or std.mem.eql(u8, ident.text, "sizeof")) return .size;
-            if (std.mem.eql(u8, ident.text, "repr_of")) return .repr;
-            if (std.mem.eql(u8, ident.text, "alignof")) return .alignment;
-            if (std.mem.eql(u8, ident.text, "field_offset")) return .field_offset;
-            if (std.mem.eql(u8, ident.text, "bit_offset")) return .bit_offset;
-            return null;
-        },
-        .grouped => |inner| reflectionCallKind(inner.*),
-        else => null,
-    };
-}
-
 pub fn isResultConstructorCall(call: anytype) ?[]const u8 {
     if (call.type_args.len != 0 or call.args.len != 1) return null;
     const name = switch (call.callee.kind) {

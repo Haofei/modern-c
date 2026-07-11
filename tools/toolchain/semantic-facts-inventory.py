@@ -102,6 +102,8 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn bitcastCallReturnType(",
             "pub fn vaCallReturnType(",
             "pub fn byteViewCallReturnType(",
+            "pub fn reflectionValueCallKind(",
+            "pub fn reflectionValueCallReturnType(",
         ],
         "src/lower_llvm_query.zig": [
             "ast_query.rawLoadCallReturnType(call)",
@@ -114,6 +116,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "enumVariantPathType(&self.enum_types, node, self.memberBaseIsValue(node))",
             "vaCallReturnType(call)",
             "byteViewCallReturnType(call)",
+            "reflectionValueCallReturnType(call)",
         ],
     },
     "llvm-bounds-range-consumption": {
@@ -731,6 +734,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_llvm_query.zig": {
         "fn bitcastTargetType(": 0,
+        "pub fn reflectionCallKind(": 0,
+        "pub const ReflectionCallKind": 0,
     },
     "tests/spec/no_implicit_conversion.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 9,

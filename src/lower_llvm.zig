@@ -17,6 +17,7 @@ const typeName = ast_query.typeName;
 const ByteViewCallKind = ast_query.ByteViewCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
 const byteViewCallReturnType = ast_query.byteViewCallReturnType;
+const reflectionValueCallReturnType = ast_query.reflectionValueCallReturnType;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
@@ -124,7 +125,6 @@ const llvmTraitIsObjectSafe = lower_llvm_query.llvmTraitIsObjectSafe;
 const memberCallee = lower_llvm_query.memberCallee;
 const packedBitsClearMask = lower_llvm_query.packedBitsClearMask;
 const packedBitsMask = lower_llvm_query.packedBitsMask;
-const reflectionCallKind = lower_llvm_query.reflectionCallKind;
 const structFieldIndex = lower_llvm_query.structFieldIndex;
 const structLiteralField = lower_llvm_query.structLiteralField;
 const taggedUnionConstructorName = lower_llvm_query.taggedUnionConstructorName;
@@ -8404,7 +8404,7 @@ const LlvmEmitter = struct {
     }
 
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
-        if (reflectionCallKind(call.callee.*) != null) return simpleType(call.callee.*.span, "usize");
+        if (reflectionValueCallReturnType(call)) |ty| return ty;
         // Tier 2 dynamic dispatch `d.method(args)` through a `*dyn Trait`: the return type is the
         // trait method's declared return type. Without this, exprType() is null for a dispatch call,
         // so a dispatch used directly as a switch/if subject (`if self.inner.poll() { ... }`) fell

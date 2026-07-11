@@ -20,7 +20,7 @@ const isOpaqueAddressGenericName = lower_llvm_type.isOpaqueAddressGenericName;
 const isPayloadDomainGenericName = lower_llvm_type.isPayloadDomainGenericName;
 const isPointerLikeType = lower_llvm_type.isPointerLikeType;
 const libraryScalarLlvmType = lower_llvm_type.libraryScalarLlvmType;
-const reflectionCallKind = lower_llvm_query.reflectionCallKind;
+const reflectionValueCallKind = ast_query.reflectionValueCallKind;
 const reflectionFieldName = ast_query.reflectionFieldName;
 const scalarLayout = type_layout.scalarLayout;
 const typeName = ast_query.typeName;
@@ -55,7 +55,7 @@ pub fn comptimeReflect(env: *const ReflectEnv, call: ast.Expr) ?i128 {
         .call => |n| n,
         else => return null,
     };
-    const kind = reflectionCallKind(node.callee.*) orelse return null;
+    const kind = reflectionValueCallKind(node.callee.*) orelse return null;
     const ty = reflectionTypeArg(node) orelse return null;
     const field_arg_index: usize = if (node.type_args.len == 1) 0 else 1;
     return switch (kind) {
