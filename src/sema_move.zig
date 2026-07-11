@@ -902,12 +902,10 @@ fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
     };
 }
 
-fn isMoveSubplaceKey(key: []const u8) bool {
-    return firstSubplaceSeparator(key) != null;
-}
-
 fn isTrackedMoveSubplace(slot: MoveSlot, key: []const u8) bool {
-    return if (slot.place) |place| place.isSubplace() else isMoveSubplaceKey(key);
+    _ = key;
+    const place = slot.place orelse return false;
+    return place.isSubplace();
 }
 
 fn moveSubplaceRootInOuter(slot: MoveSlot, key: []const u8, outer: *const std.StringHashMap(MoveSlot)) bool {
@@ -920,17 +918,6 @@ fn trackedSubplaceRoot(slot: MoveSlot, key: []const u8) ?[]const u8 {
     _ = key;
     const place = slot.place orelse return null;
     return if (place.isSubplace()) place.root else null;
-}
-
-fn firstSubplaceSeparator(key: []const u8) ?usize {
-    for (key, 0..) |c, i| {
-        if (isSubplaceSeparator(c)) return i;
-    }
-    return null;
-}
-
-fn isSubplaceSeparator(c: u8) bool {
-    return c == '.' or c == '[';
 }
 
 // `&<ident>` (peeling `grouped`): the address of a binding ITSELF, so `*result` is that
@@ -1056,7 +1043,7 @@ fn aliasReferentRoot(referent: AliasReferent) []const u8 {
 
 fn referentRoot(key: []const u8, place: ?MovePlace) []const u8 {
     if (place) |typed| return typed.root;
-    return rootPlaceName(key);
+    return key;
 }
 
 fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
@@ -1315,29 +1302,7 @@ fn consumeTrackedMoveReferent(self: *Checker, referent: AliasReferent, span: dia
         }
         return;
     }
-    if (isMoveSubplaceKey(referent.key)) {
-        consumeTrackedMoveSubplace(self, referent.key, span, state);
-    } else {
-        consumeTrackedMoveBinding(self, referent.key, span, state);
-    }
-}
-
-fn consumeTrackedMoveSubplace(self: *Checker, key: []const u8, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    const sep = firstSubplaceSeparator(key) orelse return;
-    const root = key[0..sep];
-    if (state.get(root)) |slot| {
-        if (!slot.live) {
-            self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` field after its owner was moved");
-            return;
-        }
-    }
-    if (state.contains(key)) {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` field after it was moved out");
-    } else {
-        state.put(key, .{ .live = false, .span = span }) catch {
-            self.oom = true;
-        };
-    }
+    consumeTrackedMoveBinding(self, referent.key, span, state);
 }
 
 fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
@@ -2423,11 +2388,6 @@ fn deferredBorrowConflictsWithTrackedPlace(place: MovePlace, state: *const std.S
     const root_slot = state.get(place.root) orelse return false;
     const borrowed = root_slot.deferred_borrow_place orelse return false;
     return borrowed.eql(place) or borrowed.isPrefixOf(place) or place.isPrefixOf(borrowed) or borrowed.conflicts(place);
-}
-
-fn rootPlaceName(key: []const u8) []const u8 {
-    const sep = firstSubplaceSeparator(key) orelse return key;
-    return key[0..sep];
 }
 
 // Whether any field of `base` has been moved out (a partial move of the aggregate).
