@@ -209,6 +209,10 @@ const rawPtrCallReturnType = ast_query.rawPtrCallReturnType;
 const bitcastCallReturnType = ast_query.bitcastCallReturnType;
 const vaCallMember = ast_query.vaCallMember;
 const vaCallReturnType = ast_query.vaCallReturnType;
+const atomicMemberOpName = ast_query.atomicMemberOpName;
+const atomicCallMemberOp = ast_query.atomicCallMemberOp;
+const maybeUninitMemberOpName = ast_query.maybeUninitMemberOpName;
+const maybeUninitCallMemberOp = ast_query.maybeUninitCallMemberOp;
 const DmaBufInfo = ast_query.DmaBufInfo;
 const dmaBufInfo = ast_query.dmaBufInfo;
 
@@ -3663,7 +3667,11 @@ pub const Checker = struct {
 
         const payload_ty = atomicPayloadTypeForValue(member.base.*, ctx) orelse return;
         const payload_class = classifyTypeCtx(payload_ty, ctx);
-        if (std.mem.eql(u8, member.name.text, "load")) {
+        const op = atomicMemberOpName(member.name.text) orelse {
+            self.errorCode(member.name.span, "E_ATOMIC_OPERATION", "unknown atomic operation");
+            return;
+        };
+        if (std.mem.eql(u8, op, "load")) {
             if (args.len != 1) {
                 self.errorCode(span, "E_CALL_ARG_COUNT", "atomic load expects exactly one memory ordering argument");
                 return;
@@ -3671,7 +3679,7 @@ pub const Checker = struct {
             self.checkAtomicLoadOrdering(args[0]);
             return;
         }
-        if (std.mem.eql(u8, member.name.text, "store")) {
+        if (std.mem.eql(u8, op, "store")) {
             if (args.len != 2) {
                 self.errorCode(span, "E_CALL_ARG_COUNT", "atomic store expects a value and one memory ordering argument");
                 return;
@@ -3681,7 +3689,7 @@ pub const Checker = struct {
             self.checkAtomicStoreOrdering(args[1]);
             return;
         }
-        if (std.mem.eql(u8, member.name.text, "fetch_add") or std.mem.eql(u8, member.name.text, "fetch_sub")) {
+        if (std.mem.eql(u8, op, "fetch_add") or std.mem.eql(u8, op, "fetch_sub")) {
             if (args.len != 2) {
                 self.errorCode(span, "E_CALL_ARG_COUNT", "atomic fetch_add/fetch_sub expects a value and one memory ordering argument");
                 return;
@@ -3694,14 +3702,13 @@ pub const Checker = struct {
             self.checkAtomicReadModifyWriteOrdering(args[1]);
             return;
         }
-        self.errorCode(member.name.span, "E_ATOMIC_OPERATION", "unknown atomic operation");
     }
 
     fn checkMaybeUninitCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
         const member = memberExpr(callee) orelse return;
-        if (!std.mem.eql(u8, member.name.text, "write") and !std.mem.eql(u8, member.name.text, "assume_init")) return;
+        const op = maybeUninitMemberOpName(member.name.text) orelse return;
         const payload_ty = maybeUninitPayloadTypeForValue(member.base.*, ctx) orelse return;
-        if (std.mem.eql(u8, member.name.text, "write")) {
+        if (std.mem.eql(u8, op, "write")) {
             if (args.len != 1) {
                 self.errorCode(span, "E_CALL_ARG_COUNT", "MaybeUninit.write expects exactly one payload argument");
                 return;
@@ -6917,16 +6924,16 @@ fn residueCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
 }
 
 fn atomicCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const op = atomicCallMemberOp(callee) orelse return null;
+    if (std.mem.eql(u8, op, "store")) return null;
     const member = memberExpr(callee) orelse return null;
-    if (std.mem.eql(u8, member.name.text, "load") or std.mem.eql(u8, member.name.text, "fetch_add") or std.mem.eql(u8, member.name.text, "fetch_sub")) {
-        return atomicPayloadTypeForValue(member.base.*, ctx);
-    }
-    return null;
+    return atomicPayloadTypeForValue(member.base.*, ctx);
 }
 
 fn maybeUninitCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const op = maybeUninitCallMemberOp(callee) orelse return null;
+    if (!std.mem.eql(u8, op, "assume_init")) return null;
     const member = memberExpr(callee) orelse return null;
-    if (!std.mem.eql(u8, member.name.text, "assume_init")) return null;
     return maybeUninitPayloadTypeForValue(member.base.*, ctx);
 }
 
@@ -7480,14 +7487,11 @@ fn isAtomicOperationMember(member: anytype, ctx: Context) bool {
 fn isKnownAtomicOperationMember(member: anytype, ctx: Context) bool {
     if (isIdentNamed(member.base.*, "atomic")) return std.mem.eql(u8, member.name.text, "init");
     _ = atomicPayloadTypeForValue(member.base.*, ctx) orelse return false;
-    return std.mem.eql(u8, member.name.text, "load") or
-        std.mem.eql(u8, member.name.text, "store") or
-        std.mem.eql(u8, member.name.text, "fetch_add") or
-        std.mem.eql(u8, member.name.text, "fetch_sub");
+    return atomicMemberOpName(member.name.text) != null;
 }
 
 fn isMaybeUninitOperationMember(member: anytype, ctx: Context) bool {
-    if (!std.mem.eql(u8, member.name.text, "write") and !std.mem.eql(u8, member.name.text, "assume_init")) return false;
+    if (maybeUninitMemberOpName(member.name.text) == null) return false;
     _ = maybeUninitPayloadTypeForValue(member.base.*, ctx) orelse return false;
     return true;
 }

@@ -18,6 +18,8 @@ const ByteViewCallKind = ast_query.ByteViewCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
 const byteViewCallReturnType = ast_query.byteViewCallReturnType;
 const reflectionValueCallReturnType = ast_query.reflectionValueCallReturnType;
+const atomicCallMemberOp = ast_query.atomicCallMemberOp;
+const maybeUninitCallMemberOp = ast_query.maybeUninitCallMemberOp;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
@@ -8583,17 +8585,11 @@ const LlvmEmitter = struct {
     }
 
     fn atomicCallInfo(self: *LlvmEmitter, call: anytype) ?AtomicCallInfo {
+        const op = atomicCallMemberOp(call.callee.*) orelse return null;
         const member = memberCallee(call) orelse return null;
-        if (!std.mem.eql(u8, member.name.text, "load") and
-            !std.mem.eql(u8, member.name.text, "store") and
-            !std.mem.eql(u8, member.name.text, "fetch_add") and
-            !std.mem.eql(u8, member.name.text, "fetch_sub"))
-        {
-            return null;
-        }
         const base_ty = self.exprType(member.base.*) orelse return null;
         if (self.atomicPayloadType(base_ty)) |payload_ty| {
-            return .{ .base = member.base.*, .op = member.name.text, .payload_ty = payload_ty };
+            return .{ .base = member.base.*, .op = op, .payload_ty = payload_ty };
         }
         // A `*atomic<T>` base: the pointer is the atomic's address.
         const child = switch (self.resolveAliasType(base_ty).kind) {
@@ -8601,7 +8597,7 @@ const LlvmEmitter = struct {
             else => return null,
         };
         const payload_ty = self.atomicPayloadType(child) orelse return null;
-        return .{ .base = member.base.*, .op = member.name.text, .payload_ty = payload_ty, .base_is_pointer = true };
+        return .{ .base = member.base.*, .op = op, .payload_ty = payload_ty, .base_is_pointer = true };
     }
 
     // The address the atomic lives at: for a `*atomic<T>` base the pointer value already IS the
@@ -8615,15 +8611,11 @@ const LlvmEmitter = struct {
     }
 
     fn maybeUninitCallInfo(self: *LlvmEmitter, call: anytype) ?MaybeUninitCallInfo {
+        const op = maybeUninitCallMemberOp(call.callee.*) orelse return null;
         const member = memberCallee(call) orelse return null;
-        if (!std.mem.eql(u8, member.name.text, "write") and
-            !std.mem.eql(u8, member.name.text, "assume_init"))
-        {
-            return null;
-        }
         const base_ty = self.exprType(member.base.*) orelse return null;
         const payload_ty = self.maybeUninitPayloadType(base_ty) orelse return null;
-        return .{ .base = member.base.*, .op = member.name.text, .payload_ty = payload_ty };
+        return .{ .base = member.base.*, .op = op, .payload_ty = payload_ty };
     }
 
     fn dmaCacheCallInfo(self: *LlvmEmitter, call: anytype) ?DmaCacheCallInfo {

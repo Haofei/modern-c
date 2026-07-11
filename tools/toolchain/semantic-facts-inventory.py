@@ -104,6 +104,10 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn byteViewCallReturnType(",
             "pub fn reflectionValueCallKind(",
             "pub fn reflectionValueCallReturnType(",
+            "pub fn atomicMemberOpName(",
+            "pub fn atomicCallMemberOp(",
+            "pub fn maybeUninitMemberOpName(",
+            "pub fn maybeUninitCallMemberOp(",
         ],
         "src/lower_llvm_query.zig": [
             "ast_query.rawLoadCallReturnType(call)",
@@ -117,6 +121,8 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "vaCallReturnType(call)",
             "byteViewCallReturnType(call)",
             "reflectionValueCallReturnType(call)",
+            "atomicCallMemberOp(call.callee.*)",
+            "maybeUninitCallMemberOp(call.callee.*)",
         ],
     },
     "llvm-bounds-range-consumption": {
@@ -682,6 +688,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn vaCallName(": 0,
         "fn vaCallReturnType(": 0,
         "fn byteViewCallReturnType(": 0,
+        "std.mem.eql(u8, member.name.text, \"fetch_add\")": 0,
+        "std.mem.eql(u8, member.name.text, \"assume_init\")": 0,
         "const ptr_ty = ast.TypeExpr{ .span = node.type_args[0].span": 0,
     },
     "src/lower_c_emitter.zig": {

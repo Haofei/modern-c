@@ -379,6 +379,38 @@ pub fn reflectionValueCallReturnType(call: anytype) ?ast.TypeExpr {
     return simpleNameType("usize", call.callee.*.span);
 }
 
+/// For `atomic<T>` members, return the supported operation spelling.
+pub fn atomicMemberOpName(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "load") or
+        std.mem.eql(u8, name, "store") or
+        std.mem.eql(u8, name, "fetch_add") or
+        std.mem.eql(u8, name, "fetch_sub"))
+    {
+        return name;
+    }
+    return null;
+}
+
+/// For `atomic<T>` member calls, return the supported operation spelling.
+pub fn atomicCallMemberOp(callee: ast.Expr) ?[]const u8 {
+    const member = memberExpr(callee) orelse return null;
+    return atomicMemberOpName(member.name.text);
+}
+
+/// For `MaybeUninit<T>` members, return the supported operation spelling.
+pub fn maybeUninitMemberOpName(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "write") or std.mem.eql(u8, name, "assume_init")) {
+        return name;
+    }
+    return null;
+}
+
+/// For `MaybeUninit<T>` member calls, return the supported operation spelling.
+pub fn maybeUninitCallMemberOp(callee: ast.Expr) ?[]const u8 {
+    const member = memberExpr(callee) orelse return null;
+    return maybeUninitMemberOpName(member.name.text);
+}
+
 /// The payload type and mode tag of a `DmaBuf<T, .mode>` type, or null.
 pub const DmaBufInfo = struct {
     payload: ast.TypeExpr,
