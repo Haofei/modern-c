@@ -199,6 +199,7 @@ accepted conservative fallback with missing-fact or diagnostic evidence.
 | `c-pointer-provenance-consumption` | `src/lower_c_emitter.zig` MIR provenance consumers and deref lowering | C pointer-mediated race lowering | MIR-owned for narrow direct subset; registered conservative fallback for broader scalar leaves. | Missing facts keep provenance unknown and use race-tolerant scalar lowering where supported. |
 | `c-direct-global-race-helpers` | `src/lower_c_global.zig` direct global load/store helpers | C direct global scalar/array/member access | Registered direct-global backend inference. | Unsupported scalar helper widths fail closed; aggregate leaves recurse only through supported shapes. |
 | `llvm-pointer-provenance-consumption` | `src/lower_llvm.zig` MIR-or-local-proof provenance consumers and race-tolerant deref lowering | LLVM pointer-mediated race lowering | MIR-owned for direct facts; one registered local-only proof remains outside MIR. | Missing facts default scalar derefs to unordered atomic unless positive local/raw/MMIO proof exists. |
+| `llvm-expression-type-inference` | `src/lower_llvm.zig` `exprType`, `derefPointeeType`, and `qualifiedUnionConstructorType` | LLVM expression, call, deref, constructor, and MMIO emission | Registered backend inference; migrate high-risk lowering decisions into typed facts/MIR as families are touched. | Unsupported or unknown shapes return null/unsupported and must not infer facts beyond sema-accepted source meaning. |
 | `llvm-bounds-range-consumption` | `src/lower_llvm.zig` `requireMirBoundsFact`, `requireMirNoOverflowRangeFact`, `mirCheckElided` | LLVM bounds checks, unchecked arithmetic, check elision | MIR-owned for current range/bounds/check-elision subset. | Missing/stale facts keep checks or reject prebuilt MIR. |
 | `llvm-representation-fact-consumption` | `src/mir.zig` representation validator; `src/lower_llvm.zig` MIR validation at backend entry | LLVM representation-sensitive lowering | MIR-owned for current representation facts. | Missing/stale representation facts reject prebuilt MIR before lowering. |
 | `mir-pointer-provenance-production` | `src/mir.zig` pointer-provenance producers and invalidators | C/LLVM pointer-provenance consumers | MIR-owned for direct local, aggregate-field, fixed-array, invalidation, and aggregate-return-adjacent subsets. | Unsupported producers emit unknown/no fact; consumers must remain conservative. |
@@ -226,7 +227,7 @@ at entry instead of treating the AST as a second representation authority.
 
 ### Backend AST-inference budget
 
-Current backend AST-inference budget: **7 registered families**.
+Current backend AST-inference budget: **8 registered families**.
 
 This is a shrinking budget. These families are allowed only because their
 current behavior is named, anchored, and paired with a fail-closed policy. A new
@@ -243,6 +244,7 @@ family from backend authority must reduce the count.
 | `c-direct-global-race-helpers` | Backend AST inference budget | Direct global race-helper routing is represented by typed memory/race facts or by an accepted direct-global backend policy. |
 | `c-pointer-provenance-consumption` | Backend AST inference budget | Broader scalar-leaf conservative fallback is fully covered by typed provenance facts or an accepted default policy. |
 | `llvm-pointer-provenance-consumption` | Backend AST inference budget | The remaining LLVM local-only proof is migrated to MIR facts or explicitly accepted as a local emission proof, not semantic inference. |
+| `llvm-expression-type-inference` | Backend AST inference budget | LLVM expression type decisions that affect lowering are provided by typed facts/MIR or rejected when absent. |
 
 ### Scalar pointer deref default audit
 
