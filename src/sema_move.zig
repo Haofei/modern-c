@@ -43,7 +43,7 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
             };
         } else if (self.move_ctx) |ctx| {
             if (typeCanStoreBorrowAlias(param.ty, ctx.*)) {
-                state.put(param.name.text, .{ .live = false, .span = param.name.span, .ty = param.ty, .type_only = true }) catch {
+                state.put(param.name.text, .{ .live = false, .span = param.name.span, .place = .{ .root = param.name.text }, .ty = param.ty, .type_only = true }) catch {
                     self.oom = true;
                 };
             }
@@ -268,7 +268,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
             if (!bound_as_move and !bound_as_index_fact and decl.names.len > 0) {
                 if (binding_ty) |ty| {
                     if (retainsAliasPlaceType(ty)) {
-                        state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .ty = ty, .type_only = true }) catch {
+                        state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .ty = ty, .type_only = true }) catch {
                             self.oom = true;
                         };
                     }
@@ -301,8 +301,10 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                     // The scan recurses through nested struct literals (`o.h.p`) for precise
                     // tracking, and conservatively marks the move root escaped where the borrow
                     // is buried in a non-nameable place (a nested array literal).
+                    recordTypeOnlyPlaceRoot(self, decl.names[0], binding_ty, state, false);
                     registerAggregateFieldAliases(self, decl.names[0].text, .{ .root = decl.names[0].text }, decl.names[0].span, decl.init.?, state, aliases);
                 } else if (decl.init.?.kind == .array_literal) {
+                    recordTypeOnlyPlaceRoot(self, decl.names[0], binding_ty, state, false);
                     registerArrayElementAliases(self, decl.names[0].text, .{ .root = decl.names[0].text }, decl.names[0].span, decl.init.?, state, aliases);
                 } else {
                     // T1.2: `let p = &t.inner;` borrows a SUBFIELD/element of the move binding
@@ -957,8 +959,6 @@ fn inheritedFullDerefAlias(expr: ast.Expr, state: *const std.StringHashMap(MoveS
 
 fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) void {
     const place = aliasStoragePlaceForExpr(self, expr, state);
-    var key: ?[]const u8 = null;
-    defer if (key) |owned| self.reporter.allocator.free(owned);
     var it = state.iterator();
     while (it.next()) |entry| {
         if (entry.value_ptr.alias_of == null) continue;
@@ -968,14 +968,6 @@ fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const std
                 checkStaleAlias(self, "", entry.value_ptr.*, expr.span, state);
                 continue;
             }
-        }
-        if (entry.value_ptr.place == null) continue;
-        const fallback_key = key orelse blk: {
-            key = aliasPlaceKey(self, expr, state) orelse memberPlaceKey(self, expr) orelse return;
-            break :blk key.?;
-        };
-        if (std.mem.eql(u8, entry.key_ptr.*, fallback_key) or isPlacePrefix(fallback_key, entry.key_ptr.*)) {
-            checkStaleAlias(self, "", entry.value_ptr.*, expr.span, state);
         }
     }
 }
@@ -3983,6 +3975,10 @@ fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *std.St
                 self.oom = true;
             };
             return;
+        } else if (retainsAliasPlaceType(ty)) {
+            state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .ty = ty, .type_only = true, .cleanup_local = true }) catch {
+                self.oom = true;
+            };
         }
     }
     if (decl.init) |init| {
@@ -3993,10 +3989,22 @@ fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *std.St
                 };
             }
         } else if (init.kind == .struct_literal) {
+            recordTypeOnlyPlaceRoot(self, decl.names[0], binding_ty, state, true);
             registerAggregateFieldAliases(self, decl.names[0].text, .{ .root = decl.names[0].text }, decl.names[0].span, init, state, aliases);
         } else if (init.kind == .array_literal) {
+            recordTypeOnlyPlaceRoot(self, decl.names[0], binding_ty, state, true);
             registerArrayElementAliases(self, decl.names[0].text, .{ .root = decl.names[0].text }, decl.names[0].span, init, state, aliases);
         }
         markBorrowEscapeCapturedCallResult(self, init, decl.names[0].span, state, aliases);
     }
+}
+
+fn recordTypeOnlyPlaceRoot(self: *Checker, name: ast.Ident, maybe_ty: ?ast.TypeExpr, state: *std.StringHashMap(MoveSlot), cleanup_local: bool) void {
+    const ty = maybe_ty orelse return;
+    if (state.get(name.text)) |slot| {
+        if (slot.alias_of != null or isPureIndexFactSlot(slot) or (slot.live and !slot.type_only)) return;
+    }
+    state.put(name.text, .{ .live = false, .span = name.span, .place = .{ .root = name.text }, .ty = ty, .type_only = true, .cleanup_local = cleanup_local }) catch {
+        self.oom = true;
+    };
 }
