@@ -803,10 +803,12 @@ are discarded at block exit, while supported updates to an outer returned
 aggregate remain visible. Contract bodies with call-like unchecked arithmetic
 remain outside the producer. Pure comptime-block prefixes are supported only
 when their contents are compile-time expression/assert statements;
-runtime-affecting contents remain outside the producer. Transparent
-`while`/`for` prefixes are supported only when the condition or iterable and
-loop body contain no calls/exits/control flow and do not mutate
-aggregate-return locals.
+runtime-affecting contents remain outside the producer. Call-free runtime
+expression/assert prefixes are also transparent and do not mutate aggregate
+facts; expressions containing calls, `try`, `await`, block expressions, or
+`unreachable` remain outside the producer. Transparent `while`/`for` prefixes
+are supported only when the condition or iterable and loop body contain no
+calls/exits/control flow and do not mutate aggregate-return locals.
 
 ### Consumer and retirement rule
 

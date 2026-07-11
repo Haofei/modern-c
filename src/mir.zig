@@ -1681,6 +1681,9 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
                 if (assignmentTargetIdentName(assignment.target) == null) return false;
                 if (aggregateReturnPrefixExprHasCallOrExit(assignment.value)) return false;
             },
+            .expr, .assert => |expr| {
+                if (aggregateReturnPrefixExprHasCallOrExit(expr)) return false;
+            },
             .block => |block| {
                 if (!aggregateReturnPrefixStatementsAreSupported(block.items)) return false;
             },
@@ -1808,6 +1811,9 @@ fn processAggregateReturnLiteralLocalStatements(
                 }
                 const target = aggregateReturnLocalArrayElementAssignmentTarget(assignment.target) orelse return false;
                 try tryTrackAggregateReturnLiteralLocalArrayElementAssignment(allocator, locals, paths, target.local_name, target.field_name, target.index, assignment.value);
+            },
+            .expr, .assert => |expr| {
+                if (aggregateReturnPrefixExprHasCallOrExit(expr)) return false;
             },
             .block => |block| {
                 if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, block.items, true)) return false;
