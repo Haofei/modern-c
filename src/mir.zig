@@ -1605,7 +1605,7 @@ fn collectSequentialSwitchAggregateReturnLiteralPathsFrom(
 fn aggregateReturnStatementsContainControlFlow(statements: []const ast.Stmt) bool {
     for (statements) |stmt| switch (stmt.kind) {
         .@"return", .@"switch", .if_let, .@"break", .@"continue", .@"defer" => return true,
-        .loop => |loop| if (!aggregateReturnForLoopIsTransparent(loop)) return true,
+        .loop => |loop| if (!aggregateReturnLoopIsTransparent(loop)) return true,
         .block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
         .unsafe_block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
         .comptime_block => |block| if (!aggregateReturnComptimeBlockIsTransparent(block)) return true,
@@ -1690,7 +1690,7 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
                 if (!aggregateReturnPrefixStatementsAreSupported(contract.block.items)) return false;
             },
             .loop => |loop| {
-                if (!aggregateReturnForLoopIsTransparent(loop)) return false;
+                if (!aggregateReturnLoopIsTransparent(loop)) return false;
             },
             else => return false,
         }
@@ -1698,14 +1698,16 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
     return true;
 }
 
-fn aggregateReturnForLoopIsTransparent(loop: ast.Loop) bool {
-    if (loop.kind != .@"for") return false;
-    const iterable = loop.iterable orelse return false;
-    if (aggregateReturnPrefixExprHasCallOrExit(iterable)) return false;
-    return aggregateReturnForLoopBodyIsTransparent(loop.body.items);
+fn aggregateReturnLoopIsTransparent(loop: ast.Loop) bool {
+    switch (loop.kind) {
+        .@"for", .@"while" => {},
+    }
+    const condition_or_iterable = loop.iterable orelse return false;
+    if (aggregateReturnPrefixExprHasCallOrExit(condition_or_iterable)) return false;
+    return aggregateReturnLoopBodyIsTransparent(loop.body.items);
 }
 
-fn aggregateReturnForLoopBodyIsTransparent(statements: []const ast.Stmt) bool {
+fn aggregateReturnLoopBodyIsTransparent(statements: []const ast.Stmt) bool {
     for (statements) |stmt| switch (stmt.kind) {
         .let_decl, .var_decl => |local| {
             if (local.init) |initializer| {
@@ -1715,10 +1717,10 @@ fn aggregateReturnForLoopBodyIsTransparent(statements: []const ast.Stmt) bool {
         .expr, .assert => |expr| {
             if (aggregateReturnPrefixExprHasCallOrExit(expr)) return false;
         },
-        .block => |block| if (!aggregateReturnForLoopBodyIsTransparent(block.items)) return false,
-        .unsafe_block => |block| if (!aggregateReturnForLoopBodyIsTransparent(block.items)) return false,
+        .block => |block| if (!aggregateReturnLoopBodyIsTransparent(block.items)) return false,
+        .unsafe_block => |block| if (!aggregateReturnLoopBodyIsTransparent(block.items)) return false,
         .comptime_block => |block| if (!aggregateReturnComptimeBlockIsTransparent(block)) return false,
-        .contract_block => |contract| if (!aggregateReturnForLoopBodyIsTransparent(contract.block.items)) return false,
+        .contract_block => |contract| if (!aggregateReturnLoopBodyIsTransparent(contract.block.items)) return false,
         else => return false,
     };
     return true;
@@ -1786,7 +1788,7 @@ fn processAggregateReturnLiteralLocalStatements(
                 if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, contract.block.items, true)) return false;
             },
             .loop => |loop| {
-                if (!aggregateReturnForLoopIsTransparent(loop)) return false;
+                if (!aggregateReturnLoopIsTransparent(loop)) return false;
             },
             else => return false,
         }

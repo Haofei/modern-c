@@ -741,8 +741,9 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
   scoped blocks and transparent unsafe blocks whose contents reduce to those
   supported prefix statements, plus pure comptime blocks whose contents are
   compile-time expression/assert statements, contract blocks whose contents
-  reduce to supported aggregate updates, and transparent `for` prefixes whose
-  iterable and body have no calls/exits/control flow or aggregate mutation;
+  reduce to supported aggregate updates, and transparent `while`/`for` prefixes
+  whose condition or iterable and body have no calls/exits/control flow or
+  aggregate mutation;
 - exhaustive bool/wildcard switches with bounded return/fallthrough paths,
   including all-fallthrough switch/`if` joins before a supported trailing return,
   bounded `if let` return/fallthrough and explicit-else return path splits,
@@ -783,10 +784,11 @@ are explicit fail-closed boundaries too: MIR emits no summary for the callee, so
 both backends keep the returned field unknown. Unsupported nested control flow
 inside an aggregate-return candidate path is also an explicit fail-closed
 boundary: MIR emits no summary for that callee, and C/LLVM keep the returned
-field conservative. Mutating loop/`for` prefixes, deferred cleanup prefixes,
-unsupported nested CFG joins, and path-count-overflow CFG joins before a final
-aggregate return are handled the same way: they remain outside the producer
-domain, MIR emits no summary, and both backends keep returned fields
+field conservative. Mutating loop prefixes, loop bodies with explicit control
+flow, deferred cleanup prefixes, unsupported nested CFG joins, and
+path-count-overflow CFG joins before a final aggregate return are handled the
+same way: they remain outside the producer domain, MIR emits no summary, and
+both backends keep returned fields
 conservative. Plain scoped-block prefixes, transparent unsafe-block
 prefixes, and contract-block prefixes are supported only when their contents
 reduce to the same straight-line aggregate-return prefix domain; block locals
@@ -794,9 +796,10 @@ are discarded at block exit, while supported updates to an outer returned
 aggregate remain visible. Contract bodies with call-like unchecked arithmetic
 remain outside the producer. Pure comptime-block prefixes are supported only
 when their contents are compile-time expression/assert statements;
-runtime-affecting contents remain outside the producer. Transparent `for`
-prefixes are supported only when the iterable and loop body contain no
-calls/exits/control flow and do not mutate aggregate-return locals.
+runtime-affecting contents remain outside the producer. Transparent
+`while`/`for` prefixes are supported only when the condition or iterable and
+loop body contain no calls/exits/control flow and do not mutate
+aggregate-return locals.
 
 ### Consumer and retirement rule
 

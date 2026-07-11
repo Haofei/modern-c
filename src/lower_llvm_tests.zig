@@ -999,6 +999,65 @@ test "LLVM aggregate-return loop prefix fails closed" {
     try expectContains(body, "load atomic i32, ptr %");
 }
 
+test "LLVM consumes MIR aggregate-return transparent while-prefix facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder(flag: bool) -> Holder {
+        \\    while flag {
+        \\        let ignored: u32 = 0;
+        \\    }
+        \\    return .{ .ptr = &shared_counter, .tag = 1 };
+        \\}
+        \\
+        \\fn use_returned_holder(flag: bool) -> u32 {
+        \\    let holder: Holder = returned_holder(flag);
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_transparent_while_prefix_aggregate_return_mir_fact.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
+    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_transparent_while_prefix_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_returned_holder");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+}
+
+test "LLVM aggregate-return mutating while prefix fails closed" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder(flag: bool) -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 1 };
+        \\    while flag {
+        \\        holder.tag = 2;
+        \\    }
+        \\    return holder;
+        \\}
+        \\
+        \\fn use_returned_holder(flag: bool) -> u32 {
+        \\    let holder: Holder = returned_holder(flag);
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mutating_while_prefix_aggregate_return_fail_closed.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
+    try expectNotContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
+    try expectContains(body, "load atomic i32, ptr %");
+}
+
 test "LLVM aggregate-return nested loop control fails closed" {
     const source =
         \\global shared_counter: u32 = 0;
