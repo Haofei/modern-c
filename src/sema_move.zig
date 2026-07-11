@@ -1483,10 +1483,56 @@ fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, sp
 }
 
 fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    var rhs_state = cloneMoveState(self, state);
-    defer rhs_state.deinit();
-    moveConsume(self, rhs, &rhs_state, aliases);
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    defer cfg.deinit();
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        return;
+    };
+    const rhs_block = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        return;
+    };
+    const join = cfg.addBlock(.branch_join) catch {
+        self.oom = true;
+        return;
+    };
+    // The bypass edge is inserted first so the join state represents the path
+    // where the RHS was not evaluated before the RHS path is merged into it.
+    cfg.addEdge(entry, join, .branch) catch {
+        self.oom = true;
+        return;
+    };
+    cfg.addEdge(entry, rhs_block, .branch) catch {
+        self.oom = true;
+        return;
+    };
+    cfg.addEdge(rhs_block, join, .normal) catch {
+        self.oom = true;
+        return;
+    };
 
+    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return;
+    defer worklist.deinit();
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == entry) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == rhs_block) {
+            moveConsume(self, rhs, block_state, aliases);
+            const joined = worklist.statePtr(join) orelse {
+                self.oom = true;
+                return;
+            };
+            mergeShortCircuitMoveStates(self, joined, block_state, rhs.span, false);
+            worklist.enqueue(self, join);
+        } else if (block == join) {
+            replaceMoveState(self, state, block_state);
+        }
+    }
+}
+
+fn mergeShortCircuitMoveStates(self: *Checker, state: *std.StringHashMap(MoveSlot), rhs_state: *const std.StringHashMap(MoveSlot), span: diagnostics.Span, deferred: bool) void {
     var index_fact_removals: std.ArrayListUnmanaged([]const u8) = .empty;
     defer index_fact_removals.deinit(self.reporter.allocator);
 
@@ -1502,7 +1548,7 @@ fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringH
         };
         const before = entry.value_ptr.*;
         if (before.live != after.live or before.deferred != after.deferred or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow) or !sameMaybeKey(before.deferred_borrow, after.deferred_borrow) or !sameMaybePlace(before.deferred_borrow_place, after.deferred_borrow_place)) {
-            self.errorCode(rhs.span, "E_MOVE_BRANCH_MISMATCH", "cannot consume, reserve, or escape an outer linear `move` value only on one side of a short-circuit expression");
+            self.errorCode(span, "E_MOVE_BRANCH_MISMATCH", if (deferred) "cannot consume, reserve, or defer-borrow an outer linear `move` value only on one side of a short-circuit expression" else "cannot consume, reserve, or escape an outer linear `move` value only on one side of a short-circuit expression");
             entry.value_ptr.live = false;
             entry.value_ptr.deferred = false;
             entry.value_ptr.escaped_borrow = null;
@@ -1523,7 +1569,7 @@ fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringH
         if (state.contains(entry.key_ptr.*)) continue;
         const root = trackedSubplaceRoot(entry.value_ptr.*, entry.key_ptr.*) orelse continue;
         if (state.getPtr(root)) |root_slot| {
-            self.errorCode(rhs.span, "E_MOVE_BRANCH_MISMATCH", "cannot move a linear `move` place only on one side of a short-circuit expression");
+            self.errorCode(span, "E_MOVE_BRANCH_MISMATCH", if (deferred) "cannot defer-consume a linear `move` place only on one side of a short-circuit expression" else "cannot move a linear `move` place only on one side of a short-circuit expression");
             root_slot.live = false;
             root_slot.deferred = false;
             root_slot.escaped_borrow = null;
@@ -1535,51 +1581,7 @@ fn moveDeferShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHas
     var rhs_state = cloneMoveState(self, state);
     defer rhs_state.deinit();
     moveDefer(self, rhs, &rhs_state, aliases);
-
-    var index_fact_removals: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer index_fact_removals.deinit(self.reporter.allocator);
-
-    var it = state.iterator();
-    while (it.next()) |entry| {
-        const after = rhs_state.get(entry.key_ptr.*) orelse {
-            if (isPureIndexFactSlot(entry.value_ptr.*)) {
-                index_fact_removals.append(self.reporter.allocator, entry.key_ptr.*) catch {
-                    self.oom = true;
-                };
-            }
-            continue;
-        };
-        const before = entry.value_ptr.*;
-        if (before.live != after.live or before.deferred != after.deferred or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow) or !sameMaybeKey(before.deferred_borrow, after.deferred_borrow) or !sameMaybePlace(before.deferred_borrow_place, after.deferred_borrow_place)) {
-            self.errorCode(rhs.span, "E_MOVE_BRANCH_MISMATCH", "cannot consume, reserve, or defer-borrow an outer linear `move` value only on one side of a short-circuit expression");
-            entry.value_ptr.live = false;
-            entry.value_ptr.deferred = false;
-            entry.value_ptr.escaped_borrow = null;
-            entry.value_ptr.deferred_borrow = null;
-            entry.value_ptr.deferred_borrow_place = null;
-        } else if (!sameAliasFact(before, after)) {
-            entry.value_ptr.* = divergentAliasSlot(entry.key_ptr.*, before);
-        } else if (isPureIndexFactSlot(before) and !sameIndexFact(before, after)) {
-            index_fact_removals.append(self.reporter.allocator, entry.key_ptr.*) catch {
-                self.oom = true;
-            };
-        }
-    }
-    for (index_fact_removals.items) |k| _ = state.remove(k);
-
-    var rhs_it = rhs_state.iterator();
-    while (rhs_it.next()) |entry| {
-        if (state.contains(entry.key_ptr.*)) continue;
-        const root = trackedSubplaceRoot(entry.value_ptr.*, entry.key_ptr.*) orelse continue;
-        if (state.getPtr(root)) |root_slot| {
-            self.errorCode(rhs.span, "E_MOVE_BRANCH_MISMATCH", "cannot defer-consume a linear `move` place only on one side of a short-circuit expression");
-            root_slot.live = false;
-            root_slot.deferred = false;
-            root_slot.escaped_borrow = null;
-            root_slot.deferred_borrow = null;
-            root_slot.deferred_borrow_place = null;
-        }
-    }
+    mergeShortCircuitMoveStates(self, state, &rhs_state, rhs.span, true);
 }
 
 fn sameMaybeSpan(left: ?diagnostics.Span, right: ?diagnostics.Span) bool {
