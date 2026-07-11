@@ -1557,6 +1557,18 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    }
         \\    return .{ .ptr = &shared_counter, .tag = 27 };
         \\}
+        \\fn nested_if_let_control_holder(choice: u32, maybe: ?u32) -> Holder {
+        \\    switch choice {
+        \\        0 => {
+        \\            if let value = maybe {
+        \\                return .{ .ptr = &shared_counter, .tag = value };
+        \\            }
+        \\            return .{ .ptr = &shared_counter, .tag = 28 };
+        \\        }
+        \\        _ => {}
+        \\    }
+        \\    return .{ .ptr = &shared_counter, .tag = 29 };
+        \\}
         \\fn if_let_control_holder(maybe: ?u32) -> Holder {
         \\    if let value = maybe {
         \\        return .{ .ptr = &shared_counter, .tag = value };
@@ -1792,6 +1804,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_control_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "nested_loop_control_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "nested_call_control_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_if_let_control_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "if_let_control_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "if_let_else_control_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "scoped_block_holder"));
@@ -1820,6 +1833,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "copied_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "branched_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_control_holder", "ptr", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_if_let_control_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "if_let_control_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "if_let_else_control_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_holder", "ptr", .global_storage));

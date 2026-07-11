@@ -720,7 +720,8 @@ Current producer boundary:
   or direct constant-index fixed pointer-array element assignments before a
   checked trailing return, exhaustive all-fallthrough switch/`if` joins before
   the same kind of checked trailing return, bounded `if let` path splits whose
-  reachable arms reduce to supported return/fallthrough or explicit-else return paths, bounded
+  reachable arms reduce to supported return/fallthrough or explicit-else return
+  paths, including when nested inside supported switch arms, bounded
   sequential top-level exhaustive switch joins, or bounded nested
   exhaustive switch/`if` return paths whose expanded paths stay within the
   aggregate-return path cap;
@@ -744,6 +745,7 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
 - exhaustive bool/wildcard switches with bounded return/fallthrough paths,
   including all-fallthrough switch/`if` joins before a supported trailing return,
   bounded `if let` return/fallthrough and explicit-else return path splits,
+  including when nested inside supported switch arms,
   bounded sequential top-level switch joins, and bounded nested switch/`if`
   return paths;
 - intersection of field facts across paths, retaining a field only when every
@@ -777,11 +779,11 @@ no owned aggregate-return summary for those diagnostic shapes, and both backends
 keep the final scalar load conservative.
 Dereference writes through aggregate aliases, such as `alias.*.ptr = &global`,
 are explicit fail-closed boundaries too: MIR emits no summary for the callee, so
-both backends keep the returned field unknown. Nested control flow inside an
-aggregate-return candidate path is also an explicit fail-closed boundary: MIR
-emits no summary for that callee, and C/LLVM keep the returned field
-conservative. Loop prefixes, `for` prefixes, deferred cleanup prefixes, `if
-let` narrowing, unsupported nested CFG joins, and path-count-overflow CFG joins
+both backends keep the returned field unknown. Unsupported nested control flow
+inside an aggregate-return candidate path is also an explicit fail-closed
+boundary: MIR emits no summary for that callee, and C/LLVM keep the returned
+field conservative. Loop prefixes, `for` prefixes, deferred cleanup prefixes,
+unsupported nested CFG joins, and path-count-overflow CFG joins
 before a final aggregate return are handled the same way: they remain outside
 the producer domain, MIR emits no summary, and both backends keep returned
 fields conservative. Plain scoped-block prefixes, transparent unsafe-block
@@ -821,8 +823,7 @@ MIR-populated cache; the AST collector is gone.
    call-like unchecked arithmetic, loop prefixes, `for` prefixes, deferred
    cleanup prefixes, unsupported nested CFG joins, path-count-overflow CFG
    joins, exported aggregate returns, mixed paths, prefix calls, fallthrough
-   dynamic-index writes, dereference writes, unsupported nested `if let`
-   narrowing, and aggregate array nesting beyond the fixed
+   dynamic-index writes, dereference writes, and aggregate array nesting beyond the fixed
    pointer-array/struct-array domains are covered as fail-closed rather than
    inferred.
 5. Complete: the semantic-facts inventory rejects the retired LLVM

@@ -595,9 +595,25 @@ test "lower-c consumes MIR aggregate-return nested control facts" {
         \\    }
         \\    return .{ .ptr = &shared_counter, .tag = 3 };
         \\}
+        \\fn returned_holder_if_let(choice: u32, maybe: ?u32) -> Holder {
+        \\    switch choice {
+        \\        0 => {
+        \\            if let value = maybe {
+        \\                return .{ .ptr = &shared_counter, .tag = value };
+        \\            }
+        \\            return .{ .ptr = &shared_counter, .tag = 4 };
+        \\        }
+        \\        _ => {}
+        \\    }
+        \\    return .{ .ptr = &shared_counter, .tag = 5 };
+        \\}
         \\
         \\fn use_returned_holder(choice: u32, flag: bool) -> u32 {
         \\    let holder: Holder = returned_holder(choice, flag);
+        \\    return holder.ptr.*;
+        \\}
+        \\fn use_returned_holder_if_let(choice: u32, maybe: ?u32) -> u32 {
+        \\    let holder: Holder = returned_holder_if_let(choice, maybe);
         \\    return holder.ptr.*;
         \\}
     ;
@@ -606,12 +622,20 @@ test "lower-c consumes MIR aggregate-return nested control facts" {
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTest("c_nested_control_aggregate_return_mir_fact.mc", source, &output);
     try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder_if_let callee=returned_holder_if_let field=ptr provenance=global_storage");
 
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
     try appendCheckedCTestWithoutAggregateReturnPointerFact("c_nested_control_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
     try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder_if_let callee=returned_holder_if_let field=ptr provenance=global_storage");
     try expectContains(missing_output.items, "mc_race_load_u32");
+
+    var missing_if_let_output: std.ArrayList(u8) = .empty;
+    defer missing_if_let_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_nested_control_aggregate_return_mir_fact.mc", source, "returned_holder_if_let", "ptr", &missing_if_let_output);
+    try expectNotContains(missing_if_let_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder_if_let callee=returned_holder_if_let field=ptr");
+    try expectContains(missing_if_let_output.items, "mc_race_load_u32");
 }
 
 test "lower-c aggregate-return loop prefix fails closed" {
