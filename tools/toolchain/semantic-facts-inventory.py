@@ -376,6 +376,51 @@ INTEGER_DEFAULT_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
     ],
 }
 
+REPRESENTATION_FACT_HARDENING_AUDIT: dict[str, list[str]] = {
+    "docs/typed-semantic-facts.md": [
+        "### Representation-fact hardening audit",
+        "| Owned fact model |",
+        "| Backend admission gate |",
+        "| Extra stale-fact rejection |",
+    ],
+    "docs/compiler-production-readiness.md": [
+        "Representation-fact hardening is gated",
+    ],
+    "src/mir_model.zig": [
+        "pub const RepresentationFact = struct",
+        "representation_facts: []RepresentationFact",
+    ],
+    "src/mir.zig": [
+        "pub fn validateRepresentationFactsForLowering",
+        "fn functionHasMatchingRepresentationFact",
+        "fn functionHasMatchingRepresentationInstruction",
+        "fn representationFactKind",
+    ],
+    "src/lower_c.zig": [
+        "try mir.validateRepresentationFactsForLowering(typed_mir.*);",
+    ],
+    "src/lower_llvm.zig": [
+        "try mir.validateRepresentationFactsForLowering(module_mir.*);",
+    ],
+    "src/lower_c_tests.zig": [
+        "lower-c rejects prebuilt MIR with missing representation facts",
+        "lower-c rejects prebuilt MIR with stale representation facts",
+        "lower-c rejects prebuilt MIR with extra stale representation facts",
+        "fn appendStaleRepresentationFactForFunction",
+    ],
+    "src/lower_llvm_tests.zig": [
+        "LLVM rejects prebuilt MIR with missing representation facts",
+        "LLVM rejects prebuilt MIR with stale representation facts",
+        "LLVM rejects prebuilt MIR with extra stale representation facts",
+        "fn appendStaleRepresentationFactForFunction",
+    ],
+    "src/mir_tests.zig": [
+        "MIR dump exposes representation value identities",
+        "MIR target representation checks see through casts",
+        "mir representation_fact fn=return_ptr_param",
+    ],
+}
+
 ANCHORS: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "### Phase 1 inventory: current fact-like surfaces",
@@ -791,6 +836,19 @@ def main() -> int:
             checked += 1
             if anchor not in text:
                 missing.append(f"integer/default fact family audit: {relative}: missing anchor {anchor!r}")
+
+    for relative, anchors in sorted(REPRESENTATION_FACT_HARDENING_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"representation fact hardening audit: {relative}: file missing")
+            continue
+
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"representation fact hardening audit: {relative}: missing anchor {anchor!r}")
 
     if missing:
         print("semantic facts inventory anchor check failed:", file=sys.stderr)

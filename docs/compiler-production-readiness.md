@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-11, based on the current compiler worktree**.
-Evidence register: **517 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **518 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -251,6 +251,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | MIR representation facts are explicit in lower-mir dumps | Representation-sensitive typed loads, checks, and uses now emit stable `mir representation_fact ... recorded=true` rows with type and `value_id`, alongside ordinary instruction rows. This gives the representation family a visible typed-MIR artifact surface comparable to range, pointer-provenance, and elided-bounds facts. | `src/mir.zig` `appendDumpOpt`; `src/mir_tests.zig` `MIR dump exposes representation value identities`; `docs/typed-semantic-facts.md`; `zig test src/mir_tests.zig --test-filter "MIR dump exposes representation value identities"`; `git diff --check`. |
 | MIR representation facts are first-class typed MIR rows | Representation-sensitive typed loads, checks, and uses are now recorded in `Function.representation_facts` as owned `RepresentationFact` entries keyed by kind, type, `value_id`, and source point. The lower-mir and MIR verification artifacts print those owned rows instead of rediscovering them from instruction kinds, and tests assert both the in-memory fact slice and dump text. | `src/mir_model.zig` `RepresentationFact`; `src/mir.zig` `representation_facts`, `representationFactKind`, `appendDumpOpt`, and `appendVerificationFacts`; `src/mir_tests.zig` `MIR dump exposes representation value identities`; `docs/typed-semantic-facts.md`; `zig test src/mir_tests.zig`; `git diff --check`. |
 | C and LLVM consume representation facts as a MIR admission gate | Both production backends now reject prebuilt MIR when an owned `RepresentationFact` is missing or no longer exactly matches its representation-sensitive instruction. This makes the fact slice load-bearing at backend entry and prevents a mutated MIR artifact from falling through to AST-only representation trust. | `src/mir.zig` `validateRepresentationFactsForLowering`; `src/lower_c.zig` `appendCProfileWithMir`; `src/lower_llvm.zig` `appendLlvmCheckedMir`; `src/lower_c_tests.zig` / `src/lower_llvm_tests.zig` missing and stale representation-fact tests; focused C/LLVM tests; `zig build test`; `git diff --check`. |
+| Representation-fact hardening is gated | The representation fact family now has an explicit hardening audit: C and LLVM reject missing facts, retargeted stale facts, and extra stale facts appended to otherwise valid MIR. The semantic-facts inventory anchors the owned fact model, exact validator, backend admission calls, hardening audit table, and both backend negative tests so this admission contract cannot drift silently. | `docs/typed-semantic-facts.md` `Representation-fact hardening audit`; `tools/toolchain/semantic-facts-inventory.py` `REPRESENTATION_FACT_HARDENING_AUDIT`; `src/mir.zig` `validateRepresentationFactsForLowering`; `src/lower_c_tests.zig` / `src/lower_llvm_tests.zig` extra-stale representation-fact tests; focused C/LLVM representation-fact tests; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
 | Integer literal syntax overflow rejects before defaulting | Oversized integer literal syntax is treated as an out-of-range semantic error instead of falling through to target defaulting or backend emission. The semantic-facts inventory anchors the shared `parseIntegerLiteral` overflow sentinel, the initializer/targetless/binary-operand semantic gates, and exact fixture counts across binary operands, annotated locals, targetless locals, globals, and returns. This is a bounded integer/defaulting cleanup slice, not closure of every integer/default fact family. | `src/numeric.zig` `parseIntegerLiteral`; `src/sema.zig` `integerLiteralSyntaxOverflow`, `checkIntegerLiteralInitializer`, `checkTargetlessLiteralInitializer`, and `checkLiteralOperandAgainstClass`; `tests/spec/no_implicit_conversion.mc`; `tests/spec/initialization.mc`; `tests/spec/global_initializers.mc`; `tests/spec/return_types.mc`; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `git diff --check`. |
 | Lexer skips UTF-8 BOM at file start | Source files that begin with a UTF-8 byte-order mark now lex as ordinary MC files instead of reporting `E_LEX_UNEXPECTED_BYTE`. The lexer advances past the BOM while preserving the first real token at line 1, column 1, and the unit test locks that diagnostic-free behavior. | `src/lexer.zig` `Lexer.init`; `src/lexer_tests.zig` `lexer skips UTF-8 BOM at start of file`; `zig test src/lexer_tests.zig --test-filter "UTF-8 BOM"`; `python3 tools/toolchain/readiness-ledger-test.py`; `git diff --check`. |
 | MIR aggregate representation facts expose stable value identities | Aggregate field and array-element representation uses now have explicit lower-MIR dump coverage, not only verifier rows. Casted pointer values stored into struct fields or array elements emit owned `mir representation_fact ... detail=aggregate_field/aggregate_element ... value_id=cast` rows, proving aggregate representation obligations are auditable through the typed MIR artifact. | `src/mir_tests.zig` `MIR target representation checks see through casts`; `src/mir.zig` `addRepresentationUseForValue` / `appendDumpOpt`; `docs/typed-semantic-facts.md`; `zig test src/mir_tests.zig --test-filter "MIR target representation checks see through casts"`; `git diff --check`. |
@@ -726,13 +727,14 @@ bounded slice: non-elided bounds checks, optimized check elision, and no-overflo
 unchecked arithmetic all use MIR-owned facts with C/LLVM missing or retargeted
 fact gates. The integer/default slice is complete for target-typed integer
 literal conversions: MIR emits integer facts and both backends reject missing or
-stale prebuilt facts before lowering.
+stale prebuilt facts before lowering. The representation-fact slice is also
+gated: both backends reject missing, retargeted stale, and extra stale
+representation facts at MIR admission.
 
-Next actionable slices:
-
-| Slice | Action | Acceptance evidence | Not enough |
-|---|---|---|---|
-| Representation-fact hardening | Turn remaining representation admission checks into exact typed-fact consumers with missing-fact gates. | Tests that removing a required representation fact causes conservative fallback or a diagnostic on both backends. | More positive representation tests without negative missing-fact coverage. |
+Next actionable slices: none in this workstream. Remaining typed-MIR work is
+tracked by the closure matrix and semantic-inference budget; a new slice must
+name the next registered inference family being migrated or explicitly accepted
+as a conservative fallback.
 
 #### CFG/Place-Based Move Checker
 
@@ -828,16 +830,20 @@ claim. They are tracked separately from the three compiler-implementation
 workstreams because some are design decisions or product-scope decisions rather
 than immediate compiler slices.
 
-| Risk | Production-readiness action | Closure condition |
-|---|---|---|
-| General temporal memory safety | Decide whether the production profile includes restricted region/lifetime checking or documents this as an explicit non-goal. `move` covers linear resources in the supported subset, but MC does not yet have a general borrow/lifetime system for dangling slices, returned views, `defer free` escapes, closure captures, async captures, or arena-scoped values. | Implement a restricted lifetime layer for the chosen cases, or document the unsupported cases with diagnostics/unsafe boundaries where applicable. |
-| Shared memory model ergonomics | Decide whether to keep the current provenance-proof plus conservative race-lowering model, or introduce explicit `shared<T>` / `atomic<T>` / `volatile<T>` types. | Either ship a typed shared-memory model with migration tests, or document the current model as the production memory model with complete provenance/race-lowering closure. |
-| `unsafe_contract` optimizer semantics | Choose one contract model: check-elision only, whole-program unsafe optimizer assumption, or compiler-verified proof. | Spec text, lowering rules, and tests show contract violations cannot accidentally create a subtler optimizer contract than the chosen model. |
-| Trait method namespace and coherence | Decide whether trait expansion is in the production profile; if yes, add trait-qualified method identity and coherence based on owning the trait or type. | Either implement and test qualified disambiguation/coherence, or freeze trait scope and document the limitation. |
-| Module graph and separate compilation | Decide whether broad production readiness requires a stable module graph, separate compilation, and incremental-friendly identities. | Implement `ModuleId`/`DeclId`/`TypeId`-style ownership and interface boundaries, or document whole-program compilation as a deliberate production-profile constraint. |
-| C backend positioning | Define the C backend as bootstrap/reference/differential backend or as a supported production backend with a target matrix. | Documentation states compiler versions, target triples, ABI subset, flags, aggregate passing/return limits, and whether ISO C portability is a non-goal. |
-| Async expansion before typed IR | Freeze async feature expansion until typed lowering owns capture, liveness, move, borrow-across-await, and effect facts. | New async syntax is blocked, or async is reimplemented on typed facts/MIR with diagnostics for unsupported captures and suspension cases. |
-| Comptime and reflection breadth | Decide whether bounded structural reflection/derive belongs in the production profile. | Either implement the bounded reflection subset with tests, or document narrow value-level comptime as the production language boundary. |
+Priority order is based on semantic risk first: items that can change the meaning
+of accepted programs or the compiler's safety contract rank above ecosystem,
+ergonomics, or convenience work.
+
+| Order | Priority | Risk | Production-readiness action | Closure condition |
+|---|---|---|---|---|
+| 1 | P0 | Shared memory model ergonomics | Decide whether to keep the current provenance-proof plus conservative race-lowering model, or introduce explicit `shared<T>` / `atomic<T>` / `volatile<T>` types. | Either ship a typed shared-memory model with migration tests, or document the current model as the production memory model with complete provenance/race-lowering closure. |
+| 2 | P0 | General temporal memory safety | Decide whether the production profile includes restricted region/lifetime checking or documents this as an explicit non-goal. `move` covers linear resources in the supported subset, but MC does not yet have a general borrow/lifetime system for dangling slices, returned views, `defer free` escapes, closure captures, async captures, or arena-scoped values. | Implement a restricted lifetime layer for the chosen cases, or document the unsupported cases with diagnostics/unsafe boundaries where applicable. |
+| 3 | P0 | `unsafe_contract` optimizer semantics | Choose one contract model: check-elision only, whole-program unsafe optimizer assumption, or compiler-verified proof. | Spec text, lowering rules, and tests show contract violations cannot accidentally create a subtler optimizer contract than the chosen model. |
+| 4 | P1 | Async expansion before typed IR | Freeze async feature expansion until typed lowering owns capture, liveness, move, borrow-across-await, and effect facts. | New async syntax is blocked, or async is reimplemented on typed facts/MIR with diagnostics for unsupported captures and suspension cases. |
+| 5 | P1 | Module graph and separate compilation | Decide whether broad production readiness requires a stable module graph, separate compilation, and incremental-friendly identities. | Implement `ModuleId`/`DeclId`/`TypeId`-style ownership and interface boundaries, or document whole-program compilation as a deliberate production-profile constraint. |
+| 6 | P1 | Trait method namespace and coherence | Decide whether trait expansion is in the production profile; if yes, add trait-qualified method identity and coherence based on owning the trait or type. | Either implement and test qualified disambiguation/coherence, or freeze trait scope and document the limitation. |
+| 7 | P1 | C backend positioning | Define the C backend as bootstrap/reference/differential backend or as a supported production backend with a target matrix. | Documentation states compiler versions, target triples, ABI subset, flags, aggregate passing/return limits, and whether ISO C portability is a non-goal. |
+| 8 | P2 | Comptime and reflection breadth | Decide whether bounded structural reflection/derive belongs in the production profile. | Either implement the bounded reflection subset with tests, or document narrow value-level comptime as the production language boundary. |
 
 The intended layering remains:
 

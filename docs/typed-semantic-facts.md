@@ -207,6 +207,23 @@ accepted conservative fallback with missing-fact or diagnostic evidence.
 | `sema-call-type-resolution` | `src/sema.zig` call return/type helpers | Sema checking and MIR/backend source typing | Sema-owned source of truth, but not yet exported as a unified typed HIR. | Backends must not overrule sema; unsupported backend call spelling must reject or lower conservatively. |
 | `sema-layout-representation-checks` | `src/sema.zig` layout, packed-bits, and bitcast-layout checks | Sema representation diagnostics and MIR representation facts | Sema/MIR-owned for current representation facts. | Backend representation lowering must require matching MIR facts or reject prebuilt MIR. |
 
+### Representation-fact hardening audit
+
+This audit gates the current representation-fact admission contract. A
+prebuilt MIR module must carry an exact owned `RepresentationFact` row for each
+representation-sensitive instruction, and it must not carry extra stale rows
+that no longer correspond to an instruction. Backends validate this fact family
+at entry instead of treating the AST as a second representation authority.
+
+| Boundary | Evidence |
+|---|---|
+| Owned fact model | `src/mir_model.zig` owns `RepresentationFact` rows in `Function.representation_facts`; `src/mir.zig` records rows through the `representationFactKind` producer path. |
+| Stable identity key | Facts match by instruction kind, result type, source point, detail, and `value_id`; `lower-mir` prints both instruction `value_id=...` and `mir representation_fact ... value_id=...` rows. |
+| Backend admission gate | C calls `validateRepresentationFactsForLowering` from `appendCProfileWithMir`; LLVM calls it from `appendLlvmCheckedMir`. |
+| Missing-fact rejection | `lower-c rejects prebuilt MIR with missing representation facts` and `LLVM rejects prebuilt MIR with missing representation facts` remove required rows and expect `InvalidMirRepresentationFacts`. |
+| Stale-fact rejection | `lower-c rejects prebuilt MIR with stale representation facts` and `LLVM rejects prebuilt MIR with stale representation facts` retarget a required row and expect `InvalidMirRepresentationFacts`. |
+| Extra stale-fact rejection | `lower-c rejects prebuilt MIR with extra stale representation facts` and `LLVM rejects prebuilt MIR with extra stale representation facts` keep all valid rows, append an unmatched stale row, and still expect `InvalidMirRepresentationFacts`. |
+
 ### Backend AST-inference budget
 
 Current backend AST-inference budget: **7 registered families**.
