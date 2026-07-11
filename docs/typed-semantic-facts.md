@@ -742,8 +742,8 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
   supported prefix statements, plus pure comptime blocks whose contents are
   compile-time expression/assert statements, contract blocks whose contents
   reduce to supported aggregate updates, and transparent `while`/`for` prefixes
-  whose condition or iterable and body have no calls/exits/control flow or
-  aggregate mutation;
+  whose condition or iterable and body have no calls/exits or pointer-bearing
+  tracked aggregate mutation;
 - exhaustive bool/wildcard switches with bounded return/fallthrough paths,
   including all-fallthrough switch/`if` joins before a supported trailing return,
   bounded `if let` return/fallthrough and explicit-else return path splits,
@@ -753,10 +753,11 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
 - intersection of field facts across paths, retaining a field only when every
   path agrees on `global_storage` and pointer shape.
 
-Every other shape remains outside the MIR-owned domain. That includes mutating loops,
-direct or indirect calls in a prefix, exports, unions, aggregate/array element
-nesting beyond the direct field model, fallthrough dynamic-index writes,
-dereference writes or nested control flow, and any path with a missing or
+Every other shape remains outside the MIR-owned domain. That includes loop calls
+or exits, pointer-bearing tracked aggregate mutation inside loops, direct or
+indirect calls in a prefix, exports, unions, aggregate/array element nesting
+beyond the direct field model, fallthrough dynamic-index writes, dereference
+writes or non-transparent nested control flow, and any path with a missing or
 ambiguous field fact. Fallthrough dynamic-index writes are an explicit
 fail-closed boundary: MIR emits no owned aggregate-return summary, and C/LLVM
 keep returned fields unknown.
