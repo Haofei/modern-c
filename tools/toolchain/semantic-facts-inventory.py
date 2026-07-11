@@ -14,6 +14,135 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
+    "c-expression-type-inference": {
+        "docs/typed-semantic-facts.md": ["| `c-expression-type-inference` |"],
+        "src/lower_c_infer.zig": [
+            "//! C backend expression type inference helpers.",
+            "pub fn operandEmitType(",
+            "pub fn derefPointeeType(",
+        ],
+    },
+    "c-type-shape-classification": {
+        "docs/typed-semantic-facts.md": ["| `c-type-shape-classification` |"],
+        "src/lower_c_info.zig": [
+            "const LocalInfo = lower_c_model.LocalInfo",
+            "const GlobalInfo = lower_c_model.GlobalInfo",
+            "pub fn localInfoFromType(",
+            "pub fn globalInfoFromType(",
+        ],
+        "src/lower_c_shape.zig": [
+            "pub fn resolvedArrayChildType(",
+            "pub fn isPointerLikeGlobalType(",
+        ],
+    },
+    "c-abi-aggregate-lowering": {
+        "docs/typed-semantic-facts.md": ["| `c-abi-aggregate-lowering` |"],
+        "src/lower_c_aggregate.zig": [
+            "pub fn emitArrayLiteral(",
+            "pub fn emitStructLiteral(",
+            "pub fn emitTaggedUnionConstructor(",
+        ],
+    },
+    "c-call-target-classification": {
+        "docs/typed-semantic-facts.md": ["| `c-call-target-classification` |"],
+        "src/lower_c_call.zig": [
+            "pub fn emitBitcastInferredLocalInit(",
+            "pub fn emitExternNonNullCallInferredLocalInit(",
+            "pub fn emitSequencedCallLocalInit(",
+        ],
+        "src/lower_c_builtin.zig": [
+            "pub fn reflectionCallKind(",
+            "const byteViewCallKind = ast_query.byteViewCallKind",
+        ],
+    },
+    "c-bounds-range-consumption": {
+        "docs/typed-semantic-facts.md": ["| `c-bounds-range-consumption` |"],
+        "src/lower_c_emitter.zig": [
+            "fn requireMirBoundsFact(",
+            "fn hasMirNoOverflowRangeFact(",
+            "fn mirCheckElided(",
+        ],
+    },
+    "c-pointer-provenance-consumption": {
+        "docs/typed-semantic-facts.md": ["| `c-pointer-provenance-consumption` |"],
+        "src/lower_c_emitter.zig": [
+            "fn updatePointerProvenanceFromMir(",
+            "fn derefAccessLowering(",
+            "fn derefPointerHasProvenLocalStorage(",
+        ],
+    },
+    "c-direct-global-race-helpers": {
+        "docs/typed-semantic-facts.md": ["| `c-direct-global-race-helpers` |"],
+        "src/lower_c_global.zig": [
+            "pub fn appendGlobalLoadExpr(",
+            "pub fn appendGlobalStorePrefix(",
+            "pub fn globalAssignmentTarget(",
+        ],
+    },
+    "llvm-pointer-provenance-consumption": {
+        "docs/typed-semantic-facts.md": ["| `llvm-pointer-provenance-consumption` |"],
+        "src/lower_llvm.zig": [
+            "fn updatePointerProvenanceFromMirOrLocalProof(",
+            "fn derefUsesRaceTolerantLowering(",
+            "fn pointerExprHasGlobalStorageProvenance(",
+        ],
+    },
+    "llvm-bounds-range-consumption": {
+        "docs/typed-semantic-facts.md": ["| `llvm-bounds-range-consumption` |"],
+        "src/lower_llvm.zig": [
+            "fn requireMirBoundsFact(",
+            "fn requireMirNoOverflowRangeFact(",
+            "fn mirCheckElided(",
+        ],
+    },
+    "llvm-representation-fact-consumption": {
+        "docs/typed-semantic-facts.md": ["| `llvm-representation-fact-consumption` |"],
+        "src/mir.zig": ["pub fn validateRepresentationFactsForLowering"],
+        "src/lower_llvm.zig": ["try mir.validateRepresentationFactsForLowering(module_mir.*)"],
+    },
+    "mir-pointer-provenance-production": {
+        "docs/typed-semantic-facts.md": ["| `mir-pointer-provenance-production` |"],
+        "src/mir.zig": [
+            "fn recordPointerProvenanceForLocalInitializer",
+            "fn appendPointerFieldProvenanceFact",
+            "fn recordPointerProvenanceAddressEscape",
+        ],
+    },
+    "mir-aggregate-return-production": {
+        "docs/typed-semantic-facts.md": ["| `mir-aggregate-return-production` |"],
+        "src/mir.zig": [
+            "fn appendAggregateReturnPointerFact",
+            "fn collectSequentialSwitchAggregateReturnLiteralPathsFrom",
+            "max_aggregate_return_literal_paths",
+        ],
+    },
+    "mir-bounds-range-production": {
+        "docs/typed-semantic-facts.md": ["| `mir-bounds-range-production` |"],
+        "src/mir.zig": [
+            "fn addRangeFactForUncheckedCall",
+            "fn addAggregateRangeFactForUncheckedExpr",
+            "try self.elided_bounds.append",
+        ],
+    },
+    "sema-call-type-resolution": {
+        "docs/typed-semantic-facts.md": ["| `sema-call-type-resolution` |"],
+        "src/sema.zig": [
+            "pub fn directCallReturnType(",
+            "fn fnPointerCallReturnType(",
+            "fn closureCallReturnType(",
+        ],
+    },
+    "sema-layout-representation-checks": {
+        "docs/typed-semantic-facts.md": ["| `sema-layout-representation-checks` |"],
+        "src/sema.zig": [
+            "const layoutFieldInfo = sema_lookup.layoutFieldInfo",
+            "fn packedBitsInfoForType(",
+            "const isBitcastLayoutClass = sema_type.isBitcastLayoutClass",
+        ],
+    },
+}
+
 ANCHORS: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "### Phase 1 inventory: current fact-like surfaces",
@@ -295,6 +424,20 @@ def main() -> int:
             actual = text.count(needle)
             if actual != expected:
                 missing.append(f"{relative}: expected {expected} occurrences of {needle!r}, found {actual}")
+
+    for family, files in sorted(SEMANTIC_INFERENCE_FAMILIES.items()):
+        for relative, anchors in sorted(files.items()):
+            path = REPO_ROOT / relative
+            try:
+                text = path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                missing.append(f"{family}: {relative}: file missing")
+                continue
+
+            for anchor in anchors:
+                checked += 1
+                if anchor not in text:
+                    missing.append(f"{family}: {relative}: missing anchor {anchor!r}")
 
     if missing:
         print("semantic facts inventory anchor check failed:", file=sys.stderr)
