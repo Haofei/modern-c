@@ -4491,6 +4491,8 @@ const FunctionBuilder = struct {
                     .unknown
                 else if (reduceCallKind(node.callee.*) != null)
                     self.exprType(expr)
+                else if (self.atomicCallValueType(node)) |ty|
+                    ty
                 else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
                 if (reduceCallKind(node.callee.*)) |kind| {
@@ -4499,6 +4501,10 @@ const FunctionBuilder = struct {
                         .sum_left => .reduce_sum_left,
                         .sum_fast => .reduce_sum_fast,
                     };
+                    try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
+                    try self.addCallTargetFact(fact_kind, call_ty, expr.span);
+                }
+                if (self.atomicCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
                     try self.addCallTargetFact(fact_kind, call_ty, expr.span);
                 }
@@ -4692,12 +4698,30 @@ const FunctionBuilder = struct {
     fn atomicReceiverCalleeName(self: *FunctionBuilder, callee: ast.Expr) ?[]const u8 {
         const member = memberExpr(callee) orelse return null;
         const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
-        if (!isAtomicTypeExprAlias(base_ty, self.aliases)) return null;
+        if (atomicPayloadTypeExprAlias(base_ty, self.aliases) == null) return null;
         if (std.mem.eql(u8, member.name.text, "load")) return "atomic.load";
         if (std.mem.eql(u8, member.name.text, "store")) return "atomic.store";
         if (std.mem.eql(u8, member.name.text, "fetch_add")) return "atomic.fetch_add";
         if (std.mem.eql(u8, member.name.text, "fetch_sub")) return "atomic.fetch_sub";
         return null;
+    }
+
+    fn atomicCallTargetKind(self: *FunctionBuilder, callee: ast.Expr) ?CallTargetKind {
+        const name = self.atomicReceiverCalleeName(callee) orelse return null;
+        if (std.mem.eql(u8, name, "atomic.load")) return .atomic_load;
+        if (std.mem.eql(u8, name, "atomic.store")) return .atomic_store;
+        if (std.mem.eql(u8, name, "atomic.fetch_add")) return .atomic_fetch_add;
+        if (std.mem.eql(u8, name, "atomic.fetch_sub")) return .atomic_fetch_sub;
+        return null;
+    }
+
+    fn atomicCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
+        const kind = self.atomicCallTargetKind(call.callee.*) orelse return null;
+        if (kind == .atomic_store) return .void;
+        const member = memberExpr(call.callee.*) orelse return null;
+        const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
+        const payload_ty = atomicPayloadTypeExprAlias(base_ty, self.aliases) orelse return null;
+        return valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases);
     }
 
     fn mmioReceiverCalleeName(self: *FunctionBuilder, callee: ast.Expr) ?[]const u8 {
@@ -7363,6 +7387,21 @@ fn isAtomicTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMa
         .generic => |node| std.mem.eql(u8, node.base.text, "atomic"),
         .qualified => |node| isAtomicTypeExprAliasDepth(node.child.*, aliases, depth + 1),
         else => false,
+    };
+}
+
+fn atomicPayloadTypeExprAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ast.TypeExpr {
+    return atomicPayloadTypeExprAliasDepth(ty, aliases, 0);
+}
+
+fn atomicPayloadTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) ?ast.TypeExpr {
+    if (depth > 64) return null;
+    return switch (ty.kind) {
+        .name => |name| if (aliases.get(name.text)) |resolved| atomicPayloadTypeExprAliasDepth(resolved, aliases, depth + 1) else null,
+        .generic => |node| if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1) node.args[0] else null,
+        .pointer => |node| atomicPayloadTypeExprAliasDepth(node.child.*, aliases, depth + 1),
+        .qualified => |node| atomicPayloadTypeExprAliasDepth(node.child.*, aliases, depth + 1),
+        else => null,
     };
 }
 

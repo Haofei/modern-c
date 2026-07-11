@@ -10,6 +10,7 @@ const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
+const mir = @import("mir.zig");
 
 const isIdentNamed = ast_query.isIdentNamed;
 const memberCallee = ast_query.memberCallee;
@@ -22,6 +23,7 @@ const genericChildType = lower_c_shape.genericChildType;
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const ExprIsPointerFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
@@ -31,6 +33,7 @@ pub const EmitContext = struct {
     emit_expr: EmitExprFn,
     operand_emit_type: OperandEmitTypeFn,
     expr_is_pointer: ExprIsPointerFn,
+    mir_call_target_kind: MirCallTargetKindFn,
 };
 
 pub fn orderingArg(args: []ast.Expr) []const u8 {
@@ -134,7 +137,14 @@ pub fn emitAtomicInitCall(ctx: EmitContext, call: anytype, locals: ?*std.StringH
 
 pub fn emitAtomicCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     const member = memberCallee(call.callee.*) orelse return false;
-    const op = member.name.text;
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return false;
+    const op = switch (kind) {
+        .atomic_load => "load",
+        .atomic_store => "store",
+        .atomic_fetch_add => "fetch_add",
+        .atomic_fetch_sub => "fetch_sub",
+        else => return false,
+    };
     if (std.mem.eql(u8, op, "load")) {
         _ = atomicLocalPayload(ctx, member.base.*, locals) orelse return false;
         const ordering = atomicOrderingArg(call.args, 0);
@@ -177,7 +187,13 @@ pub fn emitAtomicCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashM
 
 pub fn atomicResultPayload(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
     const member = memberCallee(call.callee.*) orelse return null;
-    const op = member.name.text;
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
+    const op = switch (kind) {
+        .atomic_load => "load",
+        .atomic_fetch_add => "fetch_add",
+        .atomic_fetch_sub => "fetch_sub",
+        else => return null,
+    };
     if (!std.mem.eql(u8, op, "load") and
         !std.mem.eql(u8, op, "fetch_add") and
         !std.mem.eql(u8, op, "fetch_sub"))

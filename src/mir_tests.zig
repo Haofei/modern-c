@@ -696,6 +696,40 @@ test "MIR call target facts do not collide with ordinary call names" {
     try mir.validateCallTargetFactsForLowering(typed_mir);
 }
 
+test "MIR records typed call target facts for atomic member calls" {
+    const source =
+        \\fn atomic_ops() -> u32 {
+        \\    var counter: atomic<u32> = atomic.init(1);
+        \\    counter.store(2, .release);
+        \\    let previous: u32 = counter.fetch_add(3, .acq_rel);
+        \\    let next: u32 = counter.fetch_sub(1, .seq_cst);
+        \\    return previous + next + counter.load(.acquire);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_atomic_call_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "atomic_ops").?;
+    try std.testing.expectEqual(@as(usize, 4), function.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.atomic_store, function.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("void", function.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(mir.CallTargetKind.atomic_fetch_add, function.call_target_facts[1].kind);
+    try std.testing.expectEqual(mir.CallTargetKind.atomic_fetch_sub, function.call_target_facts[2].kind);
+    try std.testing.expectEqual(mir.CallTargetKind.atomic_load, function.call_target_facts[3].kind);
+    for (function.call_target_facts[1..]) |fact| try std.testing.expectEqualStrings("u32", fact.result_ty.name());
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+}
+
 test "MIR verifier reports no_lang_trap, fallthrough, contract, and irq findings" {
     const source =
         \\fn missing_return(flag: bool) -> u32 {

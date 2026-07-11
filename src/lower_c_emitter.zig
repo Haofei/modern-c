@@ -1576,6 +1576,7 @@ const CEmitter = struct {
             .emit_expr = emitExprForCall,
             .operand_emit_type = operandEmitTypeForAtomic,
             .expr_is_pointer = exprIsPointerForAtomic,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
         };
     }
 

@@ -224,7 +224,16 @@ pub const IntegerFact = struct {
     source: SourcePoint,
 };
 
-pub const CallTargetKind = enum { reduce_sum_checked, reduce_sum_left, reduce_sum_fast, const_get };
+pub const CallTargetKind = enum {
+    reduce_sum_checked,
+    reduce_sum_left,
+    reduce_sum_fast,
+    const_get,
+    atomic_load,
+    atomic_store,
+    atomic_fetch_add,
+    atomic_fetch_sub,
+};
 
 pub const CallTargetFact = struct {
     kind: CallTargetKind,

@@ -18,7 +18,6 @@ const ByteViewCallKind = ast_query.ByteViewCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
 const byteViewCallReturnType = ast_query.byteViewCallReturnType;
 const reflectionValueCallReturnType = ast_query.reflectionValueCallReturnType;
-const atomicCallMemberOp = ast_query.atomicCallMemberOp;
 const maybeUninitCallMemberOp = ast_query.maybeUninitCallMemberOp;
 const constGetCallTarget = ast_query.constGetCallTarget;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
@@ -8568,7 +8567,7 @@ const LlvmEmitter = struct {
             .reduce_sum_checked => "sum_checked",
             .reduce_sum_left => "sum_left",
             .reduce_sum_fast => "sum_fast",
-            .const_get => return null,
+            else => return null,
         };
         return .{ .element_ty = element_ty, .return_ty = return_ty, .op = op };
     }
@@ -8597,7 +8596,14 @@ const LlvmEmitter = struct {
     }
 
     fn atomicCallInfo(self: *LlvmEmitter, call: anytype) ?AtomicCallInfo {
-        const op = atomicCallMemberOp(call.callee.*) orelse return null;
+        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+        const op = switch (kind) {
+            .atomic_load => "load",
+            .atomic_store => "store",
+            .atomic_fetch_add => "fetch_add",
+            .atomic_fetch_sub => "fetch_sub",
+            else => return null,
+        };
         const member = memberCallee(call) orelse return null;
         const base_ty = self.exprType(member.base.*) orelse return null;
         if (self.atomicPayloadType(base_ty)) |payload_ty| {
