@@ -143,6 +143,36 @@ fn linearMoveCfg(self: *Checker, exit_kind: sema_model.MoveCfgBlockKind) ?Linear
     return .{ .cfg = cfg, .entry = entry, .body = body, .exit = exit };
 }
 
+const ExitMoveCfg = struct {
+    cfg: sema_model.MoveCfg,
+    entry: sema_model.MoveCfgBlockId,
+    exit: sema_model.MoveCfgBlockId,
+
+    fn deinit(self: *ExitMoveCfg) void {
+        self.cfg.deinit();
+    }
+};
+
+fn exitMoveCfg(self: *Checker) ?ExitMoveCfg {
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const exit = cfg.addBlock(.exit) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(entry, exit, .normal) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    return .{ .cfg = cfg, .entry = entry, .exit = exit };
+}
+
 pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     const body = fn_decl.body orelse return;
     var state = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
@@ -288,28 +318,16 @@ pub fn checkMoveExitEdge(self: *Checker, state: *const std.StringHashMap(MoveSlo
 }
 
 fn moveExitEdgeCfg(self: *Checker, state: *const std.StringHashMap(MoveSlot), message: []const u8) void {
-    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
-    defer cfg.deinit();
-    const entry = cfg.addBlock(.entry) catch {
-        self.oom = true;
-        return;
-    };
-    const exit = cfg.addBlock(.exit) catch {
-        self.oom = true;
-        return;
-    };
-    cfg.addEdge(entry, exit, .normal) catch {
-        self.oom = true;
-        return;
-    };
+    var exit_cfg = exitMoveCfg(self) orelse return;
+    defer exit_cfg.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return;
+    var worklist = MoveStateCfgWorklist.init(self, &exit_cfg.cfg, exit_cfg.entry, state) orelse return;
     defer worklist.deinit();
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == entry) {
+        if (block == exit_cfg.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == exit) {
+        } else if (block == exit_cfg.exit) {
             checkMoveExitEdge(self, block_state, message);
         }
     }
@@ -1021,28 +1039,16 @@ pub fn checkLoopExitLeaks(self: *Checker, state: *std.StringHashMap(MoveSlot), t
 }
 
 fn moveLoopExitEdgeCfg(self: *Checker, state: *const std.StringHashMap(MoveSlot), target: ?ast.Ident) void {
-    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
-    defer cfg.deinit();
-    const entry = cfg.addBlock(.entry) catch {
-        self.oom = true;
-        return;
-    };
-    const exit = cfg.addBlock(.exit) catch {
-        self.oom = true;
-        return;
-    };
-    cfg.addEdge(entry, exit, .normal) catch {
-        self.oom = true;
-        return;
-    };
+    var exit_cfg = exitMoveCfg(self) orelse return;
+    defer exit_cfg.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return;
+    var worklist = MoveStateCfgWorklist.init(self, &exit_cfg.cfg, exit_cfg.entry, state) orelse return;
     defer worklist.deinit();
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == entry) {
+        if (block == exit_cfg.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == exit) {
+        } else if (block == exit_cfg.exit) {
             checkLoopExitLeaks(self, block_state, target);
         }
     }

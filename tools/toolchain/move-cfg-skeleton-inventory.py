@@ -27,6 +27,8 @@ ANCHORS: dict[str, list[str]] = {
         "const MoveStateCfgWorklist = struct",
         "const LinearMoveCfg = struct",
         "fn linearMoveCfg",
+        "const ExitMoveCfg = struct",
+        "fn exitMoveCfg",
         "fn moveFunctionBodyCfg",
         "fn moveExitEdgeCfg",
         "fn moveLoopExitEdgeCfg",
@@ -40,6 +42,7 @@ ANCHORS: dict[str, list[str]] = {
     "docs/compiler-production-readiness.md": [
         "Move checker CFG skeleton is explicit",
         "Move checker linear CFG construction is centralized",
+        "Move checker exit CFG construction is centralized",
         "Move checker return and try exits use CFG worklist state",
         "Move checker loop early exits use CFG worklist state",
         "Move checker function fallthrough exits use CFG worklist state",
