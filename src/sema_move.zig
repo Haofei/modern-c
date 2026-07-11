@@ -1020,12 +1020,6 @@ fn fullDerefMoveSubplace(self: *Checker, expr: ast.Expr, state: *const std.Strin
     return pp;
 }
 
-fn aliasPlaceForKey(key: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
-    const slot = state.get(key) orelse return null;
-    if (slot.alias_of != null) return slot.alias_place;
-    return slot.place;
-}
-
 const AliasReferent = struct {
     key: []const u8,
     place: ?MovePlace,
@@ -1053,7 +1047,7 @@ fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.String
     if (callLaunderedMoveAliasReferent(self, expr, state, aliases)) |referent| return referent;
     const key = spine.aliasReferentOf(expr, state) orelse
         return null;
-    var place = aliasPlaceForKey(key, state);
+    var place: ?MovePlace = null;
     switch (expr.kind) {
         .ident => |id| if (state.get(id.text)) |slot| {
             if (slot.alias_of) |alias_of| {
@@ -1252,7 +1246,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
 fn immediateFullDerefMoveReferent(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
     if (fullDerefMoveSubplace(self, expr, state, aliases)) |referent| return .{ .key = referent.key, .place = referent.place, .full_deref = true };
     const root = spine.borrowedMoveRoot(expr, state) orelse return null;
-    return .{ .key = root, .place = aliasPlaceForKey(root, state), .full_deref = true };
+    return .{ .key = root, .place = null, .full_deref = true };
 }
 
 fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
@@ -1294,7 +1288,7 @@ fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics
 }
 
 fn consumeTrackedMoveReferent(self: *Checker, referent: AliasReferent, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    if (referent.place orelse aliasPlaceForKey(referent.key, state)) |place| {
+    if (referent.place) |place| {
         if (place.isSubplace()) {
             consumeTrackedMovePlace(self, referent.key, place, span, state);
         } else {
