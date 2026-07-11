@@ -3086,18 +3086,11 @@ fn aliasIndexExprType(self: *Checker, expr: ast.Expr, state: *const std.StringHa
 
 fn aliasSlotReferentMoved(slot: MoveSlot, state: *const std.StringHashMap(MoveSlot)) bool {
     const referent = slot.alias_of orelse return false;
-    const place = slot.alias_place orelse movedReferentPlaceFromState(referent, state);
-    if (place) |typed| return referentPlaceMoved(typed, state);
+    if (slot.alias_place) |typed| return referentPlaceMoved(typed, state);
     if (state.get(referent)) |r| {
         if (!r.live) return true;
     }
     return false;
-}
-
-fn movedReferentPlaceFromState(referent: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
-    const slot = state.get(referent) orelse return null;
-    if (slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) return null;
-    return slot.place;
 }
 
 fn referentPlaceMoved(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
@@ -3303,7 +3296,7 @@ fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.Stri
 }
 
 fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    const borrowed_place = place orelse movedReferentPlaceFromState(referent, state);
+    const borrowed_place = place;
     const root = referentRoot(referent, borrowed_place);
     const root_slot = state.getPtr(root) orelse return;
     if (root_slot.cleanup_local) {
