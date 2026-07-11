@@ -3202,41 +3202,22 @@ fn aliasWildcardPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.Stri
         },
         .index => |ix| {
             const ctx = self.move_ctx orelse return null;
-            const base = aliasPlaceKey(self, ix.base.*, state) orelse return null;
-            errdefer self.reporter.allocator.free(base);
+            const base = placeKeyAndType(self, ix.base.*, state) orelse return null;
             const base_ty = resolveAliasType(aliasPlaceBaseType(ix.base.*, state) orelse
-                spine.exprResultType(ix.base.*, ctx.*) orelse {
-                self.reporter.allocator.free(base);
-                return null;
-            }, ctx.*);
+                spine.exprResultType(ix.base.*, ctx.*) orelse
+                base.ty, ctx.*);
             const array = switch (base_ty.kind) {
                 .array => |node| node,
-                else => {
-                    self.reporter.allocator.free(base);
-                    return null;
-                },
+                else => return null,
             };
-            const len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse {
-                self.reporter.allocator.free(base);
-                return null;
-            };
-            if (len <= 1) {
-                self.reporter.allocator.free(base);
-                return null;
-            }
-            const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[*]", .{base}) catch {
-                self.reporter.allocator.free(base);
+            const len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse return null;
+            if (len <= 1) return null;
+            const place = base.place.project(.wildcard_index) orelse return null;
+            const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[*]", .{base.key}) catch {
                 self.oom = true;
                 return null;
             };
-            self.reporter.allocator.free(base);
-            const base_place = aliasStoragePlaceForExpr(self, ix.base.*, state);
-            const place = if (base_place) |p| p.project(.wildcard_index) else null;
-            if (place == null) {
-                self.reporter.allocator.free(key);
-                return null;
-            }
-            return .{ .key = key, .place = place.? };
+            return .{ .key = key, .place = place };
         },
         else => return null,
     }

@@ -16,6 +16,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn removeAliasSlotForStoragePlace",
         "fn aliasPlaceInfo",
         "fn aliasWildcardPlaceInfo",
+        "const base = placeKeyAndType(self, ix.base.*, state) orelse return null;",
         "const AliasPlaceInfo = struct",
         "place: MovePlace",
     ],
@@ -31,6 +32,14 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "state.remove(key)": 0,
         "state.getPtr(target_info.key)": 0,
         "state.remove(target_info.key)": 0,
+    },
+}
+
+BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
+    "src/sema_move.zig": {
+        ("fn aliasWildcardPlaceInfo", "fn aliasPlaceBaseType"): [
+            "const base = aliasPlaceKey(self, ix.base.*, state) orelse return null;",
+        ],
     },
 }
 
@@ -57,6 +66,19 @@ def main() -> int:
             actual = text.count(needle)
             if actual != expected:
                 missing.append(f"{relative}: expected {expected} occurrences of {needle!r}, found {actual}")
+
+        for (start_anchor, end_anchor), forbidden_items in BLOCK_FORBIDDEN.get(relative, {}).items():
+            checked += 1
+            start = text.find(start_anchor)
+            end = text.find(end_anchor, start + len(start_anchor)) if start != -1 else -1
+            if start == -1 or end == -1:
+                missing.append(f"{relative}: cannot find block {start_anchor!r}..{end_anchor!r}")
+                continue
+            block = text[start:end]
+            for forbidden in forbidden_items:
+                checked += 1
+                if forbidden in block:
+                    missing.append(f"{relative}: block {start_anchor!r} still contains {forbidden!r}")
 
     if missing:
         print("FAIL: move place identity inventory drift", file=sys.stderr)
