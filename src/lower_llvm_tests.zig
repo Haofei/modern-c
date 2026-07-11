@@ -1129,6 +1129,44 @@ test "LLVM consumes MIR aggregate-return nested transparent switch facts" {
     try expectContains(missing_body, "load atomic i32, ptr %");
 }
 
+test "LLVM consumes MIR aggregate-return nested transparent if-let facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder(choice: u32, maybe: ?u32) -> Holder {
+        \\    switch choice {
+        \\        0 => {
+        \\            if let value = maybe {
+        \\                let ignored: u32 = value;
+        \\            }
+        \\            return .{ .ptr = &shared_counter, .tag = 1 };
+        \\        }
+        \\        _ => {}
+        \\    }
+        \\    return .{ .ptr = &shared_counter, .tag = 2 };
+        \\}
+        \\
+        \\fn use_returned_holder(choice: u32, maybe: ?u32) -> u32 {
+        \\    let holder: Holder = returned_holder(choice, maybe);
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_nested_transparent_if_let_aggregate_return_mir_fact.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
+    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_nested_transparent_if_let_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_returned_holder");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+}
+
 test "LLVM aggregate-return nested call control fails closed" {
     const source =
         \\global shared_counter: u32 = 0;

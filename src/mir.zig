@@ -1606,7 +1606,8 @@ fn collectSequentialSwitchAggregateReturnLiteralPathsFrom(
 
 fn aggregateReturnStatementsContainControlFlow(statements: []const ast.Stmt) bool {
     for (statements) |stmt| switch (stmt.kind) {
-        .@"return", .if_let, .@"break", .@"continue", .@"defer" => return true,
+        .@"return", .@"break", .@"continue", .@"defer" => return true,
+        .if_let => |if_let| if (!aggregateReturnIfLetIsTransparent(if_let)) return true,
         .@"switch" => |switch_node| if (!aggregateReturnSwitchIsTransparent(switch_node)) return true,
         .loop => |loop| if (!aggregateReturnLoopIsTransparent(loop)) return true,
         .block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
@@ -1698,6 +1699,9 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
             .@"switch" => |switch_node| {
                 if (!aggregateReturnSwitchIsTransparent(switch_node)) return false;
             },
+            .if_let => |if_let| {
+                if (!aggregateReturnIfLetIsTransparent(if_let)) return false;
+            },
             else => return false,
         }
     }
@@ -1728,6 +1732,7 @@ fn aggregateReturnLoopBodyIsTransparent(statements: []const ast.Stmt) bool {
         .comptime_block => |block| if (!aggregateReturnComptimeBlockIsTransparent(block)) return false,
         .contract_block => |contract| if (!aggregateReturnLoopBodyIsTransparent(contract.block.items)) return false,
         .@"switch" => |switch_node| if (!aggregateReturnSwitchIsTransparent(switch_node)) return false,
+        .if_let => |if_let| if (!aggregateReturnIfLetIsTransparent(if_let)) return false,
         else => return false,
     };
     return true;
@@ -1742,6 +1747,15 @@ fn aggregateReturnSwitchIsTransparent(switch_node: ast.Switch) bool {
             .expr => return false,
         };
         if (!aggregateReturnLoopBodyIsTransparent(arm_block.items)) return false;
+    }
+    return true;
+}
+
+fn aggregateReturnIfLetIsTransparent(if_let: ast.IfLet) bool {
+    if (aggregateReturnPrefixExprHasCallOrExit(if_let.value)) return false;
+    if (!aggregateReturnLoopBodyIsTransparent(if_let.then_block.items)) return false;
+    if (if_let.else_block) |else_block| {
+        if (!aggregateReturnLoopBodyIsTransparent(else_block.items)) return false;
     }
     return true;
 }
@@ -1812,6 +1826,9 @@ fn processAggregateReturnLiteralLocalStatements(
             },
             .@"switch" => |switch_node| {
                 if (!aggregateReturnSwitchIsTransparent(switch_node)) return false;
+            },
+            .if_let => |if_let| {
+                if (!aggregateReturnIfLetIsTransparent(if_let)) return false;
             },
             else => return false,
         }

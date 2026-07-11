@@ -784,13 +784,16 @@ are explicit fail-closed boundaries too: MIR emits no summary for the callee, so
 both backends keep the returned field unknown. Transparent nested exhaustive
 `switch`/boolean-`if` statements are supported inside aggregate-return candidate
 paths when their subjects and arms contain no calls/exits/control flow or
-aggregate mutation. Non-transparent nested control flow remains an explicit
-fail-closed boundary: MIR emits no summary for that callee, and C/LLVM keep the
-returned field conservative. Mutating loop prefixes, loop bodies with explicit
-control flow, deferred cleanup prefixes, non-transparent nested CFG joins, and
-above-cap path-count-overflow CFG joins before a final aggregate return are
-handled the same way: they remain outside the producer domain, MIR emits no
-summary, and both backends keep returned fields conservative. The current
+aggregate mutation. Transparent nested `if let` blocks are supported under the
+same rule when the matched value and reachable bodies contain no calls/exits,
+control flow, or aggregate mutation. Non-transparent nested control flow remains
+an explicit fail-closed boundary: MIR emits no summary for that callee, and
+C/LLVM keep the returned field conservative. Mutating loop prefixes, loop
+bodies with explicit control flow, deferred cleanup prefixes, non-transparent
+nested CFG joins, and above-cap path-count-overflow CFG joins before a final
+aggregate return are handled the same way: they remain outside the producer
+domain, MIR emits no summary, and both backends keep returned fields
+conservative. The current
 aggregate-return path cap is a named 16-path bound, so 3x3 exhaustive switch
 chains are inside the producer domain while 3x3x3 chains remain fail-closed.
 Plain scoped-block prefixes, transparent unsafe-block
