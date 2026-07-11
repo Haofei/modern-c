@@ -1768,6 +1768,11 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    defer cleanup();
         \\    return .{ .ptr = &shared_counter, .tag = 45 };
         \\}
+        \\fn local_defer_prefix_holder() -> Holder {
+        \\    let holder: Holder = .{ .ptr = &shared_counter, .tag = 45 };
+        \\    defer cleanup();
+        \\    return holder;
+        \\}
         \\fn defer_expr_prefix_holder() -> Holder {
         \\    let cleanup_value: u32 = 0;
         \\    defer cleanup_value;
@@ -1948,7 +1953,8 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "path_overflow_switch_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "if_join_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "all_fallthrough_switch_holder"));
-    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "defer_prefix_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "defer_prefix_holder"));
+    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "local_defer_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "defer_expr_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "for_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "mutating_for_prefix_holder"));
@@ -1987,6 +1993,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "contract_block_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "contract_block_local_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "contract_block_updated_holder", "ptr", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "defer_prefix_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "defer_expr_prefix_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "loop_prefix_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "sequential_switch_holder", "ptr", .global_storage));

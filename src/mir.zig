@@ -1736,7 +1736,7 @@ fn aggregateReturnDirectLiteralPrefixStatementsAreSupported(statements: []const 
                 if (aggregateReturnPrefixExprHasExit(expr)) return false;
             },
             .@"defer" => |expr| {
-                if (!aggregateReturnDeferIsTransparent(expr)) return false;
+                if (aggregateReturnPrefixExprHasExit(expr)) return false;
             },
             .block => |block| {
                 if (!aggregateReturnDirectLiteralPrefixStatementsAreSupported(block.items)) return false;

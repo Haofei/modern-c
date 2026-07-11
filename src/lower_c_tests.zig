@@ -1496,7 +1496,7 @@ test "lower-c consumes MIR aggregate-return all-fallthrough switch facts" {
     try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
-test "lower-c aggregate-return defer prefix fails closed" {
+test "lower-c consumes MIR aggregate-return effectful direct-literal defer prefix facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\extern fn cleanup() -> void;
@@ -1507,17 +1507,37 @@ test "lower-c aggregate-return defer prefix fails closed" {
         \\    return .{ .ptr = &shared_counter, .tag = 1 };
         \\}
         \\
+        \\fn local_returned_holder() -> Holder {
+        \\    let holder: Holder = .{ .ptr = &shared_counter, .tag = 2 };
+        \\    defer cleanup();
+        \\    return holder;
+        \\}
+        \\
         \\fn use_returned_holder() -> u32 {
         \\    let holder: Holder = returned_holder();
+        \\    return holder.ptr.*;
+        \\}
+        \\
+        \\fn use_local_returned_holder() -> u32 {
+        \\    let holder: Holder = local_returned_holder();
         \\    return holder.ptr.*;
         \\}
     ;
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_defer_prefix_aggregate_return_fail_closed.mc", source, &output);
-    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
-    try expectContains(output.items, "mc_race_load_u32");
+    try appendCheckedCTest("c_effectful_defer_prefix_aggregate_return_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_local_returned_holder callee=local_returned_holder field=ptr");
+    const local_body = try cFunctionBody(output.items, "static uint32_t use_local_returned_holder(void)");
+    try expectContains(local_body, "mc_race_load_u32");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_effectful_defer_prefix_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    const missing_body = try cFunctionBody(missing_output.items, "static uint32_t use_returned_holder(void)");
+    try expectContains(missing_body, "mc_race_load_u32");
 }
 
 test "lower-c consumes MIR aggregate-return call-free defer prefix facts" {

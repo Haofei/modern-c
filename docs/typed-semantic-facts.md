@@ -792,10 +792,12 @@ aggregate mutation. Transparent nested `if let` blocks are supported under the
 same rule when the matched value and reachable bodies contain no calls/exits,
 control flow, or aggregate mutation. Non-transparent nested control flow remains
 an explicit fail-closed boundary: MIR emits no summary for that callee, and
-C/LLVM keep the returned field conservative. Call-free `defer` prefixes are
-transparent when their deferred expression has no calls/exits/control flow and
-does not mutate aggregate provenance; effectful deferred cleanup prefixes remain
-outside the producer. `while`/`for` loop prefixes, including nested loops inside
+C/LLVM keep the returned field conservative. `defer` prefixes before direct
+struct-literal returns are transparent when their deferred expression has no
+exits/control flow; the literal itself supplies the returned pointer-field
+provenance even when the deferred cleanup is effectful. Tracked-local aggregate
+returns still require call-free `defer` prefixes because effectful deferred
+cleanup can invalidate local aggregate provenance. `while`/`for` loop prefixes, including nested loops inside
 otherwise transparent aggregate-return switch arms, are transparent when their
 bodies contain only provenance-transparent statements plus local
 `break`/`continue`; tracked local aggregate returns additionally allow scalar
@@ -847,8 +849,9 @@ MIR-populated cache; the AST collector is gone.
    pointer-array elements including nested fixed pointer arrays, nested
    aggregate field paths, fixed arrays of struct elements with pointer-bearing
    fields, and nested fixed arrays of those struct elements. Direct literal
-   returns after ordinary call prefixes without exits, call-free
-   expression/assert/defer prefixes, transparent
+   returns after ordinary call prefixes without exits, direct-literal
+   effectful defer prefixes without exits, call-free expression/assert/defer
+   prefixes, transparent
    `while`/`for` prefixes with local `break`/`continue`, and tracked-local
    aggregate returns with scalar-mutating loop locals, scalar aggregate-field
    loop mutations, or stable same-address pointer-field loop mutations are
@@ -858,7 +861,7 @@ MIR-populated cache; the AST collector is gone.
    removing only the return-field fact produces conservative lowering.
 4. Complete for named unsupported producer shapes: contract-block prefixes with
    unsupported calls, non-stable pointer-bearing tracked aggregate mutations
-   inside loop prefixes, loop calls/exits, effectful deferred cleanup prefixes,
+   inside loop prefixes, loop calls/exits, tracked-local effectful deferred cleanup prefixes,
    non-transparent nested CFG joins, above-cap path-count-overflow CFG joins,
    exported aggregate returns, mixed paths, tracked-local prefix calls, fallthrough
    dynamic-index writes, dereference writes, and aggregate array nesting beyond the fixed

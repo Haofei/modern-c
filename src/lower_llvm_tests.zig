@@ -1900,7 +1900,7 @@ test "LLVM consumes MIR aggregate-return all-fallthrough switch facts" {
     try expectContains(missing_body, "load atomic i32, ptr %");
 }
 
-test "LLVM aggregate-return defer prefix fails closed" {
+test "LLVM consumes MIR aggregate-return effectful direct-literal defer prefix facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\extern fn cleanup() -> void;
@@ -1911,18 +1911,40 @@ test "LLVM aggregate-return defer prefix fails closed" {
         \\    return .{ .ptr = &shared_counter, .tag = 1 };
         \\}
         \\
+        \\fn local_returned_holder() -> Holder {
+        \\    let holder: Holder = .{ .ptr = &shared_counter, .tag = 2 };
+        \\    defer cleanup();
+        \\    return holder;
+        \\}
+        \\
         \\fn use_returned_holder() -> u32 {
         \\    let holder: Holder = returned_holder();
+        \\    return holder.ptr.*;
+        \\}
+        \\
+        \\fn use_local_returned_holder() -> u32 {
+        \\    let holder: Holder = local_returned_holder();
         \\    return holder.ptr.*;
         \\}
     ;
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_defer_prefix_aggregate_return_fail_closed.mc", source, &output);
+    try appendLlvmTest("llvm_effectful_defer_prefix_aggregate_return_mir_fact.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
-    try expectNotContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
-    try expectContains(body, "load atomic i32, ptr %");
+    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+    const local_body = try llvmFunctionBody(output.items, "define internal i32 @use_local_returned_holder");
+    try expectNotContains(local_body, "; mir aggregate_return_pointer consumed caller=use_local_returned_holder callee=local_returned_holder field=ptr");
+    try expectContains(local_body, "load atomic i32, ptr %");
+    try expectNotContains(local_body, "load i32, ptr %");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_effectful_defer_prefix_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_returned_holder");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+    try expectNotContains(missing_body, "load i32, ptr %");
 }
 
 test "LLVM consumes MIR aggregate-return call-free defer prefix facts" {
