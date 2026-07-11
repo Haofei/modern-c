@@ -754,8 +754,8 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
   path agrees on `global_storage` and pointer shape.
 
 Every other shape remains outside the MIR-owned domain. That includes loop calls
-or exits, pointer-bearing tracked aggregate mutation inside loops, direct or
-indirect calls in a prefix, exports, unions, aggregate/array element nesting
+or exits, non-stable pointer-bearing tracked aggregate mutation inside loops,
+direct or indirect calls in a prefix, exports, unions, aggregate/array element nesting
 beyond the direct field model, fallthrough dynamic-index writes, dereference
 writes or non-transparent nested control flow, and any path with a missing or
 ambiguous field fact. Fallthrough dynamic-index writes are an explicit
@@ -844,15 +844,16 @@ MIR-populated cache; the AST collector is gone.
    fields, and nested fixed arrays of those struct elements. Direct literal
    returns after call-free expression/assert/defer prefixes, transparent
    `while`/`for` prefixes with local `break`/`continue`, and tracked-local
-   aggregate returns with scalar-mutating loop locals or scalar aggregate-field
-   loop mutations are covered. Literal returns after call prefixes are
+   aggregate returns with scalar-mutating loop locals, scalar aggregate-field
+   loop mutations, or stable same-address pointer-field loop mutations are
+   covered. Literal returns after call prefixes are
    explicitly excluded.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
 4. Complete for named unsupported producer shapes: contract-block prefixes with
-   unsupported calls, pointer-bearing tracked aggregate mutations inside loop
-   prefixes, loop calls/exits, effectful deferred cleanup prefixes,
+   unsupported calls, non-stable pointer-bearing tracked aggregate mutations
+   inside loop prefixes, loop calls/exits, effectful deferred cleanup prefixes,
    non-transparent nested CFG joins, above-cap path-count-overflow CFG joins,
    exported aggregate returns, mixed paths, prefix calls, fallthrough
    dynamic-index writes, dereference writes, and aggregate array nesting beyond the fixed

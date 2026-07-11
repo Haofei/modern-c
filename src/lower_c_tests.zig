@@ -760,7 +760,7 @@ test "lower-c consumes MIR aggregate-return scalar-field-mutating while facts" {
     try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
-test "lower-c aggregate-return pointer-mutating while prefix fails closed" {
+test "lower-c consumes MIR aggregate-return stable pointer-field-mutating while facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Holder { ptr: *mut u32, tag: u32 }
@@ -781,7 +781,39 @@ test "lower-c aggregate-return pointer-mutating while prefix fails closed" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_pointer_mutating_while_prefix_aggregate_return_fail_closed.mc", source, &output);
+    try appendCheckedCTest("c_stable_pointer_field_mutating_while_aggregate_return_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_stable_pointer_field_mutating_while_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_output.items, "mc_race_load_u32");
+}
+
+test "lower-c aggregate-return mixed pointer-mutating while prefix fails closed" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\global other_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder(flag: bool) -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 1 };
+        \\    while flag {
+        \\        holder.ptr = &other_counter;
+        \\    }
+        \\    return holder;
+        \\}
+        \\
+        \\fn use_returned_holder(flag: bool) -> u32 {
+        \\    let holder: Holder = returned_holder(flag);
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mixed_pointer_mutating_while_prefix_aggregate_return_fail_closed.mc", source, &output);
     try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
     try expectContains(output.items, "mc_race_load_u32");
 }
