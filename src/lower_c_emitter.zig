@@ -4010,7 +4010,6 @@ const CEmitter = struct {
     }
 
     fn emitNamedSpecialCallExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
-        const name = calleeIdentName(node.callee.*) orelse return false;
         // `drop(x)` and `forget_unchecked(x)` both evaluate and discard the
         // operand (linearity is a compile-time check). The difference is in the
         // checker: `forget_unchecked` is the only one legal on a resource.
@@ -4019,7 +4018,7 @@ const CEmitter = struct {
         // env pointer is type-erased to void* and the function pointer
         // (whose first param is the typed env) is cast to take void* —
         // both casts are ABI-identity, so user code stays typed/cast-free.
-        if (std.mem.eql(u8, name, "bind") and node.args.len == 2) {
+        if (ast_query.isBindCallNode(node)) {
             try self.emitBind(node, locals);
             return true;
         }

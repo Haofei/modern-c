@@ -7942,13 +7942,9 @@ fn calleeClosureType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
     };
 }
 
-fn isBindCallNode(call: anytype) bool {
-    return call.type_args.len == 0 and call.args.len == 2 and isIdentNamed(call.callee.*, "bind");
-}
-
 fn bindMatchesClosureExpr(expr: ast.Expr, expected: ast.TypeExpr, ctx: Context) ?bool {
     return switch (expr.kind) {
-        .call => |node| if (isBindCallNode(node)) bindMatchesClosure(node, expected, ctx) else null,
+        .call => |node| if (ast_query.isBindCallNode(node)) bindMatchesClosure(node, expected, ctx) else null,
         .grouped => |inner| bindMatchesClosureExpr(inner.*, expected, ctx),
         else => null,
     };
@@ -8152,7 +8148,7 @@ fn aggregateLocalAddressRoot(expr: ast.Expr, ctx: Context) ?BorrowedLocal {
 
 fn closureLocalAddressRoot(expr: ast.Expr, ctx: Context) ?BorrowedLocal {
     return switch (expr.kind) {
-        .call => |node| if (isBindCallNode(node)) localAddressRoot(node.args[0], ctx) else null,
+        .call => |node| if (ast_query.isBindCallNode(node)) localAddressRoot(node.args[0], ctx) else null,
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| {

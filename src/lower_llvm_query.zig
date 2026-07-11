@@ -144,15 +144,3 @@ pub fn taggedUnionConstructorName(callee: ast.Expr) ?[]const u8 {
         else => null,
     };
 }
-
-pub fn isBindCall(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .call => |call| isBindCallByNode(call),
-        .grouped => |inner| isBindCall(inner.*),
-        else => false,
-    };
-}
-
-pub fn isBindCallByNode(call: anytype) bool {
-    return call.type_args.len == 0 and call.args.len == 2 and ast_query.isIdentNamed(call.callee.*, "bind");
-}

@@ -344,9 +344,7 @@ pub fn collectBlockBindThunks(ctx: BindThunkContext, block: ast.Block) anyerror!
 fn collectExprBindThunks(ctx: BindThunkContext, expr: ast.Expr) anyerror!void {
     switch (expr.kind) {
         .call => |node| {
-            if (calleeIdentName(node.callee.*)) |name| {
-                if (std.mem.eql(u8, name, "bind") and node.args.len == 2) try collectBindThunk(ctx, node);
-            }
+            if (ast_query.isBindCallNode(node)) try collectBindThunk(ctx, node);
             try collectExprBindThunks(ctx, node.callee.*);
             for (node.args) |arg| try collectExprBindThunks(ctx, arg);
         },

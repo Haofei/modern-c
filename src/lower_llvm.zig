@@ -116,8 +116,8 @@ const comptimeStructFieldValue = lower_llvm_query.comptimeStructFieldValue;
 const derefTarget = lower_llvm_query.derefTarget;
 const implMethodMangledLlvm = lower_llvm_query.implMethodMangledLlvm;
 const isAssumeNoaliasCall = lower_llvm_query.isAssumeNoaliasCall;
-const isBindCall = lower_llvm_query.isBindCall;
-const isBindCallByNode = lower_llvm_query.isBindCallByNode;
+const isBindCallExpr = ast_query.isBindCallExpr;
+const isBindCallNode = ast_query.isBindCallNode;
 const isDeclassifyCall = ast_query.isDeclassifyCall;
 const isDropCall = lower_llvm_query.isDropCall;
 const isPhysCall = ast_query.isPhysCall;
@@ -778,7 +778,7 @@ const LlvmEmitter = struct {
             else => {},
         }
         switch (resolved_ty.kind) {
-            .closure_type => if (isBindCall(expr)) {
+            .closure_type => if (isBindCallExpr(expr)) {
                 return try self.emitGlobalBindInitializer(expr, resolved_ty);
             },
             .array => |array| {
@@ -6047,7 +6047,7 @@ const LlvmEmitter = struct {
         defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
         defer self.local_pointer_array_aliases.clearRetainingCapacity();
         if (isDropCall(call.callee.*)) return error.UnsupportedLlvmEmission;
-        if (isBindCallByNode(call)) return try self.emitBindValue(call, expected_ty);
+        if (isBindCallNode(call)) return try self.emitBindValue(call, expected_ty);
         // `Union.variant(...)` qualified constructor — self-typed from the owner (no target).
         if (try self.emitQualifiedUnionConstructor(call)) |value| return value;
         if (try self.emitTaggedUnionConstructor(call, expected_ty)) |value| return value;
@@ -8387,7 +8387,7 @@ const LlvmEmitter = struct {
     }
 
     fn bindClosureType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
-        if (!isBindCallByNode(call) or call.args.len != 2) return null;
+        if (!isBindCallNode(call)) return null;
         const fname = calleeIdentName(call.args[1]) orelse return null;
         const sig = self.fn_sigs.get(fname) orelse return null;
         if (sig.params.len == 0) return null;
@@ -8455,7 +8455,7 @@ const LlvmEmitter = struct {
             if (std.mem.eql(u8, info.op, "as_slice")) return self.sliceTypeFor(info.payload_ty, .mut, call.callee.*.span) catch null;
         }
         if (self.rawManyOffsetCallInfo(call)) |info| return info.base_ty;
-        if (isBindCallByNode(call)) return self.bindClosureType(call);
+        if (isBindCallNode(call)) return self.bindClosureType(call);
         if (self.closureCalleeType(call.callee.*)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
         if (self.fnPointerCalleeType(call.callee.*)) |fn_ty| return fn_ty.kind.fn_pointer.ret.*;
         const callee = self.directCallName(call.callee.*) orelse return null;

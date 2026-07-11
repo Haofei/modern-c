@@ -434,6 +434,20 @@ pub fn isPhysCall(callee: ast.Expr) bool {
     return isIdentNamed(callee, "phys");
 }
 
+/// Whether a call has the supported `bind(environment, function)` closure shape.
+pub fn isBindCallNode(call: anytype) bool {
+    return call.type_args.len == 0 and call.args.len == 2 and isIdentNamed(call.callee.*, "bind");
+}
+
+/// Whether an expression is, possibly under grouping, a supported `bind` call.
+pub fn isBindCallExpr(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .call => |call| isBindCallNode(call),
+        .grouped => |inner| isBindCallExpr(inner.*),
+        else => false,
+    };
+}
+
 /// The payload type and mode tag of a `DmaBuf<T, .mode>` type, or null.
 pub const DmaBufInfo = struct {
     payload: ast.TypeExpr,
