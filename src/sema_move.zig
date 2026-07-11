@@ -612,7 +612,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
             };
             var body_state = cloneMoveState(self, state);
             defer body_state.deinit();
-            const body_diverges = moveBlock(self, l.body, &body_state, aliases);
+            const body_diverges = moveLoopBodyCfg(self, l.body, state, &body_state, aliases);
             if (self.move_loop_stack.pop()) |popped| {
                 var loop_frame = popped;
                 applyLoopEarlyExitConstIndexInvalidations(state, &loop_frame);
@@ -1528,6 +1528,50 @@ fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *std.String
             replaceMoveState(self, state, block_state);
         }
     }
+}
+
+// This is the forward body transfer only. Backedges and early exits still use
+// the existing loop frame/widening path after the worklist returns, preserving
+// its diagnostic order and zero-or-many semantics.
+fn moveLoopBodyCfg(self: *Checker, body: ast.Block, entry_state: *const std.StringHashMap(MoveSlot), result_state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    defer cfg.deinit();
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        return false;
+    };
+    const body_block = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        return false;
+    };
+    const exit = cfg.addBlock(.branch_join) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(entry, body_block, .normal) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(body_block, exit, .normal) catch {
+        self.oom = true;
+        return false;
+    };
+
+    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, entry_state) orelse return false;
+    defer worklist.deinit();
+    var body_diverges = false;
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == entry) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == body_block) {
+            body_diverges = moveBlock(self, body, block_state, aliases);
+            if (!body_diverges) worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == exit) {
+            replaceMoveState(self, result_state, block_state);
+        }
+    }
+    return body_diverges;
 }
 
 fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
