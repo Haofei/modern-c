@@ -643,6 +643,11 @@ The direct local fixed-pointer-array-alias constant-index subcase is also
 complete. Its dynamic all-elements subcase is also complete. Mixed,
 invalidated, reassigned, and broader alias/return-flow/CFG boundaries remain
 open.
+The fallback register gate is complete for the current named global/local
+provenance entry points: the semantic-facts inventory rejects the retired LLVM
+global fallback and exact-counts the registered C MIR-only and LLVM
+MIR-or-local-proof helpers. New backend-local provenance entry points must update
+that gate deliberately.
 The aggregate-return migration is active and owns direct internal struct-literal
 returns plus straight-line local initialization, whole-local reassignment, and
 whole-local copies from tracked literal values, exhaustive bool/wildcard
@@ -661,7 +666,6 @@ Next actionable slices:
 | Escaped pointer boundary | Add a fail-closed rule for pointer locals whose address, containing aggregate, or callback path escapes before dereference. | C and LLVM fixtures for escaped local pointer, escaped aggregate pointer field, indirect call escape, and missing-fact fallback. | Treating one escaped expression spelling as unknown while leaving unnamed escape routes untracked. |
 | Returned pointer facts | Define MIR facts or conservative defaults for scalar pointer returns through direct calls, local function aliases, callback/function-pointer calls, and exported ambiguity. | MIR artifact rows plus C/LLVM positive and missing-fact tests for direct, aliased, callback, and exported-return paths. | Reintroducing backend-local function-body scans. |
 | Aggregate-return CFG decision | Either implement a bounded CFG join for aggregate-return pointer facts or document every unsupported CFG class as conservative with fixtures. | One named CFG join implementation, or an unsupported-CFG matrix with negative MIR/C/LLVM tests for each class. | Continuing to add one-off transparent prefix cases without closing the arbitrary-CFG policy. |
-| Fallback register gate | Make the semantic-facts inventory reject any new backend-local global/local provenance entry point unless it is listed in this matrix. | Inventory script failure on an injected fallback name or exact-count drift. | Manual review-only tracking. |
 
 #### Typed Semantic Fact Table / Typed MIR
 
