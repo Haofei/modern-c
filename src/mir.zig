@@ -1604,7 +1604,8 @@ fn collectSequentialSwitchAggregateReturnLiteralPathsFrom(
 
 fn aggregateReturnStatementsContainControlFlow(statements: []const ast.Stmt) bool {
     for (statements) |stmt| switch (stmt.kind) {
-        .@"return", .@"switch", .loop, .if_let, .@"break", .@"continue", .@"defer" => return true,
+        .@"return", .@"switch", .if_let, .@"break", .@"continue", .@"defer" => return true,
+        .loop => |loop| if (!aggregateReturnForLoopIsTransparent(loop)) return true,
         .block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
         .unsafe_block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
         .comptime_block => |block| if (!aggregateReturnComptimeBlockIsTransparent(block)) return true,
@@ -1688,9 +1689,38 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
             .contract_block => |contract| {
                 if (!aggregateReturnPrefixStatementsAreSupported(contract.block.items)) return false;
             },
+            .loop => |loop| {
+                if (!aggregateReturnForLoopIsTransparent(loop)) return false;
+            },
             else => return false,
         }
     }
+    return true;
+}
+
+fn aggregateReturnForLoopIsTransparent(loop: ast.Loop) bool {
+    if (loop.kind != .@"for") return false;
+    const iterable = loop.iterable orelse return false;
+    if (aggregateReturnPrefixExprHasCallOrExit(iterable)) return false;
+    return aggregateReturnForLoopBodyIsTransparent(loop.body.items);
+}
+
+fn aggregateReturnForLoopBodyIsTransparent(statements: []const ast.Stmt) bool {
+    for (statements) |stmt| switch (stmt.kind) {
+        .let_decl, .var_decl => |local| {
+            if (local.init) |initializer| {
+                if (aggregateReturnPrefixExprHasCallOrExit(initializer)) return false;
+            }
+        },
+        .expr, .assert => |expr| {
+            if (aggregateReturnPrefixExprHasCallOrExit(expr)) return false;
+        },
+        .block => |block| if (!aggregateReturnForLoopBodyIsTransparent(block.items)) return false,
+        .unsafe_block => |block| if (!aggregateReturnForLoopBodyIsTransparent(block.items)) return false,
+        .comptime_block => |block| if (!aggregateReturnComptimeBlockIsTransparent(block)) return false,
+        .contract_block => |contract| if (!aggregateReturnForLoopBodyIsTransparent(contract.block.items)) return false,
+        else => return false,
+    };
     return true;
 }
 
@@ -1754,6 +1784,9 @@ fn processAggregateReturnLiteralLocalStatements(
             },
             .contract_block => |contract| {
                 if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, contract.block.items, true)) return false;
+            },
+            .loop => |loop| {
+                if (!aggregateReturnForLoopIsTransparent(loop)) return false;
             },
             else => return false,
         }

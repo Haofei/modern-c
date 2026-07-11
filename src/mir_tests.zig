@@ -1703,6 +1703,13 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    }
         \\    return .{ .ptr = &shared_counter, .tag = 44 };
         \\}
+        \\fn mutating_for_prefix_holder(values: [2]u32) -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 45 };
+        \\    for value in values {
+        \\        holder.tag = value;
+        \\    }
+        \\    return holder;
+        \\}
         \\fn trailing_nested_field_updated_holder(choice: u32) -> Outer {
         \\    var holder: Outer = .{ .inner = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &shared_counter } }, .tag = 17 };
         \\    switch choice {
@@ -1821,7 +1828,8 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "if_join_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "all_fallthrough_switch_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "defer_prefix_holder"));
-    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "for_prefix_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "for_prefix_holder"));
+    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "mutating_for_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_nested_field_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_deep_nested_field_updated_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "deref_updated_holder"));
@@ -1850,6 +1858,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "triple_switch_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "if_join_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "all_fallthrough_switch_holder", "ptr", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "for_prefix_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_nested_field_updated_holder", "inner.ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_deep_nested_field_updated_holder", "middle.leaf.ptr", .global_storage));
     try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "mixed_branched_holder", "ptr", .global_storage));

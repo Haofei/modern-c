@@ -1492,7 +1492,7 @@ test "LLVM aggregate-return defer prefix fails closed" {
     try expectContains(body, "load atomic i32, ptr %");
 }
 
-test "LLVM aggregate-return for prefix fails closed" {
+test "LLVM consumes MIR aggregate-return transparent for-prefix facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Holder { ptr: *mut u32, tag: u32 }
@@ -1512,7 +1512,40 @@ test "LLVM aggregate-return for prefix fails closed" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_for_prefix_aggregate_return_fail_closed.mc", source, &output);
+    try appendLlvmTest("llvm_for_prefix_aggregate_return_mir_fact.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
+    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_for_prefix_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_returned_holder");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+}
+
+test "LLVM aggregate-return mutating for prefix fails closed" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder(values: [2]u32) -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 1 };
+        \\    for value in values {
+        \\        holder.tag = value;
+        \\    }
+        \\    return holder;
+        \\}
+        \\
+        \\fn use_returned_holder(values: [2]u32) -> u32 {
+        \\    let holder: Holder = returned_holder(values);
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mutating_for_prefix_aggregate_return_fail_closed.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
     try expectNotContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
     try expectContains(body, "load atomic i32, ptr %");
