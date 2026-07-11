@@ -418,6 +418,71 @@ test "LLVM rejects prebuilt MIR with missing bitcast call target facts" {
     );
 }
 
+test "LLVM rejects prebuilt MIR with missing const_get call target facts" {
+    const source =
+        \\fn const_get_call_target_fact_gate(xs: [3]u32) -> u32 {
+        \\    return xs.const_get<1>();
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_missing_const_get_call_target_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearCallTargetFactsForFunction(&module_mir, "const_get_call_target_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_const_get_call_target_facts.mc", .{}, false, .riscv64, null),
+    );
+}
+
+test "LLVM rejects prebuilt MIR with missing phys call target facts" {
+    const source =
+        \\fn phys_call_target_fact_gate(value: usize) -> PAddr {
+        \\    return phys(value);
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_missing_phys_call_target_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearCallTargetFactsForFunction(&module_mir, "phys_call_target_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_phys_call_target_facts.mc", .{}, false, .riscv64, null),
+    );
+}
+
+test "LLVM rejects prebuilt MIR with missing MaybeUninit call target facts" {
+    const source =
+        \\struct Node { value: u32 }
+        \\
+        \\fn maybe_uninit_call_target_fact_gate() -> u32 {
+        \\    var slot: MaybeUninit<Node> = uninit;
+        \\    slot.write(.{ .value = 7 });
+        \\    let value: Node = slot.assume_init();
+        \\    return value.value;
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_missing_maybe_uninit_call_target_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearCallTargetFactsForFunction(&module_mir, "maybe_uninit_call_target_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_maybe_uninit_call_target_facts.mc", .{}, false, .riscv64, null),
+    );
+}
+
 test "LLVM rejects prebuilt MIR with missing raw store call target facts" {
     const source =
         \\fn raw_store_call_target_fact_gate(addr: PAddr, value: u32) -> void {
