@@ -3130,7 +3130,11 @@ pub fn aliasPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHas
 
 fn aliasPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?AliasPlaceInfo {
     const key = aliasPlaceKey(self, expr, state) orelse return null;
-    return .{ .key = key, .place = aliasStoragePlaceForExpr(self, expr, state) };
+    const place = aliasStoragePlaceForExpr(self, expr, state) orelse {
+        self.reporter.allocator.free(key);
+        return null;
+    };
+    return .{ .key = key, .place = place };
 }
 
 fn aliasPlaceIndex(self: *Checker, ix: anytype, state: *const std.StringHashMap(MoveSlot)) ?usize {
@@ -3155,11 +3159,15 @@ fn aliasWildcardPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.Stri
         .member => |m| {
             const base = aliasWildcardPlaceInfo(self, m.base.*, state) orelse return null;
             defer self.reporter.allocator.free(base.key);
+            const base_place = base.place orelse return null;
             const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base.key, m.name.text }) catch {
                 self.oom = true;
                 return null;
             };
-            const place = if (base.place) |p| p.project(.{ .field = m.name.text }) else null;
+            const place = base_place.project(.{ .field = m.name.text }) orelse {
+                self.reporter.allocator.free(key);
+                return null;
+            };
             return .{ .key = key, .place = place };
         },
         .index => |ix| {
@@ -3194,6 +3202,10 @@ fn aliasWildcardPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.Stri
             self.reporter.allocator.free(base);
             const base_place = aliasStoragePlaceForExpr(self, ix.base.*, state);
             const place = if (base_place) |p| p.project(.wildcard_index) else null;
+            if (place == null) {
+                self.reporter.allocator.free(key);
+                return null;
+            }
             return .{ .key = key, .place = place };
         },
         else => return null,
