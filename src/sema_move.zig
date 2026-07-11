@@ -634,83 +634,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
             return moveIfLetCfg(self, n, state, aliases);
         },
         .@"switch" => |sw| {
-            // The subject is evaluated, so by-value `move` operands in it are
-            // consumed (a plain `if cond` desugars to a switch on `cond`; borrow
-            // operands `&x` and non-move subjects stay no-ops in moveConsume).
-            moveConsume(self, sw.subject, state, aliases);
-            var joined: ?std.StringHashMap(MoveSlot) = null;
-            defer if (joined) |*m| m.deinit();
-            // Infer the subject's type so a pattern binding (`ok(p)`) that names a `move`
-            // value is tracked inside the arm — otherwise use-after-move / a leak through a
-            // switch arm goes undetected.
-            const subject_ty: ?ast.TypeExpr = if (self.move_ctx) |ctx| spine.exprResultType(sw.subject, ctx.*) else null;
-            var any_arm = false;
-            var all_diverge = true;
-            for (sw.arms) |arm| {
-                any_arm = true;
-                var arm_state = cloneMoveState(self, state);
-                defer arm_state.deinit();
-                var bound_name: ?[]const u8 = null;
-                for (arm.patterns) |pat| {
-                    const payload_ty: ?ast.TypeExpr = switch (pat.kind) {
-                        .bind => subject_ty, // binds the whole value
-                        .tag_bind => |tb| if (subject_ty) |sty| spine.resultPayloadType(sty, tb.tag.text) else null,
-                        else => null,
-                    };
-                    const name: ?ast.Ident = switch (pat.kind) {
-                        .bind => |id| id,
-                        .tag_bind => |tb| tb.binding,
-                        else => null,
-                    };
-                    if (name) |id| {
-                        if (payload_ty) |pty| {
-                            // Recursive predicate: a payload that is itself a `?move` or
-                            // `Result<…move…,…>` embeds a linear resource and must be tracked
-                            // inside the arm too, not only a payload that is a move type name.
-                            if (self.typeEmbedsMoveByValue(pty, aliases)) {
-                                arm_state.put(id.text, .{ .live = true, .span = id.span, .place = .{ .root = id.text }, .ty = pty }) catch {
-                                    self.oom = true;
-                                };
-                                bound_name = id.text;
-                            }
-                        }
-                    }
-                }
-                const arm_div = switch (arm.body) {
-                    .block => |b| moveBlock(self, b, &arm_state, aliases),
-                    .expr => |e| blk: {
-                        moveConsume(self, e, &arm_state, aliases);
-                        checkUnusedMoveResult(self, e, aliases); // arm body is used for effect; its move result must not be discarded
-                        break :blk false;
-                    },
-                };
-                // A `move` value bound by this arm must be consumed within it; then it leaves
-                // scope (remove it so a later arm's same-named binding starts fresh). A
-                // diverging arm already leak-checked it at its exit edge.
-                if (bound_name) |bn| {
-                    if (!arm_div) {
-                        if (arm_state.getPtr(bn)) |slot| {
-                            if (slot.live and !slot.deferred) {
-                                self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in a switch arm is never consumed (must be moved, returned, or freed)");
-                            }
-                        }
-                    }
-                    _ = arm_state.remove(bn);
-                }
-                finalizeBranchLocals(self, &arm_state, state, !arm_div);
-                // Only an arm that falls through reaches the join after the switch.
-                if (!arm_div) {
-                    all_diverge = false;
-                    if (joined) |*m| {
-                        mergeMoveBranches(self, m, m, &arm_state);
-                    } else {
-                        joined = cloneMoveState(self, &arm_state);
-                    }
-                }
-            }
-            if (joined) |*m| replaceMoveState(self, state, m);
-            // The switch diverges only if it has arms and every arm diverges.
-            return any_arm and all_diverge;
+            return moveSwitchCfg(self, sw, state, aliases);
         },
         .@"break" => |target| {
             checkLoopExitLeaks(self, state, target);
@@ -804,6 +728,119 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *std.StringHashMap(MoveS
     // statement as terminal; preserve the incoming map only for unreachable code.
     if (!joined and !(then_div and node.else_block != null and else_div)) self.oom = true;
     return then_div and (node.else_block != null) and else_div;
+}
+
+// Route all switch arms through the same real-state CFG worklist. Each arm gets a
+// cloned post-subject state; only fallthrough arms contribute an incoming state to
+// the shared join block, where MoveStateCfgWorklist performs the ownership merge.
+fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    if (node.arms.len == 0) {
+        moveConsume(self, node.subject, state, aliases);
+        return false;
+    }
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    defer cfg.deinit();
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        return false;
+    };
+    const join = cfg.addBlock(.branch_join) catch {
+        self.oom = true;
+        return false;
+    };
+    const arm_blocks = self.reporter.allocator.alloc(sema_model.MoveCfgBlockId, node.arms.len) catch {
+        self.oom = true;
+        return false;
+    };
+    defer self.reporter.allocator.free(arm_blocks);
+    for (arm_blocks, 0..) |*block, i| {
+        _ = i;
+        block.* = cfg.addBlock(.statement) catch {
+            self.oom = true;
+            return false;
+        };
+        cfg.addEdge(entry, block.*, .branch) catch {
+            self.oom = true;
+            return false;
+        };
+        cfg.addEdge(block.*, join, .normal) catch {
+            self.oom = true;
+            return false;
+        };
+    }
+
+    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return false;
+    defer worklist.deinit();
+    const subject_ty: ?ast.TypeExpr = if (self.move_ctx) |ctx| spine.exprResultType(node.subject, ctx.*) else null;
+    var all_diverge = true;
+    var joined = false;
+
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == entry) {
+            moveConsume(self, node.subject, block_state, aliases);
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == join) {
+            replaceMoveState(self, state, block_state);
+            joined = true;
+        } else {
+            var arm_index: ?usize = null;
+            for (arm_blocks, 0..) |arm_block, i| {
+                if (arm_block == block) {
+                    arm_index = i;
+                    break;
+                }
+            }
+            const index = arm_index orelse continue;
+            const diverges = moveSwitchArm(self, node.arms[index], subject_ty, block_state, state, aliases);
+            if (!diverges) {
+                all_diverge = false;
+                worklist.propagateSuccessors(self, block, block_state);
+            }
+        }
+    }
+    if (!joined and !all_diverge) self.oom = true;
+    return all_diverge;
+}
+
+fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, state: *std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    var bound_name: ?[]const u8 = null;
+    for (arm.patterns) |pattern| {
+        const payload_ty: ?ast.TypeExpr = switch (pattern.kind) {
+            .bind => subject_ty,
+            .tag_bind => |tag| if (subject_ty) |ty| spine.resultPayloadType(ty, tag.tag.text) else null,
+            else => null,
+        };
+        const name: ?ast.Ident = switch (pattern.kind) {
+            .bind => |ident| ident,
+            .tag_bind => |tag| tag.binding,
+            else => null,
+        };
+        if (name) |ident| if (payload_ty) |ty| if (self.typeEmbedsMoveByValue(ty, aliases)) {
+            state.put(ident.text, .{ .live = true, .span = ident.span, .place = .{ .root = ident.text }, .ty = ty }) catch {
+                self.oom = true;
+            };
+            bound_name = ident.text;
+        };
+    }
+    const diverges = switch (arm.body) {
+        .block => |body| moveBlock(self, body, state, aliases),
+        .expr => |expr| blk: {
+            moveConsume(self, expr, state, aliases);
+            checkUnusedMoveResult(self, expr, aliases);
+            break :blk false;
+        },
+    };
+    if (bound_name) |name| {
+        if (!diverges) {
+            if (state.getPtr(name)) |slot| if (slot.live and !slot.deferred) {
+                self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in a switch arm is never consumed (must be moved, returned, or freed)");
+            };
+        }
+        _ = state.remove(name);
+    }
+    finalizeBranchLocals(self, state, outer, !diverges);
+    return diverges;
 }
 
 // Drop branch-local `move` bindings (names not present in `outer`) from `branch` on
