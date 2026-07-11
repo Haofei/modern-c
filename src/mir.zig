@@ -2605,7 +2605,7 @@ fn collectDirectGlobalPointerReturnSummaries(allocator: std.mem.Allocator, modul
             const return_ty = fn_decl.return_type orelse continue;
             const pointer_shape = pointerShapeFromValueType(valueTypeFromTypeAlias(return_ty, enums, structs, packed_bits, aliases)) orelse continue;
             const body = fn_decl.body orelse continue;
-            const storage = directGlobalAddressStorage(body, globals, &summaries, pointer_shape) orelse continue;
+            const storage = (try directGlobalAddressStorage(allocator, body, globals, &summaries, pointer_shape)) orelse continue;
             try summaries.put(fn_decl.name.text, .{
                 .pointer_shape = pointer_shape,
                 .provenance = .{ .kind = .global_storage, .storage = storage },
@@ -2616,8 +2616,10 @@ fn collectDirectGlobalPointerReturnSummaries(allocator: std.mem.Allocator, modul
     return summaries;
 }
 
-fn directGlobalAddressStorage(body: ast.Block, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) ?[]const u8 {
-    const flow = directGlobalReturnFlowForBlock(body, globals, summaries, pointer_shape);
+fn directGlobalAddressStorage(allocator: std.mem.Allocator, body: ast.Block, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) error{OutOfMemory}!?[]const u8 {
+    var locals = std.StringHashMap([]const u8).init(allocator);
+    defer locals.deinit();
+    const flow = try directGlobalReturnFlowForBlock(allocator, &locals, body, globals, summaries, pointer_shape);
     if (flow.can_fall_through or flow.unknown_return) return null;
     return flow.storage;
 }
@@ -2633,43 +2635,92 @@ const DirectGlobalReturnFlow = struct {
     unknown_return: bool = false,
 };
 
-fn directGlobalReturnFlowForBlock(block: ast.Block, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) DirectGlobalReturnFlow {
+fn directGlobalReturnFlowForBlock(allocator: std.mem.Allocator, locals: *std.StringHashMap([]const u8), block: ast.Block, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) error{OutOfMemory}!DirectGlobalReturnFlow {
     var result: DirectGlobalReturnFlow = .{};
     for (block.items) |stmt| {
         if (!result.can_fall_through) break;
-        const statement_flow = directGlobalReturnFlowForStmt(stmt, globals, summaries, pointer_shape);
+        const statement_flow = try directGlobalReturnFlowForStmt(allocator, locals, stmt, globals, summaries, pointer_shape);
         result = appendDirectGlobalReturnFlow(result, statement_flow);
     }
     return result;
 }
 
-fn directGlobalReturnFlowForStmt(stmt: ast.Stmt, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) DirectGlobalReturnFlow {
+fn directGlobalReturnFlowForStmt(allocator: std.mem.Allocator, locals: *std.StringHashMap([]const u8), stmt: ast.Stmt, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) error{OutOfMemory}!DirectGlobalReturnFlow {
     return switch (stmt.kind) {
+        .let_decl, .var_decl => |local| blk: {
+            if (local.names.len != 1) {
+                locals.clearRetainingCapacity();
+                break :blk .{};
+            }
+            const initializer = local.init orelse {
+                _ = locals.remove(local.names[0].text);
+                break :blk .{};
+            };
+            if (directGlobalAddressStorageExprWithLocals(locals, initializer, globals, summaries, pointer_shape)) |storage| {
+                try locals.put(local.names[0].text, storage);
+            } else {
+                _ = locals.remove(local.names[0].text);
+            }
+            break :blk .{};
+        },
+        .assignment => |assignment| blk: {
+            if (assignmentTargetIdentName(assignment.target)) |target| {
+                if (directGlobalAddressStorageExprWithLocals(locals, assignment.value, globals, summaries, pointer_shape)) |storage| {
+                    try locals.put(target, storage);
+                } else {
+                    _ = locals.remove(target);
+                }
+            } else {
+                locals.clearRetainingCapacity();
+            }
+            break :blk .{};
+        },
         .@"return" => |maybe_value| .{
             .can_fall_through = false,
-            .storage = if (maybe_value) |value| directGlobalAddressStorageExpr(value, globals, summaries, pointer_shape) else null,
-            .unknown_return = maybe_value == null or directGlobalAddressStorageExpr(maybe_value.?, globals, summaries, pointer_shape) == null,
+            .storage = if (maybe_value) |value| directGlobalAddressStorageExprWithLocals(locals, value, globals, summaries, pointer_shape) else null,
+            .unknown_return = maybe_value == null or directGlobalAddressStorageExprWithLocals(locals, maybe_value.?, globals, summaries, pointer_shape) == null,
         },
-        .block, .unsafe_block, .comptime_block => |block| directGlobalReturnFlowForBlock(block, globals, summaries, pointer_shape),
-        .contract_block => |contract| directGlobalReturnFlowForBlock(contract.block, globals, summaries, pointer_shape),
+        .block, .unsafe_block, .comptime_block => |block| blk: {
+            const flow = try directGlobalReturnFlowForBlock(allocator, locals, block, globals, summaries, pointer_shape);
+            if (flow.can_fall_through) locals.clearRetainingCapacity();
+            break :blk flow;
+        },
+        .contract_block => |contract| blk: {
+            const flow = try directGlobalReturnFlowForBlock(allocator, locals, contract.block, globals, summaries, pointer_shape);
+            if (flow.can_fall_through) locals.clearRetainingCapacity();
+            break :blk flow;
+        },
         .if_let => |node| blk: {
-            const then_flow = directGlobalReturnFlowForBlock(node.then_block, globals, summaries, pointer_shape);
-            const else_flow = if (node.else_block) |else_block|
-                directGlobalReturnFlowForBlock(else_block, globals, summaries, pointer_shape)
-            else
-                DirectGlobalReturnFlow{};
+            var then_locals = try cloneDirectGlobalReturnLocals(allocator, locals);
+            defer then_locals.deinit();
+            const then_flow = try directGlobalReturnFlowForBlock(allocator, &then_locals, node.then_block, globals, summaries, pointer_shape);
+            const else_flow = if (node.else_block) |else_block| else_blk: {
+                var else_locals = try cloneDirectGlobalReturnLocals(allocator, locals);
+                defer else_locals.deinit();
+                break :else_blk try directGlobalReturnFlowForBlock(allocator, &else_locals, else_block, globals, summaries, pointer_shape);
+            } else DirectGlobalReturnFlow{};
+            if (then_flow.can_fall_through or else_flow.can_fall_through) locals.clearRetainingCapacity();
             break :blk joinDirectGlobalReturnFlows(then_flow, else_flow);
         },
-        .@"switch" => |node| directGlobalReturnFlowForSwitch(node, globals, summaries, pointer_shape),
-        else => .{},
+        .@"switch" => |node| blk: {
+            const flow = try directGlobalReturnFlowForSwitch(allocator, locals, node, globals, summaries, pointer_shape);
+            if (flow.can_fall_through) locals.clearRetainingCapacity();
+            break :blk flow;
+        },
+        else => blk: {
+            locals.clearRetainingCapacity();
+            break :blk .{};
+        },
     };
 }
 
-fn directGlobalReturnFlowForSwitch(node: ast.Switch, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) DirectGlobalReturnFlow {
+fn directGlobalReturnFlowForSwitch(allocator: std.mem.Allocator, locals: *const std.StringHashMap([]const u8), node: ast.Switch, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) error{OutOfMemory}!DirectGlobalReturnFlow {
     var result: DirectGlobalReturnFlow = .{ .can_fall_through = !directGlobalReturnSwitchIsExhaustive(node) };
     for (node.arms) |arm| {
+        var arm_locals = try cloneDirectGlobalReturnLocals(allocator, locals);
+        defer arm_locals.deinit();
         const arm_flow = switch (arm.body) {
-            .block => |block| directGlobalReturnFlowForBlock(block, globals, summaries, pointer_shape),
+            .block => |block| try directGlobalReturnFlowForBlock(allocator, &arm_locals, block, globals, summaries, pointer_shape),
             .expr => DirectGlobalReturnFlow{},
         };
         if (arm_flow.can_fall_through) result.can_fall_through = true;
@@ -2714,6 +2765,14 @@ fn directGlobalReturnBoolPatternValue(pattern: ast.Pattern) ?bool {
     };
 }
 
+fn cloneDirectGlobalReturnLocals(allocator: std.mem.Allocator, locals: *const std.StringHashMap([]const u8)) error{OutOfMemory}!std.StringHashMap([]const u8) {
+    var cloned = std.StringHashMap([]const u8).init(allocator);
+    errdefer cloned.deinit();
+    var it = locals.iterator();
+    while (it.next()) |entry| try cloned.put(entry.key_ptr.*, entry.value_ptr.*);
+    return cloned;
+}
+
 fn joinDirectGlobalReturnFlows(left: DirectGlobalReturnFlow, right: DirectGlobalReturnFlow) DirectGlobalReturnFlow {
     var result: DirectGlobalReturnFlow = .{
         .can_fall_through = left.can_fall_through or right.can_fall_through,
@@ -2740,9 +2799,14 @@ fn appendDirectGlobalReturnFlow(prefix: DirectGlobalReturnFlow, statement: Direc
 }
 
 fn directGlobalAddressStorageExpr(expr: ast.Expr, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) ?[]const u8 {
+    return directGlobalAddressStorageExprWithLocals(null, expr, globals, summaries, pointer_shape);
+}
+
+fn directGlobalAddressStorageExprWithLocals(locals: ?*const std.StringHashMap([]const u8), expr: ast.Expr, globals: *const std.StringHashMap(ValueType), summaries: *const std.StringHashMap(PointerReturnProvenanceSummary), pointer_shape: PointerShape) ?[]const u8 {
     return switch (expr.kind) {
-        .grouped => |inner| directGlobalAddressStorageExpr(inner.*, globals, summaries, pointer_shape),
-        .cast => |node| directGlobalAddressStorageExpr(node.value.*, globals, summaries, pointer_shape),
+        .grouped => |inner| directGlobalAddressStorageExprWithLocals(locals, inner.*, globals, summaries, pointer_shape),
+        .cast => |node| directGlobalAddressStorageExprWithLocals(locals, node.value.*, globals, summaries, pointer_shape),
+        .ident => |ident| if (locals) |local_map| local_map.get(ident.text) else null,
         .address_of => |inner| switch (inner.kind) {
             .ident => |ident| if (globals.contains(ident.text)) ident.text else null,
             else => null,
@@ -2750,7 +2814,7 @@ fn directGlobalAddressStorageExpr(expr: ast.Expr, globals: *const std.StringHash
         .call => |call| blk: {
             if (isAssumeNoaliasDirectCall(call)) {
                 if (call.type_args.len != 0 or call.args.len != 2) break :blk null;
-                break :blk directGlobalAddressStorageExpr(call.args[0], globals, summaries, pointer_shape);
+                break :blk directGlobalAddressStorageExprWithLocals(locals, call.args[0], globals, summaries, pointer_shape);
             }
             if (call.type_args.len != 0) break :blk null;
             const callee = directCalleeName(call.callee.*) orelse break :blk null;

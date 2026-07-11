@@ -510,6 +510,20 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
         \\        return compiler.assume_noalias_unchecked(&shared_counter, 4);
         \\    }
         \\}
+        \\fn local_global_pointer() -> *mut u32 {
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    return gp;
+        \\}
+        \\fn assigned_local_global_pointer() -> *mut u32 {
+        \\    var gp: *mut u32 = &shared_counter;
+        \\    gp = returned_global_pointer();
+        \\    return gp;
+        \\}
+        \\fn mixed_local_pointer(fallback: *mut u32) -> *mut u32 {
+        \\    var gp: *mut u32 = &shared_counter;
+        \\    gp = fallback;
+        \\    return gp;
+        \\}
         \\fn branched_global_pointer(flag: bool) -> *mut u32 {
         \\    if flag { return &shared_counter; } else { return &shared_counter; }
         \\}
@@ -528,6 +542,18 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
         \\}
         \\fn uses_noalias_global_pointer() -> u32 {
         \\    let gp: *mut u32 = noalias_global_pointer();
+        \\    return gp.*;
+        \\}
+        \\fn uses_local_global_pointer() -> u32 {
+        \\    let gp: *mut u32 = local_global_pointer();
+        \\    return gp.*;
+        \\}
+        \\fn uses_assigned_local_global_pointer() -> u32 {
+        \\    let gp: *mut u32 = assigned_local_global_pointer();
+        \\    return gp.*;
+        \\}
+        \\fn uses_mixed_local_pointer(fallback: *mut u32) -> u32 {
+        \\    let gp: *mut u32 = mixed_local_pointer(fallback);
         \\    return gp.*;
         \\}
         \\fn uses_branched_global_pointer(flag: bool) -> u32 {
@@ -555,6 +581,18 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
     const noalias_body = try llvmFunctionBody(output.items, "define internal i32 @uses_noalias_global_pointer");
     try expectContains(noalias_body, "; mir pointer_provenance consumed fn=uses_noalias_global_pointer subject=gp provenance=global_storage reason=none");
     try expectContains(noalias_body, "load atomic i32, ptr %");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i32 @uses_local_global_pointer");
+    try expectContains(local_body, "; mir pointer_provenance consumed fn=uses_local_global_pointer subject=gp provenance=global_storage reason=none");
+    try expectContains(local_body, "load atomic i32, ptr %");
+
+    const assigned_local_body = try llvmFunctionBody(output.items, "define internal i32 @uses_assigned_local_global_pointer");
+    try expectContains(assigned_local_body, "; mir pointer_provenance consumed fn=uses_assigned_local_global_pointer subject=gp provenance=global_storage reason=none");
+    try expectContains(assigned_local_body, "load atomic i32, ptr %");
+
+    const mixed_local_body = try llvmFunctionBody(output.items, "define internal i32 @uses_mixed_local_pointer");
+    try expectNotContains(mixed_local_body, "; mir pointer_provenance consumed fn=uses_mixed_local_pointer subject=gp provenance=global_storage reason=none");
+    try expectContains(mixed_local_body, "load atomic i32, ptr %");
 
     const alias_body = try llvmFunctionBody(output.items, "define internal i32 @uses_global_pointer_through_alias");
     try expectContains(alias_body, "; mir pointer_provenance consumed fn=uses_global_pointer_through_alias subject=gp provenance=global_storage reason=none");
@@ -587,6 +625,13 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
     const missing_noalias_body = try llvmFunctionBody(missing_noalias_output.items, "define internal i32 @uses_noalias_global_pointer");
     try expectNotContains(missing_noalias_body, "; mir pointer_provenance consumed fn=uses_noalias_global_pointer subject=gp provenance=global_storage reason=none");
     try expectContains(missing_noalias_body, "load atomic i32, ptr %");
+
+    var missing_local_output: std.ArrayList(u8) = .empty;
+    defer missing_local_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutPointerProvenanceFactsForSubject("llvm_pointer_return_provenance.mc", source, "uses_local_global_pointer", "gp", &missing_local_output);
+    const missing_local_body = try llvmFunctionBody(missing_local_output.items, "define internal i32 @uses_local_global_pointer");
+    try expectNotContains(missing_local_body, "; mir pointer_provenance consumed fn=uses_local_global_pointer subject=gp provenance=global_storage reason=none");
+    try expectContains(missing_local_body, "load atomic i32, ptr %");
 }
 
 test "LLVM aggregate-return pointer facts are MIR-owned and fail closed when absent" {

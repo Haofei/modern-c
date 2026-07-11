@@ -2114,6 +2114,20 @@ test "MIR records direct internal global pointer return provenance in callers" {
         \\        return compiler.assume_noalias_unchecked(&shared_counter, 4);
         \\    }
         \\}
+        \\fn local_global_pointer() -> *mut u32 {
+        \\    let gp: *mut u32 = &shared_counter;
+        \\    return gp;
+        \\}
+        \\fn assigned_local_global_pointer() -> *mut u32 {
+        \\    var gp: *mut u32 = &shared_counter;
+        \\    gp = returned_global_pointer();
+        \\    return gp;
+        \\}
+        \\fn mixed_local_pointer(fallback: *mut u32) -> *mut u32 {
+        \\    var gp: *mut u32 = &shared_counter;
+        \\    gp = fallback;
+        \\    return gp;
+        \\}
         \\fn malformed_noalias_global_pointer() -> *mut u32 {
         \\    return compiler.assume_noalias_unchecked(&shared_counter);
         \\}
@@ -2138,6 +2152,18 @@ test "MIR records direct internal global pointer return provenance in callers" {
         \\}
         \\fn uses_noalias_global_pointer() -> u32 {
         \\    let p: *mut u32 = noalias_global_pointer();
+        \\    return p.*;
+        \\}
+        \\fn uses_local_global_pointer() -> u32 {
+        \\    let p: *mut u32 = local_global_pointer();
+        \\    return p.*;
+        \\}
+        \\fn uses_assigned_local_global_pointer() -> u32 {
+        \\    let p: *mut u32 = assigned_local_global_pointer();
+        \\    return p.*;
+        \\}
+        \\fn uses_mixed_local_pointer(fallback: *mut u32) -> u32 {
+        \\    let p: *mut u32 = mixed_local_pointer(fallback);
         \\    return p.*;
         \\}
         \\fn uses_malformed_noalias_global_pointer() -> u32 {
@@ -2168,6 +2194,12 @@ test "MIR records direct internal global pointer return provenance in callers" {
     try std.testing.expect(!hasPointerProvenanceFact(recursive, "p", null, .global_storage, .none, "shared_counter"));
     const noalias_function = functionByName(typed_mir, "uses_noalias_global_pointer").?;
     try std.testing.expect(hasPointerProvenanceFact(noalias_function, "p", null, .global_storage, .none, "shared_counter"));
+    const local_function = functionByName(typed_mir, "uses_local_global_pointer").?;
+    try std.testing.expect(hasPointerProvenanceFact(local_function, "p", null, .global_storage, .none, "shared_counter"));
+    const assigned_local_function = functionByName(typed_mir, "uses_assigned_local_global_pointer").?;
+    try std.testing.expect(hasPointerProvenanceFact(assigned_local_function, "p", null, .global_storage, .none, "shared_counter"));
+    const mixed_local_function = functionByName(typed_mir, "uses_mixed_local_pointer").?;
+    try std.testing.expect(!hasPointerProvenanceFact(mixed_local_function, "p", null, .global_storage, .none, "shared_counter"));
     const malformed_noalias = functionByName(typed_mir, "uses_malformed_noalias_global_pointer").?;
     try std.testing.expect(!hasPointerProvenanceFact(malformed_noalias, "p", null, .global_storage, .none, "shared_counter"));
 }

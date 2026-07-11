@@ -543,9 +543,10 @@ covered direct local shapes, raw-many zero offsets outside the direct-local
 MIR-owned compile-time-zero shape, callback/exported/nontrivial returned
 pointers, broader aggregate return summaries,
 and other fallback paths. The narrow internal `return &global` pointer-return
-form, acyclic direct forwarding through already summarized internal helpers,
-and well-formed `assume_noalias_unchecked` wrappers around either form are no
-longer in that fallback: MIR records the call-result local's normal
+form, straight-line local aliases of those proven returns, acyclic direct
+forwarding through already summarized internal helpers, and well-formed
+`assume_noalias_unchecked` wrappers around those forms are no longer in that
+fallback: MIR records the call-result local's normal
 `PointerProvenanceFact`, and both backends consume it; a missing caller fact
 falls back to race-tolerant lowering.
 C now keeps the fixed pointer-array destination-read boundary on the MIR-owned
