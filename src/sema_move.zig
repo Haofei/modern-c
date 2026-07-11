@@ -2441,10 +2441,8 @@ pub fn hasMovedSubplace(base: MovePlace, state: *const std.StringHashMap(MoveSlo
     return false;
 }
 
-// Remove every child place when the whole aggregate leaves play (consumed or
-// forgotten), so a later same-named binding starts clean. Typed slots use
-// projection ancestry; legacy alias-only slots retain the display-key fallback
-// until the state-map migration is complete.
+// Remove every typed child place when the whole aggregate leaves play (consumed
+// or forgotten), so a later same-named binding starts clean.
 pub fn clearSubplaces(base: MovePlace, state: *std.StringHashMap(MoveSlot)) void {
     // A HashMap iterator is invalidated by a removal, so rescan from the top
     // after each one. The number of tracked places per function is tiny.
@@ -2455,15 +2453,11 @@ pub fn clearSubplaces(base: MovePlace, state: *std.StringHashMap(MoveSlot)) void
         while (it.next()) |entry| {
             const k = entry.key_ptr.*;
             const slot = entry.value_ptr.*;
-            const is_child = if (slot.place) |place|
-                base.isPrefixOf(place)
-            else
-                k.len > base.root.len + 1 and std.mem.startsWith(u8, k, base.root) and isSubplaceSeparator(k[base.root.len]);
-            if (is_child) {
+            if (slot.place) |place| if (base.isPrefixOf(place)) {
                 _ = state.remove(k);
                 removed_any = true;
                 break; // the iterator is now invalid; rescan with a fresh one
-            }
+            };
         }
     }
 }
