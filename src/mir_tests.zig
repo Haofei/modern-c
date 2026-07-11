@@ -789,6 +789,32 @@ test "MIR records typed call target facts for bitcast calls" {
     try mir.validateCallTargetFactsForLowering(typed_mir);
 }
 
+test "MIR records typed call target facts for phys calls" {
+    const source =
+        \\fn make_phys(value: usize) -> PAddr {
+        \\    return phys(value);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_phys_call_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "make_phys").?;
+    try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.phys, function.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("PAddr", function.call_target_facts[0].result_ty.name());
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+}
+
 test "MIR verifier reports no_lang_trap, fallthrough, contract, and irq findings" {
     const source =
         \\fn missing_return(flag: bool) -> u32 {

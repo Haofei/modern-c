@@ -20,7 +20,6 @@ const mir = @import("mir.zig");
 const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
 const isDeclassifyCall = ast_query.isDeclassifyCall;
-const isPhysCall = ast_query.isPhysCall;
 const isIdentNamed = ast_query.isIdentNamed;
 const isRawLoadCall = ast_query.isRawLoadCall;
 const isRawPtrCall = ast_query.isRawPtrCall;
@@ -61,6 +60,7 @@ pub const Context = struct {
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
     c_type: CTypeFn,
+    mir_call_target_kind: MirCallTargetKindFn,
 };
 
 pub const TempContext = struct {
@@ -535,7 +535,7 @@ pub fn emitVaCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Local
 }
 
 pub fn emitPhysCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    if (!isPhysCall(call.callee.*)) return false;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .phys) return false;
     if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
     try ctx.out.appendSlice(ctx.allocator, "((uintptr_t)(");
     try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);

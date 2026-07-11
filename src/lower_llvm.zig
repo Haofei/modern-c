@@ -118,7 +118,6 @@ const isBindCallExpr = ast_query.isBindCallExpr;
 const isBindCallNode = ast_query.isBindCallNode;
 const isDeclassifyCall = ast_query.isDeclassifyCall;
 const isDropCall = lower_llvm_query.isDropCall;
-const isPhysCall = ast_query.isPhysCall;
 const resultConstructorCallTag = ast_query.resultConstructorCallTag;
 const isUninitExpr = lower_llvm_query.isUninitExpr;
 const llvmTraitIsObjectSafe = lower_llvm_query.llvmTraitIsObjectSafe;
@@ -6372,7 +6371,7 @@ const LlvmEmitter = struct {
             const value = try self.emitExpr(call.args[0], source_ty);
             return try self.emitBitcastValue(value, source_ty, target_ty);
         }
-        if (isPhysCall(call.callee.*)) {
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .phys) {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             return try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
         }
