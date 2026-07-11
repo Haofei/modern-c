@@ -609,7 +609,48 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
         .block, .unsafe_block, .comptime_block => |b| return moveScopedBlock(self, b, state, aliases),
         .contract_block => |c| return moveScopedBlock(self, c.block, state, aliases),
         .loop => |l| {
-            return moveLoopCfg(self, l, state, aliases);
+            if (l.iterable) |iter| {
+                switch (l.kind) {
+                    .@"for" => moveBorrow(self, iter, state, aliases),
+                    .@"while" => {
+                        var condition_state = cloneMoveState(self, state);
+                        defer condition_state.deinit();
+                        moveConsume(self, iter, &condition_state, aliases);
+                        reportLoopOuterResourceChanges(self, state, &condition_state);
+                    },
+                }
+            }
+            var frame = LoopMoveFrame{
+                .label = if (l.loop_label) |label| label.text else null,
+                .entry_names = std.StringHashMap(void).init(self.reporter.allocator),
+                .entry_state = cloneMoveState(self, state),
+                .invalidated_const_indexes = std.StringHashMap(void).init(self.reporter.allocator),
+                .invalidated_aliases = std.StringHashMap(void).init(self.reporter.allocator),
+            };
+            var snap_it = state.iterator();
+            while (snap_it.next()) |entry| {
+                frame.entry_names.put(entry.key_ptr.*, {}) catch {
+                    self.oom = true;
+                };
+            }
+            self.move_loop_stack.append(self.reporter.allocator, frame) catch {
+                self.oom = true;
+                frame.deinit();
+            };
+            var body_state = cloneMoveState(self, state);
+            defer body_state.deinit();
+            const body_diverges = moveBlock(self, l.body, &body_state, aliases);
+            if (self.move_loop_stack.pop()) |popped| {
+                var loop_frame = popped;
+                applyLoopEarlyExitConstIndexInvalidations(state, &loop_frame);
+                applyLoopEarlyExitAliasInvalidations(state, &loop_frame);
+                loop_frame.deinit();
+            }
+            if (!body_diverges) {
+                reportMoveLocalsLeavingScope(self, &body_state, state, "linear `move` value declared in a loop body is never consumed (must be moved, returned, or freed before the iteration ends)");
+                reportLoopOuterResourceChanges(self, state, &body_state);
+            }
+            return false;
         },
         .if_let => |n| {
             return moveIfLetCfg(self, n, state, aliases);
