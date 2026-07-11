@@ -2880,8 +2880,7 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
     aliases: *const std.StringHashMap(ast.TypeExpr),
 ) void {
     const key = aliasPlaceKey(self, target, state) orelse
-        aliasWildcardPlaceKey(self, target, state) orelse
-        memberPlaceKey(self, target) orelse {
+        aliasWildcardPlaceKey(self, target, state) orelse {
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
@@ -3209,27 +3208,6 @@ fn aliasPlaceBaseType(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot))
             const slot = state.get(id.text) orelse return null;
             if (!slot.type_only) return null;
             return slot.ty;
-        },
-        else => return null,
-    }
-}
-
-// The dotted place key for a member access over a bare-ident root (`base.f.g`), allocated
-// for the caller to free. Null if the root is not a bare ident.
-pub fn memberPlaceKey(self: *Checker, expr: ast.Expr) ?[]const u8 {
-    switch (expr.kind) {
-        .grouped => |inner| return memberPlaceKey(self, inner.*),
-        .ident => |id| return self.reporter.allocator.dupe(u8, id.text) catch {
-            self.oom = true;
-            return null;
-        },
-        .member => |m| {
-            const base = memberPlaceKey(self, m.base.*) orelse return null;
-            defer self.reporter.allocator.free(base);
-            return std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base, m.name.text }) catch {
-                self.oom = true;
-                return null;
-            };
         },
         else => return null,
     }
