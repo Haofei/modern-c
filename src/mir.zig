@@ -1851,8 +1851,9 @@ fn aggregateReturnLoopBodyIsTransparentForLocalTracker(statements: []const ast.S
             }
         },
         .assignment => |assignment| {
-            const target = assignmentTargetIdentName(assignment.target) orelse return false;
-            if (locals.contains(target)) return false;
+            if (assignmentTargetIdentName(assignment.target)) |target| {
+                if (locals.contains(target)) return false;
+            } else if (!aggregateReturnLoopAssignmentIsNonPointerAggregateMutation(locals, assignment.target, assignment.value)) return false;
             if (aggregateReturnPrefixExprHasCallOrExit(assignment.value)) return false;
         },
         .expr, .assert => |expr| {
@@ -1870,6 +1871,55 @@ fn aggregateReturnLoopBodyIsTransparentForLocalTracker(statements: []const ast.S
         else => return false,
     };
     return true;
+}
+
+fn aggregateReturnLoopAssignmentIsNonPointerAggregateMutation(
+    locals: *const std.StringHashMap([]ast.StructLiteralField),
+    target_expr: ast.Expr,
+    value: ast.Expr,
+) bool {
+    if (aggregateReturnLoopExprMayCarryPointerProvenance(value)) return false;
+    if (aggregateReturnLocalNestedFieldAssignmentTarget(target_expr)) |target| {
+        const fields = locals.get(target.local_name) orelse return false;
+        const previous = aggregateReturnLiteralValueAtPath(fields, target.fieldNames()) orelse return false;
+        return !aggregateReturnLoopExprMayCarryPointerProvenance(previous);
+    }
+    if (aggregateReturnLocalFieldAssignmentTarget(target_expr)) |target| {
+        const fields = locals.get(target.local_name) orelse return false;
+        const previous = aggregateLiteralFieldValue(fields, target.field_name) orelse return false;
+        return !aggregateReturnLoopExprMayCarryPointerProvenance(previous);
+    }
+    return false;
+}
+
+fn aggregateReturnLiteralValueAtPath(fields: []ast.StructLiteralField, field_names: []const []const u8) ?ast.Expr {
+    if (field_names.len == 0) return null;
+    var value = aggregateLiteralFieldValue(fields, field_names[0]) orelse return null;
+    for (field_names[1..]) |field_name| {
+        const nested_fields = structLiteralFieldsForAggregateReturn(value) orelse return null;
+        value = aggregateLiteralFieldValue(nested_fields, field_name) orelse return null;
+    }
+    return value;
+}
+
+fn aggregateReturnLoopExprMayCarryPointerProvenance(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .address_of, .deref, .call, .try_expr, .await_expr, .unreachable_expr => true,
+        .grouped => |inner| aggregateReturnLoopExprMayCarryPointerProvenance(inner.*),
+        .cast => |node| aggregateReturnLoopExprMayCarryPointerProvenance(node.value.*),
+        .unary => |node| aggregateReturnLoopExprMayCarryPointerProvenance(node.expr.*),
+        .binary => |node| aggregateReturnLoopExprMayCarryPointerProvenance(node.left.*) or aggregateReturnLoopExprMayCarryPointerProvenance(node.right.*),
+        .array_literal => |items| for (items) |item| {
+            if (aggregateReturnLoopExprMayCarryPointerProvenance(item)) break true;
+        } else false,
+        .struct_literal => |fields| for (fields) |field| {
+            if (aggregateReturnLoopExprMayCarryPointerProvenance(field.value)) break true;
+        } else false,
+        .index => |node| aggregateReturnLoopExprMayCarryPointerProvenance(node.base.*) or aggregateReturnLoopExprMayCarryPointerProvenance(node.index.*),
+        .slice => |node| aggregateReturnLoopExprMayCarryPointerProvenance(node.base.*) or aggregateReturnLoopExprMayCarryPointerProvenance(node.start.*) or aggregateReturnLoopExprMayCarryPointerProvenance(node.end.*),
+        .member => |node| aggregateReturnLoopExprMayCarryPointerProvenance(node.base.*),
+        else => false,
+    };
 }
 
 fn aggregateReturnSwitchIsTransparent(switch_node: ast.Switch) bool {
