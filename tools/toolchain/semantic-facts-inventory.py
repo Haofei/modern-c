@@ -8,6 +8,7 @@ drift fails closed instead of silently leaving stale evidence in the docs.
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 
@@ -769,6 +770,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn pointerExprHasProvenLocalStorage(": 1,
         "fn qualifiedUnionConstructorType(": 0,
         "fn enumVariantPathType(": 0,
+        "bitcastCallReturnType(call)": 0,
+        "atomicCallMemberOp(call.callee.*)": 0,
+        "maybeUninitCallMemberOp(call.callee.*)": 0,
+        "reduceCallKind(call.callee.*)": 0,
     },
     "src/lower_llvm_query.zig": {
         "fn bitcastTargetType(": 0,
@@ -788,18 +793,39 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "tests/spec/return_types.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 1,
     },
-    "src/lower_llvm.zig": {
-        "bitcastCallReturnType(call)": 0,
-        "atomicCallMemberOp(call.callee.*)": 0,
-        "maybeUninitCallMemberOp(call.callee.*)": 0,
-        "reduceCallKind(call.callee.*)": 0,
-    },
 }
+
+
+def duplicate_exact_count_files() -> list[str]:
+    """Detect duplicate top-level file keys before Python dict parsing hides them."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == "EXACT_COUNTS" for target in node.targets):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            return []
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for key in node.value.keys:
+            if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                continue
+            if key.value in seen and key.value not in duplicates:
+                duplicates.append(key.value)
+            seen.add(key.value)
+        return duplicates
+    return []
 
 
 def main() -> int:
     missing: list[str] = []
     checked = 0
+
+    for duplicate in duplicate_exact_count_files():
+        missing.append(f"EXACT_COUNTS: duplicate top-level file key {duplicate!r}")
+        checked += 1
 
     for relative, anchors in sorted(ANCHORS.items()):
         path = REPO_ROOT / relative
