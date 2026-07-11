@@ -158,11 +158,54 @@ pub fn moveBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(Mov
 pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var before = cloneMoveState(self, state);
     defer before.deinit();
-    const diverges = moveBlock(self, block, state, aliases);
-    if (!diverges) {
-        reportMoveLocalsLeavingScope(self, state, &before, "linear `move` value declared in this block is never consumed (must be moved, returned, or freed before the block ends)");
-    }
 
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    defer cfg.deinit();
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        return false;
+    };
+    const body = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        return false;
+    };
+    const exit = cfg.addBlock(.branch_join) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(entry, body, .normal) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(body, exit, .normal) catch {
+        self.oom = true;
+        return false;
+    };
+
+    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return false;
+    defer worklist.deinit();
+    var diverges = false;
+    while (worklist.pop()) |block_id| {
+        const block_state = worklist.statePtr(block_id) orelse continue;
+        if (block_id == entry) {
+            worklist.propagateSuccessors(self, block_id, block_state);
+        } else if (block_id == body) {
+            diverges = moveBlock(self, block, block_state, aliases);
+            if (!diverges) {
+                reportMoveLocalsLeavingScope(self, block_state, &before, "linear `move` value declared in this block is never consumed (must be moved, returned, or freed before the block ends)");
+                worklist.propagateSuccessors(self, block_id, block_state);
+            } else {
+                replaceMoveState(self, state, block_state);
+            }
+        } else if (block_id == exit) {
+            replaceMoveState(self, state, block_state);
+        }
+    }
+    preserveOuterScopedMoveState(self, state, &before);
+    return diverges;
+}
+
+fn preserveOuterScopedMoveState(self: *Checker, state: *std.StringHashMap(MoveSlot), before: *const std.StringHashMap(MoveSlot)) void {
     var scoped = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
     defer scoped.deinit();
     var it = before.iterator();
@@ -178,13 +221,12 @@ pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *std.StringHashM
     var state_it = state.iterator();
     while (state_it.next()) |entry| {
         if (before.contains(entry.key_ptr.*)) continue;
-        if (!moveSubplaceRootInOuter(entry.value_ptr.*, entry.key_ptr.*, &before)) continue;
+        if (!moveSubplaceRootInOuter(entry.value_ptr.*, entry.key_ptr.*, before)) continue;
         scoped.put(entry.key_ptr.*, entry.value_ptr.*) catch {
             self.oom = true;
         };
     }
     replaceMoveState(self, state, &scoped);
-    return diverges;
 }
 
 // Leak-check every `move` binding live at an exit edge. Used both at an explicit

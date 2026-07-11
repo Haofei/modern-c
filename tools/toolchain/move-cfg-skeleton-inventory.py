@@ -23,8 +23,14 @@ ANCHORS: dict[str, list[str]] = {
         "move CFG skeleton requeues loop head on backedge state change",
         "move CFG skeleton carries early-exit state to exit block",
     ],
+    "src/sema_move.zig": [
+        "const MoveStateCfgWorklist = struct",
+        "fn preserveOuterScopedMoveState",
+        "worklist.propagateSuccessors(self, block_id, block_state)",
+    ],
     "docs/compiler-production-readiness.md": [
         "Move checker CFG skeleton is explicit",
+        "Move checker scoped blocks use CFG worklist state",
         "move-cfg-skeleton-inventory.py",
     ],
 }
