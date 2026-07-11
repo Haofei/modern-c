@@ -398,6 +398,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
     // move-unsupported-inventory-test keeps fail-closed move-array unsupported channels named and fixture-owned.
     m0_step.dependOn(ctx.cmd("move-unsupported-inventory-test"));
+    // move-place-identity-inventory-test keeps alias assignment ownership checks typed-place based.
+    m0_step.dependOn(ctx.cmd("move-place-identity-inventory-test"));
     // std-api-docs-test keeps the generated stdlib API index in sync with std/**/*.mc exports.
     m0_step.dependOn(ctx.cmd("std-api-docs-test"));
     // vendoring-test keeps third_party provenance and CVE/advisory process docs present.
@@ -919,6 +921,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     fast_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
     fast_step.dependOn(ctx.cmd("move-unsupported-inventory-test"));
+    fast_step.dependOn(ctx.cmd("move-place-identity-inventory-test"));
     fast_step.dependOn(ctx.cmd("std-api-docs-test"));
     fast_step.dependOn(ctx.cmd("vendoring-test"));
     fast_step.dependOn(ctx.cmd("third-party-licenses-test"));
@@ -967,6 +970,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("diagnostics-reference-test")); // generated diagnostic-code reference stays current
     c0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test")); // emitted diagnostics stay fixture-owned or documented
     c0_step.dependOn(ctx.cmd("move-unsupported-inventory-test")); // fail-closed move-array unsupported channels stay named and covered
+    c0_step.dependOn(ctx.cmd("move-place-identity-inventory-test")); // alias assignment ownership checks stay typed-place based
     c0_step.dependOn(ctx.cmd("std-api-docs-test")); // generated stdlib API index stays current
     c0_step.dependOn(ctx.cmd("vendoring-test")); // third_party provenance and CVE/advisory process stay documented
     c0_step.dependOn(ctx.cmd("third-party-licenses-test")); // aggregated third-party license manifest stays complete

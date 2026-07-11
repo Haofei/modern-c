@@ -82,6 +82,11 @@ RULES: tuple[Rule, ...] = (
         "unit test source changes are covered by the compiler unit/spec test step",
     ),
     Rule(
+        ("src/sema_move.zig", "tools/toolchain/move-place-identity-inventory.py"),
+        ("move-place-identity-inventory-test",),
+        "move checker place-identity changes need the focused typed-place drift gate",
+    ),
+    Rule(
         ("tools/ci/pass-gates.py",),
         ("ci-pass-gates-test",),
         "CI PASS assertion helper changes need the focused CI anti-vacuity contract gate",

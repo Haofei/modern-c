@@ -1495,7 +1495,7 @@ pub const PlaceKeyTy = struct {
 
 const AliasPlaceInfo = struct {
     key: []const u8,
-    place: ?MovePlace,
+    place: MovePlace,
 };
 
 // Build the dotted place key and leaf type for a place expression (`x`, `x.f`, `x.f.g`)
@@ -2885,18 +2885,18 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
     };
 
     const referent = aliasReferentForExpr(self, value, state, aliases) orelse {
-        _ = state.remove(target_info.key);
+        _ = removeAliasSlotForStoragePlace(target_info.place, state);
         self.reporter.allocator.free(target_info.key);
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
     if (!aliasReferentIsTracked(referent, state)) {
-        _ = state.remove(target_info.key);
+        _ = removeAliasSlotForStoragePlace(target_info.place, state);
         self.reporter.allocator.free(target_info.key);
         return;
     }
 
-    if (state.getPtr(target_info.key)) |slot| {
+    if (aliasSlotPtrForStoragePlace(target_info.place, state)) |slot| {
         slot.* = .{ .live = false, .span = value.span, .place = target_info.place, .alias_of = referent.key, .alias_place = referent.place };
         self.reporter.allocator.free(target_info.key);
         return;
@@ -2946,7 +2946,12 @@ pub fn registerArrayElementAliases(
             self.reporter.allocator.free(key);
             continue;
         }
-        recordAliasPlaceOrEscapeWithKey(self, key, element_place, item, escape_span, state, aliases);
+        const concrete_element_place = element_place orelse {
+            self.reporter.allocator.free(key);
+            markBorrowEscape(self, item, escape_span, state);
+            continue;
+        };
+        recordAliasPlaceOrEscapeWithKey(self, key, concrete_element_place, item, escape_span, state, aliases);
     }
 }
 
@@ -2977,25 +2982,25 @@ pub fn recordAssignedAliasPlaceOrEscape(
 fn recordAliasPlaceOrEscapeWithKey(
     self: *Checker,
     key: []const u8,
-    key_place: ?MovePlace,
+    key_place: MovePlace,
     value: ast.Expr,
     escape_span: diagnostics.Span,
     state: *std.StringHashMap(MoveSlot),
     aliases: *const std.StringHashMap(ast.TypeExpr),
 ) void {
     const referent = aliasReferentForExpr(self, value, state, aliases) orelse {
-        _ = state.remove(key);
+        _ = removeAliasSlotForStoragePlace(key_place, state);
         self.reporter.allocator.free(key);
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
     if (!aliasReferentIsTracked(referent, state)) {
-        _ = state.remove(key);
+        _ = removeAliasSlotForStoragePlace(key_place, state);
         self.reporter.allocator.free(key);
         return;
     }
 
-    if (state.getPtr(key)) |slot| {
+    if (aliasSlotPtrForStoragePlace(key_place, state)) |slot| {
         slot.* = .{ .live = false, .span = value.span, .place = key_place, .alias_of = referent.key, .alias_place = referent.place };
         self.reporter.allocator.free(key);
         return;
@@ -3031,6 +3036,32 @@ fn aliasSlotForStoragePlace(place: MovePlace, state: *const std.StringHashMap(Mo
         }
     }
     return null;
+}
+
+fn aliasSlotPtrForStoragePlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) ?*MoveSlot {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr;
+        if (slot.alias_of == null) continue;
+        if (slot.place) |stored| {
+            if (stored.eql(place)) return slot;
+        }
+    }
+    return null;
+}
+
+fn removeAliasSlotForStoragePlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) bool {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (slot.alias_of == null) continue;
+        if (slot.place) |stored| {
+            if (stored.eql(place)) {
+                return state.remove(entry.key_ptr.*);
+            }
+        }
+    }
+    return false;
 }
 
 fn staleAliasWildcardSlotForConcretePlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
@@ -3159,12 +3190,11 @@ fn aliasWildcardPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.Stri
         .member => |m| {
             const base = aliasWildcardPlaceInfo(self, m.base.*, state) orelse return null;
             defer self.reporter.allocator.free(base.key);
-            const base_place = base.place orelse return null;
             const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base.key, m.name.text }) catch {
                 self.oom = true;
                 return null;
             };
-            const place = base_place.project(.{ .field = m.name.text }) orelse {
+            const place = base.place.project(.{ .field = m.name.text }) orelse {
                 self.reporter.allocator.free(key);
                 return null;
             };
@@ -3206,7 +3236,7 @@ fn aliasWildcardPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.Stri
                 self.reporter.allocator.free(key);
                 return null;
             }
-            return .{ .key = key, .place = place };
+            return .{ .key = key, .place = place.? };
         },
         else => return null,
     }
