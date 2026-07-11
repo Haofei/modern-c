@@ -1047,7 +1047,7 @@ const AliasReferent = struct {
 
 fn aliasReferentIsTracked(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot)) bool {
     if (referent.place) |place| return state.contains(place.root);
-    return state.contains(referent.key) or isMoveSubplaceKey(referent.key);
+    return state.contains(referent.key);
 }
 
 fn aliasReferentRoot(referent: AliasReferent) []const u8 {
