@@ -848,6 +848,21 @@ ergonomics, or convenience work.
 | 7 | P1 | C backend positioning | Define the C backend as bootstrap/reference/differential backend or as a supported production backend with a target matrix. | Documentation states compiler versions, target triples, ABI subset, flags, aggregate passing/return limits, and whether ISO C portability is a non-goal. |
 | 8 | P2 | Comptime and reflection breadth | Decide whether bounded structural reflection/derive belongs in the production profile. | Either implement the bounded reflection subset with tests, or document narrow value-level comptime as the production language boundary. |
 
+Unified priority order:
+
+| Order | Priority | Item | Why it comes here |
+|---|---|---|---|
+| 1 | P0 | Broader pointer-provenance race lowering / shared memory model ergonomics | This defines whether accepted racy or shared-memory programs preserve MC's "not LLVM UB" contract. Finish the current provenance/race-lowering closure or replace it with an explicit typed shared-memory model. |
+| 2 | P0 | General temporal memory safety boundary | The production profile must say whether dangling slices/views, `defer free` escapes, closure captures, async captures, and arena-scoped values are diagnosed, forced behind unsafe boundaries, or accepted non-goals. |
+| 3 | P0 | `unsafe_contract` optimizer semantics | The compiler must choose whether contracts only remove checks, become whole-program unsafe assumptions, or require compiler proof before they can affect optimization. |
+| 4 | P1 | Typed semantic fact table / typed MIR | Backends must stop re-deriving type, ABI, representation, call-target, ownership, effect, and provenance facts from AST shape. This is the main architecture prerequisite for closing later correctness work. |
+| 5 | P1 | CFG/place-based move checker | The move checker must finish replacing string-key compatibility state with typed places and CFG/worklist joins before move-resource acceptance can be trusted broadly. |
+| 6 | P1 | Async expansion before typed IR | Async should stay frozen until capture, liveness, move, borrow-across-await, and effect validation are owned by typed facts/MIR. |
+| 7 | P1 | Module graph and separate compilation | Decide whether broad production readiness requires stable module/declaration/type identities, interface boundaries, and incremental-friendly compilation, or documents whole-program compilation as the supported profile. |
+| 8 | P1 | Trait method namespace and coherence | If traits are in scope for the production profile, method identity and coherence need trait-qualified disambiguation; otherwise trait expansion must be frozen and documented. |
+| 9 | P1 | C backend positioning | Define whether the C backend is bootstrap/reference/differential only or a supported production backend with a concrete compiler, target, ABI, and flag matrix. |
+| 10 | P2 | Comptime and reflection breadth | Decide whether bounded structural reflection/derive belongs in the production profile after the semantic and architecture risks above are closed. |
+
 The intended layering remains:
 
 | Layer | Scope |
