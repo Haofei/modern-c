@@ -509,6 +509,12 @@ pub fn rawPtrCallReturnType(call: anytype) ?ast.TypeExpr {
     };
 }
 
+/// The result type of `bitcast<T>(value)`, or null when the call shape is not exact.
+pub fn bitcastCallReturnType(call: anytype) ?ast.TypeExpr {
+    if (!isIdentNamed(call.callee.*, "bitcast") or call.type_args.len != 1 or call.args.len != 1) return null;
+    return call.type_args[0];
+}
+
 /// True when `callee` names the `raw.store` intrinsic (through grouping).
 pub fn isRawStoreCall(callee: ast.Expr) bool {
     return switch (callee.kind) {

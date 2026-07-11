@@ -99,6 +99,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn enumVariantPathType(",
             "pub fn rawLoadCallReturnType(",
             "pub fn rawPtrCallReturnType(",
+            "pub fn bitcastCallReturnType(",
         ],
         "src/lower_llvm_query.zig": [
             "ast_query.rawLoadCallReturnType(call)",
@@ -670,6 +671,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "if (integerLiteralSyntaxOverflow(expr))": 4,
         "fn rawLoadCallReturnType(": 0,
         "fn isRawPtrCall(": 0,
+        "fn bitcastCallReturnType(": 0,
         "const ptr_ty = ast.TypeExpr{ .span = node.type_args[0].span": 0,
     },
     "src/lower_c_emitter.zig": {
@@ -719,6 +721,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn pointerExprHasProvenLocalStorage(": 1,
         "fn qualifiedUnionConstructorType(": 0,
         "fn enumVariantPathType(": 0,
+    },
+    "src/lower_llvm_query.zig": {
+        "fn bitcastTargetType(": 0,
     },
     "tests/spec/no_implicit_conversion.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 9,

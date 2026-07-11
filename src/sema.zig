@@ -205,6 +205,7 @@ const memberExpr = ast_query.memberExpr;
 const byteViewCallKind = ast_query.byteViewCallKind;
 const rawLoadCallReturnType = ast_query.rawLoadCallReturnType;
 const rawPtrCallReturnType = ast_query.rawPtrCallReturnType;
+const bitcastCallReturnType = ast_query.bitcastCallReturnType;
 const DmaBufInfo = ast_query.DmaBufInfo;
 const dmaBufInfo = ast_query.dmaBufInfo;
 
@@ -6929,11 +6930,6 @@ fn maybeUninitCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
 fn atomicCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
     const ty = atomicCallReturnType(callee, ctx) orelse return null;
     return classifyTypeCtx(ty, ctx);
-}
-
-fn bitcastCallReturnType(call: anytype) ?ast.TypeExpr {
-    if (!isBitcastCallName(call.callee.*) or call.type_args.len != 1) return null;
-    return call.type_args[0];
 }
 
 // `va.arg<T>(&ap)` yields a `T` (the next C-ABI variadic slot); `va.start()` yields a

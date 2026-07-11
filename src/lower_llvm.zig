@@ -35,6 +35,7 @@ const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
 const taggedUnionCase = ast_query.taggedUnionCase;
 const qualifiedTaggedUnionConstructorType = ast_query.qualifiedTaggedUnionConstructorType;
 const enumVariantPathType = ast_query.enumVariantPathType;
+const bitcastCallReturnType = ast_query.bitcastCallReturnType;
 
 const backend_mod = @import("backend.zig");
 const lower_llvm_alias = @import("lower_llvm_alias.zig");
@@ -105,7 +106,6 @@ const sectionAttr = lower_llvm_text.sectionAttr;
 // LLVM backend AST/call-shape queries and small pure lowering helpers.
 const lower_llvm_query = @import("lower_llvm_query.zig");
 const assignmentIdent = lower_llvm_query.assignmentIdent;
-const bitcastTargetType = lower_llvm_query.bitcastTargetType;
 const builtinCallReturnType = lower_llvm_query.builtinCallReturnType;
 const comptimeStructFieldValue = lower_llvm_query.comptimeStructFieldValue;
 const derefTarget = lower_llvm_query.derefTarget;
@@ -6356,7 +6356,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(info.element_ty), ptr });
             return result;
         }
-        if (bitcastTargetType(call)) |target_ty| {
+        if (bitcastCallReturnType(call)) |target_ty| {
             if (call.args.len != 1) return error.UnsupportedLlvmEmission;
             const source_ty = self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission;
             const value = try self.emitExpr(call.args[0], source_ty);
@@ -8413,7 +8413,7 @@ const LlvmEmitter = struct {
             return trait.methods[slot].return_type orelse simpleType(call.callee.*.span, "void");
         }
         if (self.constGetCallInfo(call)) |info| return info.element_ty;
-        if (bitcastTargetType(call)) |ty| return ty;
+        if (bitcastCallReturnType(call)) |ty| return ty;
         if (builtinCallReturnType(call)) |ty| return ty;
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;

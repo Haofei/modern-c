@@ -157,19 +157,6 @@ pub fn comptimeStructFieldValue(fields: []const eval.ComptimeStructField, name: 
     return null;
 }
 
-pub fn bitcastTargetType(call: anytype) ?ast.TypeExpr {
-    const callee = switch (call.callee.kind) {
-        .ident => |ident| ident,
-        .grouped => |inner| switch (inner.kind) {
-            .ident => |ident| ident,
-            else => return null,
-        },
-        else => return null,
-    };
-    if (!std.mem.eql(u8, callee.text, "bitcast") or call.type_args.len != 1) return null;
-    return call.type_args[0];
-}
-
 pub const ReflectionCallKind = enum {
     size,
     repr,
