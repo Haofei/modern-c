@@ -15,6 +15,54 @@ for a general production-ready claim.
 
 ## 0. Current Assessment
 
+### Product Positioning
+
+As of 2026-07-11, MC is best described as a **kernel-profile,
+freestanding-oriented machine-contract language prototype**, not as a generally
+production-ready language competing head-on with Zig, Odin, C, C++, or Rust for
+all systems-programming use cases.
+
+The compiler's most important value is not Zig-like syntax. It is the attempt to
+make low-level machine contracts explicit and locally checkable:
+
+- arithmetic domains such as checked, wrapping, saturating, serial, and counter
+  arithmetic;
+- address/resource types such as `PAddr`, `VAddr`, `DmaAddr`, and `MmioPtr`;
+- MMIO, DMA/cache ownership, IRQ context, and freestanding trap contracts;
+- opt-in `move` resources for linear hardware/resource capabilities;
+- explicit machine-effect attributes such as `#[no_lang_trap]`,
+  `#[bounded]`, and `#[irq_context]`;
+- the rule that optimization mode must not silently change the semantics of an
+  already accepted program.
+
+The supported-subset claim should therefore be read as a kernel/freestanding
+compiler qualification claim. It is not a claim that MC already has the full
+toolchain maturity, package ecosystem, metaprogramming breadth, module system,
+separate compilation story, or general memory-safety model expected from a
+general-purpose production language.
+
+### Strategic Constraint
+
+The project should stop treating additional surface-language features as the
+main path to production readiness. The current readiness risk is architectural:
+the language surface is already large enough, while the compiler's semantic
+authority is still converging from AST/backend-local inference toward typed
+facts and MIR-owned decisions.
+
+The practical rule is:
+
+> Backends may use syntax to choose emission shape, but type, provenance,
+> ownership, effect, ABI, representation, and safety decisions must come from
+> typed semantic facts or MIR-owned state. When the fact is missing, lowering
+> must be conservative or the source must be rejected with a diagnostic.
+
+Longer-term designs such as `shared<T>`, restricted lifetime/region checking,
+`unsafe fn`, trait-qualified method namespaces, a true module graph, and
+bounded structural reflection may be necessary for a stronger language story.
+They are not counted as separate readiness blockers here unless the project
+chooses to expand the supported-subset contract. The three workstreams below are
+the current compiler-side blockers for a general production-ready claim.
+
 ### Current Guarantee
 
 Within the tested supported subset, the compiler either emits the documented
@@ -549,7 +597,28 @@ or explicitly accepted as a limitation by project decision. Adding a regression
 fixture or another expression identity case is evidence-only unless it closes a
 named matrix row.
 
+The workstreams are intentionally architectural because they remove duplicated
+semantic authority. A narrow slice is useful only when it moves one of these
+systems toward a single owner:
+
+- pointer provenance and race lowering must be decided by explicit facts or by a
+  conservative default, not by ad hoc backend AST recognition;
+- typed facts / typed MIR must become the source of semantic truth consumed by
+  both C and LLVM backends;
+- move checking must become place- and CFG-based rather than a collection of
+  string-keyed expression-shape checks.
+
 #### Broader Pointer-Provenance Race Lowering
+
+Purpose: prevent C/LLVM data-race UB from leaking into MC semantics while keeping
+local/raw/MMIO accesses optimizable when there is a positive proof.
+
+MC's rule is that ordinary data races are program errors, but they are not
+optimization licenses for the compiler. A potentially racing scalar access must
+therefore lower through a race-tolerant path unless the compiler has a sound
+local/raw/MMIO proof. The remaining work is not more syntax coverage for its own
+sake; it is closing the provenance decision model so supported source shapes do
+not depend on backend-local guessing.
 
 Closure matrix:
 
@@ -583,6 +652,20 @@ joins remain an open matrix row.
 
 #### Typed Semantic Fact Table / Typed MIR
 
+Purpose: make typed semantic facts and MIR-owned state the compiler's authority
+for lowering decisions.
+
+This is the central workstream. Without it, sema, MIR, comptime, C lowering, and
+LLVM lowering can each rediscover types, provenance, representation, call
+targets, or safety facts from different source shapes. That duplicates logic,
+makes backend parity difficult to audit, and can let C and LLVM share the same
+wrong inference so differential testing misses the bug.
+
+The immediate implementation target is not necessarily a full typed HIR rewrite.
+The near-term target is stricter: every semantic decision that affects lowering
+must either be represented as a typed fact / MIR-owned value, or be listed as an
+accepted conservative fallback with a missing-fact test.
+
 Closure matrix:
 
 | Remaining boundary | Close condition |
@@ -605,6 +688,21 @@ pointer-field facts; unsupported forms stay conservative instead of using an
 LLVM collector.
 
 #### CFG/Place-Based Move Checker
+
+Purpose: turn `move` from an expression-shape/state-map checker into a
+place-based dataflow checker over CFG control flow.
+
+MC's `move` feature is a linear-resource checker, not a general borrow checker.
+It is intended to prevent double-consume, stale alias use, and unsupported
+resource movement in the supported subset. It does not prove general temporal
+memory safety, does not prevent all use-after-free or dangling slice/view
+patterns, and does not replace a future region/lifetime system if the language
+chooses to add one.
+
+The remaining work is therefore twofold: first, complete the typed place model
+for locals, fields, dereferences, array elements, wildcard/dynamic projections,
+and non-nameable storage; second, run move state through CFG joins rather than
+through statement-local expression identities.
 
 Closure matrix:
 
@@ -656,6 +754,31 @@ by the finished release-artifact evidence row and
 [`release-process.md`](release-process.md). Public-release policy is an
 operational decision, not unfinished compiler implementation work; it must not
 be counted as a fourth compiler blocker.
+
+### Tracked Design Risks
+
+These risks matter for a stronger language and product story, but they are not
+additional open compiler-readiness workstreams unless the supported-subset
+contract is expanded.
+
+| Risk | Current readiness position |
+|---|---|
+| General temporal memory safety | `move` covers linear resources in the supported subset, but MC does not yet have a general borrow/lifetime system for dangling slices, returned views, `defer free` escapes, closure captures, async captures, or arena-scoped values. A restricted region/lifetime system could be a future language layer, with raw-pointer escapes remaining `unsafe`. |
+| Shared memory model ergonomics | The current implementation protects MC semantics by combining positive provenance proofs with conservative race-tolerant lowering. A future explicit `shared<T>` / `atomic<T>` / `volatile<T>` model could make sharing intent part of the type system and reduce pressure on inference, but that would be a language-design change, not just a backend cleanup. |
+| `unsafe_contract` optimizer semantics | Current readiness work should avoid relying on subtle optimizer assumptions whose violation is hard to confine. If contracts later become optimizer assumptions, the language must choose a clear model: check-elision only, whole-program unsafe assumption, or compiler-verified proof. |
+| Trait method namespace and coherence | A larger ecosystem likely needs trait-qualified method identities such as `<T as Trait>::method` and a coherence rule based on owning either the trait or the type. This is not part of the current three compiler blockers unless trait expansion resumes. |
+| Module graph and separate compilation | Whole-program flattening and textual/mangled workarounds limit diagnostics, incremental compilation, LSP scaling, and separate compilation. A stable module graph with `ModuleId`, `DeclId`, `TypeId`, interface hashes, and project-root import boundaries is a product-maturity requirement, but not counted as one of the current semantic closure matrices. |
+| C backend positioning | The C backend should be treated as a bootstrap/reference/differential-testing backend for the supported compiler contract, not as a promise of fully portable ISO C output. Any production claim must state the required compiler versions, target triples, ABI subset, flags, and aggregate passing/return limits. |
+| Async expansion before typed IR | Async should not expand its surface area while type, move, borrow-across-await, and effect facts are still converging. Correctness fixes and explicit fail-closed gates are acceptable; new async syntax should wait for typed lowering ownership. |
+| Comptime and reflection breadth | MC's narrow value-level comptime keeps the language smaller, but limits drivers, ABI tables, serializers, register maps, and generic containers. Bounded structural reflection or derive support may be useful later; it is not a current production-readiness blocker. |
+
+The intended layering remains:
+
+| Layer | Scope |
+|---|---|
+| MC Core | Scalars, arrays, slices, aggregates, `Result`/optional, checked arithmetic, modules/generics, typed facts/MIR, C ABI, atomics, and the memory model. |
+| MC Kernel Profile | `PAddr`/`VAddr`, MMIO, DMA/cache ownership, IRQ effects, `move` capabilities, sections, naked functions, inline asm, and freestanding trap ABI. |
+| MC OS / Demo | Scheduler, drivers, filesystem, networking, async runtime, agent surfaces, and real-hardware validation. |
 
 This is the compiler-side companion to
 [`production-readiness-plan.md`](production-readiness-plan.md), which qualifies the
