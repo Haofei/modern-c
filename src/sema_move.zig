@@ -2921,11 +2921,6 @@ pub fn aggregateFieldAliasSlot(self: *Checker, expr: ast.Expr, state: *const std
         }
     }
     if (allConcreteAliasSlotForWildcardExpr(self, expr, state)) |slot| return slot;
-    const key = memberPlaceKey(self, expr) orelse return null;
-    defer self.reporter.allocator.free(key);
-    if (state.get(key)) |slot| {
-        if (slot.alias_of != null and slot.place != null) return slot;
-    }
     return null;
 }
 
