@@ -2096,8 +2096,13 @@ fn processAggregateReturnLiteralLocalStatements(
                     try tryTrackAggregateReturnLiteralLocalFieldAssignment(allocator, locals, paths, target.local_name, target.field_name, assignment.value);
                     continue;
                 }
-                const target = aggregateReturnLocalArrayElementAssignmentTarget(assignment.target) orelse return false;
-                try tryTrackAggregateReturnLiteralLocalArrayElementAssignment(allocator, locals, paths, target.local_name, target.field_name, target.index, assignment.value);
+                if (aggregateReturnLocalArrayElementAssignmentTarget(assignment.target)) |target| {
+                    try tryTrackAggregateReturnLiteralLocalArrayElementAssignment(allocator, locals, paths, target.local_name, target.field_name, target.index, assignment.value);
+                    continue;
+                }
+                const target = aggregateReturnLocalDynamicArrayElementAssignmentTarget(assignment.target) orelse return false;
+                if (aggregateReturnPrefixExprHasCallOrExit(assignment.target)) return false;
+                try tryTrackAggregateReturnLiteralLocalDynamicArrayElementAssignment(locals, target.local_name, target.field_name, assignment.value);
             },
             .expr, .assert => |expr| {
                 if (!aggregateReturnTrackedLocalPrefixExprIsTransparent(expr)) return false;
@@ -2168,8 +2173,13 @@ fn processAggregateReturnNoOverflowContractLocalStatements(
                 try tryTrackAggregateReturnLiteralLocalFieldAssignment(allocator, locals, paths, target.local_name, target.field_name, assignment.value);
                 continue;
             }
-            const target = aggregateReturnLocalArrayElementAssignmentTarget(assignment.target) orelse return false;
-            try tryTrackAggregateReturnLiteralLocalArrayElementAssignment(allocator, locals, paths, target.local_name, target.field_name, target.index, assignment.value);
+            if (aggregateReturnLocalArrayElementAssignmentTarget(assignment.target)) |target| {
+                try tryTrackAggregateReturnLiteralLocalArrayElementAssignment(allocator, locals, paths, target.local_name, target.field_name, target.index, assignment.value);
+                continue;
+            }
+            const target = aggregateReturnLocalDynamicArrayElementAssignmentTarget(assignment.target) orelse return false;
+            if (aggregateReturnContractPrefixExprHasCallOrExit(assignment.target)) return false;
+            try tryTrackAggregateReturnLiteralLocalDynamicArrayElementAssignment(locals, target.local_name, target.field_name, assignment.value);
         },
         .expr, .assert => |expr| {
             if (aggregateReturnContractPrefixExprHasCallOrExit(expr)) return false;
@@ -2255,6 +2265,29 @@ fn aggregateReturnLocalArrayElementAssignmentTarget(expr: ast.Expr) ?AggregateRe
                 .local_name = directIdentName(member.base.*) orelse break :blk null,
                 .field_name = member.name.text,
                 .index = std.fmt.parseUnsigned(usize, literal, 10) catch break :blk null,
+            };
+        },
+        else => null,
+    };
+}
+
+const AggregateReturnLocalDynamicArrayElementAssignmentTarget = struct {
+    local_name: []const u8,
+    field_name: []const u8,
+};
+
+fn aggregateReturnLocalDynamicArrayElementAssignmentTarget(expr: ast.Expr) ?AggregateReturnLocalDynamicArrayElementAssignmentTarget {
+    return switch (expr.kind) {
+        .grouped => |inner| aggregateReturnLocalDynamicArrayElementAssignmentTarget(inner.*),
+        .index => |node| blk: {
+            if (node.index.*.kind == .int_literal) break :blk null;
+            const member = switch (node.base.*.kind) {
+                .member => |value| value,
+                else => break :blk null,
+            };
+            break :blk .{
+                .local_name = directIdentName(member.base.*) orelse break :blk null,
+                .field_name = member.name.text,
             };
         },
         else => null,
@@ -2371,6 +2404,40 @@ fn tryTrackAggregateReturnLiteralLocalArrayElementAssignment(
     }
     allocator.free(updated_fields);
     _ = locals.remove(local_name);
+}
+
+fn tryTrackAggregateReturnLiteralLocalDynamicArrayElementAssignment(
+    locals: *std.StringHashMap([]ast.StructLiteralField),
+    local_name: []const u8,
+    field_name: []const u8,
+    value: ast.Expr,
+) !void {
+    const previous = locals.get(local_name) orelse return;
+    for (previous) |field| {
+        if (!std.mem.eql(u8, field.name.text, field_name)) continue;
+        const previous_items = arrayLiteralItems(field.value) orelse break;
+        if (aggregateReturnDynamicArrayWritePreservesAllElements(previous_items, value)) return;
+        break;
+    }
+    _ = locals.remove(local_name);
+}
+
+fn aggregateReturnDynamicArrayWritePreservesAllElements(items: []const ast.Expr, value: ast.Expr) bool {
+    const value_address = aggregateReturnDirectAddressIdent(value) orelse return false;
+    for (items) |item| {
+        const item_address = aggregateReturnDirectAddressIdent(item) orelse return false;
+        if (!std.mem.eql(u8, item_address, value_address)) return false;
+    }
+    return true;
+}
+
+fn aggregateReturnDirectAddressIdent(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| aggregateReturnDirectAddressIdent(inner.*),
+        .cast => |node| aggregateReturnDirectAddressIdent(node.value.*),
+        .address_of => |inner| directIdentName(inner.*),
+        else => null,
+    };
 }
 
 fn tryTrackAggregateReturnLiteralLocal(locals: *std.StringHashMap([]ast.StructLiteralField), name: []const u8, value: ast.Expr) !void {

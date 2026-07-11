@@ -1529,6 +1529,14 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    }
         \\    return holder;
         \\}
+        \\fn trailing_mixed_dynamic_array_updated_holder(choice: u32, index: usize) -> ArrayHolder {
+        \\    var holder: ArrayHolder = .{ .ptrs = .{ &shared_counter, &other_counter } };
+        \\    switch choice {
+        \\        0 => { return .{ .ptrs = .{ &shared_counter, &shared_counter } }; }
+        \\        _ => { holder.ptrs[index] = &shared_counter; }
+        \\    }
+        \\    return holder;
+        \\}
         \\fn nested_control_holder(choice: u32, flag: bool) -> Holder {
         \\    switch choice {
         \\        0 => {
@@ -1955,7 +1963,8 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_field_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_array_updated_holder"));
-    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "trailing_dynamic_array_updated_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "trailing_dynamic_array_updated_holder"));
+    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "trailing_mixed_dynamic_array_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_control_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_loop_control_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_transparent_switch_control_holder"));
@@ -2015,6 +2024,8 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_updated_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_field_updated_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_array_updated_holder", "ptrs[0]", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_dynamic_array_updated_holder", "ptrs[0]", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_dynamic_array_updated_holder", "ptrs[1]", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "scoped_block_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "scoped_block_updated_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "unsafe_block_holder", "ptr", .global_storage));

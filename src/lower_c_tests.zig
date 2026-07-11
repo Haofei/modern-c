@@ -615,7 +615,7 @@ test "lower-c consumes MIR trailing aggregate-return array element assignment fa
     try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
-test "lower-c aggregate-return dynamic-index fallthrough writes fail closed" {
+test "lower-c consumes MIR aggregate-return same-address dynamic-index facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Holder { ptrs: [2]*mut u32 }
@@ -637,9 +637,14 @@ test "lower-c aggregate-return dynamic-index fallthrough writes fail closed" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_trailing_aggregate_return_dynamic_index_assignment_fail_closed.mc", source, &output);
-    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptrs[0]");
-    try expectContains(output.items, "mc_race_load_u32");
+    try appendCheckedCTest("c_trailing_aggregate_return_dynamic_index_assignment_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptrs[0] provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_trailing_aggregate_return_dynamic_index_assignment_mir_fact.mc", source, "returned_holder", "ptrs[0]", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptrs[0]");
+    try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
 test "lower-c consumes MIR aggregate-return nested control facts" {
