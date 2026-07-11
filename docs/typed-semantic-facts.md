@@ -786,10 +786,12 @@ inside an aggregate-return candidate path is also an explicit fail-closed
 boundary: MIR emits no summary for that callee, and C/LLVM keep the returned
 field conservative. Mutating loop prefixes, loop bodies with explicit control
 flow, deferred cleanup prefixes, unsupported nested CFG joins, and
-path-count-overflow CFG joins before a final aggregate return are handled the
-same way: they remain outside the producer domain, MIR emits no summary, and
-both backends keep returned fields
-conservative. Plain scoped-block prefixes, transparent unsafe-block
+above-cap path-count-overflow CFG joins before a final aggregate return are
+handled the same way: they remain outside the producer domain, MIR emits no
+summary, and both backends keep returned fields conservative. The current
+aggregate-return path cap is a named 16-path bound, so 3x3 exhaustive switch
+chains are inside the producer domain while 3x3x3 chains remain fail-closed.
+Plain scoped-block prefixes, transparent unsafe-block
 prefixes, and contract-block prefixes are supported only when their contents
 reduce to the same straight-line aggregate-return prefix domain; block locals
 are discarded at block exit, while supported updates to an outer returned
@@ -827,8 +829,8 @@ MIR-populated cache; the AST collector is gone.
    removing only the return-field fact produces conservative lowering.
 4. Complete for named unsupported producer shapes: contract-block prefixes with
    call-like unchecked arithmetic, loop prefixes, `for` prefixes, deferred
-   cleanup prefixes, unsupported nested CFG joins, path-count-overflow CFG
-   joins, exported aggregate returns, mixed paths, prefix calls, fallthrough
+   cleanup prefixes, unsupported nested CFG joins, above-cap path-count-overflow
+   CFG joins, exported aggregate returns, mixed paths, prefix calls, fallthrough
    dynamic-index writes, dereference writes, and aggregate array nesting beyond the fixed
    pointer-array/struct-array domains are covered as fail-closed rather than
    inferred.

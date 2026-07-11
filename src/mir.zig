@@ -1082,7 +1082,7 @@ fn collectAggregateReturnPointerFactsForStruct(
             else => continue,
         };
         const nested_summary = structs.get(nested_name) orelse continue;
-        var nested_paths: [8][]ast.StructLiteralField = undefined;
+        var nested_paths: [max_aggregate_return_literal_paths][]ast.StructLiteralField = undefined;
         for (literal_paths, 0..) |literal_fields, index| {
             const value = aggregateLiteralFieldValue(literal_fields, field.name.text) orelse break;
             nested_paths[index] = structLiteralFieldsForAggregateReturn(value) orelse break;
@@ -1120,7 +1120,7 @@ fn collectAggregateReturnPointerFactsForStructArray(
     aliases: *const std.StringHashMap(ast.TypeExpr),
     pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary),
 ) anyerror!bool {
-    var array_values: [8]ast.Expr = undefined;
+    var array_values: [max_aggregate_return_literal_paths]ast.Expr = undefined;
     for (literal_paths, 0..) |literal_fields, index| {
         array_values[index] = aggregateLiteralFieldValue(literal_fields, field_name) orelse return false;
     }
@@ -1163,7 +1163,7 @@ fn collectAggregateReturnPointerFactsForStructArrayValues(
         .struct_ => |name| {
             const nested_summary = structs.get(name) orelse return false;
             for (first_items, 0..) |_, element_index| {
-                var nested_paths: [8][]ast.StructLiteralField = undefined;
+                var nested_paths: [max_aggregate_return_literal_paths][]ast.StructLiteralField = undefined;
                 for (values, 0..) |value, path_index| {
                     const items = arrayLiteralItems(value) orelse return false;
                     if (element_index >= items.len) return false;
@@ -1190,7 +1190,7 @@ fn collectAggregateReturnPointerFactsForStructArrayValues(
         },
         .array => {
             for (first_items, 0..) |_, element_index| {
-                var nested_values: [8]ast.Expr = undefined;
+                var nested_values: [max_aggregate_return_literal_paths]ast.Expr = undefined;
                 for (values, 0..) |value, path_index| {
                     const items = arrayLiteralItems(value) orelse return false;
                     if (element_index >= items.len) return false;
@@ -1234,7 +1234,7 @@ fn collectAggregateReturnPointerFactsForPointerArray(
     aliases: *const std.StringHashMap(ast.TypeExpr),
     pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary),
 ) !bool {
-    var array_values: [8]ast.Expr = undefined;
+    var array_values: [max_aggregate_return_literal_paths]ast.Expr = undefined;
     for (literal_paths, 0..) |literal_fields, index| {
         array_values[index] = aggregateLiteralFieldValue(literal_fields, field_name) orelse return false;
     }
@@ -1293,7 +1293,7 @@ fn collectAggregateReturnPointerFactsForPointerArrayValues(
 
     if (aggregateTargetTypeAlias(array.child.*, aliases).kind != .array) return false;
     for (first_items, 0..) |_, index| {
-        var nested_values: [8]ast.Expr = undefined;
+        var nested_values: [max_aggregate_return_literal_paths]ast.Expr = undefined;
         for (values, 0..) |value, path_index| {
             const items = arrayLiteralItems(value) orelse return false;
             if (index >= items.len) return false;
@@ -1338,8 +1338,10 @@ fn appendAggregateReturnPointerFact(
     });
 }
 
+const max_aggregate_return_literal_paths = 16;
+
 const AggregateReturnLiteralPaths = struct {
-    paths: [8][]ast.StructLiteralField = undefined,
+    paths: [max_aggregate_return_literal_paths][]ast.StructLiteralField = undefined,
     len: usize = 0,
     owned_fields: std.ArrayList([]ast.StructLiteralField) = .empty,
     owned_array_items: std.ArrayList([]ast.Expr) = .empty,

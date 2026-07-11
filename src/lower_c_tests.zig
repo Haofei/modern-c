@@ -1059,7 +1059,7 @@ test "lower-c consumes MIR aggregate-return triple switch facts" {
     try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
-test "lower-c aggregate-return path overflow switches fail closed" {
+test "lower-c consumes MIR aggregate-return nine-path switch facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Holder { ptr: *mut u32, tag: u32 }
@@ -1081,6 +1081,49 @@ test "lower-c aggregate-return path overflow switches fail closed" {
         \\
         \\fn use_returned_holder(first: u32, second: u32) -> u32 {
         \\    let holder: Holder = returned_holder(first, second);
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_nine_path_switch_aggregate_return_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_nine_path_switch_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_output.items, "mc_race_load_u32");
+}
+
+test "lower-c aggregate-return path overflow switches fail closed" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder(first: u32, second: u32, third: u32) -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 1 };
+        \\    switch first {
+        \\        0 => { holder.ptr = &shared_counter; }
+        \\        1 => { holder.ptr = &shared_counter; }
+        \\        _ => { holder.ptr = &shared_counter; }
+        \\    }
+        \\    switch second {
+        \\        0 => { holder.ptr = &shared_counter; }
+        \\        1 => { holder.ptr = &shared_counter; }
+        \\        _ => { holder.ptr = &shared_counter; }
+        \\    }
+        \\    switch third {
+        \\        0 => { holder.ptr = &shared_counter; }
+        \\        1 => { holder.ptr = &shared_counter; }
+        \\        _ => { holder.ptr = &shared_counter; }
+        \\    }
+        \\    return holder;
+        \\}
+        \\
+        \\fn use_returned_holder(first: u32, second: u32, third: u32) -> u32 {
+        \\    let holder: Holder = returned_holder(first, second, third);
         \\    return holder.ptr.*;
         \\}
     ;
