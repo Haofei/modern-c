@@ -3246,6 +3246,10 @@ fn scanConcreteAliasPattern(
             acc.all_present = false;
             return null;
         };
+        if (slot.place == null) {
+            acc.all_present = false;
+            return null;
+        }
         if (aliasSlotReferentMoved(slot, state)) return slot;
         if (acc.first_referent) |seen| {
             if (!std.mem.eql(u8, seen, referent)) acc.all_same = false;
