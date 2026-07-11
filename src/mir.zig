@@ -1557,9 +1557,10 @@ fn collectSequentialSwitchAggregateReturnLiteralPathsFrom(
 
 fn aggregateReturnStatementsContainControlFlow(statements: []const ast.Stmt) bool {
     for (statements) |stmt| switch (stmt.kind) {
-        .@"return", .@"switch", .loop, .if_let, .@"break", .@"continue", .@"defer", .comptime_block, .contract_block => return true,
+        .@"return", .@"switch", .loop, .if_let, .@"break", .@"continue", .@"defer", .contract_block => return true,
         .block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
         .unsafe_block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
+        .comptime_block => |block| if (!aggregateReturnComptimeBlockIsTransparent(block)) return true,
         else => {},
     };
     return false;
@@ -1633,9 +1634,23 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
             .unsafe_block => |block| {
                 if (!aggregateReturnPrefixStatementsAreSupported(block.items)) return false;
             },
+            .comptime_block => |block| {
+                if (!aggregateReturnComptimeBlockIsTransparent(block)) return false;
+            },
             else => return false,
         }
     }
+    return true;
+}
+
+fn aggregateReturnComptimeBlockIsTransparent(block: ast.Block) bool {
+    for (block.items) |stmt| switch (stmt.kind) {
+        .expr, .assert => {},
+        .block => |nested| if (!aggregateReturnComptimeBlockIsTransparent(nested)) return false,
+        .unsafe_block => |nested| if (!aggregateReturnComptimeBlockIsTransparent(nested)) return false,
+        .comptime_block => |nested| if (!aggregateReturnComptimeBlockIsTransparent(nested)) return false,
+        else => return false,
+    };
     return true;
 }
 
@@ -1682,6 +1697,9 @@ fn processAggregateReturnLiteralLocalStatements(
             },
             .unsafe_block => |block| {
                 if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, block.items, true)) return false;
+            },
+            .comptime_block => |block| {
+                if (!aggregateReturnComptimeBlockIsTransparent(block)) return false;
             },
             else => return false,
         }
