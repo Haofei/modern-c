@@ -34,6 +34,7 @@ const overlayArrayElementType = ast_query.overlayArrayElementType;
 const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
 const taggedUnionCase = ast_query.taggedUnionCase;
 const qualifiedTaggedUnionConstructorType = ast_query.qualifiedTaggedUnionConstructorType;
+const enumVariantPathType = ast_query.enumVariantPathType;
 
 const backend_mod = @import("backend.zig");
 const lower_llvm_alias = @import("lower_llvm_alias.zig");
@@ -1347,7 +1348,7 @@ const LlvmEmitter = struct {
             .deref => |inner| try self.emitDeref(inner.*, expected_ty),
             .index => |node| try self.emitIndexLoad(node),
             .slice => |node| try self.emitSlice(node, expr.span),
-            .member => |node| if (self.enumVariantPathType(node)) |variant_ty|
+            .member => |node| if (enumVariantPathType(&self.enum_types, node, self.memberBaseIsValue(node))) |variant_ty|
                 (if (self.enumDeclForType(variant_ty)) |enum_decl|
                     try self.enumCaseValueByName(enum_decl, node.name.text)
                 else
@@ -7873,7 +7874,7 @@ const LlvmEmitter = struct {
             .deref => |inner| self.derefPointeeType(inner.*),
             .index => |node| self.indexElementType(node.base.*),
             .slice => |node| if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
-            .member => |node| if (self.enumVariantPathType(node)) |variant_ty| variant_ty else if (self.exprType(node.base.*)) |base_ty| blk: {
+            .member => |node| if (enumVariantPathType(&self.enum_types, node, self.memberBaseIsValue(node))) |variant_ty| variant_ty else if (self.exprType(node.base.*)) |base_ty| blk: {
                 const resolved_base_ty = self.resolveAliasType(base_ty);
                 if (resolved_base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");
                 if (self.packedBitsInfoForType(base_ty)) |info| {
@@ -8108,21 +8109,12 @@ const LlvmEmitter = struct {
         return lower_llvm_lookup.enumDeclForType(&self.type_aliases, &self.enum_types, ty);
     }
 
-    // A variant-path literal `Enum.variant` used as a value has the enum's own type.
-    // The base must name an enum TYPE (not a local/global value shadowing it), and the
-    // member must be one of its cases. Returns the enum type expression, or null.
-    fn enumVariantPathType(self: *LlvmEmitter, node: anytype) ?ast.TypeExpr {
+    fn memberBaseIsValue(self: *LlvmEmitter, node: anytype) bool {
         const base_ident = switch (node.base.*.kind) {
             .ident => |id| id,
-            else => return null,
+            else => return false,
         };
-        if (self.local_types.contains(base_ident.text)) return null;
-        if (self.global_types.contains(base_ident.text)) return null;
-        const enum_decl = self.enum_types.get(base_ident.text) orelse return null;
-        for (enum_decl.cases) |case| {
-            if (std.mem.eql(u8, case.name.text, node.name.text)) return simpleType(base_ident.span, base_ident.text);
-        }
-        return null;
+        return self.local_types.contains(base_ident.text) or self.global_types.contains(base_ident.text);
     }
 
     fn memberBaseStructType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {

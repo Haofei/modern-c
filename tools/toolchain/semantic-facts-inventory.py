@@ -17,10 +17,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
     "c-expression-type-inference": {
         "docs/typed-semantic-facts.md": ["| `c-expression-type-inference` |"],
+        "src/ast_query.zig": [
+            "pub fn enumVariantPathType(",
+        ],
         "src/lower_c_infer.zig": [
             "//! C backend expression type inference helpers.",
             "pub fn operandEmitType(",
             "pub fn derefPointeeType(",
+            "enumVariantPathType(ctx.enums, node, base_is_value)",
         ],
     },
     "c-type-shape-classification": {
@@ -92,11 +96,13 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
         "docs/typed-semantic-facts.md": ["| `llvm-expression-type-inference` |"],
         "src/ast_query.zig": [
             "pub fn qualifiedTaggedUnionConstructorType(",
+            "pub fn enumVariantPathType(",
         ],
         "src/lower_llvm.zig": [
             "fn exprType(",
             "fn derefPointeeType(",
             "qualifiedTaggedUnionConstructorType(&self.tagged_unions, call)",
+            "enumVariantPathType(&self.enum_types, node, self.memberBaseIsValue(node))",
         ],
     },
     "llvm-bounds-range-consumption": {

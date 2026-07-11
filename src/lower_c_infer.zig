@@ -21,6 +21,7 @@ const RawManyOffsetInfo = lower_c_model.RawManyOffsetInfo;
 const calleeIdentName = ast_query.calleeIdentName;
 const isRawManyPointerType = ast_query.isRawManyPointerType;
 const memberCallee = ast_query.memberCallee;
+const enumVariantPathType = ast_query.enumVariantPathType;
 const qualifiedTaggedUnionConstructorType = ast_query.qualifiedTaggedUnionConstructorType;
 const simpleNameType = ast_query.simpleNameType;
 const exprIsNumericLiteral = lower_c_expr.exprIsNumericLiteral;
@@ -140,15 +141,9 @@ fn enumNameForVariantPath(ctx: TypeQueryContext, node: anytype, locals: ?*std.St
         .ident => |id| id,
         else => return null,
     };
-    if (locals) |local_set| {
-        if (local_set.contains(base_ident.text)) return null;
-    }
-    if (ctx.globals.contains(base_ident.text)) return null;
-    const enum_decl = ctx.enums.get(base_ident.text) orelse return null;
-    for (enum_decl.cases) |case| {
-        if (std.mem.eql(u8, case.name.text, node.name.text)) return base_ident.text;
-    }
-    return null;
+    const base_is_value = (if (locals) |local_set| local_set.contains(base_ident.text) else false) or ctx.globals.contains(base_ident.text);
+    const ty = enumVariantPathType(ctx.enums, node, base_is_value) orelse return null;
+    return typeName(ty);
 }
 
 pub fn enumNameForType(ctx: TypeQueryContext, ty: ast.TypeExpr) ?[]const u8 {

@@ -625,6 +625,23 @@ pub fn qualifiedTaggedUnionConstructorType(tagged_unions: *const std.StringHashM
     return simpleNameType(q.owner, call.callee.*.span);
 }
 
+/// The result type of a value-position enum variant path `Enum.variant`, or null
+/// when the base is shadowed by a value binding or the member is not an enum case.
+pub fn enumVariantPathType(enums: *const std.StringHashMap(ast.EnumDecl), member: anytype, base_is_value: bool) ?ast.TypeExpr {
+    if (base_is_value) return null;
+    const base_ident = switch (member.base.*.kind) {
+        .ident => |id| id,
+        else => return null,
+    };
+    const enum_decl = enums.get(base_ident.text) orelse return null;
+    for (enum_decl.cases) |case| {
+        if (std.mem.eql(u8, case.name.text, member.name.text)) {
+            return simpleNameType(base_ident.text, base_ident.span);
+        }
+    }
+    return null;
+}
+
 pub fn dynCalleeMethodName(callee: ast.Expr) ?[]const u8 {
     return switch (callee.kind) {
         .member => |m| m.name.text,
