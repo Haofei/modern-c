@@ -131,7 +131,6 @@ const indexExpr = ast_query.indexExpr;
 const memberCallee = ast_query.memberCallee;
 const memberExpr = ast_query.memberExpr;
 const isCpuPauseCall = ast_query.isCpuPauseCall;
-const isRawLoadCall = ast_query.isRawLoadCall;
 const isRawStoreCall = ast_query.isRawStoreCall;
 const isStringLiteralTarget = ast_query.isStringLiteralTarget;
 const isMmioStructAbi = ast_query.isMmioStructAbi;
@@ -4781,7 +4780,7 @@ const CEmitter = struct {
     }
 
     fn callResolvesToFloat(self: *CEmitter, expr: ast.Expr, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) bool {
-        if (isRawLoadCall(node.callee.*) and node.type_args.len == 1) {
+        if (self.mirCallTargetKindAt(node.callee.*.span) == .raw_load and node.type_args.len == 1) {
             return floatCTypeName(node.type_args[0]) != null;
         }
         const return_ty = self.callReturnTypeForExpr(expr, locals) orelse return false;

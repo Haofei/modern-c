@@ -24,11 +24,9 @@ const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
 const indexExpr = ast_query.indexExpr;
 const isCpuPauseCall = ast_query.isCpuPauseCall;
-const isRawLoadCall = ast_query.isRawLoadCall;
 const vaCallMember = ast_query.vaCallMember;
 const vaCallReturnType = ast_query.vaCallReturnType;
 const isVaStartCall = ast_query.isVaStartCall;
-const isRawPtrCall = ast_query.isRawPtrCall;
 const isRawStoreCall = ast_query.isRawStoreCall;
 const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
 const isStringLiteralTarget = ast_query.isStringLiteralTarget;
@@ -6422,7 +6420,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(info.payload_ty), ptr });
             return result;
         }
-        if (isRawLoadCall(call.callee.*)) {
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_load) {
             if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const value_ty = call.type_args[0];
             const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
@@ -6461,7 +6459,7 @@ const LlvmEmitter = struct {
             }
             return error.UnsupportedLlvmEmission; // va.start only valid as a let initializer
         }
-        if (isRawPtrCall(call.callee.*)) {
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_ptr) {
             if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
             const result = try self.nextTemp();

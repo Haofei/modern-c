@@ -21,8 +21,6 @@ const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
 const isDeclassifyCall = ast_query.isDeclassifyCall;
 const isIdentNamed = ast_query.isIdentNamed;
-const isRawLoadCall = ast_query.isRawLoadCall;
-const isRawPtrCall = ast_query.isRawPtrCall;
 const isVaStartCall = ast_query.isVaStartCall;
 const rawScalarSuffix = lower_c_type.rawScalarSuffix;
 const isNonNullPointerType = lower_c_type.isNonNullPointerType;
@@ -481,7 +479,7 @@ pub fn emitNamedDiscardCall(ctx: Context, call: anytype, locals: ?*std.StringHas
 }
 
 pub fn emitRawAddressCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    if (isRawLoadCall(call.callee.*)) {
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) == .raw_load) {
         if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
         if (typeName(call.type_args[0])) |name| {
             if (rawScalarSuffix(name)) |suffix| {
@@ -501,7 +499,7 @@ pub fn emitRawAddressCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
         try ctx.out.appendSlice(ctx.allocator, "))");
         return true;
     }
-    if (isRawPtrCall(call.callee.*)) {
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) == .raw_ptr) {
         if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
         try ctx.out.appendSlice(ctx.allocator, "(");
         try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, call.type_args[0]));

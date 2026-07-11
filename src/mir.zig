@@ -4499,6 +4499,10 @@ const FunctionBuilder = struct {
                     ty
                 else if (self.physCallValueType(node)) |ty|
                     ty
+                else if (self.rawLoadCallValueType(node)) |ty|
+                    ty
+                else if (self.rawPtrCallValueType(node)) |ty|
+                    ty
                 else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
                 if (reduceCallKind(node.callee.*)) |kind| {
@@ -4525,6 +4529,14 @@ const FunctionBuilder = struct {
                 if (self.physCallValueType(node)) |phys_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.phys), phys_ty, expr.span);
                     try self.addCallTargetFact(.phys, phys_ty, expr.span);
+                }
+                if (self.rawLoadCallValueType(node)) |raw_load_ty| {
+                    try self.addInstr(.call_target, @tagName(CallTargetKind.raw_load), raw_load_ty, expr.span);
+                    try self.addCallTargetFact(.raw_load, raw_load_ty, expr.span);
+                }
+                if (self.rawPtrCallValueType(node)) |raw_ptr_ty| {
+                    try self.addInstr(.call_target, @tagName(CallTargetKind.raw_ptr), raw_ptr_ty, expr.span);
+                    try self.addCallTargetFact(.raw_ptr, raw_ptr_ty, expr.span);
                 }
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {
                     try self.addInstr(.unsafe_check, callee_name, .unknown, expr.span);
@@ -4768,6 +4780,16 @@ const FunctionBuilder = struct {
     fn physCallValueType(_: *FunctionBuilder, call: anytype) ?ValueType {
         if (!ast_query.isPhysCall(call.callee.*) or call.type_args.len != 0 or call.args.len != 1) return null;
         return .{ .address = .paddr };
+    }
+
+    fn rawLoadCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
+        const ty = ast_query.rawLoadCallReturnType(call) orelse return null;
+        return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+    }
+
+    fn rawPtrCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
+        const ty = ast_query.rawPtrCallReturnType(call) orelse return null;
+        return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
     }
 
     fn mmioReceiverCalleeName(self: *FunctionBuilder, callee: ast.Expr) ?[]const u8 {
