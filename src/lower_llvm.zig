@@ -23,7 +23,6 @@ const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
 const indexExpr = ast_query.indexExpr;
-const isCpuPauseCall = ast_query.isCpuPauseCall;
 const vaCallMember = ast_query.vaCallMember;
 const vaCallReturnType = ast_query.vaCallReturnType;
 const isVaStartCall = ast_query.isVaStartCall;
@@ -2574,7 +2573,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  fence {s}{s}\n", .{ ordering, try self.debugCallSuffix() });
             return true;
         }
-        if (isCpuPauseCall(call.callee.*)) {
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .cpu_pause) {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             try self.out.print(self.allocator, "  call void asm sideeffect \"pause\", \"~{{memory}}\"(){s}\n", .{try self.debugCallSuffix()});
             return true;

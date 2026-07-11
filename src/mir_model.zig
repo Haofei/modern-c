@@ -240,6 +240,7 @@ pub const CallTargetKind = enum {
     raw_load,
     raw_ptr,
     raw_store,
+    cpu_pause,
 };
 
 pub const CallTargetFact = struct {

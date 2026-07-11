@@ -4505,6 +4505,8 @@ const FunctionBuilder = struct {
                     ty
                 else if (self.rawStoreCallValueType(node)) |ty|
                     ty
+                else if (self.cpuPauseCallValueType(node)) |ty|
+                    ty
                 else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
                 if (reduceCallKind(node.callee.*)) |kind| {
@@ -4543,6 +4545,10 @@ const FunctionBuilder = struct {
                 if (self.rawStoreCallValueType(node)) |raw_store_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.raw_store), raw_store_ty, expr.span);
                     try self.addCallTargetFact(.raw_store, raw_store_ty, expr.span);
+                }
+                if (self.cpuPauseCallValueType(node)) |cpu_pause_ty| {
+                    try self.addInstr(.call_target, @tagName(CallTargetKind.cpu_pause), cpu_pause_ty, expr.span);
+                    try self.addCallTargetFact(.cpu_pause, cpu_pause_ty, expr.span);
                 }
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {
                     try self.addInstr(.unsafe_check, callee_name, .unknown, expr.span);
@@ -4800,6 +4806,11 @@ const FunctionBuilder = struct {
 
     fn rawStoreCallValueType(_: *FunctionBuilder, call: anytype) ?ValueType {
         if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
+        return .void;
+    }
+
+    fn cpuPauseCallValueType(_: *FunctionBuilder, call: anytype) ?ValueType {
+        if (!ast_query.isCpuPauseCall(call.callee.*) or call.type_args.len != 0 or call.args.len != 0) return null;
         return .void;
     }
 

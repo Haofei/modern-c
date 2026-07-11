@@ -130,7 +130,6 @@ const callExpr = ast_query.callExpr;
 const indexExpr = ast_query.indexExpr;
 const memberCallee = ast_query.memberCallee;
 const memberExpr = ast_query.memberExpr;
-const isCpuPauseCall = ast_query.isCpuPauseCall;
 const isStringLiteralTarget = ast_query.isStringLiteralTarget;
 const isMmioStructAbi = ast_query.isMmioStructAbi;
 const dynCalleeMethodName = ast_query.dynCalleeMethodName;
@@ -3440,7 +3439,7 @@ const CEmitter = struct {
 
     fn emitCpuPauseStmt(self: *CEmitter, expr: ast.Expr) !bool {
         const call = callExpr(expr) orelse return false;
-        if (!isCpuPauseCall(call.callee.*)) return false;
+        if (self.mirCallTargetKindAt(call.callee.*.span) != .cpu_pause) return false;
         if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "mc_cpu_pause();\n");
