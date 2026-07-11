@@ -1606,7 +1606,8 @@ fn collectSequentialSwitchAggregateReturnLiteralPathsFrom(
 
 fn aggregateReturnStatementsContainControlFlow(statements: []const ast.Stmt) bool {
     for (statements) |stmt| switch (stmt.kind) {
-        .@"return", .@"break", .@"continue", .@"defer" => return true,
+        .@"return", .@"break", .@"continue" => return true,
+        .@"defer" => |expr| if (!aggregateReturnDeferIsTransparent(expr)) return true,
         .if_let => |if_let| if (!aggregateReturnIfLetIsTransparent(if_let)) return true,
         .@"switch" => |switch_node| if (!aggregateReturnSwitchIsTransparent(switch_node)) return true,
         .loop => |loop| if (!aggregateReturnLoopIsTransparent(loop)) return true,
@@ -1684,6 +1685,9 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
             .expr, .assert => |expr| {
                 if (aggregateReturnPrefixExprHasCallOrExit(expr)) return false;
             },
+            .@"defer" => |expr| {
+                if (!aggregateReturnDeferIsTransparent(expr)) return false;
+            },
             .block => |block| {
                 if (!aggregateReturnPrefixStatementsAreSupported(block.items)) return false;
             },
@@ -1741,6 +1745,9 @@ fn aggregateReturnNoOverflowContractStatementsAreSupported(statements: []const a
         },
         .expr, .assert => |expr| {
             if (aggregateReturnContractPrefixExprHasCallOrExit(expr)) return false;
+        },
+        .@"defer" => |expr| {
+            if (!aggregateReturnContractDeferIsTransparent(expr)) return false;
         },
         .block => |block| {
             if (!aggregateReturnNoOverflowContractStatementsAreSupported(block.items)) return false;
@@ -1811,6 +1818,9 @@ fn aggregateReturnLoopBodyIsTransparent(statements: []const ast.Stmt) bool {
         .expr, .assert => |expr| {
             if (aggregateReturnPrefixExprHasCallOrExit(expr)) return false;
         },
+        .@"defer" => |expr| {
+            if (!aggregateReturnDeferIsTransparent(expr)) return false;
+        },
         .block => |block| if (!aggregateReturnLoopBodyIsTransparent(block.items)) return false,
         .unsafe_block => |block| if (!aggregateReturnLoopBodyIsTransparent(block.items)) return false,
         .comptime_block => |block| if (!aggregateReturnComptimeBlockIsTransparent(block)) return false,
@@ -1855,6 +1865,14 @@ fn aggregateReturnComptimeBlockIsTransparent(block: ast.Block) bool {
     return true;
 }
 
+fn aggregateReturnDeferIsTransparent(expr: ast.Expr) bool {
+    return !aggregateReturnPrefixExprHasCallOrExit(expr);
+}
+
+fn aggregateReturnContractDeferIsTransparent(expr: ast.Expr) bool {
+    return !aggregateReturnContractPrefixExprHasCallOrExit(expr);
+}
+
 fn processAggregateReturnLiteralLocalStatements(
     allocator: std.mem.Allocator,
     locals: *std.StringHashMap([]ast.StructLiteralField),
@@ -1895,6 +1913,9 @@ fn processAggregateReturnLiteralLocalStatements(
             },
             .expr, .assert => |expr| {
                 if (aggregateReturnPrefixExprHasCallOrExit(expr)) return false;
+            },
+            .@"defer" => |expr| {
+                if (!aggregateReturnDeferIsTransparent(expr)) return false;
             },
             .block => |block| {
                 if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, block.items, true)) return false;
@@ -1964,6 +1985,9 @@ fn processAggregateReturnNoOverflowContractLocalStatements(
         },
         .expr, .assert => |expr| {
             if (aggregateReturnContractPrefixExprHasCallOrExit(expr)) return false;
+        },
+        .@"defer" => |expr| {
+            if (!aggregateReturnContractDeferIsTransparent(expr)) return false;
         },
         .block => |block| {
             if (!try processAggregateReturnNoOverflowContractLocalStatements(allocator, locals, paths, block.items)) return false;
