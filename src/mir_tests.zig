@@ -668,6 +668,34 @@ test "MIR rejects duplicate call target facts" {
     try std.testing.expectError(error.InvalidMirCallTargetFacts, mir.validateCallTargetFactsForLowering(typed_mir));
 }
 
+test "MIR call target facts do not collide with ordinary call names" {
+    const source =
+        \\fn sum_checked() -> u32 {
+        \\    return 7;
+        \\}
+        \\
+        \\fn caller() -> u32 {
+        \\    return sum_checked();
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_call_target_name_collision.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const caller = functionByName(typed_mir, "caller").?;
+    try std.testing.expectEqual(@as(usize, 0), caller.call_target_facts.len);
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+}
+
 test "MIR verifier reports no_lang_trap, fallthrough, contract, and irq findings" {
     const source =
         \\fn missing_return(flag: bool) -> u32 {

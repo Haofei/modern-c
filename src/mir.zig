@@ -906,12 +906,8 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
 }
 
 fn callTargetKindForInstruction(instruction: Instruction) ?CallTargetKind {
-    if (instruction.kind == .index and std.mem.eql(u8, instruction.detail, "const_get")) return .const_get;
-    if (instruction.kind != .call) return null;
-    if (std.mem.eql(u8, instruction.detail, "sum_checked")) return .reduce_sum_checked;
-    if (std.mem.eql(u8, instruction.detail, "sum_left")) return .reduce_sum_left;
-    if (std.mem.eql(u8, instruction.detail, "sum_fast")) return .reduce_sum_fast;
-    return null;
+    if (instruction.kind != .call_target) return null;
+    return std.meta.stringToEnum(CallTargetKind, instruction.detail);
 }
 
 fn countMatchingCallTargetFacts(function: Function, kind: CallTargetKind, instruction: Instruction) usize {
@@ -4470,6 +4466,7 @@ const FunctionBuilder = struct {
             .call => |node| {
                 if (self.constGetCallType(node)) |const_get_ty| {
                     try self.addInstr(.index, "const_get", const_get_ty, expr.span);
+                    try self.addInstr(.call_target, @tagName(CallTargetKind.const_get), const_get_ty, expr.span);
                     try self.addCallTargetFact(.const_get, const_get_ty, expr.span);
                     if (representationCheckKind(const_get_ty) != null) {
                         try self.addInstr(.typed_load, exprText(expr), const_get_ty, expr.span);
@@ -4502,6 +4499,7 @@ const FunctionBuilder = struct {
                         .sum_left => .reduce_sum_left,
                         .sum_fast => .reduce_sum_fast,
                     };
+                    try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
                     try self.addCallTargetFact(fact_kind, call_ty, expr.span);
                 }
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {

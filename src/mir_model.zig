@@ -133,6 +133,7 @@ pub const Instruction = struct {
         typed_load,
         call,
         indirect_call,
+        call_target,
         contract_begin,
         contract_end,
         unchecked_assume,
