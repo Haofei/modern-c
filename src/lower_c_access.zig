@@ -10,6 +10,7 @@ const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const mir = @import("mir.zig");
 
 const callExpr = ast_query.callExpr;
 const calleeIdentName = ast_query.calleeIdentName;
@@ -47,6 +48,7 @@ pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals
 pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
 pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitRaceLoadTempFn = *const fn (ctx: *anyopaque, ptr_name: []const u8, target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 
 pub const DirectCallIndexTemps = struct {
     base: SequencedArgTemp,
@@ -73,6 +75,7 @@ pub const EmitContext = struct {
     slice_return_type_for_call: SliceReturnTypeForCallFn,
     array_return_type_for_expr: ArrayReturnTypeForExprFn,
     array_len_text: ArrayLenTextFn,
+    mir_call_target_kind: MirCallTargetKindFn,
 };
 
 pub fn cloneLocals(allocator: std.mem.Allocator, locals: std.StringHashMap(LocalInfo)) !std.StringHashMap(LocalInfo) {
@@ -110,13 +113,14 @@ pub fn arrayElemsFieldForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalI
     };
 }
 
-pub fn constGetCallInfo(call: anytype) ?ConstGetCallInfo {
+pub fn constGetCallInfo(ctx: EmitContext, call: anytype) ?ConstGetCallInfo {
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .const_get) return null;
     const target = ast_query.constGetCallTarget(call) orelse return null;
     return .{ .base = target.base, .index = target.index };
 }
 
 pub fn emitConstGetCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    const info = constGetCallInfo(call) orelse return false;
+    const info = constGetCallInfo(ctx, call) orelse return false;
     try ctx.emit_expr(ctx.emit_ctx, info.base.*, locals);
     if (arrayElemsFieldForExpr(info.base.*, locals)) |elems_field| {
         try ctx.out.print(ctx.allocator, ".{s}", .{elems_field});

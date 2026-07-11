@@ -1626,6 +1626,7 @@ const CEmitter = struct {
             .result_type_name = resultTypeNameForConvert,
             .mir_check_elided = mirCheckElidedForArith,
             .has_mir_no_overflow_range_fact = hasMirNoOverflowRangeFactForArith,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
             .local_info_from_type = localInfoFromTypeForArith,
             .operand_emit_type = operandEmitTypeForArith,
             .global_assignment_target = globalAssignmentTargetForArith,
@@ -1730,6 +1731,7 @@ const CEmitter = struct {
             .slice_return_type_for_call = sliceReturnTypeForAccess,
             .array_return_type_for_expr = arrayReturnTypeForAccess,
             .array_len_text = arrayLenTextForAccess,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
         };
     }
 
@@ -2120,6 +2122,11 @@ const CEmitter = struct {
     fn hasMirNoOverflowRangeFactForArith(ctx: *anyopaque, target: []const u8, op: []const u8, span: ast.Span) bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.hasMirNoOverflowRangeFact(target, op, span);
+    }
+
+    fn mirCallTargetKindForLowering(ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        return self.mirCallTargetKindAt(span);
     }
 
     fn localInfoFromTypeForArith(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo {
@@ -4937,6 +4944,14 @@ const CEmitter = struct {
         const function_name = self.current_function orelse return null;
         for (self.mir_module.functions) |*function| {
             if (std.mem.eql(u8, function.name, function_name)) return function;
+        }
+        return null;
+    }
+
+    fn mirCallTargetKindAt(self: *CEmitter, span: ast.Span) ?mir.CallTargetKind {
+        const function = self.currentMirFunction() orelse return null;
+        for (function.call_target_facts) |fact| {
+            if (mirSourceMatches(span, fact.source)) return fact.kind;
         }
         return null;
     }

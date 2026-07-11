@@ -16,6 +16,7 @@ const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_target = @import("lower_c_target.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const mir = @import("mir.zig");
 
 const appendCIntLiteral = lower_c_const.appendCIntLiteral;
 const appendCFloatLiteral = lower_c_const.appendCFloatLiteral;
@@ -37,7 +38,6 @@ const isIdentNamed = ast_query.isIdentNamed;
 const isSatType = ast_query.isSatType;
 const isWrapType = ast_query.isWrapType;
 const memberCallee = ast_query.memberCallee;
-const reduceCallKind = ast_query.reduceCallKind;
 const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const satHelperParts = lower_c_op.satHelperParts;
 const signedTypeSuffix = lower_c_type.signedTypeSuffix;
@@ -58,6 +58,7 @@ pub const UnderlyingIntTypeNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr
 pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror![]const u8;
 pub const MirCheckElidedFn = *const fn (ctx: *anyopaque, span: ast.Span) bool;
 pub const MirNoOverflowRangeFactFn = *const fn (ctx: *anyopaque, target: []const u8, op: []const u8, span: ast.Span) bool;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo;
 pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
@@ -83,6 +84,7 @@ pub const Context = struct {
     result_type_name: ResultTypeNameFn,
     mir_check_elided: MirCheckElidedFn,
     has_mir_no_overflow_range_fact: MirNoOverflowRangeFactFn,
+    mir_call_target_kind: MirCallTargetKindFn,
     local_info_from_type: LocalInfoFromTypeFn,
     operand_emit_type: OperandEmitTypeFn,
     global_assignment_target: GlobalAssignmentTargetFn,
@@ -160,12 +162,13 @@ pub fn emitResidueCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(
 // operand is evaluated once. `sum_checked` uses a wide integer accumulator and
 // result path; floating reductions use an explicit typed loop.
 pub fn emitReduceSumCheckedCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    const kind = reduceCallKind(call.callee.*) orelse return false;
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return false;
+    if (kind != .reduce_sum_checked and kind != .reduce_sum_left and kind != .reduce_sum_fast) return false;
     const member = memberCallee(call.callee.*) orelse return false;
     if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
 
-    if (kind == .sum_left or kind == .sum_fast) {
-        return try emitFloatReduceCall(ctx, call, locals, kind == .sum_fast);
+    if (kind == .reduce_sum_left or kind == .reduce_sum_fast) {
+        return try emitFloatReduceCall(ctx, call, locals, kind == .reduce_sum_fast);
     }
 
     var t_ty = call.type_args[0];
