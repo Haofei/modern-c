@@ -100,6 +100,28 @@ const MoveStateCfgWorklist = struct {
             if (changed) self.enqueue(checker, edge.to);
         }
     }
+
+    // Loop backedges use a loop-specific widening transfer rather than the
+    // ordinary branch merge. The caller has already diagnosed/normalized
+    // zero-or-many iteration effects before replacing the loop-head state.
+    fn replaceBackedgeSuccessor(self: *MoveStateCfgWorklist, checker: *Checker, from: sema_model.MoveCfgBlockId, outgoing: *const std.StringHashMap(MoveSlot)) void {
+        for (self.cfg.edges.items) |edge| {
+            if (edge.from != from or edge.kind != .backedge) continue;
+            const changed = if (self.states[edge.to]) |*previous| !moveStatesEqual(previous, outgoing) else true;
+            if (!changed) continue;
+            if (self.states[edge.to]) |*previous| previous.deinit();
+            self.states[edge.to] = cloneMoveState(checker, outgoing);
+            self.enqueue(checker, edge.to);
+        }
+    }
+
+    fn replaceStateAt(self: *MoveStateCfgWorklist, checker: *Checker, block: sema_model.MoveCfgBlockId, outgoing: *const std.StringHashMap(MoveSlot)) void {
+        const changed = if (self.states[block]) |*previous| !moveStatesEqual(previous, outgoing) else true;
+        if (!changed) return;
+        if (self.states[block]) |*previous| previous.deinit();
+        self.states[block] = cloneMoveState(checker, outgoing);
+        self.enqueue(checker, block);
+    }
 };
 
 pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
@@ -587,52 +609,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
         .block, .unsafe_block, .comptime_block => |b| return moveScopedBlock(self, b, state, aliases),
         .contract_block => |c| return moveScopedBlock(self, c.block, state, aliases),
         .loop => |l| {
-            if (l.iterable) |iter| {
-                switch (l.kind) {
-                    .@"for" => moveBorrow(self, iter, state, aliases),
-                    .@"while" => {
-                        var condition_state = cloneMoveState(self, state);
-                        defer condition_state.deinit();
-                        moveConsume(self, iter, &condition_state, aliases);
-                        reportLoopOuterResourceChanges(self, state, &condition_state);
-                    },
-                }
-            }
-            // Snapshot loop entry so a `break`/`continue` inside the body can tell
-            // loop-body locals (which leak on an early exit) from outer resources, and
-            // compare outer move/place ownership on that early-exit edge.
-            var frame = LoopMoveFrame{
-                .label = if (l.loop_label) |label| label.text else null,
-                .entry_names = std.StringHashMap(void).init(self.reporter.allocator),
-                .entry_state = cloneMoveState(self, state),
-                .invalidated_const_indexes = std.StringHashMap(void).init(self.reporter.allocator),
-                .invalidated_aliases = std.StringHashMap(void).init(self.reporter.allocator),
-            };
-            var snap_it = state.iterator();
-            while (snap_it.next()) |e| {
-                frame.entry_names.put(e.key_ptr.*, {}) catch {
-                    self.oom = true;
-                };
-            }
-            self.move_loop_stack.append(self.reporter.allocator, frame) catch {
-                self.oom = true;
-                frame.deinit();
-            };
-            var body_state = cloneMoveState(self, state);
-            defer body_state.deinit();
-            const body_diverges = moveBlock(self, l.body, &body_state, aliases);
-            if (self.move_loop_stack.pop()) |popped| {
-                var p = popped;
-                applyLoopEarlyExitConstIndexInvalidations(state, &p);
-                applyLoopEarlyExitAliasInvalidations(state, &p);
-                p.deinit();
-            }
-            if (!body_diverges) {
-                reportMoveLocalsLeavingScope(self, &body_state, state, "linear `move` value declared in a loop body is never consumed (must be moved, returned, or freed before the iteration ends)");
-                reportLoopOuterResourceChanges(self, state, &body_state);
-            }
-            // A loop may run zero times, so control can always fall through past it.
-            return false;
+            return moveLoopCfg(self, l, state, aliases);
         },
         .if_let => |n| {
             return moveIfLetCfg(self, n, state, aliases);
@@ -845,6 +822,126 @@ fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, 
     }
     finalizeBranchLocals(self, state, outer, !diverges);
     return diverges;
+}
+
+// Loops use an explicit CFG, but their backedge is widened with the language's
+// existing zero-or-many iteration rule instead of ordinary branch joining. This
+// preserves E_MOVE_LOOP_RESOURCE and post-loop alias/index invalidation behavior.
+fn moveLoopCfg(self: *Checker, node: ast.Loop, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    defer cfg.deinit();
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        return false;
+    };
+    const head = cfg.addBlock(.loop_head) catch {
+        self.oom = true;
+        return false;
+    };
+    const body = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        return false;
+    };
+    const exit = cfg.addBlock(.exit) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(entry, head, .normal) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(head, body, .branch) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(head, exit, .branch) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(body, head, .backedge) catch {
+        self.oom = true;
+        return false;
+    };
+
+    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return false;
+    defer worklist.deinit();
+    var head_processed = false;
+    var loop_done = false;
+
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == entry) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == head) {
+            if (!head_processed) {
+                head_processed = true;
+                if (node.iterable) |iterable| switch (node.kind) {
+                    .@"for" => moveBorrow(self, iterable, block_state, aliases),
+                    .@"while" => {
+                        var condition_state = cloneMoveState(self, block_state);
+                        defer condition_state.deinit();
+                        moveConsume(self, iterable, &condition_state, aliases);
+                        reportLoopOuterResourceChanges(self, block_state, &condition_state);
+                    },
+                };
+                worklist.propagateSuccessors(self, block, block_state);
+            } else {
+                // The widened loop-head state is the post-loop abstract result.
+                // Do not re-run the body and duplicate diagnostics for another
+                // concrete iteration; the zero-or-many transfer already collapsed it.
+                loop_done = true;
+                worklist.replaceStateAt(self, exit, block_state);
+            }
+        } else if (block == body) {
+            var frame = LoopMoveFrame{
+                .label = if (node.loop_label) |label| label.text else null,
+                .entry_names = std.StringHashMap(void).init(self.reporter.allocator),
+                .entry_state = cloneMoveState(self, block_state),
+                .invalidated_const_indexes = std.StringHashMap(void).init(self.reporter.allocator),
+                .invalidated_aliases = std.StringHashMap(void).init(self.reporter.allocator),
+            };
+            var snapshot = block_state.iterator();
+            while (snapshot.next()) |item| {
+                frame.entry_names.put(item.key_ptr.*, {}) catch {
+                    self.oom = true;
+                };
+            }
+            self.move_loop_stack.append(self.reporter.allocator, frame) catch {
+                self.oom = true;
+                frame.deinit();
+                continue;
+            };
+            const body_diverges = moveBlock(self, node.body, block_state, aliases);
+            if (self.move_loop_stack.pop()) |popped| {
+                var frame_out = popped;
+                if (worklist.statePtr(head)) |head_state| {
+                    applyLoopEarlyExitConstIndexInvalidations(head_state, &frame_out);
+                    applyLoopEarlyExitAliasInvalidations(head_state, &frame_out);
+                }
+                frame_out.deinit();
+            }
+            if (!body_diverges) {
+                const head_state = worklist.statePtr(head) orelse continue;
+                reportMoveLocalsLeavingScope(self, block_state, head_state, "linear `move` value declared in a loop body is never consumed (must be moved, returned, or freed before the iteration ends)");
+                reportLoopOuterResourceChanges(self, head_state, block_state);
+                worklist.replaceBackedgeSuccessor(self, block, head_state);
+                // `reportLoopOuterResourceChanges` widens the head state in
+                // place, so the replacement can be value-identical. The
+                // backedge still must schedule one head transfer to publish
+                // that normalized state on the post-loop exit edge.
+                worklist.enqueue(self, head);
+            } else if (worklist.statePtr(head)) |head_state| {
+                // A break/continue path may have invalidated facts even though the
+                // body has no normal fallthrough. Revisit head to publish that state.
+                worklist.enqueue(self, head);
+                _ = head_state;
+            }
+        } else if (block == exit) {
+            if (!loop_done) continue;
+            replaceMoveState(self, state, block_state);
+        }
+    }
+    return false;
 }
 
 // Drop branch-local `move` bindings (names not present in `outer`) from `branch` on
