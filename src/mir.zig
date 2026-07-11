@@ -1606,7 +1606,8 @@ fn collectSequentialSwitchAggregateReturnLiteralPathsFrom(
 
 fn aggregateReturnStatementsContainControlFlow(statements: []const ast.Stmt) bool {
     for (statements) |stmt| switch (stmt.kind) {
-        .@"return", .@"switch", .if_let, .@"break", .@"continue", .@"defer" => return true,
+        .@"return", .if_let, .@"break", .@"continue", .@"defer" => return true,
+        .@"switch" => |switch_node| if (!aggregateReturnSwitchIsTransparent(switch_node)) return true,
         .loop => |loop| if (!aggregateReturnLoopIsTransparent(loop)) return true,
         .block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
         .unsafe_block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
@@ -1694,6 +1695,9 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
             .loop => |loop| {
                 if (!aggregateReturnLoopIsTransparent(loop)) return false;
             },
+            .@"switch" => |switch_node| {
+                if (!aggregateReturnSwitchIsTransparent(switch_node)) return false;
+            },
             else => return false,
         }
     }
@@ -1723,8 +1727,22 @@ fn aggregateReturnLoopBodyIsTransparent(statements: []const ast.Stmt) bool {
         .unsafe_block => |block| if (!aggregateReturnLoopBodyIsTransparent(block.items)) return false,
         .comptime_block => |block| if (!aggregateReturnComptimeBlockIsTransparent(block)) return false,
         .contract_block => |contract| if (!aggregateReturnLoopBodyIsTransparent(contract.block.items)) return false,
+        .@"switch" => |switch_node| if (!aggregateReturnSwitchIsTransparent(switch_node)) return false,
         else => return false,
     };
+    return true;
+}
+
+fn aggregateReturnSwitchIsTransparent(switch_node: ast.Switch) bool {
+    if (!aggregateReturnSwitchIsExhaustive(switch_node)) return false;
+    if (aggregateReturnPrefixExprHasCallOrExit(switch_node.subject)) return false;
+    for (switch_node.arms) |arm| {
+        const arm_block = switch (arm.body) {
+            .block => |block| block,
+            .expr => return false,
+        };
+        if (!aggregateReturnLoopBodyIsTransparent(arm_block.items)) return false;
+    }
     return true;
 }
 
@@ -1791,6 +1809,9 @@ fn processAggregateReturnLiteralLocalStatements(
             },
             .loop => |loop| {
                 if (!aggregateReturnLoopIsTransparent(loop)) return false;
+            },
+            .@"switch" => |switch_node| {
+                if (!aggregateReturnSwitchIsTransparent(switch_node)) return false;
             },
             else => return false,
         }

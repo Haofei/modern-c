@@ -781,11 +781,13 @@ no owned aggregate-return summary for those diagnostic shapes, and both backends
 keep the final scalar load conservative.
 Dereference writes through aggregate aliases, such as `alias.*.ptr = &global`,
 are explicit fail-closed boundaries too: MIR emits no summary for the callee, so
-both backends keep the returned field unknown. Unsupported nested control flow
-inside an aggregate-return candidate path is also an explicit fail-closed
-boundary: MIR emits no summary for that callee, and C/LLVM keep the returned
-field conservative. Mutating loop prefixes, loop bodies with explicit control
-flow, deferred cleanup prefixes, unsupported nested CFG joins, and
+both backends keep the returned field unknown. Transparent nested exhaustive
+`switch`/boolean-`if` statements are supported inside aggregate-return candidate
+paths when their subjects and arms contain no calls/exits/control flow or
+aggregate mutation. Non-transparent nested control flow remains an explicit
+fail-closed boundary: MIR emits no summary for that callee, and C/LLVM keep the
+returned field conservative. Mutating loop prefixes, loop bodies with explicit
+control flow, deferred cleanup prefixes, non-transparent nested CFG joins, and
 above-cap path-count-overflow CFG joins before a final aggregate return are
 handled the same way: they remain outside the producer domain, MIR emits no
 summary, and both backends keep returned fields conservative. The current
@@ -829,7 +831,7 @@ MIR-populated cache; the AST collector is gone.
    removing only the return-field fact produces conservative lowering.
 4. Complete for named unsupported producer shapes: contract-block prefixes with
    call-like unchecked arithmetic, loop prefixes, `for` prefixes, deferred
-   cleanup prefixes, unsupported nested CFG joins, above-cap path-count-overflow
+   cleanup prefixes, non-transparent nested CFG joins, above-cap path-count-overflow
    CFG joins, exported aggregate returns, mixed paths, prefix calls, fallthrough
    dynamic-index writes, dereference writes, and aggregate array nesting beyond the fixed
    pointer-array/struct-array domains are covered as fail-closed rather than

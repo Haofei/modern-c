@@ -1547,15 +1547,28 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    }
         \\    return .{ .ptr = &shared_counter, .tag = 25 };
         \\}
-        \\fn nested_call_control_holder(choice: u32) -> Holder {
+        \\fn nested_transparent_switch_control_holder(choice: u32, flag: bool) -> Holder {
         \\    switch choice {
         \\        0 => {
-        \\            helper();
+        \\            switch flag {
+        \\                true => { let ignored: u32 = 0; }
+        \\                false => {}
+        \\            }
         \\            return .{ .ptr = &shared_counter, .tag = 26 };
         \\        }
         \\        _ => {}
         \\    }
         \\    return .{ .ptr = &shared_counter, .tag = 27 };
+        \\}
+        \\fn nested_call_control_holder(choice: u32) -> Holder {
+        \\    switch choice {
+        \\        0 => {
+        \\            helper();
+        \\            return .{ .ptr = &shared_counter, .tag = 28 };
+        \\        }
+        \\        _ => {}
+        \\    }
+        \\    return .{ .ptr = &shared_counter, .tag = 29 };
         \\}
         \\fn nested_if_let_control_holder(choice: u32, maybe: ?u32) -> Holder {
         \\    switch choice {
@@ -1563,11 +1576,11 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\            if let value = maybe {
         \\                return .{ .ptr = &shared_counter, .tag = value };
         \\            }
-        \\            return .{ .ptr = &shared_counter, .tag = 28 };
+        \\            return .{ .ptr = &shared_counter, .tag = 30 };
         \\        }
         \\        _ => {}
         \\    }
-        \\    return .{ .ptr = &shared_counter, .tag = 29 };
+        \\    return .{ .ptr = &shared_counter, .tag = 31 };
         \\}
         \\fn if_let_control_holder(maybe: ?u32) -> Holder {
         \\    if let value = maybe {
@@ -1842,6 +1855,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "trailing_dynamic_array_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_control_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "nested_loop_control_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_transparent_switch_control_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "nested_call_control_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_if_let_control_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "if_let_control_holder"));
@@ -1876,6 +1890,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "copied_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "branched_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_control_holder", "ptr", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_transparent_switch_control_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_if_let_control_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "if_let_control_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "if_let_else_control_holder", "ptr", .global_storage));
