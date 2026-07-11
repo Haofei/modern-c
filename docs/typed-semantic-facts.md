@@ -719,9 +719,11 @@ Current producer boundary:
   whole-local assignments, direct bounded nested aggregate member assignments,
   or direct constant-index fixed pointer-array element assignments before a
   checked trailing return, exhaustive all-fallthrough switch/`if` joins before
-  the same kind of checked trailing return, bounded sequential top-level
-  exhaustive switch joins, or bounded nested exhaustive switch/`if` return
-  paths whose expanded paths stay within the aggregate-return path cap;
+  the same kind of checked trailing return, bounded `if let` path splits whose
+  reachable arms reduce to supported return/fallthrough paths, bounded
+  sequential top-level exhaustive switch joins, or bounded nested
+  exhaustive switch/`if` return paths whose expanded paths stay within the
+  aggregate-return path cap;
 - return structs with scalar pointer fields, fixed arrays of scalar pointer
   elements, recursively nested struct literals, fixed arrays of struct elements
   containing those shapes, and nested fixed arrays of those struct elements;
@@ -741,6 +743,7 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
   reduce to supported aggregate updates;
 - exhaustive bool/wildcard switches with bounded return/fallthrough paths,
   including all-fallthrough switch/`if` joins before a supported trailing return,
+  bounded `if let` return/fallthrough path splits,
   bounded sequential top-level switch joins, and bounded nested switch/`if`
   return paths;
 - intersection of field facts across paths, retaining a field only when every
@@ -818,8 +821,8 @@ MIR-populated cache; the AST collector is gone.
    call-like unchecked arithmetic, loop prefixes, `for` prefixes, deferred
    cleanup prefixes, unsupported nested CFG joins, path-count-overflow CFG
    joins, exported aggregate returns, mixed paths, prefix calls, fallthrough
-   dynamic-index writes, dereference writes, `if let` narrowing, and aggregate
-   array nesting beyond the fixed
+   dynamic-index writes, dereference writes, unsupported nested `if let`
+   narrowing, and aggregate array nesting beyond the fixed
    pointer-array/struct-array domains are covered as fail-closed rather than
    inferred.
 5. Complete: the semantic-facts inventory rejects the retired LLVM

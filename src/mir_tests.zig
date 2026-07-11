@@ -1785,7 +1785,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_control_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "nested_loop_control_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "nested_call_control_holder"));
-    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "if_let_control_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "if_let_control_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "scoped_block_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "scoped_block_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "unsafe_block_holder"));
@@ -1812,6 +1812,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "copied_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "branched_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_control_holder", "ptr", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "if_let_control_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_updated_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "trailing_field_updated_holder", "ptr", .global_storage));

@@ -1377,56 +1377,12 @@ const AggregateReturnLiteralPaths = struct {
 };
 
 fn aggregateReturnLiteralPaths(allocator: std.mem.Allocator, body: ast.Block) anyerror!?AggregateReturnLiteralPaths {
-    for (body.items, 0..) |stmt, switch_index| {
-        const switch_node = switch (stmt.kind) {
-            .@"switch" => |node| node,
+    for (body.items, 0..) |stmt, control_index| {
+        switch (stmt.kind) {
+            .@"switch" => |switch_node| return try aggregateReturnSwitchLiteralPaths(allocator, body, control_index, switch_node),
+            .if_let => |if_let| return try aggregateReturnIfLetLiteralPaths(allocator, body, control_index, if_let),
             else => continue,
-        };
-        if (!aggregateReturnSwitchIsExhaustive(switch_node)) return null;
-        const prefix = body.items[0..switch_index];
-        var paths: AggregateReturnLiteralPaths = .{};
-        var keep_paths = false;
-        defer if (!keep_paths) paths.deinit(allocator);
-        if (switch_index + 1 == body.items.len) {
-            for (switch_node.arms) |arm| {
-                const arm_block = switch (arm.body) {
-                    .block => |block| block,
-                    .expr => return null,
-                };
-                if (!try appendAggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, arm_block.items, &.{})) return null;
-            }
-            keep_paths = true;
-            return paths;
         }
-
-        const trailing_items = body.items[switch_index + 1 ..];
-        if (try collectSequentialSwitchAggregateReturnLiteralPaths(allocator, &paths, body.span, prefix, switch_node, trailing_items)) {
-            keep_paths = true;
-            return paths;
-        }
-        var returned_arms: usize = 0;
-        var fallthrough_arms: usize = 0;
-        for (switch_node.arms) |arm| {
-            const arm_block = switch (arm.body) {
-                .block => |block| block,
-                .expr => return null,
-            };
-            if (arm_block.items.len == 0) {
-                fallthrough_arms += 1;
-                if (!try appendAggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, &.{}, trailing_items)) return null;
-                continue;
-            }
-            if (try appendAggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, arm_block.items, &.{})) {
-                returned_arms += 1;
-                continue;
-            }
-
-            if (!try appendAggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, arm_block.items, trailing_items)) return null;
-            fallthrough_arms += 1;
-        }
-        if (fallthrough_arms == 0) return null;
-        keep_paths = true;
-        return paths;
     }
 
     var paths: AggregateReturnLiteralPaths = .{};
@@ -1436,6 +1392,97 @@ fn aggregateReturnLiteralPaths(allocator: std.mem.Allocator, body: ast.Block) an
     _ = paths.append(fields);
     keep_paths = true;
     return paths;
+}
+
+fn aggregateReturnSwitchLiteralPaths(
+    allocator: std.mem.Allocator,
+    body: ast.Block,
+    switch_index: usize,
+    switch_node: ast.Switch,
+) anyerror!?AggregateReturnLiteralPaths {
+    if (!aggregateReturnSwitchIsExhaustive(switch_node)) return null;
+    const prefix = body.items[0..switch_index];
+    var paths: AggregateReturnLiteralPaths = .{};
+    var keep_paths = false;
+    defer if (!keep_paths) paths.deinit(allocator);
+    if (switch_index + 1 == body.items.len) {
+        for (switch_node.arms) |arm| {
+            const arm_block = switch (arm.body) {
+                .block => |block| block,
+                .expr => return null,
+            };
+            if (!try appendAggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, arm_block.items, &.{})) return null;
+        }
+        keep_paths = true;
+        return paths;
+    }
+
+    const trailing_items = body.items[switch_index + 1 ..];
+    if (try collectSequentialSwitchAggregateReturnLiteralPaths(allocator, &paths, body.span, prefix, switch_node, trailing_items)) {
+        keep_paths = true;
+        return paths;
+    }
+    var returned_arms: usize = 0;
+    var fallthrough_arms: usize = 0;
+    for (switch_node.arms) |arm| {
+        const arm_block = switch (arm.body) {
+            .block => |block| block,
+            .expr => return null,
+        };
+        if (arm_block.items.len == 0) {
+            fallthrough_arms += 1;
+            if (!try appendAggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, &.{}, trailing_items)) return null;
+            continue;
+        }
+        if (try appendAggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, arm_block.items, &.{})) {
+            returned_arms += 1;
+            continue;
+        }
+
+        if (!try appendAggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, arm_block.items, trailing_items)) return null;
+        fallthrough_arms += 1;
+    }
+    if (fallthrough_arms == 0) return null;
+    keep_paths = true;
+    return paths;
+}
+
+fn aggregateReturnIfLetLiteralPaths(
+    allocator: std.mem.Allocator,
+    body: ast.Block,
+    if_let_index: usize,
+    if_let: ast.IfLet,
+) anyerror!?AggregateReturnLiteralPaths {
+    if (aggregateReturnPrefixExprHasCallOrExit(if_let.value)) return null;
+    const prefix = body.items[0..if_let_index];
+    const trailing_items = body.items[if_let_index + 1 ..];
+    var paths: AggregateReturnLiteralPaths = .{};
+    var keep_paths = false;
+    defer if (!keep_paths) paths.deinit(allocator);
+
+    if (!try appendAggregateReturnLiteralFieldsForMaybeFallthroughPath(allocator, &paths, body.span, prefix, if_let.then_block.items, trailing_items)) return null;
+    if (if_let.else_block) |else_block| {
+        if (!try appendAggregateReturnLiteralFieldsForMaybeFallthroughPath(allocator, &paths, body.span, prefix, else_block.items, trailing_items)) return null;
+    } else {
+        if (trailing_items.len == 0) return null;
+        if (!try appendAggregateReturnLiteralFieldsForPath(allocator, &paths, body.span, prefix, &.{}, trailing_items)) return null;
+    }
+
+    keep_paths = true;
+    return paths;
+}
+
+fn appendAggregateReturnLiteralFieldsForMaybeFallthroughPath(
+    allocator: std.mem.Allocator,
+    paths: *AggregateReturnLiteralPaths,
+    span: ast.Span,
+    prefix: []const ast.Stmt,
+    branch: []const ast.Stmt,
+    trailing: []const ast.Stmt,
+) anyerror!bool {
+    if (branch.len == 0) return try appendAggregateReturnLiteralFieldsForPath(allocator, paths, span, prefix, &.{}, trailing);
+    if (try appendAggregateReturnLiteralFieldsForPath(allocator, paths, span, prefix, branch, &.{})) return true;
+    return try appendAggregateReturnLiteralFieldsForPath(allocator, paths, span, prefix, branch, trailing);
 }
 
 fn appendAggregateReturnLiteralFieldsForPath(
