@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-11, based on the current compiler worktree**.
-Evidence register: **501 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **502 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -571,6 +571,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Move checker CFG skeleton is explicit | The move-checker model now has explicit CFG block, edge, edge-kind, flow-state, and worklist types, plus unit tests proving branch joins, loop backedge requeue, and early-exit state propagation. This is the first CFG/worklist boundary; the legacy recursive move checker remains the compatibility executor until later slices route statement subsets through this skeleton. | `src/sema_model.zig` `MoveCfg`, `MoveCfgBlockKind`, `MoveCfgEdgeKind`, `MoveCfgFlowState`, and `MoveCfgWorklist`; `src/sema_tests.zig` move CFG skeleton branch/backedge/early-exit tests; `tools/toolchain/move-cfg-skeleton-inventory.py`; `build/qemu.zig` `move-cfg-skeleton-inventory-test`; `build/tiers.zig` m0/fast/c0 dependencies; `tools/dev-gates.py`; `tools/toolchain/dev-gates-test.py`; `zig build move-cfg-skeleton-inventory-test dev-gates-test`; `zig test src/sema_tests.zig`; `git diff --check`. |
 | Move checker dynamic-place policy is explicit | Stable dynamic indexes now have an explicit typed projection policy separate from genuinely unknown wildcard indexes. `MovePlaceProjectionRelation` distinguishes exact identity, may-overlap, and disjoint projections; `MovePlace.conflicts` consumes that policy instead of a wildcard-named helper that conflated symbolic and unknown index cases. The focused inventory gate anchors the policy helper, stable-index entry points, unit coverage, and dev-gate routing. | `src/sema_model.zig` `MovePlaceProjectionRelation` and `movePlaceProjectionRelation`; `src/sema_move.zig` `stableIndexPlaceKnown`, `symbolicIndexValue`, `wildcardMoveIndexedPlaceKey`, and `nestedWildcardIndexedPlaceKeyAndType`; `src/sema_tests.zig` dynamic-place policy identity/overlap tests; `tools/toolchain/move-dynamic-place-policy-inventory.py`; `build/qemu.zig` `move-dynamic-place-policy-inventory-test`; `build/tiers.zig` m0/fast/c0 dependencies; `tools/dev-gates.py`; `tools/toolchain/dev-gates-test.py`; `zig build move-dynamic-place-policy-inventory-test dev-gates-test`; `zig test src/sema_tests.zig`; `git diff --check`. |
 | Move checker pointer-pointee boundary is explicit | Pointer-mediated moves of linear resources now have a documented accept/reject boundary. Full pointer aliases to tracked move places, including constant, symbolic, and wildcard array-element places, carry `MovePlace` identity and can move the pointee through `p.*`; arbitrary pointer-to-array dynamic pointees remain fail-closed with `E_MOVE_ARRAY_UNSUPPORTED` because the checker has no owner place to update or reserve. The focused inventory gate anchors both the accepted full-alias cases and the rejected arbitrary pointer-to-array cases. | `src/sema_model.zig` `full_deref_alias`; `src/sema_move.zig` `fullDerefMoveSubplace`, `immediateFullDerefMoveReferent`, `consumeTrackedMoveReferent`, and `arrayIndexEmbedsMove`; `tests/spec/move_place.mc` full-alias accept/reject and arbitrary pointer-to-array `E_MOVE_ARRAY_UNSUPPORTED` cases; `tools/toolchain/move-pointer-pointee-boundary-inventory.py`; `build/qemu.zig` `move-pointer-pointee-boundary-inventory-test`; `build/tiers.zig` m0/fast/c0 dependencies; `tools/dev-gates.py`; `tools/toolchain/dev-gates-test.py`; `zig build move-pointer-pointee-boundary-inventory-test dev-gates-test`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `git diff --check`. |
+| Move checker unsupported-channel inventory is explicit | The remaining move-array unsupported channels now have a channelized inventory with an accept/reject policy and fixture anchor for each category: globals, extern/export ABI parameters and returns, non-`move` aggregate containment, arbitrary pointer-to-array dynamic pointees, multi-element returned arrays, multi-element array literals, and the singleton non-nameable exceptions that remain accepted. This closes the inventory slice only; it does not finish the typed place model or CFG/worklist rewrite. | `tools/toolchain/move-unsupported-inventory.py` `CHANNELS`; `tests/spec/bad/move_cfg_arrays_reject.mc` globals/ABI/non-`move` aggregate containment rejects; `tests/spec/move_place.mc` arbitrary pointer, returned-array, array-literal, and singleton exception fixtures; `src/sema.zig` `E_MOVE_ARRAY_UNSUPPORTED` storage/signature diagnostics; `src/sema_move.zig` dynamic array element diagnostics and `nonNameableSingletonMoveIndex`; `zig build move-unsupported-inventory-test readiness-ledger-test`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `git diff --check`. |
 | LLVM scalar pointer parameter fallback is retired | LLVM no longer scans direct or local function-pointer-alias call sites to seed scalar parameter provenance. Scalar pointer parameters without a typed MIR fact now use the conservative atomic dereference path, matching C and the aggregate parameter policy. | `src/lower_llvm.zig` removed scalar parameter provenance maps and collector; `tests/spec/data_race_semantics.mc` `consume_local_only_param` / `consume_indirect_local_param`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig --test-filter "ordinary global scalar accesses"`; `zig build test`; `git diff --check`. |
 | LLVM aggregate pointer parameter fallback is retired | LLVM no longer scans direct or local function-pointer-alias call sites to seed aggregate parameter field provenance. Aggregate pointer parameters without a typed MIR fact now use the conservative atomic dereference path, matching C; direct local aggregate provenance and aggregate-return summaries remain separate. | `src/lower_llvm.zig` removed `aggregate_pointer_param_fields` and aggregate parameter collectors; `tests/spec/data_race_semantics.mc` `consume_aggregate_local_param` / `consume_indirect_aggregate_local_param`; `src/lower_llvm_tests.zig`; `zig test src/lower_llvm_tests.zig --test-filter "ordinary global scalar accesses"`; `zig build test`; `git diff --check`. |
 | Aggregate-return loop-control prefixes are bounded | `while`/`for` prefixes before an aggregate return, including nested loops inside otherwise transparent aggregate-return switch arms, now remain inside the MIR producer when their bodies are provenance-transparent and use only local `break`/`continue` control flow. MIR records the returned pointer-field fact, C and LLVM consume it, and missing-field facts still fall back conservatively. Calls, exits, and pointer-bearing aggregate mutation inside those loop bodies remain outside this bounded shape. | `src/mir.zig` `aggregateReturnLoopBodyIsTransparent`; `src/mir_tests.zig` `loop_prefix_holder` / `continue_for_prefix_holder` / `nested_loop_control_holder` / `pointer_mutating_while_prefix_holder`; `src/lower_c_tests.zig` `lower-c consumes MIR aggregate-return loop-control prefix facts` / `lower-c consumes MIR aggregate-return continue loop-control prefix facts` / `lower-c consumes MIR aggregate-return nested loop-control facts`; `src/lower_llvm_tests.zig` `LLVM consumes MIR aggregate-return loop-control prefix facts` / `LLVM consumes MIR aggregate-return continue loop-control prefix facts` / `LLVM consumes MIR aggregate-return nested loop-control facts`; focused MIR/C/LLVM aggregate-return tests; `git diff --check`. |
@@ -763,7 +764,6 @@ Closure matrix:
 |---|---|
 | Explicit place representation | Replace string-key place identity with a typed place model for locals, fields, derefs, and array elements. |
 | CFG dataflow engine | Build CFG blocks and a worklist join over move state; route `if`, `switch`, loops, short-circuit, `defer`, and exits through it. |
-| Unsupported-channel inventory | Globals, ABI boundaries, multi-element non-nameable arrays, and arbitrary pointers each have an explicit accept or fail-closed decision and fixture. |
 
 Current status: the checker is still AST/state-map based, but direct ownership
 paths and tracked aliases now carry and compare typed `MovePlace`
@@ -782,21 +782,20 @@ explicit exact/may-overlap/disjoint projection policy, and unknown dynamic
 indexes remain wildcard projections. Pointer-mediated moves now have an explicit
 boundary: full aliases to tracked places carry `MovePlace`, while arbitrary
 pointer-to-array dynamic pointees fail closed. Stale-alias, typed-referent,
-deferred-borrow, and read-side alias rows above are
-regression coverage; they do not close the remaining map migration or CFG
-rewrite.
+deferred-borrow, read-side alias, and unsupported-channel rows above are
+regression coverage; they do not close the remaining typed-place map migration
+or CFG rewrite.
 
-There is no active move-checker slice. The next slice must reduce another named
-string-key compatibility path or introduce a CFG/worklist boundary; additional
-symbolic-expression, stale-alias, typed-referent, deferred-borrow, or read-side
-alias fixtures alone are
-evidence-only.
+There is no active move-checker inventory slice. The remaining work is
+architectural: either reduce another named string-key compatibility path toward
+the typed place model, or route a statement subset through the CFG/worklist
+boundary. Additional symbolic-expression, stale-alias, typed-referent,
+deferred-borrow, read-side alias, pointer-boundary, or unsupported-channel
+fixtures alone are evidence-only.
 
-Next actionable slices:
-
-| Slice | Action | Acceptance evidence | Not enough |
-|---|---|---|---|
-| Unsupported-channel inventory | List globals, ABI boundaries, multi-element non-nameable arrays, arbitrary pointers, and aggregate containment channels with accept/reject policy. | Inventory plus fixtures for each channel. | A single broad statement that arrays/pointers are unsupported. |
+Next actionable slices: none in the compatibility-inventory track. The next
+implementation slice must be a typed-place migration slice or a CFG/worklist
+routing slice.
 
 ### Production-Ready Exit Rule
 
