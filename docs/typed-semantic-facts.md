@@ -802,9 +802,10 @@ reduce to the same straight-line aggregate-return prefix domain; block locals
 are discarded at block exit, while supported updates to an outer returned
 aggregate remain visible. No-overflow contract blocks may also contain scalar
 local declaration/assignment/assert/expression prefixes whose only call-like
-operations are `unchecked.add/sub/mul` with call-free operands. Other contract
-calls remain outside the producer. Pure comptime-block prefixes are supported only
-when their contents are compile-time expression/assert statements;
+operations are `unchecked.add/sub/mul` with call-free operands, for both direct
+literal returns and tracked local aggregate returns. Other contract calls remain
+outside the producer. Pure comptime-block prefixes are supported only when their
+contents are compile-time expression/assert statements;
 runtime-affecting contents remain outside the producer. Call-free runtime
 expression/assert prefixes are also transparent and do not mutate aggregate
 facts; expressions containing calls, `try`, `await`, block expressions, or

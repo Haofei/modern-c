@@ -1906,7 +1906,9 @@ fn processAggregateReturnLiteralLocalStatements(
                 if (!aggregateReturnComptimeBlockIsTransparent(block)) return false;
             },
             .contract_block => |contract| {
-                if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, contract.block.items, true)) return false;
+                if (aggregateReturnContractAllowsUncheckedNoOverflow(contract)) {
+                    if (!try processAggregateReturnNoOverflowContractLocalStatements(allocator, locals, paths, contract.block.items)) return false;
+                } else if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, contract.block.items, true)) return false;
             },
             .loop => |loop| {
                 if (!aggregateReturnLoopIsTransparent(loop)) return false;
@@ -1920,6 +1922,60 @@ fn processAggregateReturnLiteralLocalStatements(
             else => return false,
         }
     }
+    for (scoped_names.items) |name| _ = locals.remove(name);
+    return true;
+}
+
+fn processAggregateReturnNoOverflowContractLocalStatements(
+    allocator: std.mem.Allocator,
+    locals: *std.StringHashMap([]ast.StructLiteralField),
+    paths: *AggregateReturnLiteralPaths,
+    statements: []const ast.Stmt,
+) !bool {
+    var scoped_names: std.ArrayList([]const u8) = .empty;
+    defer scoped_names.deinit(allocator);
+    for (statements) |stmt| switch (stmt.kind) {
+        .let_decl, .var_decl => |local| {
+            if (local.names.len != 1) return false;
+            try scoped_names.append(allocator, local.names[0].text);
+            const initializer = local.init orelse {
+                _ = locals.remove(local.names[0].text);
+                continue;
+            };
+            if (aggregateReturnContractPrefixExprHasCallOrExit(initializer)) return false;
+            try tryTrackAggregateReturnLiteralLocal(locals, local.names[0].text, initializer);
+        },
+        .assignment => |assignment| {
+            if (aggregateReturnContractPrefixExprHasCallOrExit(assignment.value)) return false;
+            if (assignmentTargetIdentName(assignment.target)) |target| {
+                try tryTrackAggregateReturnLiteralLocal(locals, target, assignment.value);
+                continue;
+            }
+            if (aggregateReturnLocalNestedFieldAssignmentTarget(assignment.target)) |target| {
+                try tryTrackAggregateReturnLiteralLocalNestedFieldAssignment(allocator, locals, paths, target.local_name, target.fieldNames(), assignment.value);
+                continue;
+            }
+            if (aggregateReturnLocalFieldAssignmentTarget(assignment.target)) |target| {
+                try tryTrackAggregateReturnLiteralLocalFieldAssignment(allocator, locals, paths, target.local_name, target.field_name, assignment.value);
+                continue;
+            }
+            const target = aggregateReturnLocalArrayElementAssignmentTarget(assignment.target) orelse return false;
+            try tryTrackAggregateReturnLiteralLocalArrayElementAssignment(allocator, locals, paths, target.local_name, target.field_name, target.index, assignment.value);
+        },
+        .expr, .assert => |expr| {
+            if (aggregateReturnContractPrefixExprHasCallOrExit(expr)) return false;
+        },
+        .block => |block| {
+            if (!try processAggregateReturnNoOverflowContractLocalStatements(allocator, locals, paths, block.items)) return false;
+        },
+        .unsafe_block => |block| {
+            if (!try processAggregateReturnNoOverflowContractLocalStatements(allocator, locals, paths, block.items)) return false;
+        },
+        .comptime_block => |block| {
+            if (!aggregateReturnComptimeBlockIsTransparent(block)) return false;
+        },
+        else => return false,
+    };
     for (scoped_names.items) |name| _ = locals.remove(name);
     return true;
 }
