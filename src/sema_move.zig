@@ -911,15 +911,15 @@ fn isTrackedMoveSubplace(slot: MoveSlot, key: []const u8) bool {
 }
 
 fn moveSubplaceRootInOuter(slot: MoveSlot, key: []const u8, outer: *const std.StringHashMap(MoveSlot)) bool {
-    if (slot.place) |place| return outer.contains(place.root);
-    const sep = firstSubplaceSeparator(key) orelse return false;
-    return outer.contains(key[0..sep]);
+    _ = key;
+    const place = slot.place orelse return false;
+    return outer.contains(place.root);
 }
 
 fn trackedSubplaceRoot(slot: MoveSlot, key: []const u8) ?[]const u8 {
-    if (slot.place) |place| return if (place.isSubplace()) place.root else null;
-    const sep = firstSubplaceSeparator(key) orelse return null;
-    return key[0..sep];
+    _ = key;
+    const place = slot.place orelse return null;
+    return if (place.isSubplace()) place.root else null;
 }
 
 fn firstSubplaceSeparator(key: []const u8) ?usize {
