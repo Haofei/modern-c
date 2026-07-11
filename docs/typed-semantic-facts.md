@@ -769,11 +769,11 @@ both backends keep the returned field unknown. Nested control flow inside an
 aggregate-return candidate path is also an explicit fail-closed boundary: MIR
 emits no summary for that callee, and C/LLVM keep the returned field
 conservative. Plain scoped-block prefixes, unsafe-block prefixes,
-comptime-block prefixes, loop prefixes, `for` prefixes, deferred cleanup
-prefixes, `if let` narrowing, unsupported nested CFG joins, and
-path-count-overflow CFG joins before a final aggregate return are handled the
-same way: they remain outside the producer domain, MIR emits no summary, and
-both backends keep returned fields
+comptime-block prefixes, contract-block prefixes, loop prefixes, `for`
+prefixes, deferred cleanup prefixes, `if let` narrowing, unsupported nested CFG
+joins, and path-count-overflow CFG joins before a final aggregate return are
+handled the same way: they remain outside the producer domain, MIR emits no
+summary, and both backends keep returned fields
 conservative.
 
 ### Consumer and retirement rule
@@ -801,11 +801,11 @@ MIR-populated cache; the AST collector is gone.
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
 4. Complete for named unsupported producer shapes: plain scoped-block prefixes,
-   unsafe-block prefixes, comptime-block prefixes, loop prefixes, `for`
-   prefixes, deferred cleanup prefixes, unsupported nested CFG joins,
-   path-count-overflow CFG joins, exported aggregate returns, mixed paths,
-   prefix calls, fallthrough dynamic-index writes, dereference writes, `if let`
-   narrowing, and aggregate array nesting beyond the fixed
+   unsafe-block prefixes, comptime-block prefixes, contract-block prefixes,
+   loop prefixes, `for` prefixes, deferred cleanup prefixes, unsupported nested
+   CFG joins, path-count-overflow CFG joins, exported aggregate returns, mixed
+   paths, prefix calls, fallthrough dynamic-index writes, dereference writes,
+   `if let` narrowing, and aggregate array nesting beyond the fixed
    pointer-array/struct-array domains are covered as fail-closed rather than
    inferred.
 5. Complete: the semantic-facts inventory rejects the retired LLVM

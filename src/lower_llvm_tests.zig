@@ -1138,6 +1138,34 @@ test "LLVM aggregate-return comptime-block prefix fails closed" {
     try expectContains(body, "load atomic i32, ptr %");
 }
 
+test "LLVM aggregate-return contract-block prefix fails closed" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder() -> Holder {
+        \\    var tag: u32 = 1;
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        tag = unchecked.add(tag, 0);
+        \\    }
+        \\    return .{ .ptr = &shared_counter, .tag = tag };
+        \\}
+        \\
+        \\fn use_returned_holder() -> u32 {
+        \\    let holder: Holder = returned_holder();
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_contract_block_prefix_aggregate_return_fail_closed.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
+    try expectNotContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
+    try expectContains(body, "load atomic i32, ptr %");
+}
+
 test "LLVM consumes MIR aggregate-return sequential switch facts" {
     const source =
         \\global shared_counter: u32 = 0;
