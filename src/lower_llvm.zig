@@ -8423,6 +8423,7 @@ const LlvmEmitter = struct {
         }
         if (self.constGetCallInfo(call)) |info| return info.element_ty;
         if (self.bitcastCallTargetType(call)) |ty| return ty;
+        if (self.physCallTargetType(call)) |ty| return ty;
         if (vaCallReturnType(call)) |ty| return ty;
         if (builtinCallReturnType(call)) |ty| return ty;
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
@@ -8641,6 +8642,12 @@ const LlvmEmitter = struct {
         if (self.mirCallTargetKindAt(call.callee.*.span) != .bitcast) return null;
         if (call.type_args.len != 1 or call.args.len != 1) return null;
         return call.type_args[0];
+    }
+
+    fn physCallTargetType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
+        if (self.mirCallTargetKindAt(call.callee.*.span) != .phys) return null;
+        if (call.type_args.len != 0 or call.args.len != 1) return null;
+        return simpleType(call.callee.*.span, "PAddr");
     }
 
     fn dmaCacheCallInfo(self: *LlvmEmitter, call: anytype) ?DmaCacheCallInfo {

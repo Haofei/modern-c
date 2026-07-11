@@ -8,7 +8,6 @@ const lower_llvm_type = @import("lower_llvm_type.zig");
 
 const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
 const integerBits = lower_llvm_type.integerBits;
-const simpleType = lower_llvm_type.simpleType;
 
 pub const MemberCallee = struct {
     base: *ast.Expr,
@@ -96,7 +95,6 @@ pub fn packedBitsClearMask(info: PackedBitsInfo, bit_index: usize) ?u64 {
 }
 
 pub fn builtinCallReturnType(call: anytype) ?ast.TypeExpr {
-    if (ast_query.isPhysCall(call.callee.*) and call.type_args.len == 0 and call.args.len == 1) return simpleType(call.callee.*.span, "PAddr");
     if (isAssumeNoaliasCall(call)) return null;
     if (ast_query.rawLoadCallReturnType(call)) |ty| return ty;
     if (ast_query.rawPtrCallReturnType(call)) |ty| return ty;

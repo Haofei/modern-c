@@ -773,6 +773,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn bitcastTargetType(": 0,
         "pub fn reflectionCallKind(": 0,
         "pub const ReflectionCallKind": 0,
+        "ast_query.isPhysCall(call.callee.*)": 0,
     },
     "tests/spec/no_implicit_conversion.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 9,
