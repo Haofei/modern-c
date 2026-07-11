@@ -761,9 +761,9 @@ tracked-local argument-bearing/member/indirect prefix calls, direct or indirect
 calls in nested aggregate-return control prefixes, exports, unions,
 aggregate/array element nesting beyond the direct field model, fallthrough
 dynamic-index writes, dereference writes or non-transparent nested control flow,
-and any path with a missing or ambiguous field fact. Fallthrough dynamic-index writes are an explicit
-fail-closed boundary: MIR emits no owned aggregate-return summary, and C/LLVM
-keep returned fields unknown.
+and any path with a missing or ambiguous field fact. Fallthrough dynamic-index
+writes are an explicit fail-closed boundary: MIR emits no owned aggregate-return
+summary, and C/LLVM keep returned fields unknown.
 Callees with tracked-local argument-bearing/member/indirect prefix calls or
 direct/indirect calls in nested aggregate-return control prefixes are also
 explicit fail-closed boundaries: MIR emits no owned aggregate-return summary for
@@ -853,8 +853,8 @@ MIR-populated cache; the AST collector is gone.
    fields, and nested fixed arrays of those struct elements. Direct literal
    returns after ordinary call prefixes without exits, direct-literal
    effectful defer prefixes without exits, tracked-local direct zero-argument
-   call/assert prefix statements, tracked-local direct zero-argument deferred cleanup calls,
-   call-free expression/assert/defer prefixes, transparent
+   call/assert prefix statements, tracked-local direct zero-argument deferred
+   cleanup calls, call-free expression/assert/defer prefixes, transparent
    `while`/`for` prefixes with local `break`/`continue`, and tracked-local
    aggregate returns with scalar-mutating loop locals, scalar aggregate-field
    loop mutations, or stable same-address pointer-field loop mutations are
@@ -865,7 +865,8 @@ MIR-populated cache; the AST collector is gone.
    removing only the return-field fact produces conservative lowering.
 4. Complete for named unsupported producer shapes: contract-block prefixes with
    unsupported calls, non-stable pointer-bearing tracked aggregate mutations
-   inside loop prefixes, loop calls/exits, tracked-local argument-bearing/member/indirect prefix calls,
+   inside loop prefixes, loop calls/exits,
+   tracked-local argument-bearing/member/indirect prefix calls,
    tracked-local argument-bearing/member/indirect deferred cleanup prefixes,
    non-transparent nested CFG joins, above-cap path-count-overflow CFG joins,
    exported aggregate returns, mixed paths, fallthrough
