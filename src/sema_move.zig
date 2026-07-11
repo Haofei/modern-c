@@ -2938,16 +2938,20 @@ pub fn fieldExprIsStructLiteral(expr: ast.Expr) bool {
 // (bug #3) If `expr` is a member access `base.f…` whose place-key names a registered
 // field-place borrow alias, return its slot — for the stale-alias check on member reads.
 pub fn aggregateFieldAliasSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
-    if (aliasStoragePlaceForExpr(self, expr, state)) |place| {
+    const storage_place = aliasStoragePlaceForExpr(self, expr, state);
+    if (storage_place) |place| {
         if (aliasSlotForStoragePlace(place, state)) |slot| return slot;
         if (staleAliasWildcardSlotForConcretePlace(place, state)) |slot| return slot;
+        if (aliasConflictingSlotForStoragePlace(place, state)) |slot| return slot;
     }
     if (aliasPlaceKey(self, expr, state)) |key| {
         defer self.reporter.allocator.free(key);
         if (state.get(key)) |slot| {
             if (slot.alias_of != null) return slot;
         }
-        if (wildcardAliasSlotForConcrete(key, state)) |slot| return slot;
+        if (storage_place == null) {
+            if (wildcardAliasSlotForConcrete(key, state)) |slot| return slot;
+        }
     }
     if (aliasWildcardPlaceKey(self, expr, state)) |key| {
         defer self.reporter.allocator.free(key);
@@ -3109,16 +3113,20 @@ fn recordAliasPlaceOrEscapeWithKey(
 }
 
 pub fn aliasPlaceSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
-    if (aliasStoragePlaceForExpr(self, expr, state)) |place| {
+    const storage_place = aliasStoragePlaceForExpr(self, expr, state);
+    if (storage_place) |place| {
         if (aliasSlotForStoragePlace(place, state)) |slot| return slot;
         if (staleAliasWildcardSlotForConcretePlace(place, state)) |slot| return slot;
+        if (aliasConflictingSlotForStoragePlace(place, state)) |slot| return slot;
     }
     if (aliasPlaceKey(self, expr, state)) |key| {
         defer self.reporter.allocator.free(key);
         if (state.get(key)) |slot| {
             if (slot.alias_of != null) return slot;
         }
-        if (wildcardAliasSlotForConcrete(key, state)) |slot| return slot;
+        if (storage_place == null) {
+            if (wildcardAliasSlotForConcrete(key, state)) |slot| return slot;
+        }
     }
     if (aliasWildcardPlaceKey(self, expr, state)) |key| {
         defer self.reporter.allocator.free(key);
@@ -3149,6 +3157,18 @@ fn staleAliasWildcardSlotForConcretePlace(place: MovePlace, state: *const std.St
         if (slot.alias_of == null) continue;
         if (slot.place) |stored| {
             if (!stored.eql(place) and stored.conflicts(place) and aliasSlotReferentMoved(slot, state)) return slot;
+        }
+    }
+    return null;
+}
+
+fn aliasConflictingSlotForStoragePlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (slot.alias_of == null) continue;
+        if (slot.place) |stored| {
+            if (!stored.eql(place) and stored.conflicts(place)) return slot;
         }
     }
     return null;
