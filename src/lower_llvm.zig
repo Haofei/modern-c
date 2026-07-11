@@ -22,6 +22,7 @@ const atomicCallMemberOp = ast_query.atomicCallMemberOp;
 const maybeUninitCallMemberOp = ast_query.maybeUninitCallMemberOp;
 const reduceCallKind = ast_query.reduceCallKind;
 const reduceCallOpName = ast_query.reduceCallOpName;
+const constGetCallTarget = ast_query.constGetCallTarget;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
@@ -8560,11 +8561,8 @@ const LlvmEmitter = struct {
     }
 
     fn constGetCallInfo(self: *LlvmEmitter, call: anytype) ?ConstGetCallInfo {
-        if (call.type_args.len != 1) return null;
-        const member = memberCallee(call) orelse return null;
-        if (!std.mem.eql(u8, member.name.text, "const_get")) return null;
-        const index = constGetIndexArg(call.type_args[0]) orelse return null;
-        const base_ty = self.exprType(member.base.*) orelse return null;
+        const target = constGetCallTarget(call) orelse return null;
+        const base_ty = self.exprType(target.base.*) orelse return null;
         const array_ty = self.resolveAliasType(base_ty);
         const array = switch (array_ty.kind) {
             .array => |node| node,
@@ -8575,12 +8573,12 @@ const LlvmEmitter = struct {
             else => return null,
         };
         const len = self.arrayLenValue(array.len) orelse return null;
-        if (index >= len) return null;
+        if (target.index >= len) return null;
         return .{
-            .base = member.base.*,
+            .base = target.base.*,
             .array_ty = array_ty,
             .element_ty = array.child.*,
-            .index = index,
+            .index = target.index,
         };
     }
 

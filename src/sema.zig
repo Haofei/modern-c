@@ -7747,12 +7747,12 @@ const ConstGetInfo = struct {
 };
 
 fn constGetInfo(call: anytype, ctx: Context) ?ConstGetInfo {
-    const member = constGetMember(call.callee.*) orelse return null;
-    const base_ty = exprResultType(member.base.*, ctx) orelse exprStorageType(member.base.*, ctx) orelse return null;
+    const target = ast_query.constGetCallTarget(call) orelse return null;
+    const base_ty = exprResultType(target.base.*, ctx) orelse exprStorageType(target.base.*, ctx) orelse return null;
     const array = fixedArrayType(resolveAliasType(base_ty, ctx), ctx.const_fns, ctx.const_globals) orelse return null;
     return .{
-        .base = member.base,
-        .index = if (call.type_args.len == 1) constGetIndexArg(call.type_args[0]) else null,
+        .base = target.base,
+        .index = target.index,
         .len = array.len,
         .element_ty = array.child,
     };

@@ -116,6 +116,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn isBindCallExpr(",
             "pub fn reduceCallKind(",
             "pub fn reduceCallOpName(",
+            "pub fn constGetCallTarget(",
         ],
         "src/lower_llvm_query.zig": [
             "ast_query.rawLoadCallReturnType(call)",
@@ -137,6 +138,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "isBindCallExpr(expr)",
             "isBindCallNode(call)",
             "reduceCallKind(call.callee.*)",
+            "constGetCallTarget(call)",
         ],
     },
     "llvm-bounds-range-consumption": {
@@ -758,6 +760,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn updatePointerProvenanceAssignmentFromMirOrLocalProof": 1,
         "try self.updatePointerProvenanceAssignmentFromMirOrLocalProof(": 1,
         "std.mem.eql(u8, op, \"sum_checked\")": 0,
+        "if (!std.mem.eql(u8, member.name.text, \"const_get\")) return null;": 0,
         "fn mirPointerProvenanceCoversDirectLocalUpdate": 1,
         "fn collectAggregateReturnPointerFieldSummaries": 0,
         "fn collectAggregateReturnPointerFieldsForFunction": 0,

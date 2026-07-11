@@ -111,11 +111,8 @@ pub fn arrayElemsFieldForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalI
 }
 
 pub fn constGetCallInfo(call: anytype) ?ConstGetCallInfo {
-    if (call.args.len != 0 or call.type_args.len != 1) return null;
-    const member = memberCallee(call.callee.*) orelse return null;
-    if (!std.mem.eql(u8, member.name.text, "const_get")) return null;
-    const index = constGetIndexArg(call.type_args[0]) orelse return null;
-    return .{ .base = member.base, .index = index };
+    const target = ast_query.constGetCallTarget(call) orelse return null;
+    return .{ .base = target.base, .index = target.index };
 }
 
 pub fn emitConstGetCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {

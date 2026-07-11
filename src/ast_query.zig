@@ -14,6 +14,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const array_len = @import("array_len.zig");
 const diagnostics = @import("diagnostics.zig");
 
 /// True when `expr` is (transparently through grouping parens) the identifier `name`.
@@ -842,4 +843,20 @@ pub fn reduceCallKind(callee: ast.Expr) ?ReduceCallKind {
     if (std.mem.eql(u8, member.name.text, "sum_left")) return .sum_left;
     if (std.mem.eql(u8, member.name.text, "sum_fast")) return .sum_fast;
     return null;
+}
+
+pub const ConstGetCallTarget = struct {
+    base: *ast.Expr,
+    index: usize,
+};
+
+/// Classify a well-formed `array.const_get<N>()` target. Semantic checking owns
+/// diagnostics for malformed calls and array bounds; consumers use this only
+/// after the call shape itself is valid.
+pub fn constGetCallTarget(call: anytype) ?ConstGetCallTarget {
+    if (call.args.len != 0 or call.type_args.len != 1) return null;
+    const member = memberCallee(call.callee.*) orelse return null;
+    if (!std.mem.eql(u8, member.name.text, "const_get")) return null;
+    const index = array_len.constGetIndexArg(call.type_args[0]) orelse return null;
+    return .{ .base = member.base, .index = index };
 }
