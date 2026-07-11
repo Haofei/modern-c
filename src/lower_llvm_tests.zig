@@ -111,6 +111,16 @@ fn clearCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8) !v
     return error.TestUnexpectedResult;
 }
 
+fn retargetCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.CallTargetKind) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        if (function.call_target_facts.len == 0) return error.TestUnexpectedResult;
+        function.call_target_facts[0].kind = kind;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn retargetIntegerFactsForFunction(module_mir: *mir.Module, name: []const u8, target_ty: mir.ValueType) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -365,6 +375,22 @@ test "LLVM rejects prebuilt MIR with missing call target facts" {
         error.InvalidMirCallTargetFacts,
         lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_call_target_facts.mc", .{}, false, .riscv64, null),
     );
+}
+
+test "LLVM rejects prebuilt MIR with stale call target facts" {
+    const source =
+        \\fn call_target_fact_gate(xs: []const u32) -> Result<u32, Overflow> {
+        \\    return reduce.sum_checked<u32>(xs);
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_stale_call_target_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try retargetCallTargetFactsForFunction(&module_mir, "call_target_fact_gate", .const_get);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_stale_call_target_facts.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM rejects prebuilt MIR with stale integer facts" {
