@@ -12,6 +12,7 @@ const ast_query = @import("ast_query.zig");
 const array_len = @import("array_len.zig");
 const diagnostics = @import("diagnostics.zig");
 const sema_type = @import("sema_type.zig");
+const sema_model = @import("sema_model.zig");
 
 const sema = @import("sema.zig");
 const spine = sema;
@@ -23,6 +24,79 @@ const parseArrayLen = array_len.parseArrayLen;
 const resolveAliasType = sema_type.resolveAliasType;
 
 const ArrayMoveShape = struct { len: usize, embeds: bool };
+
+// The first production consumer of the move CFG.  Unlike the small model-level
+// worklist tests, this carries the real ownership state used by the checker.
+// Transfer functions still operate on a block-local MoveSlot map; edges clone
+// that map and joins use the same ownership merge as the legacy recursive pass.
+const MoveStateCfgWorklist = struct {
+    allocator: std.mem.Allocator,
+    cfg: *const sema_model.MoveCfg,
+    states: []?std.StringHashMap(MoveSlot),
+    queued: []bool,
+    queue: std.ArrayListUnmanaged(sema_model.MoveCfgBlockId) = .empty,
+
+    fn init(self: *Checker, cfg: *const sema_model.MoveCfg, entry: sema_model.MoveCfgBlockId, state: *const std.StringHashMap(MoveSlot)) ?MoveStateCfgWorklist {
+        const states = self.reporter.allocator.alloc(?std.StringHashMap(MoveSlot), cfg.blocks.items.len) catch {
+            self.oom = true;
+            return null;
+        };
+        errdefer self.reporter.allocator.free(states);
+        for (states) |*slot| slot.* = null;
+        const queued = self.reporter.allocator.alloc(bool, cfg.blocks.items.len) catch {
+            self.oom = true;
+            return null;
+        };
+        @memset(queued, false);
+
+        var worklist = MoveStateCfgWorklist{ .allocator = self.reporter.allocator, .cfg = cfg, .states = states, .queued = queued };
+        worklist.states[entry] = cloneMoveState(self, state);
+        worklist.enqueue(self, entry);
+        return worklist;
+    }
+
+    fn deinit(self: *MoveStateCfgWorklist) void {
+        for (self.states) |*state| {
+            if (state.*) |*map| map.deinit();
+        }
+        self.queue.deinit(self.allocator);
+        self.allocator.free(self.queued);
+        self.allocator.free(self.states);
+    }
+
+    fn enqueue(self: *MoveStateCfgWorklist, checker: *Checker, block: sema_model.MoveCfgBlockId) void {
+        if (self.queued[block]) return;
+        self.queue.append(self.allocator, block) catch {
+            checker.oom = true;
+            return;
+        };
+        self.queued[block] = true;
+    }
+
+    fn pop(self: *MoveStateCfgWorklist) ?sema_model.MoveCfgBlockId {
+        if (self.queue.items.len == 0) return null;
+        const block = self.queue.orderedRemove(0);
+        self.queued[block] = false;
+        return block;
+    }
+
+    fn statePtr(self: *MoveStateCfgWorklist, block: sema_model.MoveCfgBlockId) ?*std.StringHashMap(MoveSlot) {
+        if (self.states[block]) |*state| return state;
+        return null;
+    }
+
+    fn propagateSuccessors(self: *MoveStateCfgWorklist, checker: *Checker, from: sema_model.MoveCfgBlockId, outgoing: *const std.StringHashMap(MoveSlot)) void {
+        for (self.cfg.edges.items) |edge| {
+            if (edge.from != from) continue;
+            if (self.states[edge.to]) |*joined| {
+                mergeMoveBranches(checker, joined, joined, outgoing);
+            } else {
+                self.states[edge.to] = cloneMoveState(checker, outgoing);
+            }
+            self.enqueue(checker, edge.to);
+        }
+    }
+};
 
 pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     const body = fn_decl.body orelse return;
@@ -557,36 +631,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
             return false;
         },
         .if_let => |n| {
-            // The condition/scrutinee is evaluated, so by-value `move` operands in
-            // it are consumed (borrow operands `&x` stay borrows inside moveConsume).
-            moveConsume(self, n.value, state, aliases);
-            var then_state = cloneMoveState(self, state);
-            defer then_state.deinit();
-            var else_state = cloneMoveState(self, state);
-            defer else_state.deinit();
-            const bound_name = addIfLetMoveBinding(self, n.pattern, n.value, &then_state, aliases);
-            const then_div = moveBlock(self, n.then_block, &then_state, aliases);
-            if (bound_name) |bn| {
-                // A diverging arm already leak-checked the binding at its exit edge.
-                if (!then_div) {
-                    if (then_state.getPtr(bn)) |slot| {
-                        if (slot.live and !slot.deferred) {
-                            self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in an if-let branch is never consumed (must be moved, returned, or freed)");
-                        }
-                    }
-                }
-                _ = then_state.remove(bn);
-            }
-            var else_div = false;
-            if (n.else_block) |eb| {
-                else_div = moveBlock(self, eb, &else_state, aliases);
-            }
-            finalizeBranchLocals(self, &then_state, state, !then_div);
-            finalizeBranchLocals(self, &else_state, state, !else_div);
-            joinMoveBranches(self, state, &then_state, then_div, &else_state, else_div);
-            // Diverges only when an `else` exists and both arms diverge; a missing
-            // `else` arm falls through.
-            return then_div and (n.else_block != null) and else_div;
+            return moveIfLetCfg(self, n, state, aliases);
         },
         .@"switch" => |sw| {
             // The subject is evaluated, so by-value `move` operands in it are
@@ -677,6 +722,88 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
         },
         .asm_stmt => return false,
     }
+}
+
+// Route `if let` through explicit entry/then/else/join CFG blocks.  The scrutinee
+// transfer runs in entry, arm-local bindings live only in then, and only
+// non-diverging arms reach the join.  This is deliberately the first production
+// CFG slice; switch and loop still use their existing specialized transfer rules.
+fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    defer cfg.deinit();
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        return false;
+    };
+    const then_block = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        return false;
+    };
+    const else_block = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        return false;
+    };
+    const join = cfg.addBlock(.branch_join) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(entry, then_block, .branch) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(entry, else_block, .branch) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(then_block, join, .normal) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(else_block, join, .normal) catch {
+        self.oom = true;
+        return false;
+    };
+
+    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return false;
+    defer worklist.deinit();
+    var then_div = false;
+    var else_div = false;
+    var joined = false;
+
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == entry) {
+            // The condition/scrutinee is evaluated before either branch.
+            moveConsume(self, node.value, block_state, aliases);
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == then_block) {
+            const bound_name = addIfLetMoveBinding(self, node.pattern, node.value, block_state, aliases);
+            then_div = moveBlock(self, node.then_block, block_state, aliases);
+            if (bound_name) |name| {
+                if (!then_div) {
+                    if (block_state.getPtr(name)) |slot| {
+                        if (slot.live and !slot.deferred) {
+                            self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in an if-let branch is never consumed (must be moved, returned, or freed)");
+                        }
+                    }
+                }
+                _ = block_state.remove(name);
+            }
+            finalizeBranchLocals(self, block_state, state, !then_div);
+            if (!then_div) worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == else_block) {
+            if (node.else_block) |else_body| else_div = moveBlock(self, else_body, block_state, aliases);
+            finalizeBranchLocals(self, block_state, state, !else_div);
+            if (!else_div) worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == join) {
+            replaceMoveState(self, state, block_state);
+            joined = true;
+        }
+    }
+    // Both divergent arms leave no normal join.  The caller already treats the
+    // statement as terminal; preserve the incoming map only for unreachable code.
+    if (!joined and !(then_div and node.else_block != null and else_div)) self.oom = true;
+    return then_div and (node.else_block != null) and else_div;
 }
 
 // Drop branch-local `move` bindings (names not present in `outer`) from `branch` on
