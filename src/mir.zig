@@ -1557,8 +1557,9 @@ fn collectSequentialSwitchAggregateReturnLiteralPathsFrom(
 
 fn aggregateReturnStatementsContainControlFlow(statements: []const ast.Stmt) bool {
     for (statements) |stmt| switch (stmt.kind) {
-        .@"return", .@"switch", .loop, .if_let, .@"break", .@"continue", .@"defer", .unsafe_block, .comptime_block, .contract_block => return true,
+        .@"return", .@"switch", .loop, .if_let, .@"break", .@"continue", .@"defer", .comptime_block, .contract_block => return true,
         .block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
+        .unsafe_block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
         else => {},
     };
     return false;
@@ -1629,6 +1630,9 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
             .block => |block| {
                 if (!aggregateReturnPrefixStatementsAreSupported(block.items)) return false;
             },
+            .unsafe_block => |block| {
+                if (!aggregateReturnPrefixStatementsAreSupported(block.items)) return false;
+            },
             else => return false,
         }
     }
@@ -1674,6 +1678,9 @@ fn processAggregateReturnLiteralLocalStatements(
                 try tryTrackAggregateReturnLiteralLocalArrayElementAssignment(allocator, locals, paths, target.local_name, target.field_name, target.index, assignment.value);
             },
             .block => |block| {
+                if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, block.items, true)) return false;
+            },
+            .unsafe_block => |block| {
                 if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, block.items, true)) return false;
             },
             else => return false,
