@@ -239,6 +239,7 @@ pub const CallTargetKind = enum {
     phys,
     raw_load,
     raw_ptr,
+    raw_store,
 };
 
 pub const CallTargetFact = struct {

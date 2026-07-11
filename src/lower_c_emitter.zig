@@ -131,7 +131,6 @@ const indexExpr = ast_query.indexExpr;
 const memberCallee = ast_query.memberCallee;
 const memberExpr = ast_query.memberExpr;
 const isCpuPauseCall = ast_query.isCpuPauseCall;
-const isRawStoreCall = ast_query.isRawStoreCall;
 const isStringLiteralTarget = ast_query.isStringLiteralTarget;
 const isMmioStructAbi = ast_query.isMmioStructAbi;
 const dynCalleeMethodName = ast_query.dynCalleeMethodName;
@@ -3421,7 +3420,7 @@ const CEmitter = struct {
 
     fn emitRawStoreStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const call = callExpr(expr) orelse return false;
-        if (!isRawStoreCall(call.callee.*)) return false;
+        if (self.mirCallTargetKindAt(call.callee.*.span) != .raw_store) return false;
         if (call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedCEmission;
 
         const addr_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, simpleNameType("PAddr", call.args[0].span));

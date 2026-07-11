@@ -4503,6 +4503,8 @@ const FunctionBuilder = struct {
                     ty
                 else if (self.rawPtrCallValueType(node)) |ty|
                     ty
+                else if (self.rawStoreCallValueType(node)) |ty|
+                    ty
                 else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
                 if (reduceCallKind(node.callee.*)) |kind| {
@@ -4537,6 +4539,10 @@ const FunctionBuilder = struct {
                 if (self.rawPtrCallValueType(node)) |raw_ptr_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.raw_ptr), raw_ptr_ty, expr.span);
                     try self.addCallTargetFact(.raw_ptr, raw_ptr_ty, expr.span);
+                }
+                if (self.rawStoreCallValueType(node)) |raw_store_ty| {
+                    try self.addInstr(.call_target, @tagName(CallTargetKind.raw_store), raw_store_ty, expr.span);
+                    try self.addCallTargetFact(.raw_store, raw_store_ty, expr.span);
                 }
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {
                     try self.addInstr(.unsafe_check, callee_name, .unknown, expr.span);
@@ -4790,6 +4796,11 @@ const FunctionBuilder = struct {
     fn rawPtrCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
         const ty = ast_query.rawPtrCallReturnType(call) orelse return null;
         return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+    }
+
+    fn rawStoreCallValueType(_: *FunctionBuilder, call: anytype) ?ValueType {
+        if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
+        return .void;
     }
 
     fn mmioReceiverCalleeName(self: *FunctionBuilder, callee: ast.Expr) ?[]const u8 {

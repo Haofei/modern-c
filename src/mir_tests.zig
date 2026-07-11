@@ -823,6 +823,9 @@ test "MIR records typed call target facts for raw address calls" {
         \\fn pointer(addr: PAddr) -> *mut u32 {
         \\    unsafe { return raw.ptr<u32>(addr); }
         \\}
+        \\fn store(addr: PAddr, value: u32) -> void {
+        \\    unsafe { raw.store<u32>(addr, value); }
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_raw_address_call_targets.mc", source);
@@ -839,12 +842,16 @@ test "MIR records typed call target facts for raw address calls" {
     defer typed_mir.deinit();
     const read = functionByName(typed_mir, "read").?;
     const pointer = functionByName(typed_mir, "pointer").?;
+    const store = functionByName(typed_mir, "store").?;
     try std.testing.expectEqual(@as(usize, 1), read.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.raw_load, read.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("u32", read.call_target_facts[0].result_ty.name());
     try std.testing.expectEqual(@as(usize, 1), pointer.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.raw_ptr, pointer.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("*mut", pointer.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 1), store.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.raw_store, store.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("void", store.call_target_facts[0].result_ty.name());
     try mir.validateCallTargetFactsForLowering(typed_mir);
 }
 

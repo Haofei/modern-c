@@ -27,7 +27,6 @@ const isCpuPauseCall = ast_query.isCpuPauseCall;
 const vaCallMember = ast_query.vaCallMember;
 const vaCallReturnType = ast_query.vaCallReturnType;
 const isVaStartCall = ast_query.isVaStartCall;
-const isRawStoreCall = ast_query.isRawStoreCall;
 const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
 const isStringLiteralTarget = ast_query.isStringLiteralTarget;
 const isMmioStructAbi = ast_query.isMmioStructAbi;
@@ -2511,7 +2510,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(info.payload_ty), value, ptr, try self.debugCallSuffix() });
             return true;
         }
-        if (isRawStoreCall(call.callee.*)) {
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_store) {
             if (call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedLlvmEmission;
             const value_ty = call.type_args[0];
             const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
