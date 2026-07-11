@@ -1810,6 +1810,7 @@ fn aggregateReturnUncheckedNoOverflowCallIsTransparent(call: anytype) bool {
 
 fn aggregateReturnLoopBodyIsTransparent(statements: []const ast.Stmt) bool {
     for (statements) |stmt| switch (stmt.kind) {
+        .@"break", .@"continue" => {},
         .let_decl, .var_decl => |local| {
             if (local.init) |initializer| {
                 if (aggregateReturnPrefixExprHasCallOrExit(initializer)) return false;

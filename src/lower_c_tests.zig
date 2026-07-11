@@ -638,7 +638,7 @@ test "lower-c consumes MIR aggregate-return nested control facts" {
     try expectContains(missing_if_let_output.items, "mc_race_load_u32");
 }
 
-test "lower-c aggregate-return loop prefix fails closed" {
+test "lower-c consumes MIR aggregate-return loop-control prefix facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Holder { ptr: *mut u32, tag: u32 }
@@ -658,9 +658,45 @@ test "lower-c aggregate-return loop prefix fails closed" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_loop_prefix_aggregate_return_fail_closed.mc", source, &output);
-    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
-    try expectContains(output.items, "mc_race_load_u32");
+    try appendCheckedCTest("c_loop_control_prefix_aggregate_return_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_loop_control_prefix_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_output.items, "mc_race_load_u32");
+}
+
+test "lower-c consumes MIR aggregate-return continue loop-control prefix facts" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder(values: [2]u32) -> Holder {
+        \\    for value in values {
+        \\        let ignored: u32 = value;
+        \\        continue;
+        \\    }
+        \\    return .{ .ptr = &shared_counter, .tag = 1 };
+        \\}
+        \\
+        \\fn use_returned_holder(values: [2]u32) -> u32 {
+        \\    let holder: Holder = returned_holder(values);
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_continue_loop_control_prefix_aggregate_return_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_continue_loop_control_prefix_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
 test "lower-c consumes MIR aggregate-return transparent while-prefix facts" {
@@ -719,7 +755,7 @@ test "lower-c aggregate-return mutating while prefix fails closed" {
     try expectContains(output.items, "mc_race_load_u32");
 }
 
-test "lower-c aggregate-return nested loop control fails closed" {
+test "lower-c consumes MIR aggregate-return nested loop-control facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Holder { ptr: *mut u32, tag: u32 }
@@ -745,9 +781,14 @@ test "lower-c aggregate-return nested loop control fails closed" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_nested_loop_control_aggregate_return_fail_closed.mc", source, &output);
-    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
-    try expectContains(output.items, "mc_race_load_u32");
+    try appendCheckedCTest("c_nested_loop_control_aggregate_return_mir_fact.mc", source, &output);
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_nested_loop_control_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
 test "lower-c consumes MIR aggregate-return nested transparent switch facts" {
