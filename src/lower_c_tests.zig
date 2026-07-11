@@ -53,6 +53,26 @@ fn clearRepresentationFactsForFunction(module_mir: *mir.Module, name: []const u8
     return error.TestUnexpectedResult;
 }
 
+fn clearIntegerFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        if (function.integer_facts.len != 0) module_mir.allocator.free(function.integer_facts);
+        function.integer_facts = try module_mir.allocator.alloc(mir.IntegerFact, 0);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn retargetIntegerFactsForFunction(module_mir: *mir.Module, name: []const u8, target_ty: mir.ValueType) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        if (function.integer_facts.len == 0) return error.TestUnexpectedResult;
+        function.integer_facts[0].target_ty = target_ty;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn retargetRepresentationFactsForFunction(module_mir: *mir.Module, name: []const u8, value_id: []const u8) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -201,6 +221,48 @@ test "lower-c rejects prebuilt MIR with stale representation facts" {
     try std.testing.expectError(
         error.InvalidMirRepresentationFacts,
         lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_stale_representation_facts.mc", .{}, false, null),
+    );
+}
+
+test "lower-c rejects prebuilt MIR with missing integer facts" {
+    const source =
+        \\fn integer_fact_gate() -> u8 {
+        \\    let a: u8 = 7;
+        \\    return a;
+        \\}
+    ;
+
+    var parsed = try test_support.parseCheckedModule("c_missing_integer_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearIntegerFactsForFunction(&module_mir, "integer_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirIntegerFacts,
+        lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_integer_facts.mc", .{}, false, null),
+    );
+}
+
+test "lower-c rejects prebuilt MIR with stale integer facts" {
+    const source =
+        \\fn integer_fact_gate() -> u8 {
+        \\    let a: u8 = 7;
+        \\    return a;
+        \\}
+    ;
+
+    var parsed = try test_support.parseCheckedModule("c_stale_integer_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try retargetIntegerFactsForFunction(&module_mir, "integer_fact_gate", .{ .integer = "u16" });
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirIntegerFacts,
+        lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_stale_integer_facts.mc", .{}, false, null),
     );
 }
 

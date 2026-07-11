@@ -335,6 +335,47 @@ BOUNDS_RANGE_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
     ],
 }
 
+INTEGER_DEFAULT_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
+    "docs/typed-semantic-facts.md": [
+        "| MIR integer literal facts |",
+        "target-typed integer literal conversion",
+        "validateIntegerFactsForLowering",
+    ],
+    "docs/compiler-production-readiness.md": [
+        "Integer/default fact family is gated",
+    ],
+    "src/mir_model.zig": [
+        "integer_literal_conversion",
+        "pub const IntegerFact = struct",
+        "integer_facts: []IntegerFact",
+    ],
+    "src/mir.zig": [
+        '"mir integer_fact',
+        "fn addIntegerLiteralFact(",
+        "pub fn validateIntegerFactsForLowering(",
+        "fn functionHasMatchingIntegerFact(",
+        "fn integerFactLiteralText(",
+    ],
+    "src/mir_tests.zig": [
+        "MIR dump emits target-typed integer literal facts",
+        "mir integer_fact fn=integer_literals literal=255 target_type=u8 recorded=true",
+    ],
+    "src/lower_c.zig": [
+        "try mir.validateIntegerFactsForLowering(typed_mir.*);",
+    ],
+    "src/lower_llvm.zig": [
+        "try mir.validateIntegerFactsForLowering(module_mir.*);",
+    ],
+    "src/lower_c_tests.zig": [
+        "lower-c rejects prebuilt MIR with missing integer facts",
+        "lower-c rejects prebuilt MIR with stale integer facts",
+    ],
+    "src/lower_llvm_tests.zig": [
+        "LLVM rejects prebuilt MIR with missing integer facts",
+        "LLVM rejects prebuilt MIR with stale integer facts",
+    ],
+}
+
 ANCHORS: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "### Phase 1 inventory: current fact-like surfaces",
@@ -384,6 +425,7 @@ ANCHORS: dict[str, list[str]] = {
         "pub const Instruction = struct",
         "value_id: ?[]const u8",
         "contract_region_id: ?usize",
+        "pub const IntegerFact = struct",
         "pub const RangeFact = struct",
         "pub const BoundsFactKind = enum",
         "pub const BoundsFact = struct",
@@ -395,6 +437,7 @@ ANCHORS: dict[str, list[str]] = {
         "pub const RepresentationFact = struct",
         "range_facts: []RangeFact",
         "bounds_facts: []BoundsFact",
+        "integer_facts: []IntegerFact",
         "pointer_provenance_facts: []PointerProvenanceFact",
         "representation_facts: []RepresentationFact",
         "elided_bounds: []SourcePoint",
@@ -403,6 +446,7 @@ ANCHORS: dict[str, list[str]] = {
         "pub fn appendDumpOpt",
         '"mir range_fact',
         '"mir bounds_fact',
+        '"mir integer_fact',
         '"mir representation_fact',
         '"mir pointer_provenance_fact',
         "field={s}",
@@ -425,6 +469,8 @@ ANCHORS: dict[str, list[str]] = {
         "pub fn validateRepresentationFactsForLowering",
         "fn addRangeFactForUncheckedCall",
         "fn addAggregateRangeFactForUncheckedExpr",
+        "fn addIntegerLiteralFact",
+        "pub fn validateIntegerFactsForLowering",
         "fn invalidateFacts",
         "fn recordTrueCondFacts",
         "fn factIdentAllowed",
@@ -488,6 +534,9 @@ ANCHORS: dict[str, list[str]] = {
         "if (self.mirCheckElided(node.index.span))",
         "if (self.mirCheckElided(slice_span))",
     ],
+    "src/lower_c.zig": [
+        "try mir.validateIntegerFactsForLowering(typed_mir.*);",
+    ],
     "src/lower_c_global.zig": [
         "pub fn appendGlobalLoadExpr",
         "pub fn appendGlobalStorePrefix",
@@ -505,6 +554,7 @@ ANCHORS: dict[str, list[str]] = {
         '"lower contract_scope',
     ],
     "src/lower_llvm.zig": [
+        "try mir.validateIntegerFactsForLowering(module_mir.*);",
         "pointer_local_provenance: std.StringHashMap(mir.PointerProvenance)",
         "local_aggregate_pointer_aliases: std.StringHashMap([]const u8)",
         "local_array_global_pointer_elements: std.StringHashMap(mir.PointerProvenance)",
@@ -539,6 +589,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn parseIntegerLiteral": 1,
         "std.fmt.parseInt(u128": 1,
     },
+    "src/lower_c.zig": {
+        "try mir.validateIntegerFactsForLowering(typed_mir.*);": 1,
+    },
     "src/sema.zig": {
         "fn checkIntegerLiteralInitializer": 1,
         "fn checkTargetlessLiteralInitializer": 1,
@@ -564,6 +617,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn derefPointerHasProvenLocalStorage(": 1,
     },
     "src/lower_llvm.zig": {
+        "try mir.validateIntegerFactsForLowering(module_mir.*);": 1,
         "fn requireMirBoundsFact": 1,
         "try self.requireMirBoundsFact(": 5,
         "fn requireMirNoOverflowRangeFact": 1,
@@ -724,6 +778,19 @@ def main() -> int:
             checked += 1
             if anchor not in text:
                 missing.append(f"bounds/range fact family audit: {relative}: missing anchor {anchor!r}")
+
+    for relative, anchors in sorted(INTEGER_DEFAULT_FACT_FAMILY_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"integer/default fact family audit: {relative}: file missing")
+            continue
+
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"integer/default fact family audit: {relative}: missing anchor {anchor!r}")
 
     if missing:
         print("semantic facts inventory anchor check failed:", file=sys.stderr)

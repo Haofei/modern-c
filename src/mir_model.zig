@@ -144,6 +144,7 @@ pub const Instruction = struct {
         mmio_check,
         representation_check,
         representation_use,
+        integer_literal_conversion,
         nullability_conversion,
         conversion_check,
         aggregate_check,
@@ -213,6 +214,12 @@ pub const BoundsFactKind = enum { index, slice };
 
 pub const BoundsFact = struct {
     kind: BoundsFactKind,
+    source: SourcePoint,
+};
+
+pub const IntegerFact = struct {
+    literal: []const u8,
+    target_ty: ValueType,
     source: SourcePoint,
 };
 
@@ -294,6 +301,7 @@ pub const Function = struct {
     contract_regions: []ContractRegion,
     range_facts: []RangeFact,
     bounds_facts: []BoundsFact = &.{},
+    integer_facts: []IntegerFact = &.{},
     pointer_provenance_facts: []PointerProvenanceFact,
     representation_facts: []RepresentationFact,
     // OPT (annex E): operand source points of checks the optimizer proved dead and elided
@@ -321,6 +329,7 @@ pub const Module = struct {
             self.allocator.free(function.contract_regions);
             self.allocator.free(function.range_facts);
             if (function.bounds_facts.len != 0) self.allocator.free(function.bounds_facts);
+            if (function.integer_facts.len != 0) self.allocator.free(function.integer_facts);
             for (function.pointer_provenance_facts) |fact| {
                 if (fact.field_path) |field_path| self.allocator.free(field_path);
             }

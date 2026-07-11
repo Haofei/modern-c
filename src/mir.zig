@@ -62,6 +62,7 @@ pub const ContractRegion = mir_model.ContractRegion;
 pub const RangeFact = mir_model.RangeFact;
 pub const BoundsFact = mir_model.BoundsFact;
 pub const BoundsFactKind = mir_model.BoundsFactKind;
+pub const IntegerFact = mir_model.IntegerFact;
 pub const SourcePoint = mir_model.SourcePoint;
 pub const PointerProvenance = mir_model.PointerProvenance;
 pub const PointerProvenanceFact = mir_model.PointerProvenanceFact;
@@ -314,6 +315,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
                         .contract_regions = try allocator.alloc(ContractRegion, 0),
                         .range_facts = try allocator.alloc(RangeFact, 0),
                         .bounds_facts = try allocator.alloc(BoundsFact, 0),
+                        .integer_facts = try allocator.alloc(IntegerFact, 0),
                         .pointer_provenance_facts = try allocator.alloc(PointerProvenanceFact, 0),
                         .representation_facts = try allocator.alloc(RepresentationFact, 0),
                         .elided_bounds = try allocator.alloc(SourcePoint, 0),
@@ -343,8 +345,8 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
     for (mir.functions) |function| {
         try out.print(
             allocator,
-            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
-            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
+            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
+            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
         );
         for (function.contract_regions) |region| {
             try out.print(
@@ -415,6 +417,13 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
                 allocator,
                 "mir bounds_fact fn={s} kind={s} recorded=true line={} column={}\n",
                 .{ function.name, @tagName(fact.kind), fact.source.line, fact.source.column },
+            );
+        }
+        for (function.integer_facts) |fact| {
+            try out.print(
+                allocator,
+                "mir integer_fact fn={s} literal={s} target_type={s} recorded=true line={} column={}\n",
+                .{ function.name, fact.literal, fact.target_ty.name(), fact.source.line, fact.source.column },
             );
         }
         for (function.pointer_provenance_facts) |fact| {
@@ -858,6 +867,43 @@ pub fn validateRepresentationFactsForLowering(module: Module) error{InvalidMirRe
             if (!functionHasMatchingRepresentationInstruction(function, fact)) return error.InvalidMirRepresentationFacts;
         }
     }
+}
+
+pub fn validateIntegerFactsForLowering(module: Module) error{InvalidMirIntegerFacts}!void {
+    for (module.functions) |function| {
+        for (function.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .integer_literal_conversion) continue;
+                if (!functionHasMatchingIntegerFact(function, instruction)) return error.InvalidMirIntegerFacts;
+            }
+        }
+        for (function.integer_facts) |fact| {
+            if (!functionHasMatchingIntegerInstruction(function, fact)) return error.InvalidMirIntegerFacts;
+        }
+    }
+}
+
+fn functionHasMatchingIntegerFact(function: Function, instruction: Instruction) bool {
+    for (function.integer_facts) |fact| {
+        if (!sameRepresentationValueType(fact.target_ty, instruction.result_ty)) continue;
+        if (fact.source.line != instruction.line or fact.source.column != instruction.column) continue;
+        if (!std.mem.eql(u8, fact.literal, instruction.detail)) continue;
+        return true;
+    }
+    return false;
+}
+
+fn functionHasMatchingIntegerInstruction(function: Function, fact: IntegerFact) bool {
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .integer_literal_conversion) continue;
+            if (!sameRepresentationValueType(instruction.result_ty, fact.target_ty)) continue;
+            if (instruction.line != fact.source.line or instruction.column != fact.source.column) continue;
+            if (!std.mem.eql(u8, instruction.detail, fact.literal)) continue;
+            return true;
+        }
+    }
+    return false;
 }
 
 fn functionHasMatchingRepresentationFact(function: Function, instruction: Instruction) bool {
@@ -2871,6 +2917,7 @@ const FunctionBuilder = struct {
     contract_regions: std.ArrayList(ContractRegion),
     range_facts: std.ArrayList(RangeFact),
     bounds_facts: std.ArrayList(BoundsFact),
+    integer_facts: std.ArrayList(IntegerFact),
     pointer_provenance_facts: std.ArrayList(PointerProvenanceFact),
     representation_facts: std.ArrayList(RepresentationFact),
     live_pointer_provenance: std.ArrayList(LivePointerProvenance),
@@ -2954,6 +3001,7 @@ const FunctionBuilder = struct {
             .contract_regions = .empty,
             .range_facts = .empty,
             .bounds_facts = .empty,
+            .integer_facts = .empty,
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -3014,6 +3062,7 @@ const FunctionBuilder = struct {
             .contract_regions = .empty,
             .range_facts = .empty,
             .bounds_facts = .empty,
+            .integer_facts = .empty,
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -3054,6 +3103,7 @@ const FunctionBuilder = struct {
         self.contract_regions.deinit(self.allocator);
         self.range_facts.deinit(self.allocator);
         self.bounds_facts.deinit(self.allocator);
+        self.integer_facts.deinit(self.allocator);
         self.pointer_provenance_facts.deinit(self.allocator);
         self.representation_facts.deinit(self.allocator);
         self.live_pointer_provenance.deinit(self.allocator);
@@ -3104,6 +3154,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(range_facts);
         const bounds_facts = try self.bounds_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(bounds_facts);
+        const integer_facts = try self.integer_facts.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(integer_facts);
         const pointer_provenance_facts = try self.pointer_provenance_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(pointer_provenance_facts);
         const representation_facts = try self.representation_facts.toOwnedSlice(self.allocator);
@@ -3157,6 +3209,7 @@ const FunctionBuilder = struct {
             .contract_regions = contract_regions,
             .range_facts = range_facts,
             .bounds_facts = bounds_facts,
+            .integer_facts = integer_facts,
             .pointer_provenance_facts = pointer_provenance_facts,
             .representation_facts = representation_facts,
             .elided_bounds = elided_bounds,
@@ -4774,6 +4827,16 @@ const FunctionBuilder = struct {
         try self.addInstr(.nullability_conversion, finding, target_ty, span);
     }
 
+    fn addIntegerLiteralFact(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, span: ast.Span) !void {
+        const literal = integerFactLiteralText(expr);
+        try self.addInstr(.integer_literal_conversion, literal, target_ty, span);
+        try self.integer_facts.append(self.allocator, .{
+            .literal = literal,
+            .target_ty = target_ty,
+            .source = .{ .line = span.line, .column = span.column },
+        });
+    }
+
     fn addConversionCheck(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, ctx: ConversionContext, span: ast.Span) !void {
         if (expr.kind == .try_expr) return;
         const source_ty = self.exprType(expr);
@@ -4786,7 +4849,10 @@ const FunctionBuilder = struct {
             try self.addInstr(.conversion_check, finding, .{ .integer = "comptime_int" }, span);
             return;
         }
-        if (integerLiteralFitsTarget(target_ty, expr)) return;
+        if (integerLiteralFitsTarget(target_ty, expr)) {
+            try self.addIntegerLiteralFact(target_ty, expr, span);
+            return;
+        }
         if (self.packedBitsRawInitializerFits(target_ty, source_ty, expr)) return;
         if (addressClassMismatch(target_ty, source_ty)) |source_class| {
             const target_class = switch (target_ty) {
@@ -6873,6 +6939,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     allocator.free(function.contract_regions);
     allocator.free(function.range_facts);
     if (function.bounds_facts.len != 0) allocator.free(function.bounds_facts);
+    if (function.integer_facts.len != 0) allocator.free(function.integer_facts);
     for (function.pointer_provenance_facts) |fact| {
         if (fact.field_path) |field_path| allocator.free(field_path);
     }
@@ -6886,6 +6953,15 @@ fn representationFactKind(kind: Instruction.Kind, ty: ValueType) bool {
         .representation_check, .representation_use => true,
         .typed_load => representationCheckKind(ty) != null,
         else => false,
+    };
+}
+
+fn integerFactLiteralText(expr: ast.Expr) []const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| integerFactLiteralText(inner.*),
+        .cast => |node| integerFactLiteralText(node.value.*),
+        .int_literal => |text| text,
+        else => exprText(expr),
     };
 }
 

@@ -1248,6 +1248,35 @@ test "MIR dump emits non-elided bounds facts" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir bounds_fact fn=read_at kind=index recorded=true") != null);
 }
 
+test "MIR dump emits target-typed integer literal facts" {
+    const source =
+        \\extern fn takes_u8(value: u8) -> void;
+        \\fn integer_literals() -> u8 {
+        \\    let a: u8 = 255;
+        \\    takes_u8(0xff);
+        \\    return 7;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_integer_literal_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, module, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "integer_facts=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=255 target_type=u8 recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=0xff target_type=u8 recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=7 target_type=u8 recorded=true") != null);
+}
+
 test "MIR dump exposes representation value identities" {
     const source =
         \\fn return_ptr_param(p: *mut u8) -> *mut u8 {
