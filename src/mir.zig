@@ -2041,6 +2041,11 @@ fn aggregateReturnTrackedLocalDeferIsTransparent(expr: ast.Expr) bool {
     return aggregateReturnDirectZeroArgCallNoExit(expr);
 }
 
+fn aggregateReturnTrackedLocalPrefixExprIsTransparent(expr: ast.Expr) bool {
+    if (!aggregateReturnPrefixExprHasCallOrExit(expr)) return true;
+    return aggregateReturnDirectZeroArgCallNoExit(expr);
+}
+
 fn aggregateReturnDirectZeroArgCallNoExit(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .grouped => |inner| aggregateReturnDirectZeroArgCallNoExit(inner.*),
@@ -2095,7 +2100,7 @@ fn processAggregateReturnLiteralLocalStatements(
                 try tryTrackAggregateReturnLiteralLocalArrayElementAssignment(allocator, locals, paths, target.local_name, target.field_name, target.index, assignment.value);
             },
             .expr, .assert => |expr| {
-                if (aggregateReturnPrefixExprHasCallOrExit(expr)) return false;
+                if (!aggregateReturnTrackedLocalPrefixExprIsTransparent(expr)) return false;
             },
             .@"defer" => |expr| {
                 if (!aggregateReturnTrackedLocalDeferIsTransparent(expr)) return false;

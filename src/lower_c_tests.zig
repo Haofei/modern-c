@@ -283,11 +283,14 @@ test "lower-c consumes MIR aggregate-return pointer facts and fails closed when 
     try expectContains(missing_output.items, "mc_race_load_u32");
 }
 
-test "lower-c aggregate-return direct literal call prefixes are MIR-owned" {
+test "lower-c aggregate-return bounded call prefixes are MIR-owned" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Holder { ptr: *mut u32, tag: u32 }
         \\fn helper() -> void {}
+        \\fn helper_holder(holder: *mut Holder) -> void {
+        \\    holder.*.tag = 0;
+        \\}
         \\
         \\fn call_free_prefix_holder() -> Holder {
         \\    let noise: u32 = shared_counter;
@@ -305,6 +308,12 @@ test "lower-c aggregate-return direct literal call prefixes are MIR-owned" {
         \\    return holder;
         \\}
         \\
+        \\fn local_arg_call_prefix_holder() -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 3 };
+        \\    helper_holder(&holder);
+        \\    return holder;
+        \\}
+        \\
         \\fn use_call_free_prefix_holder() -> u32 {
         \\    let holder: Holder = call_free_prefix_holder();
         \\    return holder.ptr.*;
@@ -319,6 +328,11 @@ test "lower-c aggregate-return direct literal call prefixes are MIR-owned" {
         \\    let holder: Holder = local_call_prefix_holder();
         \\    return holder.ptr.*;
         \\}
+        \\
+        \\fn use_local_arg_call_prefix_holder() -> u32 {
+        \\    let holder: Holder = local_arg_call_prefix_holder();
+        \\    return holder.ptr.*;
+        \\}
     ;
 
     var output: std.ArrayList(u8) = .empty;
@@ -326,9 +340,10 @@ test "lower-c aggregate-return direct literal call prefixes are MIR-owned" {
     try appendCheckedCTest("c_aggregate_return_literal_prefix_mir_fact.mc", source, &output);
     try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_call_free_prefix_holder callee=call_free_prefix_holder field=ptr provenance=global_storage");
     try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_call_prefix_holder callee=call_prefix_holder field=ptr provenance=global_storage");
-    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_local_call_prefix_holder callee=local_call_prefix_holder field=ptr");
-    const local_call_body = try cFunctionBody(output.items, "static uint32_t use_local_call_prefix_holder(void)");
-    try expectContains(local_call_body, "mc_race_load_u32");
+    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_local_call_prefix_holder callee=local_call_prefix_holder field=ptr provenance=global_storage");
+    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_local_arg_call_prefix_holder callee=local_arg_call_prefix_holder field=ptr");
+    const local_arg_call_body = try cFunctionBody(output.items, "static uint32_t use_local_arg_call_prefix_holder(void)");
+    try expectContains(local_arg_call_body, "mc_race_load_u32");
 
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
@@ -336,6 +351,13 @@ test "lower-c aggregate-return direct literal call prefixes are MIR-owned" {
     try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_call_prefix_holder callee=call_prefix_holder field=ptr");
     const missing_call_body = try cFunctionBody(missing_output.items, "static uint32_t use_call_prefix_holder(void)");
     try expectContains(missing_call_body, "mc_race_load_u32");
+
+    var missing_local_output: std.ArrayList(u8) = .empty;
+    defer missing_local_output.deinit(std.testing.allocator);
+    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_aggregate_return_literal_prefix_mir_fact.mc", source, "local_call_prefix_holder", "ptr", &missing_local_output);
+    try expectNotContains(missing_local_output.items, "/* mir aggregate_return_pointer consumed caller=use_local_call_prefix_holder callee=local_call_prefix_holder field=ptr");
+    const missing_local_call_body = try cFunctionBody(missing_local_output.items, "static uint32_t use_local_call_prefix_holder(void)");
+    try expectContains(missing_local_call_body, "mc_race_load_u32");
 }
 
 test "lower-c consumes MIR aggregate-return pointer-array element facts" {
