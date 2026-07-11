@@ -411,6 +411,16 @@ pub fn maybeUninitCallMemberOp(callee: ast.Expr) ?[]const u8 {
     return maybeUninitMemberOpName(member.name.text);
 }
 
+/// Whether a callee names the `declassify` / `reveal` unsafe escape.
+pub fn isDeclassifyCallee(callee: ast.Expr) bool {
+    return isIdentNamed(callee, "declassify") or isIdentNamed(callee, "reveal");
+}
+
+/// Whether a call uses the `declassify` / `reveal` unsafe escape.
+pub fn isDeclassifyCall(call: anytype) bool {
+    return isDeclassifyCallee(call.callee.*);
+}
+
 /// The payload type and mode tag of a `DmaBuf<T, .mode>` type, or null.
 pub const DmaBufInfo = struct {
     payload: ast.TypeExpr,

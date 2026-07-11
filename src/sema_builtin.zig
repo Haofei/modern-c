@@ -307,14 +307,6 @@ pub fn isBitcastCallName(expr: ast.Expr) bool {
     };
 }
 
-pub fn isDeclassifyCallName(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, "declassify") or std.mem.eql(u8, ident.text, "reveal"),
-        .grouped => |inner| isDeclassifyCallName(inner.*),
-        else => false,
-    };
-}
-
 pub fn secretPayloadType(ty: ast.TypeExpr) ?ast.TypeExpr {
     return switch (ty.kind) {
         .generic => |node| if (std.mem.eql(u8, node.base.text, "Secret") and node.args.len == 1) node.args[0] else null,

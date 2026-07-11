@@ -90,7 +90,7 @@ const isComparisonBinary = sema_type.isComparisonBinary;
 const isComptimeForbiddenCall = sema_builtin.isComptimeForbiddenCall;
 const isConstStorageType = sema_type.isConstStorageType;
 const isCVoidPointerClass = sema_type.isCVoidPointerClass;
-const isDeclassifyCallName = sema_builtin.isDeclassifyCallName;
+const isDeclassifyCall = ast_query.isDeclassifyCall;
 const isDerefablePointerClass = sema_type.isDerefablePointerClass;
 const isDiagnosticNeutralOperand = sema_type.isDiagnosticNeutralOperand;
 const isDmaBufMode = sema_builtin.isDmaBufMode;
@@ -4085,7 +4085,7 @@ pub const Checker = struct {
     // caller asserts the timing channel is acceptable here). Returns the inner-T
     // class so taint stops propagating; null if this isn't a declassify call.
     fn checkDeclassifyCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) ?TypeClass {
-        if (!isDeclassifyCallName(call.callee.*)) return null;
+        if (!isDeclassifyCall(call)) return null;
         if (call.type_args.len != 0 or call.args.len != 1) {
             self.errorCode(span, "E_CALL_ARG_COUNT", "declassify/reveal takes exactly one secret value argument");
             return .unknown;

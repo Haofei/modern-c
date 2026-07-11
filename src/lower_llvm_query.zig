@@ -103,18 +103,6 @@ pub fn builtinCallReturnType(call: anytype) ?ast.TypeExpr {
     return null;
 }
 
-pub fn isDeclassifyCall(call: anytype) bool {
-    const name = switch (call.callee.kind) {
-        .ident => |ident| ident.text,
-        .grouped => |inner| switch (inner.kind) {
-            .ident => |ident| ident.text,
-            else => return false,
-        },
-        else => return false,
-    };
-    return std.mem.eql(u8, name, "declassify") or std.mem.eql(u8, name, "reveal");
-}
-
 pub fn isAssumeNoaliasCall(call: anytype) bool {
     if (call.type_args.len != 0 or call.args.len != 2) return false;
     return isAssumeNoaliasCallee(call.callee.*);

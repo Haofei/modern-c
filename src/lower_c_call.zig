@@ -18,7 +18,7 @@ const lower_c_type = @import("lower_c_type.zig");
 
 const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
-const isDeclassifyCall = lower_c_expr.isDeclassifyCall;
+const isDeclassifyCall = ast_query.isDeclassifyCall;
 const isBitcastCallee = lower_c_expr.isBitcastCallee;
 const isBitcastCall = lower_c_expr.isBitcastCall;
 const isIdentNamed = ast_query.isIdentNamed;

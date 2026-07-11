@@ -108,6 +108,8 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn atomicCallMemberOp(",
             "pub fn maybeUninitMemberOpName(",
             "pub fn maybeUninitCallMemberOp(",
+            "pub fn isDeclassifyCallee(",
+            "pub fn isDeclassifyCall(",
         ],
         "src/lower_llvm_query.zig": [
             "ast_query.rawLoadCallReturnType(call)",
@@ -123,6 +125,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "reflectionValueCallReturnType(call)",
             "atomicCallMemberOp(call.callee.*)",
             "maybeUninitCallMemberOp(call.callee.*)",
+            "isDeclassifyCall(call)",
         ],
     },
     "llvm-bounds-range-consumption": {
@@ -690,7 +693,17 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn byteViewCallReturnType(": 0,
         "std.mem.eql(u8, member.name.text, \"fetch_add\")": 0,
         "std.mem.eql(u8, member.name.text, \"assume_init\")": 0,
+        "const isDeclassifyCallName = sema_builtin.isDeclassifyCallName;": 0,
         "const ptr_ty = ast.TypeExpr{ .span = node.type_args[0].span": 0,
+    },
+    "src/sema_builtin.zig": {
+        "pub fn isDeclassifyCallName(": 0,
+    },
+    "src/lower_c_expr.zig": {
+        "pub fn isDeclassifyCall(": 0,
+    },
+    "src/lower_llvm_query.zig": {
+        "pub fn isDeclassifyCall(": 0,
     },
     "src/lower_c_emitter.zig": {
         "fn requireMirBoundsFact": 1,

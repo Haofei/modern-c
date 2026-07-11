@@ -212,11 +212,6 @@ pub fn intLiteralText(expr: ast.Expr) ?[]const u8 {
     };
 }
 
-pub fn isDeclassifyCall(call: anytype) bool {
-    const name = calleeIdentName(call.callee.*) orelse return false;
-    return std.mem.eql(u8, name, "declassify") or std.mem.eql(u8, name, "reveal");
-}
-
 pub fn sequencedConditionCandidate(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .grouped => |inner| sequencedConditionCandidate(inner.*),
