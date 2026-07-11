@@ -2868,7 +2868,6 @@ pub fn aggregateFieldAliasSlot(self: *Checker, expr: ast.Expr, state: *const std
         if (staleAliasWildcardSlotForConcretePlace(place, state)) |slot| return slot;
         if (aliasConflictingSlotForStoragePlace(place, state)) |slot| return slot;
     }
-    if (allConcreteAliasSlotForWildcardExpr(self, expr, state)) |slot| return slot;
     return null;
 }
 
@@ -3023,7 +3022,6 @@ pub fn aliasPlaceSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHa
         if (staleAliasWildcardSlotForConcretePlace(place, state)) |slot| return slot;
         if (aliasConflictingSlotForStoragePlace(place, state)) |slot| return slot;
     }
-    if (allConcreteAliasSlotForWildcardExpr(self, expr, state)) |slot| return slot;
     return null;
 }
 
@@ -3061,178 +3059,6 @@ fn aliasConflictingSlotForStoragePlace(place: MovePlace, state: *const std.Strin
         }
     }
     return null;
-}
-
-fn allConcreteAliasSlotForWildcardExpr(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
-    const pattern = aliasWildcardPatternKeyAndLen(self, expr, state) orelse return null;
-    const wildcard_key = pattern.key;
-    defer self.reporter.allocator.free(wildcard_key);
-    if (pattern.len_count == 0) return null;
-
-    var acc = ConcreteAliasScan{};
-    if (scanConcreteAliasPattern(self, wildcard_key, pattern.lens[0..pattern.len_count], state, &acc)) |stale| return stale;
-    if (acc.all_present and acc.all_same) return acc.first_slot;
-    return null;
-}
-
-const AliasWildcardPattern = struct {
-    key: []const u8,
-    lens: [4]usize = undefined,
-    len_count: usize = 0,
-};
-
-const ConcreteAliasScan = struct {
-    first_slot: ?MoveSlot = null,
-    first_referent: ?[]const u8 = null,
-    first_place: ?MovePlace = null,
-    all_present: bool = true,
-    all_same: bool = true,
-};
-
-fn scanConcreteAliasPattern(
-    self: *Checker,
-    key: []const u8,
-    lens: []const usize,
-    state: *const std.StringHashMap(MoveSlot),
-    acc: *ConcreteAliasScan,
-) ?MoveSlot {
-    if (lens.len == 0) {
-        const slot = state.get(key) orelse {
-            acc.all_present = false;
-            return null;
-        };
-        const referent = slot.alias_of orelse {
-            acc.all_present = false;
-            return null;
-        };
-        if (slot.place == null) {
-            acc.all_present = false;
-            return null;
-        }
-        if (aliasSlotReferentMoved(slot, state)) return slot;
-        if (acc.first_referent) |seen| {
-            if (!std.mem.eql(u8, seen, referent)) acc.all_same = false;
-            if (!sameMaybePlace(acc.first_place, slot.alias_place)) acc.all_same = false;
-        } else {
-            acc.first_referent = referent;
-            acc.first_place = slot.alias_place;
-            acc.first_slot = slot;
-        }
-        return null;
-    }
-
-    const marker = std.mem.indexOf(u8, key, "[*]") orelse {
-        acc.all_present = false;
-        return null;
-    };
-    const prefix = key[0..marker];
-    const suffix = key[marker + 3 ..];
-    for (0..lens[0]) |index| {
-        const concrete_key = std.fmt.allocPrint(self.reporter.allocator, "{s}[{d}]{s}", .{ prefix, index, suffix }) catch {
-            self.oom = true;
-            return null;
-        };
-        defer self.reporter.allocator.free(concrete_key);
-        if (scanConcreteAliasPattern(self, concrete_key, lens[1..], state, acc)) |stale| return stale;
-    }
-    return null;
-}
-
-fn aliasWildcardPatternKeyAndLen(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?AliasWildcardPattern {
-    switch (expr.kind) {
-        .grouped => |inner| return aliasWildcardPatternKeyAndLen(self, inner.*, state),
-        .member => |m| {
-            const base = aliasWildcardPatternKeyAndLen(self, m.base.*, state) orelse return null;
-            errdefer self.reporter.allocator.free(base.key);
-            const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base.key, m.name.text }) catch {
-                self.oom = true;
-                self.reporter.allocator.free(base.key);
-                return null;
-            };
-            self.reporter.allocator.free(base.key);
-            return .{ .key = key, .lens = base.lens, .len_count = base.len_count };
-        },
-        .index => |ix| {
-            if (aliasWildcardPatternKeyAndLen(self, ix.base.*, state)) |base| {
-                errdefer self.reporter.allocator.free(base.key);
-                if (aliasPatternConstIndex(self, ix, state)) |index| {
-                    const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[{d}]", .{ base.key, index }) catch {
-                        self.oom = true;
-                        self.reporter.allocator.free(base.key);
-                        return null;
-                    };
-                    self.reporter.allocator.free(base.key);
-                    return .{ .key = key, .lens = base.lens, .len_count = base.len_count };
-                }
-                if (base.len_count >= 4) {
-                    self.reporter.allocator.free(base.key);
-                    return null;
-                }
-                const len = dynamicAliasIndexLen(self, ix, state) orelse {
-                    self.reporter.allocator.free(base.key);
-                    return null;
-                };
-                const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[*]", .{base.key}) catch {
-                    self.oom = true;
-                    self.reporter.allocator.free(base.key);
-                    return null;
-                };
-                var lens = base.lens;
-                lens[base.len_count] = len;
-                self.reporter.allocator.free(base.key);
-                return .{ .key = key, .lens = lens, .len_count = base.len_count + 1 };
-            }
-            const ctx = self.move_ctx orelse return null;
-            const base = aliasPlaceKey(self, ix.base.*, state) orelse return null;
-            errdefer self.reporter.allocator.free(base);
-            const base_ty = resolveAliasType(aliasPlaceBaseType(ix.base.*, state) orelse
-                spine.exprResultType(ix.base.*, ctx.*) orelse {
-                self.reporter.allocator.free(base);
-                return null;
-            }, ctx.*);
-            const array = switch (base_ty.kind) {
-                .array => |node| node,
-                else => {
-                    self.reporter.allocator.free(base);
-                    return null;
-                },
-            };
-            const len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse {
-                self.reporter.allocator.free(base);
-                return null;
-            };
-            if (len <= 1 or aliasPlaceIndex(self, ix, state) != null) {
-                self.reporter.allocator.free(base);
-                return null;
-            }
-            const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[*]", .{base}) catch {
-                self.oom = true;
-                self.reporter.allocator.free(base);
-                return null;
-            };
-            self.reporter.allocator.free(base);
-            var lens: [4]usize = undefined;
-            lens[0] = len;
-            return .{ .key = key, .lens = lens, .len_count = 1 };
-        },
-        else => return null,
-    }
-}
-
-fn dynamicAliasIndexLen(self: *Checker, ix: anytype, state: *const std.StringHashMap(MoveSlot)) ?usize {
-    const ctx = self.move_ctx orelse return null;
-    if (aliasPlaceIndex(self, ix, state) != null) return null;
-    const base_ty = resolveAliasType(aliasIndexExprType(self, ix.base.*, state, ctx.*) orelse
-        aliasPlaceBaseType(ix.base.*, state) orelse
-        spine.exprResultType(ix.base.*, ctx.*) orelse
-        return null, ctx.*);
-    const array = switch (base_ty.kind) {
-        .array => |node| node,
-        else => return null,
-    };
-    const len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse return null;
-    if (len <= 1) return null;
-    return len;
 }
 
 fn aliasIndexExprType(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), ctx: Context) ?ast.TypeExpr {
@@ -3320,19 +3146,6 @@ fn aliasPlaceIndex(self: *Checker, ix: anytype, state: *const std.StringHashMap(
     const base_ty = resolveAliasType(aliasPlaceBaseType(ix.base.*, state) orelse
         spine.exprResultType(ix.base.*, ctx.*) orelse
         return null, ctx.*);
-    const array = switch (base_ty.kind) {
-        .array => |node| node,
-        else => return null,
-    };
-    const len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse return null;
-    if (len != 1) return null;
-    return 0;
-}
-
-fn aliasPatternConstIndex(self: *Checker, ix: anytype, state: *const std.StringHashMap(MoveSlot)) ?usize {
-    const ctx = self.move_ctx orelse return null;
-    if (constIndexValue(self, ix.index.*, state, ctx.*)) |index| return index;
-    const base_ty = resolveAliasType(spine.exprResultType(ix.base.*, ctx.*) orelse return null, ctx.*);
     const array = switch (base_ty.kind) {
         .array => |node| node,
         else => return null,
