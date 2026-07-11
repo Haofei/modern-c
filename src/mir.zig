@@ -1557,10 +1557,11 @@ fn collectSequentialSwitchAggregateReturnLiteralPathsFrom(
 
 fn aggregateReturnStatementsContainControlFlow(statements: []const ast.Stmt) bool {
     for (statements) |stmt| switch (stmt.kind) {
-        .@"return", .@"switch", .loop, .if_let, .@"break", .@"continue", .@"defer", .contract_block => return true,
+        .@"return", .@"switch", .loop, .if_let, .@"break", .@"continue", .@"defer" => return true,
         .block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
         .unsafe_block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
         .comptime_block => |block| if (!aggregateReturnComptimeBlockIsTransparent(block)) return true,
+        .contract_block => |contract| if (aggregateReturnStatementsContainControlFlow(contract.block.items)) return true,
         else => {},
     };
     return false;
@@ -1637,6 +1638,9 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
             .comptime_block => |block| {
                 if (!aggregateReturnComptimeBlockIsTransparent(block)) return false;
             },
+            .contract_block => |contract| {
+                if (!aggregateReturnPrefixStatementsAreSupported(contract.block.items)) return false;
+            },
             else => return false,
         }
     }
@@ -1700,6 +1704,9 @@ fn processAggregateReturnLiteralLocalStatements(
             },
             .comptime_block => |block| {
                 if (!aggregateReturnComptimeBlockIsTransparent(block)) return false;
+            },
+            .contract_block => |contract| {
+                if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, contract.block.items, true)) return false;
             },
             else => return false,
         }
