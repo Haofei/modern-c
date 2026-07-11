@@ -1578,10 +1578,51 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *std.StringHashMap(MoveSlo
 }
 
 fn moveDeferShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    var rhs_state = cloneMoveState(self, state);
-    defer rhs_state.deinit();
-    moveDefer(self, rhs, &rhs_state, aliases);
-    mergeShortCircuitMoveStates(self, state, &rhs_state, rhs.span, true);
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    defer cfg.deinit();
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        return;
+    };
+    const rhs_block = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        return;
+    };
+    const join = cfg.addBlock(.branch_join) catch {
+        self.oom = true;
+        return;
+    };
+    cfg.addEdge(entry, join, .branch) catch {
+        self.oom = true;
+        return;
+    };
+    cfg.addEdge(entry, rhs_block, .branch) catch {
+        self.oom = true;
+        return;
+    };
+    cfg.addEdge(rhs_block, join, .normal) catch {
+        self.oom = true;
+        return;
+    };
+
+    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return;
+    defer worklist.deinit();
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == entry) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == rhs_block) {
+            moveDefer(self, rhs, block_state, aliases);
+            const joined = worklist.statePtr(join) orelse {
+                self.oom = true;
+                return;
+            };
+            mergeShortCircuitMoveStates(self, joined, block_state, rhs.span, true);
+            worklist.enqueue(self, join);
+        } else if (block == join) {
+            replaceMoveState(self, state, block_state);
+        }
+    }
 }
 
 fn sameMaybeSpan(left: ?diagnostics.Span, right: ?diagnostics.Span) bool {
