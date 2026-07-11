@@ -1499,6 +1499,11 @@ pub const PlaceKeyTy = struct {
     ty: ast.TypeExpr,
 };
 
+const AliasPlaceInfo = struct {
+    key: []const u8,
+    place: ?MovePlace,
+};
+
 // Build the dotted place key and leaf type for a place expression (`x`, `x.f`, `x.f.g`)
 // whose root is a tracked move binding — so nested fields, not just one level, are
 // distinct places. The key is allocated and owned by `move_place_keys`. Returns null if
@@ -2879,37 +2884,36 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
     state: *std.StringHashMap(MoveSlot),
     aliases: *const std.StringHashMap(ast.TypeExpr),
 ) void {
-    const key = aliasPlaceKey(self, target, state) orelse
-        aliasWildcardPlaceKey(self, target, state) orelse {
+    const target_info = aliasPlaceInfo(self, target, state) orelse
+        aliasWildcardPlaceInfo(self, target, state) orelse {
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    const key_place = aliasStoragePlaceForExpr(self, target, state);
 
     const referent = aliasReferentForExpr(self, value, state, aliases) orelse {
-        _ = state.remove(key);
-        self.reporter.allocator.free(key);
+        _ = state.remove(target_info.key);
+        self.reporter.allocator.free(target_info.key);
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
     if (!aliasReferentIsTracked(referent, state)) {
-        _ = state.remove(key);
-        self.reporter.allocator.free(key);
+        _ = state.remove(target_info.key);
+        self.reporter.allocator.free(target_info.key);
         return;
     }
 
-    if (state.getPtr(key)) |slot| {
-        slot.* = .{ .live = false, .span = value.span, .place = key_place, .alias_of = referent.key, .alias_place = referent.place };
-        self.reporter.allocator.free(key);
+    if (state.getPtr(target_info.key)) |slot| {
+        slot.* = .{ .live = false, .span = value.span, .place = target_info.place, .alias_of = referent.key, .alias_place = referent.place };
+        self.reporter.allocator.free(target_info.key);
         return;
     }
 
-    self.move_place_keys.append(self.reporter.allocator, key) catch {
+    self.move_place_keys.append(self.reporter.allocator, target_info.key) catch {
         self.oom = true;
-        self.reporter.allocator.free(key);
+        self.reporter.allocator.free(target_info.key);
         return;
     };
-    state.put(key, .{ .live = false, .span = value.span, .place = key_place, .alias_of = referent.key, .alias_place = referent.place }) catch {
+    state.put(target_info.key, .{ .live = false, .span = value.span, .place = target_info.place, .alias_of = referent.key, .alias_place = referent.place }) catch {
         self.oom = true;
     };
 }
@@ -2968,13 +2972,12 @@ pub fn recordAssignedAliasPlaceOrEscape(
     state: *std.StringHashMap(MoveSlot),
     aliases: *const std.StringHashMap(ast.TypeExpr),
 ) void {
-    const key = aliasPlaceKey(self, target, state) orelse
-        aliasWildcardPlaceKey(self, target, state) orelse {
+    const target_info = aliasPlaceInfo(self, target, state) orelse
+        aliasWildcardPlaceInfo(self, target, state) orelse {
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    const key_place = aliasStoragePlaceForExpr(self, target, state);
-    recordAliasPlaceOrEscapeWithKey(self, key, key_place, value, escape_span, state, aliases);
+    recordAliasPlaceOrEscapeWithKey(self, target_info.key, target_info.place, value, escape_span, state, aliases);
 }
 
 fn recordAliasPlaceOrEscapeWithKey(
@@ -3138,6 +3141,11 @@ pub fn aliasPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHas
     }
 }
 
+fn aliasPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?AliasPlaceInfo {
+    const key = aliasPlaceKey(self, expr, state) orelse return null;
+    return .{ .key = key, .place = aliasStoragePlaceForExpr(self, expr, state) };
+}
+
 fn aliasPlaceIndex(self: *Checker, ix: anytype, state: *const std.StringHashMap(MoveSlot)) ?usize {
     const ctx = self.move_ctx orelse return null;
     if (constIndexValue(self, ix.index.*, state, ctx.*)) |index| return index;
@@ -3154,16 +3162,18 @@ fn aliasPlaceIndex(self: *Checker, ix: anytype, state: *const std.StringHashMap(
     return 0;
 }
 
-fn aliasWildcardPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?[]const u8 {
+fn aliasWildcardPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?AliasPlaceInfo {
     switch (expr.kind) {
-        .grouped => |inner| return aliasWildcardPlaceKey(self, inner.*, state),
+        .grouped => |inner| return aliasWildcardPlaceInfo(self, inner.*, state),
         .member => |m| {
-            const base = aliasWildcardPlaceKey(self, m.base.*, state) orelse return null;
-            defer self.reporter.allocator.free(base);
-            return std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base, m.name.text }) catch {
+            const base = aliasWildcardPlaceInfo(self, m.base.*, state) orelse return null;
+            defer self.reporter.allocator.free(base.key);
+            const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base.key, m.name.text }) catch {
                 self.oom = true;
                 return null;
             };
+            const place = if (base.place) |p| p.project(.{ .field = m.name.text }) else null;
+            return .{ .key = key, .place = place };
         },
         .index => |ix| {
             const ctx = self.move_ctx orelse return null;
@@ -3195,7 +3205,9 @@ fn aliasWildcardPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.Strin
                 return null;
             };
             self.reporter.allocator.free(base);
-            return key;
+            const base_place = aliasStoragePlaceForExpr(self, ix.base.*, state);
+            const place = if (base_place) |p| p.project(.wildcard_index) else null;
+            return .{ .key = key, .place = place };
         },
         else => return null,
     }
