@@ -16,6 +16,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn removeAliasSlotForStoragePlace",
         "fn aliasPlaceInfo",
         "fn aliasWildcardPlaceInfo",
+        "const pp = placeKeyAndType(self, expr, state) orelse return null;",
         "const base = placeKeyAndType(self, ix.base.*, state) orelse return null;",
         "const AliasPlaceInfo = struct",
         "place: MovePlace",
@@ -37,6 +38,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
 
 BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
     "src/sema_move.zig": {
+        ("fn aliasPlaceInfo", "fn aliasPlaceIndex"): [
+            "aliasPlaceKey(self, expr, state)",
+            "aliasStoragePlaceForExpr(self, expr, state)",
+        ],
         ("fn aliasWildcardPlaceInfo", "fn aliasPlaceBaseType"): [
             "const base = aliasPlaceKey(self, ix.base.*, state) orelse return null;",
         ],

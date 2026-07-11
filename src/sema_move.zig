@@ -3160,12 +3160,12 @@ pub fn aliasPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHas
 }
 
 fn aliasPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?AliasPlaceInfo {
-    const key = aliasPlaceKey(self, expr, state) orelse return null;
-    const place = aliasStoragePlaceForExpr(self, expr, state) orelse {
-        self.reporter.allocator.free(key);
+    const pp = placeKeyAndType(self, expr, state) orelse return null;
+    const key = self.reporter.allocator.dupe(u8, pp.key) catch {
+        self.oom = true;
         return null;
     };
-    return .{ .key = key, .place = place };
+    return .{ .key = key, .place = pp.place };
 }
 
 fn aliasPlaceIndex(self: *Checker, ix: anytype, state: *const std.StringHashMap(MoveSlot)) ?usize {
