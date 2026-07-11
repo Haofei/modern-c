@@ -750,6 +750,31 @@ test "lower-c aggregate-return scoped-block prefix fails closed" {
     try expectContains(output.items, "mc_race_load_u32");
 }
 
+test "lower-c aggregate-return unsafe-block prefix fails closed" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder() -> Holder {
+        \\    unsafe {
+        \\        let ignored: u32 = shared_counter;
+        \\    }
+        \\    return .{ .ptr = &shared_counter, .tag = 1 };
+        \\}
+        \\
+        \\fn use_returned_holder() -> u32 {
+        \\    let holder: Holder = returned_holder();
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_unsafe_block_prefix_aggregate_return_fail_closed.mc", source, &output);
+    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
+    try expectContains(output.items, "mc_race_load_u32");
+}
+
 test "lower-c consumes MIR aggregate-return sequential switch facts" {
     const source =
         \\global shared_counter: u32 = 0;
