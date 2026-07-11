@@ -178,15 +178,7 @@ fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast.Expr) anyerror!v
 
 fn reduceCallUsesConstSliceOperand(call: anytype) bool {
     if (call.type_args.len != 1 or call.args.len != 1) return false;
-    const member = memberCallee(call.callee.*) orelse return false;
-    const base = switch (member.base.kind) {
-        .ident => |ident| ident.text,
-        else => return false,
-    };
-    if (!std.mem.eql(u8, base, "reduce")) return false;
-    return std.mem.eql(u8, member.name.text, "sum_checked") or
-        std.mem.eql(u8, member.name.text, "sum_left") or
-        std.mem.eql(u8, member.name.text, "sum_fast");
+    return ast_query.reduceCallKind(call.callee.*) != null;
 }
 
 pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast.TypeExpr) anyerror!void {

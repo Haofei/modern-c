@@ -37,6 +37,7 @@ const isIdentNamed = ast_query.isIdentNamed;
 const isSatType = ast_query.isSatType;
 const isWrapType = ast_query.isWrapType;
 const memberCallee = ast_query.memberCallee;
+const reduceCallKind = ast_query.reduceCallKind;
 const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const satHelperParts = lower_c_op.satHelperParts;
 const signedTypeSuffix = lower_c_type.signedTypeSuffix;
@@ -159,14 +160,13 @@ pub fn emitResidueCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(
 // operand is evaluated once. `sum_checked` uses a wide integer accumulator and
 // result path; floating reductions use an explicit typed loop.
 pub fn emitReduceSumCheckedCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    const kind = reduceCallKind(call.callee.*) orelse return false;
     const member = memberCallee(call.callee.*) orelse return false;
-    if (!isIdentNamed(member.base.*, "reduce")) return false;
     if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
 
-    if (std.mem.eql(u8, member.name.text, "sum_left") or std.mem.eql(u8, member.name.text, "sum_fast")) {
-        return try emitFloatReduceCall(ctx, call, locals, std.mem.eql(u8, member.name.text, "sum_fast"));
+    if (kind == .sum_left or kind == .sum_fast) {
+        return try emitFloatReduceCall(ctx, call, locals, kind == .sum_fast);
     }
-    if (!std.mem.eql(u8, member.name.text, "sum_checked")) return error.UnsupportedCEmission;
 
     var t_ty = call.type_args[0];
     const t_cty = try ctx.c_type(ctx.emit_ctx, t_ty);

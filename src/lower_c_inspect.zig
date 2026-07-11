@@ -398,10 +398,10 @@ const Inspector = struct {
     }
 
     fn writeFloatReduceMetadata(self: *Inspector, call: anytype, ctx: *FnContext) !void {
+        const kind = ast_query.reduceCallKind(call.callee.*) orelse return;
         const member = memberCallee(call.callee.*) orelse return;
-        if (!isIdentNamed(member.base.*, "reduce")) return;
-        const is_left = std.mem.eql(u8, member.name.text, "sum_left");
-        const is_fast = std.mem.eql(u8, member.name.text, "sum_fast");
+        const is_left = kind == .sum_left;
+        const is_fast = kind == .sum_fast;
         if (!is_left and !is_fast) return;
         if (call.type_args.len != 1) return;
 

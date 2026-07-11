@@ -20,6 +20,8 @@ const byteViewCallReturnType = ast_query.byteViewCallReturnType;
 const reflectionValueCallReturnType = ast_query.reflectionValueCallReturnType;
 const atomicCallMemberOp = ast_query.atomicCallMemberOp;
 const maybeUninitCallMemberOp = ast_query.maybeUninitCallMemberOp;
+const reduceCallKind = ast_query.reduceCallKind;
+const reduceCallOpName = ast_query.reduceCallOpName;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
@@ -8546,17 +8548,15 @@ const LlvmEmitter = struct {
     }
 
     fn reduceCallInfo(self: *LlvmEmitter, call: anytype) ?ReduceCallInfo {
+        const kind = reduceCallKind(call.callee.*) orelse return null;
         const member = memberCallee(call) orelse return null;
-        if (!isIdentNamed(member.base.*, "reduce")) return null;
-        const op = member.name.text;
-        if (!std.mem.eql(u8, op, "sum_checked") and !std.mem.eql(u8, op, "sum_left") and !std.mem.eql(u8, op, "sum_fast")) return null;
         if (call.type_args.len != 1) return null;
         const element_ty = call.type_args[0];
-        const return_ty = if (std.mem.eql(u8, op, "sum_checked"))
+        const return_ty = if (kind == .sum_checked)
             self.resultType(element_ty, simpleType(member.name.span, "Overflow"), member.name.span) catch return null
         else
             element_ty;
-        return .{ .element_ty = element_ty, .return_ty = return_ty, .op = op };
+        return .{ .element_ty = element_ty, .return_ty = return_ty, .op = reduceCallOpName(kind) };
     }
 
     fn constGetCallInfo(self: *LlvmEmitter, call: anytype) ?ConstGetCallInfo {
