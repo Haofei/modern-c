@@ -7348,6 +7348,23 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     defer load_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_union_load.mc", overlay_load_source, &load_output));
 
+    var diagnostic_parsed = try test_support.parseCheckedModule("llvm_pointer_union_load_diagnostic.mc", overlay_load_source);
+    defer diagnostic_parsed.deinit();
+    var diagnostic_reporter = diagnostics.Reporter.init(std.testing.allocator, "llvm_pointer_union_load_diagnostic.mc", overlay_load_source);
+    defer diagnostic_reporter.deinit();
+    var diagnostic_output: std.ArrayList(u8) = .empty;
+    defer diagnostic_output.deinit(std.testing.allocator);
+    const llvm_backend = lower_llvm.mcBackend();
+    try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerFn(llvm_backend.ctx, std.testing.allocator, diagnostic_parsed.module, &diagnostic_output, .{
+        .profile = .kernel,
+        .source_path = "llvm_pointer_union_load_diagnostic.mc",
+        .reporter = &diagnostic_reporter,
+    }));
+    try std.testing.expect(diagnostic_reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 1), diagnostic_reporter.diagnostics.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostic_reporter.diagnostics.items[0].message, "E_BACKEND_UNSUPPORTED") != null);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostic_reporter.diagnostics.items[0].message, "deref") != null);
+
     const overlay_store_source =
         \\overlay union Word {
         \\    value: u32,

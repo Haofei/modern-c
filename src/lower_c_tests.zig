@@ -256,6 +256,27 @@ fn expectUnsupportedCheckedCEmission(source_name: []const u8, source: []const u8
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendC(std.testing.allocator, parsed.module, &output));
 }
 
+fn expectUnsupportedCheckedCEmissionDiagnostic(source_name: []const u8, source: []const u8, expected_construct: []const u8) !void {
+    var parsed = try test_support.parseCheckedModule(source_name, source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, source_name, source);
+    defer reporter.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.UnsupportedCEmission,
+        lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, source_name, .{}, false, &reporter),
+    );
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 1), reporter.diagnostics.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_BACKEND_UNSUPPORTED") != null);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, expected_construct) != null);
+}
+
 test "lower-c consumes MIR aggregate-return pointer facts and fails closed when absent" {
     const source =
         \\global shared_counter: u32 = 0;
@@ -3852,6 +3873,7 @@ test "lower-c union aggregate pointer deref value copies fail closed" {
         \\}
     ;
     try expectUnsupportedCheckedCEmission("emit_c_pointer_union_load.mc", overlay_load_source);
+    try expectUnsupportedCheckedCEmissionDiagnostic("emit_c_pointer_union_load_diagnostic.mc", overlay_load_source, "deref");
 
     const overlay_store_source =
         \\overlay union Word {
