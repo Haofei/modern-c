@@ -23,6 +23,7 @@ const indexExpr = ast_query.indexExpr;
 const isCpuPauseCall = ast_query.isCpuPauseCall;
 const isRawLoadCall = ast_query.isRawLoadCall;
 const vaCallMember = ast_query.vaCallMember;
+const vaCallReturnType = ast_query.vaCallReturnType;
 const isVaStartCall = ast_query.isVaStartCall;
 const isRawPtrCall = ast_query.isRawPtrCall;
 const isRawStoreCall = ast_query.isRawStoreCall;
@@ -8414,6 +8415,7 @@ const LlvmEmitter = struct {
         }
         if (self.constGetCallInfo(call)) |info| return info.element_ty;
         if (bitcastCallReturnType(call)) |ty| return ty;
+        if (vaCallReturnType(call)) |ty| return ty;
         if (builtinCallReturnType(call)) |ty| return ty;
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;

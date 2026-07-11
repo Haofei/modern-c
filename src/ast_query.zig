@@ -486,6 +486,21 @@ pub fn vaCallMember(callee: ast.Expr) ?[]const u8 {
     };
 }
 
+/// The result type of value-producing `va.*` calls, or null for non-`va` calls, malformed shapes,
+/// and `va.end(&ap)` which is statement-only/void in the frontend.
+pub fn vaCallReturnType(call: anytype) ?ast.TypeExpr {
+    const name = vaCallMember(call.callee.*) orelse return null;
+    if (std.mem.eql(u8, name, "arg")) {
+        if (call.type_args.len != 1 or call.args.len != 1) return null;
+        return call.type_args[0];
+    }
+    if (std.mem.eql(u8, name, "start")) {
+        if (call.type_args.len != 0 or call.args.len != 0) return null;
+        return ast.TypeExpr{ .span = call.callee.*.span, .kind = .{ .name = .{ .text = "va_list", .span = call.callee.*.span } } };
+    }
+    return null;
+}
+
 /// True when `callee` names `va.start` (the only `va.*` valid as a let initializer).
 pub fn isVaStartCall(callee: ast.Expr) bool {
     return if (vaCallMember(callee)) |name| std.mem.eql(u8, name, "start") else false;

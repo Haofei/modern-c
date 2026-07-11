@@ -206,6 +206,8 @@ const byteViewCallKind = ast_query.byteViewCallKind;
 const rawLoadCallReturnType = ast_query.rawLoadCallReturnType;
 const rawPtrCallReturnType = ast_query.rawPtrCallReturnType;
 const bitcastCallReturnType = ast_query.bitcastCallReturnType;
+const vaCallMember = ast_query.vaCallMember;
+const vaCallReturnType = ast_query.vaCallReturnType;
 const DmaBufInfo = ast_query.DmaBufInfo;
 const dmaBufInfo = ast_query.dmaBufInfo;
 
@@ -3205,7 +3207,7 @@ pub const Checker = struct {
                     return .void;
                 }
                 if (rawLoadCallReturnType(node)) |ty| return classifyTypeCtx(ty, ctx);
-                if (vaCallName(node.callee.*)) |va_name| {
+                if (vaCallMember(node.callee.*)) |va_name| {
                     if (vaCallReturnType(node)) |ty| return classifyTypeCtx(ty, ctx);
                     if (std.mem.eql(u8, va_name, "end")) return .void;
                 }
@@ -6930,25 +6932,6 @@ fn maybeUninitCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
 fn atomicCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
     const ty = atomicCallReturnType(callee, ctx) orelse return null;
     return classifyTypeCtx(ty, ctx);
-}
-
-// `va.arg<T>(&ap)` yields a `T` (the next C-ABI variadic slot); `va.start()` yields a
-// `va_list`; `va.end(&ap)` yields void. These give the call its result type.
-fn vaCallName(callee: ast.Expr) ?[]const u8 {
-    const member = memberExpr(callee) orelse return null;
-    return if (isIdentNamed(member.base.*, "va")) member.name.text else null;
-}
-
-fn vaCallReturnType(call: anytype) ?ast.TypeExpr {
-    const name = vaCallName(call.callee.*) orelse return null;
-    if (std.mem.eql(u8, name, "arg")) {
-        if (call.type_args.len != 1) return null;
-        return call.type_args[0];
-    }
-    if (std.mem.eql(u8, name, "start")) {
-        return ast.TypeExpr{ .span = call.callee.span, .kind = .{ .name = .{ .text = "va_list", .span = call.callee.span } } };
-    }
-    return null; // va.end -> void (no type)
 }
 
 fn tryPayloadType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
