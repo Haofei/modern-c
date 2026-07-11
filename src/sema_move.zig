@@ -3151,9 +3151,6 @@ pub fn aliasPlaceSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHa
         if (state.get(key)) |slot| {
             if (slot.alias_of != null) return slot;
         }
-        if (storage_place == null) {
-            if (wildcardAliasSlotForConcrete(key, state)) |slot| return slot;
-        }
     }
     if (aliasWildcardPlaceKey(self, expr, state)) |key| {
         defer self.reporter.allocator.free(key);
@@ -3197,15 +3194,6 @@ fn aliasConflictingSlotForStoragePlace(place: MovePlace, state: *const std.Strin
         if (slot.place) |stored| {
             if (!stored.eql(place) and stored.conflicts(place)) return slot;
         }
-    }
-    return null;
-}
-
-fn wildcardAliasSlotForConcrete(concrete_key: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
-    var it = state.iterator();
-    while (it.next()) |entry| {
-        if (!wildcardMoveKeyMatchesConcrete(entry.key_ptr.*, concrete_key)) continue;
-        if (entry.value_ptr.alias_of != null) return entry.value_ptr.*;
     }
     return null;
 }
