@@ -97,6 +97,11 @@ RULES: tuple[Rule, ...] = (
         "move checker dynamic-place changes need the focused stable-symbolic versus wildcard policy gate",
     ),
     Rule(
+        ("src/sema_model.zig", "src/sema_move.zig", "tools/toolchain/move-pointer-pointee-boundary-inventory.py"),
+        ("move-pointer-pointee-boundary-inventory-test",),
+        "move checker pointer-pointee changes need the focused accept/reject boundary gate",
+    ),
+    Rule(
         ("tools/ci/pass-gates.py",),
         ("ci-pass-gates-test",),
         "CI PASS assertion helper changes need the focused CI anti-vacuity contract gate",
