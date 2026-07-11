@@ -2964,7 +2964,6 @@ pub fn aggregateFieldAliasSlot(self: *Checker, expr: ast.Expr, state: *const std
         if (staleAliasWildcardSlotForConcretePlace(place, state)) |slot| return slot;
         if (aliasConflictingSlotForStoragePlace(place, state)) |slot| return slot;
     }
-    if (aliasSlotForTypedStorageSubpath(self, expr, state)) |slot| return slot;
     if (aliasWildcardPlaceKey(self, expr, state)) |key| {
         defer self.reporter.allocator.free(key);
         if (state.get(key)) |slot| {
@@ -3137,7 +3136,6 @@ pub fn aliasPlaceSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHa
         if (staleAliasWildcardSlotForConcretePlace(place, state)) |slot| return slot;
         if (aliasConflictingSlotForStoragePlace(place, state)) |slot| return slot;
     }
-    if (aliasSlotForTypedStorageSubpath(self, expr, state)) |slot| return slot;
     if (aliasWildcardPlaceKey(self, expr, state)) |key| {
         defer self.reporter.allocator.free(key);
         if (state.get(key)) |slot| {
@@ -3145,18 +3143,6 @@ pub fn aliasPlaceSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHa
         }
     }
     if (allConcreteAliasSlotForWildcardExpr(self, expr, state)) |slot| return slot;
-    return null;
-}
-
-fn aliasSlotForTypedStorageSubpath(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
-    const key = aliasPlaceKey(self, expr, state) orelse return null;
-    defer self.reporter.allocator.free(key);
-    var it = state.iterator();
-    while (it.next()) |entry| {
-        const slot = entry.value_ptr.*;
-        if (slot.alias_of == null or slot.place == null) continue;
-        if (std.mem.eql(u8, entry.key_ptr.*, key) or isPlacePrefix(entry.key_ptr.*, key)) return slot;
-    }
     return null;
 }
 
