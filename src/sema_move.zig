@@ -2932,7 +2932,7 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    const key_place = aliasStoragePlaceForExpr(self, target, state) orelse existingAliasStoragePlace(key, state);
+    const key_place = aliasStoragePlaceForExpr(self, target, state);
 
     const referent = aliasReferentForExpr(self, value, state, aliases) orelse {
         _ = state.remove(key);
@@ -3021,14 +3021,8 @@ pub fn recordAssignedAliasPlaceOrEscape(
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    const key_place = aliasStoragePlaceForExpr(self, target, state) orelse existingAliasStoragePlace(key, state);
+    const key_place = aliasStoragePlaceForExpr(self, target, state);
     recordAliasPlaceOrEscapeWithKey(self, key, key_place, value, escape_span, state, aliases);
-}
-
-fn existingAliasStoragePlace(key: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
-    const slot = state.get(key) orelse return null;
-    if (slot.alias_of == null) return null;
-    return slot.place;
 }
 
 fn recordAliasPlaceOrEscapeWithKey(
