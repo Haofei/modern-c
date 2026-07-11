@@ -2914,12 +2914,6 @@ pub fn aggregateFieldAliasSlot(self: *Checker, expr: ast.Expr, state: *const std
         if (staleAliasWildcardSlotForConcretePlace(place, state)) |slot| return slot;
         if (aliasConflictingSlotForStoragePlace(place, state)) |slot| return slot;
     }
-    if (aliasWildcardPlaceKey(self, expr, state)) |key| {
-        defer self.reporter.allocator.free(key);
-        if (state.get(key)) |slot| {
-            if (slot.alias_of != null and slot.place != null) return slot;
-        }
-    }
     if (allConcreteAliasSlotForWildcardExpr(self, expr, state)) |slot| return slot;
     return null;
 }
@@ -3080,12 +3074,6 @@ pub fn aliasPlaceSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHa
         if (aliasSlotForStoragePlace(place, state)) |slot| return slot;
         if (staleAliasWildcardSlotForConcretePlace(place, state)) |slot| return slot;
         if (aliasConflictingSlotForStoragePlace(place, state)) |slot| return slot;
-    }
-    if (aliasWildcardPlaceKey(self, expr, state)) |key| {
-        defer self.reporter.allocator.free(key);
-        if (state.get(key)) |slot| {
-            if (slot.alias_of != null and slot.place != null) return slot;
-        }
     }
     if (allConcreteAliasSlotForWildcardExpr(self, expr, state)) |slot| return slot;
     return null;
