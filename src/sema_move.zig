@@ -963,7 +963,7 @@ fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const std
         if (entry.value_ptr.alias_of == null) continue;
         if (place) |arg_place| {
             if (entry.value_ptr.place) |slot_place| {
-                if (!slot_place.eql(arg_place) and !arg_place.isPrefixOf(slot_place)) continue;
+                if (!slot_place.eql(arg_place) and !arg_place.isPrefixOf(slot_place) and !storagePlaceMayBeWithinArgument(arg_place, slot_place)) continue;
                 checkStaleAlias(self, "", entry.value_ptr.*, expr.span, state);
                 continue;
             }
@@ -976,6 +976,36 @@ fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const std
             checkStaleAlias(self, "", entry.value_ptr.*, expr.span, state);
         }
     }
+}
+
+fn storagePlaceMayBeWithinArgument(argument: MovePlace, stored: MovePlace) bool {
+    if (!std.mem.eql(u8, argument.root, stored.root) or argument.projection_count > stored.projection_count) return false;
+    for (argument.projections[0..argument.projection_count], stored.projections[0..argument.projection_count]) |arg_projection, stored_projection| {
+        if (!moveProjectionsMayOverlap(arg_projection, stored_projection)) return false;
+    }
+    return true;
+}
+
+fn moveProjectionsMayOverlap(left: MoveProjection, right: MoveProjection) bool {
+    return switch (left) {
+        .field => |left_name| switch (right) {
+            .field => |right_name| std.mem.eql(u8, left_name, right_name),
+            else => false,
+        },
+        .constant_index => |left_index| switch (right) {
+            .constant_index => |right_index| left_index == right_index,
+            .symbolic_index, .wildcard_index => true,
+            else => false,
+        },
+        .symbolic_index => switch (right) {
+            .constant_index, .symbolic_index, .wildcard_index => true,
+            else => false,
+        },
+        .wildcard_index => switch (right) {
+            .constant_index, .symbolic_index, .wildcard_index => true,
+            else => false,
+        },
+    };
 }
 
 fn aliasStoragePlaceForExpr(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {

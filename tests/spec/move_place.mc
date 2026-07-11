@@ -4159,6 +4159,18 @@ fn reject_assigned_dynamic_multi_array_struct_field_alias_constant_read_after_mo
     return consume(x) + v;
 }
 
+// Rejected: passing a concrete aggregate element to a call also scans the
+// wildcard field alias recorded by a dynamic element-field assignment.
+fn reject_assigned_dynamic_multi_array_struct_field_alias_call_arg_after_move(i: usize) -> u32 {
+    let r: Res = mkres(1);
+    var arr: [2]ResPtrHolder = .{ .{ .p = &r }, .{ .p = &r } };
+    arr[i].p = &r;
+    let x: Res = r;
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let v: u32 = peek_holder(arr[0]);
+    return consume(x) + v;
+}
+
 // Accepted: laundered pointer results assigned into dynamic multi-element
 // array-element struct fields use the same wildcard field alias.
 fn accept_assigned_dynamic_multi_array_struct_field_laundered_alias_before_move(i: usize) -> u32 {
