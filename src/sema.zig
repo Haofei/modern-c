@@ -203,6 +203,8 @@ const calleeIdentName = ast_query.calleeIdentName;
 const memberCallee = ast_query.memberCallee;
 const memberExpr = ast_query.memberExpr;
 const byteViewCallKind = ast_query.byteViewCallKind;
+const rawLoadCallReturnType = ast_query.rawLoadCallReturnType;
+const rawPtrCallReturnType = ast_query.rawPtrCallReturnType;
 const DmaBufInfo = ast_query.DmaBufInfo;
 const dmaBufInfo = ast_query.dmaBufInfo;
 
@@ -3206,10 +3208,7 @@ pub const Checker = struct {
                     if (vaCallReturnType(node)) |ty| return classifyTypeCtx(ty, ctx);
                     if (std.mem.eql(u8, va_name, "end")) return .void;
                 }
-                if (isRawPtrCall(node.callee.*) and node.type_args.len == 1) {
-                    const ptr_ty = ast.TypeExpr{ .span = node.type_args[0].span, .kind = .{ .pointer = .{ .mutability = .mut, .child = @constCast(&node.type_args[0]) } } };
-                    return classifyTypeCtx(ptr_ty, ctx);
-                }
+                if (rawPtrCallReturnType(node)) |ty| return classifyTypeCtx(ty, ctx);
                 if (self.checkEnumRawCall(expr.span, node.callee.*, node.args, ctx)) |class| return class;
                 if (atomicCallReturnClass(node.callee.*, ctx)) |class| return class;
                 if (self.dmaCallReturnClass(node.callee.*, ctx)) |class| return class;
@@ -6937,17 +6936,6 @@ fn bitcastCallReturnType(call: anytype) ?ast.TypeExpr {
     return call.type_args[0];
 }
 
-// `raw.load<T>(addr)` reads a `T` from a raw address (the dual of `raw.store`).
-fn isRawLoadCall(callee: ast.Expr) bool {
-    const member = memberExpr(callee) orelse return false;
-    return isIdentNamed(member.base.*, "raw") and std.mem.eql(u8, member.name.text, "load");
-}
-
-fn rawLoadCallReturnType(call: anytype) ?ast.TypeExpr {
-    if (!isRawLoadCall(call.callee.*) or call.type_args.len != 1) return null;
-    return call.type_args[0];
-}
-
 // `va.arg<T>(&ap)` yields a `T` (the next C-ABI variadic slot); `va.start()` yields a
 // `va_list`; `va.end(&ap)` yields void. These give the call its result type.
 fn vaCallName(callee: ast.Expr) ?[]const u8 {
@@ -6965,13 +6953,6 @@ fn vaCallReturnType(call: anytype) ?ast.TypeExpr {
         return ast.TypeExpr{ .span = call.callee.span, .kind = .{ .name = .{ .text = "va_list", .span = call.callee.span } } };
     }
     return null; // va.end -> void (no type)
-}
-
-// `raw.ptr<T>(addr)` mints a `*mut T` from a raw address — the typed-pointer companion
-// of raw.load/store (used to view an allocation as a typed object: Arc blocks, etc.).
-fn isRawPtrCall(callee: ast.Expr) bool {
-    const member = memberExpr(callee) orelse return false;
-    return isIdentNamed(member.base.*, "raw") and std.mem.eql(u8, member.name.text, "ptr");
 }
 
 fn tryPayloadType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {

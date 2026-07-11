@@ -471,6 +471,12 @@ pub fn isRawLoadCall(callee: ast.Expr) bool {
     };
 }
 
+/// The result type of `raw.load<T>(addr)`, or null when the call shape is not exact.
+pub fn rawLoadCallReturnType(call: anytype) ?ast.TypeExpr {
+    if (!isRawLoadCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 1) return null;
+    return call.type_args[0];
+}
+
 /// If `callee` is a `va.<name>` intrinsic (through grouping), return `<name>`; else null.
 pub fn vaCallMember(callee: ast.Expr) ?[]const u8 {
     return switch (callee.kind) {
@@ -491,6 +497,15 @@ pub fn isRawPtrCall(callee: ast.Expr) bool {
         .member => |member| std.mem.eql(u8, member.name.text, "ptr") and isIdentNamed(member.base.*, "raw"),
         .grouped => |inner| isRawPtrCall(inner.*),
         else => false,
+    };
+}
+
+/// The result type of `raw.ptr<T>(addr)`, or null when the call shape is not exact.
+pub fn rawPtrCallReturnType(call: anytype) ?ast.TypeExpr {
+    if (!isRawPtrCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 1) return null;
+    return .{
+        .span = call.callee.*.span,
+        .kind = .{ .pointer = .{ .mutability = .mut, .child = @constCast(&call.type_args[0]) } },
     };
 }
 

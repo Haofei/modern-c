@@ -97,6 +97,12 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
         "src/ast_query.zig": [
             "pub fn qualifiedTaggedUnionConstructorType(",
             "pub fn enumVariantPathType(",
+            "pub fn rawLoadCallReturnType(",
+            "pub fn rawPtrCallReturnType(",
+        ],
+        "src/lower_llvm_query.zig": [
+            "ast_query.rawLoadCallReturnType(call)",
+            "ast_query.rawPtrCallReturnType(call)",
         ],
         "src/lower_llvm.zig": [
             "fn exprType(",
@@ -662,6 +668,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn checkLiteralOperandAgainstClass": 1,
         "fn integerLiteralSyntaxOverflow": 1,
         "if (integerLiteralSyntaxOverflow(expr))": 4,
+        "fn rawLoadCallReturnType(": 0,
+        "fn isRawPtrCall(": 0,
+        "const ptr_ty = ast.TypeExpr{ .span = node.type_args[0].span": 0,
     },
     "src/lower_c_emitter.zig": {
         "fn requireMirBoundsFact": 1,
