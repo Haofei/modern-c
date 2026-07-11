@@ -1330,10 +1330,6 @@ fn consumeTrackedMoveSubplace(self: *Checker, key: []const u8, span: diagnostics
             self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` field after its owner was moved");
             return;
         }
-        if (slot.deferred_borrow != null and deferredBorrowConflictsWithPlace(key, slot.deferred_borrow.?)) {
-            self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` field is borrowed by a deferred expression and cannot be moved before the defer runs");
-            return;
-        }
     }
     if (state.contains(key)) {
         self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` field after it was moved out");
@@ -2461,23 +2457,9 @@ fn deferredBorrowConflictsWithTrackedPlace(place: MovePlace, state: *const std.S
     return borrowed.eql(place) or borrowed.isPrefixOf(place) or place.isPrefixOf(borrowed) or borrowed.conflicts(place);
 }
 
-// Compatibility for aliases whose referent predates the structured state entry.
-// Direct move/defer paths use `deferredBorrowConflictsWithTrackedPlace` above.
-fn deferredBorrowConflictsWithPlace(move_key: []const u8, borrow_key: []const u8) bool {
-    if (std.mem.eql(u8, move_key, borrow_key)) return true;
-    if (isPlacePrefix(move_key, borrow_key) or isPlacePrefix(borrow_key, move_key)) return true;
-    if (wildcardMoveKeyMatchesConcrete(move_key, borrow_key)) return true;
-    return wildcardMoveKeyMatchesConcrete(borrow_key, move_key);
-}
-
 fn rootPlaceName(key: []const u8) []const u8 {
     const sep = firstSubplaceSeparator(key) orelse return key;
     return key[0..sep];
-}
-
-fn isPlacePrefix(prefix: []const u8, key: []const u8) bool {
-    if (key.len <= prefix.len) return false;
-    return std.mem.startsWith(u8, key, prefix) and isSubplaceSeparator(key[prefix.len]);
 }
 
 // Whether any field of `base` has been moved out (a partial move of the aggregate).
