@@ -345,6 +345,14 @@ pub fn byteViewCallKind(callee: ast.Expr) ?ByteViewCallKind {
     return null;
 }
 
+/// The result type of value-producing `mem.*` byte-view intrinsics, or null when not recognized.
+pub fn byteViewCallReturnType(call: anytype) ?ast.TypeExpr {
+    return switch (byteViewCallKind(call.callee.*) orelse return null) {
+        .as_bytes => constU8SliceType(call.callee.*.span),
+        .bytes_equal => simpleNameType("bool", call.callee.*.span),
+    };
+}
+
 /// The payload type and mode tag of a `DmaBuf<T, .mode>` type, or null.
 pub const DmaBufInfo = struct {
     payload: ast.TypeExpr,

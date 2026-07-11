@@ -203,6 +203,7 @@ const calleeIdentName = ast_query.calleeIdentName;
 const memberCallee = ast_query.memberCallee;
 const memberExpr = ast_query.memberExpr;
 const byteViewCallKind = ast_query.byteViewCallKind;
+const byteViewCallReturnType = ast_query.byteViewCallReturnType;
 const rawLoadCallReturnType = ast_query.rawLoadCallReturnType;
 const rawPtrCallReturnType = ast_query.rawPtrCallReturnType;
 const bitcastCallReturnType = ast_query.bitcastCallReturnType;
@@ -7719,14 +7720,6 @@ fn mathBuiltinReturnType(callee: ast.Expr) ?ast.TypeExpr {
     const callee_name = calleeIdentName(callee) orelse return null;
     const name = if (mathBuiltinFloatClass(callee_name)) |class| (if (class == .f32) "f32" else "f64") else return null;
     return ast.TypeExpr{ .span = callee.span, .kind = .{ .name = .{ .text = name, .span = callee.span } } };
-}
-
-fn byteViewCallReturnType(call: anytype) ?ast.TypeExpr {
-    const kind = byteViewCallKind(call.callee.*) orelse return null;
-    return switch (kind) {
-        .as_bytes => constU8SliceType(call.callee.*.span),
-        .bytes_equal => boolTypeExpr(call.callee.*.span),
-    };
 }
 
 fn isConstU8SliceType(ty: ast.TypeExpr) bool {

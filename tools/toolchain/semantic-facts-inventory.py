@@ -101,6 +101,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn rawPtrCallReturnType(",
             "pub fn bitcastCallReturnType(",
             "pub fn vaCallReturnType(",
+            "pub fn byteViewCallReturnType(",
         ],
         "src/lower_llvm_query.zig": [
             "ast_query.rawLoadCallReturnType(call)",
@@ -112,6 +113,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "qualifiedTaggedUnionConstructorType(&self.tagged_unions, call)",
             "enumVariantPathType(&self.enum_types, node, self.memberBaseIsValue(node))",
             "vaCallReturnType(call)",
+            "byteViewCallReturnType(call)",
         ],
     },
     "llvm-bounds-range-consumption": {
@@ -676,6 +678,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn bitcastCallReturnType(": 0,
         "fn vaCallName(": 0,
         "fn vaCallReturnType(": 0,
+        "fn byteViewCallReturnType(": 0,
         "const ptr_ty = ast.TypeExpr{ .span = node.type_args[0].span": 0,
     },
     "src/lower_c_emitter.zig": {

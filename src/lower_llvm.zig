@@ -16,6 +16,7 @@ const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const typeName = ast_query.typeName;
 const ByteViewCallKind = ast_query.ByteViewCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
+const byteViewCallReturnType = ast_query.byteViewCallReturnType;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
@@ -8421,10 +8422,7 @@ const LlvmEmitter = struct {
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
         if (self.domainOpCallInfo(call)) |info| return info.return_ty;
         if (self.reduceCallInfo(call)) |info| return info.return_ty;
-        if (byteViewCallKind(call.callee.*)) |kind| return switch (kind) {
-            .as_bytes => self.constU8SliceType(call.callee.*.span) catch null,
-            .bytes_equal => simpleType(call.callee.*.span, "bool"),
-        };
+        if (byteViewCallReturnType(call)) |ty| return ty;
         if (mmioMapCallPayloadType(call)) |ty| {
             const child = self.scratch.allocator().create(ast.TypeExpr) catch return null;
             child.* = ty;
