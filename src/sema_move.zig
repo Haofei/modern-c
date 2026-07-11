@@ -747,11 +747,11 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
             return moveSwitchCfg(self, sw, state, aliases);
         },
         .@"break" => |target| {
-            checkLoopExitLeaks(self, state, target);
+            moveLoopExitEdgeCfg(self, state, target);
             return true; // the rest of the loop body is unreachable
         },
         .@"continue" => |target| {
-            checkLoopExitLeaks(self, state, target);
+            moveLoopExitEdgeCfg(self, state, target);
             return true; // the rest of the loop body is unreachable
         },
         .asm_stmt => return false,
@@ -1018,6 +1018,34 @@ pub fn checkLoopExitLeaks(self: *Checker, state: *std.StringHashMap(MoveSlot), t
     defer entry_state.deinit();
     reportLoopOuterResourceChanges(self, &entry_state, state);
     recordLoopEarlyExitConstIndexInvalidations(self, frame, state);
+}
+
+fn moveLoopExitEdgeCfg(self: *Checker, state: *const std.StringHashMap(MoveSlot), target: ?ast.Ident) void {
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    defer cfg.deinit();
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        return;
+    };
+    const exit = cfg.addBlock(.exit) catch {
+        self.oom = true;
+        return;
+    };
+    cfg.addEdge(entry, exit, .normal) catch {
+        self.oom = true;
+        return;
+    };
+
+    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return;
+    defer worklist.deinit();
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == entry) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == exit) {
+            checkLoopExitLeaks(self, block_state, target);
+        }
+    }
 }
 
 // Semantic checking already rejects a missing loop label. The move pass resolves
