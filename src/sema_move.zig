@@ -3384,8 +3384,7 @@ fn aliasIndexExprType(self: *Checker, expr: ast.Expr, state: *const std.StringHa
 fn aliasSlotReferentMoved(slot: MoveSlot, state: *const std.StringHashMap(MoveSlot)) bool {
     const referent = slot.alias_of orelse return false;
     const place = slot.alias_place orelse movedReferentPlaceFromState(referent, state);
-    if (referentPlaceMoved(referent, place, state)) return true;
-    if (slot.alias_place != null) return false;
+    if (place) |typed| return referentPlaceMoved(referent, typed, state);
     if (state.get(referent)) |r| {
         if (!r.live) return true;
     }
