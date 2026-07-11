@@ -800,8 +800,10 @@ Plain scoped-block prefixes, transparent unsafe-block
 prefixes, and contract-block prefixes are supported only when their contents
 reduce to the same straight-line aggregate-return prefix domain; block locals
 are discarded at block exit, while supported updates to an outer returned
-aggregate remain visible. Contract bodies with call-like unchecked arithmetic
-remain outside the producer. Pure comptime-block prefixes are supported only
+aggregate remain visible. No-overflow contract blocks may also contain scalar
+local declaration/assignment/assert/expression prefixes whose only call-like
+operations are `unchecked.add/sub/mul` with call-free operands. Other contract
+calls remain outside the producer. Pure comptime-block prefixes are supported only
 when their contents are compile-time expression/assert statements;
 runtime-affecting contents remain outside the producer. Call-free runtime
 expression/assert prefixes are also transparent and do not mutate aggregate
@@ -835,7 +837,7 @@ MIR-populated cache; the AST collector is gone.
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
 4. Complete for named unsupported producer shapes: contract-block prefixes with
-   call-like unchecked arithmetic, loop prefixes, `for` prefixes, deferred
+   unsupported calls, loop prefixes, `for` prefixes, deferred
    cleanup prefixes, non-transparent nested CFG joins, above-cap path-count-overflow
    CFG joins, exported aggregate returns, mixed paths, prefix calls, fallthrough
    dynamic-index writes, dereference writes, and aggregate array nesting beyond the fixed

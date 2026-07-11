@@ -1883,7 +1883,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "unsafe_block_updated_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "comptime_block_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "assert_prefix_holder"));
-    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "contract_block_holder"));
+    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "contract_block_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "contract_block_updated_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "loop_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "transparent_while_prefix_holder"));
@@ -1923,6 +1923,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "unsafe_block_updated_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "comptime_block_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "assert_prefix_holder", "ptr", .global_storage));
+    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "contract_block_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "contract_block_updated_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "sequential_switch_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "triple_switch_holder", "ptr", .global_storage));

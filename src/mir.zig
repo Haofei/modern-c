@@ -1694,7 +1694,7 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
                 if (!aggregateReturnComptimeBlockIsTransparent(block)) return false;
             },
             .contract_block => |contract| {
-                if (!aggregateReturnPrefixStatementsAreSupported(contract.block.items)) return false;
+                if (!aggregateReturnContractPrefixStatementsAreSupported(contract)) return false;
             },
             .loop => |loop| {
                 if (!aggregateReturnLoopIsTransparent(loop)) return false;
@@ -1718,6 +1718,87 @@ fn aggregateReturnLoopIsTransparent(loop: ast.Loop) bool {
     const condition_or_iterable = loop.iterable orelse return false;
     if (aggregateReturnPrefixExprHasCallOrExit(condition_or_iterable)) return false;
     return aggregateReturnLoopBodyIsTransparent(loop.body.items);
+}
+
+fn aggregateReturnContractPrefixStatementsAreSupported(contract: ast.ContractBlock) bool {
+    if (!aggregateReturnContractAllowsUncheckedNoOverflow(contract)) {
+        return aggregateReturnPrefixStatementsAreSupported(contract.block.items);
+    }
+    return aggregateReturnNoOverflowContractStatementsAreSupported(contract.block.items);
+}
+
+fn aggregateReturnNoOverflowContractStatementsAreSupported(statements: []const ast.Stmt) bool {
+    for (statements) |stmt| switch (stmt.kind) {
+        .let_decl, .var_decl => |local| {
+            if (local.names.len != 1) return false;
+            if (local.init) |initializer| {
+                if (aggregateReturnContractPrefixExprHasCallOrExit(initializer)) return false;
+            }
+        },
+        .assignment => |assignment| {
+            if (assignmentTargetIdentName(assignment.target) == null) return false;
+            if (aggregateReturnContractPrefixExprHasCallOrExit(assignment.value)) return false;
+        },
+        .expr, .assert => |expr| {
+            if (aggregateReturnContractPrefixExprHasCallOrExit(expr)) return false;
+        },
+        .block => |block| {
+            if (!aggregateReturnNoOverflowContractStatementsAreSupported(block.items)) return false;
+        },
+        .unsafe_block => |block| {
+            if (!aggregateReturnNoOverflowContractStatementsAreSupported(block.items)) return false;
+        },
+        .comptime_block => |block| {
+            if (!aggregateReturnComptimeBlockIsTransparent(block)) return false;
+        },
+        else => return false,
+    };
+    return true;
+}
+
+fn aggregateReturnContractAllowsUncheckedNoOverflow(contract: ast.ContractBlock) bool {
+    return switch (contract.attr.kind) {
+        .unsafe_contract => |attr| std.mem.eql(u8, attr.name.text, "no_overflow"),
+        else => false,
+    };
+}
+
+fn aggregateReturnContractPrefixExprHasCallOrExit(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .call => |call| {
+            if (!aggregateReturnUncheckedNoOverflowCallIsTransparent(call)) return true;
+            for (call.args) |arg| {
+                if (aggregateReturnContractPrefixExprHasCallOrExit(arg)) return true;
+            }
+            return false;
+        },
+        .block, .try_expr, .await_expr, .unreachable_expr => true,
+        .array_literal => |items| for (items) |item| {
+            if (aggregateReturnContractPrefixExprHasCallOrExit(item)) break true;
+        } else false,
+        .struct_literal => |fields| for (fields) |field| {
+            if (aggregateReturnContractPrefixExprHasCallOrExit(field.value)) break true;
+        } else false,
+        .grouped, .address_of, .deref => |inner| aggregateReturnContractPrefixExprHasCallOrExit(inner.*),
+        .unary => |node| aggregateReturnContractPrefixExprHasCallOrExit(node.expr.*),
+        .binary => |node| aggregateReturnContractPrefixExprHasCallOrExit(node.left.*) or aggregateReturnContractPrefixExprHasCallOrExit(node.right.*),
+        .cast => |node| aggregateReturnContractPrefixExprHasCallOrExit(node.value.*),
+        .index => |node| aggregateReturnContractPrefixExprHasCallOrExit(node.base.*) or aggregateReturnContractPrefixExprHasCallOrExit(node.index.*),
+        .slice => |node| aggregateReturnContractPrefixExprHasCallOrExit(node.base.*) or aggregateReturnContractPrefixExprHasCallOrExit(node.start.*) or aggregateReturnContractPrefixExprHasCallOrExit(node.end.*),
+        .member => |node| aggregateReturnContractPrefixExprHasCallOrExit(node.base.*),
+        else => false,
+    };
+}
+
+fn aggregateReturnUncheckedNoOverflowCallIsTransparent(call: anytype) bool {
+    if (call.type_args.len != 0 or call.args.len != 2) return false;
+    const name = directCalleeName(call.callee.*) orelse return false;
+    return std.mem.eql(u8, name, "unchecked.add") or
+        std.mem.eql(u8, name, "unchecked.sub") or
+        std.mem.eql(u8, name, "unchecked.mul") or
+        std.mem.eql(u8, name, "unchecked_add") or
+        std.mem.eql(u8, name, "unchecked_sub") or
+        std.mem.eql(u8, name, "unchecked_mul");
 }
 
 fn aggregateReturnLoopBodyIsTransparent(statements: []const ast.Stmt) bool {

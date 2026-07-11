@@ -1390,7 +1390,7 @@ test "LLVM consumes MIR aggregate-return assert prefix facts" {
     try expectNotContains(missing_body, "load i32, ptr %");
 }
 
-test "LLVM aggregate-return contract-block prefix fails closed" {
+test "LLVM consumes MIR aggregate-return no-overflow contract prefix facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Holder { ptr: *mut u32, tag: u32 }
@@ -1412,10 +1412,18 @@ test "LLVM aggregate-return contract-block prefix fails closed" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_contract_block_prefix_aggregate_return_fail_closed.mc", source, &output);
+    try appendLlvmTest("llvm_contract_block_prefix_aggregate_return_mir_fact.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
-    try expectNotContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder");
+    try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
     try expectContains(body, "load atomic i32, ptr %");
+
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_contract_block_prefix_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
+    const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_returned_holder");
+    try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_body, "load atomic i32, ptr %");
+    try expectNotContains(missing_body, "load i32, ptr %");
 }
 
 test "LLVM consumes MIR aggregate-return contract-block update facts" {
