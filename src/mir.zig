@@ -1557,7 +1557,8 @@ fn collectSequentialSwitchAggregateReturnLiteralPathsFrom(
 
 fn aggregateReturnStatementsContainControlFlow(statements: []const ast.Stmt) bool {
     for (statements) |stmt| switch (stmt.kind) {
-        .@"return", .@"switch", .loop, .if_let, .@"break", .@"continue", .@"defer", .block, .unsafe_block, .comptime_block, .contract_block => return true,
+        .@"return", .@"switch", .loop, .if_let, .@"break", .@"continue", .@"defer", .unsafe_block, .comptime_block, .contract_block => return true,
+        .block => |block| if (aggregateReturnStatementsContainControlFlow(block.items)) return true,
         else => {},
     };
     return false;
@@ -1608,37 +1609,7 @@ fn directOrStraightLineLocalAggregateReturnLiteralFields(
     const returned_local = directIdentName(final_value) orelse return null;
     var local_literals = std.StringHashMap([]ast.StructLiteralField).init(allocator);
     defer local_literals.deinit();
-    for (body.items[0 .. body.items.len - 1]) |stmt| {
-        switch (stmt.kind) {
-            .let_decl, .var_decl => |local| {
-                if (local.names.len != 1) return null;
-                const initializer = local.init orelse {
-                    _ = local_literals.remove(local.names[0].text);
-                    continue;
-                };
-                if (aggregateReturnPrefixExprHasCallOrExit(initializer)) return null;
-                try tryTrackAggregateReturnLiteralLocal(&local_literals, local.names[0].text, initializer);
-            },
-            .assignment => |assignment| {
-                if (aggregateReturnPrefixExprHasCallOrExit(assignment.value)) return null;
-                if (assignmentTargetIdentName(assignment.target)) |target| {
-                    try tryTrackAggregateReturnLiteralLocal(&local_literals, target, assignment.value);
-                    continue;
-                }
-                if (aggregateReturnLocalNestedFieldAssignmentTarget(assignment.target)) |target| {
-                    try tryTrackAggregateReturnLiteralLocalNestedFieldAssignment(allocator, &local_literals, paths, target.local_name, target.fieldNames(), assignment.value);
-                    continue;
-                }
-                if (aggregateReturnLocalFieldAssignmentTarget(assignment.target)) |target| {
-                    try tryTrackAggregateReturnLiteralLocalFieldAssignment(allocator, &local_literals, paths, target.local_name, target.field_name, assignment.value);
-                    continue;
-                }
-                const target = aggregateReturnLocalArrayElementAssignmentTarget(assignment.target) orelse return null;
-                try tryTrackAggregateReturnLiteralLocalArrayElementAssignment(allocator, &local_literals, paths, target.local_name, target.field_name, target.index, assignment.value);
-            },
-            else => return null,
-        }
-    }
+    if (!try processAggregateReturnLiteralLocalStatements(allocator, &local_literals, paths, body.items[0 .. body.items.len - 1], false)) return null;
     return local_literals.get(returned_local);
 }
 
@@ -1655,9 +1626,60 @@ fn aggregateReturnPrefixStatementsAreSupported(statements: []const ast.Stmt) boo
                 if (assignmentTargetIdentName(assignment.target) == null) return false;
                 if (aggregateReturnPrefixExprHasCallOrExit(assignment.value)) return false;
             },
+            .block => |block| {
+                if (!aggregateReturnPrefixStatementsAreSupported(block.items)) return false;
+            },
             else => return false,
         }
     }
+    return true;
+}
+
+fn processAggregateReturnLiteralLocalStatements(
+    allocator: std.mem.Allocator,
+    locals: *std.StringHashMap([]ast.StructLiteralField),
+    paths: *AggregateReturnLiteralPaths,
+    statements: []const ast.Stmt,
+    scoped: bool,
+) !bool {
+    var scoped_names: std.ArrayList([]const u8) = .empty;
+    defer scoped_names.deinit(allocator);
+    for (statements) |stmt| {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| {
+                if (local.names.len != 1) return false;
+                if (scoped) try scoped_names.append(allocator, local.names[0].text);
+                const initializer = local.init orelse {
+                    _ = locals.remove(local.names[0].text);
+                    continue;
+                };
+                if (aggregateReturnPrefixExprHasCallOrExit(initializer)) return false;
+                try tryTrackAggregateReturnLiteralLocal(locals, local.names[0].text, initializer);
+            },
+            .assignment => |assignment| {
+                if (aggregateReturnPrefixExprHasCallOrExit(assignment.value)) return false;
+                if (assignmentTargetIdentName(assignment.target)) |target| {
+                    try tryTrackAggregateReturnLiteralLocal(locals, target, assignment.value);
+                    continue;
+                }
+                if (aggregateReturnLocalNestedFieldAssignmentTarget(assignment.target)) |target| {
+                    try tryTrackAggregateReturnLiteralLocalNestedFieldAssignment(allocator, locals, paths, target.local_name, target.fieldNames(), assignment.value);
+                    continue;
+                }
+                if (aggregateReturnLocalFieldAssignmentTarget(assignment.target)) |target| {
+                    try tryTrackAggregateReturnLiteralLocalFieldAssignment(allocator, locals, paths, target.local_name, target.field_name, assignment.value);
+                    continue;
+                }
+                const target = aggregateReturnLocalArrayElementAssignmentTarget(assignment.target) orelse return false;
+                try tryTrackAggregateReturnLiteralLocalArrayElementAssignment(allocator, locals, paths, target.local_name, target.field_name, target.index, assignment.value);
+            },
+            .block => |block| {
+                if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, block.items, true)) return false;
+            },
+            else => return false,
+        }
+    }
+    for (scoped_names.items) |name| _ = locals.remove(name);
     return true;
 }
 

@@ -706,8 +706,10 @@ Current producer boundary:
 - non-exported functions with a direct struct-literal return, or a final return
   of a local initialized or whole-assigned from a direct struct literal or a
   tracked copy of one;
-- straight-line call-free declaration and whole-local assignment prefixes only;
-  calls, member writes, dereference writes, and other control flow are outside
+- straight-line call-free declaration and whole-local assignment prefixes,
+  including plain scoped blocks whose contents reduce to the same supported
+  straight-line aggregate updates; calls, member writes outside the supported
+  aggregate-update forms, dereference writes, and other control flow are outside
   the producer domain, except for exhaustive bool/wildcard switches whose arms
   each independently reduce to an already-supported return value, or have direct
   returning arms plus fallthrough arms that contain only supported whole-local
@@ -729,7 +731,8 @@ The remaining producer must operate on the checked module and derive its result
 from the same direct pointer/aggregate facts used by ordinary MIR construction:
 
 - direct struct-literal returns and returns of tracked local aggregates;
-- straight-line local declaration and assignment prefixes;
+- straight-line local declaration and assignment prefixes, including plain
+  scoped blocks whose contents reduce to those supported prefix statements;
 - exhaustive bool/wildcard switches with bounded return/fallthrough paths,
   including all-fallthrough switch/`if` joins before a supported trailing return,
   bounded sequential top-level switch joins, and bounded nested switch/`if`
@@ -768,13 +771,15 @@ are explicit fail-closed boundaries too: MIR emits no summary for the callee, so
 both backends keep the returned field unknown. Nested control flow inside an
 aggregate-return candidate path is also an explicit fail-closed boundary: MIR
 emits no summary for that callee, and C/LLVM keep the returned field
-conservative. Plain scoped-block prefixes, unsafe-block prefixes,
-comptime-block prefixes, contract-block prefixes, loop prefixes, `for`
-prefixes, deferred cleanup prefixes, `if let` narrowing, unsupported nested CFG
-joins, and path-count-overflow CFG joins before a final aggregate return are
-handled the same way: they remain outside the producer domain, MIR emits no
-summary, and both backends keep returned fields
-conservative.
+conservative. Unsafe-block prefixes, comptime-block prefixes, contract-block
+prefixes, loop prefixes, `for` prefixes, deferred cleanup prefixes, `if let`
+narrowing, unsupported nested CFG joins, and path-count-overflow CFG joins
+before a final aggregate return are handled the same way: they remain outside
+the producer domain, MIR emits no summary, and both backends keep returned
+fields conservative. Plain scoped-block prefixes are supported only when their
+contents reduce to the same straight-line aggregate-return prefix domain; block
+locals are discarded at block exit, while supported updates to an outer returned
+aggregate remain visible.
 
 ### Consumer and retirement rule
 
@@ -800,12 +805,12 @@ MIR-populated cache; the AST collector is gone.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
-4. Complete for named unsupported producer shapes: plain scoped-block prefixes,
-   unsafe-block prefixes, comptime-block prefixes, contract-block prefixes,
-   loop prefixes, `for` prefixes, deferred cleanup prefixes, unsupported nested
-   CFG joins, path-count-overflow CFG joins, exported aggregate returns, mixed
-   paths, prefix calls, fallthrough dynamic-index writes, dereference writes,
-   `if let` narrowing, and aggregate array nesting beyond the fixed
+4. Complete for named unsupported producer shapes: unsafe-block prefixes,
+   comptime-block prefixes, contract-block prefixes, loop prefixes, `for`
+   prefixes, deferred cleanup prefixes, unsupported nested CFG joins,
+   path-count-overflow CFG joins, exported aggregate returns, mixed paths,
+   prefix calls, fallthrough dynamic-index writes, dereference writes, `if let`
+   narrowing, and aggregate array nesting beyond the fixed
    pointer-array/struct-array domains are covered as fail-closed rather than
    inferred.
 5. Complete: the semantic-facts inventory rejects the retired LLVM
