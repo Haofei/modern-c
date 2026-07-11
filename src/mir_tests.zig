@@ -1586,6 +1586,19 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
         \\    }
         \\    return .{ .ptr = &shared_counter, .tag = 31 };
         \\}
+        \\fn nested_mutating_join_holder(choice: u32, inner: u32, ptr: *mut u32) -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 32 };
+        \\    switch choice {
+        \\        0 => {
+        \\            switch inner {
+        \\                0 => { holder.ptr = ptr; }
+        \\                _ => {}
+        \\            }
+        \\        }
+        \\        _ => {}
+        \\    }
+        \\    return holder;
+        \\}
         \\fn nested_if_let_control_holder(choice: u32, maybe: ?u32) -> Holder {
         \\    switch choice {
         \\        0 => {
@@ -1948,6 +1961,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_transparent_switch_control_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_transparent_if_let_control_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "nested_call_control_holder"));
+    try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "nested_mutating_join_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_if_let_control_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "if_let_control_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "if_let_else_control_holder"));

@@ -1052,6 +1052,38 @@ test "lower-c aggregate-return nested call control fails closed" {
     try expectContains(output.items, "mc_race_load_u32");
 }
 
+test "lower-c aggregate-return nested mutating join fails closed" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\struct Holder { ptr: *mut u32, tag: u32 }
+        \\
+        \\fn returned_holder(choice: u32, inner: u32, ptr: *mut u32) -> Holder {
+        \\    var holder: Holder = .{ .ptr = &shared_counter, .tag = 1 };
+        \\    switch choice {
+        \\        0 => {
+        \\            switch inner {
+        \\                0 => { holder.ptr = ptr; }
+        \\                _ => {}
+        \\            }
+        \\        }
+        \\        _ => {}
+        \\    }
+        \\    return holder;
+        \\}
+        \\
+        \\fn use_returned_holder(choice: u32, inner: u32, ptr: *mut u32) -> u32 {
+        \\    let holder: Holder = returned_holder(choice, inner, ptr);
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_nested_mutating_join_aggregate_return_fail_closed.mc", source, &output);
+    try expectNotContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(output.items, "mc_race_load_u32");
+}
+
 test "lower-c consumes MIR aggregate-return if-let facts" {
     const source =
         \\global shared_counter: u32 = 0;
