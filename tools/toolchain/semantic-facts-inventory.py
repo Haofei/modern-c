@@ -90,10 +90,13 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
     },
     "llvm-expression-type-inference": {
         "docs/typed-semantic-facts.md": ["| `llvm-expression-type-inference` |"],
+        "src/ast_query.zig": [
+            "pub fn qualifiedTaggedUnionConstructorType(",
+        ],
         "src/lower_llvm.zig": [
             "fn exprType(",
             "fn derefPointeeType(",
-            "fn qualifiedUnionConstructorType(",
+            "qualifiedTaggedUnionConstructorType(&self.tagged_unions, call)",
         ],
     },
     "llvm-bounds-range-consumption": {

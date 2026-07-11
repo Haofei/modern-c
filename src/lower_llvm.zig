@@ -33,6 +33,7 @@ const overlayByteArrayElementType = ast_query.overlayByteArrayElementType;
 const overlayArrayElementType = ast_query.overlayArrayElementType;
 const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
 const taggedUnionCase = ast_query.taggedUnionCase;
+const qualifiedTaggedUnionConstructorType = ast_query.qualifiedTaggedUnionConstructorType;
 
 const backend_mod = @import("backend.zig");
 const lower_llvm_alias = @import("lower_llvm_alias.zig");
@@ -7269,15 +7270,6 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    // The union type of a qualified constructor `Union.variant(...)` (its owner), for
-    // emit-time type inference (e.g. an untyped `let t = Token.number(9)`); null otherwise.
-    fn qualifiedUnionConstructorType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
-        const q = ast_query.qualifiedMemberCallee(call.callee.*) orelse return null;
-        const union_decl = self.tagged_unions.get(q.owner) orelse return null;
-        if (self.taggedUnionCaseIndex(union_decl, q.member.text) == null) return null;
-        return ast.TypeExpr{ .span = call.callee.*.span, .kind = .{ .name = .{ .text = q.owner, .span = call.callee.*.span } } };
-    }
-
     // `Union.variant(...)` — qualified, self-typed tagged-union constructor. The union is
     // the callee owner (not a target type). Returns null when the owner is not a known
     // tagged union (an inherent/associated call, or an intrinsic).
@@ -7862,7 +7854,7 @@ const LlvmEmitter = struct {
             .int_literal => null,
             .float_literal => null,
             .grouped => |inner| self.exprType(inner.*),
-            .call => |call| if (self.qualifiedUnionConstructorType(call)) |ty|
+            .call => |call| if (qualifiedTaggedUnionConstructorType(&self.tagged_unions, call)) |ty|
                 ty
             else if (isAssumeNoaliasCall(call))
                 self.exprType(call.args[0])

@@ -616,6 +616,15 @@ pub fn taggedUnionCase(union_decl: ast.UnionDecl, name: []const u8) ?ast.UnionCa
     return null;
 }
 
+/// The result type of a qualified tagged-union constructor `Union.variant(...)`,
+/// or null when the callee is not a known tagged-union case.
+pub fn qualifiedTaggedUnionConstructorType(tagged_unions: *const std.StringHashMap(ast.UnionDecl), call: anytype) ?ast.TypeExpr {
+    const q = qualifiedMemberCallee(call.callee.*) orelse return null;
+    const union_decl = tagged_unions.get(q.owner) orelse return null;
+    if (taggedUnionCase(union_decl, q.member.text) == null) return null;
+    return simpleNameType(q.owner, call.callee.*.span);
+}
+
 pub fn dynCalleeMethodName(callee: ast.Expr) ?[]const u8 {
     return switch (callee.kind) {
         .member => |m| m.name.text,

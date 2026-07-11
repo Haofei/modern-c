@@ -21,9 +21,8 @@ const RawManyOffsetInfo = lower_c_model.RawManyOffsetInfo;
 const calleeIdentName = ast_query.calleeIdentName;
 const isRawManyPointerType = ast_query.isRawManyPointerType;
 const memberCallee = ast_query.memberCallee;
-const qualifiedMemberCallee = ast_query.qualifiedMemberCallee;
+const qualifiedTaggedUnionConstructorType = ast_query.qualifiedTaggedUnionConstructorType;
 const simpleNameType = ast_query.simpleNameType;
-const taggedUnionCase = ast_query.taggedUnionCase;
 const exprIsNumericLiteral = lower_c_expr.exprIsNumericLiteral;
 const isNumericValueBinaryOp = lower_c_expr.isNumericValueBinaryOp;
 const isAssumeNoaliasCall = lower_c_builtin.isAssumeNoaliasCall;
@@ -229,13 +228,7 @@ pub fn taggedUnionReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.
         .call => |node| blk: {
             // A qualified constructor `Union.variant(...)` is self-typed to its owner,
             // so an untyped `let t = Token.number(9)` infers `Token`.
-            if (qualifiedMemberCallee(node.callee.*)) |q| {
-                if (ctx.tagged_unions.get(q.owner)) |union_decl| {
-                    if (taggedUnionCase(union_decl, q.member.text) != null) {
-                        break :blk simpleNameType(q.owner, node.callee.*.span);
-                    }
-                }
-            }
+            if (qualifiedTaggedUnionConstructorType(ctx.tagged_unions, node)) |ty| break :blk ty;
             const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
             const info = ctx.functions.get(fn_name) orelse break :blk null;
             const ret_ty = info.return_type orelse break :blk null;
