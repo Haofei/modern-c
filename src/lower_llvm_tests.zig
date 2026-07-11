@@ -1045,9 +1045,20 @@ test "LLVM consumes MIR aggregate-return if-let facts" {
         \\    }
         \\    return .{ .ptr = &shared_counter, .tag = 2 };
         \\}
+        \\fn returned_holder_else(maybe: ?u32) -> Holder {
+        \\    if let value = maybe {
+        \\        return .{ .ptr = &shared_counter, .tag = value };
+        \\    } else {
+        \\        return .{ .ptr = &shared_counter, .tag = 3 };
+        \\    }
+        \\}
         \\
         \\fn use_returned_holder(maybe: ?u32) -> u32 {
         \\    let holder: Holder = returned_holder(maybe);
+        \\    return holder.ptr.*;
+        \\}
+        \\fn use_returned_holder_else(maybe: ?u32) -> u32 {
+        \\    let holder: Holder = returned_holder_else(maybe);
         \\    return holder.ptr.*;
         \\}
     ;
@@ -1056,16 +1067,29 @@ test "LLVM consumes MIR aggregate-return if-let facts" {
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_if_let_control_aggregate_return_mir_fact.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
+    const else_body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder_else");
     try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
+    try expectContains(else_body, "; mir aggregate_return_pointer consumed caller=use_returned_holder_else callee=returned_holder_else field=ptr provenance=global_storage");
     try expectContains(body, "load atomic i32, ptr %");
+    try expectContains(else_body, "load atomic i32, ptr %");
 
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
     try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_if_let_control_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
     const missing_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_returned_holder");
+    const missing_else_body = try llvmFunctionBody(missing_output.items, "define internal i32 @use_returned_holder_else");
     try expectNotContains(missing_body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
+    try expectContains(missing_else_body, "; mir aggregate_return_pointer consumed caller=use_returned_holder_else callee=returned_holder_else field=ptr provenance=global_storage");
     try expectContains(missing_body, "load atomic i32, ptr %");
     try expectNotContains(missing_body, "load i32, ptr %");
+
+    var missing_else_output: std.ArrayList(u8) = .empty;
+    defer missing_else_output.deinit(std.testing.allocator);
+    try appendLlvmTestWithoutAggregateReturnPointerFact("llvm_if_let_control_aggregate_return_mir_fact.mc", source, "returned_holder_else", "ptr", &missing_else_output);
+    const missing_else_only_body = try llvmFunctionBody(missing_else_output.items, "define internal i32 @use_returned_holder_else");
+    try expectNotContains(missing_else_only_body, "; mir aggregate_return_pointer consumed caller=use_returned_holder_else callee=returned_holder_else field=ptr");
+    try expectContains(missing_else_only_body, "load atomic i32, ptr %");
+    try expectNotContains(missing_else_only_body, "load i32, ptr %");
 }
 
 test "LLVM consumes MIR aggregate-return scoped-block prefix facts" {

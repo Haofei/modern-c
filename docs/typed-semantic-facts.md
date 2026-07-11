@@ -720,7 +720,7 @@ Current producer boundary:
   or direct constant-index fixed pointer-array element assignments before a
   checked trailing return, exhaustive all-fallthrough switch/`if` joins before
   the same kind of checked trailing return, bounded `if let` path splits whose
-  reachable arms reduce to supported return/fallthrough paths, bounded
+  reachable arms reduce to supported return/fallthrough or explicit-else return paths, bounded
   sequential top-level exhaustive switch joins, or bounded nested
   exhaustive switch/`if` return paths whose expanded paths stay within the
   aggregate-return path cap;
@@ -743,7 +743,7 @@ from the same direct pointer/aggregate facts used by ordinary MIR construction:
   reduce to supported aggregate updates;
 - exhaustive bool/wildcard switches with bounded return/fallthrough paths,
   including all-fallthrough switch/`if` joins before a supported trailing return,
-  bounded `if let` return/fallthrough path splits,
+  bounded `if let` return/fallthrough and explicit-else return path splits,
   bounded sequential top-level switch joins, and bounded nested switch/`if`
   return paths;
 - intersection of field facts across paths, retaining a field only when every
