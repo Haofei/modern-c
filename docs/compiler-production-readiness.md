@@ -58,10 +58,11 @@ The practical rule is:
 
 Longer-term designs such as `shared<T>`, restricted lifetime/region checking,
 `unsafe fn`, trait-qualified method namespaces, a true module graph, and
-bounded structural reflection may be necessary for a stronger language story.
-They are not counted as separate readiness blockers here unless the project
-chooses to expand the supported-subset contract. The three workstreams below are
-the current compiler-side blockers for a general production-ready claim.
+bounded structural reflection are part of the broader production-readiness
+track. They are listed in the design-risk readiness table below. The three
+workstreams below remain the current compiler-implementation blockers for the
+supported subset; the design-risk table defines additional decisions required
+before a broad language/product production claim.
 
 ### Current Guarantee
 
@@ -765,10 +766,19 @@ Next actionable slices:
 
 ### Production-Ready Exit Rule
 
-The compiler may be labelled generally production-ready only when all three
-closure matrices are closed, or every remaining limitation is explicitly
-accepted, diagnosed, documented in the supported-subset contract, and covered by
-a regression test.
+The compiler may be labelled production-ready for the current supported subset
+only when all three compiler closure matrices are closed, or every remaining
+implementation limitation is explicitly accepted, diagnosed, documented in the
+supported-subset contract, and covered by a regression test.
+
+A broader MC language/product production-ready claim additionally requires every
+design-risk readiness row below to be resolved as one of:
+
+- **implemented** with tests and documentation;
+- **accepted limitation** with explicit scope, diagnostics where applicable, and
+  user-facing documentation;
+- **deferred non-goal** with a written reason that the supported production
+  profile does not need it.
 
 ### Current Working Rules
 
@@ -785,22 +795,23 @@ by the finished release-artifact evidence row and
 operational decision, not unfinished compiler implementation work; it must not
 be counted as a fourth compiler blocker.
 
-### Tracked Design Risks
+### Design-Risk Readiness Track
 
-These risks matter for a stronger language and product story, but they are not
-additional open compiler-readiness workstreams unless the supported-subset
-contract is expanded.
+These risks are part of production readiness for any broad MC language/product
+claim. They are tracked separately from the three compiler-implementation
+workstreams because some are design decisions or product-scope decisions rather
+than immediate compiler slices.
 
-| Risk | Current readiness position |
-|---|---|
-| General temporal memory safety | `move` covers linear resources in the supported subset, but MC does not yet have a general borrow/lifetime system for dangling slices, returned views, `defer free` escapes, closure captures, async captures, or arena-scoped values. A restricted region/lifetime system could be a future language layer, with raw-pointer escapes remaining `unsafe`. |
-| Shared memory model ergonomics | The current implementation protects MC semantics by combining positive provenance proofs with conservative race-tolerant lowering. A future explicit `shared<T>` / `atomic<T>` / `volatile<T>` model could make sharing intent part of the type system and reduce pressure on inference, but that would be a language-design change, not just a backend cleanup. |
-| `unsafe_contract` optimizer semantics | Current readiness work should avoid relying on subtle optimizer assumptions whose violation is hard to confine. If contracts later become optimizer assumptions, the language must choose a clear model: check-elision only, whole-program unsafe assumption, or compiler-verified proof. |
-| Trait method namespace and coherence | A larger ecosystem likely needs trait-qualified method identities such as `<T as Trait>::method` and a coherence rule based on owning either the trait or the type. This is not part of the current three compiler blockers unless trait expansion resumes. |
-| Module graph and separate compilation | Whole-program flattening and textual/mangled workarounds limit diagnostics, incremental compilation, LSP scaling, and separate compilation. A stable module graph with `ModuleId`, `DeclId`, `TypeId`, interface hashes, and project-root import boundaries is a product-maturity requirement, but not counted as one of the current semantic closure matrices. |
-| C backend positioning | The C backend should be treated as a bootstrap/reference/differential-testing backend for the supported compiler contract, not as a promise of fully portable ISO C output. Any production claim must state the required compiler versions, target triples, ABI subset, flags, and aggregate passing/return limits. |
-| Async expansion before typed IR | Async should not expand its surface area while type, move, borrow-across-await, and effect facts are still converging. Correctness fixes and explicit fail-closed gates are acceptable; new async syntax should wait for typed lowering ownership. |
-| Comptime and reflection breadth | MC's narrow value-level comptime keeps the language smaller, but limits drivers, ABI tables, serializers, register maps, and generic containers. Bounded structural reflection or derive support may be useful later; it is not a current production-readiness blocker. |
+| Risk | Production-readiness action | Closure condition |
+|---|---|---|
+| General temporal memory safety | Decide whether the production profile includes restricted region/lifetime checking or documents this as an explicit non-goal. `move` covers linear resources in the supported subset, but MC does not yet have a general borrow/lifetime system for dangling slices, returned views, `defer free` escapes, closure captures, async captures, or arena-scoped values. | Implement a restricted lifetime layer for the chosen cases, or document the unsupported cases with diagnostics/unsafe boundaries where applicable. |
+| Shared memory model ergonomics | Decide whether to keep the current provenance-proof plus conservative race-lowering model, or introduce explicit `shared<T>` / `atomic<T>` / `volatile<T>` types. | Either ship a typed shared-memory model with migration tests, or document the current model as the production memory model with complete provenance/race-lowering closure. |
+| `unsafe_contract` optimizer semantics | Choose one contract model: check-elision only, whole-program unsafe optimizer assumption, or compiler-verified proof. | Spec text, lowering rules, and tests show contract violations cannot accidentally create a subtler optimizer contract than the chosen model. |
+| Trait method namespace and coherence | Decide whether trait expansion is in the production profile; if yes, add trait-qualified method identity and coherence based on owning the trait or type. | Either implement and test qualified disambiguation/coherence, or freeze trait scope and document the limitation. |
+| Module graph and separate compilation | Decide whether broad production readiness requires a stable module graph, separate compilation, and incremental-friendly identities. | Implement `ModuleId`/`DeclId`/`TypeId`-style ownership and interface boundaries, or document whole-program compilation as a deliberate production-profile constraint. |
+| C backend positioning | Define the C backend as bootstrap/reference/differential backend or as a supported production backend with a target matrix. | Documentation states compiler versions, target triples, ABI subset, flags, aggregate passing/return limits, and whether ISO C portability is a non-goal. |
+| Async expansion before typed IR | Freeze async feature expansion until typed lowering owns capture, liveness, move, borrow-across-await, and effect facts. | New async syntax is blocked, or async is reimplemented on typed facts/MIR with diagnostics for unsupported captures and suspension cases. |
+| Comptime and reflection breadth | Decide whether bounded structural reflection/derive belongs in the production profile. | Either implement the bounded reflection subset with tests, or document narrow value-level comptime as the production language boundary. |
 
 The intended layering remains:
 
