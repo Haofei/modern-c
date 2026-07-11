@@ -680,6 +680,12 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try self.derefAccessLowering(": 2,
         "fn derefPointerHasProvenLocalStorage(": 1,
     },
+    "src/lower_c_infer.zig": {
+        "fn qualifiedUnionConstructorType(": 0,
+        "fn enumVariantPathType(": 0,
+        "taggedUnionCase(union_decl": 0,
+        "for (enum_decl.cases)": 0,
+    },
     "src/lower_llvm.zig": {
         "try mir.validateIntegerFactsForLowering(module_mir.*);": 1,
         "fn requireMirBoundsFact": 1,
@@ -702,6 +708,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn derefUsesRaceTolerantLowering(": 1,
         "self.derefUsesRaceTolerantLowering(": 2,
         "fn pointerExprHasProvenLocalStorage(": 1,
+        "fn qualifiedUnionConstructorType(": 0,
+        "fn enumVariantPathType(": 0,
     },
     "tests/spec/no_implicit_conversion.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 9,
