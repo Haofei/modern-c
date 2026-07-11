@@ -1833,6 +1833,45 @@ fn aggregateReturnLoopBodyIsTransparent(statements: []const ast.Stmt) bool {
     return true;
 }
 
+fn aggregateReturnLoopIsTransparentForLocalTracker(loop: ast.Loop, locals: *const std.StringHashMap([]ast.StructLiteralField)) bool {
+    switch (loop.kind) {
+        .@"for", .@"while" => {},
+    }
+    const condition_or_iterable = loop.iterable orelse return false;
+    if (aggregateReturnPrefixExprHasCallOrExit(condition_or_iterable)) return false;
+    return aggregateReturnLoopBodyIsTransparentForLocalTracker(loop.body.items, locals);
+}
+
+fn aggregateReturnLoopBodyIsTransparentForLocalTracker(statements: []const ast.Stmt, locals: *const std.StringHashMap([]ast.StructLiteralField)) bool {
+    for (statements) |stmt| switch (stmt.kind) {
+        .@"break", .@"continue" => {},
+        .let_decl, .var_decl => |local| {
+            if (local.init) |initializer| {
+                if (aggregateReturnPrefixExprHasCallOrExit(initializer)) return false;
+            }
+        },
+        .assignment => |assignment| {
+            const target = assignmentTargetIdentName(assignment.target) orelse return false;
+            if (locals.contains(target)) return false;
+            if (aggregateReturnPrefixExprHasCallOrExit(assignment.value)) return false;
+        },
+        .expr, .assert => |expr| {
+            if (aggregateReturnPrefixExprHasCallOrExit(expr)) return false;
+        },
+        .@"defer" => |expr| {
+            if (!aggregateReturnDeferIsTransparent(expr)) return false;
+        },
+        .block => |block| if (!aggregateReturnLoopBodyIsTransparentForLocalTracker(block.items, locals)) return false,
+        .unsafe_block => |block| if (!aggregateReturnLoopBodyIsTransparentForLocalTracker(block.items, locals)) return false,
+        .comptime_block => |block| if (!aggregateReturnComptimeBlockIsTransparent(block)) return false,
+        .contract_block => |contract| if (!aggregateReturnLoopBodyIsTransparentForLocalTracker(contract.block.items, locals)) return false,
+        .@"switch" => |switch_node| if (!aggregateReturnSwitchIsTransparent(switch_node)) return false,
+        .if_let => |if_let| if (!aggregateReturnIfLetIsTransparent(if_let)) return false,
+        else => return false,
+    };
+    return true;
+}
+
 fn aggregateReturnSwitchIsTransparent(switch_node: ast.Switch) bool {
     if (!aggregateReturnSwitchIsExhaustive(switch_node)) return false;
     if (aggregateReturnPrefixExprHasCallOrExit(switch_node.subject)) return false;
@@ -1933,7 +1972,7 @@ fn processAggregateReturnLiteralLocalStatements(
                 } else if (!try processAggregateReturnLiteralLocalStatements(allocator, locals, paths, contract.block.items, true)) return false;
             },
             .loop => |loop| {
-                if (!aggregateReturnLoopIsTransparent(loop)) return false;
+                if (!aggregateReturnLoopIsTransparentForLocalTracker(loop, locals)) return false;
             },
             .@"switch" => |switch_node| {
                 if (!aggregateReturnSwitchIsTransparent(switch_node)) return false;

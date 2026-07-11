@@ -794,9 +794,11 @@ does not mutate aggregate provenance; effectful deferred cleanup prefixes remain
 outside the producer. `while`/`for` loop prefixes, including nested loops inside
 otherwise transparent aggregate-return switch arms, are transparent when their
 bodies contain only provenance-transparent statements plus local
-`break`/`continue`; loop calls, exits, and aggregate mutation remain outside the
-producer. Mutating loop prefixes, non-transparent nested CFG joins, and
-above-cap path-count-overflow CFG joins before a final aggregate return remain
+`break`/`continue`; tracked local aggregate returns additionally allow scalar
+local assignments inside those loops when the assigned local is not one of the
+tracked aggregate values. Loop calls, exits, and tracked aggregate mutation
+remain outside the producer. Non-transparent nested CFG joins and above-cap
+path-count-overflow CFG joins before a final aggregate return remain
 fail-closed: MIR emits no summary, and both backends keep returned fields
 conservative. The current
 aggregate-return path cap is a named 16-path bound, so 3x3 exhaustive switch
@@ -816,8 +818,9 @@ expression/assert prefixes are also transparent and do not mutate aggregate
 facts; expressions containing calls, `try`, `await`, block expressions, or
 `unreachable` remain outside the producer. Transparent `while`/`for` prefixes
 are supported only when the condition or iterable has no calls/exits and the
-loop body has no calls/exits or aggregate-return mutation; local
-`break`/`continue` is allowed.
+loop body has no calls/exits or tracked aggregate mutation; local
+`break`/`continue` and scalar-local assignments in the tracked-local producer
+are allowed.
 
 ### Consumer and retirement rule
 
@@ -838,18 +841,19 @@ MIR-populated cache; the AST collector is gone.
    pointer-array elements including nested fixed pointer arrays, nested
    aggregate field paths, fixed arrays of struct elements with pointer-bearing
    fields, and nested fixed arrays of those struct elements. Direct literal
-   returns after call-free expression/assert/defer prefixes and transparent
-   `while`/`for` prefixes with local `break`/`continue` are covered, and literal
+   returns after call-free expression/assert/defer prefixes, transparent
+   `while`/`for` prefixes with local `break`/`continue`, and tracked-local
+   aggregate returns with scalar-mutating loop locals are covered. Literal
    returns after call prefixes are explicitly excluded.
 3. Complete for C and LLVM direct literals, straight-line locals, tracked copies,
    and exhaustive branches: normal consumption is visible in lowering, and
    removing only the return-field fact produces conservative lowering.
 4. Complete for named unsupported producer shapes: contract-block prefixes with
-   unsupported calls, mutating loop prefixes, loop calls/exits, effectful
-   deferred cleanup prefixes, non-transparent nested CFG joins, above-cap
-   path-count-overflow CFG joins, exported aggregate returns, mixed paths,
-   prefix calls, fallthrough dynamic-index writes, dereference writes, and
-   aggregate array nesting beyond the fixed
+   unsupported calls, tracked aggregate mutations inside loop prefixes, loop
+   calls/exits, effectful deferred cleanup prefixes, non-transparent nested CFG
+   joins, above-cap path-count-overflow CFG joins, exported aggregate returns,
+   mixed paths, prefix calls, fallthrough dynamic-index writes, dereference
+   writes, and aggregate array nesting beyond the fixed
    pointer-array/struct-array domains are covered as fail-closed rather than
    inferred.
 5. Complete: the semantic-facts inventory rejects the retired LLVM
