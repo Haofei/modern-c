@@ -67,12 +67,22 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
 }
 
+FORBIDDEN_ANCHORS: dict[str, list[str]] = {
+    "docs/compiler-production-readiness.md": [
+        "legacySubplaceReferentMoved",
+        "formatted subplace and wildcard keys",
+        "legacy formatted-subplace fallback",
+        "all-concrete typed scans",
+    ],
+}
+
 
 def main() -> int:
     missing: list[str] = []
     checked = 0
 
-    for relative, anchors in sorted(ANCHORS.items()):
+    all_paths = set(ANCHORS.keys()) | set(FORBIDDEN_ANCHORS.keys())
+    for relative in sorted(all_paths):
         path = REPO_ROOT / relative
         try:
             text = path.read_text(encoding="utf-8")
@@ -80,6 +90,7 @@ def main() -> int:
             missing.append(f"{relative}: file missing")
             continue
 
+        anchors = ANCHORS.get(relative, [])
         for anchor in anchors:
             checked += 1
             if anchor not in text:
@@ -90,6 +101,11 @@ def main() -> int:
             actual = text.count(needle)
             if actual != expected:
                 missing.append(f"{relative}: expected {expected} occurrences of {needle!r}, found {actual}")
+
+        for forbidden in FORBIDDEN_ANCHORS.get(relative, []):
+            checked += 1
+            if forbidden in text:
+                missing.append(f"{relative}: forbidden stale anchor {forbidden!r}")
 
     if missing:
         print("FAIL: move unsupported inventory drift", file=sys.stderr)
