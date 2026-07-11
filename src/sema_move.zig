@@ -1018,10 +1018,6 @@ fn aliasStoragePlaceForExpr(self: *Checker, expr: ast.Expr, state: *const std.St
         },
         else => {},
     }
-    if (aliasPlaceKey(self, expr, state)) |key| {
-        defer self.reporter.allocator.free(key);
-        if (state.get(key)) |slot| return slot.place;
-    }
     return null;
 }
 
