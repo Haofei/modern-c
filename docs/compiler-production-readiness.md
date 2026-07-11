@@ -706,7 +706,9 @@ C replacement." This document quantifies the distance and lays out the path.
 above — with the gap concentrated in four enumerable classes, not diffuse decay:**
 
 1. **Crash/hang classes reachable from ordinary input** (unbounded parser recursion,
-   uncapped monomorphization, unguarded 128-bit comptime arithmetic).
+   uncapped monomorphization, unguarded 128-bit comptime arithmetic). These
+   examples are historical; the current evidence register records bounded parser
+   nesting, monomorphization limits, and 128-bit comptime/reflection guards.
 2. **A small number of silent-acceptance soundness holes in spec'd features**
    (closures essentially unchecked; a `while`-condition gap in the move checker;
    uninstantiated generics never checked).
@@ -877,7 +879,13 @@ keeps the name-keyed analyses sound).
   concrete closure type), extend callee checking to closure types, include closures
   in local-escape checks. Effort M. **[inspected — accept-side verified at the cited
   lines; write a runtime miscompile PoC before/while fixing]**
-- **[P0] Move checker misses by-value consumption in `while` conditions.** Loop
+- **[P0] Move checker misses by-value consumption in `while` conditions.**
+  **Retired in the current ledger.** `while` conditions are now checked through a
+  cloned condition move state and diffed with `reportLoopOuterResourceChanges`;
+  `tests/spec/move_linear.mc` and `tests/spec/move_place.mc` cover root, field,
+  array, symbolic-index, and nested condition consumes.
+
+  Historical finding: Loop
   conditions/iterables get `moveBorrow` only (`src/sema_move.zig:342`), while `if`
   conditions and `switch` subjects are properly consumed (`:380`, `:413`). So
   `while (eat(t)) {} free(t);` — with `eat` consuming a linear `t` by value —
@@ -887,23 +895,33 @@ keeps the name-keyed analyses sound).
   exists to prevent; no spec test covers a consuming while-condition. Fix: analyze
   the condition like a body region (clone state, consume, diff against entry ⇒
   `E_MOVE_LOOP_RESOURCE`); keep borrow-only for `for` iterables. Add spec tests.
-  Effort S. **[inspected]**
+  Effort S. **[inspected, retired]**
 - **[P1] Generic bodies are checked only per-instantiation; uninstantiated generics
-  are never checked.** Monomorphization runs *before* sema and drops generic decls
+  are never checked.** **Retired in the current ledger.**
+  `generic_template_precheck` checks unused generic templates before
+  monomorphization can drop them; `tests/spec/generic_body_precheck.mc` covers bad
+  names and missing trait-bound member calls.
+
+  Historical finding: Monomorphization runs *before* sema and drops generic decls
   outright (`continue; // dropped; replaced by instances`,
   `src/monomorphize.zig:226,230,234`). A generic with no call sites ships with an
   entirely unchecked body (name resolution, types, unsafe-gating — nothing). Note:
   the G32 fix in the project ledger closed this in the mcc2 *subset* compiler, not
   in `src/`. Fix: minimum — name-resolution/arity/unsafe-gating over generic bodies
   pre-drop; better — a check-only instantiation with opaque placeholders honoring
-  `where` bounds. Effort M-L. **[inspected]**
-- **[P1] No monomorphization limits.** The specialization worklists loop to fixpoint
+  `where` bounds. Effort M-L. **[inspected, retired]**
+- **[P1] No monomorphization limits.** **Retired in the current ledger.**
+  `src/monomorphize.zig` defines depth and total-instance caps and reports
+  `E_MONOMORPHIZATION_LIMIT` with "required from here" notes; unit and spec tests
+  cover both cap styles and polymorphic recursion.
+
+  Historical finding: The specialization worklists loop to fixpoint
   with no depth counter, instance cap, or cycle detection
   (`src/monomorphize.zig:249-298`); dedup is by mangled name, and comptime args fold
   at rewrite time, so `fn f(comptime N: usize){ f(N+1); }` (or `f<Wrap<T>>`) mints
   new names forever — hang/OOM on 3 lines of source, and a DoS on shared CI. Fix:
   instantiation-depth + total-instance ceilings with a diagnostic naming the chain.
-  Effort S. **[inspected]**
+  Effort S. **[inspected, retired]**
 - **[P1] Definite-init tracks only scalar `uninit` vars.** Aggregates are excluded
   (`diIsScalarType`, `src/sema.zig:5844-5851`; design comment :1300-1317), and any
   address-of clears pending (`:1596-1605`) — `var s: Header = uninit;` + field reads
@@ -911,7 +929,13 @@ keeps the name-keyed analyses sound).
   initialization as a check; today it is best-effort. Fix: track aggregate `uninit`
   whole-object; document the `&x` out-param accept explicitly in the spec. Effort M.
   **[inspected]**
-- **[P1] Unguarded 128-bit arithmetic in comptime folding.** (a)
+- **[P1] Unguarded 128-bit arithmetic in comptime folding.**
+  **Retired in the current ledger.** `foldComptimeBitcast` routes 128-bit results
+  through `comptimeIntFromBits`, reflection uses the shared checked
+  `type_layout.comptimeArraySize` helper, and `src/eval_tests.zig` plus
+  `tests/spec/reflection.mc` cover unrepresentable bitcasts and giant-array layout.
+
+  Historical finding: (a)
   `foldComptimeBitcast` `@intCast`s a masked u128 into the i128 `ComptimeValue.int`
   — a negative operand bitcast to a 128-bit target yields a value ≥ 2^127 → safety
   panic in Debug, UB in ReleaseFast (`src/eval.zig:919-923,262`). (b) Array sizing
@@ -920,7 +944,7 @@ keeps the name-keyed analyses sound).
   `src/lower_llvm_reflect.zig:169`) — nested max-usize arrays overflow i128 → panic.
   Neighboring code uses `std.math.mul ... catch null`, so these are misses, not
   policy. Fix: early-return `.unknown` / one shared checked helper. Effort S.
-  **[inspected]**
+  **[inspected, retired]**
 - **[P2] Move checker is lexical and name-keyed, by its own admission** ("Phase 3
   will rewrite this pass over a proper CFG", `src/sema_move.zig:6`). Short-circuit
   RHS is consumed unconditionally (leak on the untaken path is invisible in this
@@ -1327,13 +1351,13 @@ gate, in repo idiom. Efforts: S = hours-to-a-day, M = days, L = week(s)+.
 
 | Item | Fix | Gate | Effort |
 |---|---|---|---|
-| Parser depth guard | Depth counter in Parser; `E_NESTING_TOO_DEEP` past ~256 | `bad/` fixtures at depth 10k; nesting amplifier in `fuzz-robust` | S |
-| Monomorphization limits | Depth + total-instance caps; `E_MONO_DEPTH` naming the chain | `bad/` polymorphic-recursion fixture must reject fast | S |
-| `while`-condition move consumption | Consume the condition like a body region | Spec tests: consuming while-cond rejected; borrow-cond accepted | S |
+| Parser depth guard | **Retired in current ledger.** Depth counter in Parser; `E_NESTING_TOO_DEEP` past ~256 | `bad/` fixtures at depth 10k; nesting amplifier in `fuzz-robust` | S |
+| Monomorphization limits | **Retired in current ledger.** Depth + total-instance caps; `E_MONOMORPHIZATION_LIMIT` names the chain through notes | `tests/spec/monomorphization_limits.mc`; unit coverage for depth and total caps | S |
+| `while`-condition move consumption | **Retired in current ledger.** Consume the condition like a body region | `tests/spec/move_linear.mc`; `tests/spec/move_place.mc` root/place while-condition rejects and borrow accept | S |
 | Closure typing | Type `bind`; closure-call arg checks; env-escape checks | New `E_CLOSURE_*` codes + spec accept/reject fixtures both backends | M |
 | Extern struct-by-value (LLVM) | Sema-reject on `extern`/`export` until ABI work | `bad/` fixture + a diff-backend struct-ABI driver vs clang | S |
 | LLVM elision function filter | Match function name + span like the C side | Parity fixture: two same-span fns, one proven elision | S |
-| 128-bit fold guards | `.unknown` on overflow; one shared checked array-size helper | Unit tests + `bad/` giant-array fixture | S |
+| 128-bit fold guards | **Retired in current ledger.** `.unknown` on overflow; one shared checked array-size helper | `src/eval_tests.zig`; `tests/spec/reflection.mc` giant-array fixture | S |
 | Oversized int literals | Null-fold on integer syntax ⇒ `E_INTEGER_LITERAL_OUT_OF_RANGE` | Reject fixture | S |
 | OOM fail-closed | `has_errors = true` in Reporter catch arms; poison eval folds | Unit test with failing allocator | S |
 
@@ -1417,14 +1441,16 @@ Reasonable to defer, but say so in user-facing docs:
 
 1. Closure miscompile PoC: mismatched `bind` signature → run both backends, observe
    miscast call (§5.2).
-2. `while`-condition double-free PoC on both backends (§5.2).
+2. `while`-condition double-free PoC on both backends (§5.2) — retired by current
+   move-condition fixtures.
 3. `extern "C" fn f(t: Timespec)` → diff `emit-llvm` IR vs clang's IR for the same C
    signature (§5.3).
 4. Elision-divergence reachability: monomorphized instances sharing spans under
    `--checks=elide-proven` (§5.3).
 5. `eval.zig` 128-bit panics: comptime bitcast of a negative to a 128-bit target;
-   nested max-usize arrays (§5.2/§5.4).
-6. Monomorphization hang: 3-line polymorphic recursion with a timeout (§5.2).
+   nested max-usize arrays (§5.2/§5.4) — retired by current eval/reflection guards.
+6. Monomorphization hang: 3-line polymorphic recursion with a timeout (§5.2) —
+   retired by current monomorphization cap diagnostics.
 7. Whether checked-in MC sources pass `mcc fmt --check` (§5.5, open question from
    review).
 
