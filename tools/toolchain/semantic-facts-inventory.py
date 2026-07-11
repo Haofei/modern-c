@@ -121,7 +121,6 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
         "src/lower_llvm_query.zig": [
             "ast_query.rawLoadCallReturnType(call)",
             "ast_query.rawPtrCallReturnType(call)",
-            "ast_query.isPhysCall(call.callee.*)",
         ],
         "src/lower_llvm.zig": [
             "fn exprType(",
@@ -135,6 +134,8 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "resultConstructorCallTag(call)",
             "isBindCallExpr(expr)",
             "isBindCallNode(call)",
+            "fn physCallTargetType(",
+            "self.mirCallTargetKindAt(call.callee.*.span) != .phys",
             "constGetCallTarget(call)",
         ],
     },
