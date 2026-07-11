@@ -266,6 +266,160 @@ pub const LoopMoveFrame = struct {
     }
 };
 
+pub const MoveCfgBlockId = usize;
+
+pub const MoveCfgBlockKind = enum {
+    entry,
+    statement,
+    branch_join,
+    loop_head,
+    exit,
+};
+
+pub const MoveCfgEdgeKind = enum {
+    normal,
+    branch,
+    backedge,
+    early_exit,
+};
+
+pub const MoveCfgBlock = struct {
+    kind: MoveCfgBlockKind,
+};
+
+pub const MoveCfgEdge = struct {
+    from: MoveCfgBlockId,
+    to: MoveCfgBlockId,
+    kind: MoveCfgEdgeKind,
+};
+
+pub const MoveCfgFlowState = struct {
+    moved_mask: u64 = 0,
+
+    pub fn withMoved(self: MoveCfgFlowState, bit: u6) MoveCfgFlowState {
+        var next = self;
+        next.moved_mask |= (@as(u64, 1) << bit);
+        return next;
+    }
+
+    pub fn joinInto(self: *MoveCfgFlowState, incoming: MoveCfgFlowState) bool {
+        const before = self.moved_mask;
+        self.moved_mask |= incoming.moved_mask;
+        return self.moved_mask != before;
+    }
+};
+
+pub const MoveCfg = struct {
+    allocator: std.mem.Allocator,
+    blocks: std.ArrayListUnmanaged(MoveCfgBlock) = .empty,
+    edges: std.ArrayListUnmanaged(MoveCfgEdge) = .empty,
+
+    pub fn init(allocator: std.mem.Allocator) MoveCfg {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *MoveCfg) void {
+        self.blocks.deinit(self.allocator);
+        self.edges.deinit(self.allocator);
+    }
+
+    pub fn addBlock(self: *MoveCfg, kind: MoveCfgBlockKind) !MoveCfgBlockId {
+        const id = self.blocks.items.len;
+        try self.blocks.append(self.allocator, .{ .kind = kind });
+        return id;
+    }
+
+    pub fn addEdge(self: *MoveCfg, from: MoveCfgBlockId, to: MoveCfgBlockId, kind: MoveCfgEdgeKind) !void {
+        std.debug.assert(from < self.blocks.items.len);
+        std.debug.assert(to < self.blocks.items.len);
+        try self.edges.append(self.allocator, .{ .from = from, .to = to, .kind = kind });
+    }
+};
+
+pub const MoveCfgWorklist = struct {
+    allocator: std.mem.Allocator,
+    cfg: *const MoveCfg,
+    states: []MoveCfgFlowState,
+    initialized: []bool,
+    queued: []bool,
+    queue: std.ArrayListUnmanaged(MoveCfgBlockId) = .empty,
+
+    pub fn init(allocator: std.mem.Allocator, cfg: *const MoveCfg, entry: MoveCfgBlockId, entry_state: MoveCfgFlowState) !MoveCfgWorklist {
+        std.debug.assert(entry < cfg.blocks.items.len);
+        const states = try allocator.alloc(MoveCfgFlowState, cfg.blocks.items.len);
+        errdefer allocator.free(states);
+        const initialized = try allocator.alloc(bool, cfg.blocks.items.len);
+        errdefer allocator.free(initialized);
+        const queued = try allocator.alloc(bool, cfg.blocks.items.len);
+        errdefer allocator.free(queued);
+
+        @memset(states, .{});
+        @memset(initialized, false);
+        @memset(queued, false);
+
+        var worklist = MoveCfgWorklist{
+            .allocator = allocator,
+            .cfg = cfg,
+            .states = states,
+            .initialized = initialized,
+            .queued = queued,
+        };
+        worklist.states[entry] = entry_state;
+        worklist.initialized[entry] = true;
+        try worklist.enqueue(entry);
+        return worklist;
+    }
+
+    pub fn deinit(self: *MoveCfgWorklist) void {
+        self.queue.deinit(self.allocator);
+        self.allocator.free(self.queued);
+        self.allocator.free(self.initialized);
+        self.allocator.free(self.states);
+    }
+
+    pub fn enqueue(self: *MoveCfgWorklist, block: MoveCfgBlockId) !void {
+        std.debug.assert(block < self.states.len);
+        if (self.queued[block]) return;
+        try self.queue.append(self.allocator, block);
+        self.queued[block] = true;
+    }
+
+    pub fn pop(self: *MoveCfgWorklist) ?MoveCfgBlockId {
+        if (self.queue.items.len == 0) return null;
+        const block = self.queue.orderedRemove(0);
+        self.queued[block] = false;
+        return block;
+    }
+
+    pub fn state(self: *const MoveCfgWorklist, block: MoveCfgBlockId) ?MoveCfgFlowState {
+        std.debug.assert(block < self.states.len);
+        if (!self.initialized[block]) return null;
+        return self.states[block];
+    }
+
+    pub fn propagateEdge(self: *MoveCfgWorklist, edge: MoveCfgEdge, outgoing: MoveCfgFlowState) !bool {
+        std.debug.assert(edge.to < self.states.len);
+        const changed = if (self.initialized[edge.to])
+            self.states[edge.to].joinInto(outgoing)
+        else blk: {
+            self.states[edge.to] = outgoing;
+            self.initialized[edge.to] = true;
+            break :blk true;
+        };
+        if (changed) try self.enqueue(edge.to);
+        return changed;
+    }
+
+    pub fn propagateSuccessors(self: *MoveCfgWorklist, from: MoveCfgBlockId, outgoing: MoveCfgFlowState) !usize {
+        var changed_count: usize = 0;
+        for (self.cfg.edges.items) |edge| {
+            if (edge.from != from) continue;
+            if (try self.propagateEdge(edge, outgoing)) changed_count += 1;
+        }
+        return changed_count;
+    }
+};
+
 pub const LayoutFieldInfo = struct {
     fields: std.StringHashMap(ast.TypeExpr),
     ordered: []const ast.Field,

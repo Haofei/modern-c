@@ -5,6 +5,7 @@ const diagnostics = @import("diagnostics.zig");
 const monomorphize = @import("monomorphize.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
+const sema_model = @import("sema_model.zig");
 
 fn checkSource(source: []const u8, reporter: *diagnostics.Reporter) !void {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -37,6 +38,84 @@ fn countDiagnosticCode(reporter: *const diagnostics.Reporter, code: []const u8) 
 fn parseWithAllocator(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !ast.Module {
     var p = parser.Parser.init(source, reporter);
     return p.parseModule(allocator);
+}
+
+test "move CFG skeleton joins branch states through worklist" {
+    var cfg = sema_model.MoveCfg.init(std.testing.allocator);
+    defer cfg.deinit();
+
+    const entry = try cfg.addBlock(.entry);
+    const then_block = try cfg.addBlock(.statement);
+    const else_block = try cfg.addBlock(.statement);
+    const join = try cfg.addBlock(.branch_join);
+    try cfg.addEdge(entry, then_block, .branch);
+    try cfg.addEdge(entry, else_block, .branch);
+    try cfg.addEdge(then_block, join, .normal);
+    try cfg.addEdge(else_block, join, .normal);
+
+    var worklist = try sema_model.MoveCfgWorklist.init(std.testing.allocator, &cfg, entry, .{});
+    defer worklist.deinit();
+
+    try std.testing.expectEqual(entry, worklist.pop().?);
+    _ = try worklist.propagateSuccessors(entry, worklist.state(entry).?);
+    try std.testing.expectEqual(then_block, worklist.pop().?);
+    try std.testing.expectEqual(else_block, worklist.pop().?);
+
+    _ = try worklist.propagateSuccessors(then_block, worklist.state(then_block).?.withMoved(0));
+    _ = try worklist.propagateSuccessors(else_block, worklist.state(else_block).?.withMoved(1));
+
+    const joined = worklist.state(join) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 0b11), joined.moved_mask);
+    try std.testing.expectEqual(join, worklist.pop().?);
+}
+
+test "move CFG skeleton requeues loop head on backedge state change" {
+    var cfg = sema_model.MoveCfg.init(std.testing.allocator);
+    defer cfg.deinit();
+
+    const entry = try cfg.addBlock(.entry);
+    const loop_head = try cfg.addBlock(.loop_head);
+    const body = try cfg.addBlock(.statement);
+    try cfg.addEdge(entry, loop_head, .normal);
+    try cfg.addEdge(loop_head, body, .normal);
+    try cfg.addEdge(body, loop_head, .backedge);
+
+    var worklist = try sema_model.MoveCfgWorklist.init(std.testing.allocator, &cfg, entry, .{});
+    defer worklist.deinit();
+
+    try std.testing.expectEqual(entry, worklist.pop().?);
+    _ = try worklist.propagateSuccessors(entry, worklist.state(entry).?);
+    try std.testing.expectEqual(loop_head, worklist.pop().?);
+    _ = try worklist.propagateSuccessors(loop_head, worklist.state(loop_head).?);
+    try std.testing.expectEqual(body, worklist.pop().?);
+
+    _ = try worklist.propagateSuccessors(body, worklist.state(body).?.withMoved(2));
+    const loop_state = worklist.state(loop_head) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 0b100), loop_state.moved_mask);
+    try std.testing.expectEqual(loop_head, worklist.pop().?);
+}
+
+test "move CFG skeleton carries early-exit state to exit block" {
+    var cfg = sema_model.MoveCfg.init(std.testing.allocator);
+    defer cfg.deinit();
+
+    const entry = try cfg.addBlock(.entry);
+    const body = try cfg.addBlock(.statement);
+    const exit = try cfg.addBlock(.exit);
+    try cfg.addEdge(entry, body, .normal);
+    try cfg.addEdge(body, exit, .early_exit);
+
+    var worklist = try sema_model.MoveCfgWorklist.init(std.testing.allocator, &cfg, entry, .{});
+    defer worklist.deinit();
+
+    try std.testing.expectEqual(entry, worklist.pop().?);
+    _ = try worklist.propagateSuccessors(entry, worklist.state(entry).?);
+    try std.testing.expectEqual(body, worklist.pop().?);
+    _ = try worklist.propagateSuccessors(body, worklist.state(body).?.withMoved(3));
+
+    const exit_state = worklist.state(exit) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 0b1000), exit_state.moved_mask);
+    try std.testing.expectEqual(exit, worklist.pop().?);
 }
 
 test "allocation failure across parse monomorphize and sema never reports clean success" {

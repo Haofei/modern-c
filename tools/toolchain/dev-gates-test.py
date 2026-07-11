@@ -148,7 +148,9 @@ def main() -> None:
     assert_gates(module, ["tools/toolchain/dev-gates-test.py"], ["dev-gates-test"])
     assert_gates(module, ["tools/toolchain/move-unsupported-inventory.py"], ["move-unsupported-inventory-test"])
     assert_gates(module, ["tools/toolchain/move-place-identity-inventory.py"], ["move-place-identity-inventory-test"])
+    assert_gates(module, ["tools/toolchain/move-cfg-skeleton-inventory.py"], ["move-cfg-skeleton-inventory-test"])
     assert_gates(module, ["src/sema_move.zig"], ["test", "diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "c-test", "diff-backend", "move-place-identity-inventory-test"])
+    assert_gates(module, ["src/sema_model.zig"], ["test", "diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "c-test", "diff-backend", "move-cfg-skeleton-inventory-test"])
     assert_route(
         module,
         ["tests/spec/bad/move_cfg_arrays_reject.mc"],

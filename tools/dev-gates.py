@@ -87,6 +87,11 @@ RULES: tuple[Rule, ...] = (
         "move checker place-identity changes need the focused typed-place drift gate",
     ),
     Rule(
+        ("src/sema_model.zig", "tools/toolchain/move-cfg-skeleton-inventory.py"),
+        ("move-cfg-skeleton-inventory-test",),
+        "move checker CFG model changes need the focused CFG skeleton drift gate",
+    ),
+    Rule(
         ("tools/ci/pass-gates.py",),
         ("ci-pass-gates-test",),
         "CI PASS assertion helper changes need the focused CI anti-vacuity contract gate",
