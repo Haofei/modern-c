@@ -438,6 +438,46 @@ test "LLVM rejects prebuilt MIR with missing raw store call target facts" {
     );
 }
 
+test "LLVM rejects prebuilt MIR with missing raw load call target facts" {
+    const source =
+        \\fn raw_load_call_target_fact_gate(addr: PAddr) -> u32 {
+        \\    unsafe { return raw.load<u32>(addr); }
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_missing_raw_load_call_target_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearCallTargetFactsForFunction(&module_mir, "raw_load_call_target_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_raw_load_call_target_facts.mc", .{}, false, .riscv64, null),
+    );
+}
+
+test "LLVM rejects prebuilt MIR with missing raw ptr call target facts" {
+    const source =
+        \\fn raw_ptr_call_target_fact_gate(addr: PAddr) -> *mut u32 {
+        \\    unsafe { return raw.ptr<u32>(addr); }
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_missing_raw_ptr_call_target_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearCallTargetFactsForFunction(&module_mir, "raw_ptr_call_target_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_raw_ptr_call_target_facts.mc", .{}, false, .riscv64, null),
+    );
+}
+
 test "LLVM rejects prebuilt MIR with missing cpu pause call target facts" {
     const source =
         \\fn cpu_pause_call_target_fact_gate() -> void {
