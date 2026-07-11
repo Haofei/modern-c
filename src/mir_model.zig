@@ -241,6 +241,9 @@ pub const CallTargetKind = enum {
     raw_ptr,
     raw_store,
     cpu_pause,
+    fence_full,
+    fence_release,
+    fence_acquire,
 };
 
 pub const CallTargetFact = struct {

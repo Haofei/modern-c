@@ -26,7 +26,6 @@ const satHelperParts = lower_c_op.satHelperParts;
 const trapHelperForCall = lower_c_op.trapHelperForCall;
 
 const lower_c_atomic = @import("lower_c_atomic.zig");
-const fenceHelperForCall = lower_c_atomic.fenceHelperForCall;
 
 // C emission model and helper modules used by the emitter implementation.
 const lower_c_model = @import("lower_c_model.zig");
@@ -3452,7 +3451,12 @@ const CEmitter = struct {
     // compiler barriers.
     fn emitFenceStmt(self: *CEmitter, expr: ast.Expr) !bool {
         const call = callExpr(expr) orelse return false;
-        const helper = fenceHelperForCall(call.callee.*) orelse return false;
+        const helper = switch (self.mirCallTargetKindAt(call.callee.*.span) orelse return false) {
+            .fence_full => "mc_barrier_full",
+            .fence_release => "mc_barrier_release_before",
+            .fence_acquire => "mc_barrier_acquire_after",
+            else => return false,
+        };
         if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}();\n", .{helper});

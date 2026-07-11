@@ -4507,7 +4507,7 @@ const FunctionBuilder = struct {
                     ty
                 else if (self.cpuPauseCallValueType(node)) |ty|
                     ty
-                else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
+                else if (self.fenceCallTargetKind(node.callee.*)) |_| .void else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
                 if (reduceCallKind(node.callee.*)) |kind| {
                     const fact_kind: CallTargetKind = switch (kind) {
@@ -4549,6 +4549,12 @@ const FunctionBuilder = struct {
                 if (self.cpuPauseCallValueType(node)) |cpu_pause_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.cpu_pause), cpu_pause_ty, expr.span);
                     try self.addCallTargetFact(.cpu_pause, cpu_pause_ty, expr.span);
+                }
+                if (self.fenceCallTargetKind(node.callee.*)) |fence_kind| {
+                    if (node.type_args.len == 0 and node.args.len == 0) {
+                        try self.addInstr(.call_target, @tagName(fence_kind), .void, expr.span);
+                        try self.addCallTargetFact(fence_kind, .void, expr.span);
+                    }
                 }
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {
                     try self.addInstr(.unsafe_check, callee_name, .unknown, expr.span);
@@ -4812,6 +4818,16 @@ const FunctionBuilder = struct {
     fn cpuPauseCallValueType(_: *FunctionBuilder, call: anytype) ?ValueType {
         if (!ast_query.isCpuPauseCall(call.callee.*) or call.type_args.len != 0 or call.args.len != 0) return null;
         return .void;
+    }
+
+    fn fenceCallTargetKind(_: *FunctionBuilder, callee: ast.Expr) ?CallTargetKind {
+        const member = memberExpr(callee) orelse return null;
+        const base = calleeIdentName(member.base.*) orelse return null;
+        if (!std.mem.eql(u8, base, "fence")) return null;
+        if (std.mem.eql(u8, member.name.text, "full")) return .fence_full;
+        if (std.mem.eql(u8, member.name.text, "release")) return .fence_release;
+        if (std.mem.eql(u8, member.name.text, "acquire")) return .fence_acquire;
+        return null;
     }
 
     fn mmioReceiverCalleeName(self: *FunctionBuilder, callee: ast.Expr) ?[]const u8 {

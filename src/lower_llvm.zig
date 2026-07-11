@@ -138,7 +138,6 @@ const atomicOrderingArg = lower_llvm_atomic.atomicOrderingArg;
 const atomicOrderingExpr = lower_llvm_atomic.atomicOrderingExpr;
 const orderingArg = lower_llvm_atomic.orderingArg;
 const atomicLlvmOrdering = lower_llvm_atomic.atomicLlvmOrdering;
-const fenceOrderingForCall = lower_llvm_atomic.fenceOrderingForCall;
 const isAtomicInitCall = lower_llvm_atomic.isAtomicInitCall;
 const isAtomicInitExpr = lower_llvm_atomic.isAtomicInitExpr;
 const atomicInitValue = lower_llvm_atomic.atomicInitValue;
@@ -2568,7 +2567,13 @@ const LlvmEmitter = struct {
             }
             return true;
         }
-        if (fenceOrderingForCall(call.callee.*)) |ordering| {
+        if (self.mirCallTargetKindAt(call.callee.*.span)) |fence_kind| {
+            const ordering = switch (fence_kind) {
+                .fence_full => "seq_cst",
+                .fence_release => "release",
+                .fence_acquire => "acquire",
+                else => null,
+            } orelse return false;
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             try self.out.print(self.allocator, "  fence {s}{s}\n", .{ ordering, try self.debugCallSuffix() });
             return true;
