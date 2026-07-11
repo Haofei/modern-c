@@ -165,6 +165,33 @@ BACKEND_AST_INFERENCE_BUDGET: dict[str, object] = {
     ],
 }
 
+SCALAR_DEREF_DEFAULT_AUDIT: dict[str, list[str]] = {
+    "docs/typed-semantic-facts.md": [
+        "### Scalar pointer deref default audit",
+        "| C bare scalar pointer deref |",
+        "| C aggregate pointer deref leaves |",
+        "| LLVM bare scalar pointer deref |",
+        "| LLVM aggregate pointer deref leaves |",
+    ],
+    "src/lower_c_emitter.zig": [
+        "fn derefPointerHasProvenLocalStorage(",
+        "fn directLocalStorageTarget(",
+        "fn derefAccessLowering(",
+        "fn emitRaceTolerantDerefStoreStmt(",
+        "fn emitRaceTolerantAggregateDerefExpr(",
+        "fn emitRaceTolerantAggregateLoadFromPtr(",
+        "fn emitRaceTolerantAggregateStoreFromPtr(",
+    ],
+    "src/lower_llvm.zig": [
+        "fn pointerExprHasProvenLocalStorage(",
+        "fn directLocalStorageRoot(",
+        "fn derefUsesRaceTolerantLowering(",
+        "fn emitDeref(",
+        "fn emitRaceTolerantAggregateDerefLoad(",
+        "fn emitRaceTolerantAggregateDerefStore(",
+    ],
+}
+
 ANCHORS: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "### Phase 1 inventory: current fact-like surfaces",
@@ -389,6 +416,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn mirPointerProvenanceCoversDirectLocalUpdate": 0,
         "global_pointer_return_fns": 0,
         "fn collectGlobalPointerProvenanceSummaries": 0,
+        "fn derefAccessLowering(": 1,
+        "try self.derefAccessLowering(": 2,
+        "fn derefPointerHasProvenLocalStorage(": 1,
     },
     "src/lower_llvm.zig": {
         "fn requireMirBoundsFact": 1,
@@ -408,6 +438,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn collectAggregateReturnPointerFieldsForFunction": 0,
         "fn collectSimpleControlFlowAggregateReturnPointerFields": 0,
         "fn trackSimpleAggregateReturn": 0,
+        "fn derefUsesRaceTolerantLowering(": 1,
+        "self.derefUsesRaceTolerantLowering(": 2,
+        "fn pointerExprHasProvenLocalStorage(": 1,
     },
     "tests/spec/no_implicit_conversion.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 9,
@@ -483,6 +516,19 @@ def main() -> int:
             checked += 1
             if anchor not in budget_doc:
                 missing.append(f"backend AST-inference budget: docs/typed-semantic-facts.md missing anchor {anchor!r}")
+
+    for relative, anchors in sorted(SCALAR_DEREF_DEFAULT_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"scalar deref default audit: {relative}: file missing")
+            continue
+
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"scalar deref default audit: {relative}: missing anchor {anchor!r}")
 
     if missing:
         print("semantic facts inventory anchor check failed:", file=sys.stderr)

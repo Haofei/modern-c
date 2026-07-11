@@ -39,6 +39,11 @@ seven registered backend families. This closes the budget action slice; each
 budgeted family still needs a later migration, reduction, or accepted limitation
 decision.
 
+The completed scalar pointer deref default audit records the current C/LLVM
+decision entry points and default behavior for missing provenance. It closes the
+audit action slice, not the escaped-pointer, returned-pointer, or arbitrary-CFG
+provenance boundaries.
+
 The compiler already has several fact-like surfaces, but they are not a single
 typed semantic source of truth:
 
@@ -214,6 +219,20 @@ family from backend authority must reduce the count.
 | `c-direct-global-race-helpers` | Backend AST inference budget | Direct global race-helper routing is represented by typed memory/race facts or by an accepted direct-global backend policy. |
 | `c-pointer-provenance-consumption` | Backend AST inference budget | Broader scalar-leaf conservative fallback is fully covered by typed provenance facts or an accepted default policy. |
 | `llvm-pointer-provenance-consumption` | Backend AST inference budget | The remaining LLVM local-only proof is migrated to MIR facts or explicitly accepted as a local emission proof, not semantic inference. |
+
+### Scalar pointer deref default audit
+
+This audit gates the current default for ordinary scalar pointer dereferences:
+missing or unknown provenance must not silently produce UB-bearing plain memory
+operations. Plain lowering requires a positive local-storage proof. Unsupported
+scalar widths or aggregate shapes without a sound recursive lowering fail closed.
+
+| Access path | Positive plain proof | Missing-proof default | Fail-closed boundary |
+|---|---|---|---|
+| C bare scalar pointer deref | `derefPointerHasProvenLocalStorage` accepts a live MIR `local_storage` pointer fact, a local aggregate/array element fact, or syntactic `&local` through grouped/cast wrappers. | `derefAccessLowering` routes scalar leaves through `mc_race_load_*` / `mc_race_store_*` and pointer-shaped leaves through relaxed `__atomic_*_n`. | Scalars without a race helper, such as unsupported wide scalar leaves, return `UnsupportedCEmission`; aggregate pointees use the recursive aggregate path instead of plain aggregate copy. |
+| C aggregate pointer deref leaves | The same local proof keeps the aggregate access on the plain structural path. | `emitRaceTolerantAggregateLoadFromPtr` and `emitRaceTolerantAggregateStoreFromPtr` recursively lower scalar/pointer leaves through the race-tolerant helpers. | Unsupported aggregate kinds, union-like leaves, or non-constant array sizes reject emission. |
+| LLVM bare scalar pointer deref | `pointerExprHasProvenLocalStorage` accepts a live MIR `local_storage` pointer fact, local aggregate/array provenance, or syntactic `&local` through grouped/cast wrappers. | `derefUsesRaceTolerantLowering` makes `emitDeref` / store paths pass `use_atomic=true`, so scalar leaves emit `load/store atomic ... unordered`. | Atomic-ineligible scalar leaves reject through `ordinaryAtomicScalarTooWide` / `UnsupportedLlvmEmission`; aggregate pointees use the recursive aggregate path. |
+| LLVM aggregate pointer deref leaves | The same local proof keeps aggregate deref on the plain structural path. | `emitRaceTolerantAggregateDerefLoad` and `emitRaceTolerantAggregateDerefStore` recursively lower scalar leaves with `emitOrdinaryLoad/Store(..., true)`. | Unsupported unions, non-constant array lengths, or atomic-ineligible leaves reject emission. |
 
 ### Phase 2: add a typed fact table for one narrow fact family
 
