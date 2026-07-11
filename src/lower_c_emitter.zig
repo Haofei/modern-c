@@ -3014,7 +3014,10 @@ const CEmitter = struct {
         if (try lower_c_try.emitResultTryExprStmt(self.tryStmtEmitContext(), expr, locals, return_ty)) return;
         if (try lower_c_try.emitNullableTryExprStmt(self.tryStmtEmitContext(), expr, locals)) return;
         if (try lower_c_mmio.emitReadExprStmt(self.mmioCallEmitContext(), expr, locals)) return;
-        if (try lower_c_call.emitSequencedCallExprStmt(self.sequencedArgContext(), &self.functions, expr, locals)) return;
+        if (try lower_c_call.emitSequencedCallExprStmt(self.sequencedArgContext(), &self.functions, expr, locals)) {
+            self.applyMirPointerProvenanceInvalidationsAtCall(expr.span, locals);
+            return;
+        }
         try self.writeIndent();
         try self.emitExpr(expr, locals);
         try self.out.appendSlice(self.allocator, ";\n");
@@ -3195,7 +3198,10 @@ const CEmitter = struct {
         if (try lower_c_try.emitResultTryExprStmt(self.tryStmtEmitContext(), expr, locals, return_ty)) return;
         if (try lower_c_try.emitNullableTryExprStmt(self.tryStmtEmitContext(), expr, locals)) return;
         if (try lower_c_mmio.emitReadExprStmt(self.mmioCallEmitContext(), expr, locals)) return;
-        if (try lower_c_call.emitSequencedCallExprStmt(self.sequencedArgContext(), &self.functions, expr, locals)) return;
+        if (try lower_c_call.emitSequencedCallExprStmt(self.sequencedArgContext(), &self.functions, expr, locals)) {
+            self.applyMirPointerProvenanceInvalidationsAtCall(expr.span, locals);
+            return;
+        }
         try self.writeIndent();
         try self.emitExpr(expr, locals);
         try self.out.appendSlice(self.allocator, ";\n");

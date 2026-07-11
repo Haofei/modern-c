@@ -3411,6 +3411,48 @@ test "LLVM call-produced scalar pointer derefs lower race-tolerantly" {
     try expectNotContains(store_body, "store i32 ");
 }
 
+test "LLVM escaped pointer provenance lowers conservatively" {
+    const source =
+        \\extern fn consume_pointer(p: *mut u32) -> void;
+        \\extern fn consume_box(p: *mut PtrBox) -> void;
+        \\
+        \\struct PtrBox {
+        \\    p: *mut u32,
+        \\}
+        \\
+        \\fn escaped_local_pointer_lowers_race_tolerant() -> u32 {
+        \\    var local: u32 = 1;
+        \\    let p: *mut u32 = &local;
+        \\    consume_pointer(p);
+        \\    return p.*;
+        \\}
+        \\
+        \\fn escaped_aggregate_pointer_field_lowers_race_tolerant() -> u32 {
+        \\    var local: u32 = 2;
+        \\    var box: PtrBox = .{ .p = &local };
+        \\    consume_box(&box);
+        \\    let p: *mut u32 = box.p;
+        \\    return p.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("escaped_pointer_provenance.mc", source, &output);
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i32 @escaped_local_pointer_lowers_race_tolerant");
+    try expectContains(local_body, "call void @consume_pointer(ptr %");
+    try expectContains(local_body, "load atomic i32, ptr %");
+    try expectContains(local_body, " unordered, align 4");
+    try expectNotContains(local_body, "load i32, ptr %");
+
+    const aggregate_body = try llvmFunctionBody(output.items, "define internal i32 @escaped_aggregate_pointer_field_lowers_race_tolerant");
+    try expectContains(aggregate_body, "call void @consume_box(ptr %");
+    try expectContains(aggregate_body, "load atomic i32, ptr %");
+    try expectContains(aggregate_body, " unordered, align 4");
+    try expectNotContains(aggregate_body, "load i32, ptr %");
+}
+
 test "LLVM pointer-member scalar access lowers race-tolerantly" {
     const source =
         \\struct Inner {

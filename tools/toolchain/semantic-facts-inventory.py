@@ -192,6 +192,35 @@ SCALAR_DEREF_DEFAULT_AUDIT: dict[str, list[str]] = {
     ],
 }
 
+ESCAPED_POINTER_BOUNDARY_AUDIT: dict[str, list[str]] = {
+    "docs/typed-semantic-facts.md": [
+        "### Escaped pointer boundary audit",
+        "| Direct pointer argument escape |",
+        "| Aggregate address escape |",
+        "| Function-pointer callback escape |",
+    ],
+    "src/lower_c_emitter.zig": [
+        "self.applyMirPointerProvenanceInvalidationsAtCall(expr.span, locals);",
+        "fn applyMirPointerProvenanceInvalidationsAtCall(",
+    ],
+    "src/lower_c_tests.zig": [
+        "lower-c escaped pointer provenance lowers conservatively",
+        "escaped_local_pointer_lowers_race_tolerant",
+        "escaped_aggregate_pointer_field_lowers_race_tolerant",
+    ],
+    "src/lower_llvm_tests.zig": [
+        "LLVM escaped pointer provenance lowers conservatively",
+        "consume_alias_copy_escape_param",
+        "consume_aggregate_alias_copy_escape_param",
+        "escaped_local_pointer_lowers_race_tolerant",
+        "escaped_aggregate_pointer_field_lowers_race_tolerant",
+    ],
+    "src/mir_tests.zig": [
+        "MIR pointer provenance facts fail closed on reassignment dynamic writes calls and address escape",
+        "invalidation_reason=address_escape",
+    ],
+}
+
 ANCHORS: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "### Phase 1 inventory: current fact-like surfaces",
@@ -529,6 +558,19 @@ def main() -> int:
             checked += 1
             if anchor not in text:
                 missing.append(f"scalar deref default audit: {relative}: missing anchor {anchor!r}")
+
+    for relative, anchors in sorted(ESCAPED_POINTER_BOUNDARY_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"escaped pointer boundary audit: {relative}: file missing")
+            continue
+
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"escaped pointer boundary audit: {relative}: missing anchor {anchor!r}")
 
     if missing:
         print("semantic facts inventory anchor check failed:", file=sys.stderr)

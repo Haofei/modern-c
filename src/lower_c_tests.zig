@@ -5571,6 +5571,46 @@ test "lower-c address-of-local deref keeps plain lowering" {
     try expectNotContains(body, "mc_race_");
 }
 
+test "lower-c escaped pointer provenance lowers conservatively" {
+    const source =
+        \\extern fn consume_pointer(p: *mut u32) -> void;
+        \\extern fn consume_box(p: *mut PtrBox) -> void;
+        \\
+        \\struct PtrBox {
+        \\    p: *mut u32,
+        \\}
+        \\
+        \\fn escaped_local_pointer_lowers_race_tolerant() -> u32 {
+        \\    var local: u32 = 1;
+        \\    let p: *mut u32 = &local;
+        \\    consume_pointer(p);
+        \\    return p.*;
+        \\}
+        \\
+        \\fn escaped_aggregate_pointer_field_lowers_race_tolerant() -> u32 {
+        \\    var local: u32 = 2;
+        \\    var box: PtrBox = .{ .p = &local };
+        \\    consume_box(&box);
+        \\    let p: *mut u32 = box.p;
+        \\    return p.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("emit_c_escaped_pointer_provenance.mc", source, &output);
+
+    const local_body = try cFunctionBody(output.items, "static uint32_t escaped_local_pointer_lowers_race_tolerant(void)");
+    try expectContains(local_body, "consume_pointer(");
+    try expectContains(local_body, "return ((uint32_t)mc_race_load_u32(p));");
+    try expectNotContains(local_body, "return *p;");
+
+    const aggregate_body = try cFunctionBody(output.items, "static uint32_t escaped_aggregate_pointer_field_lowers_race_tolerant(void)");
+    try expectContains(aggregate_body, "consume_box(");
+    try expectContains(aggregate_body, "return ((uint32_t)mc_race_load_u32(p));");
+    try expectNotContains(aggregate_body, "return *p;");
+}
+
 test "lower-c consumes MIR pointer provenance facts for direct scalar pointer derefs" {
     const source =
         \\global shared_counter: u32 = 0;

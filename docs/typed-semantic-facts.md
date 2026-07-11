@@ -44,6 +44,10 @@ decision entry points and default behavior for missing provenance. It closes the
 audit action slice, not the escaped-pointer, returned-pointer, or arbitrary-CFG
 provenance boundaries.
 
+The completed escaped pointer boundary audit covers direct pointer argument
+escape, aggregate address escape, and existing callback escape cases. Returned
+pointer facts and arbitrary-CFG aggregate provenance remain open.
+
 The compiler already has several fact-like surfaces, but they are not a single
 typed semantic source of truth:
 
@@ -233,6 +237,18 @@ scalar widths or aggregate shapes without a sound recursive lowering fail closed
 | C aggregate pointer deref leaves | The same local proof keeps the aggregate access on the plain structural path. | `emitRaceTolerantAggregateLoadFromPtr` and `emitRaceTolerantAggregateStoreFromPtr` recursively lower scalar/pointer leaves through the race-tolerant helpers. | Unsupported aggregate kinds, union-like leaves, or non-constant array sizes reject emission. |
 | LLVM bare scalar pointer deref | `pointerExprHasProvenLocalStorage` accepts a live MIR `local_storage` pointer fact, local aggregate/array provenance, or syntactic `&local` through grouped/cast wrappers. | `derefUsesRaceTolerantLowering` makes `emitDeref` / store paths pass `use_atomic=true`, so scalar leaves emit `load/store atomic ... unordered`. | Atomic-ineligible scalar leaves reject through `ordinaryAtomicScalarTooWide` / `UnsupportedLlvmEmission`; aggregate pointees use the recursive aggregate path. |
 | LLVM aggregate pointer deref leaves | The same local proof keeps aggregate deref on the plain structural path. | `emitRaceTolerantAggregateDerefLoad` and `emitRaceTolerantAggregateDerefStore` recursively lower scalar leaves with `emitOrdinaryLoad/Store(..., true)`. | Unsupported unions, non-constant array lengths, or atomic-ineligible leaves reject emission. |
+
+### Escaped pointer boundary audit
+
+Escapes must drop positive local/global provenance before later dereferences.
+This audit covers the currently named escape boundary; broader returned-pointer
+and arbitrary-CFG provenance remain separate work.
+
+| Escape path | Required lowering behavior | Evidence |
+|---|---|---|
+| Direct pointer argument escape | Passing a proven-local pointer to a direct call invalidates the live local proof before the next C/LLVM deref, so the later scalar load is race-tolerant. | `src/lower_c_tests.zig` and `src/lower_llvm_tests.zig` `escaped_local_pointer_lowers_race_tolerant`; C sequenced call statements apply `applyMirPointerProvenanceInvalidationsAtCall`. |
+| Aggregate address escape | Passing `&aggregate` to a call invalidates pointer-field facts for the aggregate, so a later field read and deref stays conservative. | `escaped_aggregate_pointer_field_lowers_race_tolerant` in C/LLVM tests; MIR emits call invalidation for the aggregate field path. |
+| Function-pointer callback escape | Escaped copied callback aliases do not prove scalar or aggregate pointer parameters local/global; callee derefs lower race-tolerantly. | `tests/spec/data_race_semantics.mc` callback escape cases and LLVM assertions for `consume_alias_copy_escape_param`, `consume_aggregate_alias_copy_escape_param`, and `consume_aggregate_indirect_escape_param`. |
 
 ### Phase 2: add a typed fact table for one narrow fact family
 
