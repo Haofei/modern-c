@@ -25,6 +25,7 @@ const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const packedBitsMaskLiteral = lower_c_access.packedBitsMaskLiteral;
 const resolvedArrayChildType = lower_c_shape.resolvedArrayChildType;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
+const resultConstructorCallTag = ast_query.resultConstructorCallTag;
 const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 const structFieldType = lower_c_shape.structFieldType;
 const taggedUnionCase = ast_query.taggedUnionCase;
@@ -382,9 +383,7 @@ fn writeIndent(ctx: EmitContext) !void {
 }
 
 pub fn emitResultConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
-    const tag = calleeIdentName(call.callee.*) orelse return false;
-    if (!std.mem.eql(u8, tag, "ok") and !std.mem.eql(u8, tag, "err")) return false;
-    if (call.args.len != 1) return error.UnsupportedCEmission;
+    const tag = resultConstructorCallTag(call) orelse return false;
     const payload_ty = resultPayloadTypeForTag(target_ty, tag) orelse return false;
     const result_ty = try ctx.c_type(ctx.emit_ctx, target_ty);
 

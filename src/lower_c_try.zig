@@ -30,6 +30,7 @@ const appendGlobalStoreSuffix = lower_c_global.appendGlobalStoreSuffix;
 const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
+const resultConstructorCallTag = ast_query.resultConstructorCallTag;
 
 pub const TryPredicateFn = *const fn (ctx: *anyopaque, operand: ast.Expr) bool;
 pub const TryPredicateErrorFn = *const fn (ctx: *anyopaque, operand: ast.Expr) anyerror!bool;
@@ -404,9 +405,7 @@ pub fn emitNullableTryCallReturn(ctx: TryCallEmitContext, expr: ast.Expr, locals
 pub fn emitResultTryConstructorReturn(ctx: TryCallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
     const target_ty = return_ty orelse return false;
     const call = callExpr(expr) orelse return false;
-    const tag = calleeIdentName(call.callee.*) orelse return false;
-    if (!std.mem.eql(u8, tag, "ok") and !std.mem.eql(u8, tag, "err")) return false;
-    if (call.args.len != 1) return false;
+    const tag = resultConstructorCallTag(call) orelse return false;
     if (!ctx.expr_contains_result_try(ctx.replacement.emit_ctx, call.args[0], locals)) return false;
     const payload_ty = resultPayloadTypeForTag(target_ty, tag) orelse return false;
 

@@ -110,6 +110,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn maybeUninitCallMemberOp(",
             "pub fn isDeclassifyCallee(",
             "pub fn isDeclassifyCall(",
+            "pub fn resultConstructorCallTag(",
         ],
         "src/lower_llvm_query.zig": [
             "ast_query.rawLoadCallReturnType(call)",
@@ -126,6 +127,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "atomicCallMemberOp(call.callee.*)",
             "maybeUninitCallMemberOp(call.callee.*)",
             "isDeclassifyCall(call)",
+            "resultConstructorCallTag(call)",
         ],
     },
     "llvm-bounds-range-consumption": {
@@ -704,6 +706,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_llvm_query.zig": {
         "pub fn isDeclassifyCall(": 0,
+        "pub fn isResultConstructorCall(": 0,
     },
     "src/lower_c_emitter.zig": {
         "fn requireMirBoundsFact": 1,

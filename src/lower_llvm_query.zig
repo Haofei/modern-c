@@ -145,20 +145,6 @@ pub fn comptimeStructFieldValue(fields: []const eval.ComptimeStructField, name: 
     return null;
 }
 
-pub fn isResultConstructorCall(call: anytype) ?[]const u8 {
-    if (call.type_args.len != 0 or call.args.len != 1) return null;
-    const name = switch (call.callee.kind) {
-        .ident => |ident| ident.text,
-        .grouped => |inner| switch (inner.kind) {
-            .ident => |ident| ident.text,
-            else => return null,
-        },
-        else => return null,
-    };
-    if (std.mem.eql(u8, name, "ok") or std.mem.eql(u8, name, "err")) return name;
-    return null;
-}
-
 pub fn taggedUnionConstructorName(callee: ast.Expr) ?[]const u8 {
     return switch (callee.kind) {
         .ident => |ident| ident.text,

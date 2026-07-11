@@ -121,7 +121,7 @@ const isBindCallByNode = lower_llvm_query.isBindCallByNode;
 const isDeclassifyCall = ast_query.isDeclassifyCall;
 const isDropCall = lower_llvm_query.isDropCall;
 const isPhysCall = lower_llvm_query.isPhysCall;
-const isResultConstructorCall = lower_llvm_query.isResultConstructorCall;
+const resultConstructorCallTag = ast_query.resultConstructorCallTag;
 const isUninitExpr = lower_llvm_query.isUninitExpr;
 const llvmTraitIsObjectSafe = lower_llvm_query.llvmTraitIsObjectSafe;
 const memberCallee = lower_llvm_query.memberCallee;
@@ -6469,7 +6469,7 @@ const LlvmEmitter = struct {
             return try self.castValue(value, info.enum_ty, info.repr_ty);
         }
         if (byteViewCallKind(call.callee.*)) |kind| return try self.emitByteViewCall(call, kind);
-        if (isResultConstructorCall(call)) |tag| return try self.emitResultConstructorValue(call, expected_ty, tag);
+        if (resultConstructorCallTag(call)) |tag| return try self.emitResultConstructorValue(call, expected_ty, tag);
         if (self.domainResidueCallInfo(call)) |info| {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             return try self.emitExpr(info.base, info.domain_ty);

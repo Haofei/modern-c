@@ -421,6 +421,14 @@ pub fn isDeclassifyCall(call: anytype) bool {
     return isDeclassifyCallee(call.callee.*);
 }
 
+/// For a well-formed `ok(payload)` / `err(payload)` Result constructor, return its tag.
+pub fn resultConstructorCallTag(call: anytype) ?[]const u8 {
+    if (call.type_args.len != 0 or call.args.len != 1) return null;
+    const name = calleeIdentName(call.callee.*) orelse return null;
+    if (std.mem.eql(u8, name, "ok") or std.mem.eql(u8, name, "err")) return name;
+    return null;
+}
+
 /// The payload type and mode tag of a `DmaBuf<T, .mode>` type, or null.
 pub const DmaBufInfo = struct {
     payload: ast.TypeExpr,
