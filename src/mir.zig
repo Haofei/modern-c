@@ -4493,6 +4493,8 @@ const FunctionBuilder = struct {
                     self.exprType(expr)
                 else if (self.atomicCallValueType(node)) |ty|
                     ty
+                else if (self.maybeUninitCallValueType(node)) |ty|
+                    ty
                 else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
                 if (reduceCallKind(node.callee.*)) |kind| {
@@ -4505,6 +4507,10 @@ const FunctionBuilder = struct {
                     try self.addCallTargetFact(fact_kind, call_ty, expr.span);
                 }
                 if (self.atomicCallTargetKind(node.callee.*)) |fact_kind| {
+                    try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
+                    try self.addCallTargetFact(fact_kind, call_ty, expr.span);
+                }
+                if (self.maybeUninitCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
                     try self.addCallTargetFact(fact_kind, call_ty, expr.span);
                 }
@@ -4721,6 +4727,24 @@ const FunctionBuilder = struct {
         const member = memberExpr(call.callee.*) orelse return null;
         const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
         const payload_ty = atomicPayloadTypeExprAlias(base_ty, self.aliases) orelse return null;
+        return valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+    }
+
+    fn maybeUninitCallTargetKind(self: *FunctionBuilder, callee: ast.Expr) ?CallTargetKind {
+        const member = memberExpr(callee) orelse return null;
+        const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
+        if (maybeUninitPayloadTypeExprAlias(base_ty, self.aliases) == null) return null;
+        if (std.mem.eql(u8, member.name.text, "write")) return .maybe_uninit_write;
+        if (std.mem.eql(u8, member.name.text, "assume_init")) return .maybe_uninit_assume_init;
+        return null;
+    }
+
+    fn maybeUninitCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
+        const kind = self.maybeUninitCallTargetKind(call.callee.*) orelse return null;
+        if (kind == .maybe_uninit_write) return .void;
+        const member = memberExpr(call.callee.*) orelse return null;
+        const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
+        const payload_ty = maybeUninitPayloadTypeExprAlias(base_ty, self.aliases) orelse return null;
         return valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases);
     }
 
@@ -7401,6 +7425,20 @@ fn atomicPayloadTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringH
         .generic => |node| if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1) node.args[0] else null,
         .pointer => |node| atomicPayloadTypeExprAliasDepth(node.child.*, aliases, depth + 1),
         .qualified => |node| atomicPayloadTypeExprAliasDepth(node.child.*, aliases, depth + 1),
+        else => null,
+    };
+}
+
+fn maybeUninitPayloadTypeExprAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ast.TypeExpr {
+    return maybeUninitPayloadTypeExprAliasDepth(ty, aliases, 0);
+}
+
+fn maybeUninitPayloadTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) ?ast.TypeExpr {
+    if (depth > 64) return null;
+    return switch (ty.kind) {
+        .name => |name| if (aliases.get(name.text)) |resolved| maybeUninitPayloadTypeExprAliasDepth(resolved, aliases, depth + 1) else null,
+        .generic => |node| if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1) node.args[0] else null,
+        .qualified => |node| maybeUninitPayloadTypeExprAliasDepth(node.child.*, aliases, depth + 1),
         else => null,
     };
 }

@@ -18,7 +18,6 @@ const ByteViewCallKind = ast_query.ByteViewCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
 const byteViewCallReturnType = ast_query.byteViewCallReturnType;
 const reflectionValueCallReturnType = ast_query.reflectionValueCallReturnType;
-const maybeUninitCallMemberOp = ast_query.maybeUninitCallMemberOp;
 const constGetCallTarget = ast_query.constGetCallTarget;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
@@ -8629,7 +8628,12 @@ const LlvmEmitter = struct {
     }
 
     fn maybeUninitCallInfo(self: *LlvmEmitter, call: anytype) ?MaybeUninitCallInfo {
-        const op = maybeUninitCallMemberOp(call.callee.*) orelse return null;
+        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+        const op = switch (kind) {
+            .maybe_uninit_write => "write",
+            .maybe_uninit_assume_init => "assume_init",
+            else => return null,
+        };
         const member = memberCallee(call) orelse return null;
         const base_ty = self.exprType(member.base.*) orelse return null;
         const payload_ty = self.maybeUninitPayloadType(base_ty) orelse return null;

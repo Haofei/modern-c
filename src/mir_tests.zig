@@ -730,6 +730,39 @@ test "MIR records typed call target facts for atomic member calls" {
     try mir.validateCallTargetFactsForLowering(typed_mir);
 }
 
+test "MIR records typed call target facts for MaybeUninit member calls" {
+    const source =
+        \\struct Node { value: u32 }
+        \\
+        \\fn maybe_uninit_ops() -> u32 {
+        \\    var slot: MaybeUninit<Node> = uninit;
+        \\    slot.write(.{ .value = 7 });
+        \\    let value: Node = slot.assume_init();
+        \\    return value.value;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_maybe_uninit_call_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "maybe_uninit_ops").?;
+    try std.testing.expectEqual(@as(usize, 2), function.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.maybe_uninit_write, function.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("void", function.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(mir.CallTargetKind.maybe_uninit_assume_init, function.call_target_facts[1].kind);
+    try std.testing.expectEqualStrings("Node", function.call_target_facts[1].result_ty.name());
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+}
+
 test "MIR verifier reports no_lang_trap, fallthrough, contract, and irq findings" {
     const source =
         \\fn missing_return(flag: bool) -> u32 {

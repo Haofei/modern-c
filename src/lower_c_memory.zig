@@ -7,6 +7,7 @@ const ast_query = @import("ast_query.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
+const mir = @import("mir.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
@@ -23,6 +24,7 @@ pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]con
 pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, mutability: ast.Mutability) anyerror![]const u8;
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
 pub const ExprTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -38,6 +40,7 @@ pub const Context = struct {
     c_ident: CIdentFn,
     operand_emit_type: ExprTypeFn,
     expr_source_type: ExprTypeFn,
+    mir_call_target_kind: MirCallTargetKindFn,
 };
 
 pub fn emitByteViewCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
@@ -105,7 +108,7 @@ pub fn emitDmaCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Loca
 pub fn emitMaybeUninitAssumeInitCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     if (call.type_args.len != 0 or call.args.len != 0) return false;
     const member = memberCallee(call.callee.*) orelse return false;
-    if (!std.mem.eql(u8, member.name.text, "assume_init")) return false;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .maybe_uninit_assume_init) return false;
     _ = maybeUninitPayloadType(ctx, member.base.*, locals) orelse return false;
     try ctx.emit_expr(ctx.emit_ctx, member.base.*, locals);
     return true;
@@ -118,7 +121,7 @@ pub fn emitMaybeUninitWriteStmt(ctx: Context, expr: ast.Expr, locals: *std.Strin
     };
     if (call.type_args.len != 0 or call.args.len != 1) return false;
     const member = memberCallee(call.callee.*) orelse return false;
-    if (!std.mem.eql(u8, member.name.text, "write")) return false;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .maybe_uninit_write) return false;
     const payload_ty = maybeUninitPayloadType(ctx, member.base.*, locals) orelse return false;
     try writeIndent(ctx);
     try ctx.emit_expr(ctx.emit_ctx, member.base.*, locals);
