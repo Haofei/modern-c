@@ -11,11 +11,11 @@ const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const mir = @import("mir.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const intTypeRange = lower_c_type.intTypeRange;
 const isNumericStorageType = lower_c_type.isNumericStorageType;
-const isBitcastCall = lower_c_expr.isBitcastCall;
 const memberCallee = ast_query.memberCallee;
 const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const simpleNameType = ast_query.simpleNameType;
@@ -27,6 +27,7 @@ pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]con
 pub const NumericExprTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const UnderlyingIntTypeNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) ?[]const u8;
 pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror![]const u8;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -41,6 +42,7 @@ pub const Context = struct {
     numeric_expr_type: NumericExprTypeFn,
     underlying_int_type_name: UnderlyingIntTypeNameFn,
     result_type_name: ResultTypeNameFn,
+    mir_call_target_kind: MirCallTargetKindFn,
 };
 
 pub fn emitConversionCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
@@ -128,7 +130,8 @@ pub fn emitConversionCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
 }
 
 pub fn emitBitcastCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    if (!isBitcastCall(call)) return false;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .bitcast) return false;
+    if (call.type_args.len != 1 or call.args.len != 1) return false;
     const target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, call.type_args[0]);
     const source_ty = ctx.expr_source_type(ctx.emit_ctx, call.args[0], locals) orelse return error.UnsupportedCEmission;
     const source_name = try std.fmt.allocPrint(ctx.scratch, "mc_bc_src{d}", .{ctx.temp_index.*});

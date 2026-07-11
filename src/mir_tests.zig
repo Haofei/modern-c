@@ -763,6 +763,32 @@ test "MIR records typed call target facts for MaybeUninit member calls" {
     try mir.validateCallTargetFactsForLowering(typed_mir);
 }
 
+test "MIR records typed call target facts for bitcast calls" {
+    const source =
+        \\fn bitcast_bits(value: f32) -> u32 {
+        \\    return bitcast<u32>(value);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_bitcast_call_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "bitcast_bits").?;
+    try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.bitcast, function.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("u32", function.call_target_facts[0].result_ty.name());
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+}
+
 test "MIR verifier reports no_lang_trap, fallthrough, contract, and irq findings" {
     const source =
         \\fn missing_return(flag: bool) -> u32 {

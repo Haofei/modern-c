@@ -15,13 +15,12 @@ const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const mir = @import("mir.zig");
 
 const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
 const isDeclassifyCall = ast_query.isDeclassifyCall;
 const isPhysCall = ast_query.isPhysCall;
-const isBitcastCallee = lower_c_expr.isBitcastCallee;
-const isBitcastCall = lower_c_expr.isBitcastCall;
 const isIdentNamed = ast_query.isIdentNamed;
 const isRawLoadCall = ast_query.isRawLoadCall;
 const isRawPtrCall = ast_query.isRawPtrCall;
@@ -54,6 +53,7 @@ pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]co
 pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo;
 pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
 pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -80,6 +80,7 @@ pub const TempContext = struct {
     local_info_from_type: LocalInfoFromTypeFn,
     global_assignment_target: GlobalAssignmentTargetFn,
     emit_assign_target: EmitAssignTargetFn,
+    mir_call_target_kind: MirCallTargetKindFn,
 };
 
 pub const LocalInitContext = struct {
@@ -206,8 +207,8 @@ pub fn emitBitcastValueTemp(ctx: TempContext, expr: ast.Expr, locals: *std.Strin
 }
 
 pub fn emitBitcastValueTempFromCall(ctx: TempContext, call: anytype, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
-    if (!isBitcastCall(call)) return null;
-    const target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, call.type_args[0]);
+    const target = bitcastTargetType(ctx, call) orelse return null;
+    const target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, target);
     const source_ty = ctx.expr_source_type(ctx.emit_ctx, call.args[0], locals) orelse return error.UnsupportedCEmission;
     const source_temp = try ctx.emit_arg_temp(ctx.emit_ctx, call.args[0], locals, source_ty);
     const result_temp = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
@@ -222,8 +223,7 @@ pub fn emitBitcastValueTempFromCall(ctx: TempContext, call: anytype, locals: *st
 
 pub fn emitBitcastLocalInit(ctx: TempContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(initializer) orelse return false;
-    if (!isBitcastCallee(call)) return false;
-    if (!isBitcastCall(call)) return error.UnsupportedCEmission;
+    if (bitcastTargetType(ctx, call) == null) return false;
     const source_ty = ctx.expr_source_type(ctx.emit_ctx, call.args[0], locals) orelse return error.UnsupportedCEmission;
     const source_temp = try ctx.emit_arg_temp(ctx.emit_ctx, call.args[0], locals, source_ty);
 
@@ -236,9 +236,15 @@ pub fn emitBitcastLocalInit(ctx: TempContext, name: []const u8, decl_ty: ast.Typ
 
 pub fn emitBitcastInferredLocalInit(ctx: TempContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(initializer) orelse return false;
-    if (!isBitcastCall(call)) return false;
-    try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, call.type_args[0]));
-    return try emitBitcastLocalInit(ctx, name, call.type_args[0], initializer, locals);
+    const target_ty = bitcastTargetType(ctx, call) orelse return false;
+    try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, target_ty));
+    return try emitBitcastLocalInit(ctx, name, target_ty, initializer, locals);
+}
+
+fn bitcastTargetType(ctx: TempContext, call: anytype) ?ast.TypeExpr {
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .bitcast) return null;
+    if (call.type_args.len != 1 or call.args.len != 1) return null;
+    return call.type_args[0];
 }
 
 pub fn emitBitcastReturn(ctx: TempContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {

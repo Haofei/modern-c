@@ -1551,6 +1551,7 @@ const CEmitter = struct {
             .local_info_from_type = localInfoFromTypeForArith,
             .global_assignment_target = globalAssignmentTargetForArith,
             .emit_assign_target = emitAssignTargetForArith,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
         };
     }
 
@@ -1594,6 +1595,7 @@ const CEmitter = struct {
             .numeric_expr_type = numericExprTypeForConvert,
             .underlying_int_type_name = underlyingIntTypeNameForConvert,
             .result_type_name = resultTypeNameForConvert,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
         };
     }
 

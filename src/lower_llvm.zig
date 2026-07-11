@@ -39,7 +39,6 @@ const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
 const taggedUnionCase = ast_query.taggedUnionCase;
 const qualifiedTaggedUnionConstructorType = ast_query.qualifiedTaggedUnionConstructorType;
 const enumVariantPathType = ast_query.enumVariantPathType;
-const bitcastCallReturnType = ast_query.bitcastCallReturnType;
 
 const backend_mod = @import("backend.zig");
 const lower_llvm_alias = @import("lower_llvm_alias.zig");
@@ -6368,8 +6367,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(info.element_ty), ptr });
             return result;
         }
-        if (bitcastCallReturnType(call)) |target_ty| {
-            if (call.args.len != 1) return error.UnsupportedLlvmEmission;
+        if (self.bitcastCallTargetType(call)) |target_ty| {
             const source_ty = self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission;
             const value = try self.emitExpr(call.args[0], source_ty);
             return try self.emitBitcastValue(value, source_ty, target_ty);
@@ -8425,7 +8423,7 @@ const LlvmEmitter = struct {
             return trait.methods[slot].return_type orelse simpleType(call.callee.*.span, "void");
         }
         if (self.constGetCallInfo(call)) |info| return info.element_ty;
-        if (bitcastCallReturnType(call)) |ty| return ty;
+        if (self.bitcastCallTargetType(call)) |ty| return ty;
         if (vaCallReturnType(call)) |ty| return ty;
         if (builtinCallReturnType(call)) |ty| return ty;
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
@@ -8638,6 +8636,12 @@ const LlvmEmitter = struct {
         const base_ty = self.exprType(member.base.*) orelse return null;
         const payload_ty = self.maybeUninitPayloadType(base_ty) orelse return null;
         return .{ .base = member.base.*, .op = op, .payload_ty = payload_ty };
+    }
+
+    fn bitcastCallTargetType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
+        if (self.mirCallTargetKindAt(call.callee.*.span) != .bitcast) return null;
+        if (call.type_args.len != 1 or call.args.len != 1) return null;
+        return call.type_args[0];
     }
 
     fn dmaCacheCallInfo(self: *LlvmEmitter, call: anytype) ?DmaCacheCallInfo {

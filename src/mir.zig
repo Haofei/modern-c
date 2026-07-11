@@ -4495,6 +4495,8 @@ const FunctionBuilder = struct {
                     ty
                 else if (self.maybeUninitCallValueType(node)) |ty|
                     ty
+                else if (self.bitcastCallValueType(node)) |ty|
+                    ty
                 else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
                 if (reduceCallKind(node.callee.*)) |kind| {
@@ -4513,6 +4515,10 @@ const FunctionBuilder = struct {
                 if (self.maybeUninitCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
                     try self.addCallTargetFact(fact_kind, call_ty, expr.span);
+                }
+                if (self.bitcastCallValueType(node)) |bitcast_ty| {
+                    try self.addInstr(.call_target, @tagName(CallTargetKind.bitcast), bitcast_ty, expr.span);
+                    try self.addCallTargetFact(.bitcast, bitcast_ty, expr.span);
                 }
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {
                     try self.addInstr(.unsafe_check, callee_name, .unknown, expr.span);
@@ -4746,6 +4752,11 @@ const FunctionBuilder = struct {
         const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
         const payload_ty = maybeUninitPayloadTypeExprAlias(base_ty, self.aliases) orelse return null;
         return valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+    }
+
+    fn bitcastCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
+        if (!isMirBitcastCallee(call.callee.*) or call.type_args.len != 1 or call.args.len != 1) return null;
+        return valueTypeFromTypeAlias(call.type_args[0], self.enums, self.structs, self.packed_bits, self.aliases);
     }
 
     fn mmioReceiverCalleeName(self: *FunctionBuilder, callee: ast.Expr) ?[]const u8 {

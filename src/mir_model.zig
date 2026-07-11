@@ -235,6 +235,7 @@ pub const CallTargetKind = enum {
     atomic_fetch_sub,
     maybe_uninit_write,
     maybe_uninit_assume_init,
+    bitcast,
 };
 
 pub const CallTargetFact = struct {

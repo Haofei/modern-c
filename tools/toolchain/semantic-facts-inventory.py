@@ -787,6 +787,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 1,
     },
     "src/lower_llvm.zig": {
+        "bitcastCallReturnType(call)": 0,
         "atomicCallMemberOp(call.callee.*)": 0,
         "maybeUninitCallMemberOp(call.callee.*)": 0,
         "reduceCallKind(call.callee.*)": 0,

@@ -346,6 +346,26 @@ test "lower-c rejects prebuilt MIR with missing atomic call target facts" {
     );
 }
 
+test "lower-c rejects prebuilt MIR with missing bitcast call target facts" {
+    const source =
+        \\fn bitcast_call_target_fact_gate(value: f32) -> u32 {
+        \\    return bitcast<u32>(value);
+        \\}
+    ;
+
+    var parsed = try test_support.parseCheckedModule("c_missing_bitcast_call_target_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearCallTargetFactsForFunction(&module_mir, "bitcast_call_target_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_bitcast_call_target_facts.mc", .{}, false, null),
+    );
+}
+
 test "lower-c rejects prebuilt MIR with stale call target facts" {
     const source =
         \\fn call_target_fact_gate(xs: []const u32) -> Result<u32, Overflow> {
