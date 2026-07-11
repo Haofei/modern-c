@@ -501,6 +501,9 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
         \\fn returned_global_pointer() -> *mut u32 {
         \\    return &shared_counter;
         \\}
+        \\export fn exported_global_pointer() -> *mut u32 {
+        \\    return &shared_counter;
+        \\}
         \\fn forwarded_global_pointer() -> *mut u32 {
         \\    return returned_global_pointer();
         \\}
@@ -530,6 +533,14 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
         \\fn uses_global_pointer_through_alias() -> u32 {
         \\    let producer: fn() -> *mut u32 = returned_global_pointer;
         \\    let gp: *mut u32 = producer();
+        \\    return gp.*;
+        \\}
+        \\fn uses_callback_pointer_return(producer: fn() -> *mut u32) -> u32 {
+        \\    let gp: *mut u32 = producer();
+        \\    return gp.*;
+        \\}
+        \\fn uses_exported_global_pointer() -> u32 {
+        \\    let gp: *mut u32 = exported_global_pointer();
         \\    return gp.*;
         \\}
         \\fn uses_returned_global_pointer() -> u32 {
@@ -597,6 +608,19 @@ test "LLVM consumes MIR facts for direct internal global pointer returns" {
     const alias_body = try llvmFunctionBody(output.items, "define internal i32 @uses_global_pointer_through_alias");
     try expectContains(alias_body, "; mir pointer_provenance consumed fn=uses_global_pointer_through_alias subject=gp provenance=global_storage reason=none");
     try expectContains(alias_body, "load atomic i32, ptr %");
+
+    const callback_body = try llvmFunctionBody(output.items, "define internal i32 @uses_callback_pointer_return");
+    try expectNotContains(callback_body, "; mir pointer_provenance consumed fn=uses_callback_pointer_return subject=gp provenance=global_storage reason=none");
+    try expectContains(callback_body, "load atomic i32, ptr %");
+    try expectContains(callback_body, " unordered, align 4");
+    try expectNotContains(callback_body, "load i32, ptr %");
+
+    const exported_body = try llvmFunctionBody(output.items, "define internal i32 @uses_exported_global_pointer");
+    try expectNotContains(exported_body, "; mir pointer_provenance consumed fn=uses_exported_global_pointer subject=gp provenance=global_storage reason=none");
+    try expectContains(exported_body, "call ptr @exported_global_pointer()");
+    try expectContains(exported_body, "load atomic i32, ptr %");
+    try expectContains(exported_body, " unordered, align 4");
+    try expectNotContains(exported_body, "load i32, ptr %");
 
     const assignment_body = try llvmFunctionBody(output.items, "define internal i32 @assigns_returned_global_pointer");
     try expectContains(assignment_body, "; mir pointer_provenance consumed fn=assigns_returned_global_pointer subject=gp provenance=global_storage reason=reassignment");

@@ -6126,6 +6126,9 @@ test "lower-c consumes MIR facts for direct internal global pointer returns" {
         \\fn returned_global_pointer() -> *mut u32 {
         \\    return &shared_counter;
         \\}
+        \\export fn exported_global_pointer() -> *mut u32 {
+        \\    return &shared_counter;
+        \\}
         \\fn forwarded_global_pointer() -> *mut u32 {
         \\    return returned_global_pointer();
         \\}
@@ -6155,6 +6158,14 @@ test "lower-c consumes MIR facts for direct internal global pointer returns" {
         \\fn c_uses_global_pointer_through_alias() -> u32 {
         \\    let producer: fn() -> *mut u32 = returned_global_pointer;
         \\    let gp: *mut u32 = producer();
+        \\    return gp.*;
+        \\}
+        \\fn c_uses_callback_pointer_return(producer: fn() -> *mut u32) -> u32 {
+        \\    let gp: *mut u32 = producer();
+        \\    return gp.*;
+        \\}
+        \\fn c_uses_exported_global_pointer() -> u32 {
+        \\    let gp: *mut u32 = exported_global_pointer();
         \\    return gp.*;
         \\}
         \\fn c_uses_returned_global_pointer() -> u32 {
@@ -6205,6 +6216,17 @@ test "lower-c consumes MIR facts for direct internal global pointer returns" {
     try expectNotContains(output.items, "/* mir pointer_provenance consumed fn=c_uses_mixed_local_pointer subject=gp provenance=global_storage reason=none source=");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=c_uses_branched_global_pointer subject=gp provenance=global_storage reason=none source=");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=c_uses_global_pointer_through_alias subject=gp provenance=global_storage reason=none source=");
+    try expectNotContains(output.items, "/* mir pointer_provenance consumed fn=c_uses_callback_pointer_return subject=gp provenance=global_storage reason=none source=");
+    try expectNotContains(output.items, "/* mir pointer_provenance consumed fn=c_uses_exported_global_pointer subject=gp provenance=global_storage reason=none source=");
+
+    const callback_body = try cFunctionBody(output.items, "static uint32_t c_uses_callback_pointer_return(");
+    try expectContains(callback_body, "return ((uint32_t)mc_race_load_u32(gp));");
+    try expectNotContains(callback_body, "return *gp;");
+
+    const exported_body = try cFunctionBody(output.items, "static uint32_t c_uses_exported_global_pointer(void)");
+    try expectContains(exported_body, "exported_global_pointer()");
+    try expectContains(exported_body, "return ((uint32_t)mc_race_load_u32(gp));");
+    try expectNotContains(exported_body, "return *gp;");
 
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);

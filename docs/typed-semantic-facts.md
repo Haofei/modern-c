@@ -41,12 +41,14 @@ decision.
 
 The completed scalar pointer deref default audit records the current C/LLVM
 decision entry points and default behavior for missing provenance. It closes the
-audit action slice, not the escaped-pointer, returned-pointer, or arbitrary-CFG
-provenance boundaries.
+audit action slice, not the escaped-pointer or arbitrary-CFG provenance
+boundaries.
 
 The completed escaped pointer boundary audit covers direct pointer argument
 escape, aggregate address escape, and existing callback escape cases. Returned
-pointer facts and arbitrary-CFG aggregate provenance remain open.
+pointer facts now cover direct internal returns, local function aliases, and
+conservative callback/exported ambiguity. Arbitrary-CFG aggregate provenance
+remains open.
 
 The compiler already has several fact-like surfaces, but they are not a single
 typed semantic source of truth:
@@ -242,13 +244,29 @@ scalar widths or aggregate shapes without a sound recursive lowering fail closed
 
 Escapes must drop positive local/global provenance before later dereferences.
 This audit covers the currently named escape boundary; broader returned-pointer
-and arbitrary-CFG provenance remain separate work.
+policy is audited separately below, and arbitrary-CFG provenance remains
+separate work.
 
 | Escape path | Required lowering behavior | Evidence |
 |---|---|---|
 | Direct pointer argument escape | Passing a proven-local pointer to a direct call invalidates the live local proof before the next C/LLVM deref, so the later scalar load is race-tolerant. | `src/lower_c_tests.zig` and `src/lower_llvm_tests.zig` `escaped_local_pointer_lowers_race_tolerant`; C sequenced call statements apply `applyMirPointerProvenanceInvalidationsAtCall`. |
 | Aggregate address escape | Passing `&aggregate` to a call invalidates pointer-field facts for the aggregate, so a later field read and deref stays conservative. | `escaped_aggregate_pointer_field_lowers_race_tolerant` in C/LLVM tests; MIR emits call invalidation for the aggregate field path. |
 | Function-pointer callback escape | Escaped copied callback aliases do not prove scalar or aggregate pointer parameters local/global; callee derefs lower race-tolerantly. | `tests/spec/data_race_semantics.mc` callback escape cases and LLVM assertions for `consume_alias_copy_escape_param`, `consume_aggregate_alias_copy_escape_param`, and `consume_aggregate_indirect_escape_param`. |
+
+### Returned pointer facts audit
+
+Scalar pointer-return facts are deliberately narrow. MIR may summarize only
+internal functions whose explicit returns all resolve to the same global-backed
+pointer shape; caller locals receive normal `PointerProvenanceFact` rows from
+that summary. Callback, exported, malformed wrapper, mixed, recursive, and
+external-return paths stay unknown and must lower conservatively.
+
+| Return path | Required fact/default | Evidence |
+|---|---|---|
+| Direct internal return | A non-exported helper that returns `&global`, or a well-formed `assume_noalias_unchecked` wrapper around it, may seed a caller-local `global_storage` fact. | `src/mir_tests.zig` `MIR records direct internal global pointer return provenance in callers`; C/LLVM `uses_returned_global_pointer` and missing-fact checks. |
+| Local function alias return | A straight-line local function alias of an already summarized internal helper may seed the same caller-local fact; reassignment, branch, loop, or unknown alias keeps the call result unknown. | `MIR records internal global pointer return provenance through local function aliases`; C/LLVM `uses_global_pointer_through_alias`. |
+| Callback/function-pointer return | A function-pointer parameter or escaped callback return is not summarized and does not produce pointer provenance. | C/LLVM `uses_callback_pointer_return` loads through race-tolerant scalar lowering with no consumed MIR provenance comment. |
+| Exported pointer return | An exported function body is not used as a provenance producer, even if its implementation currently returns `&global`. | MIR `uses_exported_global_pointer` has no `global_storage` fact; C/LLVM `uses_exported_global_pointer` uses race-tolerant scalar loads. |
 
 ### Phase 2: add a typed fact table for one narrow fact family
 

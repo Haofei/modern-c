@@ -221,6 +221,35 @@ ESCAPED_POINTER_BOUNDARY_AUDIT: dict[str, list[str]] = {
     ],
 }
 
+RETURNED_POINTER_FACTS_AUDIT: dict[str, list[str]] = {
+    "docs/typed-semantic-facts.md": [
+        "### Returned pointer facts audit",
+        "| Direct internal return |",
+        "| Local function alias return |",
+        "| Callback/function-pointer return |",
+        "| Exported pointer return |",
+    ],
+    "src/mir.zig": [
+        "fn collectDirectGlobalPointerReturnSummaries(",
+        "fn directPointerReturnAliasTarget(",
+    ],
+    "src/mir_tests.zig": [
+        "MIR records direct internal global pointer return provenance in callers",
+        "uses_callback_pointer_return",
+        "uses_exported_global_pointer",
+    ],
+    "src/lower_c_tests.zig": [
+        "lower-c consumes MIR facts for direct internal global pointer returns",
+        "c_uses_callback_pointer_return",
+        "c_uses_exported_global_pointer",
+    ],
+    "src/lower_llvm_tests.zig": [
+        "LLVM consumes MIR facts for direct internal global pointer returns",
+        "uses_callback_pointer_return",
+        "uses_exported_global_pointer",
+    ],
+}
+
 ANCHORS: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "### Phase 1 inventory: current fact-like surfaces",
@@ -571,6 +600,19 @@ def main() -> int:
             checked += 1
             if anchor not in text:
                 missing.append(f"escaped pointer boundary audit: {relative}: missing anchor {anchor!r}")
+
+    for relative, anchors in sorted(RETURNED_POINTER_FACTS_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"returned pointer facts audit: {relative}: file missing")
+            continue
+
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"returned pointer facts audit: {relative}: missing anchor {anchor!r}")
 
     if missing:
         print("semantic facts inventory anchor check failed:", file=sys.stderr)

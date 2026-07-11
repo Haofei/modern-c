@@ -2134,9 +2134,20 @@ test "MIR records direct internal global pointer return provenance in callers" {
         \\fn returned_global_pointer() -> *mut u32 {
         \\    return &shared_counter;
         \\}
+        \\export fn exported_global_pointer() -> *mut u32 {
+        \\    return &shared_counter;
+        \\}
         \\fn uses_returned_global_pointer() -> u32 {
         \\    let gp: *mut u32 = returned_global_pointer();
         \\    return gp.*;
+        \\}
+        \\fn uses_exported_global_pointer() -> u32 {
+        \\    let p: *mut u32 = exported_global_pointer();
+        \\    return p.*;
+        \\}
+        \\fn uses_callback_pointer_return(producer: fn() -> *mut u32) -> u32 {
+        \\    let p: *mut u32 = producer();
+        \\    return p.*;
         \\}
         \\fn uses_forwarded_global_pointer() -> u32 {
         \\    let gp: *mut u32 = forwarded_global_pointer_twice();
@@ -2186,6 +2197,10 @@ test "MIR records direct internal global pointer return provenance in callers" {
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "uses_returned_global_pointer").?;
     try std.testing.expect(hasPointerProvenanceFact(function, "gp", null, .global_storage, .none, "shared_counter"));
+    const exported = functionByName(typed_mir, "uses_exported_global_pointer").?;
+    try std.testing.expect(!hasPointerProvenanceFact(exported, "p", null, .global_storage, .none, "shared_counter"));
+    const callback = functionByName(typed_mir, "uses_callback_pointer_return").?;
+    try std.testing.expect(!hasPointerProvenanceFact(callback, "p", null, .global_storage, .none, "shared_counter"));
     const forwarded = functionByName(typed_mir, "uses_forwarded_global_pointer").?;
     try std.testing.expect(hasPointerProvenanceFact(forwarded, "gp", null, .global_storage, .none, "shared_counter"));
     const external = functionByName(typed_mir, "uses_external_pointer_forward").?;
