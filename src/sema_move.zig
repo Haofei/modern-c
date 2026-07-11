@@ -127,7 +127,7 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
             }
         }
     }
-    const fell_through = !moveBlock(self, body, &state, aliases);
+    const fell_through = moveFunctionBodyCfg(self, body, &state, aliases);
     // Implicit fall-through exit at the end of the body (a `void` return): only a
     // real exit edge if control can actually reach it. If the body diverges on every
     // path (e.g. ends in `return`), each such exit edge was already leak-checked.
@@ -139,6 +139,50 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
             }
         }
     }
+}
+
+fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    defer cfg.deinit();
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        return false;
+    };
+    const body_block = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        return false;
+    };
+    const implicit_exit = cfg.addBlock(.exit) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(entry, body_block, .normal) catch {
+        self.oom = true;
+        return false;
+    };
+    cfg.addEdge(body_block, implicit_exit, .normal) catch {
+        self.oom = true;
+        return false;
+    };
+
+    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return false;
+    defer worklist.deinit();
+    var fell_through = false;
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == entry) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == body_block) {
+            const diverges = moveBlock(self, body, block_state, aliases);
+            if (!diverges) {
+                fell_through = true;
+                worklist.propagateSuccessors(self, block, block_state);
+            }
+        } else if (block == implicit_exit) {
+            replaceMoveState(self, state, block_state);
+        }
+    }
+    return fell_through;
 }
 
 // Analyze the statements of a block in order. Returns `true` if the block diverges
