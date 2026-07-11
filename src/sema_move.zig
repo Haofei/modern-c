@@ -102,6 +102,47 @@ const MoveStateCfgWorklist = struct {
     }
 };
 
+const LinearMoveCfg = struct {
+    cfg: sema_model.MoveCfg,
+    entry: sema_model.MoveCfgBlockId,
+    body: sema_model.MoveCfgBlockId,
+    exit: sema_model.MoveCfgBlockId,
+
+    fn deinit(self: *LinearMoveCfg) void {
+        self.cfg.deinit();
+    }
+};
+
+fn linearMoveCfg(self: *Checker, exit_kind: sema_model.MoveCfgBlockKind) ?LinearMoveCfg {
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const body = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const exit = cfg.addBlock(exit_kind) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(entry, body, .normal) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(body, exit, .normal) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    return .{ .cfg = cfg, .entry = entry, .body = body, .exit = exit };
+}
+
 pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     const body = fn_decl.body orelse return;
     var state = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
@@ -142,43 +183,23 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
 }
 
 fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
-    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
-    defer cfg.deinit();
-    const entry = cfg.addBlock(.entry) catch {
-        self.oom = true;
-        return false;
-    };
-    const body_block = cfg.addBlock(.statement) catch {
-        self.oom = true;
-        return false;
-    };
-    const implicit_exit = cfg.addBlock(.exit) catch {
-        self.oom = true;
-        return false;
-    };
-    cfg.addEdge(entry, body_block, .normal) catch {
-        self.oom = true;
-        return false;
-    };
-    cfg.addEdge(body_block, implicit_exit, .normal) catch {
-        self.oom = true;
-        return false;
-    };
+    var linear = linearMoveCfg(self, .exit) orelse return false;
+    defer linear.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return false;
+    var worklist = MoveStateCfgWorklist.init(self, &linear.cfg, linear.entry, state) orelse return false;
     defer worklist.deinit();
     var fell_through = false;
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == entry) {
+        if (block == linear.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == body_block) {
+        } else if (block == linear.body) {
             const diverges = moveBlock(self, body, block_state, aliases);
             if (!diverges) {
                 fell_through = true;
                 worklist.propagateSuccessors(self, block, block_state);
             }
-        } else if (block == implicit_exit) {
+        } else if (block == linear.exit) {
             replaceMoveState(self, state, block_state);
         }
     }
@@ -203,37 +224,17 @@ pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *std.StringHashM
     var before = cloneMoveState(self, state);
     defer before.deinit();
 
-    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
-    defer cfg.deinit();
-    const entry = cfg.addBlock(.entry) catch {
-        self.oom = true;
-        return false;
-    };
-    const body = cfg.addBlock(.statement) catch {
-        self.oom = true;
-        return false;
-    };
-    const exit = cfg.addBlock(.branch_join) catch {
-        self.oom = true;
-        return false;
-    };
-    cfg.addEdge(entry, body, .normal) catch {
-        self.oom = true;
-        return false;
-    };
-    cfg.addEdge(body, exit, .normal) catch {
-        self.oom = true;
-        return false;
-    };
+    var linear = linearMoveCfg(self, .branch_join) orelse return false;
+    defer linear.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return false;
+    var worklist = MoveStateCfgWorklist.init(self, &linear.cfg, linear.entry, state) orelse return false;
     defer worklist.deinit();
     var diverges = false;
     while (worklist.pop()) |block_id| {
         const block_state = worklist.statePtr(block_id) orelse continue;
-        if (block_id == entry) {
+        if (block_id == linear.entry) {
             worklist.propagateSuccessors(self, block_id, block_state);
-        } else if (block_id == body) {
+        } else if (block_id == linear.body) {
             diverges = moveBlock(self, block, block_state, aliases);
             if (!diverges) {
                 reportMoveLocalsLeavingScope(self, block_state, &before, "linear `move` value declared in this block is never consumed (must be moved, returned, or freed before the block ends)");
@@ -241,7 +242,7 @@ pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *std.StringHashM
             } else {
                 replaceMoveState(self, state, block_state);
             }
-        } else if (block_id == exit) {
+        } else if (block_id == linear.exit) {
             replaceMoveState(self, state, block_state);
         }
     }
@@ -1620,40 +1621,20 @@ fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *std.String
 // the existing loop frame/widening path after the worklist returns, preserving
 // its diagnostic order and zero-or-many semantics.
 fn moveLoopBodyCfg(self: *Checker, body: ast.Block, entry_state: *const std.StringHashMap(MoveSlot), result_state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
-    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
-    defer cfg.deinit();
-    const entry = cfg.addBlock(.entry) catch {
-        self.oom = true;
-        return false;
-    };
-    const body_block = cfg.addBlock(.statement) catch {
-        self.oom = true;
-        return false;
-    };
-    const exit = cfg.addBlock(.branch_join) catch {
-        self.oom = true;
-        return false;
-    };
-    cfg.addEdge(entry, body_block, .normal) catch {
-        self.oom = true;
-        return false;
-    };
-    cfg.addEdge(body_block, exit, .normal) catch {
-        self.oom = true;
-        return false;
-    };
+    var linear = linearMoveCfg(self, .branch_join) orelse return false;
+    defer linear.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, entry_state) orelse return false;
+    var worklist = MoveStateCfgWorklist.init(self, &linear.cfg, linear.entry, entry_state) orelse return false;
     defer worklist.deinit();
     var body_diverges = false;
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == entry) {
+        if (block == linear.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == body_block) {
+        } else if (block == linear.body) {
             body_diverges = moveBlock(self, body, block_state, aliases);
             if (!body_diverges) worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == exit) {
+        } else if (block == linear.exit) {
             replaceMoveState(self, result_state, block_state);
         }
     }

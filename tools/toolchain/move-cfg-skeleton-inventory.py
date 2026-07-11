@@ -25,13 +25,17 @@ ANCHORS: dict[str, list[str]] = {
     ],
     "src/sema_move.zig": [
         "const MoveStateCfgWorklist = struct",
+        "const LinearMoveCfg = struct",
+        "fn linearMoveCfg",
         "fn moveFunctionBodyCfg",
         "fn preserveOuterScopedMoveState",
-        "const implicit_exit = cfg.addBlock(.exit)",
+        "linearMoveCfg(self, .exit)",
+        "linearMoveCfg(self, .branch_join)",
         "worklist.propagateSuccessors(self, block_id, block_state)",
     ],
     "docs/compiler-production-readiness.md": [
         "Move checker CFG skeleton is explicit",
+        "Move checker linear CFG construction is centralized",
         "Move checker function fallthrough exits use CFG worklist state",
         "Move checker scoped blocks use CFG worklist state",
         "move-cfg-skeleton-inventory.py",
