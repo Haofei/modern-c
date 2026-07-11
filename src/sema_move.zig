@@ -590,12 +590,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
             if (l.iterable) |iter| {
                 switch (l.kind) {
                     .@"for" => moveBorrow(self, iter, state, aliases),
-                    .@"while" => {
-                        var condition_state = cloneMoveState(self, state);
-                        defer condition_state.deinit();
-                        moveConsume(self, iter, &condition_state, aliases);
-                        reportLoopOuterResourceChanges(self, state, &condition_state);
-                    },
+                    .@"while" => moveWhileConditionCfg(self, iter, state, aliases),
                 }
             }
             var frame = LoopMoveFrame{
@@ -1480,6 +1475,59 @@ fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, sp
     state.put(key, .{ .live = false, .span = span, .place = place }) catch {
         self.oom = true;
     };
+}
+
+// A while condition has a zero-iteration bypass and an evaluated-condition path.
+// The worklist owns transport between those blocks; loop widening remains the
+// existing dedicated rule so condition-only moves retain E_MOVE_LOOP_RESOURCE.
+fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    defer cfg.deinit();
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        return;
+    };
+    const condition_block = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        return;
+    };
+    const exit = cfg.addBlock(.branch_join) catch {
+        self.oom = true;
+        return;
+    };
+    // Insert the zero-iteration path first so the exit starts with the
+    // unmodified entry state before the evaluated condition is widened into it.
+    cfg.addEdge(entry, exit, .branch) catch {
+        self.oom = true;
+        return;
+    };
+    cfg.addEdge(entry, condition_block, .branch) catch {
+        self.oom = true;
+        return;
+    };
+    cfg.addEdge(condition_block, exit, .normal) catch {
+        self.oom = true;
+        return;
+    };
+
+    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return;
+    defer worklist.deinit();
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == entry) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == condition_block) {
+            moveConsume(self, condition, block_state, aliases);
+            const exit_state = worklist.statePtr(exit) orelse {
+                self.oom = true;
+                return;
+            };
+            reportLoopOuterResourceChanges(self, exit_state, block_state);
+            worklist.enqueue(self, exit);
+        } else if (block == exit) {
+            replaceMoveState(self, state, block_state);
+        }
+    }
 }
 
 fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
