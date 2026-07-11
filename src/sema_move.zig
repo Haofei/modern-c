@@ -88,12 +88,16 @@ const MoveStateCfgWorklist = struct {
     fn propagateSuccessors(self: *MoveStateCfgWorklist, checker: *Checker, from: sema_model.MoveCfgBlockId, outgoing: *const std.StringHashMap(MoveSlot)) void {
         for (self.cfg.edges.items) |edge| {
             if (edge.from != from) continue;
-            if (self.states[edge.to]) |*joined| {
+            const changed = if (self.states[edge.to]) |*joined| blk: {
+                var before = cloneMoveState(checker, joined);
+                defer before.deinit();
                 mergeMoveBranches(checker, joined, joined, outgoing);
-            } else {
+                break :blk !moveStatesEqual(joined, &before);
+            } else blk: {
                 self.states[edge.to] = cloneMoveState(checker, outgoing);
-            }
-            self.enqueue(checker, edge.to);
+                break :blk true;
+            };
+            if (changed) self.enqueue(checker, edge.to);
         }
     }
 };
@@ -1600,6 +1604,33 @@ fn sameMaybePlace(left: ?MovePlace, right: ?MovePlace) bool {
     if (left == null and right == null) return true;
     if (left == null or right == null) return false;
     return left.?.eql(right.?);
+}
+
+fn moveStatesEqual(left: *const std.StringHashMap(MoveSlot), right: *const std.StringHashMap(MoveSlot)) bool {
+    if (left.count() != right.count()) return false;
+    var it = left.iterator();
+    while (it.next()) |entry| {
+        const other = right.get(entry.key_ptr.*) orelse return false;
+        if (!moveSlotStateEqual(entry.value_ptr.*, other)) return false;
+    }
+    return true;
+}
+
+fn moveSlotStateEqual(left: MoveSlot, right: MoveSlot) bool {
+    return left.live == right.live and
+        sameMaybePlace(left.place, right.place) and
+        left.deferred == right.deferred and
+        sameMaybeKey(left.deferred_borrow, right.deferred_borrow) and
+        sameMaybePlace(left.deferred_borrow_place, right.deferred_borrow_place) and
+        std.meta.eql(left.ty, right.ty) and
+        left.type_only == right.type_only and
+        left.const_index == right.const_index and
+        sameMaybeKey(left.symbolic_index, right.symbolic_index) and
+        sameMaybeKey(left.alias_of, right.alias_of) and
+        sameMaybePlace(left.alias_place, right.alias_place) and
+        sameMaybeSpan(left.escaped_borrow, right.escaped_borrow) and
+        left.cleanup_local == right.cleanup_local and
+        left.full_deref_alias == right.full_deref_alias;
 }
 
 fn deferredAliasBorrowPlace(place: ?MovePlace) ?MovePlace {
