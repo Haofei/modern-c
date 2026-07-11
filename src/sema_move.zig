@@ -287,8 +287,36 @@ pub fn checkMoveExitEdge(self: *Checker, state: *const std.StringHashMap(MoveSlo
     }
 }
 
+fn moveExitEdgeCfg(self: *Checker, state: *const std.StringHashMap(MoveSlot), message: []const u8) void {
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    defer cfg.deinit();
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        return;
+    };
+    const exit = cfg.addBlock(.exit) catch {
+        self.oom = true;
+        return;
+    };
+    cfg.addEdge(entry, exit, .normal) catch {
+        self.oom = true;
+        return;
+    };
+
+    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return;
+    defer worklist.deinit();
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == entry) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == exit) {
+            checkMoveExitEdge(self, block_state, message);
+        }
+    }
+}
+
 pub fn checkMoveExit(self: *Checker, state: *const std.StringHashMap(MoveSlot)) void {
-    checkMoveExitEdge(self, state, "linear `move` value is still live on this function-exit path (must be moved, returned, or freed)");
+    moveExitEdgeCfg(self, state, "linear `move` value is still live on this function-exit path (must be moved, returned, or freed)");
 }
 
 pub fn reportMoveLocalsLeavingScope(self: *Checker, inner: *const std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), message: []const u8) void {
@@ -1330,7 +1358,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
             // `ok` payload is consumed and flows on; every *other* live `move` value
             // would leak on the error return unless it is registered with `defer`.
             moveConsume(self, inner.operand.*, state, aliases);
-            checkMoveExitEdge(self, state, "linear `move` value is still live where `?` may return on error (consume it before `?`, or register it with `defer`)");
+            moveExitEdgeCfg(self, state, "linear `move` value is still live where `?` may return on error (consume it before `?`, or register it with `defer`)");
         },
         .cast => |c| moveConsume(self, c.value.*, state, aliases),
         .address_of => |inner| {
@@ -3655,7 +3683,7 @@ pub fn moveBorrow(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Move
             // `?` is an exit edge even in a borrow position: on error it returns, so any
             // other live `move` value would leak unless registered with `defer`.
             moveBorrow(self, inner.operand.*, state, aliases);
-            checkMoveExitEdge(self, state, "linear `move` value is still live where `?` may return on error (consume it before `?`, or register it with `defer`)");
+            moveExitEdgeCfg(self, state, "linear `move` value is still live where `?` may return on error (consume it before `?`, or register it with `defer`)");
         },
         .member => |m| {
             moveBorrow(self, m.base.*, state, aliases);
