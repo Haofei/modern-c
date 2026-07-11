@@ -16,6 +16,12 @@ pub const MovePlaceProjection = union(enum) {
     wildcard_index,
 };
 
+pub const MovePlaceProjectionRelation = enum {
+    exact,
+    may_overlap,
+    disjoint,
+};
+
 pub const MovePlace = struct {
     root: []const u8,
     projections: [max_move_place_projections]MovePlaceProjection = undefined,
@@ -52,14 +58,16 @@ pub const MovePlace = struct {
         return true;
     }
 
-    // A wildcard element represents an unknown element of the same array. It
-    // conflicts with every concrete/symbolic element at that projection level.
+    // Dynamic-index policy: stable dynamic indexes are preserved as symbolic
+    // projections; genuinely unknown indexes become wildcard projections. Both
+    // may overlap other elements, but only exact projection equality is identity.
     pub fn conflicts(self: MovePlace, other: MovePlace) bool {
         if (!std.mem.eql(u8, self.root, other.root) or self.projection_count != other.projection_count) return false;
         for (self.projections[0..self.projection_count], other.projections[0..other.projection_count]) |left, right| {
-            if (projectionEql(left, right)) continue;
-            if (projectionWildcardMatches(left, right)) continue;
-            return false;
+            switch (movePlaceProjectionRelation(left, right)) {
+                .exact, .may_overlap => continue,
+                .disjoint => return false,
+            }
         }
         return true;
     }
@@ -83,12 +91,23 @@ fn projectionEql(left: MovePlaceProjection, right: MovePlaceProjection) bool {
     };
 }
 
-fn projectionWildcardMatches(left: MovePlaceProjection, right: MovePlaceProjection) bool {
-    return (left == .wildcard_index and right != .field) or
-        (right == .wildcard_index and left != .field) or
-        (left == .symbolic_index and right == .symbolic_index) or
-        (left == .symbolic_index and right == .constant_index) or
-        (left == .constant_index and right == .symbolic_index);
+pub fn movePlaceProjectionRelation(left: MovePlaceProjection, right: MovePlaceProjection) MovePlaceProjectionRelation {
+    if (projectionEql(left, right)) return .exact;
+    return switch (left) {
+        .field => .disjoint,
+        .constant_index => switch (right) {
+            .symbolic_index, .wildcard_index => .may_overlap,
+            else => .disjoint,
+        },
+        .symbolic_index => switch (right) {
+            .constant_index, .symbolic_index, .wildcard_index => .may_overlap,
+            else => .disjoint,
+        },
+        .wildcard_index => switch (right) {
+            .field => .disjoint,
+            else => .may_overlap,
+        },
+    };
 }
 
 pub const Context = struct {

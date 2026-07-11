@@ -118,6 +118,48 @@ test "move CFG skeleton carries early-exit state to exit block" {
     try std.testing.expectEqual(exit, worklist.pop().?);
 }
 
+test "move dynamic-place policy separates symbolic identity from overlap" {
+    const root: sema_model.MovePlace = .{ .root = "arr" };
+    const symbolic_i = root.project(.{ .symbolic_index = "i" }).?;
+    const same_symbolic_i = root.project(.{ .symbolic_index = "i" }).?;
+    const symbolic_j = root.project(.{ .symbolic_index = "j" }).?;
+    const constant_zero = root.project(.{ .constant_index = 0 }).?;
+    const constant_one = root.project(.{ .constant_index = 1 }).?;
+    const wildcard = root.project(.wildcard_index).?;
+
+    try std.testing.expect(symbolic_i.eql(same_symbolic_i));
+    try std.testing.expect(symbolic_i.conflicts(same_symbolic_i));
+    try std.testing.expect(!symbolic_i.eql(symbolic_j));
+    try std.testing.expect(symbolic_i.conflicts(symbolic_j));
+    try std.testing.expect(!symbolic_i.eql(constant_zero));
+    try std.testing.expect(symbolic_i.conflicts(constant_zero));
+    try std.testing.expect(!constant_zero.conflicts(constant_one));
+    try std.testing.expect(wildcard.conflicts(symbolic_i));
+    try std.testing.expect(wildcard.conflicts(constant_zero));
+}
+
+test "move dynamic-place policy keeps wildcard indexes behind field boundaries" {
+    const root: sema_model.MovePlace = .{ .root = "arr" };
+    const field = root.project(.{ .field = "items" }).?;
+    const wildcard = root.project(.wildcard_index).?;
+    const symbolic = root.project(.{ .symbolic_index = "i" }).?;
+
+    try std.testing.expectEqual(
+        sema_model.MovePlaceProjectionRelation.disjoint,
+        sema_model.movePlaceProjectionRelation(.wildcard_index, .{ .field = "items" }),
+    );
+    try std.testing.expectEqual(
+        sema_model.MovePlaceProjectionRelation.may_overlap,
+        sema_model.movePlaceProjectionRelation(.wildcard_index, .{ .symbolic_index = "i" }),
+    );
+    try std.testing.expectEqual(
+        sema_model.MovePlaceProjectionRelation.may_overlap,
+        sema_model.movePlaceProjectionRelation(.{ .symbolic_index = "i" }, .{ .constant_index = 0 }),
+    );
+    try std.testing.expect(!field.conflicts(wildcard));
+    try std.testing.expect(!field.conflicts(symbolic));
+}
+
 test "allocation failure across parse monomorphize and sema never reports clean success" {
     {
         const source = "fn main() -> void {}\n";
