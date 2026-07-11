@@ -143,6 +143,28 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
     },
 }
 
+BACKEND_AST_INFERENCE_BUDGET: dict[str, object] = {
+    "docs/typed-semantic-facts.md": [
+        "Current backend AST-inference budget: **7 registered families**.",
+        "| `c-expression-type-inference` | Backend AST inference budget |",
+        "| `c-type-shape-classification` | Backend AST inference budget |",
+        "| `c-abi-aggregate-lowering` | Backend AST inference budget |",
+        "| `c-call-target-classification` | Backend AST inference budget |",
+        "| `c-direct-global-race-helpers` | Backend AST inference budget |",
+        "| `c-pointer-provenance-consumption` | Backend AST inference budget |",
+        "| `llvm-pointer-provenance-consumption` | Backend AST inference budget |",
+    ],
+    "families": [
+        "c-expression-type-inference",
+        "c-type-shape-classification",
+        "c-abi-aggregate-lowering",
+        "c-call-target-classification",
+        "c-direct-global-race-helpers",
+        "c-pointer-provenance-consumption",
+        "llvm-pointer-provenance-consumption",
+    ],
+}
+
 ANCHORS: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "### Phase 1 inventory: current fact-like surfaces",
@@ -438,6 +460,29 @@ def main() -> int:
                 checked += 1
                 if anchor not in text:
                     missing.append(f"{family}: {relative}: missing anchor {anchor!r}")
+
+    budget_families = BACKEND_AST_INFERENCE_BUDGET["families"]
+    assert isinstance(budget_families, list)
+    checked += 1
+    if len(budget_families) != 7:
+        missing.append(f"backend AST-inference budget: expected 7 registered families, found {len(budget_families)}")
+    for family in budget_families:
+        checked += 1
+        if family not in SEMANTIC_INFERENCE_FAMILIES:
+            missing.append(f"backend AST-inference budget: unknown family {family!r}")
+
+    budget_docs = BACKEND_AST_INFERENCE_BUDGET["docs/typed-semantic-facts.md"]
+    assert isinstance(budget_docs, list)
+    budget_doc_path = REPO_ROOT / "docs/typed-semantic-facts.md"
+    try:
+        budget_doc = budget_doc_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        missing.append("backend AST-inference budget: docs/typed-semantic-facts.md file missing")
+    else:
+        for anchor in budget_docs:
+            checked += 1
+            if anchor not in budget_doc:
+                missing.append(f"backend AST-inference budget: docs/typed-semantic-facts.md missing anchor {anchor!r}")
 
     if missing:
         print("semantic facts inventory anchor check failed:", file=sys.stderr)

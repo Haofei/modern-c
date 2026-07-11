@@ -34,6 +34,11 @@ consumer, migration status, and fail-closed policy, and is gated by
 `tools/toolchain/semantic-facts-inventory.py`. This closes the inventory action
 slice, not the migration of those families.
 
+The completed backend AST-inference budget sets the current shrinking budget to
+seven registered backend families. This closes the budget action slice; each
+budgeted family still needs a later migration, reduction, or accepted limitation
+decision.
+
 The compiler already has several fact-like surfaces, but they are not a single
 typed semantic source of truth:
 
@@ -189,6 +194,26 @@ accepted conservative fallback with missing-fact or diagnostic evidence.
 | `mir-bounds-range-production` | `src/mir.zig` no-overflow range, bounds, and elided-check producers | C/LLVM range/bounds/check-elision consumers | MIR-owned for current bounded subset. | Missing optimization proof keeps runtime check; unchecked no-overflow consumption requires a matching fact. |
 | `sema-call-type-resolution` | `src/sema.zig` call return/type helpers | Sema checking and MIR/backend source typing | Sema-owned source of truth, but not yet exported as a unified typed HIR. | Backends must not overrule sema; unsupported backend call spelling must reject or lower conservatively. |
 | `sema-layout-representation-checks` | `src/sema.zig` layout, packed-bits, and bitcast-layout checks | Sema representation diagnostics and MIR representation facts | Sema/MIR-owned for current representation facts. | Backend representation lowering must require matching MIR facts or reject prebuilt MIR. |
+
+### Backend AST-inference budget
+
+Current backend AST-inference budget: **7 registered families**.
+
+This is a shrinking budget. These families are allowed only because their
+current behavior is named, anchored, and paired with a fail-closed policy. A new
+backend semantic inference family must either reuse an existing registered
+family or deliberately update this budget. A migration slice that removes a
+family from backend authority must reduce the count.
+
+| Family | Budget class | Reduction condition |
+|---|---|---|
+| `c-expression-type-inference` | Backend AST inference budget | C expression type decisions that affect lowering are provided by typed facts/MIR or rejected when absent. |
+| `c-type-shape-classification` | Backend AST inference budget | Local/global shape, aggregate/scalar routing, and race-helper eligibility are supplied by typed facts or an accepted target matrix. |
+| `c-abi-aggregate-lowering` | Backend AST inference budget | Aggregate ABI/literal lowering consumes typed layout/ABI facts or rejects unsupported forms without backend rediscovery. |
+| `c-call-target-classification` | Backend AST inference budget | Builtin/special call lowering consumes sema/MIR call-target facts instead of classifying callee syntax in the backend. |
+| `c-direct-global-race-helpers` | Backend AST inference budget | Direct global race-helper routing is represented by typed memory/race facts or by an accepted direct-global backend policy. |
+| `c-pointer-provenance-consumption` | Backend AST inference budget | Broader scalar-leaf conservative fallback is fully covered by typed provenance facts or an accepted default policy. |
+| `llvm-pointer-provenance-consumption` | Backend AST inference budget | The remaining LLVM local-only proof is migrated to MIR facts or explicitly accepted as a local emission proof, not semantic inference. |
 
 ### Phase 2: add a typed fact table for one narrow fact family
 
