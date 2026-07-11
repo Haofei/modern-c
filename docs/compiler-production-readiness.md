@@ -1025,15 +1025,17 @@ These are production-grade properties today; regressions here would be expensive
 
 ### 4. Current residual blockers
 
-The old ranked blocker list was a review snapshot. The current compiler-side
-residual work is the three umbrella workstreams below; details and closure
-matrices are in §5.
+The old ranked blocker list was a review snapshot. The canonical priority order
+is the Design-Risk Readiness Track above. The current compiler-side residual
+implementation work is the first three umbrella workstreams below; the remaining
+P0/P1/P2 design-risk items are tracked in that canonical action table and must
+not be re-ranked separately here.
 
 | # | Sev | Workstream | Dimension | Closure shape |
 |---|---|---|---|---|
-| 1 | P0 | Broader pointer-provenance race lowering | Backends / MIR | Finish conservative scalar-pointer lowering and retire or register remaining backend-local provenance ladders. |
-| 2 | P1 | Typed semantic fact table / typed MIR | Architecture | Move remaining backend semantic decisions behind typed MIR facts or explicitly accepted fail-closed fallbacks. |
-| 3 | P1 | CFG/place-based move checker | Sema | Replace compatibility string-key move state with typed places and a CFG/worklist join model. |
+| 1 | P0 | Typed semantic fact table / typed MIR | Architecture | Move remaining backend semantic decisions behind typed MIR facts or explicitly accepted fail-closed fallbacks. |
+| 2 | P0 | Broader pointer-provenance race lowering / shared memory model ergonomics | Backends / MIR | Finish conservative scalar-pointer lowering or replace the remaining inference burden with explicit `shared<T>` / `atomic<T>` / `volatile<T>` semantics. |
+| 3 | P0 | CFG/place-based move checker | Sema | Replace compatibility string-key move state with typed places and a CFG/worklist join model. |
 
 ### 5. Findings by dimension
 
