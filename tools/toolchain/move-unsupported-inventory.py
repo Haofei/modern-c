@@ -69,7 +69,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
 
 FORBIDDEN_ANCHORS: dict[str, list[str]] = {
     "docs/compiler-production-readiness.md": [
+        "aliasWildcardPlaceKey",
         "legacySubplaceReferentMoved",
+        "memberPlaceKey",
         "formatted subplace and wildcard keys",
         "legacy formatted-subplace fallback",
         "all-concrete typed scans",
