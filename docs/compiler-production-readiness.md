@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-11, based on the current compiler worktree**.
-Evidence register: **514 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **515 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -170,8 +170,9 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Semantic inference family register is gated | Backend semantic inference families that affect type, ABI, representation, bounds, integer/defaulting, call target, ownership, effect, and race/provenance lowering now have a named register with owner/source anchors, current consumers, migration status, and fail-closed policy. The inventory script fails if a registered family row or code anchor drifts. This completes the actionable inventory slice only; it does not migrate the registered families. | `docs/typed-semantic-facts.md` `Semantic inference family register`; `tools/toolchain/semantic-facts-inventory.py` `SEMANTIC_INFERENCE_FAMILIES`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
 | Backend AST-inference budget is gated | The typed-facts inventory now has a shrinking exact budget for seven registered backend AST-inference families. New backend semantic inference families must reuse an existing registered family or deliberately update the budget, and future migration slices must reduce the count when a family stops being backend authority. This completes the budget action slice only; it does not migrate the budgeted families. | `docs/typed-semantic-facts.md` `Backend AST-inference budget`; `tools/toolchain/semantic-facts-inventory.py` `BACKEND_AST_INFERENCE_BUDGET`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
 | Scalar pointer deref default audit is gated | C and LLVM now have a documented and inventory-gated audit for ordinary scalar pointer dereference defaults. Plain lowering requires positive local-storage proof; missing or unknown provenance routes scalar leaves through C race helpers / relaxed pointer atomics or LLVM unordered atomics, while unsupported scalar widths and aggregate shapes without recursive coverage fail closed. This completes the audit action slice only; escaped and higher-order provenance boundaries remain open. | `docs/typed-semantic-facts.md` `Scalar pointer deref default audit`; `tools/toolchain/semantic-facts-inventory.py` `SCALAR_DEREF_DEFAULT_AUDIT`; exact counts for `derefAccessLowering` and `derefUsesRaceTolerantLowering`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
-| Escaped pointer boundary is gated | C now applies MIR call invalidations on sequenced call expression statements before later derefs, matching LLVM's conservative behavior. Direct pointer argument escape, aggregate address escape, and existing callback escape fixtures prove escaped local/global provenance does not keep a plain scalar deref. This closes the named escaped-pointer action slice; arbitrary-CFG boundaries remain open. | `src/lower_c_emitter.zig` `applyMirPointerProvenanceInvalidationsAtCall`; `src/lower_c_tests.zig` / `src/lower_llvm_tests.zig` escaped pointer provenance tests; `docs/typed-semantic-facts.md` `Escaped pointer boundary audit`; `tools/toolchain/semantic-facts-inventory.py` `ESCAPED_POINTER_BOUNDARY_AUDIT`; focused C/LLVM escaped-pointer tests; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
+| Escaped pointer boundary is gated | C now applies MIR call invalidations on sequenced call expression statements before later derefs, matching LLVM's conservative behavior. Direct pointer argument escape, aggregate address escape, and existing callback escape fixtures prove escaped local/global provenance does not keep a plain scalar deref. This closes the named escaped-pointer action slice; aggregate-return CFG policy is gated separately. | `src/lower_c_emitter.zig` `applyMirPointerProvenanceInvalidationsAtCall`; `src/lower_c_tests.zig` / `src/lower_llvm_tests.zig` escaped pointer provenance tests; `docs/typed-semantic-facts.md` `Escaped pointer boundary audit`; `tools/toolchain/semantic-facts-inventory.py` `ESCAPED_POINTER_BOUNDARY_AUDIT`; focused C/LLVM escaped-pointer tests; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
 | Returned pointer facts are gated | Scalar pointer-return provenance is MIR-owned for direct internal global returns, direct forwarding, straight-line local function aliases, and well-formed noalias wrappers. Callback/function-pointer returns and exported pointer-return ambiguity deliberately produce no caller-local provenance fact and lower conservatively in C and LLVM. | `src/mir.zig` `collectDirectGlobalPointerReturnSummaries` / `directPointerReturnAliasTarget`; `src/mir_tests.zig` direct, alias, callback, and exported pointer-return assertions; `src/lower_c_tests.zig` / `src/lower_llvm_tests.zig` returned pointer provenance tests; `docs/typed-semantic-facts.md` `Returned pointer facts audit`; `tools/toolchain/semantic-facts-inventory.py` `RETURNED_POINTER_FACTS_AUDIT`; focused MIR/C/LLVM returned-pointer tests; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
+| Aggregate-return CFG decision is gated | The aggregate-return producer keeps the named bounded 16-path CFG domain and treats the remaining unsupported CFG classes as explicit fail-closed limitations rather than open-ended implementation debt. The unsupported matrix covers non-transparent nested calls/control, path overflow, argument-bearing tracked-local calls/defer, non-stable pointer mutation in loop prefixes, ambiguous dynamic-index writes, dereference writes, exported/local-escaping returns, and unsupported aggregate nesting, each tied to MIR and/or C/LLVM conservative evidence. | `docs/typed-semantic-facts.md` `Aggregate-return unsupported CFG matrix`; `tools/toolchain/semantic-facts-inventory.py` `AGGREGATE_RETURN_CFG_DECISION_AUDIT`; `src/mir_tests.zig` aggregate-return unsupported summary/fact assertions; `src/lower_c_tests.zig` / `src/lower_llvm_tests.zig` aggregate-return fail-closed tests; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
 | Typed semantic facts preserve raw-many zero local provenance | MIR raw-many local `.offset(0)` transfers now propagate live `local_storage` as well as `global_storage`. C and LLVM consume the resulting destination fact, keeping proven-local raw-many zero deref loads/stores plain while missing destination facts and nonzero/dynamic/unknown raw-many offsets stay conservative. | `src/mir.zig` `rawManyZeroOffsetProvenance`; `src/mir_tests.zig` `MIR records narrow raw-many zero offset pointer provenance facts`; `src/lower_llvm_tests.zig` `LLVM raw-many zero direct local without MIR fact lowers conservatively`; `src/lower_c_tests.zig` `lower-c consumes MIR pointer provenance facts for direct scalar pointer derefs`; focused `zig test` filters for those tests; `git diff --check`. |
 | Typed semantic facts cover noalias-wrapped direct pointer provenance | `compiler.assume_noalias_unchecked(&storage, n)` is now transparent to the MIR direct-address provenance producer for the direct pointer-local subset, so noalias-wrapped globals and locals emit the same typed `PointerProvenanceFact` rows as direct address expressions. C and LLVM treat that shape as MIR-owned; removing the destination fact in LLVM leaves conservative scalar deref lowering without recreating backend-local provenance. | `src/mir.zig` `directAddressProvenance` and `isAssumeNoaliasDirectCall`; `src/lower_llvm.zig` `directMirAddressProvenanceExpr`; `src/lower_c_emitter.zig` `directMirAddressProvenanceExpr`; `src/mir_tests.zig` noalias pointer facts in `MIR records typed pointer provenance facts for direct globals and pointer arrays`; `src/lower_llvm_tests.zig` noalias cases in `LLVM direct pointer locals without MIR facts lower conservatively`; `src/lower_c_tests.zig` `pointer_fact_noalias_global_load`; `zig test src/mir_tests.zig`; `zig test src/lower_llvm_tests.zig`; `zig test src/lower_c_tests.zig`. |
 | LLVM noalias-local provenance requires MIR local-storage facts | LLVM now has explicit negative coverage for noalias-wrapped direct local addresses. With the `PointerProvenanceFact` present, `let p = compiler.assume_noalias_unchecked(&local, 4)` consumes a `local_storage` row and keeps `p.*` store/load plain; removing the destination fact suppresses the consumed comment and makes both derefs fall back to unordered atomics instead of rebuilding locality from backend-local inference. | `src/lower_llvm_tests.zig` `noalias_local_requires_mir_fact` in `LLVM direct pointer locals without MIR facts lower conservatively`; `appendLlvmTestWithoutPointerProvenanceFacts`; `zig test src/lower_llvm_tests.zig --test-filter "LLVM direct pointer locals without MIR facts lower conservatively"`; `git diff --check`. |
@@ -641,11 +642,12 @@ policy as explicit fail-closed diagnostics. The matrix rows above remain open;
 new fixtures that only broaden an already-covered direct shape are evidence-only.
 The direct local aggregate-pointer-alias field/element subcase is complete:
 its destination facts are consumed by both backends and missing-fact tests are
-conservative. The broader alias, return-flow, and CFG boundaries remain open.
+conservative. Broader alias forms not named by the current producer stay
+conservative unless a later design-risk slice accepts a new bounded producer.
 The direct local fixed-pointer-array-alias constant-index subcase is also
 complete. Its dynamic all-elements subcase is also complete. Mixed,
-invalidated, reassigned, and broader alias/return-flow/CFG boundaries remain
-open.
+invalidated, reassigned, and broader alias forms remain conservative accepted
+limitations.
 The fallback register gate is complete for the current named global/local
 provenance entry points: the semantic-facts inventory rejects the retired LLVM
 global fallback and exact-counts the registered C MIR-only and LLVM
@@ -662,21 +664,20 @@ Returned scalar pointer facts are complete for the current bounded policy:
 direct internal returns, direct forwarding, local function aliases, and
 well-formed noalias wrappers are MIR-owned; callback/function-pointer returns
 and exported ambiguity stay unknown and lower conservatively in C and LLVM.
-The aggregate-return migration is active and owns direct internal struct-literal
+The aggregate-return migration is bounded and owns direct internal struct-literal
 returns plus straight-line local initialization, whole-local reassignment, and
 whole-local copies from tracked literal values, exhaustive bool/wildcard
 branches whose arms use those forms, single supported trailing/fallthrough
 joins, bounded sequential top-level switch joins, and bounded nested switch/if
 return paths, for supported aggregate shapes. Its missing-fact gate is
 deliberate: an MIR-owned return summary prevents LLVM from rebuilding a removed
-fact from the AST. Arbitrary, unsupported nested, and above-cap path-count-overflow CFG
-joins remain an open matrix row.
+fact from the AST. Unsupported nested/control, escaping, path-overflow, alias
+write, ambiguous dynamic-index, and aggregate-shape classes are now an explicit
+fail-closed matrix rather than an open-ended CFG action item.
 
-Next actionable slices:
-
-| Slice | Action | Acceptance evidence | Not enough |
-|---|---|---|---|
-| Aggregate-return CFG decision | Either implement a bounded CFG join for aggregate-return pointer facts or document every unsupported CFG class as conservative with fixtures. | One named CFG join implementation, or an unsupported-CFG matrix with negative MIR/C/LLVM tests for each class. | Continuing to add one-off transparent prefix cases without closing the arbitrary-CFG policy. |
+Next actionable slices: none in this workstream. New pointer-provenance work
+must either reduce a named conservative limitation or add a new design-risk row
+with MIR/C/LLVM evidence requirements.
 
 #### Typed Semantic Fact Table / Typed MIR
 

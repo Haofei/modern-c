@@ -250,6 +250,45 @@ RETURNED_POINTER_FACTS_AUDIT: dict[str, list[str]] = {
     ],
 }
 
+AGGREGATE_RETURN_CFG_DECISION_AUDIT: dict[str, list[str]] = {
+    "docs/typed-semantic-facts.md": [
+        "### Aggregate-return unsupported CFG matrix",
+        "| Non-transparent nested call/control |",
+        "| Above-cap path expansion |",
+        "| Argument-bearing tracked-local calls/defer |",
+        "| Non-stable pointer mutation in loop prefixes |",
+        "| Ambiguous dynamic-index writes |",
+        "| Dereference writes through aliases |",
+        "| Exported or escaping-local aggregate returns |",
+        "| Unsupported aggregate nesting |",
+    ],
+    "src/mir_tests.zig": [
+        "MIR records direct aggregate-return pointer facts and excludes legacy shapes",
+        "nested_call_control_holder",
+        "path_overflow_switch_holder",
+        "local_defer_arg_prefix_holder",
+        "mixed_pointer_mutating_while_prefix_holder",
+        "trailing_mixed_dynamic_array_updated_holder",
+        "deref_updated_holder",
+        "exported_holder",
+        "local_only_holder",
+    ],
+    "src/lower_c_tests.zig": [
+        "lower-c aggregate-return nested call control fails closed",
+        "lower-c aggregate-return path overflow switches fail closed",
+        "lower-c aggregate-return mixed pointer-mutating while prefix fails closed",
+        "lower-c aggregate-return dereference writes fail closed",
+        "lower-c aggregate-return nested pointer arrays with missing leaf facts fail closed",
+    ],
+    "src/lower_llvm_tests.zig": [
+        "LLVM aggregate-return nested call control fails closed",
+        "LLVM aggregate-return path overflow switches fail closed",
+        "LLVM aggregate-return mixed pointer-mutating while prefix fails closed",
+        "LLVM aggregate-return dereference writes fail closed",
+        "LLVM aggregate-return nested pointer arrays with missing leaf facts fail closed",
+    ],
+}
+
 ANCHORS: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "### Phase 1 inventory: current fact-like surfaces",
@@ -613,6 +652,19 @@ def main() -> int:
             checked += 1
             if anchor not in text:
                 missing.append(f"returned pointer facts audit: {relative}: missing anchor {anchor!r}")
+
+    for relative, anchors in sorted(AGGREGATE_RETURN_CFG_DECISION_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"aggregate-return CFG decision audit: {relative}: file missing")
+            continue
+
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"aggregate-return CFG decision audit: {relative}: missing anchor {anchor!r}")
 
     if missing:
         print("semantic facts inventory anchor check failed:", file=sys.stderr)

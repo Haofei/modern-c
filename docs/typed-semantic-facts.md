@@ -41,7 +41,7 @@ decision.
 
 The completed scalar pointer deref default audit records the current C/LLVM
 decision entry points and default behavior for missing provenance. It closes the
-audit action slice, not the escaped-pointer or arbitrary-CFG provenance
+audit action slice, not the escaped-pointer or aggregate-return CFG policy
 boundaries.
 
 The completed escaped pointer boundary audit covers direct pointer argument
@@ -244,8 +244,7 @@ scalar widths or aggregate shapes without a sound recursive lowering fail closed
 
 Escapes must drop positive local/global provenance before later dereferences.
 This audit covers the currently named escape boundary; broader returned-pointer
-policy is audited separately below, and arbitrary-CFG provenance remains
-separate work.
+policy and aggregate-return CFG policy are audited separately below.
 
 | Escape path | Required lowering behavior | Evidence |
 |---|---|---|
@@ -942,6 +941,25 @@ are supported only when the condition or iterable has no calls/exits and the
 loop body has no calls/exits or pointer-bearing tracked aggregate mutation;
 local `break`/`continue`, scalar-local assignments, and scalar aggregate-field
 assignments in the tracked-local producer are allowed.
+
+### Aggregate-return unsupported CFG matrix
+
+The aggregate-return CFG decision is explicit: the compiler keeps the bounded
+16-path producer and treats the unsupported CFG classes below as accepted
+fail-closed limitations until a later slice deliberately moves a row into the
+supported producer domain. Each row has MIR evidence plus C/LLVM conservative
+lowering evidence where backend consumption is relevant.
+
+| Unsupported class | Required behavior | Evidence |
+|---|---|---|
+| Non-transparent nested call/control | Calls or exits inside nested aggregate-return control paths suppress the returned-field summary. | MIR `nested_call_control_holder` has no summary; C/LLVM `aggregate-return nested call control fails closed`. |
+| Above-cap path expansion | CFG expansion beyond the named 16-path cap suppresses the summary instead of partially proving fields. | MIR `path_overflow_switch_holder` has no summary; C/LLVM `aggregate-return path overflow switches fail closed`. |
+| Argument-bearing tracked-local calls/defer | Calls or deferred cleanups that can observe or mutate the tracked return local by argument/member/indirect path suppress the summary. | MIR `call_arg_before_return` and `local_defer_arg_prefix_holder` have no summary; C/LLVM returned fields stay conservative through the existing missing-summary path. |
+| Non-stable pointer mutation in loop prefixes | Loop prefixes that can change a pointer-bearing field to a different storage target suppress the summary. | MIR `mixed_pointer_mutating_while_prefix_holder` has no summary; C/LLVM `aggregate-return mixed pointer-mutating while prefix fails closed`. |
+| Ambiguous dynamic-index writes | Dynamic writes to pointer arrays are supported only when every element already has the same proven address; mixed dynamic writes suppress the summary. | MIR `trailing_mixed_dynamic_array_updated_holder` has no summary; same-address dynamic writes remain covered by `trailing_dynamic_array_updated_holder`. |
+| Dereference writes through aliases | Writes such as `alias.*.ptr = &global` are not treated as transparent aggregate updates. | MIR `deref_updated_holder` has no summary; C/LLVM `aggregate-return dereference writes fail closed`. |
+| Exported or escaping-local aggregate returns | Exported aggregate-return bodies and callee-local pointer fields are not provenance producers. | MIR `exported_holder` has no summary and `local_only_holder` has no `global_storage` field fact. |
+| Unsupported aggregate nesting | Aggregate shapes outside the named scalar pointer, fixed pointer-array, nested struct, fixed struct-array, and nested fixed-array domains remain conservative. | C/LLVM `aggregate-return nested pointer arrays with missing leaf facts fail closed` and the aggregate-return producer matrix above. |
 
 ### Consumer and retirement rule
 
