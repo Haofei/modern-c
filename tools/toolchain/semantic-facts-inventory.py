@@ -720,6 +720,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn isPhysCall(": 0,
         "pub fn isBindCall(": 0,
         "pub fn isBindCallByNode(": 0,
+        "fn bitcastTargetType(": 0,
+        "pub fn reflectionCallKind(": 0,
+        "pub const ReflectionCallKind": 0,
+        "ast_query.isPhysCall(call.callee.*)": 0,
     },
     "src/lower_c_emitter.zig": {
         "fn requireMirBoundsFact": 1,
@@ -775,12 +779,6 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "maybeUninitCallMemberOp(call.callee.*)": 0,
         "reduceCallKind(call.callee.*)": 0,
     },
-    "src/lower_llvm_query.zig": {
-        "fn bitcastTargetType(": 0,
-        "pub fn reflectionCallKind(": 0,
-        "pub const ReflectionCallKind": 0,
-        "ast_query.isPhysCall(call.callee.*)": 0,
-    },
     "tests/spec/no_implicit_conversion.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 9,
     },
@@ -801,10 +799,12 @@ def duplicate_exact_count_files() -> list[str]:
     source = Path(__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
     for node in tree.body:
-        if not isinstance(node, ast.Assign):
+        if not isinstance(node, ast.AnnAssign):
             continue
-        if not any(isinstance(target, ast.Name) and target.id == "EXACT_COUNTS" for target in node.targets):
+        if not isinstance(node.target, ast.Name) or node.target.id != "EXACT_COUNTS":
             continue
+        if node.value is None:
+            return []
         if not isinstance(node.value, ast.Dict):
             return []
         seen: set[str] = set()
