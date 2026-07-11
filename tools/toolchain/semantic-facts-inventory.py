@@ -289,6 +289,52 @@ AGGREGATE_RETURN_CFG_DECISION_AUDIT: dict[str, list[str]] = {
     ],
 }
 
+BOUNDS_RANGE_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
+    "docs/typed-semantic-facts.md": [
+        "| MIR no-overflow range facts |",
+        "| MIR bounds facts |",
+        "| MIR check-elision source points |",
+        "| `c-bounds-range-consumption` |",
+        "| `llvm-bounds-range-consumption` |",
+    ],
+    "docs/compiler-production-readiness.md": [
+        "| Bounds checks require typed MIR facts |",
+        "| MIR bounds facts have a stable dump artifact |",
+        "| Typed semantic facts inventory pins bounds-fact consumers |",
+        "Bounds/range fact family is gated",
+    ],
+    "src/mir_model.zig": [
+        "pub const RangeFact = struct",
+        "pub const BoundsFact = struct",
+        "bounds_facts: []BoundsFact",
+        "range_facts: []RangeFact",
+        "elided_bounds: []SourcePoint",
+    ],
+    "src/mir.zig": [
+        '"mir range_fact',
+        '"mir bounds_fact',
+        '"mir elided_bounds_fact',
+        "try self.bounds_facts.append",
+        "fn addRangeFactForUncheckedCall",
+        "fn addAggregateRangeFactForUncheckedExpr",
+    ],
+    "src/mir_tests.zig": [
+        "MIR dump emits non-elided bounds facts",
+        "MIR dump exposes elided bounds facts",
+        "MIR records no_overflow range facts for unchecked add contract",
+    ],
+    "src/lower_c_tests.zig": [
+        "lower-c rejects prebuilt MIR with missing bounds facts",
+        "lower-c unchecked arithmetic requires MIR no-overflow range fact",
+        "appendCheckedCTestWithRetargetedRangeFacts",
+    ],
+    "src/lower_llvm_tests.zig": [
+        "LLVM rejects prebuilt MIR with missing bounds facts",
+        "LLVM unchecked arithmetic requires MIR no-overflow range fact",
+        "appendLlvmTestWithRetargetedRangeFacts",
+    ],
+}
+
 ANCHORS: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "### Phase 1 inventory: current fact-like surfaces",
@@ -665,6 +711,19 @@ def main() -> int:
             checked += 1
             if anchor not in text:
                 missing.append(f"aggregate-return CFG decision audit: {relative}: missing anchor {anchor!r}")
+
+    for relative, anchors in sorted(BOUNDS_RANGE_FACT_FAMILY_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"bounds/range fact family audit: {relative}: file missing")
+            continue
+
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"bounds/range fact family audit: {relative}: missing anchor {anchor!r}")
 
     if missing:
         print("semantic facts inventory anchor check failed:", file=sys.stderr)
