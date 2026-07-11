@@ -131,13 +131,10 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "vaCallReturnType(call)",
             "byteViewCallReturnType(call)",
             "reflectionValueCallReturnType(call)",
-            "atomicCallMemberOp(call.callee.*)",
-            "maybeUninitCallMemberOp(call.callee.*)",
             "isDeclassifyCall(call)",
             "resultConstructorCallTag(call)",
             "isBindCallExpr(expr)",
             "isBindCallNode(call)",
-            "reduceCallKind(call.callee.*)",
             "constGetCallTarget(call)",
         ],
     },
@@ -788,6 +785,11 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "tests/spec/return_types.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 1,
+    },
+    "src/lower_llvm.zig": {
+        "atomicCallMemberOp(call.callee.*)": 0,
+        "maybeUninitCallMemberOp(call.callee.*)": 0,
+        "reduceCallKind(call.callee.*)": 0,
     },
 }
 
