@@ -2979,9 +2979,6 @@ pub fn aggregateFieldAliasSlot(self: *Checker, expr: ast.Expr, state: *const std
         if (state.get(key)) |slot| {
             if (slot.alias_of != null) return slot;
         }
-        if (storage_place == null) {
-            if (wildcardAliasSlotForConcrete(key, state)) |slot| return slot;
-        }
     }
     if (aliasWildcardPlaceKey(self, expr, state)) |key| {
         defer self.reporter.allocator.free(key);
