@@ -63,6 +63,16 @@ fn clearIntegerFactsForFunction(module_mir: *mir.Module, name: []const u8) !void
     return error.TestUnexpectedResult;
 }
 
+fn clearCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        if (function.call_target_facts.len != 0) module_mir.allocator.free(function.call_target_facts);
+        function.call_target_facts = try module_mir.allocator.alloc(mir.CallTargetFact, 0);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn retargetIntegerFactsForFunction(module_mir: *mir.Module, name: []const u8, target_ty: mir.ValueType) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -282,6 +292,26 @@ test "lower-c rejects prebuilt MIR with missing integer facts" {
     try std.testing.expectError(
         error.InvalidMirIntegerFacts,
         lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_integer_facts.mc", .{}, false, null),
+    );
+}
+
+test "lower-c rejects prebuilt MIR with missing call target facts" {
+    const source =
+        \\fn call_target_fact_gate(xs: []const u32) -> Result<u32, Overflow> {
+        \\    return reduce.sum_checked<u32>(xs);
+        \\}
+    ;
+
+    var parsed = try test_support.parseCheckedModule("c_missing_call_target_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearCallTargetFactsForFunction(&module_mir, "call_target_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_call_target_facts.mc", .{}, false, null),
     );
 }
 

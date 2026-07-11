@@ -88,6 +88,7 @@ fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast.Module, o
 pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast.Module, typed_mir: *const mir.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
     try mir.validateRepresentationFactsForLowering(typed_mir.*);
     try mir.validateIntegerFactsForLowering(typed_mir.*);
+    try mir.validateCallTargetFactsForLowering(typed_mir.*);
     const profile_marker = switch (profile) {
         .kernel => "/* mc-profile: kernel (freestanding) */\n",
         .hosted => "/* mc-profile: hosted (links libc + -lm) */\n",

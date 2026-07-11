@@ -63,6 +63,8 @@ pub const RangeFact = mir_model.RangeFact;
 pub const BoundsFact = mir_model.BoundsFact;
 pub const BoundsFactKind = mir_model.BoundsFactKind;
 pub const IntegerFact = mir_model.IntegerFact;
+pub const CallTargetKind = mir_model.CallTargetKind;
+pub const CallTargetFact = mir_model.CallTargetFact;
 pub const SourcePoint = mir_model.SourcePoint;
 pub const PointerProvenance = mir_model.PointerProvenance;
 pub const PointerProvenanceFact = mir_model.PointerProvenanceFact;
@@ -316,6 +318,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
                         .range_facts = try allocator.alloc(RangeFact, 0),
                         .bounds_facts = try allocator.alloc(BoundsFact, 0),
                         .integer_facts = try allocator.alloc(IntegerFact, 0),
+                        .call_target_facts = try allocator.alloc(CallTargetFact, 0),
                         .pointer_provenance_facts = try allocator.alloc(PointerProvenanceFact, 0),
                         .representation_facts = try allocator.alloc(RepresentationFact, 0),
                         .elided_bounds = try allocator.alloc(SourcePoint, 0),
@@ -345,8 +348,8 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
     for (mir.functions) |function| {
         try out.print(
             allocator,
-            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
-            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
+            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} call_target_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
+            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.call_target_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
         );
         for (function.contract_regions) |region| {
             try out.print(
@@ -424,6 +427,13 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
                 allocator,
                 "mir integer_fact fn={s} literal={s} target_type={s} recorded=true line={} column={}\n",
                 .{ function.name, fact.literal, fact.target_ty.name(), fact.source.line, fact.source.column },
+            );
+        }
+        for (function.call_target_facts) |fact| {
+            try out.print(
+                allocator,
+                "mir call_target_fact fn={s} kind={s} result_type={s} recorded=true line={} column={}\n",
+                .{ function.name, @tagName(fact.kind), fact.result_ty.name(), fact.source.line, fact.source.column },
             );
         }
         for (function.pointer_provenance_facts) |fact| {
@@ -881,6 +891,46 @@ pub fn validateIntegerFactsForLowering(module: Module) error{InvalidMirIntegerFa
             if (!functionHasMatchingIntegerInstruction(function, fact)) return error.InvalidMirIntegerFacts;
         }
     }
+}
+
+pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTargetFacts}!void {
+    for (module.functions) |function| {
+        for (function.blocks) |block| for (block.instructions) |instruction| {
+            const kind = callTargetKindForInstruction(instruction) orelse continue;
+            if (!functionHasMatchingCallTargetFact(function, kind, instruction)) return error.InvalidMirCallTargetFacts;
+        };
+        for (function.call_target_facts) |fact| {
+            if (!functionHasMatchingCallTargetInstruction(function, fact)) return error.InvalidMirCallTargetFacts;
+        }
+    }
+}
+
+fn callTargetKindForInstruction(instruction: Instruction) ?CallTargetKind {
+    if (instruction.kind == .index and std.mem.eql(u8, instruction.detail, "const_get")) return .const_get;
+    if (instruction.kind != .call) return null;
+    if (std.mem.eql(u8, instruction.detail, "sum_checked")) return .reduce_sum_checked;
+    if (std.mem.eql(u8, instruction.detail, "sum_left")) return .reduce_sum_left;
+    if (std.mem.eql(u8, instruction.detail, "sum_fast")) return .reduce_sum_fast;
+    return null;
+}
+
+fn functionHasMatchingCallTargetFact(function: Function, kind: CallTargetKind, instruction: Instruction) bool {
+    for (function.call_target_facts) |fact| {
+        if (fact.kind != kind) continue;
+        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
+        if (fact.source.line == instruction.line and fact.source.column == instruction.column) return true;
+    }
+    return false;
+}
+
+fn functionHasMatchingCallTargetInstruction(function: Function, fact: CallTargetFact) bool {
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        const kind = callTargetKindForInstruction(instruction) orelse continue;
+        if (kind != fact.kind) continue;
+        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
+        if (fact.source.line == instruction.line and fact.source.column == instruction.column) return true;
+    };
+    return false;
 }
 
 fn functionHasMatchingIntegerFact(function: Function, instruction: Instruction) bool {
@@ -2918,6 +2968,7 @@ const FunctionBuilder = struct {
     range_facts: std.ArrayList(RangeFact),
     bounds_facts: std.ArrayList(BoundsFact),
     integer_facts: std.ArrayList(IntegerFact),
+    call_target_facts: std.ArrayList(CallTargetFact),
     pointer_provenance_facts: std.ArrayList(PointerProvenanceFact),
     representation_facts: std.ArrayList(RepresentationFact),
     live_pointer_provenance: std.ArrayList(LivePointerProvenance),
@@ -3002,6 +3053,7 @@ const FunctionBuilder = struct {
             .range_facts = .empty,
             .bounds_facts = .empty,
             .integer_facts = .empty,
+            .call_target_facts = .empty,
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -3063,6 +3115,7 @@ const FunctionBuilder = struct {
             .range_facts = .empty,
             .bounds_facts = .empty,
             .integer_facts = .empty,
+            .call_target_facts = .empty,
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -3104,6 +3157,7 @@ const FunctionBuilder = struct {
         self.range_facts.deinit(self.allocator);
         self.bounds_facts.deinit(self.allocator);
         self.integer_facts.deinit(self.allocator);
+        self.call_target_facts.deinit(self.allocator);
         self.pointer_provenance_facts.deinit(self.allocator);
         self.representation_facts.deinit(self.allocator);
         self.live_pointer_provenance.deinit(self.allocator);
@@ -3156,6 +3210,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(bounds_facts);
         const integer_facts = try self.integer_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(integer_facts);
+        const call_target_facts = try self.call_target_facts.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(call_target_facts);
         const pointer_provenance_facts = try self.pointer_provenance_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(pointer_provenance_facts);
         const representation_facts = try self.representation_facts.toOwnedSlice(self.allocator);
@@ -3210,6 +3266,7 @@ const FunctionBuilder = struct {
             .range_facts = range_facts,
             .bounds_facts = bounds_facts,
             .integer_facts = integer_facts,
+            .call_target_facts = call_target_facts,
             .pointer_provenance_facts = pointer_provenance_facts,
             .representation_facts = representation_facts,
             .elided_bounds = elided_bounds,
@@ -4411,6 +4468,7 @@ const FunctionBuilder = struct {
             .call => |node| {
                 if (self.constGetCallType(node)) |const_get_ty| {
                     try self.addInstr(.index, "const_get", const_get_ty, expr.span);
+                    try self.addCallTargetFact(.const_get, const_get_ty, expr.span);
                     if (representationCheckKind(const_get_ty) != null) {
                         try self.addInstr(.typed_load, exprText(expr), const_get_ty, expr.span);
                         try self.addRuntimeRepresentationCheck(const_get_ty, expr.span, exprText(expr));
@@ -4434,6 +4492,14 @@ const FunctionBuilder = struct {
                     .unknown
                 else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
+                if (reduceCallKind(node.callee.*)) |kind| {
+                    const fact_kind: CallTargetKind = switch (kind) {
+                        .sum_checked => .reduce_sum_checked,
+                        .sum_left => .reduce_sum_left,
+                        .sum_fast => .reduce_sum_fast,
+                    };
+                    try self.addCallTargetFact(fact_kind, call_ty, expr.span);
+                }
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {
                     try self.addInstr(.unsafe_check, callee_name, .unknown, expr.span);
                 }
@@ -4740,6 +4806,14 @@ const FunctionBuilder = struct {
 
     fn addInstr(self: *FunctionBuilder, kind: Instruction.Kind, detail: []const u8, ty: ValueType, span: ast.Span) !void {
         try self.addInstrWithValue(kind, detail, ty, span, null);
+    }
+
+    fn addCallTargetFact(self: *FunctionBuilder, kind: CallTargetKind, result_ty: ValueType, span: ast.Span) !void {
+        try self.call_target_facts.append(self.allocator, .{
+            .kind = kind,
+            .result_ty = result_ty,
+            .source = .{ .line = span.line, .column = span.column },
+        });
     }
 
     fn addInstrWithValue(self: *FunctionBuilder, kind: Instruction.Kind, detail: []const u8, ty: ValueType, span: ast.Span, value_id: ?[]const u8) !void {

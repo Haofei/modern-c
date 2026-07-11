@@ -223,6 +223,14 @@ pub const IntegerFact = struct {
     source: SourcePoint,
 };
 
+pub const CallTargetKind = enum { reduce_sum_checked, reduce_sum_left, reduce_sum_fast, const_get };
+
+pub const CallTargetFact = struct {
+    kind: CallTargetKind,
+    result_ty: ValueType,
+    source: SourcePoint,
+};
+
 pub const SourcePoint = struct {
     line: usize,
     column: usize,
@@ -302,6 +310,7 @@ pub const Function = struct {
     range_facts: []RangeFact,
     bounds_facts: []BoundsFact = &.{},
     integer_facts: []IntegerFact = &.{},
+    call_target_facts: []CallTargetFact = &.{},
     pointer_provenance_facts: []PointerProvenanceFact,
     representation_facts: []RepresentationFact,
     // OPT (annex E): operand source points of checks the optimizer proved dead and elided
@@ -330,6 +339,7 @@ pub const Module = struct {
             self.allocator.free(function.range_facts);
             if (function.bounds_facts.len != 0) self.allocator.free(function.bounds_facts);
             if (function.integer_facts.len != 0) self.allocator.free(function.integer_facts);
+            if (function.call_target_facts.len != 0) self.allocator.free(function.call_target_facts);
             for (function.pointer_provenance_facts) |fact| {
                 if (fact.field_path) |field_path| self.allocator.free(field_path);
             }
