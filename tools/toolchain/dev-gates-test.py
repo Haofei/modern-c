@@ -151,7 +151,7 @@ def main() -> None:
     assert_gates(module, ["tools/toolchain/move-cfg-skeleton-inventory.py"], ["move-cfg-skeleton-inventory-test"])
     assert_gates(module, ["tools/toolchain/move-dynamic-place-policy-inventory.py"], ["move-dynamic-place-policy-inventory-test"])
     assert_gates(module, ["tools/toolchain/move-pointer-pointee-boundary-inventory.py"], ["move-pointer-pointee-boundary-inventory-test"])
-    assert_gates(module, ["src/sema_move.zig"], ["test", "diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "c-test", "diff-backend", "move-place-identity-inventory-test", "move-dynamic-place-policy-inventory-test", "move-pointer-pointee-boundary-inventory-test"])
+    assert_gates(module, ["src/sema_move.zig"], ["test", "diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "c-test", "diff-backend", "move-place-identity-inventory-test", "move-cfg-skeleton-inventory-test", "move-dynamic-place-policy-inventory-test", "move-pointer-pointee-boundary-inventory-test"])
     assert_gates(module, ["src/sema_model.zig"], ["test", "diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "c-test", "diff-backend", "move-cfg-skeleton-inventory-test", "move-dynamic-place-policy-inventory-test", "move-pointer-pointee-boundary-inventory-test"])
     assert_gates(module, ["tests/spec/move_place.mc"], ["test"])
     assert_route(
