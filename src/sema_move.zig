@@ -3612,34 +3612,6 @@ fn referentPlaceMoved(place: MovePlace, state: *const std.StringHashMap(MoveSlot
     return stateHasMovedPlaceChildOrConflict(place, state);
 }
 
-pub fn aliasPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?[]const u8 {
-    switch (expr.kind) {
-        .grouped => |inner| return aliasPlaceKey(self, inner.*, state),
-        .ident => |id| return self.reporter.allocator.dupe(u8, id.text) catch {
-            self.oom = true;
-            return null;
-        },
-        .member => |m| {
-            const base = aliasPlaceKey(self, m.base.*, state) orelse return null;
-            defer self.reporter.allocator.free(base);
-            return std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base, m.name.text }) catch {
-                self.oom = true;
-                return null;
-            };
-        },
-        .index => |ix| {
-            const base = aliasPlaceKey(self, ix.base.*, state) orelse return null;
-            defer self.reporter.allocator.free(base);
-            const index = aliasPlaceIndex(self, ix, state) orelse return null;
-            return std.fmt.allocPrint(self.reporter.allocator, "{s}[{d}]", .{ base, index }) catch {
-                self.oom = true;
-                return null;
-            };
-        },
-        else => return null,
-    }
-}
-
 fn aliasPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?AliasPlaceInfo {
     const pp = placeKeyAndType(self, expr, state) orelse return null;
     const key = self.reporter.allocator.dupe(u8, pp.key) catch {
@@ -3647,22 +3619,6 @@ fn aliasPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.StringHashMa
         return null;
     };
     return .{ .key = key, .place = pp.place };
-}
-
-fn aliasPlaceIndex(self: *Checker, ix: anytype, state: *const std.StringHashMap(MoveSlot)) ?usize {
-    const ctx = self.move_ctx orelse return null;
-    if (constIndexValue(self, ix.index.*, state, ctx.*)) |index| return index;
-
-    const base_ty = resolveAliasType(aliasPlaceBaseType(ix.base.*, state) orelse
-        spine.exprResultType(ix.base.*, ctx.*) orelse
-        return null, ctx.*);
-    const array = switch (base_ty.kind) {
-        .array => |node| node,
-        else => return null,
-    };
-    const len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse return null;
-    if (len != 1) return null;
-    return 0;
 }
 
 fn aliasWildcardPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?AliasPlaceInfo {

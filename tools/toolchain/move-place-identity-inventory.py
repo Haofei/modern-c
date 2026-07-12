@@ -24,15 +24,17 @@ ANCHORS: dict[str, list[str]] = {
     "docs/compiler-production-readiness.md": [
         "Move checker alias assignment updates use typed storage places",
         "Move checker alias key formatter has no external callers",
+        "Move checker alias key formatter is retired",
         "move-place-identity-inventory.py",
     ],
 }
 
 EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/sema_move.zig": {
-        # The remaining aliasPlaceKey calls are the recursive formatter body only.
-        # Any external caller would reintroduce display-key identity as an authority.
-        "aliasPlaceKey(self,": 3,
+        # aliasPlaceKey was a display-key formatter. Keeping it at zero prevents
+        # reintroducing formatted storage identity as a move-checker authority.
+        "aliasPlaceKey": 0,
+        "aliasPlaceIndex": 0,
         "state.getPtr(key)": 0,
         "state.remove(key)": 0,
         "state.getPtr(target_info.key)": 0,
@@ -42,10 +44,6 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
 
 BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
     "src/sema_move.zig": {
-        ("fn aliasPlaceInfo", "fn aliasPlaceIndex"): [
-            "aliasPlaceKey(self, expr, state)",
-            "aliasStoragePlaceForExpr(self, expr, state)",
-        ],
         ("fn aliasWildcardPlaceInfo", "fn aliasPlaceBaseType"): [
             "const base = aliasPlaceKey(self, ix.base.*, state) orelse return null;",
         ],
