@@ -3972,30 +3972,25 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
 fn moveDeferBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     var before = cloneMoveState(self, state);
     defer before.deinit();
-    for (block.items) |stmt| moveDeferStmt(self, stmt, state, &before, aliases);
-    reportMoveLocalsLeavingScope(self, state, &before, "linear `move` value declared in this deferred cleanup block is never consumed before cleanup ends");
 
-    var scoped = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
-    defer scoped.deinit();
-    var it = before.iterator();
-    while (it.next()) |entry| {
-        if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*) and !state.contains(entry.key_ptr.*)) {
-            continue;
+    var linear = linearMoveCfg(self, .branch_join) orelse return;
+    defer linear.deinit();
+
+    var worklist = MoveStateCfgWorklist.init(self, &linear.cfg, linear.entry, state) orelse return;
+    defer worklist.deinit();
+    while (worklist.pop()) |block_id| {
+        const block_state = worklist.statePtr(block_id) orelse continue;
+        if (block_id == linear.entry) {
+            worklist.propagateSuccessors(self, block_id, block_state);
+        } else if (block_id == linear.body) {
+            for (block.items) |stmt| moveDeferStmt(self, stmt, block_state, &before, aliases);
+            reportMoveLocalsLeavingScope(self, block_state, &before, "linear `move` value declared in this deferred cleanup block is never consumed before cleanup ends");
+            worklist.propagateSuccessors(self, block_id, block_state);
+        } else if (block_id == linear.exit) {
+            replaceMoveState(self, state, block_state);
         }
-        const slot = state.get(entry.key_ptr.*) orelse entry.value_ptr.*;
-        scoped.put(entry.key_ptr.*, slot) catch {
-            self.oom = true;
-        };
     }
-    var state_it = state.iterator();
-    while (state_it.next()) |entry| {
-        if (before.contains(entry.key_ptr.*)) continue;
-        if (!moveSubplaceRootInOuter(entry.value_ptr.*, entry.key_ptr.*, &before)) continue;
-        scoped.put(entry.key_ptr.*, entry.value_ptr.*) catch {
-            self.oom = true;
-        };
-    }
-    replaceMoveState(self, state, &scoped);
+    preserveOuterScopedMoveState(self, state, &before);
 }
 
 fn cleanupLocalAliasReferent(self: *Checker, init: ast.Expr, state: *const std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
