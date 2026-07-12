@@ -6583,13 +6583,12 @@ const LlvmEmitter = struct {
         if (self.reduceCallInfo(call)) |info| return try self.emitReduceCall(call, info);
         if (self.conversionCallInfo(call)) |info| {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const source_ty = self.exprType(call.args[0]) orelse info.target_ty;
-            const value = try self.emitExpr(call.args[0], source_ty);
-            if (std.mem.eql(u8, info.op, "trap_from")) return try self.emitTrapConversion(value, source_ty, info.target_ty);
-            if (std.mem.eql(u8, info.op, "sat_from")) return try self.emitSaturatingConversion(value, source_ty, info.target_ty);
-            if (std.mem.eql(u8, info.op, "try_from")) return try self.emitTryConversion(value, source_ty, info.target_ty);
+            const value = try self.emitExpr(call.args[0], info.source_ty);
+            if (std.mem.eql(u8, info.op, "trap_from")) return try self.emitTrapConversion(value, info.source_ty, info.target_ty);
+            if (std.mem.eql(u8, info.op, "sat_from")) return try self.emitSaturatingConversion(value, info.source_ty, info.target_ty);
+            if (std.mem.eql(u8, info.op, "try_from")) return try self.emitTryConversion(value, info.source_ty, info.target_ty);
             if (!std.mem.eql(u8, info.op, "from") and !std.mem.eql(u8, info.op, "wrap_from") and !std.mem.eql(u8, info.op, "from_mod")) return error.UnsupportedLlvmEmission;
-            return try self.castValue(value, source_ty, info.target_ty);
+            return try self.castValue(value, info.source_ty, info.target_ty);
         }
         if (wrappingBuiltinOp(call.callee.*)) |op| {
             if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
@@ -8597,15 +8596,17 @@ const LlvmEmitter = struct {
         {
             return null;
         }
-        const ident = switch (member.base.kind) {
-            .ident => |id| id,
+        switch (member.base.kind) {
+            .ident => {},
             else => return null,
-        };
-        const target_ty = self.resolveAliasType(simpleType(ident.span, ident.text));
+        }
+        const target_fact = self.mirTargetTypeFactAt(.conversion_target, call.callee.*.span) orelse return null;
+        const source_fact = self.mirTargetTypeFactAt(.conversion_source, call.callee.*.span) orelse return null;
+        const target_ty = self.resolveAliasType(target_fact.target_ty);
         if (self.integerBitsOf(target_ty) == null) return null;
         const expected_kind = mir.conversionCallTargetKindForName(member.name.text) orelse return null;
         if (self.mirCallTargetKindAt(call.callee.*.span) != expected_kind) return null;
-        return .{ .target_ty = target_ty, .op = member.name.text };
+        return .{ .source_ty = source_fact.target_ty, .target_ty = target_ty, .op = member.name.text };
     }
 
     fn domainOpCallInfo(self: *LlvmEmitter, call: anytype) ?DomainOpCallInfo {

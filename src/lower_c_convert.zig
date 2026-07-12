@@ -24,10 +24,10 @@ const typeName = ast_query.typeName;
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const ExprSourceTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
-pub const NumericExprTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const UnderlyingIntTypeNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) ?[]const u8;
 pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror![]const u8;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -39,10 +39,10 @@ pub const Context = struct {
     emit_expr: EmitExprFn,
     c_type: CTypeFn,
     expr_source_type: ExprSourceTypeFn,
-    numeric_expr_type: NumericExprTypeFn,
     underlying_int_type_name: UnderlyingIntTypeNameFn,
     result_type_name: ResultTypeNameFn,
     mir_call_target_kind: MirCallTargetKindFn,
+    mir_target_type: MirTargetTypeFn,
 };
 
 pub fn emitConversionCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
@@ -60,19 +60,21 @@ pub fn emitConversionCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
     if (locals) |ls| {
         if (ls.contains(ident.text)) return false;
     }
-    const resolved = lower_c_alias.resolveAliasType(ctx.type_aliases, simpleNameType(ident.text, ident.span));
+    if (call.args.len != 1) return error.UnsupportedCEmission;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_target) return error.UnsupportedCEmission;
+    const target_ty = ctx.mir_target_type(ctx.emit_ctx, .conversion_target, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    const source_ty = ctx.mir_target_type(ctx.emit_ctx, .conversion_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    const resolved = lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty);
     const target_name = typeName(resolved);
     const numeric_target = isNumericStorageType(resolved) or
         (target_name != null and !std.mem.eql(u8, target_name.?, "cstr") and primitiveCTypeName(target_name.?) != null);
     if (!numeric_target) return false;
-    if (call.args.len != 1) return error.UnsupportedCEmission;
-    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_target) return error.UnsupportedCEmission;
     const cty = try ctx.c_type(ctx.emit_ctx, resolved);
 
     if (is_checked) {
         const dst_name = ctx.underlying_int_type_name(ctx.emit_ctx, resolved) orelse return error.UnsupportedCEmission;
         const dst_range = intTypeRange(dst_name) orelse return error.UnsupportedCEmission;
-        const src_ty = ctx.numeric_expr_type(ctx.emit_ctx, call.args[0], locals) orelse return error.UnsupportedCEmission;
+        const src_ty = source_ty;
         const src_name = ctx.underlying_int_type_name(ctx.emit_ctx, src_ty) orelse return error.UnsupportedCEmission;
         const src_range = intTypeRange(src_name) orelse return error.UnsupportedCEmission;
         const need_lower = src_range.min < dst_range.min;

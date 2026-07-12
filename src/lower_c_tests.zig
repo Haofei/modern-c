@@ -235,6 +235,13 @@ test "lower-c conversion builtins require exact MIR call-target facts" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_mir, &stale_output, .kernel, "c_conversion_call_target_facts.mc", .{}, false, null));
+
+    var missing_types_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_types_mir.deinit();
+    try clearTargetTypeFactsForFunction(&missing_types_mir, "convert");
+    var missing_types_output: std.ArrayList(u8) = .empty;
+    defer missing_types_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_types_mir, &missing_types_output, .kernel, "c_conversion_call_target_facts.mc", .{}, false, null));
 }
 
 fn retargetIntegerFactsForFunction(module_mir: *mir.Module, name: []const u8, target_ty: mir.ValueType) !void {

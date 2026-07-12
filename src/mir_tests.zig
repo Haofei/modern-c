@@ -134,6 +134,7 @@ test "MIR owns all scalar conversion builtin call targets" {
         \\fn wrap_value(x: u64) -> u8 { return u8.wrap_from(x); }
         \\fn sat_value(x: u64) -> u8 { return u8.sat_from(x); }
         \\fn mod_value() -> W { return W.from_mod(300); }
+        \\fn adapted_binary(x: u64) -> u8 { return u8.trap_from(1 + x); }
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_conversion_call_targets.mc", source);
     defer reporter.deinit();
@@ -154,12 +155,18 @@ test "MIR owns all scalar conversion builtin call targets" {
         .{ .name = "wrap_value", .kind = .conversion_wrap_from },
         .{ .name = "sat_value", .kind = .conversion_sat_from },
         .{ .name = "mod_value", .kind = .conversion_from_mod },
+        .{ .name = "adapted_binary", .kind = .conversion_trap_from },
     };
     for (cases) |case| {
         const function = functionByName(typed_mir, case.name).?;
         try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
         try std.testing.expectEqual(case.kind, function.call_target_facts[0].kind);
+        try std.testing.expectEqual(@as(usize, 2), function.target_type_facts.len);
+        try std.testing.expectEqual(mir.TargetTypeKind.conversion_source, function.target_type_facts[0].kind);
+        try std.testing.expectEqual(mir.TargetTypeKind.conversion_target, function.target_type_facts[1].kind);
     }
+    try std.testing.expectEqualStrings("u32", valueTypeName(functionByName(typed_mir, "mod_value").?.target_type_facts[0].result_ty));
+    try std.testing.expectEqualStrings("u64", valueTypeName(functionByName(typed_mir, "adapted_binary").?.target_type_facts[0].result_ty));
 }
 
 test "MIR owns target types for contextual constructors and literals" {

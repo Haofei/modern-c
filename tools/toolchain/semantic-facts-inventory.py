@@ -774,6 +774,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/lower_c_convert.zig": {
         "mir.conversionCallTargetKindForName(op)": 1,
         "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_target": 1,
+        "ctx.mir_target_type(ctx.emit_ctx, .conversion_source": 1,
+        "ctx.mir_target_type(ctx.emit_ctx, .conversion_target": 1,
+        "numeric_expr_type:": 0,
     },
     "src/lower_c_infer.zig": {
         "fn qualifiedUnionConstructorType(": 0,
@@ -801,6 +804,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.dyn_coercion": 1,
         "mir.conversionCallTargetKindForName(member.name.text)": 1,
         "self.mirCallTargetKindAt(call.callee.*.span) != expected_kind": 1,
+        "mirTargetTypeFactAt(.conversion_source": 1,
+        "mirTargetTypeFactAt(.conversion_target": 1,
+        "self.exprType(call.args[0]) orelse info.target_ty": 0,
         "self.current_function = global.name.text;": 1,
         "if (span.line == 0 or span.column == 0) return null;": 1,
         "fn bindClosureType(": 0,

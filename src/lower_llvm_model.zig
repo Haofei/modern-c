@@ -165,6 +165,7 @@ pub const DomainOpCallInfo = struct {
 };
 
 pub const ConversionCallInfo = struct {
+    source_ty: ast.TypeExpr,
     target_ty: ast.TypeExpr,
     op: []const u8,
 };

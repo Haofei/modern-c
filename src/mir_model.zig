@@ -281,6 +281,8 @@ pub const TargetTypeKind = enum {
     null_literal,
     value_optional_coercion,
     dyn_coercion,
+    conversion_source,
+    conversion_target,
 };
 
 pub const TargetTypeFact = struct {

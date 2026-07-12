@@ -1593,10 +1593,10 @@ const CEmitter = struct {
             .emit_expr = emitExprForCall,
             .c_type = cTypeForCall,
             .expr_source_type = exprSourceTypeForCall,
-            .numeric_expr_type = numericExprTypeForConvert,
             .underlying_int_type_name = underlyingIntTypeNameForConvert,
             .result_type_name = resultTypeNameForConvert,
             .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 
@@ -2133,6 +2133,11 @@ const CEmitter = struct {
     fn mirCallTargetKindForLowering(ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.mirCallTargetKindAt(span);
+    }
+
+    fn mirTargetTypeForLowering(ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        return if (self.mirTargetTypeFactAt(kind, span)) |fact| fact.target_ty else null;
     }
 
     fn localInfoFromTypeForArith(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo {

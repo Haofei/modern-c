@@ -4710,9 +4710,11 @@ const FunctionBuilder = struct {
                         try self.addCallTargetFact(fence_kind, .void, expr.span);
                     }
                 }
-                if (self.conversionCallTargetKind(node)) |conversion_kind| {
-                    try self.addInstr(.call_target, @tagName(conversion_kind), call_ty, expr.span);
-                    try self.addCallTargetFact(conversion_kind, call_ty, expr.span);
+                if (self.conversionCallFactInfo(node)) |conversion| {
+                    try self.addInstr(.call_target, @tagName(conversion.kind), call_ty, expr.span);
+                    try self.addCallTargetFact(conversion.kind, call_ty, expr.span);
+                    try self.appendTargetTypeFact(.conversion_source, conversion.source_ty, valueTypeFromTypeAlias(conversion.source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
+                    try self.appendTargetTypeFact(.conversion_target, conversion.target_ty, valueTypeFromTypeAlias(conversion.target_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }
                 if (reflection_target) |fact_kind| {
                     const reflection_ty: ValueType = .{ .integer = "usize" };
@@ -7238,7 +7240,13 @@ const FunctionBuilder = struct {
         return null;
     }
 
-    fn conversionCallTargetKind(self: *FunctionBuilder, call: anytype) ?CallTargetKind {
+    const ConversionCallFactInfo = struct {
+        kind: CallTargetKind,
+        source_ty: ast.TypeExpr,
+        target_ty: ast.TypeExpr,
+    };
+
+    fn conversionCallFactInfo(self: *FunctionBuilder, call: anytype) ?ConversionCallFactInfo {
         if (call.type_args.len != 0 or call.args.len != 1) return null;
         const member = memberExpr(call.callee.*) orelse return null;
         const ident_name = calleeIdentName(member.base.*) orelse return null;
@@ -7246,7 +7254,30 @@ const FunctionBuilder = struct {
         const ident = ast.Ident{ .text = ident_name, .span = member.base.*.span };
         const target_ty = ast.TypeExpr{ .span = ident.span, .kind = .{ .name = ident } };
         if (arithmeticDomainTypeAlias(target_ty, self.aliases) == null and !self.resolvesToScalarInt(ident_name, 0)) return null;
-        return conversionCallTargetKindForName(member.name.text);
+        const source_ty = self.conversionSourceTypeExpr(call.args[0]) orelse return null;
+        return .{
+            .kind = conversionCallTargetKindForName(member.name.text) orelse return null,
+            .source_ty = source_ty,
+            .target_ty = target_ty,
+        };
+    }
+
+    fn conversionSourceTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
+        if (self.typeExprForExpr(expr)) |ty| return ty;
+        return switch (expr.kind) {
+            .int_literal => ast_query.simpleNameType("u32", expr.span),
+            .grouped => |inner| self.conversionSourceTypeExpr(inner.*),
+            .unary => |node| if (node.op == .neg and node.expr.kind == .int_literal)
+                ast_query.simpleNameType("i32", expr.span)
+            else
+                self.conversionSourceTypeExpr(node.expr.*),
+            .binary => |node| self.typeExprForExpr(node.left.*) orelse
+                self.typeExprForExpr(node.right.*) orelse
+                self.conversionSourceTypeExpr(node.left.*) orelse
+                self.conversionSourceTypeExpr(node.right.*),
+            .call => |node| if (self.conversionCallFactInfo(node)) |nested| nested.target_ty else null,
+            else => null,
+        };
     }
 
     // D-pass operation legality for typed-resource calls: unknown atomic method
