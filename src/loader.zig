@@ -168,7 +168,7 @@ pub fn loadCombinedSourceWithBoundariesOptionsReport(
     if (options.std_dir) |std_dir| {
         try installed_roots.append(allocator, .{
             .kind = .std_dir,
-            .path = try canonicalize(allocator, std_dir, cwd_root),
+            .path = try canonicalizeConfiguredRoot(allocator, io, std_dir, cwd_root),
         });
     }
     for (options.mc_path) |entry| {
@@ -176,7 +176,7 @@ pub fn loadCombinedSourceWithBoundariesOptionsReport(
         if (trimmed.len == 0) continue;
         try installed_roots.append(allocator, .{
             .kind = .import_root,
-            .path = try canonicalize(allocator, trimmed, cwd_root),
+            .path = try canonicalizeConfiguredRoot(allocator, io, trimmed, cwd_root),
         });
     }
     try expand(
@@ -341,7 +341,8 @@ fn resolveImportPath(arena: std.mem.Allocator, io: std.Io, importer: []const u8,
         else
             try std.fs.path.join(arena, &.{ std.fs.path.dirname(importer) orelse ".", rel });
         const resolved = try canonicalize(arena, joined, sandbox_root);
-        return .{ .path = resolved, .display_path = try displayPath(arena, sandbox_root, resolved), .outside_sandbox = !pathWithin(sandbox_root, resolved) };
+        const actual = (try realPathFileDupe(arena, io, resolved)) orelse resolved;
+        return .{ .path = actual, .display_path = try displayPath(arena, sandbox_root, actual), .outside_sandbox = !pathWithin(sandbox_root, actual) };
     }
 
     // Rooted (e.g. `std/sync.mc`): walk up the importer's ancestor directories,
@@ -358,7 +359,10 @@ fn resolveImportPath(arena: std.mem.Allocator, io: std.Io, importer: []const u8,
             continue;
         }
         if (first == null) first = cand;
-        if (fileExists(io, cand)) return .{ .path = cand, .display_path = try displayPath(arena, sandbox_root, cand) };
+        if (fileExists(io, cand)) {
+            const actual = (try realPathFileDupe(arena, io, cand)) orelse cand;
+            return .{ .path = actual, .display_path = try displayPath(arena, sandbox_root, actual), .outside_sandbox = !pathWithin(sandbox_root, actual) };
+        }
         const parent = std.fs.path.dirname(d);
         dir = if (parent != null and !std.mem.eql(u8, parent.?, d)) parent else null;
     }
@@ -367,11 +371,18 @@ fn resolveImportPath(arena: std.mem.Allocator, io: std.Io, importer: []const u8,
     if (!pathWithin(sandbox_root, bare)) {
         if (first_outside == null) first_outside = bare;
     } else if (fileExists(io, bare)) {
-        return .{ .path = bare, .display_path = try displayPath(arena, sandbox_root, bare) };
+        const actual = (try realPathFileDupe(arena, io, bare)) orelse bare;
+        return .{ .path = actual, .display_path = try displayPath(arena, sandbox_root, actual), .outside_sandbox = !pathWithin(sandbox_root, actual) };
     }
     for (installed_roots) |root| {
         if (try installedCandidate(arena, root, rel)) |cand| {
-            if (fileExists(io, cand)) return .{ .path = cand, .display_path = try displayPath(arena, sandbox_root, cand) };
+            if (fileExists(io, cand)) {
+                const actual = (try realPathFileDupe(arena, io, cand)) orelse cand;
+                if (!pathWithin(root.path, actual)) {
+                    return .{ .path = actual, .display_path = actual, .outside_sandbox = true };
+                }
+                return .{ .path = actual, .display_path = try displayPath(arena, sandbox_root, actual) };
+            }
         }
     }
     // None found: return a sensible candidate for the error message.
@@ -406,6 +417,15 @@ fn canonicalize(arena: std.mem.Allocator, path: []const u8, relative_root: []con
     // paths) into an absolute, `..`-collapsed form.
     if (std.fs.path.isAbsolute(path)) return std.fs.path.resolve(arena, &.{path});
     return std.fs.path.resolve(arena, &.{ relative_root, path });
+}
+
+fn canonicalizeConfiguredRoot(allocator: std.mem.Allocator, io: std.Io, path: []const u8, relative_root: []const u8) LoadError![]const u8 {
+    const lexical = try canonicalize(allocator, path, relative_root);
+    if (try realPathFileDupe(allocator, io, lexical)) |actual| {
+        allocator.free(lexical);
+        return actual;
+    }
+    return lexical;
 }
 
 fn realPathFileDupe(allocator: std.mem.Allocator, io: std.Io, path: []const u8) std.mem.Allocator.Error!?[]u8 {

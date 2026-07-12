@@ -80,4 +80,35 @@ if ! grep -Fq "$OUTSIDE" <<<"$sandbox_output"; then
     exit 1
 fi
 
-echo "PASS: install-layout-test — --std-dir and MC_PATH installed std fallbacks work without relaxing explicit import sandboxing"
+INSTALLED_OUTSIDE="$WORK/installed-outside.mc"
+cat >"$INSTALLED_OUTSIDE" <<'MC'
+export fn installed_escape() -> u32 {
+    return 11;
+}
+MC
+ln -s "$INSTALLED_OUTSIDE" "$STD_DIR/escape.mc"
+cat >"$APP/bad_installed_symlink.mc" <<'MC'
+import "std/escape.mc";
+
+export fn main() -> u32 {
+    return installed_escape();
+}
+MC
+
+installed_symlink_output=""
+if installed_symlink_output=$(run_from_app check bad_installed_symlink.mc --std-dir="$STD_DIR" 2>&1); then
+    echo "FAIL: install-layout-test — installed std symlink outside its root unexpectedly succeeded"
+    exit 1
+fi
+if ! grep -Fq "bad_installed_symlink.mc:1:1: error: E_IMPORT_OUTSIDE_SANDBOX" <<<"$installed_symlink_output"; then
+    echo "FAIL: install-layout-test — installed-root symlink escape diagnostic was missing"
+    printf '%s\n' "$installed_symlink_output"
+    exit 1
+fi
+if ! grep -Fq "$INSTALLED_OUTSIDE" <<<"$installed_symlink_output"; then
+    echo "FAIL: install-layout-test — installed-root symlink diagnostic did not mention resolved target"
+    printf '%s\n' "$installed_symlink_output"
+    exit 1
+fi
+
+echo "PASS: install-layout-test — --std-dir and MC_PATH fallbacks preserve explicit and symlink-resolved import containment"

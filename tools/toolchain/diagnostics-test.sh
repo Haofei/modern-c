@@ -295,6 +295,29 @@ assert_contains "$sandbox_output" "root_abs_import.mc:1:1: error: E_IMPORT_OUTSI
 assert_contains "$sandbox_output" "outside the import sandbox rooted at" "outside-sandbox import diagnostic text"
 assert_not_contains "$sandbox_output" "parsed 2 top-level declarations" "outside-sandbox import acceptance"
 
+cat >"$OUTSIDE" <<'MC'
+export fn symlink_escape_value() -> u32 {
+    return 9;
+}
+MC
+ln -s "$(dirname "$OUTSIDE")" "$WORK/symlink-outside"
+cat >"$WORK/root_symlink_import.mc" <<MC
+import "./symlink-outside/$(basename "$OUTSIDE")";
+
+export fn main() -> u32 {
+    return symlink_escape_value();
+}
+MC
+
+symlink_output=""
+if symlink_output=$("$MCC" check "$WORK/root_symlink_import.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — symlink import outside sandbox unexpectedly succeeded"
+    exit 1
+fi
+assert_contains "$symlink_output" "root_symlink_import.mc:1:1: error: E_IMPORT_OUTSIDE_SANDBOX" "symlink outside-sandbox import diagnostic location"
+assert_contains "$symlink_output" "$OUTSIDE" "symlink outside-sandbox resolved target"
+assert_not_contains "$symlink_output" "parsed 2 top-level declarations" "symlink outside-sandbox import acceptance"
+
 cat >"$WORK/root_import.mc" <<'MC'
 import "lib.mc";
 
