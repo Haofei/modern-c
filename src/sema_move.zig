@@ -278,6 +278,59 @@ fn twoArmMoveCfg(self: *Checker) ?TwoArmMoveCfg {
     return .{ .cfg = cfg, .entry = entry, .then_block = then_block, .else_block = else_block, .join = join };
 }
 
+const MultiArmMoveCfg = struct {
+    allocator: std.mem.Allocator,
+    cfg: sema_model.MoveCfg,
+    entry: sema_model.MoveCfgBlockId,
+    join: sema_model.MoveCfgBlockId,
+    arms: []sema_model.MoveCfgBlockId,
+
+    fn deinit(self: *MultiArmMoveCfg) void {
+        self.allocator.free(self.arms);
+        self.cfg.deinit();
+    }
+};
+
+fn multiArmMoveCfg(self: *Checker, arm_count: usize) ?MultiArmMoveCfg {
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const join = cfg.addBlock(.branch_join) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const arms = self.reporter.allocator.alloc(sema_model.MoveCfgBlockId, arm_count) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    for (arms) |*block| {
+        block.* = cfg.addBlock(.statement) catch {
+            self.oom = true;
+            self.reporter.allocator.free(arms);
+            cfg.deinit();
+            return null;
+        };
+        cfg.addEdge(entry, block.*, .branch) catch {
+            self.oom = true;
+            self.reporter.allocator.free(arms);
+            cfg.deinit();
+            return null;
+        };
+        cfg.addEdge(block.*, join, .normal) catch {
+            self.oom = true;
+            self.reporter.allocator.free(arms);
+            cfg.deinit();
+            return null;
+        };
+    }
+    return .{ .allocator = self.reporter.allocator, .cfg = cfg, .entry = entry, .join = join, .arms = arms };
+}
+
 pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     const body = fn_decl.body orelse return;
     var state = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
@@ -939,38 +992,10 @@ fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *std.StringHashMap(Mov
         moveConsume(self, node.subject, state, aliases);
         return false;
     }
-    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
-    defer cfg.deinit();
-    const entry = cfg.addBlock(.entry) catch {
-        self.oom = true;
-        return false;
-    };
-    const join = cfg.addBlock(.branch_join) catch {
-        self.oom = true;
-        return false;
-    };
-    const arm_blocks = self.reporter.allocator.alloc(sema_model.MoveCfgBlockId, node.arms.len) catch {
-        self.oom = true;
-        return false;
-    };
-    defer self.reporter.allocator.free(arm_blocks);
-    for (arm_blocks, 0..) |*block, i| {
-        _ = i;
-        block.* = cfg.addBlock(.statement) catch {
-            self.oom = true;
-            return false;
-        };
-        cfg.addEdge(entry, block.*, .branch) catch {
-            self.oom = true;
-            return false;
-        };
-        cfg.addEdge(block.*, join, .normal) catch {
-            self.oom = true;
-            return false;
-        };
-    }
+    var branch = multiArmMoveCfg(self, node.arms.len) orelse return false;
+    defer branch.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return false;
+    var worklist = MoveStateCfgWorklist.init(self, &branch.cfg, branch.entry, state) orelse return false;
     defer worklist.deinit();
     const subject_ty: ?ast.TypeExpr = if (self.move_ctx) |ctx| spine.exprResultType(node.subject, ctx.*) else null;
     var all_diverge = true;
@@ -978,15 +1003,15 @@ fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *std.StringHashMap(Mov
 
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == entry) {
+        if (block == branch.entry) {
             moveConsume(self, node.subject, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == join) {
+        } else if (block == branch.join) {
             replaceMoveState(self, state, block_state);
             joined = true;
         } else {
             var arm_index: ?usize = null;
-            for (arm_blocks, 0..) |arm_block, i| {
+            for (branch.arms, 0..) |arm_block, i| {
                 if (arm_block == block) {
                     arm_index = i;
                     break;
