@@ -244,6 +244,11 @@ pub const CallTargetKind = enum {
     fence_full,
     fence_release,
     fence_acquire,
+    reflection_size,
+    reflection_alignment,
+    reflection_field_offset,
+    reflection_bit_offset,
+    reflection_repr,
 };
 
 pub const CallTargetFact = struct {

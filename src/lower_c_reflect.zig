@@ -8,6 +8,7 @@ const lower_c_builtin = @import("lower_c_builtin.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const mir = @import("mir.zig");
 
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
@@ -37,6 +38,7 @@ pub const ReflectEnv = struct {
 };
 
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
@@ -48,6 +50,7 @@ pub const EmitContext = struct {
     mmio_structs: *const std.StringHashMap(MmioStruct),
     type_ctx: *anyopaque,
     c_type: CTypeFn,
+    mir_call_target_kind: MirCallTargetKindFn,
 };
 
 pub fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
@@ -57,6 +60,8 @@ pub fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
 
 pub fn emitReflectionCall(ctx: EmitContext, call: anytype) !bool {
     const kind = reflectionCallKind(call.callee.*) orelse return false;
+    const expected_fact = mir.reflectionCallTargetKind(call) orelse return error.UnsupportedCEmission;
+    if (ctx.mir_call_target_kind(ctx.type_ctx, call.callee.*.span) != expected_fact) return error.UnsupportedCEmission;
     if (call.type_args.len != 1) return error.UnsupportedCEmission;
     const target_ty = call.type_args[0];
     switch (kind) {

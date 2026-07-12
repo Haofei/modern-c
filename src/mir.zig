@@ -4487,8 +4487,11 @@ const FunctionBuilder = struct {
                 // method's, not a same-named free function's. The verifier carries no trait sigs,
                 // so leave it `.unknown` rather than mis-binding to `summaries[method_name]`.
                 const is_dyn_dispatch = self.isDynDispatchMember(node.callee.*);
+                const reflection_target = reflectionCallTargetKind(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
+                else if (reflection_target != null)
+                    .{ .integer = "usize" }
                 else if (reduceCallKind(node.callee.*) != null)
                     self.exprType(expr)
                 else if (self.atomicCallValueType(node)) |ty|
@@ -4555,6 +4558,11 @@ const FunctionBuilder = struct {
                         try self.addInstr(.call_target, @tagName(fence_kind), .void, expr.span);
                         try self.addCallTargetFact(fence_kind, .void, expr.span);
                     }
+                }
+                if (reflection_target) |fact_kind| {
+                    const reflection_ty: ValueType = .{ .integer = "usize" };
+                    try self.addInstr(.call_target, @tagName(fact_kind), reflection_ty, expr.span);
+                    try self.addCallTargetFact(fact_kind, reflection_ty, expr.span);
                 }
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {
                     try self.addInstr(.unsafe_check, callee_name, .unknown, expr.span);
@@ -7597,6 +7605,21 @@ fn reflectionCallPreservesPointerProvenance(call: anytype) bool {
     if (call.type_args.len != 1) return false;
     const expected_args: usize = if (reflectionRequiresField(kind)) 1 else 0;
     return call.args.len == expected_args;
+}
+
+pub fn reflectionCallTargetKind(call: anytype) ?CallTargetKind {
+    const kind = reflectionKind(call.callee.*) orelse return null;
+    if (kind == .field_type or call.type_args.len != 1) return null;
+    const expected_args: usize = if (reflectionRequiresField(kind)) 1 else 0;
+    if (call.args.len != expected_args) return null;
+    return switch (kind) {
+        .size => .reflection_size,
+        .alignment => .reflection_alignment,
+        .field_offset => .reflection_field_offset,
+        .bit_offset => .reflection_bit_offset,
+        .repr => .reflection_repr,
+        .field_type => unreachable,
+    };
 }
 
 fn isUnsafeOperationCall(callee: ast.Expr) bool {

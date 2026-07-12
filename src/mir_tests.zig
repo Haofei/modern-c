@@ -641,6 +641,51 @@ test "MIR records typed call target facts for reductions" {
     try mir.validateCallTargetFactsForLowering(typed_mir);
 }
 
+test "MIR owns value reflection call target facts" {
+    const source =
+        \\extern struct Packet {
+        \\    len: u16,
+        \\    tag: u8,
+        \\}
+        \\enum Mode: u8 {
+        \\    normal = 0,
+        \\}
+        \\fn reflected_size() -> usize { return size_of<Packet>(); }
+        \\fn reflected_alignment() -> usize { return alignof<Packet>(); }
+        \\fn reflected_field_offset() -> usize { return field_offset<Packet>(.tag); }
+        \\fn reflected_bit_offset() -> usize { return bit_offset<Packet>(.tag); }
+        \\fn reflected_repr() -> usize { return repr_of<Mode>(); }
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_reflection_call_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const expected = [_]struct { name: []const u8, kind: mir.CallTargetKind }{
+        .{ .name = "reflected_size", .kind = .reflection_size },
+        .{ .name = "reflected_alignment", .kind = .reflection_alignment },
+        .{ .name = "reflected_field_offset", .kind = .reflection_field_offset },
+        .{ .name = "reflected_bit_offset", .kind = .reflection_bit_offset },
+        .{ .name = "reflected_repr", .kind = .reflection_repr },
+    };
+    for (expected) |item| {
+        const function = functionByName(typed_mir, item.name).?;
+        try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
+        try std.testing.expectEqual(item.kind, function.call_target_facts[0].kind);
+        try std.testing.expectEqualStrings("usize", function.call_target_facts[0].result_ty.name());
+    }
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+}
+
 test "MIR rejects duplicate call target facts" {
     const source =
         \\fn checked(xs: []const u32) -> Result<u32, Overflow> {

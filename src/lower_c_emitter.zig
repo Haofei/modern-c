@@ -718,6 +718,7 @@ const CEmitter = struct {
             .mmio_structs = &self.mmio_structs,
             .type_ctx = self,
             .c_type = cTypeForReflect,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
         };
     }
 

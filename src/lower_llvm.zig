@@ -8412,7 +8412,11 @@ const LlvmEmitter = struct {
     }
 
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
-        if (reflectionValueCallReturnType(call)) |ty| return ty;
+        if (reflectionValueCallReturnType(call)) |ty| {
+            const expected_fact = mir.reflectionCallTargetKind(call) orelse return null;
+            if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return null;
+            return ty;
+        }
         // Tier 2 dynamic dispatch `d.method(args)` through a `*dyn Trait`: the return type is the
         // trait method's declared return type. Without this, exprType() is null for a dispatch call,
         // so a dispatch used directly as a switch/if subject (`if self.inner.poll() { ... }`) fell
@@ -8731,6 +8735,8 @@ const LlvmEmitter = struct {
     }
 
     fn reflectionCallValue(self: *LlvmEmitter, call: anytype) ?[]const u8 {
+        const expected_fact = mir.reflectionCallTargetKind(call) orelse return null;
+        if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return null;
         const expr: ast.Expr = .{ .span = call.callee.*.span, .kind = .{ .call = call } };
         var env = self.reflectEnv();
         const value = lower_llvm_reflect.comptimeReflect(&env, expr) orelse return null;

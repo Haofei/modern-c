@@ -377,6 +377,26 @@ test "LLVM rejects prebuilt MIR with missing call target facts" {
     );
 }
 
+test "LLVM rejects prebuilt MIR with missing reflection call target facts" {
+    const source =
+        \\fn reflection_call_target_fact_gate() -> usize {
+        \\    return size_of<u32>();
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_missing_reflection_call_target_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearCallTargetFactsForFunction(&module_mir, "reflection_call_target_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_reflection_call_target_facts.mc", .{}, false, .riscv64, null),
+    );
+}
+
 test "LLVM rejects prebuilt MIR with missing atomic call target facts" {
     const source =
         \\fn atomic_call_target_fact_gate() -> u32 {

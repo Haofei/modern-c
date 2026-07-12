@@ -60,6 +60,10 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn reflectionCallKind(",
             "const byteViewCallKind = ast_query.byteViewCallKind",
         ],
+        "src/lower_c_reflect.zig": [
+            "mir.reflectionCallTargetKind(call)",
+            "ctx.mir_call_target_kind(ctx.type_ctx, call.callee.*.span) != expected_fact",
+        ],
     },
     "c-bounds-range-consumption": {
         "docs/typed-semantic-facts.md": ["| `c-bounds-range-consumption` |"],
@@ -748,6 +752,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "taggedUnionCase(union_decl": 0,
         "for (enum_decl.cases)": 0,
     },
+    "src/lower_c_reflect.zig": {
+        "mir.reflectionCallTargetKind(call)": 1,
+        "ctx.mir_call_target_kind(ctx.type_ctx, call.callee.*.span) != expected_fact": 1,
+    },
     "src/lower_llvm.zig": {
         "try mir.validateIntegerFactsForLowering(module_mir.*);": 1,
         "fn requireMirBoundsFact": 1,
@@ -778,6 +786,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "atomicCallMemberOp(call.callee.*)": 0,
         "maybeUninitCallMemberOp(call.callee.*)": 0,
         "reduceCallKind(call.callee.*)": 0,
+        "mir.reflectionCallTargetKind(call)": 2,
     },
     "tests/spec/no_implicit_conversion.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 9,

@@ -325,6 +325,26 @@ test "lower-c rejects prebuilt MIR with missing call target facts" {
     );
 }
 
+test "lower-c rejects prebuilt MIR with missing reflection call target facts" {
+    const source =
+        \\fn reflection_call_target_fact_gate() -> usize {
+        \\    return size_of<u32>();
+        \\}
+    ;
+
+    var parsed = try test_support.parseCheckedModule("c_missing_reflection_call_target_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearCallTargetFactsForFunction(&module_mir, "reflection_call_target_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_reflection_call_target_facts.mc", .{}, false, null),
+    );
+}
+
 test "lower-c rejects prebuilt MIR with missing atomic call target facts" {
     const source =
         \\fn atomic_call_target_fact_gate() -> u32 {
