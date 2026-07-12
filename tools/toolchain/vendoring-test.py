@@ -104,6 +104,8 @@ DOC_NEEDLES = [
     "quickjs",
     "wamr",
     "openlibm",
+    "README.vendored.md",
+    "THIRD-PARTY-LICENSES.md",
     "CVE",
     "advisory",
     "GitHub Security Advisories",
@@ -180,6 +182,24 @@ def check_doc() -> list[str]:
     ]
 
 
+def check_manifest_links() -> list[str]:
+    manifest = ROOT / "THIRD-PARTY-LICENSES.md"
+    if not manifest.is_file():
+        return ["missing THIRD-PARTY-LICENSES.md"]
+    text = manifest.read_text(encoding="utf-8")
+    errors: list[str] = []
+    for name, cfg in DEPENDENCIES.items():
+        readme = f"third_party/{name}/README.vendored.md"
+        if f"`{readme}`" not in text:
+            errors.append(f"THIRD-PARTY-LICENSES.md does not reference {readme}")
+        license_rel = cfg["license"]
+        assert isinstance(license_rel, str)
+        license_path = f"third_party/{name}/{license_rel}"
+        if f"`{license_path}`" not in text:
+            errors.append(f"THIRD-PARTY-LICENSES.md does not reference {license_path}")
+    return errors
+
+
 def check_wamr_loader_guard() -> list[str]:
     path = ROOT / "third_party" / "wamr" / "core" / "iwasm" / "interpreter" / "wasm_loader.c"
     if not path.is_file():
@@ -199,6 +219,7 @@ def main() -> int:
         errors.extend(check_dependency(name, cfg))
     errors.extend(check_no_extra_license_deps())
     errors.extend(check_doc())
+    errors.extend(check_manifest_links())
     errors.extend(check_wamr_loader_guard())
 
     if errors:

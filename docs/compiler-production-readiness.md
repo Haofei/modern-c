@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-11, based on the current compiler worktree**.
-Evidence register: **552 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **553 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -161,6 +161,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Async reserved forms fail closed with check-mode diagnostics | The remaining reserved async forms named by the roadmap are now gated under `mcc check`: dyn-future await / unresolved future expressions, await-bearing `for` loops, constructor-formed borrow-across-await, and first-await self-reference/pinning all reject with stable explicit diagnostic codes instead of relying only on backend rejection. | `6f636d56 Gate async reserved forms under check`; `tests/c_emit/bad/async_await_unresolved_dyn.mc`; `tests/c_emit/bad/async_for_await_nested.mc`; `tests/c_emit/bad/async_borrow_across_await.mc`; `tests/c_emit/bad/async_borrow_pinning.mc`; `tests/diagnostics/bad-golden.tsv`; `python3 tools/toolchain/bad-diagnostics-test.py --check`. |
 | Release artifact packaging and local qualification gates are implemented | Repo-local gates now prove pinned release metadata, ReleaseSafe installability, deterministic tarballs, SHA256SUMS, release inventory, CycloneDX SBOM, required payload docs/files, tag-version rejection, GitHub/Sigstore attestation wiring, and release workflow upload staging. | `7e0d4592 docs: narrow release qualification ledger item`; `.github/workflows/release.yml`; `tools/ci/package-release.py`; `tools/toolchain/release-metadata-test.py`; `tools/toolchain/package-release-test.py`; `tools/toolchain/release-safe-install-test.sh`; `build/qemu.zig`; `build/tiers.zig`; `docs/release-process.md`; `SECURITY.md`; `STABILITY.md`; `CHANGELOG.md`; `zig build release-metadata-test package-release-test release-safe-install-test`. |
 | Native macOS host support and LLVM major are gated | The documented macOS host tier is no longer an unverified README claim: CI has a native `macos-15` job, pins `MC_LLVM_MAJOR=18`, installs and selects Homebrew `llvm@18`, prints the selected LLVM tools, and runs the host/fast gate. The release metadata gate now locks the exact README support row, job comment, gate name, tool-version probes, and non-floating macOS runner. | `.github/workflows/ci.yml` `macos` job; `README.md` LLVM Support Matrix; `tools/toolchain/release-metadata-test.py` `require_llvm_support_matrix` and native macOS CI assertions; `zig build release-metadata-test readiness-ledger-test`; `git diff --check`. |
+| Supply-chain process and license provenance are gated | Every license-bearing vendored dependency now has a provenance README, license path, retained-subset description, local-modification note, source version/hash evidence, and CVE/advisory update process. The aggregate license manifest is checked against those provenance records, SECURITY.md provides the current intake/support policy, the threat model includes compiler and supply-chain attack surfaces, Docker/Zig/LLVM pins are locked, and workflow actions are SHA-pinned. | `docs/vendoring.md`; `third_party/*/README.vendored.md`; `THIRD-PARTY-LICENSES.md`; `SECURITY.md`; `docs/threat-model.md`; `Dockerfile`; `.github/workflows/*.yml`; `tools/toolchain/vendoring-test.py`; `tools/toolchain/third-party-licenses-test.py`; `tools/toolchain/release-metadata-test.py`; `zig build vendoring-test third-party-licenses-test release-metadata-test readiness-ledger-test`; `git diff --check`. |
 | CLI help/version surface is implemented and gated | `mcc --help`, `mcc help`, `mcc --version`, and `mcc version` are normal successful commands. The help transcript lists every current top-level source/loading/emission/tooling subcommand, documents stdin input, installed-layout import fallback, output paths, path remapping, build-safety profiles, machine-readable diagnostics, and exit-code classes. The transcript gate is wired into `m0`, `fast`, and `c0`, and README now carries the same command surface instead of a partial list. | `src/main.zig` `usage` / `--help` / `--version`; `build/compiler.zig` version option; `tools/toolchain/mcc-cli-test.sh` full transcript assertions; `build/qemu.zig` `mcc-cli-test`; `build/tiers.zig` m0/fast/c0 dependencies; `README.md` useful compiler commands; `zig build mcc-cli-test readiness-ledger-test`; `git diff --check`. |
 | Hosted one-shot build driver is implemented and gated | The installed `mcc` launcher dispatches `mcc build <file.mc> -o <exe>` to the hosted build helper, which emits hosted C with the private compiler, wraps a nullary exported MC `main` as the process entry point, invokes `clang`, and reports the output path. The gate now covers integer-return and `void` main programs, the missing-`-o` usage path, missing exported `main`, and multiple-input rejection. This is a hosted executable driver for the documented nullary-main boundary, not a general kernel/freestanding linker or arbitrary-entry synthesis layer. | `tools/toolchain/mcc-launcher.sh`; `tools/toolchain/mcc-build.sh`; `tools/toolchain/mcc-build-test.sh`; `build/compiler.zig` installed launcher/helper files; `build/qemu.zig` `mcc-build-test`; `build/tiers.zig` m0/fast/c0 dependencies; `README.md` `mcc build` example; `zig build mcc-build-test readiness-ledger-test`; `git diff --check`. |
 | Standard-library API reference is generated and gated | The stdlib API reference is generated from `std/**/*.mc` public declarations and now reflects the current public type/function surface, including recently public `StackGuard`, `SpinLock`, `Guard`, and `IrqGuard` declarations. The generator records modules, public functions, public constants, public type declarations, and local types referenced by public declarations; `std-api-docs-test` is wired into `m0`, `fast`, and `c0` so stdlib API drift fails closed. | `docs/std-api.md`; `tools/toolchain/std-api-docs.py`; `build/qemu.zig` `std-api-docs-test`; `build/tiers.zig` m0/fast/c0 dependencies; `python3 tools/toolchain/std-api-docs.py --check`; `zig build std-api-docs-test readiness-ledger-test`; `git diff --check`. |
@@ -1008,7 +1009,7 @@ extern ABI, incremental compilation).
 | Zig implementation quality | **C+** | Clean panic discipline, fueled comptime, exceptional comments — but unbounded recursion/instantiation, fail-open OOM paths, whole-program single-threaded architecture, Debug default. |
 | Toolchain UX & distribution | **D+** | CI-gated LSP/formatter/spec — but no releases, no version, no install story, no build driver, repo-coupled everything. |
 | Testing & CI | **B-** | Hosted CI, ~570 gates, systematic negative tests, differential fuzzing — but independent oracles ungated, fixed-seed fuzzing, coverage unmeasured, no release qualification. |
-| Security & supply chain | **C+** | No shell-outs, injection closed, exemplary BearSSL vendoring — but no CVE process for 3 of 4 vendored engines, no SECURITY.md, unverified toolchain downloads. |
+| Security & supply chain | **B-** | No shell-outs, injection closed, vendoring/license/threat-model/release-integrity metadata gated — but import sandboxing, WAMR local-patch separation, C string re-emission, and generated test-key handling remain open. |
 
 ### 3. What is already strong (protect it)
 
@@ -1532,32 +1533,39 @@ serially; honest self-documentation of limits).
   fixture-only coverage; async is also absent from the mcfuzz generator. Fold async
   shapes into the generator rather than writing unit tests. Effort M.
 
-### 5.7 Security & supply chain — C+
+### 5.7 Security & supply chain — B-
 
 Strengths: see §3 (no shell-outs; injection closed; `#line` escaping tested;
-BearSSL vendoring exemplary — upstream URL, exact commit, license, drop list, the
-one added file marked; trust-anchor provenance reproducible with commands; clean
-secrets hygiene; compatible licenses).
+vendoring provenance is now recorded for BearSSL, QuickJS, WAMR, and openlibm;
+third-party license aggregation, SECURITY.md intake, compiler/supply-chain threat
+model coverage, pinned Docker/Zig/LLVM inputs, SHA-pinned workflow actions, and
+release checksum/SBOM/attestation metadata are gated; trust-anchor provenance is
+reproducible with commands; clean secrets hygiene; compatible licenses).
 
 - **[P1] No dependency provenance or CVE process for 3 of 4 vendored engines.**
-  `third_party/quickjs/` (QuickJS-ng 0.15.1 per header) and `third_party/wamr/`
-  (2.4.3 per `core/version.h`) have no vendoring README; openlibm records no version
-  at all; no UPDATING/process doc; zero dep-bump commits in history. A published
-  CVE would go unnoticed with no recorded commit to diff against. Fix:
-  `README.vendored.md` per dep on BearSSL's template + `docs/vendoring.md` with a
-  re-vendor/CVE-watch checklist. Effort M.
-- **[P1] No SECURITY.md / vulnerability-report channel.** Finders default to public
-  issues. Effort S.
+  **fixed**: BearSSL, QuickJS, WAMR, and openlibm each have
+  `README.vendored.md` provenance records with upstream/source evidence, license
+  paths, retained subsets, local modifications, build/use notes, and update
+  expectations. `docs/vendoring.md` defines the re-vendor and CVE/advisory watch
+  process, and `vendoring-test` now also requires the aggregate license manifest
+  to link every dependency README and license file.
+- **[P1] No SECURITY.md / vulnerability-report channel.** **fixed for the current
+  public-intake policy**: `SECURITY.md` documents supported versions, report fields,
+  current public GitHub issue intake, and explicitly names the absence of a private
+  embargo/SLA. A private advisory channel remains future process maturity, not a
+  hidden current guarantee.
 - **[P1] The threat model explicitly excludes the compiler and supply chain.**
-  `docs/threat-model.md:43-45` lists "supply-chain compromise of the vendored
-  engines or the toolchain" as out of scope; the compiler appears only as trusted
-  TCB. The scenario this document targets — external users trusting the toolchain,
-  possibly compiling untrusted source — is unmodeled. Fix: add a
-  compiler-as-attack-surface section + a supply-chain sub-model. Effort M.
+  **fixed**: `docs/threat-model.md` now treats external `mcc` use on untrusted
+  source as an attacker-reachable compiler surface, models diagnostics/miscompile/
+  import/release risks, and has an explicit supply-chain sub-model for vendored
+  engines, Zig/LLVM/Docker/QEMU, CI actions, release artifacts, and vulnerability
+  intake. `release-metadata-test` rejects drift back to an out-of-scope model.
 - **[P1] Dev image fetches Zig with no integrity check; base image floats.**
-  `FROM ubuntu:24.04` by tag; `wget` + untar with no SHA/minisign verification; apt
-  unpinned. Fix: digest-pin the base; verify the Zig tarball against a committed
-  hash or Zig's minisign key. Effort S-M.
+  **fixed for the current dev image**: `Dockerfile` digest-pins the Ubuntu 24.04
+  manifest list, pins `LLVM_MAJOR=18`, verifies Zig 0.16.0 tarballs against
+  committed SHA-256 values for both Linux architectures, and asserts the selected
+  LLVM tools resolve to version 18. Apt package microversions still follow Ubuntu
+  24.04 security repositories, so full offline distro mirroring is not claimed.
 - **[P1] Imports have no project-root jail.** Absolute (`import "/etc/passwd";`) or
   `../` paths resolve and read with no containment (`src/loader.zig:201-234`, read
   at :140). Building a hostile package lets `mcc` read any file the process can —
@@ -1565,14 +1573,21 @@ secrets hygiene; compatible licenses).
   make it an information oracle. Fix: default-jail imports to the root file's tree;
   reject absolute imports unless whitelisted. Effort M. **[inspected]**
 - **[P2] CI actions pinned by moving tag** (`actions/checkout@v4`,
-  `mlugg/setup-zig@v2`) — pin to commit SHAs; Dependabot for actions. Effort S.
+  `mlugg/setup-zig@v2`) — **fixed for current workflows**: all non-local
+  `uses:` references in `.github/workflows/*.yml` are pinned to 40-character commit
+  SHAs, and `release-metadata-test` rejects moving action tags. Dependabot or an
+  equivalent scheduled action-refresh process remains optional operational polish.
 - **[P2] Local WAMR modifications are commingled with upstream** (the MC platform
   port lives inside `third_party/wamr/core/shared/platform/mc/`) — cannot cleanly
   diff against pristine upstream. Keep ports outside `third_party/` or carry a
   patch series. Effort M.
 - **[P2] No NOTICE / aggregated third-party license manifest** — WAMR is Apache-2.0
-  (NOTICE-preservation duty on redistribution); nothing aggregates the four deps for
-  a binary release. Generate `THIRD-PARTY-LICENSES.md`. Effort S.
+  (NOTICE-preservation duty on redistribution) — **fixed**:
+  `THIRD-PARTY-LICENSES.md` aggregates the license/provenance records for BearSSL,
+  QuickJS, WAMR, and openlibm, including WAMR's Apache-2.0/LLVM-exception
+  redistribution notes. `third-party-licenses-test` and `vendoring-test` reject
+  missing dependency sections, missing paths, and unlisted license-bearing
+  directories.
 - **[P2] `#line` embeds the raw CLI path** — absolute paths/usernames leak into
   emitted artifacts; add normalization or `--remap-prefix`. Effort S.
 - **[P2] String-literal passthrough is safe today but fragile** — MC lexemes are
@@ -1582,9 +1597,11 @@ secrets hygiene; compatible licenses).
 - **[P2] A committed (documented, throwaway) RSA test key**
   (`third_party/trust-anchors/host_test.key`) — generate at test time instead.
   Effort S.
-- **[P2] No release-integrity story** — nothing for signing/checksums/SBOM if
-  binaries shipped tomorrow. Minimal bar: recorded dep versions+hashes, SHA-256 +
-  minisign/cosign signature, generated SBOM. Effort M.
+- **[P2] Release-integrity story** — **fixed for the local release workflow slice**:
+  release packaging now produces SHA256SUMS, release inventory, CycloneDX SBOM,
+  and Sigstore/GitHub artifact attestations, and `release-metadata-test` plus
+  `package-release-test` gate those artifacts. Actual public release publication
+  controls remain a separate open item.
 
 ### 6. Cross-cutting root causes
 

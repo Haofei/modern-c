@@ -27,6 +27,10 @@ with:
 - Local modifications, including local platform ports or build-only adaptations.
 - How the dependency is built and used here.
 
+Every license-bearing dependency must also be represented in
+`THIRD-PARTY-LICENSES.md`, and that manifest must link both the dependency's
+`README.vendored.md` provenance record and its retained license file.
+
 Run the static check before sending a vendoring change:
 
 ```sh
