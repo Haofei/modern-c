@@ -106,11 +106,27 @@ assert_stderr_empty() {
 run_case --help
 assert_rc 0 "--help"
 assert_stdout_contains "usage:" "--help usage header"
+assert_stdout_contains "mcc --help" "--help help command"
+assert_stdout_contains "mcc --version" "--help version command"
 assert_stdout_contains "mcc explain E_CODE" "--help explain command"
+assert_stdout_contains "mcc lex <file.mc>" "--help lex command"
+assert_stdout_contains "mcc check <file.mc> [--json]" "--help check command"
+assert_stdout_contains "mcc run-trap <file.mc>" "--help run-trap command"
+assert_stdout_contains "mcc facts <file.mc>" "--help facts command"
+assert_stdout_contains "mcc lower-hir <file.mc>" "--help lower-hir command"
+assert_stdout_contains "mcc verify-hir <file.mc>" "--help verify-hir command"
+assert_stdout_contains "mcc lower-mir <file.mc> [--checks=all|elide-proven]" "--help lower-mir command"
+assert_stdout_contains "mcc verify <file.mc> [--checks=all|elide-proven]" "--help verify command"
+assert_stdout_contains "mcc lower-ir <file.mc>" "--help lower-ir command"
+assert_stdout_contains "mcc lower-c <file.mc>" "--help lower-c command"
 assert_stdout_contains "mcc list-tests <file.mc>" "--help list-tests command"
 assert_stdout_contains "mcc emit-c <file.mc> [-o <out.c>]" "--help emit-c output path"
 assert_stdout_contains "mcc emit-map <file.mc> [-o <out.mcmap>]" "--help emit-map output path"
 assert_stdout_contains "mcc emit-llvm <file.mc> [-o <out.ll>]" "--help emit-llvm output path"
+assert_stdout_contains "mcc emit-layout <file.mc> --structs=A,B,C" "--help emit-layout command"
+assert_stdout_contains "mcc emit-c-struct <file.mc> --structs=A,B,C" "--help emit-c-struct command"
+assert_stdout_contains "mcc fmt <file.mc> [--check]" "--help fmt command"
+assert_stdout_contains "mcc symbols <file.mc>" "--help symbols command"
 assert_stdout_contains "mcc build <file.mc> -o <exe>" "--help build command"
 assert_stdout_contains "--remap-prefix=FROM=TO" "--help remap-prefix option"
 assert_stdout_contains "--std-dir=<dir>" "--help installed std-dir option"
@@ -133,6 +149,15 @@ if ! grep -Eq '^mcc 0\.7\.0-dev$' "$OUT"; then
     exit 1
 fi
 assert_stderr_empty "--version"
+
+run_case version
+assert_rc 0 "version"
+if ! grep -Eq '^mcc 0\.7\.0-dev$' "$OUT"; then
+    echo "FAIL: mcc-cli-test — unexpected version stdout"
+    cat "$OUT"
+    exit 1
+fi
+assert_stderr_empty "version"
 
 run_case explain E_UNKNOWN_IDENTIFIER
 assert_rc 0 "explain known diagnostic"

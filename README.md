@@ -162,6 +162,32 @@ zig build cc-test
 zig build m0
 ```
 
+Useful compiler commands:
+
+```sh
+zig-out/bin/mcc --help
+zig-out/bin/mcc --version
+zig-out/bin/mcc check tests/spec/arithmetic_checked.mc
+zig-out/bin/mcc check tests/spec/arithmetic_checked.mc --json
+zig-out/bin/mcc facts tests/spec/arithmetic_checked.mc
+zig-out/bin/mcc lower-hir tests/spec/arithmetic_checked.mc
+zig-out/bin/mcc verify-hir tests/spec/arithmetic_checked.mc
+zig-out/bin/mcc lower-mir tests/spec/arithmetic_checked.mc
+zig-out/bin/mcc verify tests/spec/arithmetic_checked.mc
+zig-out/bin/mcc lower-ir tests/spec/arithmetic_checked.mc
+zig-out/bin/mcc emit-c tests/c_emit/smoke.mc -o /tmp/smoke.c
+zig-out/bin/mcc emit-map tests/c_emit/smoke.mc -o /tmp/smoke.mcmap
+zig-out/bin/mcc emit-llvm tests/c_emit/smoke.mc -o /tmp/smoke.ll
+printf 'export fn main() -> u32 { return 7; }\n' >/tmp/mcc-build-ok.mc
+zig-out/bin/mcc build /tmp/mcc-build-ok.mc -o /tmp/mcc-build-ok
+zig-out/bin/mcc emit-layout tests/c_emit/struct.mc --structs=Pair
+zig-out/bin/mcc emit-c-struct tests/c_emit/struct.mc --structs=Pair
+zig-out/bin/mcc fmt tests/spec/arithmetic_checked.mc --check
+zig-out/bin/mcc symbols tests/spec/arithmetic_checked.mc
+zig-out/bin/mcc list-tests tests/test/lang_tests.mc
+zig-out/bin/mcc explain E_UNKNOWN_IDENTIFIER
+```
+
 ### LLVM Backend
 
 `emit-llvm` uses the same semantic and MIR verification path as C emission, then

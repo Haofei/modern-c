@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-11, based on the current compiler worktree**.
-Evidence register: **547 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **548 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -160,6 +160,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Labeled async loop jumps are implemented | `break :label` and `continue :label` inside await-bearing async loops now resolve to the named source loop's state-machine exit/head rather than being rejected or accidentally targeting an inner copied loop. | `1f4e67e9 Support labeled async loop jumps`; `src/async_lower.zig` async loop target stack and labeled poll-loop edge; `tests/c_emit/fuzz_async_loop_breakcont.mc` labeled break/continue fixture; focused C/LLVM fixture probe returns `1` on both backends. |
 | Async reserved forms fail closed with check-mode diagnostics | The remaining reserved async forms named by the roadmap are now gated under `mcc check`: dyn-future await / unresolved future expressions, await-bearing `for` loops, constructor-formed borrow-across-await, and first-await self-reference/pinning all reject with stable explicit diagnostic codes instead of relying only on backend rejection. | `6f636d56 Gate async reserved forms under check`; `tests/c_emit/bad/async_await_unresolved_dyn.mc`; `tests/c_emit/bad/async_for_await_nested.mc`; `tests/c_emit/bad/async_borrow_across_await.mc`; `tests/c_emit/bad/async_borrow_pinning.mc`; `tests/diagnostics/bad-golden.tsv`; `python3 tools/toolchain/bad-diagnostics-test.py --check`. |
 | Release artifact packaging and local qualification gates are implemented | Repo-local gates now prove pinned release metadata, ReleaseSafe installability, deterministic tarballs, SHA256SUMS, release inventory, CycloneDX SBOM, required payload docs/files, tag-version rejection, GitHub/Sigstore attestation wiring, and release workflow upload staging. | `7e0d4592 docs: narrow release qualification ledger item`; `.github/workflows/release.yml`; `tools/ci/package-release.py`; `tools/toolchain/release-metadata-test.py`; `tools/toolchain/package-release-test.py`; `tools/toolchain/release-safe-install-test.sh`; `build/qemu.zig`; `build/tiers.zig`; `docs/release-process.md`; `SECURITY.md`; `STABILITY.md`; `CHANGELOG.md`; `zig build release-metadata-test package-release-test release-safe-install-test`. |
+| CLI help/version surface is implemented and gated | `mcc --help`, `mcc help`, `mcc --version`, and `mcc version` are normal successful commands. The help transcript lists every current top-level source/loading/emission/tooling subcommand, documents stdin input, installed-layout import fallback, output paths, path remapping, build-safety profiles, machine-readable diagnostics, and exit-code classes. The transcript gate is wired into `m0`, `fast`, and `c0`, and README now carries the same command surface instead of a partial list. | `src/main.zig` `usage` / `--help` / `--version`; `build/compiler.zig` version option; `tools/toolchain/mcc-cli-test.sh` full transcript assertions; `build/qemu.zig` `mcc-cli-test`; `build/tiers.zig` m0/fast/c0 dependencies; `README.md` useful compiler commands; `zig build mcc-cli-test readiness-ledger-test`; `git diff --check`. |
 | Typed semantic fact table design is concrete and phased | The architecture bucket now has explicit invariants, data-shape options, migration phases, first fact-family candidates, backend consumption rules, fail-closed behavior, and acceptance criteria instead of remaining a vague rewrite note. | `5f115920 docs: design typed semantic facts`; `docs/typed-semantic-facts.md`; `rg -n "typed-semantic|semantic fact|typed fact" docs src`; `git diff --check`; `zig build test`. |
 | Typed semantic facts Phase 1 inventory/stabilization is complete | The current fact-like producers, representations, invalidation points, artifact printers, and backend consumers are now inventoried with code anchors, and a read-only checker fails closed if important anchors drift. This closes only Phase 1; no typed fact family has been migrated yet. | `docs/typed-semantic-facts.md` Phase 1 inventory; `tools/toolchain/semantic-facts-inventory.py`; `python3 tools/toolchain/semantic-facts-inventory.py`; `rg -n "typed-semantic|semantic fact|typed fact" docs src`; `git diff --check`; `zig build test`. |
 | Typed semantic facts Phase 2 pointer-provenance table is in MIR | MIR now owns a narrow typed `PointerProvenanceFact` slice for direct pointer-like locals, direct pointer-local copies from live global-backed locals, direct raw-many local `.offset(0)` transfers from live global-backed bases, and direct fixed local pointer-array elements initialized or assigned from visible address expressions, with explicit `global_storage`/`local_storage`/`unknown`, source points, optional element indexes, and fail-closed invalidation rows for reassignment, dynamic-index writes, calls, indirect calls, and address escape. This closes only the Phase 2 table/artifact/test slice; broader typed provenance remains pending. | `src/mir_model.zig` `PointerProvenanceFact`; `src/mir.zig` `recordPointerProvenanceForLocalInitializer`, `recordPointerProvenanceForAssignment`, `directPointerProvenance`, `directLocalPointerCopyProvenance`, `rawManyZeroOffsetProvenance`, `recordPointerProvenanceCallInvalidation`, and `mir pointer_provenance_fact`; `src/mir_tests.zig` pointer provenance tests; `docs/typed-semantic-facts.md` Phase 2 status; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig test src/mir_tests.zig`; `zig build test`; `git diff --check`. |
@@ -1412,11 +1413,12 @@ reproducibility (Docker + preflight + no-skip CI) is excellent.
   across scripts and demo READMEs. Fix: `mcc build <file.mc> [-o exe]` that emits,
   invokes cc/llc+linker, and synthesizes an entry shim only when the program
   exports no `main`; fold the script logic into the driver. Effort M-L.
-- **[P1] No `--version`, no `--help`, undocumented subcommands.** No version string
-  exists anywhere in src/build; the usage block prints only via `failUsage()` (i.e.,
-  `mcc --help` *errors*); `list-tests` is dispatched but absent from usage
-  (`src/main.zig:171` vs :44-87); README's command list omits five subcommands.
-  Effort S.
+- **[P1] No `--version`, no `--help`, undocumented subcommands.** **fixed**;
+  `src/main.zig` implements successful `mcc --help`/`help` and
+  `mcc --version`/`version`, the usage block lists every current top-level
+  subcommand including `list-tests`, and `tools/toolchain/mcc-cli-test.sh`
+  transcript-gates the full help/version/usage surface in `m0`, `fast`, and
+  `c0`. README carries the same command surface.
 - **[P1] Repo-coupled everything.** Rooted imports resolve by walking the importing
   file's ancestors (`src/loader.zig:18-21,212-223`) — no install prefix, no
   `MC_PATH`; driver scripts self-locate by walking up to `build.zig`; the VS Code
@@ -1665,7 +1667,7 @@ per §Method.
 | Item | Gate | Effort |
 |---|---|---|
 | `build.zig.zon` + `minimum_zig_version`; ReleaseSafe release profile | build | S |
-| `mcc --version`/`help`; document all subcommands; README sync | transcript test | S |
+| `mcc --version`/`help`; document all subcommands; README sync | transcript test | Done; `mcc-cli-test` is wired into m0/fast/c0. |
 | Tag v0.7.0; release workflow: cross-compiled tarballs (mcc + std/ + drivers) + SHA-256 + minisign/cosign + SBOM + THIRD-PARTY-LICENSES | release CI job | M |
 | Installed layout + `MC_PATH`/`--std-dir` loader fallback; install-relative scripts | install smoke test in CI | M |
 | `mcc build <file> -o exe` one-shot driver (cc/llc+link; entry shim only when no exported `main`) | hello-world e2e gate | M-L |
