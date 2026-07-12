@@ -4058,19 +4058,51 @@ fn moveDeferStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveS
         .contract_block => |c| moveDeferBlock(self, c.block, state, aliases),
         .if_let => |n| moveDeferIfLetCfg(self, n, state, aliases),
         .@"switch" => |sw| moveDeferSwitchCfg(self, sw, state, aliases),
-        .loop => |l| {
-            if (l.iterable) |iter| {
-                var condition_state = cloneMoveState(self, state);
-                defer condition_state.deinit();
-                moveDefer(self, iter, &condition_state, aliases);
-                reportLoopOuterResourceChanges(self, state, &condition_state);
-            }
-            var body_state = cloneMoveState(self, state);
-            defer body_state.deinit();
-            moveDeferBlock(self, l.body, &body_state, aliases);
-            reportLoopOuterResourceChanges(self, state, &body_state);
-        },
+        .loop => |l| moveDeferLoopCfg(self, l, state, aliases),
         else => {},
+    }
+}
+
+fn moveDeferLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    if (loop.iterable) |iter| moveDeferLoopConditionCfg(self, iter, state, aliases);
+    moveDeferLoopBodyCfg(self, loop.body, state, aliases);
+}
+
+fn moveDeferLoopConditionCfg(self: *Checker, condition: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    var linear = linearMoveCfg(self, .branch_join) orelse return;
+    defer linear.deinit();
+
+    var worklist = MoveStateCfgWorklist.init(self, &linear.cfg, linear.entry, state) orelse return;
+    defer worklist.deinit();
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == linear.entry) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == linear.body) {
+            moveDefer(self, condition, block_state, aliases);
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == linear.exit) {
+            reportLoopOuterResourceChanges(self, state, block_state);
+        }
+    }
+}
+
+fn moveDeferLoopBodyCfg(self: *Checker, body: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    var linear = linearMoveCfg(self, .branch_join) orelse return;
+    defer linear.deinit();
+
+    var worklist = MoveStateCfgWorklist.init(self, &linear.cfg, linear.entry, state) orelse return;
+    defer worklist.deinit();
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == linear.entry) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == linear.body) {
+            moveDeferBlock(self, body, block_state, aliases);
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == linear.exit) {
+            reportLoopOuterResourceChanges(self, state, block_state);
+        }
     }
 }
 
