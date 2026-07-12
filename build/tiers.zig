@@ -90,6 +90,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("bad-diagnostics-test"));
     m0_step.dependOn(ctx.cmd("abi-consistency-test"));
     m0_step.dependOn(ctx.cmd("arch-emit-test"));
+    m0_step.dependOn(ctx.cmd("lowering-coverage-inventory-test"));
     m0_step.dependOn(ctx.cmd("test"));
     m0_step.dependOn(ctx.cmd("c-test"));
     m0_step.dependOn(ctx.cmd("sweep"));
@@ -926,6 +927,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("install-layout-test"));
     fast_step.dependOn(ctx.cmd("diagnostics-reference-test"));
     fast_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
+    fast_step.dependOn(ctx.cmd("lowering-coverage-inventory-test"));
     fast_step.dependOn(ctx.cmd("move-unsupported-inventory-test"));
     fast_step.dependOn(ctx.cmd("move-place-identity-inventory-test"));
     fast_step.dependOn(ctx.cmd("move-cfg-skeleton-inventory-test"));
@@ -978,6 +980,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("bad-diagnostics-test")); // golden wording for reject diagnostics
     c0_step.dependOn(ctx.cmd("diagnostics-reference-test")); // generated diagnostic-code reference stays current
     c0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test")); // emitted diagnostics stay fixture-owned or documented
+    c0_step.dependOn(ctx.cmd("lowering-coverage-inventory-test")); // split backend coverage ratchet stays pointed at production files
     c0_step.dependOn(ctx.cmd("move-unsupported-inventory-test")); // fail-closed move-array unsupported channels stay named and covered
     c0_step.dependOn(ctx.cmd("move-place-identity-inventory-test")); // alias assignment ownership checks stay typed-place based
     c0_step.dependOn(ctx.cmd("move-cfg-skeleton-inventory-test")); // explicit move-CFG/worklist boundary stays anchored

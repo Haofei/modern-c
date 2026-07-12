@@ -48,6 +48,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTestOpts(ctx, "diagnostics-reference-test", "Check docs/diagnostics.md covers every compiler E_* diagnostic code", &.{ "python3", "tools/toolchain/diagnostics-reference.py", "--check" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "diagnostic-code-inventory-test", "Check every emitted E_* diagnostic has a negative fixture or documented allowlist entry", &.{ "python3", "tools/toolchain/diagnostic-code-inventory.py", "--check" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "lowering-coverage-inventory-test", "Check lowering-coverage stays pointed at split backend files with a ratcheted baseline", &.{ "python3", "tools/toolchain/lowering-coverage-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "move-unsupported-inventory-test", "Check fail-closed move-array unsupported channels have fixed emission and fixture coverage", &.{ "python3", "tools/toolchain/move-unsupported-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "move-place-identity-inventory-test", "Check move checker alias assignment identity stays typed-place based", &.{ "python3", "tools/toolchain/move-place-identity-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "move-cfg-skeleton-inventory-test", "Check move checker CFG skeleton and worklist tests stay anchored", &.{ "python3", "tools/toolchain/move-cfg-skeleton-inventory.py" }, .{ .install = false });

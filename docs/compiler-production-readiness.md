@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-11, based on the current compiler worktree**.
-Evidence register: **557 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **558 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -170,6 +170,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Bad-corpus diagnostic wording is golden-gated | Reject fixtures in `tests/c_emit/bad`, `demo/bad`, `kernel/bad`, selected async check-mode cases, and selected LLVM backend failures now lock the complete first primary diagnostic line, including path, span, code, and non-empty wording. The gate is wired into `m0`, `fast`, `c0`, and dev-gate routing, so misleading wording drift requires an intentional golden update. | `tools/toolchain/bad-diagnostics-test.py`; `tests/diagnostics/bad-golden.tsv`; `build/sweep.zig` `bad-diagnostics-test`; `build/tiers.zig` m0/fast/c0 dependencies; `tools/dev-gates.py`; `zig build bad-diagnostics-test readiness-ledger-test`; `git diff --check`. |
 | Diagnostic-code ownership inventory is gated | Every emitted `E_*` diagnostic is now owned by a negative fixture, a colocated unit-test marker, or a documented narrow allowlist entry. The inventory rejects missing ownership, stale fixtures, stale or redundant allowlist rows, non-reasoned allowlist entries, and accidental scope shrink below the current emitted/fixture/unit ownership floors. | `tools/toolchain/diagnostic-code-inventory.py`; `docs/diagnostic-code-inventory.md`; `build/qemu.zig` `diagnostic-code-inventory-test`; `build/tiers.zig` m0/fast/c0 dependencies; `tools/dev-gates.py`; `python3 tools/toolchain/diagnostic-code-inventory.py --check`; `zig build diagnostic-code-inventory-test readiness-ledger-test`; `git diff --check`. |
 | CI PASS anti-vacuity assertions are tier-derived | CI PASS assertions are no longer a hard-coded async-only list. `tools/ci/pass-gates.py` derives named PASS requirements from arrays in `build/tiers.zig`, asserts the workflow invokes those derived checks for the container m0 and RISC-V validation logs, rejects stale hard-coded fragments, floors the assertion-list sizes, and now floors the full extracted m0 dependency set at 600 unique registered gates. | `tools/ci/pass-gates.py`; `.github/workflows/ci.yml`; `build/tiers.zig` `ci_m0_pass_assertions` / `riscv_qemu_validation` / m0 dependencies; `build/qemu.zig` `ci-pass-gates-test`; `build/tiers.zig` fast/c0 dependencies; `zig build ci-pass-gates-test readiness-ledger-test`; `git diff --check`. |
+| Lowering coverage is pointed at split backend files and ratcheted | The lowering-coverage instrument no longer measures only backend facades: the script dynamically instruments all production `src/lower_c*.zig` and `src/lower_llvm*.zig` files, excludes tests/instrumentation, folds host fixtures, targeted edge probes, and fuzz programs, and checks source-set, function-universe, and uncovered-count baselines. A fast static inventory gate now locks the split-file source set, baseline floors, docs, m0 wiring, and dev-gate routing so the coverage surface cannot silently rot back to facade-only measurement. | `tools/toolchain/lowering-coverage.sh`; `tools/toolchain/lowering-coverage-inventory.py`; `tools/toolchain/lowering-coverage-baseline.tsv`; `docs/lowering-coverage.md`; `build/hardening.zig` `lowering-coverage`; `build/qemu.zig` `lowering-coverage-inventory-test`; `build/tiers.zig` m0/fast/c0 dependencies; `tools/dev-gates.py`; `tools/toolchain/dev-gates-test.py`; `zig build lowering-coverage-inventory-test dev-gates-test readiness-ledger-test`; `git diff --check`. |
 | Typed semantic fact table design is concrete and phased | The architecture bucket now has explicit invariants, data-shape options, migration phases, first fact-family candidates, backend consumption rules, fail-closed behavior, and acceptance criteria instead of remaining a vague rewrite note. | `5f115920 docs: design typed semantic facts`; `docs/typed-semantic-facts.md`; `rg -n "typed-semantic|semantic fact|typed fact" docs src`; `git diff --check`; `zig build test`. |
 | Typed semantic facts Phase 1 inventory/stabilization is complete | The current fact-like producers, representations, invalidation points, artifact printers, and backend consumers are now inventoried with code anchors, and a read-only checker fails closed if important anchors drift. This closes only Phase 1; no typed fact family has been migrated yet. | `docs/typed-semantic-facts.md` Phase 1 inventory; `tools/toolchain/semantic-facts-inventory.py`; `python3 tools/toolchain/semantic-facts-inventory.py`; `rg -n "typed-semantic|semantic fact|typed fact" docs src`; `git diff --check`; `zig build test`. |
 | Typed semantic facts Phase 2 pointer-provenance table is in MIR | MIR now owns a narrow typed `PointerProvenanceFact` slice for direct pointer-like locals, direct pointer-local copies from live global-backed locals, direct raw-many local `.offset(0)` transfers from live global-backed bases, and direct fixed local pointer-array elements initialized or assigned from visible address expressions, with explicit `global_storage`/`local_storage`/`unknown`, source points, optional element indexes, and fail-closed invalidation rows for reassignment, dynamic-index writes, calls, indirect calls, and address escape. This closes only the Phase 2 table/artifact/test slice; broader typed provenance remains pending. | `src/mir_model.zig` `PointerProvenanceFact`; `src/mir.zig` `recordPointerProvenanceForLocalInitializer`, `recordPointerProvenanceForAssignment`, `directPointerProvenance`, `directLocalPointerCopyProvenance`, `rawManyZeroOffsetProvenance`, `recordPointerProvenanceCallInvalidation`, and `mir pointer_provenance_fact`; `src/mir_tests.zig` pointer provenance tests; `docs/typed-semantic-facts.md` Phase 2 status; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig test src/mir_tests.zig`; `zig build test`; `git diff --check`. |
@@ -1291,16 +1292,14 @@ with one known `getelementptr inbounds` exception on the va_list path,
   facts (the mcc2 self-host's "parse-once → typed fact table → emit consumes facts"
   refactor is the proven in-repo template); short term, audit backend inference
   fallbacks against sema. Effort L. **[inspected]**
-- **[P1] The lowering-coverage instrument silently rotted.**
-  `tools/toolchain/lowering-coverage.sh:34-35` still instruments `src/lower_c.zig` +
-  `src/lower_llvm.zig` only — but `lower_c.zig` has been a 108-line facade since the
-  module split (149090ea); the real emitter is `lower_c_emitter.zig` (4,747 lines) +
-  ~40 modules. The doc's headline (615 fns, 72.5% covered) describes a file that no
-  longer exists, and the gate is report-only, absent from every tier. The mechanism
-  that caught the overlay-read miscompile currently measures ~nothing of the C
-  backend. Fix: point it at all `lower_c_*`/`lower_llvm_*` files, regenerate
-  `docs/lowering-coverage.md`, add a ratchet (uncovered count must not grow) in CI.
-  Effort S-M. **[inspected]**
+- **[P1] The lowering-coverage instrument silently rotted.** **fixed**:
+  `lowering-coverage.sh` now dynamically instruments all production split
+  `src/lower_c*.zig` and `src/lower_llvm*.zig` files, excluding tests and
+  instrumentation; `docs/lowering-coverage.md` reports the split-file coverage
+  headline; `lowering-coverage-baseline.tsv` ratchets source-set, function-universe,
+  and uncovered-count floors; `lowering-coverage` is in `m0`; and the fast
+  `lowering-coverage-inventory-test` locks those anchors in m0/fast/c0 and
+  dev-gate routing so the instrument cannot regress to facade-only coverage.
 - **[P1] Differential gates have no skip budget.** `diff-backend.sh` converts "LLVM
   cannot lower this fixture" into a non-fatal per-fixture SKIP (fails only on FAILs)
   — a regression that turns a previously-compared fixture into

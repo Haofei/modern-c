@@ -182,8 +182,13 @@ RULES: tuple[Rule, ...] = (
         "third-party license checker changes need the license manifest gate",
     ),
     Rule(
-        ("tools/toolchain/lowering-coverage.sh", "tools/toolchain/lowering-coverage-baseline.tsv", "docs/lowering-coverage.md"),
-        ("lowering-coverage",),
+        (
+            "tools/toolchain/lowering-coverage.sh",
+            "tools/toolchain/lowering-coverage-inventory.py",
+            "tools/toolchain/lowering-coverage-baseline.tsv",
+            "docs/lowering-coverage.md",
+        ),
+        ("lowering-coverage-inventory-test", "lowering-coverage"),
         "lowering coverage ratchet changes need the lowering coverage gate",
     ),
     Rule(
