@@ -65,6 +65,9 @@ def expected_code(path: Path) -> str:
 def expected_primary_diagnostic(output: str, expected: str) -> str:
     for line in output.splitlines():
         if PRIMARY_DIAG_RE.match(line) and expected in line:
+            marker = f"{expected}: "
+            if marker not in line or not line.split(marker, 1)[1].strip():
+                raise RuntimeError(f"primary diagnostic for {expected} has no locked wording:\n{line}")
             return line
     raise RuntimeError(f"no primary diagnostic line containing {expected} found in output:\n{output}")
 
