@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-11, based on the current compiler worktree**.
-Evidence register: **551 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **552 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -160,6 +160,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Labeled async loop jumps are implemented | `break :label` and `continue :label` inside await-bearing async loops now resolve to the named source loop's state-machine exit/head rather than being rejected or accidentally targeting an inner copied loop. | `1f4e67e9 Support labeled async loop jumps`; `src/async_lower.zig` async loop target stack and labeled poll-loop edge; `tests/c_emit/fuzz_async_loop_breakcont.mc` labeled break/continue fixture; focused C/LLVM fixture probe returns `1` on both backends. |
 | Async reserved forms fail closed with check-mode diagnostics | The remaining reserved async forms named by the roadmap are now gated under `mcc check`: dyn-future await / unresolved future expressions, await-bearing `for` loops, constructor-formed borrow-across-await, and first-await self-reference/pinning all reject with stable explicit diagnostic codes instead of relying only on backend rejection. | `6f636d56 Gate async reserved forms under check`; `tests/c_emit/bad/async_await_unresolved_dyn.mc`; `tests/c_emit/bad/async_for_await_nested.mc`; `tests/c_emit/bad/async_borrow_across_await.mc`; `tests/c_emit/bad/async_borrow_pinning.mc`; `tests/diagnostics/bad-golden.tsv`; `python3 tools/toolchain/bad-diagnostics-test.py --check`. |
 | Release artifact packaging and local qualification gates are implemented | Repo-local gates now prove pinned release metadata, ReleaseSafe installability, deterministic tarballs, SHA256SUMS, release inventory, CycloneDX SBOM, required payload docs/files, tag-version rejection, GitHub/Sigstore attestation wiring, and release workflow upload staging. | `7e0d4592 docs: narrow release qualification ledger item`; `.github/workflows/release.yml`; `tools/ci/package-release.py`; `tools/toolchain/release-metadata-test.py`; `tools/toolchain/package-release-test.py`; `tools/toolchain/release-safe-install-test.sh`; `build/qemu.zig`; `build/tiers.zig`; `docs/release-process.md`; `SECURITY.md`; `STABILITY.md`; `CHANGELOG.md`; `zig build release-metadata-test package-release-test release-safe-install-test`. |
+| Native macOS host support and LLVM major are gated | The documented macOS host tier is no longer an unverified README claim: CI has a native `macos-15` job, pins `MC_LLVM_MAJOR=18`, installs and selects Homebrew `llvm@18`, prints the selected LLVM tools, and runs the host/fast gate. The release metadata gate now locks the exact README support row, job comment, gate name, tool-version probes, and non-floating macOS runner. | `.github/workflows/ci.yml` `macos` job; `README.md` LLVM Support Matrix; `tools/toolchain/release-metadata-test.py` `require_llvm_support_matrix` and native macOS CI assertions; `zig build release-metadata-test readiness-ledger-test`; `git diff --check`. |
 | CLI help/version surface is implemented and gated | `mcc --help`, `mcc help`, `mcc --version`, and `mcc version` are normal successful commands. The help transcript lists every current top-level source/loading/emission/tooling subcommand, documents stdin input, installed-layout import fallback, output paths, path remapping, build-safety profiles, machine-readable diagnostics, and exit-code classes. The transcript gate is wired into `m0`, `fast`, and `c0`, and README now carries the same command surface instead of a partial list. | `src/main.zig` `usage` / `--help` / `--version`; `build/compiler.zig` version option; `tools/toolchain/mcc-cli-test.sh` full transcript assertions; `build/qemu.zig` `mcc-cli-test`; `build/tiers.zig` m0/fast/c0 dependencies; `README.md` useful compiler commands; `zig build mcc-cli-test readiness-ledger-test`; `git diff --check`. |
 | Hosted one-shot build driver is implemented and gated | The installed `mcc` launcher dispatches `mcc build <file.mc> -o <exe>` to the hosted build helper, which emits hosted C with the private compiler, wraps a nullary exported MC `main` as the process entry point, invokes `clang`, and reports the output path. The gate now covers integer-return and `void` main programs, the missing-`-o` usage path, missing exported `main`, and multiple-input rejection. This is a hosted executable driver for the documented nullary-main boundary, not a general kernel/freestanding linker or arbitrary-entry synthesis layer. | `tools/toolchain/mcc-launcher.sh`; `tools/toolchain/mcc-build.sh`; `tools/toolchain/mcc-build-test.sh`; `build/compiler.zig` installed launcher/helper files; `build/qemu.zig` `mcc-build-test`; `build/tiers.zig` m0/fast/c0 dependencies; `README.md` `mcc build` example; `zig build mcc-build-test readiness-ledger-test`; `git diff --check`. |
 | Standard-library API reference is generated and gated | The stdlib API reference is generated from `std/**/*.mc` public declarations and now reflects the current public type/function surface, including recently public `StackGuard`, `SpinLock`, `Guard`, and `IrqGuard` declarations. The generator records modules, public functions, public constants, public type declarations, and local types referenced by public declarations; `std-api-docs-test` is wired into `m0`, `fast`, and `c0` so stdlib API drift fails closed. | `docs/std-api.md`; `tools/toolchain/std-api-docs.py`; `build/qemu.zig` `std-api-docs-test`; `build/tiers.zig` m0/fast/c0 dependencies; `python3 tools/toolchain/std-api-docs.py --check`; `zig build std-api-docs-test readiness-ledger-test`; `git diff --check`. |
@@ -1302,13 +1303,13 @@ with one known `getelementptr inbounds` exception on the va_list path,
   already solved this pattern (non-skippable assertions). Fix: pin an expected-skip
   list / assert `compared >= N`. Effort S. **[inspected]**
 - **[P1] LLVM support matrix undefined; textual-IR emission is upgrade-fragile.**
-  Dockerfile installs unversioned distro LLVM and symlinks the newest
-  (`Dockerfile:25,30-36`); CI apt-installs unpinned `llvm`. The backend hardcodes
-  version-sensitive datalayout strings per arch (`src/lower_llvm_prelude.zig:88-94`)
-  and feeds textual IR to external `llc`. An image rebuild that bumps LLVM can
-  change/break lowering with no gate distinguishing whose bug it is; users get raw
-  `llc` stderr. Fix: pin the LLVM major, print-and-assert versions, document the
-  supported range, add a canary leg on the next major. Effort M.
+  **fixed for the qualified LLVM 18 surface**: Docker, hosted CI, release
+  qualification, nightly fuzz/bench workflows, the native macOS host job, and
+  README support matrix now pin LLVM 18 instead of floating to the newest installed
+  LLVM. `release-metadata-test` rejects `ubuntu-latest`, `macos-latest`, mismatched
+  `MC_LLVM_MAJOR`, missing version probes, missing README support rows, and
+  Docker image/Zig integrity drift. Remaining work is a deliberate canary leg for
+  the next LLVM major, not a blocker for the current qualified subset.
 - **[P1] Debuggability is partial.** Emitted C has no `#line` by default (`#line`
   lives only in the separate `emit-map` artifact, `src/lower_c_map.zig:46`) — a
   crash in generated C shows generated-C coordinates. LLVM DWARF is line-level only:
@@ -1442,11 +1443,13 @@ reproducibility (Docker + preflight + no-skip CI) is excellent.
   `diagnostics-reference-test`/`diagnostic-code-inventory-test` keep the public
   reference and fixture ownership current in `m0`, `fast`, `c0`, and dev-gate
   routing.
-- **[P1] Host platform support is documented but unverified beyond Linux.** CI runs
-  `ubuntu-latest` only; README claims native macOS + container Linux/macOS/WSL; the
-  project's own practice is Docker-only on macOS. Fix: a macOS CI job (build mcc,
-  `zig build fast`, fmt/lsp gates); state the real support tiers in README. Effort
-  S-M.
+- **[P1] Host platform support is documented but unverified beyond Linux.**
+  **fixed for the documented native macOS host tier**: CI now has a pinned
+  `macos-15` job, selects Homebrew `llvm@18`, prints the selected LLVM tools, and
+  runs `zig build fast`; README states the real Linux container, macOS host, native
+  local, and unqualified-LLVM tiers. `release-metadata-test` locks the runner,
+  LLVM major, gate name, tool probes, and exact README row so the support claim
+  cannot silently drift back to documentation-only status.
 - **[P2] CLI ergonomics:** stdout-only artifacts, no `-o`, no stdin mode, flag
   errors dump the whole usage block without naming the bad flag, exit codes
   undocumented. Effort S.

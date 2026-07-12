@@ -481,8 +481,10 @@ def main() -> None:
     for needle in (
         "runs-on: macos-15",
         f'MC_LLVM_MAJOR: "{EXPECTED_LLVM_MAJOR}"',
+        "Native macOS coverage for the host/compiler surface README claims works outside Docker",
         f"brew --prefix llvm@{EXPECTED_LLVM_MAJOR}",
         f"brew install llvm@{EXPECTED_LLVM_MAJOR}",
+        "Run native macOS host gate",
         '"$LLVM18_PREFIX/bin/clang" --version',
         '"$LLVM18_PREFIX/bin/llvm-as" --version',
         '"$LLVM18_PREFIX/bin/llc" --version',
@@ -535,6 +537,10 @@ def main() -> None:
     require_threat_model_metadata()
     require_llvm_support_matrix()
     require_release_support_policy()
+    readme = read("README.md")
+    macos_row = f"| macOS host gate | Homebrew `llvm@{EXPECTED_LLVM_MAJOR}` on `macos-15` | Host/fast qualification path; the workflow places `llvm@{EXPECTED_LLVM_MAJOR}` first on `PATH`. |"
+    if macos_row not in readme:
+        fail("README.md must document the exact native macOS LLVM host gate row")
 
     dockerfile = read("Dockerfile")
     require_contains("Dockerfile", f"FROM {EXPECTED_DOCKER_BASE_IMAGE}")
