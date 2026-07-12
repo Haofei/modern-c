@@ -130,11 +130,13 @@ test "MIR owns target types for contextual constructors and literals" {
         \\enum E { bad }
         \\struct Slot { cb: closure(u32) -> u32, result: Result<u32, E> }
         \\struct TextSlot { ptr: *const u8, bytes: []const u8 }
+        \\struct FloatSlot { small: f32, wide: f64 }
         \\packed bits Flags: u8 { ready: bool }
         \\union Token { number: i64, eof, ok: u32 }
         \\union Event { mode: E }
         \\global default_error: E = .bad;
         \\global default_text: *const u8 = "global";
+        \\global default_float: f32 = 1.25;
         \\fn add(env: *mut u32, value: u32) -> u32 { return env.* + value; }
         \\fn consume(value: Result<u32, E>) -> u32 { return 0; }
         \\fn make_bind(env: *mut u32) -> closure(u32) -> u32 { return bind(env, add); }
@@ -155,6 +157,9 @@ test "MIR owns target types for contextual constructors and literals" {
         \\fn make_text_slot() -> TextSlot { return .{ .ptr = "ptr", .bytes = "bytes" }; }
         \\fn make_array() -> [2]u32 { return .{ 1, 2 }; }
         \\fn make_flags() -> Flags { return .{ .ready = true }; }
+        \\fn make_float() -> f32 { return 1.5; }
+        \\fn make_float_expr() -> f32 { return 1.7 * 2.3; }
+        \\fn make_float_slot() -> FloatSlot { return .{ .small = 1.0, .wide = 2.0 }; }
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_target_types.mc", source);
     defer reporter.deinit();
@@ -210,6 +215,16 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectEqual(mir.TargetTypeKind.string_literal, text_slot_fn.target_type_facts[2].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.array_literal, functionByName(typed_mir, "make_array").?.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, functionByName(typed_mir, "make_flags").?.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.float_literal, functionByName(typed_mir, "default_float").?.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.float_literal, functionByName(typed_mir, "make_float").?.target_type_facts[0].kind);
+    const float_expr_fn = functionByName(typed_mir, "make_float_expr").?;
+    try std.testing.expectEqual(@as(usize, 2), float_expr_fn.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.float_literal, float_expr_fn.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.float_literal, float_expr_fn.target_type_facts[1].kind);
+    const float_slot_fn = functionByName(typed_mir, "make_float_slot").?;
+    try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, float_slot_fn.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.float_literal, float_slot_fn.target_type_facts[1].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.float_literal, float_slot_fn.target_type_facts[2].kind);
 
     try duplicateTargetTypeFact(functionByNameMut(&typed_mir, "make_ok").?, std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));

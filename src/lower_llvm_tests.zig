@@ -195,6 +195,36 @@ test "LLVM rejects missing aggregate-literal target type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_aggregate_target_type_facts.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM rejects missing float-literal target type facts" {
+    const source =
+        \\fn value() -> f32 { return 1.25; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_missing_float_target_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "value");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_float_target_type_facts.mc", .{}, false, .riscv64, null));
+}
+
+test "LLVM consumes f32 and f64 literal target type facts" {
+    const source =
+        \\global small: f32 = 1.25;
+        \\global wide: f64 = 1.25;
+        \\fn product() -> f32 { return 1.7 * 2.3; }
+        \\fn wide_value() -> f64 { return 2.5; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_float_target_type_facts.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "@small = internal global float") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "@wide = internal global double") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "fmul float") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "define internal double @wide_value") != null);
+}
+
 test "LLVM consumes enum-literal target type facts across contexts" {
     const source =
         \\enum Mode: u8 { read = 1, write = 2 }

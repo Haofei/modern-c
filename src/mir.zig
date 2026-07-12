@@ -4572,8 +4572,8 @@ const FunctionBuilder = struct {
                 }
                 try self.addAggregateRangeFactForUncheckedExpr("binary_operand", self.rangeFactTypeForExpr(node.left.*), node.left.*);
                 try self.addAggregateRangeFactForUncheckedExpr("binary_operand", self.rangeFactTypeForExpr(node.right.*), node.right.*);
-                const left_target_ty = if (exprContainsTargetTypedLiteral(node.left.*)) self.typeExprForExpr(node.right.*) else null;
-                const right_target_ty = if (exprContainsTargetTypedLiteral(node.right.*)) self.typeExprForExpr(node.left.*) else null;
+                const left_target_ty = if (exprContainsTargetTypedLiteral(node.left.*)) self.typeExprForExpr(node.right.*) orelse self.assignment_target_type_expr else null;
+                const right_target_ty = if (exprContainsTargetTypedLiteral(node.right.*)) self.typeExprForExpr(node.left.*) orelse self.assignment_target_type_expr else null;
                 try self.buildExprWithTargetType(node.left.*, left_target_ty);
                 try self.addRepresentationUseForExpr("binary_operand", node.left.*);
                 try self.buildExprWithTargetType(node.right.*, right_target_ty);
@@ -5141,6 +5141,10 @@ const FunctionBuilder = struct {
             .array_literal => if (resolved_target_ty.kind == .array) .array_literal else return,
             .struct_literal => switch (result_ty) {
                 .struct_ => .struct_literal,
+                else => return,
+            },
+            .float_literal => switch (result_ty) {
+                .float => .float_literal,
                 else => return,
             },
             .call => |call| if (isBindCallNode(call))
@@ -7700,7 +7704,7 @@ fn unionCasePayloadType(info: UnionSummary, case_name: []const u8) ?ast.TypeExpr
 
 fn exprContainsTargetTypedLiteral(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .enum_literal, .string_literal => true,
+        .enum_literal, .string_literal, .float_literal => true,
         .grouped => |inner| exprContainsTargetTypedLiteral(inner.*),
         else => false,
     };

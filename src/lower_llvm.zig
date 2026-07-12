@@ -837,7 +837,10 @@ const LlvmEmitter = struct {
                     .{ global.len, global.name },
                 );
             },
-            .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(semantic_ty)),
+            .float_literal => |literal| if (self.mirTargetTypeFactAt(.float_literal, expr.span)) |fact|
+                try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(fact.target_ty))
+            else
+                error.UnsupportedLlvmEmission,
             .unary => |node| blk: {
                 if (node.op != .neg) break :blk error.UnsupportedLlvmEmission;
                 if (self.isFloatTypeOf(semantic_ty)) {
@@ -1340,7 +1343,10 @@ const LlvmEmitter = struct {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
             .string_literal => |literal| try self.emitStringLiteral(literal, expr.span),
-            .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(expected_ty)),
+            .float_literal => |literal| if (self.mirTargetTypeFactAt(.float_literal, expr.span)) |fact|
+                try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(fact.target_ty))
+            else
+                error.UnsupportedLlvmEmission,
             .bool_literal => |value| if (value) "1" else "0",
             .null_literal => "null",
             .enum_literal => |literal| if (self.mirTargetTypeFactAt(.enum_literal, expr.span)) |fact|

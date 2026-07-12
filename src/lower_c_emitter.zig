@@ -4169,6 +4169,7 @@ const CEmitter = struct {
             .call => |node| try self.emitTargetCallExpr(node, locals, target_ty, expr),
             .enum_literal => |literal| try self.emitEnumLiteralWithTarget(literal, expr.span),
             .string_literal => |literal| try self.emitStringLiteralWithTarget(literal, expr.span),
+            .float_literal => |literal| try self.emitFloatLiteralWithTarget(literal, expr.span),
             .grouped => |inner| try self.emitGroupedExprWithTarget(inner.*, locals, target_ty),
             .address_of => try self.emitAddressOfExprWithTarget(expr, locals, target_ty),
             else => try self.emitExpr(expr, locals),
@@ -4264,12 +4265,12 @@ const CEmitter = struct {
         // f32 target: compute the float expression in `float`, not `double`. A bare C decimal
         // literal is `double`, so `1.7 * 2.3` would multiply in double and round twice when
         // narrowed to f32 — diverging ~1 ULP from the LLVM `fmul`. Suffix f32 literals with `f`.
-        if (typeName(self.resolveAliasType(ty))) |tn| {
+        if (expr.kind != .float_literal) if (try self.mirFloatLiteralTargetForExpr(expr)) |mir_float_ty| if (typeName(self.resolveAliasType(mir_float_ty))) |tn| {
             if (std.mem.eql(u8, tn, "f32")) {
                 try self.emitF32Expr(expr, locals);
                 return true;
             }
-        }
+        };
         // The uniform `*T -> *dyn Trait` coercion: fires at EVERY assignment context
         // that threads a target type (let-init, return, assignment RHS, struct field,
         // array element, call arg), from any `*T` source — not just `&x`. A `*dyn`
@@ -4328,6 +4329,13 @@ const CEmitter = struct {
         }
         try self.out.print(self.allocator, "/* unsupported enum literal: {s} */0", .{literal.text});
         return error.UnsupportedCEmission;
+    }
+
+    fn emitFloatLiteralWithTarget(self: *CEmitter, literal: []const u8, span: ast.Span) anyerror!void {
+        const fact = self.mirTargetTypeFactAt(.float_literal, span) orelse return error.UnsupportedCEmission;
+        const name = typeName(self.resolveAliasType(fact.target_ty)) orelse return error.UnsupportedCEmission;
+        if (!std.mem.eql(u8, name, "f32") and !std.mem.eql(u8, name, "f64")) return error.UnsupportedCEmission;
+        try appendCFloatLiteral(self.allocator, self.out, literal, std.mem.eql(u8, name, "f32"));
     }
 
     fn emitStringLiteralWithTarget(self: *CEmitter, literal: []const u8, span: ast.Span) anyerror!void {
@@ -5008,6 +5016,23 @@ const CEmitter = struct {
             .grouped => |inner| self.mirAggregateTargetTypeForExpr(inner.*),
             .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else error.UnsupportedCEmission,
             .struct_literal => if (self.mirTargetTypeFactAt(.struct_literal, expr.span)) |fact| fact.target_ty else error.UnsupportedCEmission,
+            else => null,
+        };
+    }
+
+    fn mirFloatLiteralTargetForExpr(self: *CEmitter, expr: ast.Expr) !?ast.TypeExpr {
+        return switch (expr.kind) {
+            .float_literal => if (self.mirTargetTypeFactAt(.float_literal, expr.span)) |fact| fact.target_ty else error.UnsupportedCEmission,
+            .grouped => |inner| self.mirFloatLiteralTargetForExpr(inner.*),
+            .unary => |node| self.mirFloatLiteralTargetForExpr(node.expr.*),
+            .binary => |node| blk: {
+                const left = try self.mirFloatLiteralTargetForExpr(node.left.*);
+                const right = try self.mirFloatLiteralTargetForExpr(node.right.*);
+                if (left == null) break :blk right;
+                if (right == null) break :blk left;
+                if (!std.meta.eql(left.?, right.?)) return error.UnsupportedCEmission;
+                break :blk left;
+            },
             else => null,
         };
     }
