@@ -24,6 +24,7 @@ MIN_GATE_COUNTS = {
     "ci-m0-pass": 28,
     "riscv-qemu-validation": 32,
 }
+MIN_M0_DEPENDENCIES = 600
 
 
 def fail(message: str) -> None:
@@ -92,6 +93,8 @@ def tier_names(tier: str) -> list[str]:
 def check_static() -> None:
     source = read(TIERS)
     deps = m0_dependencies(source)
+    if len(deps) < MIN_M0_DEPENDENCIES:
+        fail(f"m0 has {len(deps)} unique ctx.cmd dependency gate(s), below required floor {MIN_M0_DEPENDENCIES}")
 
     for tier, zig_name in ARRAYS.items():
         names = names_in_array(source, zig_name)
