@@ -417,6 +417,42 @@ test "LLVM rejects prebuilt MIR with missing byte-view call target facts" {
     );
 }
 
+test "LLVM rejects prebuilt MIR with missing semantic escape call target facts" {
+    const source =
+        \\fn reveal_fact_gate(secret: Secret<u8>) -> u8 {
+        \\    unsafe { return reveal(secret); }
+        \\}
+        \\fn noalias_fact_gate(p: *mut u8, n: usize) -> *mut u8 {
+        \\    #[unsafe_contract(noalias)] {
+        \\        return compiler.assume_noalias_unchecked(p, n);
+        \\    }
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_missing_semantic_escape_call_target_facts.mc", source);
+    defer parsed.deinit();
+
+    var reveal_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer reveal_mir.deinit();
+    try clearCallTargetFactsForFunction(&reveal_mir, "reveal_fact_gate");
+    var reveal_output: std.ArrayList(u8) = .empty;
+    defer reveal_output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &reveal_mir, &reveal_output, "llvm_missing_semantic_escape_call_target_facts.mc", .{}, false, .riscv64, null),
+    );
+
+    var noalias_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer noalias_mir.deinit();
+    try clearCallTargetFactsForFunction(&noalias_mir, "noalias_fact_gate");
+    var noalias_output: std.ArrayList(u8) = .empty;
+    defer noalias_output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &noalias_mir, &noalias_output, "llvm_missing_semantic_escape_call_target_facts.mc", .{}, false, .riscv64, null),
+    );
+}
+
 test "LLVM rejects prebuilt MIR with missing atomic call target facts" {
     const source =
         \\fn atomic_call_target_fact_gate() -> u32 {
@@ -601,6 +637,19 @@ test "LLVM rejects prebuilt MIR with missing cpu pause call target facts" {
         error.InvalidMirCallTargetFacts,
         lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_cpu_pause_call_target_facts.mc", .{}, false, .riscv64, null),
     );
+}
+
+test "LLVM emits cpu pause after MIR call-target dispatch" {
+    const source =
+        \\fn cpu_pause_call_target_dispatch() -> void {
+        \\    unsafe { cpu.pause(); }
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_cpu_pause_call_target_dispatch.mc", source, &output);
+    try expectContains(output.items, "call void asm sideeffect \"pause\", \"~{memory}\"()");
 }
 
 test "LLVM rejects prebuilt MIR with missing fence call target facts" {

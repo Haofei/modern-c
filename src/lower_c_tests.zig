@@ -365,6 +365,42 @@ test "lower-c rejects prebuilt MIR with missing byte-view call target facts" {
     );
 }
 
+test "lower-c rejects prebuilt MIR with missing semantic escape call target facts" {
+    const source =
+        \\fn reveal_fact_gate(secret: Secret<u8>) -> u8 {
+        \\    unsafe { return reveal(secret); }
+        \\}
+        \\fn noalias_fact_gate(p: *mut u8, n: usize) -> *mut u8 {
+        \\    #[unsafe_contract(noalias)] {
+        \\        return compiler.assume_noalias_unchecked(p, n);
+        \\    }
+        \\}
+    ;
+
+    var parsed = try test_support.parseCheckedModule("c_missing_semantic_escape_call_target_facts.mc", source);
+    defer parsed.deinit();
+
+    var reveal_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer reveal_mir.deinit();
+    try clearCallTargetFactsForFunction(&reveal_mir, "reveal_fact_gate");
+    var reveal_output: std.ArrayList(u8) = .empty;
+    defer reveal_output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &reveal_mir, &reveal_output, .kernel, "c_missing_semantic_escape_call_target_facts.mc", .{}, false, null),
+    );
+
+    var noalias_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer noalias_mir.deinit();
+    try clearCallTargetFactsForFunction(&noalias_mir, "noalias_fact_gate");
+    var noalias_output: std.ArrayList(u8) = .empty;
+    defer noalias_output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirCallTargetFacts,
+        lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &noalias_mir, &noalias_output, .kernel, "c_missing_semantic_escape_call_target_facts.mc", .{}, false, null),
+    );
+}
+
 test "lower-c rejects prebuilt MIR with missing atomic call target facts" {
     const source =
         \\fn atomic_call_target_fact_gate() -> u32 {

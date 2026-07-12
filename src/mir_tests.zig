@@ -721,6 +721,43 @@ test "MIR owns byte-view call target facts" {
     try mir.validateCallTargetFactsForLowering(typed_mir);
 }
 
+test "MIR owns semantic escape call target facts" {
+    const source =
+        \\fn reveal_value(secret: Secret<u8>) -> u8 {
+        \\    unsafe { return reveal(secret); }
+        \\}
+        \\fn noalias_value(p: *mut u8, n: usize) -> *mut u8 {
+        \\    #[unsafe_contract(noalias)] {
+        \\        return compiler.assume_noalias_unchecked(p, n);
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_semantic_escape_call_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const reveal_fn = functionByName(typed_mir, "reveal_value").?;
+    try std.testing.expectEqual(@as(usize, 1), reveal_fn.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.declassify, reveal_fn.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("u8", reveal_fn.call_target_facts[0].result_ty.name());
+
+    const noalias_fn = functionByName(typed_mir, "noalias_value").?;
+    try std.testing.expectEqual(@as(usize, 1), noalias_fn.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.assume_noalias, noalias_fn.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("*mut", noalias_fn.call_target_facts[0].result_ty.name());
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+}
+
 test "MIR rejects duplicate call target facts" {
     const source =
         \\fn checked(xs: []const u32) -> Result<u32, Overflow> {

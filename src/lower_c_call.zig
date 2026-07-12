@@ -543,6 +543,7 @@ pub fn emitPhysCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Loc
 
 pub fn emitDeclassifyCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     if (!isDeclassifyCall(call)) return false;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .declassify) return error.UnsupportedCEmission;
     if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
     try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
     return true;
@@ -550,6 +551,7 @@ pub fn emitDeclassifyCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
 
 pub fn emitAssumeNoaliasCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     if (!isAssumeNoaliasCall(call)) return false;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .assume_noalias) return error.UnsupportedCEmission;
     try ctx.out.appendSlice(ctx.allocator, "((void)(");
     try ctx.emit_expr(ctx.emit_ctx, call.args[1], locals);
     try ctx.out.appendSlice(ctx.allocator, "), ");

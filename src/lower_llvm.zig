@@ -2567,21 +2567,23 @@ const LlvmEmitter = struct {
             }
             return true;
         }
-        if (self.mirCallTargetKindAt(call.callee.*.span)) |fence_kind| {
-            const ordering = switch (fence_kind) {
-                .fence_full => "seq_cst",
-                .fence_release => "release",
-                .fence_acquire => "acquire",
-                else => null,
-            } orelse return false;
-            if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
-            try self.out.print(self.allocator, "  fence {s}{s}\n", .{ ordering, try self.debugCallSuffix() });
-            return true;
-        }
         if (self.mirCallTargetKindAt(call.callee.*.span) == .cpu_pause) {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             try self.out.print(self.allocator, "  call void asm sideeffect \"pause\", \"~{{memory}}\"(){s}\n", .{try self.debugCallSuffix()});
             return true;
+        }
+        if (self.mirCallTargetKindAt(call.callee.*.span)) |fence_kind| {
+            const ordering: ?[]const u8 = switch (fence_kind) {
+                .fence_full => "seq_cst",
+                .fence_release => "release",
+                .fence_acquire => "acquire",
+                else => null,
+            };
+            if (ordering) |value| {
+                if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
+                try self.out.print(self.allocator, "  fence {s}{s}\n", .{ value, try self.debugCallSuffix() });
+                return true;
+            }
         }
         if (self.atomicCallInfo(call)) |info| {
             if (!std.mem.eql(u8, info.op, "store")) return false;
@@ -6347,12 +6349,14 @@ const LlvmEmitter = struct {
         // `declassify(x)` / `reveal(x)` strip the constant-time `Secret<T>` tag.
         // Secret shares T's representation, so this is a value-identity pass-through.
         if (isDeclassifyCall(call)) {
+            if (self.mirCallTargetKindAt(call.callee.*.span) != .declassify) return error.UnsupportedLlvmEmission;
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const source_ty = self.exprType(call.args[0]) orelse expected_ty;
             const value = try self.emitExpr(call.args[0], source_ty);
             return try self.coerceExprValue(value, call.args[0], expected_ty);
         }
         if (isAssumeNoaliasCall(call)) {
+            if (self.mirCallTargetKindAt(call.callee.*.span) != .assume_noalias) return error.UnsupportedLlvmEmission;
             const source_ty = self.exprType(call.args[0]) orelse expected_ty;
             const value = try self.emitExpr(call.args[0], source_ty);
             _ = try self.emitExpr(call.args[1], simpleType(call.args[1].span, "usize"));
@@ -7872,10 +7876,10 @@ const LlvmEmitter = struct {
             .call => |call| if (qualifiedTaggedUnionConstructorType(&self.tagged_unions, call)) |ty|
                 ty
             else if (isAssumeNoaliasCall(call))
-                self.exprType(call.args[0])
+                if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) self.exprType(call.args[0]) else null
             else if (isDeclassifyCall(call))
                 // declassify/reveal yields the Secret<T> argument's inner T.
-                if (call.args.len == 1) (if (self.exprType(call.args[0])) |ty| secretInnerType(self.resolveAliasType(ty)) orelse ty else null) else null
+                if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify and call.args.len == 1) (if (self.exprType(call.args[0])) |ty| secretInnerType(self.resolveAliasType(ty)) orelse ty else null) else null
             else
                 self.callReturnType(call),
             .cast => |node| node.ty.*,

@@ -251,6 +251,8 @@ pub const CallTargetKind = enum {
     reflection_repr,
     byte_view_as_bytes,
     byte_view_equal,
+    declassify,
+    assume_noalias,
 };
 
 pub const CallTargetFact = struct {

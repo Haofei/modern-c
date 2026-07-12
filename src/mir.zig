@@ -24,6 +24,7 @@ const isSatPreservingBinary = ast_query.isSatPreservingBinary;
 const isWrapPreservingBinary = ast_query.isWrapPreservingBinary;
 const reduceCallKind = ast_query.reduceCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
+const isDeclassifyCall = ast_query.isDeclassifyCall;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
 const memberCallee = ast_query.memberCallee;
@@ -4490,8 +4491,11 @@ const FunctionBuilder = struct {
                 const is_dyn_dispatch = self.isDynDispatchMember(node.callee.*);
                 const reflection_target = reflectionCallTargetKind(node);
                 const byte_view_target = byteViewCallTargetKind(node);
+                const semantic_escape_target = self.semanticEscapeCallTarget(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
+                else if (semantic_escape_target) |target|
+                    target.result_ty
                 else if (reflection_target != null)
                     .{ .integer = "usize" }
                 else if (byte_view_target) |kind| switch (kind) {
@@ -4578,6 +4582,10 @@ const FunctionBuilder = struct {
                     };
                     try self.addInstr(.call_target, @tagName(fact_kind), byte_view_ty, expr.span);
                     try self.addCallTargetFact(fact_kind, byte_view_ty, expr.span);
+                }
+                if (semantic_escape_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
                 }
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {
                     try self.addInstr(.unsafe_check, callee_name, .unknown, expr.span);
@@ -4969,6 +4977,36 @@ const FunctionBuilder = struct {
             .result_ty = result_ty,
             .source = .{ .line = span.line, .column = span.column },
         });
+    }
+
+    const SemanticEscapeCallTarget = struct {
+        kind: CallTargetKind,
+        result_ty: ValueType,
+    };
+
+    fn semanticEscapeCallTarget(self: *FunctionBuilder, call: anytype) ?SemanticEscapeCallTarget {
+        if (isDeclassifyCall(call)) {
+            if (call.type_args.len != 0 or call.args.len != 1) return null;
+            const source_ty = self.typeExprForExpr(call.args[0]) orelse return null;
+            const payload_ty = secretPayloadTypeAlias(source_ty, self.aliases, 0) orelse return null;
+            return .{
+                .kind = .declassify,
+                .result_ty = valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases),
+            };
+        }
+        if (isAssumeNoaliasDirectCall(call)) {
+            if (call.type_args.len != 0 or call.args.len != 2) return null;
+            const result_ty = if (self.typeExprForExpr(call.args[0])) |source_ty|
+                valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases)
+            else
+                self.exprType(call.args[0]);
+            if (result_ty == .unknown) return null;
+            return .{
+                .kind = .assume_noalias,
+                .result_ty = result_ty,
+            };
+        }
+        return null;
     }
 
     fn addInstrWithValue(self: *FunctionBuilder, kind: Instruction.Kind, detail: []const u8, ty: ValueType, span: ast.Span, value_id: ?[]const u8) !void {
@@ -7813,6 +7851,15 @@ fn isAssumeNoaliasDirectCall(call: anytype) bool {
     const name = directCalleeName(call.callee.*) orelse return false;
     return std.mem.eql(u8, name, "compiler.assume_noalias_unchecked") or
         std.mem.eql(u8, name, "assume_noalias_unchecked");
+}
+
+fn secretPayloadTypeAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) ?ast.TypeExpr {
+    if (depth > 32) return null;
+    return switch (ty.kind) {
+        .name => |name| if (aliases.get(name.text)) |resolved| secretPayloadTypeAlias(resolved, aliases, depth + 1) else null,
+        .qualified => |node| secretPayloadTypeAlias(node.child.*, aliases, depth + 1),
+        else => sema_builtin.secretPayloadType(ty),
+    };
 }
 
 fn contractBlockEndLine(block: ast.Block) usize {
