@@ -25,6 +25,7 @@ ANCHORS: dict[str, list[str]] = {
         "Move checker alias assignment updates use typed storage places",
         "Move checker alias key formatter has no external callers",
         "Move checker alias key formatter is retired",
+        "Move checker laundered referents are typed",
         "move-place-identity-inventory.py",
     ],
 }
@@ -35,6 +36,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         # reintroducing formatted storage identity as a move-checker authority.
         "aliasPlaceKey": 0,
         "aliasPlaceIndex": 0,
+        "callLaunderedMoveReferent": 0,
         "state.getPtr(key)": 0,
         "state.remove(key)": 0,
         "state.getPtr(target_info.key)": 0,

@@ -3067,7 +3067,8 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
 // move binding that escapes into the callee. The escape rule for a call arg differs from the
 // decl/assignment store: a BARE top-level `&t` argument is a transient borrow for the duration
 // of the call (the legit `pk(&t); cn(t)` pattern), so it does NOT escape here — that direction
-// is covered precisely by the pointer-returning-call laundering check (callLaunderedMoveReferent).
+// is covered precisely by the pointer-returning-call laundering check
+// (`callLaunderedMoveAliasReferent`).
 // What DOES escape is a borrow buried INSIDE an aggregate literal passed by value: the callee
 // receives a copy of the struct/array containing `&t`, so the borrow reaches memory we cannot
 // prove dead. We therefore descend into struct/array literal arguments (peeling `grouped`) and
@@ -3209,11 +3210,6 @@ fn layoutFieldsCanCarryBorrow(fields: std.StringHashMap(ast.TypeExpr), ctx: Cont
 // or null. Narrowed to KNOWN pointer-returning direct calls so a non-pointer result
 // (`pk(&t) -> u32`) — which cannot retain the borrow — does not register an alias and the
 // legit case still accepts.
-pub fn callLaunderedMoveReferent(self: *Checker, init_expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
-    if (callLaunderedMoveAliasReferent(self, init_expr, state, aliases)) |referent| return referent.key;
-    return null;
-}
-
 fn callLaunderedMoveAliasReferent(self: *Checker, init_expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
     const ctx = self.move_ctx orelse return null;
     const call = switch (init_expr.kind) {
