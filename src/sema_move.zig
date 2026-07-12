@@ -1678,50 +1678,24 @@ fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, sp
 // The worklist owns transport between those blocks; loop widening remains the
 // existing dedicated rule so condition-only moves retain E_MOVE_LOOP_RESOURCE.
 fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
-    defer cfg.deinit();
-    const entry = cfg.addBlock(.entry) catch {
-        self.oom = true;
-        return;
-    };
-    const condition_block = cfg.addBlock(.statement) catch {
-        self.oom = true;
-        return;
-    };
-    const exit = cfg.addBlock(.branch_join) catch {
-        self.oom = true;
-        return;
-    };
-    // Insert the zero-iteration path first so the exit starts with the
-    // unmodified entry state before the evaluated condition is widened into it.
-    cfg.addEdge(entry, exit, .branch) catch {
-        self.oom = true;
-        return;
-    };
-    cfg.addEdge(entry, condition_block, .branch) catch {
-        self.oom = true;
-        return;
-    };
-    cfg.addEdge(condition_block, exit, .normal) catch {
-        self.oom = true;
-        return;
-    };
+    var short = shortCircuitMoveCfg(self) orelse return;
+    defer short.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return;
+    var worklist = MoveStateCfgWorklist.init(self, &short.cfg, short.entry, state) orelse return;
     defer worklist.deinit();
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == entry) {
+        if (block == short.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == condition_block) {
+        } else if (block == short.rhs) {
             moveConsume(self, condition, block_state, aliases);
-            const exit_state = worklist.statePtr(exit) orelse {
+            const exit_state = worklist.statePtr(short.join) orelse {
                 self.oom = true;
                 return;
             };
             reportLoopOuterResourceChanges(self, exit_state, block_state);
-            worklist.enqueue(self, exit);
-        } else if (block == exit) {
+            worklist.enqueue(self, short.join);
+        } else if (block == short.join) {
             replaceMoveState(self, state, block_state);
         }
     }
