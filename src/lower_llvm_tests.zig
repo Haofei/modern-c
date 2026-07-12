@@ -166,6 +166,20 @@ test "LLVM rejects missing enum-literal target type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_enum_target_type_facts.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM rejects missing string-literal target type facts" {
+    const source =
+        \\fn text() -> *const u8 { return "text"; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_missing_string_target_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "text");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_string_target_type_facts.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM consumes enum-literal target type facts across contexts" {
     const source =
         \\enum Mode: u8 { read = 1, write = 2 }
@@ -8821,6 +8835,8 @@ test "LLVM backend emits cstr as ptr" {
     const source =
         \\extern "C" fn strlen(s: cstr) -> usize;
         \\extern "C" fn identity(s: cstr) -> cstr;
+        \\global global_cstr: cstr = "global";
+        \\global copied_cstr: cstr = global_cstr;
         \\
         \\export fn use_cstr() -> usize {
         \\    let s: cstr = "abc";
@@ -8830,6 +8846,7 @@ test "LLVM backend emits cstr as ptr" {
         \\export fn return_cstr() -> cstr {
         \\    return identity("xyz");
         \\}
+        \\export fn return_bytes() -> []const u8 { return "bytes"; }
     ;
 
     var output: std.ArrayList(u8) = .empty;
@@ -8838,8 +8855,12 @@ test "LLVM backend emits cstr as ptr" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "declare i64 @strlen(ptr)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "declare ptr @identity(ptr)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "@global_cstr = internal global ptr getelementptr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "@copied_cstr = internal global ptr getelementptr") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "define ptr @return_cstr()") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "call ptr @identity(ptr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "insertvalue { ptr, i64 }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "i64 5, 1") != null);
 }
 
 test "LLVM reflection rejects oversized tagged union layout without panicking" {

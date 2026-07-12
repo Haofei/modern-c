@@ -4572,8 +4572,8 @@ const FunctionBuilder = struct {
                 }
                 try self.addAggregateRangeFactForUncheckedExpr("binary_operand", self.rangeFactTypeForExpr(node.left.*), node.left.*);
                 try self.addAggregateRangeFactForUncheckedExpr("binary_operand", self.rangeFactTypeForExpr(node.right.*), node.right.*);
-                const left_target_ty = if (exprContainsEnumLiteral(node.left.*)) self.typeExprForExpr(node.right.*) else null;
-                const right_target_ty = if (exprContainsEnumLiteral(node.right.*)) self.typeExprForExpr(node.left.*) else null;
+                const left_target_ty = if (exprContainsTargetTypedLiteral(node.left.*)) self.typeExprForExpr(node.right.*) else null;
+                const right_target_ty = if (exprContainsTargetTypedLiteral(node.right.*)) self.typeExprForExpr(node.left.*) else null;
                 try self.buildExprWithTargetType(node.left.*, left_target_ty);
                 try self.addRepresentationUseForExpr("binary_operand", node.left.*);
                 try self.buildExprWithTargetType(node.right.*, right_target_ty);
@@ -5130,8 +5130,10 @@ const FunctionBuilder = struct {
     fn addTargetTypeFactForExpr(self: *FunctionBuilder, expr: ast.Expr) !void {
         const target_ty = self.assignment_target_type_expr orelse return;
         const result_ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        const resolved_target_ty = aggregateTargetTypeAlias(target_ty, self.aliases);
         const kind: TargetTypeKind = switch (expr.kind) {
             .enum_literal => if (result_ty == .closed_enum or result_ty == .open_enum) .enum_literal else return,
+            .string_literal => if (ast_query.isStringLiteralTarget(resolved_target_ty) or ast_query.u8SliceMutability(resolved_target_ty) != null) .string_literal else return,
             .call => |call| if (isBindCallNode(call))
                 .bind
             else if (result_ty == .result)
@@ -7668,10 +7670,10 @@ fn unionCasePayloadType(info: UnionSummary, case_name: []const u8) ?ast.TypeExpr
     return null;
 }
 
-fn exprContainsEnumLiteral(expr: ast.Expr) bool {
+fn exprContainsTargetTypedLiteral(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .enum_literal => true,
-        .grouped => |inner| exprContainsEnumLiteral(inner.*),
+        .enum_literal, .string_literal => true,
+        .grouped => |inner| exprContainsTargetTypedLiteral(inner.*),
         else => false,
     };
 }

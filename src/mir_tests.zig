@@ -129,9 +129,11 @@ test "MIR owns target types for bind Result and tagged-union constructors" {
     const source =
         \\enum E { bad }
         \\struct Slot { cb: closure(u32) -> u32, result: Result<u32, E> }
+        \\struct TextSlot { ptr: *const u8, bytes: []const u8 }
         \\union Token { number: i64, eof, ok: u32 }
         \\union Event { mode: E }
         \\global default_error: E = .bad;
+        \\global default_text: *const u8 = "global";
         \\fn add(env: *mut u32, value: u32) -> u32 { return env.* + value; }
         \\fn consume(value: Result<u32, E>) -> u32 { return 0; }
         \\fn make_bind(env: *mut u32) -> closure(u32) -> u32 { return bind(env, add); }
@@ -147,6 +149,9 @@ test "MIR owns target types for bind Result and tagged-union constructors" {
         \\fn compare_enum(value: E) -> bool { return .bad == value; }
         \\fn cast_enum() -> E { return .bad as E; }
         \\fn make_event() -> Event { return mode(.bad); }
+        \\fn make_text() -> *const u8 { return "text"; }
+        \\fn make_text_result() -> Result<*const u8, E> { return ok("ok"); }
+        \\fn make_text_slot() -> TextSlot { return .{ .ptr = "ptr", .bytes = "bytes" }; }
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_target_types.mc", source);
     defer reporter.deinit();
@@ -190,6 +195,14 @@ test "MIR owns target types for bind Result and tagged-union constructors" {
     const event_fn = functionByName(typed_mir, "make_event").?;
     try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, event_fn.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, event_fn.target_type_facts[1].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.string_literal, functionByName(typed_mir, "default_text").?.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.string_literal, functionByName(typed_mir, "make_text").?.target_type_facts[0].kind);
+    const text_result_fn = functionByName(typed_mir, "make_text_result").?;
+    try std.testing.expectEqual(mir.TargetTypeKind.result_ok, text_result_fn.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.string_literal, text_result_fn.target_type_facts[1].kind);
+    const text_slot_fn = functionByName(typed_mir, "make_text_slot").?;
+    try std.testing.expectEqual(mir.TargetTypeKind.string_literal, text_slot_fn.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.string_literal, text_slot_fn.target_type_facts[1].kind);
 
     try duplicateTargetTypeFact(functionByNameMut(&typed_mir, "make_ok").?, std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));

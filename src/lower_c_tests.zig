@@ -128,6 +128,20 @@ test "lower-c rejects missing enum-literal target type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_enum_target_type_facts.mc", .{}, false, null));
 }
 
+test "lower-c rejects missing string-literal target type facts" {
+    const source =
+        \\fn text() -> *const u8 { return "text"; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_missing_string_target_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "text");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_string_target_type_facts.mc", .{}, false, null));
+}
+
 fn retargetCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.CallTargetKind) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -2648,6 +2662,8 @@ test "lower-c emits cstr as immutable C string pointer" {
     const source =
         \\extern "C" fn strlen(s: cstr) -> usize;
         \\extern "C" fn identity(s: cstr) -> cstr;
+        \\global global_cstr: cstr = "global";
+        \\global copied_cstr: cstr = global_cstr;
         \\
         \\export fn use_cstr() -> usize {
         \\    let s: cstr = "abc";
@@ -2657,6 +2673,7 @@ test "lower-c emits cstr as immutable C string pointer" {
         \\export fn return_cstr() -> cstr {
         \\    return identity("xyz");
         \\}
+        \\export fn return_bytes() -> []const u8 { return "bytes"; }
     ;
 
     var output: std.ArrayList(u8) = .empty;
@@ -2665,11 +2682,14 @@ test "lower-c emits cstr as immutable C string pointer" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t strlen(char const * s);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * identity(char const * s);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "global_cstr = ((char const *)\"global\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "copied_cstr = ((char const *)\"global\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * s = ((char const *)\"abc\");") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * return_cstr(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "char const * mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, " = ((char const *)\"xyz\");") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return identity(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".len = 5") != null);
 }
 
 test "lower-c reuses prebuilt verified MIR without changing output" {

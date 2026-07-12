@@ -823,7 +823,8 @@ const LlvmEmitter = struct {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
             .string_literal => |literal| blk: {
-                if (!isStringLiteralTarget(resolved_ty)) break :blk error.UnsupportedLlvmEmission;
+                const fact = self.mirTargetTypeFactAt(.string_literal, expr.span) orelse break :blk error.UnsupportedLlvmEmission;
+                if (!isStringLiteralTarget(self.resolveAliasType(fact.target_ty))) break :blk error.UnsupportedLlvmEmission;
                 const global = try self.internStringLiteral(literal);
                 break :blk try std.fmt.allocPrint(
                     self.scratch.allocator(),
@@ -1333,7 +1334,7 @@ const LlvmEmitter = struct {
             .ident => |ident| try self.emitIdent(ident),
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
-            .string_literal => |literal| try self.emitStringLiteral(literal, expected_ty),
+            .string_literal => |literal| try self.emitStringLiteral(literal, expr.span),
             .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(expected_ty)),
             .bool_literal => |value| if (value) "1" else "0",
             .null_literal => "null",
@@ -4953,11 +4954,22 @@ const LlvmEmitter = struct {
     }
 
     fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
-        const function = self.currentMirFunction() orelse return null;
-        for (function.target_type_facts) |fact| {
-            if (fact.kind == kind and mirSourceMatches(span, fact.source)) return fact;
+        if (self.currentMirFunction()) |function| {
+            for (function.target_type_facts) |fact| {
+                if (fact.kind == kind and mirSourceMatches(span, fact.source)) return fact;
+            }
         }
-        return null;
+        if (span.line == 0 or span.column == 0) return null;
+        var matched: ?mir.TargetTypeFact = null;
+        for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
+            if (fact.kind != kind or !mirSourceMatches(span, fact.source)) continue;
+            if (matched) |existing| {
+                if (!std.meta.eql(existing.target_ty, fact.target_ty)) return null;
+            } else {
+                matched = fact;
+            }
+        };
+        return matched;
     }
 
     fn mirSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
@@ -7620,8 +7632,10 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitStringLiteral(self: *LlvmEmitter, literal: []const u8, expected_ty: ast.TypeExpr) ![]const u8 {
-        const resolved = self.resolveAliasType(expected_ty);
+    fn emitStringLiteral(self: *LlvmEmitter, literal: []const u8, span: ast.Span) ![]const u8 {
+        const fact = self.mirTargetTypeFactAt(.string_literal, span) orelse return error.UnsupportedLlvmEmission;
+        const target_ty = fact.target_ty;
+        const resolved = self.resolveAliasType(target_ty);
         // A `[]const u8` / `[]u8` slice target: build the fat-pointer slice value
         // `{ ptr = &.str, len = <byte count> }`. The pointer is the static string-literal
         // global (program-lifetime, always valid); the length excludes the trailing NUL that
@@ -7629,7 +7643,7 @@ const LlvmEmitter = struct {
         if (ast_query.u8SliceMutability(resolved)) |mutability| {
             const global = try self.internStringLiteral(literal);
             const child = resolved.kind.slice.child.*;
-            const slice_ty = try self.sliceTypeFor(child, mutability, expected_ty.span);
+            const slice_ty = try self.sliceTypeFor(child, mutability, target_ty.span);
             const slice_llvm = try self.llvmType(slice_ty);
             const ptr = try self.nextTemp();
             const with_ptr = try self.nextTemp();
