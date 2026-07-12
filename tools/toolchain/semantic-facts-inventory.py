@@ -741,6 +741,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_c_emitter.zig": {
         "fn mirTargetTypeFactAt(": 1,
+        "emitTaggedUnionConstructor(self.aggregateEmitContext(), node, locals, ty)": 0,
         "fn requireMirBoundsFact": 1,
         "try self.requireMirBoundsFact(": 3,
         "fn hasMirNoOverflowRangeFactForArith": 1,
@@ -780,6 +781,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try mir.validateTargetTypeFactsForLowering(module_mir.*);": 1,
         "fn mirTargetTypeFactAt(": 1,
         "fn bindClosureType(": 0,
+        "emitTaggedUnionConstructor(call, expected_ty)": 0,
         "fn requireMirBoundsFact": 1,
         "try self.requireMirBoundsFact(": 5,
         "fn requireMirNoOverflowRangeFact": 1,

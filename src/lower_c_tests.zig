@@ -98,6 +98,21 @@ test "lower-c rejects prebuilt MIR with missing target type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_target_type_facts.mc", .{}, false, null));
 }
 
+test "lower-c rejects missing tagged-union target type facts" {
+    const source =
+        \\union Token { number: i64, eof }
+        \\fn make() -> Token { return number(7); }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_missing_union_target_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "make");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_union_target_type_facts.mc", .{}, false, null));
+}
+
 fn retargetCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.CallTargetKind) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -3475,7 +3490,9 @@ test "lower-c emits tagged union constructors" {
     const source =
         \\union Token {
         \\    number: i64,
+        \\    value: i64,
         \\    eof,
+        \\    ok: u32,
         \\}
         \\
         \\fn id(token: Token) -> Token {
@@ -3483,7 +3500,7 @@ test "lower-c emits tagged union constructors" {
         \\}
         \\
         \\fn make_number() -> Token {
-        \\    return number(7);
+        \\    return value(7);
         \\}
         \\
         \\fn make_eof() -> Token {
@@ -3491,23 +3508,28 @@ test "lower-c emits tagged union constructors" {
         \\}
         \\
         \\fn call_id() -> Token {
-        \\    return id(number(7));
+        \\    return id(value(7));
         \\}
         \\
         \\fn local_number() -> Token {
-        \\    let token: Token = number(9);
+        \\    let token: Token = value(9);
         \\    return token;
         \\}
+        \\fn number(value: i64) -> Token { return Token.number(value); }
+        \\fn call_number() -> Token { return number(11); }
+        \\fn make_ok_case() -> Token { return ok(12); }
     ;
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_tagged_union_constructors.mc", source, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_number, .payload.number = 7 });") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_value, .payload.value = 7 });") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_eof });") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Token mc_tmp0 = ((Token){ .tag = TokenTag_number, .payload.number = 7 });\n    return id(mc_tmp0);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Token token = ((Token){ .tag = TokenTag_number, .payload.number = 9 });") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Token mc_tmp0 = ((Token){ .tag = TokenTag_value, .payload.value = 7 });\n    return id(mc_tmp0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Token token = ((Token){ .tag = TokenTag_value, .payload.value = 9 });") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return number(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_ok, .payload.ok = 12 });") != null);
 }
 
 test "lower-c emits Result ok and err constructors" {

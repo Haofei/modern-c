@@ -136,6 +136,37 @@ test "LLVM rejects prebuilt MIR with missing target type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_target_type_facts.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM rejects missing tagged-union target type facts" {
+    const source =
+        \\union Token { number: i64, eof }
+        \\fn make() -> Token { return number(7); }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_missing_union_target_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "make");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_union_target_type_facts.mc", .{}, false, .riscv64, null));
+}
+
+test "LLVM consumes tagged-union target type facts without function-name collisions" {
+    const source =
+        \\union Token { number: i64, eof, ok: u32 }
+        \\fn number(value: i64) -> Token { return Token.number(value); }
+        \\fn make_number() -> Token { return number(11); }
+        \\fn make_eof() -> Token { return eof(); }
+        \\fn make_ok_case() -> Token { return ok(12); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_union_target_type_facts.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "@number(i64 11)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "store i32 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "store i32 2") != null);
+}
+
 fn retargetCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.CallTargetKind) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;

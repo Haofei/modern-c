@@ -6091,7 +6091,9 @@ const LlvmEmitter = struct {
         }
         // `Union.variant(...)` qualified constructor — self-typed from the owner (no target).
         if (try self.emitQualifiedUnionConstructor(call)) |value| return value;
-        if (try self.emitTaggedUnionConstructor(call, expected_ty)) |value| return value;
+        if (self.mirTargetTypeFactAt(.tagged_union, span)) |fact| {
+            return (try self.emitTaggedUnionConstructor(call, fact.target_ty)) orelse error.UnsupportedLlvmEmission;
+        }
         if (try self.emitBuiltinValueCall(call, expected_ty, span)) |value| return value;
         if (self.directCallName(call.callee.*)) |callee| {
             return try self.emitDirectCall(callee, call, expected_ty);
@@ -7300,12 +7302,12 @@ const LlvmEmitter = struct {
         return with_err;
     }
 
-    fn emitTaggedUnionConstructor(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) !?[]const u8 {
+    fn emitTaggedUnionConstructor(self: *LlvmEmitter, call: anytype, target_ty: ast.TypeExpr) !?[]const u8 {
         const tag = taggedUnionConstructorName(call.callee.*) orelse return null;
-        const union_decl = self.taggedUnionForType(expected_ty) orelse return null;
+        const union_decl = self.taggedUnionForType(target_ty) orelse return null;
         const case_index = self.taggedUnionCaseIndex(union_decl, tag) orelse return null;
         const case = union_decl.cases[case_index];
-        const union_llvm = try self.llvmType(expected_ty);
+        const union_llvm = try self.llvmType(target_ty);
         const ptr = try self.nextTemp();
         const tag_ptr = try self.nextTemp();
         try self.emitAlloca(ptr, union_llvm);
@@ -7315,7 +7317,7 @@ const LlvmEmitter = struct {
         if (case.ty) |payload_ty| {
             if (call.args.len != 1) return error.UnsupportedLlvmEmission;
             const payload = try self.emitExpr(call.args[0], payload_ty);
-            const payload_ptr = try self.taggedUnionPayloadPtr(ptr, expected_ty, payload_ty);
+            const payload_ptr = try self.taggedUnionPayloadPtr(ptr, target_ty, payload_ty);
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(payload_ty), payload, payload_ptr, try self.debugCallSuffix() });
         } else if (call.args.len != 0) {
             return error.UnsupportedLlvmEmission;

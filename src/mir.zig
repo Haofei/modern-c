@@ -5116,14 +5116,19 @@ const FunctionBuilder = struct {
     }
 
     fn addTargetTypeFactForCall(self: *FunctionBuilder, call: anytype, span: ast.Span) !void {
-        const kind: TargetTypeKind = if (isBindCallNode(call))
-            .bind
-        else if (resultConstructorCallTag(call)) |tag|
-            if (std.mem.eql(u8, tag, "ok")) .result_ok else .result_err
-        else
-            return;
         const target_ty = self.assignment_target_type_expr orelse return;
         const result_ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        const kind: TargetTypeKind = if (isBindCallNode(call))
+            .bind
+        else if (result_ty == .result)
+            if (resultConstructorCallTag(call)) |tag|
+                if (std.mem.eql(u8, tag, "ok")) .result_ok else .result_err
+            else
+                return
+        else if (self.isTargetTypedUnionConstructor(call, target_ty))
+            .tagged_union
+        else
+            return;
         try self.addInstr(.target_type, @tagName(kind), result_ty, span);
         try self.target_type_facts.append(self.allocator, .{
             .kind = kind,
@@ -5131,6 +5136,20 @@ const FunctionBuilder = struct {
             .result_ty = result_ty,
             .source = .{ .line = span.line, .column = span.column },
         });
+    }
+
+    fn isTargetTypedUnionConstructor(self: *FunctionBuilder, call: anytype, target_ty: ast.TypeExpr) bool {
+        if (call.type_args.len != 0) return false;
+        const name = calleeIdentName(call.callee.*) orelse return false;
+        if (self.summaries.contains(name)) return false;
+        const union_name = unionTypeNameAlias(target_ty, self.aliases) orelse return false;
+        const info = self.unions.get(union_name) orelse return false;
+        for (info.cases) |case| {
+            if (!std.mem.eql(u8, case.name.text, name)) continue;
+            const expected_args: usize = if (case.ty == null) 0 else 1;
+            return call.args.len == expected_args;
+        }
+        return false;
     }
 
     const SemanticEscapeCallTarget = struct {

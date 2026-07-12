@@ -266,6 +266,7 @@ pub const TargetTypeKind = enum {
     bind,
     result_ok,
     result_err,
+    tagged_union,
 };
 
 pub const TargetTypeFact = struct {

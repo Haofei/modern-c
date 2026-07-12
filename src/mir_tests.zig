@@ -118,10 +118,11 @@ fn duplicateTargetTypeFact(function: *mir.Function, allocator: std.mem.Allocator
     function.target_type_facts = facts;
 }
 
-test "MIR owns target types for bind and Result constructors" {
+test "MIR owns target types for bind Result and tagged-union constructors" {
     const source =
         \\enum E { bad }
         \\struct Slot { cb: closure(u32) -> u32, result: Result<u32, E> }
+        \\union Token { number: i64, eof, ok: u32 }
         \\fn add(env: *mut u32, value: u32) -> u32 { return env.* + value; }
         \\fn consume(value: Result<u32, E>) -> u32 { return 0; }
         \\fn make_bind(env: *mut u32) -> closure(u32) -> u32 { return bind(env, add); }
@@ -129,6 +130,10 @@ test "MIR owns target types for bind and Result constructors" {
         \\fn make_err() -> Result<u32, E> { return err(.bad); }
         \\fn pass_ok(value: u32) -> u32 { return consume(ok(value)); }
         \\fn make_slot(env: *mut u32, value: u32) -> Slot { return .{ .cb = bind(env, add), .result = ok(value) }; }
+        \\fn number(value: i64) -> Token { return Token.number(value); }
+        \\fn make_number(value: i64) -> Token { return number(value); }
+        \\fn make_eof() -> Token { return eof(); }
+        \\fn make_union_ok(value: u32) -> Token { return ok(value); }
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_target_types.mc", source);
     defer reporter.deinit();
@@ -161,6 +166,9 @@ test "MIR owns target types for bind and Result constructors" {
     try std.testing.expectEqual(@as(usize, 2), slot_fn.target_type_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.bind, slot_fn.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.result_ok, slot_fn.target_type_facts[1].kind);
+    try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "make_number").?.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, functionByName(typed_mir, "make_eof").?.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, functionByName(typed_mir, "make_union_ok").?.target_type_facts[0].kind);
 
     try duplicateTargetTypeFact(&typed_mir.functions[3], std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));

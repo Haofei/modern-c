@@ -4238,13 +4238,16 @@ const CEmitter = struct {
     fn emitTargetCallExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, expr: ast.Expr) anyerror!void {
         if (ast_query.resultConstructorCallTag(node)) |tag| {
             const kind: mir.TargetTypeKind = if (std.mem.eql(u8, tag, "ok")) .result_ok else .result_err;
-            const fact = self.mirTargetTypeFactAt(kind, expr.span) orelse return error.UnsupportedCEmission;
-            if (try lower_c_aggregate.emitResultConstructor(self.aggregateEmitContext(), node, locals, fact.target_ty)) return;
+            if (self.mirTargetTypeFactAt(kind, expr.span)) |fact| {
+                if (try lower_c_aggregate.emitResultConstructor(self.aggregateEmitContext(), node, locals, fact.target_ty)) return;
+                return error.UnsupportedCEmission;
+            }
+        }
+        if (self.mirTargetTypeFactAt(.tagged_union, expr.span)) |fact| {
+            if (try lower_c_aggregate.emitTaggedUnionConstructor(self.aggregateEmitContext(), node, locals, fact.target_ty)) return;
             return error.UnsupportedCEmission;
         }
-        if (target_ty) |ty| {
-            if (try lower_c_aggregate.emitTaggedUnionConstructor(self.aggregateEmitContext(), node, locals, ty)) return;
-        }
+        _ = target_ty;
         try self.emitExpr(expr, locals);
     }
 
