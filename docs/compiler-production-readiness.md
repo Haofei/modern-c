@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-11, based on the current compiler worktree**.
-Evidence register: **559 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **560 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -165,6 +165,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Zig package version identity is gated | The compiler now has a repo-local package/version identity instead of relying only on CI prose: `build.zig.zon` records `0.7.0-dev` and `minimum_zig_version`, `.zigversion` pins the local toolchain, and the release metadata gate rejects drift unless both files agree with the expected Zig 0.16.0 release toolchain. | `build.zig.zon`; `.zigversion`; `tools/toolchain/release-metadata-test.py` version and minimum-Zig checks; `zig build release-metadata-test readiness-ledger-test`; `git diff --check`. |
 | CLI help/version surface is implemented and gated | `mcc --help`, `mcc help`, `mcc --version`, and `mcc version` are normal successful commands. The help transcript lists every current top-level source/loading/emission/tooling subcommand, documents stdin input, installed-layout import fallback, output paths, path remapping, build-safety profiles, machine-readable diagnostics, and exit-code classes. The transcript gate is wired into `m0`, `fast`, and `c0`, and README now carries the same command surface instead of a partial list. | `src/main.zig` `usage` / `--help` / `--version`; `build/compiler.zig` version option; `tools/toolchain/mcc-cli-test.sh` full transcript assertions; `build/qemu.zig` `mcc-cli-test`; `build/tiers.zig` m0/fast/c0 dependencies; `README.md` useful compiler commands; `zig build mcc-cli-test readiness-ledger-test`; `git diff --check`. |
 | Hosted one-shot build driver is implemented and gated | The installed `mcc` launcher dispatches `mcc build <file.mc> -o <exe>` to the hosted build helper, which emits hosted C with the private compiler, wraps a nullary exported MC `main` as the process entry point, invokes `clang`, and reports the output path. The gate now covers integer-return and `void` main programs, the missing-`-o` usage path, missing exported `main`, and multiple-input rejection. This is a hosted executable driver for the documented nullary-main boundary, not a general kernel/freestanding linker or arbitrary-entry synthesis layer. | `tools/toolchain/mcc-launcher.sh`; `tools/toolchain/mcc-build.sh`; `tools/toolchain/mcc-build-test.sh`; `build/compiler.zig` installed launcher/helper files; `build/qemu.zig` `mcc-build-test`; `build/tiers.zig` m0/fast/c0 dependencies; `README.md` `mcc build` example; `zig build mcc-build-test readiness-ledger-test`; `git diff --check`. |
+| Installed std/import layout is implemented and gated | Rooted imports still prefer the importing project tree, but an installed compiler can now resolve `import "std/x.mc"` through `--std-dir=<dir>` or `MC_PATH` without vendoring the repository layout. The installed launcher self-locates its private compiler/helper under the install prefix, and the install-layout gate proves the fallback from an external app directory while also proving absolute explicit imports outside the default sandbox still fail closed. This closes the compiler/std install-layout part of the former repo-coupling gap; editor packaging/defaults remain tracked by the IDE item. | `src/loader.zig` `LoadOptions.std_dir` / `mc_path` and installed-root resolution; `src/main.zig` `MC_PATH` parsing and help text; `tools/toolchain/mcc-launcher.sh`; `tools/toolchain/install-layout-test.sh`; `build/sweep.zig` `install-layout-test`; `build/tiers.zig` m0/fast dependencies; `tools/dev-gates.py`; `tools/toolchain/dev-gates-test.py`; `tools/toolchain/mcc-cli-test.sh`; `zig build install-layout-test mcc-cli-test dev-gates-test readiness-ledger-test`; `git diff --check`. |
 | Standard-library API reference is generated and gated | The stdlib API reference is generated from `std/**/*.mc` public declarations and now reflects the current public type/function surface, including recently public `StackGuard`, `SpinLock`, `Guard`, and `IrqGuard` declarations. The generator records modules, public functions, public constants, public type declarations, and local types referenced by public declarations; `std-api-docs-test` is wired into `m0`, `fast`, and `c0` so stdlib API drift fails closed. | `docs/std-api.md`; `tools/toolchain/std-api-docs.py`; `build/qemu.zig` `std-api-docs-test`; `build/tiers.zig` m0/fast/c0 dependencies; `python3 tools/toolchain/std-api-docs.py --check`; `zig build std-api-docs-test readiness-ledger-test`; `git diff --check`. |
 | Diagnostic reference and explain surface are generated and gated | `docs/diagnostics.md` is generated from compiler-emitted `E_*` diagnostics and now reflects current source locations and message examples after the latest sema/MIR/move-checker changes. `mcc explain E_CODE` serves the same embedded reference at runtime, and diagnostics reference gates are wired into local tier and dev-gate routing so stale diagnostic docs fail closed. | `docs/diagnostics.md`; `tools/toolchain/diagnostics-reference.py`; `src/main.zig` `mcc explain`; `build/compiler.zig` embedded diagnostics reference; `build/qemu.zig` `diagnostics-reference-test`; `build/tiers.zig` m0/fast/c0 dependencies; `tools/dev-gates.py`; `python3 tools/toolchain/diagnostics-reference.py --check`; `zig build diagnostics-reference-test readiness-ledger-test`; `git diff --check`. |
 | Bad-corpus diagnostic wording is golden-gated | Reject fixtures in `tests/c_emit/bad`, `demo/bad`, `kernel/bad`, selected async check-mode cases, and selected LLVM backend failures now lock the complete first primary diagnostic line, including path, span, code, and non-empty wording. The gate is wired into `m0`, `fast`, `c0`, and dev-gate routing, so misleading wording drift requires an intentional golden update. | `tools/toolchain/bad-diagnostics-test.py`; `tests/diagnostics/bad-golden.tsv`; `build/sweep.zig` `bad-diagnostics-test`; `build/tiers.zig` m0/fast/c0 dependencies; `tools/dev-gates.py`; `zig build bad-diagnostics-test readiness-ledger-test`; `git diff --check`. |
@@ -1425,15 +1426,15 @@ reproducibility (Docker + preflight + no-skip CI) is excellent.
   subcommand including `list-tests`, and `tools/toolchain/mcc-cli-test.sh`
   transcript-gates the full help/version/usage surface in `m0`, `fast`, and
   `c0`. README carries the same command surface.
-- **[P1] Repo-coupled everything.** Rooted imports resolve by walking the importing
-  file's ancestors (`src/loader.zig:18-21,212-223`) — no install prefix, no
-  `MC_PATH`; driver scripts self-locate by walking up to `build.zig`; the VS Code
-  extension defaults to `${workspaceFolder}` paths (`editors/vscode/package.json:49,54`).
-  An external project cannot use std/ or the drivers without vendoring the repo
-  layout; the IDE integration only works when the workspace *is* this repo. Fix: an
-  installed layout (`<prefix>/bin/mcc`, `<prefix>/lib/mc/std/`) + `MC_PATH`/
-  `--std-dir` loader fallback + install-relative scripts + PATH-based extension
-  defaults. Effort M.
+- **[P1] Repo-coupled everything.** **fixed for compiler/std install layout**;
+  rooted imports still search the importing project tree first, but
+  `src/loader.zig` now accepts `--std-dir=<dir>` and `MC_PATH` installed roots,
+  `src/main.zig` parses and documents both, and `install-layout-test` proves an
+  external app can resolve `import "std/answer.mc"` without vendoring this repo.
+  The installed `mcc` launcher/helper self-locate under the install prefix, and
+  the same gate proves explicit absolute imports outside the sandbox still fail
+  closed. The remaining repo-coupled surface is editor packaging/default paths,
+  tracked by the IDE item below.
 - **[P1] IDE support isn't out-of-the-box.** Extension install = symlink into
   `~/.vscode/extensions/` + `npm install`; no `.vsix`, no marketplace, Python 3
   required at runtime; VS Code is the only editor with any config. Fix: package/
@@ -1702,7 +1703,7 @@ per §Method.
 | `build.zig.zon` + `minimum_zig_version`; ReleaseSafe release profile | build | S |
 | `mcc --version`/`help`; document all subcommands; README sync | transcript test | Done; `mcc-cli-test` is wired into m0/fast/c0. |
 | Tag v0.7.0; release workflow: cross-compiled tarballs (mcc + std/ + drivers) + SHA-256 + minisign/cosign + SBOM + THIRD-PARTY-LICENSES | release CI job | M |
-| Installed layout + `MC_PATH`/`--std-dir` loader fallback; install-relative scripts | install smoke test in CI | M |
+| Installed layout + `MC_PATH`/`--std-dir` loader fallback; install-relative scripts | install smoke test in CI | Done; `install-layout-test` is wired into m0/fast and dev-gate routing. |
 | `mcc build <file> -o exe` one-shot driver | hosted executable gate | Done for nullary exported `main`; `mcc-build-test` is wired into m0/fast/c0. |
 | SECURITY.md; vendoring READMEs (quickjs/wamr/openlibm) + docs/vendoring.md; digest-pinned base image + verified Zig download; SHA-pinned actions | repo files | S-M |
 | STABILITY.md + CHANGELOG | repo files | S |
