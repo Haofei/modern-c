@@ -4454,7 +4454,7 @@ const FunctionBuilder = struct {
             },
             .array_literal => |items| {
                 try self.addInstr(.expr, "array_literal", .{ .array = "array" }, expr.span);
-                const child_ty = if (self.assignment_target_type_expr) |target_ty| arrayElementTypeAlias(aggregateTargetTypeAlias(target_ty, self.aliases), self.aliases) else null;
+                const child_ty = if (self.aggregateLiteralTargetTypeExpr()) |target_ty| arrayElementTypeAlias(aggregateTargetTypeAlias(target_ty, self.aliases), self.aliases) else null;
                 for (items) |item| {
                     const previous_target_ty = self.assignment_target_ty;
                     const previous_target_type_expr = self.assignment_target_type_expr;
@@ -4469,7 +4469,7 @@ const FunctionBuilder = struct {
             },
             .struct_literal => |fields| {
                 try self.addInstr(.expr, "struct_literal", .value, expr.span);
-                const struct_name = if (self.assignment_target_type_expr) |target_ty| structTypeNameAlias(aggregateTargetTypeAlias(target_ty, self.aliases), self.aliases) else null;
+                const struct_name = if (self.aggregateLiteralTargetTypeExpr()) |target_ty| structTypeNameAlias(aggregateTargetTypeAlias(target_ty, self.aliases), self.aliases) else null;
                 for (fields) |field| {
                     const field_ty = if (struct_name) |name| self.structFieldTypeExpr(name, field.name.text) else null;
                     const previous_target_ty = self.assignment_target_ty;
@@ -5134,6 +5134,22 @@ const FunctionBuilder = struct {
     fn addTargetTypeFactForExpr(self: *FunctionBuilder, expr: ast.Expr) !void {
         const target_ty = self.assignment_target_type_expr orelse return;
         const result_ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        if (expr.kind != .null_literal and self.isDynOrNullableDynTarget(target_ty) and self.exprNeedsDynCoercion(expr)) {
+            try self.appendTargetTypeFact(.dyn_coercion, target_ty, result_ty, expr.span);
+            return;
+        }
+        if (self.valueOptionalPayloadTargetType(target_ty, result_ty)) |payload_ty| {
+            if (expr.kind != .null_literal and self.exprType(expr) != .nullable_value) {
+                try self.appendTargetTypeFact(.value_optional_coercion, target_ty, result_ty, expr.span);
+                try self.addPrimaryTargetTypeFactForExpr(expr, payload_ty);
+                return;
+            }
+        }
+        try self.addPrimaryTargetTypeFactForExpr(expr, target_ty);
+    }
+
+    fn addPrimaryTargetTypeFactForExpr(self: *FunctionBuilder, expr: ast.Expr, target_ty: ast.TypeExpr) !void {
+        const result_ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
         const resolved_target_ty = aggregateTargetTypeAlias(target_ty, self.aliases);
         const kind: TargetTypeKind = switch (expr.kind) {
             .enum_literal => if (result_ty == .closed_enum or result_ty == .open_enum) .enum_literal else return,
@@ -5145,6 +5161,10 @@ const FunctionBuilder = struct {
             },
             .float_literal => switch (result_ty) {
                 .float => .float_literal,
+                else => return,
+            },
+            .null_literal => switch (result_ty) {
+                .pointer, .nullable_pointer, .nullable_value, .nullable_dyn_trait => .null_literal,
                 else => return,
             },
             .call => |call| if (isBindCallNode(call))
@@ -5160,13 +5180,53 @@ const FunctionBuilder = struct {
                 return,
             else => return,
         };
-        try self.addInstr(.target_type, @tagName(kind), result_ty, expr.span);
+        try self.appendTargetTypeFact(kind, target_ty, result_ty, expr.span);
+    }
+
+    fn appendTargetTypeFact(self: *FunctionBuilder, kind: TargetTypeKind, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span) !void {
+        try self.addInstr(.target_type, @tagName(kind), result_ty, span);
         try self.target_type_facts.append(self.allocator, .{
             .kind = kind,
             .target_ty = target_ty,
             .result_ty = result_ty,
-            .source = .{ .line = expr.span.line, .column = expr.span.column },
+            .source = .{ .line = span.line, .column = span.column },
         });
+    }
+
+    fn valueOptionalPayloadTargetType(self: *FunctionBuilder, target_ty: ast.TypeExpr, result_ty: ValueType) ?ast.TypeExpr {
+        if (result_ty != .nullable_value) return null;
+        const resolved = aggregateTargetTypeAlias(target_ty, self.aliases);
+        return switch (resolved.kind) {
+            .nullable => |child| child.*,
+            else => null,
+        };
+    }
+
+    fn isDynOrNullableDynTarget(self: *FunctionBuilder, target_ty: ast.TypeExpr) bool {
+        const resolved = aggregateTargetTypeAlias(target_ty, self.aliases);
+        return switch (resolved.kind) {
+            .dyn_trait => true,
+            .nullable => |child| isDynTraitMirType(aggregateTargetTypeAlias(child.*, self.aliases)),
+            else => false,
+        };
+    }
+
+    fn exprNeedsDynCoercion(self: *FunctionBuilder, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.exprNeedsDynCoercion(inner.*),
+            .address_of => true,
+            else => if (self.typeExprForExpr(expr)) |source_ty| switch (aggregateTargetTypeAlias(source_ty, self.aliases).kind) {
+                .pointer => true,
+                .dyn_trait => false,
+                else => false,
+            } else false,
+        };
+    }
+
+    fn aggregateLiteralTargetTypeExpr(self: *FunctionBuilder) ?ast.TypeExpr {
+        const target_ty = self.assignment_target_type_expr orelse return null;
+        const result_ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        return self.valueOptionalPayloadTargetType(target_ty, result_ty) orelse target_ty;
     }
 
     fn buildExprWithTargetType(self: *FunctionBuilder, expr: ast.Expr, target_ty: ?ast.TypeExpr) !void {
@@ -7704,7 +7764,7 @@ fn unionCasePayloadType(info: UnionSummary, case_name: []const u8) ?ast.TypeExpr
 
 fn exprContainsTargetTypedLiteral(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .enum_literal, .string_literal, .float_literal => true,
+        .enum_literal, .string_literal, .float_literal, .null_literal => true,
         .grouped => |inner| exprContainsTargetTypedLiteral(inner.*),
         else => false,
     };

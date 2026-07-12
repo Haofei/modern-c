@@ -209,6 +209,40 @@ test "LLVM rejects missing float-literal target type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_float_target_type_facts.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM rejects missing null and value-optional target type facts" {
+    const source =
+        \\fn present(value: u32) -> ?u32 { return value; }
+        \\fn absent() -> ?u32 { return null; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_missing_optional_target_type_facts.mc", source);
+    defer parsed.deinit();
+    for ([_][]const u8{ "present", "absent" }) |name| {
+        var module_mir = try mir.build(std.testing.allocator, parsed.module);
+        defer module_mir.deinit();
+        try clearTargetTypeFactsForFunction(&module_mir, name);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_optional_target_type_facts.mc", .{}, false, .riscv64, null));
+    }
+}
+
+test "LLVM rejects missing dyn-coercion target type facts" {
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\struct Square { side: u32 }
+        \\impl Shape for Square { fn area(self: *Square) -> u32 { return self.side; } }
+        \\fn as_dyn(value: *Square) -> *dyn Shape { return value; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_missing_dyn_target_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "as_dyn");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_dyn_target_type_facts.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM consumes f32 and f64 literal target type facts" {
     const source =
         \\global small: f32 = 1.25;

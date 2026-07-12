@@ -744,6 +744,7 @@ const LlvmEmitter = struct {
         const semantic_ty = switch (expr.kind) {
             .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission,
             .struct_literal => if (self.mirTargetTypeFactAt(.struct_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission,
+            .null_literal => if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission,
             else => ty,
         };
         const resolved_ty = self.resolveAliasType(semantic_ty);
@@ -868,7 +869,7 @@ const LlvmEmitter = struct {
                 break :blk error.UnsupportedLlvmEmission;
             },
             .bool_literal => |value| if (value) "1" else "0",
-            .null_literal => "null",
+            .null_literal => if (self.targetIsValueOptional(semantic_ty) or self.targetIsDynOrNullableDyn(semantic_ty)) "zeroinitializer" else "null",
             .grouped => |inner| try self.emitGlobalInitializer(inner.*, semantic_ty),
             .ident => |ident| if (self.isFnPointerType(semantic_ty) and self.fn_sigs.contains(ident.text))
                 try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text})
@@ -1323,6 +1324,10 @@ const LlvmEmitter = struct {
     }
 
     fn emitExprInner(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) anyerror![]const u8 {
+        const semantic_expected_ty = if (expr.kind == .null_literal)
+            if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission
+        else
+            expected_ty;
         // Tier 2 coercion: a `*T` value -> `*dyn Trait` builds the fat pointer
         // { data = <ptr>, vtable = @__vt_T_Trait } (the only safe path to a `*dyn`).
         // This runs UNIFORMLY wherever `expected_ty` is threaded — let-init, return,
@@ -1330,13 +1335,13 @@ const LlvmEmitter = struct {
         // on the STATIC pointee type T of the source `*T` (a `&x`, a `*Square` param, a
         // `*T` field — all uniform). Sema has already verified conformance + forge-safety;
         // a `*dyn` pass-through value (same trait) returns null and emits normally.
-        if (self.targetIsDynOrNullableDyn(expected_ty)) {
-            if (try self.emitDynCoercion(expr, expected_ty)) |value| return value;
+        if (self.targetIsDynOrNullableDyn(semantic_expected_ty)) {
+            if (try self.emitDynCoercion(expr, semantic_expected_ty)) |value| return value;
         }
         // Value optional `?T`: wrap a `null` (absent) or payload value (present) into the
         // tagged `{ i1, T }` aggregate. A source already yielding `?T` passes through.
-        if (self.targetIsValueOptional(expected_ty)) {
-            if (try self.emitValueOptionalCoercion(expr, expected_ty)) |value| return value;
+        if (self.targetIsValueOptional(semantic_expected_ty)) {
+            if (try self.emitValueOptionalCoercion(expr, semantic_expected_ty)) |value| return value;
         }
         const value = try switch (expr.kind) {
             .ident => |ident| try self.emitIdent(ident),
@@ -3283,15 +3288,18 @@ const LlvmEmitter = struct {
     // Coerce a `null` (absent) or a payload value (present) into a value optional `?T`'s
     // tagged `{ i1, T }` aggregate. A source already yielding `?T` returns null (pass-through).
     fn emitValueOptionalCoercion(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) !?[]const u8 {
-        const resolved = self.resolveAliasType(expected_ty);
-        const child = resolved.kind.nullable.*;
-        if (expr.kind == .grouped) return self.emitValueOptionalCoercion(expr.kind.grouped.*, expected_ty);
+        var resolved = self.resolveAliasType(expected_ty);
         // `null` -> absent: `{ i1 false, T zero }` == zeroinitializer.
         if (expr.kind == .null_literal) return "zeroinitializer";
         // Pass-through: the source already produces the optional aggregate.
         if (self.exprType(expr)) |src_ty| {
             if (self.resolveAliasType(src_ty).kind == .nullable) return null;
         }
+        const fact = self.mirTargetTypeFactAt(.value_optional_coercion, expr.span) orelse return error.UnsupportedLlvmEmission;
+        resolved = self.resolveAliasType(fact.target_ty);
+        if (resolved.kind != .nullable) return error.UnsupportedLlvmEmission;
+        const child = resolved.kind.nullable.*;
+        if (!self.nullablePayloadIsValueType(child)) return error.UnsupportedLlvmEmission;
         const opt_ty = try self.llvmType(resolved);
         const payload_ty = try self.llvmType(child);
         const payload = try self.emitExpr(expr, child);
@@ -3302,8 +3310,13 @@ const LlvmEmitter = struct {
         return with_value;
     }
 
-    fn emitDynCoercion(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) !?[]const u8 {
-        const resolved = self.resolveAliasType(expected_ty);
+    fn emitDynCoercion(self: *LlvmEmitter, expr: ast.Expr, _: ast.TypeExpr) !?[]const u8 {
+        if (expr.kind == .null_literal) return "zeroinitializer";
+        if (self.exprType(expr)) |source_ty| {
+            if (self.targetIsDynOrNullableDyn(source_ty)) return null;
+        }
+        const fact = self.mirTargetTypeFactAt(.dyn_coercion, expr.span) orelse return error.UnsupportedLlvmEmission;
+        const resolved = self.resolveAliasType(fact.target_ty);
         // `*dyn Trait` or `?*dyn Trait` (nullable trait object) target.
         const trait_name = switch (resolved.kind) {
             .dyn_trait => |d| d.trait_name.text,
@@ -3315,11 +3328,10 @@ const LlvmEmitter = struct {
         };
         // `?*dyn Trait = null`: `none` is the zero fat pointer (data == null). The value is
         // emitted in a typed context (store/insertvalue prefix the `{ ptr, ptr }` type).
-        if (expr.kind == .null_literal) return "zeroinitializer";
         var type_name: []const u8 = undefined;
         var data_ptr: []const u8 = undefined;
         switch (expr.kind) {
-            .grouped => |inner| return self.emitDynCoercion(inner.*, expected_ty),
+            .grouped => |inner| return self.emitDynCoercion(inner.*, fact.target_ty),
             .address_of => |inner| {
                 // `&x` -> data = &x, vtable keyed on typeof(x).
                 const source_ty = self.exprType(inner.*) orelse return null;
@@ -3330,7 +3342,7 @@ const LlvmEmitter = struct {
                 // A `*T` value: data = the pointer itself, vtable keyed on the pointee T.
                 const source_ty = self.resolveAliasType(self.exprType(expr) orelse return null);
                 // An existing `*dyn Trait` value passes through (no re-wrap).
-                if (source_ty.kind == .dyn_trait) return null;
+                if (self.targetIsDynOrNullableDyn(source_ty)) return null;
                 const pointee = switch (source_ty.kind) {
                     .pointer => |node| node.child.*,
                     else => return null,

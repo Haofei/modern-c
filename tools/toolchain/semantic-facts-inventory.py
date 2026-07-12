@@ -741,6 +741,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_c_emitter.zig": {
         "fn mirTargetTypeFactAt(": 1,
+        "mirTargetTypeFactAt(.value_optional_coercion": 1,
+        "mirTargetTypeFactAt(.dyn_coercion": 1,
         "self.current_function = global.name.text;": 1,
         "if (span.line == 0 or span.column == 0) return null;": 1,
         "fn emitEnumLiteralWithTarget(self: *CEmitter, literal: ast.Ident, target_ty:": 0,
@@ -787,6 +789,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try mir.validateIntegerFactsForLowering(module_mir.*);": 1,
         "try mir.validateTargetTypeFactsForLowering(module_mir.*);": 1,
         "fn mirTargetTypeFactAt(": 1,
+        "mirTargetTypeFactAt(.value_optional_coercion": 1,
+        "mirTargetTypeFactAt(.dyn_coercion": 1,
         "self.current_function = global.name.text;": 1,
         "if (span.line == 0 or span.column == 0) return null;": 1,
         "fn bindClosureType(": 0,

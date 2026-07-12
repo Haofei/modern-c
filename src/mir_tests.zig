@@ -160,6 +160,9 @@ test "MIR owns target types for contextual constructors and literals" {
         \\fn make_float() -> f32 { return 1.5; }
         \\fn make_float_expr() -> f32 { return 1.7 * 2.3; }
         \\fn make_float_slot() -> FloatSlot { return .{ .small = 1.0, .wide = 2.0 }; }
+        \\fn maybe_value(value: u32) -> ?u32 { return value; }
+        \\fn no_value() -> ?u32 { return null; }
+        \\fn maybe_text_slot() -> ?TextSlot { return .{ .ptr = "ptr", .bytes = "bytes" }; }
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_target_types.mc", source);
     defer reporter.deinit();
@@ -225,9 +228,50 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, float_slot_fn.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.float_literal, float_slot_fn.target_type_facts[1].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.float_literal, float_slot_fn.target_type_facts[2].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.value_optional_coercion, functionByName(typed_mir, "maybe_value").?.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.null_literal, functionByName(typed_mir, "no_value").?.target_type_facts[0].kind);
+    const maybe_text_fn = functionByName(typed_mir, "maybe_text_slot").?;
+    try std.testing.expectEqual(mir.TargetTypeKind.value_optional_coercion, maybe_text_fn.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, maybe_text_fn.target_type_facts[1].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.string_literal, maybe_text_fn.target_type_facts[2].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.string_literal, maybe_text_fn.target_type_facts[3].kind);
 
     try duplicateTargetTypeFact(functionByNameMut(&typed_mir, "make_ok").?, std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
+}
+
+test "MIR owns dyn coercion targets and excludes pass-through values" {
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\struct Square { side: u32 }
+        \\impl Shape for Square { fn area(self: *Square) -> u32 { return self.side; } }
+        \\struct Holder { inner: *dyn Shape }
+        \\fn as_dyn(p: *Square) -> *dyn Shape { return p; }
+        \\fn hold(p: *Square) -> Holder { return .{ .inner = p }; }
+        \\fn consume(value: *dyn Shape) -> u32 { return value.area(); }
+        \\fn pass_arg(p: *Square) -> u32 { return consume(p); }
+        \\fn pass_through(value: *dyn Shape) -> *dyn Shape { return value; }
+        \\fn pass_nullable(value: ?*dyn Shape) -> ?*dyn Shape { return value; }
+        \\fn no_dyn() -> ?*dyn Shape { return null; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_dyn_target_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try std.testing.expectEqual(mir.TargetTypeKind.dyn_coercion, functionByName(typed_mir, "as_dyn").?.target_type_facts[0].kind);
+    const holder = functionByName(typed_mir, "hold").?;
+    try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, holder.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.dyn_coercion, holder.target_type_facts[1].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.dyn_coercion, functionByName(typed_mir, "pass_arg").?.target_type_facts[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "pass_through").?.target_type_facts.len);
+    try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "pass_nullable").?.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.null_literal, functionByName(typed_mir, "no_dyn").?.target_type_facts[0].kind);
 }
 
 fn valueTypeName(ty: mir.ValueType) []const u8 {

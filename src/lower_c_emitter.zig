@@ -4154,24 +4154,28 @@ const CEmitter = struct {
     }
 
     fn emitExprWithTargetInner(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
-        if (try self.emitRaceTolerantAggregateDerefExpr(expr, locals, target_ty)) return;
-        if (try self.emitRaceTolerantPointerMemberAggregateExpr(expr, locals, target_ty)) return;
-        if (try self.emitRaceTolerantNestedPointerMemberAggregateExpr(expr, locals, target_ty)) return;
-        if (try self.emitRaceTolerantIndexedMemberAggregateExpr(expr, locals, target_ty)) return;
+        const semantic_target_ty = if (expr.kind == .null_literal)
+            if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedCEmission
+        else
+            target_ty;
+        if (try self.emitRaceTolerantAggregateDerefExpr(expr, locals, semantic_target_ty)) return;
+        if (try self.emitRaceTolerantPointerMemberAggregateExpr(expr, locals, semantic_target_ty)) return;
+        if (try self.emitRaceTolerantNestedPointerMemberAggregateExpr(expr, locals, semantic_target_ty)) return;
+        if (try self.emitRaceTolerantIndexedMemberAggregateExpr(expr, locals, semantic_target_ty)) return;
         if (try self.ambiguousAggregateDerefValueCopy(expr, locals)) return error.UnsupportedCEmission;
         if (try self.ambiguousPointerMemberAggregateValueCopy(expr, locals)) return error.UnsupportedCEmission;
         if (try self.ambiguousIndexedMemberAggregateValueCopy(expr, locals)) return error.UnsupportedCEmission;
-        if (try self.emitValueOptionalCoercion(expr, locals, target_ty)) return;
-        if (try self.emitTargetPreludeExpr(expr, locals, target_ty)) return;
+        if (try self.emitValueOptionalCoercion(expr, locals, semantic_target_ty)) return;
+        if (try self.emitTargetPreludeExpr(expr, locals, semantic_target_ty)) return;
         switch (expr.kind) {
             .array_literal, .struct_literal => try self.emitAggregateLiteralWithTarget(expr, locals),
-            .binary, .unary => try self.emitArithmeticExprWithTarget(expr, locals, target_ty),
-            .call => |node| try self.emitTargetCallExpr(node, locals, target_ty, expr),
+            .binary, .unary => try self.emitArithmeticExprWithTarget(expr, locals, semantic_target_ty),
+            .call => |node| try self.emitTargetCallExpr(node, locals, semantic_target_ty, expr),
             .enum_literal => |literal| try self.emitEnumLiteralWithTarget(literal, expr.span),
             .string_literal => |literal| try self.emitStringLiteralWithTarget(literal, expr.span),
             .float_literal => |literal| try self.emitFloatLiteralWithTarget(literal, expr.span),
-            .grouped => |inner| try self.emitGroupedExprWithTarget(inner.*, locals, target_ty),
-            .address_of => try self.emitAddressOfExprWithTarget(expr, locals, target_ty),
+            .grouped => |inner| try self.emitGroupedExprWithTarget(inner.*, locals, semantic_target_ty),
+            .address_of => try self.emitAddressOfExprWithTarget(expr, locals, semantic_target_ty),
             else => try self.emitExpr(expr, locals),
         }
     }
@@ -4181,12 +4185,11 @@ const CEmitter = struct {
     // returning `?T`) is left to the normal path (pass-through, no double-wrap).
     fn emitValueOptionalCoercion(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!bool {
         const ty = target_ty orelse return false;
-        const resolved = self.resolveAliasType(ty);
+        var resolved = self.resolveAliasType(ty);
         if (resolved.kind != .nullable) return false;
-        const child = resolved.kind.nullable.*;
-        if (!lower_c_type.nullablePayloadIsValueType(&self.type_aliases, child)) return false;
-        const opt_name = try self.cTypeFor(resolved, .typedef_name);
+        if (!lower_c_type.nullablePayloadIsValueType(&self.type_aliases, resolved.kind.nullable.*)) return false;
         if (expr.kind == .null_literal) {
+            const opt_name = try self.cTypeFor(resolved, .typedef_name);
             try self.out.print(self.allocator, "({s}){{ .present = false }}", .{opt_name});
             return true;
         }
@@ -4194,6 +4197,12 @@ const CEmitter = struct {
         if (self.nullableTypeForExpr(expr, locals)) |src_ty| {
             if (self.resolveAliasType(src_ty).kind == .nullable) return false;
         }
+        const fact = self.mirTargetTypeFactAt(.value_optional_coercion, expr.span) orelse return error.UnsupportedCEmission;
+        resolved = self.resolveAliasType(fact.target_ty);
+        if (resolved.kind != .nullable) return error.UnsupportedCEmission;
+        const child = resolved.kind.nullable.*;
+        if (!lower_c_type.nullablePayloadIsValueType(&self.type_aliases, child)) return error.UnsupportedCEmission;
+        const opt_name = try self.cTypeFor(resolved, .typedef_name);
         try self.out.print(self.allocator, "({s}){{ .present = true, .value = ", .{opt_name});
         try self.emitExprWithTarget(expr, locals, child);
         try self.out.appendSlice(self.allocator, " }");
@@ -4426,19 +4435,31 @@ const CEmitter = struct {
     }
 
     fn emitDynCoercion(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
-        // The target is `*dyn Trait` or `?*dyn Trait` (nullable trait object): both build
-        // the `mc_dyn_<Trait>` fat pointer; the nullable just adds the `null` niche below.
-        const trait_name = self.dynTargetTraitName(target_ty) orelse return false;
+        if (self.dynTargetTraitName(target_ty) == null) return false;
         // `?*dyn Trait = null`: `none` is the zero fat pointer (data == NULL).
         if (expr.kind == .null_literal) {
+            const trait_name = self.dynTargetTraitName(target_ty) orelse return false;
             try self.emitNullDynCoercion(trait_name);
             return true;
         }
+        if (self.dynSourceIsPassThrough(expr, locals)) return false;
+        const fact = self.mirTargetTypeFactAt(.dyn_coercion, expr.span) orelse return error.UnsupportedCEmission;
+        const trait_name = self.dynTargetTraitName(fact.target_ty) orelse return error.UnsupportedCEmission;
         switch (expr.kind) {
-            .grouped => |inner| return self.emitDynCoercion(inner.*, locals, target_ty),
+            .grouped => |inner| return self.emitDynCoercion(inner.*, locals, fact.target_ty),
             .address_of => |inner| return try self.emitAddressOfDynCoercion(inner.*, locals, trait_name),
             else => return try self.emitPointerValueDynCoercion(expr, locals, trait_name),
         }
+    }
+
+    fn dynSourceIsPassThrough(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .grouped => |inner| self.dynSourceIsPassThrough(inner.*, locals),
+            else => if (self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals)) |source_ty|
+                self.targetIsDynOrNullableDyn(source_ty)
+            else
+                false,
+        };
     }
 
     fn dynTargetTraitName(self: *CEmitter, target_ty: ast.TypeExpr) ?[]const u8 {
