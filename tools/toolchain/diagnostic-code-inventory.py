@@ -22,6 +22,9 @@ FIXTURE_GLOBS = (
 UNIT_TEST_GLOBS = (
     "src/*_tests.zig",
 )
+MIN_EMITTED_CODES = 200
+MIN_FIXTURE_OWNED_CODES = 200
+MIN_UNIT_OWNED_CODES = 10
 
 
 def load_diagnostics_reference(root: Path):
@@ -100,7 +103,19 @@ def main() -> int:
     stale_fixtures = sorted(fixture_owned - source_codes)
     stale_units = sorted(unit_owned - source_codes)
 
-    if missing or stale_allowlist or redundant_allowlist or stale_fixtures or stale_units:
+    scope_errors: list[str] = []
+    if len(source_codes) < MIN_EMITTED_CODES:
+        scope_errors.append(f"only {len(source_codes)} emitted codes found, expected at least {MIN_EMITTED_CODES}")
+    if len(fixture_owned) < MIN_FIXTURE_OWNED_CODES:
+        scope_errors.append(
+            f"only {len(fixture_owned)} fixture-owned codes found, expected at least {MIN_FIXTURE_OWNED_CODES}"
+        )
+    if len(unit_owned) < MIN_UNIT_OWNED_CODES:
+        scope_errors.append(f"only {len(unit_owned)} unit-owned codes found, expected at least {MIN_UNIT_OWNED_CODES}")
+
+    if missing or stale_allowlist or redundant_allowlist or stale_fixtures or stale_units or scope_errors:
+        for error in scope_errors:
+            print(f"FAIL: diagnostic-code-inventory - ownership scope shrank: {error}", file=sys.stderr)
         for code in missing:
             refs = ", ".join(source_info[code].refs[:4])
             print(
