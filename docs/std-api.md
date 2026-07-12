@@ -13,8 +13,8 @@ public type declarations, and local types named by public declarations.
 Total modules: **41**.
 Total public functions: **351**.
 Total public constants: **6**.
-Total public type declarations: **42**.
-Total referenced local types: **19**.
+Total public type declarations: **46**.
+Total referenced local types: **15**.
 
 ## Modules
 
@@ -264,17 +264,17 @@ Source: `std/byteview.mc`
 
 Source: `std/canary.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct StackGuard</code> | `std/canary.mc:21` |
+| <code>pub struct StackGuard</code> | `std/canary.mc:21` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn guard_new() -&gt; StackGuard</code> | `std/canary.mc:27` |
+| <code>pub fn guard_new() -&gt; StackGuard</code> | `std/canary.mc:27` |
 | <code>export fn guard_ok(g: *StackGuard) -&gt; bool</code> | `std/canary.mc:32` |
 | <code>export fn guard_check(g: *StackGuard) -&gt; void</code> | `std/canary.mc:39` |
 | <code>export fn guard_smash(g: *mut StackGuard) -&gt; void</code> | `std/canary.mc:48` |
@@ -831,22 +831,22 @@ Source: `std/sync/spinlock.mc`
 
 Source: `std/sync/sync.mc`
 
-### Referenced local types
+### Public types
 
 | Signature | Source |
 |---|---|
-| <code>struct SpinLock</code> | `std/sync/sync.mc:12` |
-| <code>move struct Guard</code> | `std/sync/sync.mc:17` |
-| <code>move struct IrqGuard</code> | `std/sync/sync.mc:23` |
+| <code>pub struct SpinLock</code> | `std/sync/sync.mc:12` |
+| <code>pub move struct Guard</code> | `std/sync/sync.mc:17` |
+| <code>pub move struct IrqGuard</code> | `std/sync/sync.mc:23` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn lock(l: *SpinLock) -&gt; Guard</code> | `std/sync/sync.mc:34` |
-| <code>export fn unlock(g: Guard) -&gt; void</code> | `std/sync/sync.mc:39` |
-| <code>export fn lock_irqsave(l: *SpinLock) -&gt; IrqGuard</code> | `std/sync/sync.mc:45` |
-| <code>export fn unlock_irqrestore(g: IrqGuard) -&gt; void</code> | `std/sync/sync.mc:49` |
+| <code>pub fn lock(l: *SpinLock) -&gt; Guard</code> | `std/sync/sync.mc:37` |
+| <code>pub fn unlock(g: Guard) -&gt; void</code> | `std/sync/sync.mc:43` |
+| <code>pub fn lock_irqsave(l: *SpinLock) -&gt; IrqGuard</code> | `std/sync/sync.mc:51` |
+| <code>pub fn unlock_irqrestore(g: IrqGuard) -&gt; void</code> | `std/sync/sync.mc:55` |
 
 ## `std/task`
 
