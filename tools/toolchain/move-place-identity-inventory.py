@@ -20,12 +20,14 @@ ANCHORS: dict[str, list[str]] = {
         "const base = placeKeyAndType(self, ix.base.*, state) orelse return null;",
         "const AliasPlaceInfo = struct",
         "place: MovePlace",
+        "fn markDeferredBorrowAliasReferent",
     ],
     "docs/compiler-production-readiness.md": [
         "Move checker alias assignment updates use typed storage places",
         "Move checker alias key formatter has no external callers",
         "Move checker alias key formatter is retired",
         "Move checker laundered referents are typed",
+        "Move checker deferred aliases use typed referents",
         "move-place-identity-inventory.py",
     ],
 }
@@ -48,6 +50,10 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
     "src/sema_move.zig": {
         ("fn aliasWildcardPlaceInfo", "fn aliasPlaceBaseType"): [
             "const base = aliasPlaceKey(self, ix.base.*, state) orelse return null;",
+        ],
+        ("pub fn moveDefer", "fn cleanupLocalAliasReferent"): [
+            "markDeferredBorrowReferent(self, referent, deferredAliasBorrowPlace",
+            "markDeferredBorrowReferent(self, referent.key",
         ],
     },
 }

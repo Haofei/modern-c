@@ -3799,6 +3799,10 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
         root_slot.place;
 }
 
+fn markDeferredBorrowAliasReferent(self: *Checker, referent: AliasReferent, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+    markDeferredBorrowReferent(self, referent.key, deferredAliasBorrowPlace(referent.place), span, state);
+}
+
 fn moveDeferSliceBase(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     switch (expr.kind) {
         .grouped => |inner| moveDeferSliceBase(self, inner.*, state, aliases),
@@ -3814,7 +3818,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
         .ident => |id| {
             if (state.getPtr(id.text)) |slot| {
                 if (slot.alias_of) |referent| {
-                    markDeferredBorrowReferent(self, referent, deferredAliasBorrowPlace(slot.alias_place), expr.span, state);
+                    markDeferredBorrowAliasReferent(self, .{ .key = referent, .place = slot.alias_place, .full_deref = slot.full_deref_alias }, expr.span, state);
                 } else if (slot.cleanup_local) {
                     consumeTrackedMoveBinding(self, id.text, expr.span, state);
                 } else if (!slot.live) {
@@ -3846,7 +3850,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
         .call => |c| for (c.args) |arg| {
             checkAggregateAliasArgument(self, arg, state);
             if (callLaunderedMoveAliasReferent(self, arg, state, aliases)) |referent| {
-                markDeferredBorrowReferent(self, referent.key, deferredAliasBorrowPlace(referent.place), arg.span, state);
+                markDeferredBorrowAliasReferent(self, referent, arg.span, state);
                 continue;
             }
             moveDefer(self, arg, state, aliases);
@@ -3854,7 +3858,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
         .member => |m| {
             moveBorrow(self, m.base.*, state, aliases);
             if (aggregateFieldAliasSlot(self, expr, state)) |slot| {
-                if (slot.alias_of) |referent| markDeferredBorrowReferent(self, referent, deferredAliasBorrowPlace(slot.alias_place), expr.span, state);
+                if (slot.alias_of) |referent| markDeferredBorrowAliasReferent(self, .{ .key = referent, .place = slot.alias_place, .full_deref = slot.full_deref_alias }, expr.span, state);
                 return;
             }
             // `defer free(p.field)`: reserve the move field for lexical cleanup so it is
@@ -3875,7 +3879,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
             moveBorrow(self, ix.base.*, state, aliases);
             moveConsume(self, ix.index.*, state, aliases);
             if (aliasPlaceSlot(self, expr, state)) |slot| {
-                if (slot.alias_of) |referent| markDeferredBorrowReferent(self, referent, deferredAliasBorrowPlace(slot.alias_place), expr.span, state);
+                if (slot.alias_of) |referent| markDeferredBorrowAliasReferent(self, .{ .key = referent, .place = slot.alias_place, .full_deref = slot.full_deref_alias }, expr.span, state);
                 return;
             }
             // `defer free(arr[0])`: reserve a tracked constant-index element place for
