@@ -4056,16 +4056,7 @@ fn moveDeferStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveS
         },
         .block, .unsafe_block, .comptime_block => |b| moveDeferBlock(self, b, state, aliases),
         .contract_block => |c| moveDeferBlock(self, c.block, state, aliases),
-        .if_let => |n| {
-            moveDefer(self, n.value, state, aliases);
-            var then_state = cloneMoveState(self, state);
-            defer then_state.deinit();
-            var else_state = cloneMoveState(self, state);
-            defer else_state.deinit();
-            moveDeferBlock(self, n.then_block, &then_state, aliases);
-            if (n.else_block) |else_block| moveDeferBlock(self, else_block, &else_state, aliases);
-            joinMoveBranches(self, state, &then_state, false, &else_state, false);
-        },
+        .if_let => |n| moveDeferIfLetCfg(self, n, state, aliases),
         .@"switch" => |sw| {
             moveDefer(self, sw.subject, state, aliases);
             var joined: ?std.StringHashMap(MoveSlot) = null;
@@ -4098,6 +4089,29 @@ fn moveDeferStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveS
             reportLoopOuterResourceChanges(self, state, &body_state);
         },
         else => {},
+    }
+}
+
+fn moveDeferIfLetCfg(self: *Checker, node: ast.IfLet, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    var branch = twoArmMoveCfg(self) orelse return;
+    defer branch.deinit();
+
+    var worklist = MoveStateCfgWorklist.init(self, &branch.cfg, branch.entry, state) orelse return;
+    defer worklist.deinit();
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == branch.entry) {
+            moveDefer(self, node.value, block_state, aliases);
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.then_block) {
+            moveDeferBlock(self, node.then_block, block_state, aliases);
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.else_block) {
+            if (node.else_block) |else_block| moveDeferBlock(self, else_block, block_state, aliases);
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.join) {
+            replaceMoveState(self, state, block_state);
+        }
     }
 }
 
