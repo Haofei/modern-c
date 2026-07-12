@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-11, based on the current compiler worktree**.
-Evidence register: **560 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **561 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -166,6 +166,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | CLI help/version surface is implemented and gated | `mcc --help`, `mcc help`, `mcc --version`, and `mcc version` are normal successful commands. The help transcript lists every current top-level source/loading/emission/tooling subcommand, documents stdin input, installed-layout import fallback, output paths, path remapping, build-safety profiles, machine-readable diagnostics, and exit-code classes. The transcript gate is wired into `m0`, `fast`, and `c0`, and README now carries the same command surface instead of a partial list. | `src/main.zig` `usage` / `--help` / `--version`; `build/compiler.zig` version option; `tools/toolchain/mcc-cli-test.sh` full transcript assertions; `build/qemu.zig` `mcc-cli-test`; `build/tiers.zig` m0/fast/c0 dependencies; `README.md` useful compiler commands; `zig build mcc-cli-test readiness-ledger-test`; `git diff --check`. |
 | Hosted one-shot build driver is implemented and gated | The installed `mcc` launcher dispatches `mcc build <file.mc> -o <exe>` to the hosted build helper, which emits hosted C with the private compiler, wraps a nullary exported MC `main` as the process entry point, invokes `clang`, and reports the output path. The gate now covers integer-return and `void` main programs, the missing-`-o` usage path, missing exported `main`, and multiple-input rejection. This is a hosted executable driver for the documented nullary-main boundary, not a general kernel/freestanding linker or arbitrary-entry synthesis layer. | `tools/toolchain/mcc-launcher.sh`; `tools/toolchain/mcc-build.sh`; `tools/toolchain/mcc-build-test.sh`; `build/compiler.zig` installed launcher/helper files; `build/qemu.zig` `mcc-build-test`; `build/tiers.zig` m0/fast/c0 dependencies; `README.md` `mcc build` example; `zig build mcc-build-test readiness-ledger-test`; `git diff --check`. |
 | Installed std/import layout is implemented and gated | Rooted imports still prefer the importing project tree, but an installed compiler can now resolve `import "std/x.mc"` through `--std-dir=<dir>` or `MC_PATH` without vendoring the repository layout. The installed launcher self-locates its private compiler/helper under the install prefix, and the install-layout gate proves the fallback from an external app directory while also proving absolute explicit imports outside the default sandbox still fail closed. This closes the compiler/std install-layout part of the former repo-coupling gap; editor packaging/defaults remain tracked by the IDE item. | `src/loader.zig` `LoadOptions.std_dir` / `mc_path` and installed-root resolution; `src/main.zig` `MC_PATH` parsing and help text; `tools/toolchain/mcc-launcher.sh`; `tools/toolchain/install-layout-test.sh`; `build/sweep.zig` `install-layout-test`; `build/tiers.zig` m0/fast dependencies; `tools/dev-gates.py`; `tools/toolchain/dev-gates-test.py`; `tools/toolchain/mcc-cli-test.sh`; `zig build install-layout-test mcc-cli-test dev-gates-test readiness-ledger-test`; `git diff --check`. |
+| Default import sandbox is implemented and gated | Explicit relative and absolute imports are now canonicalized under the root-file sandbox. Imports that resolve outside the sandbox produce `E_IMPORT_OUTSIDE_SANDBOX` before the file is read into the combined source, and installed `--std-dir`/`MC_PATH` roots are searched only after project-root lookup without relaxing explicit relative or absolute imports. This closes the default root-tree import-jail slice; an explicit user-selectable `--sandbox-root` remains future CLI policy. | `src/loader.zig` `defaultSandboxRoot`, `pathWithin`, `resolveImportPath`, and `E_IMPORT_OUTSIDE_SANDBOX`; `tests/spec/import_outside_sandbox_reject.mc`; `tools/toolchain/diagnostics-test.sh` absolute outside-import rejection; `tools/toolchain/install-layout-test.sh` installed-root fallback plus outside-sandbox rejection; `docs/diagnostics.md` `E_IMPORT_OUTSIDE_SANDBOX`; `build/tiers.zig` m0 `diagnostics-test` / `install-layout-test`; `zig build diagnostics-test install-layout-test readiness-ledger-test`; `git diff --check`. |
 | Standard-library API reference is generated and gated | The stdlib API reference is generated from `std/**/*.mc` public declarations and now reflects the current public type/function surface, including recently public `StackGuard`, `SpinLock`, `Guard`, and `IrqGuard` declarations. The generator records modules, public functions, public constants, public type declarations, and local types referenced by public declarations; `std-api-docs-test` is wired into `m0`, `fast`, and `c0` so stdlib API drift fails closed. | `docs/std-api.md`; `tools/toolchain/std-api-docs.py`; `build/qemu.zig` `std-api-docs-test`; `build/tiers.zig` m0/fast/c0 dependencies; `python3 tools/toolchain/std-api-docs.py --check`; `zig build std-api-docs-test readiness-ledger-test`; `git diff --check`. |
 | Diagnostic reference and explain surface are generated and gated | `docs/diagnostics.md` is generated from compiler-emitted `E_*` diagnostics and now reflects current source locations and message examples after the latest sema/MIR/move-checker changes. `mcc explain E_CODE` serves the same embedded reference at runtime, and diagnostics reference gates are wired into local tier and dev-gate routing so stale diagnostic docs fail closed. | `docs/diagnostics.md`; `tools/toolchain/diagnostics-reference.py`; `src/main.zig` `mcc explain`; `build/compiler.zig` embedded diagnostics reference; `build/qemu.zig` `diagnostics-reference-test`; `build/tiers.zig` m0/fast/c0 dependencies; `tools/dev-gates.py`; `python3 tools/toolchain/diagnostics-reference.py --check`; `zig build diagnostics-reference-test readiness-ledger-test`; `git diff --check`. |
 | Bad-corpus diagnostic wording is golden-gated | Reject fixtures in `tests/c_emit/bad`, `demo/bad`, `kernel/bad`, selected async check-mode cases, and selected LLVM backend failures now lock the complete first primary diagnostic line, including path, span, code, and non-empty wording. The gate is wired into `m0`, `fast`, `c0`, and dev-gate routing, so misleading wording drift requires an intentional golden update. | `tools/toolchain/bad-diagnostics-test.py`; `tests/diagnostics/bad-golden.tsv`; `build/sweep.zig` `bad-diagnostics-test`; `build/tiers.zig` m0/fast/c0 dependencies; `tools/dev-gates.py`; `zig build bad-diagnostics-test readiness-ledger-test`; `git diff --check`. |
@@ -1580,12 +1581,15 @@ reproducible with commands; clean secrets hygiene; compatible licenses).
   committed SHA-256 values for both Linux architectures, and asserts the selected
   LLVM tools resolve to version 18. Apt package microversions still follow Ubuntu
   24.04 security repositories, so full offline distro mirroring is not claimed.
-- **[P1] Imports have no project-root jail.** Absolute (`import "/etc/passwd";`) or
-  `../` paths resolve and read with no containment (`src/loader.zig:201-234`, read
-  at :140). Building a hostile package lets `mcc` read any file the process can —
-  bounded (content must lex/parse to go further), but diagnostics that echo source
-  make it an information oracle. Fix: default-jail imports to the root file's tree;
-  reject absolute imports unless whitelisted. Effort M. **[inspected]**
+- **[P1] Imports have no project-root jail.** **fixed for the default root-tree
+  policy**: `src/loader.zig` derives an import sandbox from the root file/cwd,
+  canonicalizes explicit relative and absolute imports, rejects paths outside the
+  sandbox with `E_IMPORT_OUTSIDE_SANDBOX`, and only applies installed
+  `--std-dir`/`MC_PATH` roots to rooted imports after project lookup. The
+  `diagnostics-test`, spec reject fixture, and `install-layout-test` gate both
+  the diagnostic and the fact that installed roots do not loosen explicit import
+  containment. A user-selectable `--sandbox-root` remains future policy rather
+  than a current guarantee.
 - **[P2] CI actions pinned by moving tag** (`actions/checkout@v4`,
   `mlugg/setup-zig@v2`) — **fixed for current workflows**: all non-local
   `uses:` references in `.github/workflows/*.yml` are pinned to 40-character commit
@@ -1709,7 +1713,8 @@ per §Method.
 | STABILITY.md + CHANGELOG | repo files | S |
 | Package + publish `.vsix`; generic LSP setup docs; LSP debounce/cancel | lsp-test extension leg | M |
 | macOS CI leg (build + `fast` + fmt/lsp) | ci.yml | S-M |
-| Import jail (`--sandbox-root`, default root-tree); `#line` path remapping | reject fixture; reproducible-build assert | M |
+| Default root-tree import jail | reject fixture + installed-layout containment gate | Done; `E_IMPORT_OUTSIDE_SANDBOX` is gated by `diagnostics-test`, spec ownership, and `install-layout-test`. |
+| Explicit `--sandbox-root`; `#line` path remapping | CLI/reproducible-build assert | M |
 
 ### Phase 4 — Architecture (the compiler a team can build on)
 
