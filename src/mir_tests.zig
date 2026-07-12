@@ -23,6 +23,13 @@ fn functionByName(module: mir.Module, name: []const u8) ?mir.Function {
     return null;
 }
 
+fn functionByNameMut(module: *mir.Module, name: []const u8) ?*mir.Function {
+    for (module.functions) |*function| {
+        if (std.mem.eql(u8, function.name, name)) return function;
+    }
+    return null;
+}
+
 fn functionHasInstruction(function: mir.Function, kind: mir.Instruction.Kind, detail: []const u8) bool {
     for (function.blocks) |block| {
         for (block.instructions) |instruction| {
@@ -123,6 +130,8 @@ test "MIR owns target types for bind Result and tagged-union constructors" {
         \\enum E { bad }
         \\struct Slot { cb: closure(u32) -> u32, result: Result<u32, E> }
         \\union Token { number: i64, eof, ok: u32 }
+        \\union Event { mode: E }
+        \\global default_error: E = .bad;
         \\fn add(env: *mut u32, value: u32) -> u32 { return env.* + value; }
         \\fn consume(value: Result<u32, E>) -> u32 { return 0; }
         \\fn make_bind(env: *mut u32) -> closure(u32) -> u32 { return bind(env, add); }
@@ -134,6 +143,10 @@ test "MIR owns target types for bind Result and tagged-union constructors" {
         \\fn make_number(value: i64) -> Token { return number(value); }
         \\fn make_eof() -> Token { return eof(); }
         \\fn make_union_ok(value: u32) -> Token { return ok(value); }
+        \\fn make_enum() -> E { return .bad; }
+        \\fn compare_enum(value: E) -> bool { return .bad == value; }
+        \\fn cast_enum() -> E { return .bad as E; }
+        \\fn make_event() -> Event { return mode(.bad); }
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_target_types.mc", source);
     defer reporter.deinit();
@@ -160,6 +173,7 @@ test "MIR owns target types for bind Result and tagged-union constructors" {
 
     const err_fn = functionByName(typed_mir, "make_err").?;
     try std.testing.expectEqual(mir.TargetTypeKind.result_err, err_fn.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, err_fn.target_type_facts[1].kind);
     const arg_fn = functionByName(typed_mir, "pass_ok").?;
     try std.testing.expectEqual(mir.TargetTypeKind.result_ok, arg_fn.target_type_facts[0].kind);
     const slot_fn = functionByName(typed_mir, "make_slot").?;
@@ -169,8 +183,15 @@ test "MIR owns target types for bind Result and tagged-union constructors" {
     try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "make_number").?.target_type_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, functionByName(typed_mir, "make_eof").?.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, functionByName(typed_mir, "make_union_ok").?.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "make_enum").?.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "compare_enum").?.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "cast_enum").?.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "default_error").?.target_type_facts[0].kind);
+    const event_fn = functionByName(typed_mir, "make_event").?;
+    try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, event_fn.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, event_fn.target_type_facts[1].kind);
 
-    try duplicateTargetTypeFact(&typed_mir.functions[3], std.testing.allocator);
+    try duplicateTargetTypeFact(functionByNameMut(&typed_mir, "make_ok").?, std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 }
 

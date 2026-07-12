@@ -113,6 +113,21 @@ test "lower-c rejects missing tagged-union target type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_union_target_type_facts.mc", .{}, false, null));
 }
 
+test "lower-c rejects missing enum-literal target type facts" {
+    const source =
+        \\enum Mode: u8 { read = 1, write = 2 }
+        \\fn make() -> Mode { return .read; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_missing_enum_target_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "make");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_enum_target_type_facts.mc", .{}, false, null));
+}
+
 fn retargetCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.CallTargetKind) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -9446,6 +9461,7 @@ test "lower-c emits target-typed enum literals" {
         \\}
         \\
         \\extern fn sink(mode: Mode) -> u32;
+        \\global global_mode: Mode = .read;
         \\
         \\fn default_mode() -> Mode {
         \\    return .read;
@@ -9459,6 +9475,8 @@ test "lower-c emits target-typed enum literals" {
         \\fn pass_mode() -> u32 {
         \\    return sink(.read);
         \\}
+        \\fn is_read(mode: Mode) -> bool { return mode == .read; }
+        \\fn cast_mode() -> Mode { return .write as Mode; }
     ;
 
     var output: std.ArrayList(u8) = .empty;
@@ -9469,9 +9487,12 @@ test "lower-c emits target-typed enum literals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode_read = 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode_write = 2") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t sink(Mode mode);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "global_mode = Mode_read") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return Mode_read;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode mode = Mode_write;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode mc_tmp0 = Mode_read;\n    return sink(mc_tmp0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mode == Mode_read") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Mode)Mode_write);") != null);
 }
 
 test "lower-c emits optional pointer if-let" {

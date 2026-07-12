@@ -639,6 +639,9 @@ const CEmitter = struct {
     }
 
     fn emitGlobal(self: *CEmitter, global: ast.GlobalDecl) !void {
+        const previous_function = self.current_function;
+        self.current_function = global.name.text;
+        defer self.current_function = previous_function;
         try emitGlobalDecl(self.globalEmitContext(), global);
     }
 
@@ -3674,7 +3677,7 @@ const CEmitter = struct {
 
     fn emitCastExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(node.ty.*, .typedef_name)});
-        try self.emitExpr(node.value.*, locals);
+        try self.emitExprWithTarget(node.value.*, locals, node.ty.*);
         try self.out.appendSlice(self.allocator, ")");
     }
 
@@ -4161,7 +4164,7 @@ const CEmitter = struct {
             .array_literal, .struct_literal => try self.emitAggregateLiteralWithTarget(expr, locals, target_ty),
             .binary, .unary => try self.emitArithmeticExprWithTarget(expr, locals, target_ty),
             .call => |node| try self.emitTargetCallExpr(node, locals, target_ty, expr),
-            .enum_literal => |literal| try self.emitEnumLiteralWithTarget(literal, target_ty),
+            .enum_literal => |literal| try self.emitEnumLiteralWithTarget(literal, expr.span),
             .string_literal => |literal| try self.emitStringLiteralWithTarget(literal, target_ty),
             .grouped => |inner| try self.emitGroupedExprWithTarget(inner.*, locals, target_ty),
             .address_of => try self.emitAddressOfExprWithTarget(expr, locals, target_ty),
@@ -4311,8 +4314,9 @@ const CEmitter = struct {
         return true;
     }
 
-    fn emitEnumLiteralWithTarget(self: *CEmitter, literal: ast.Ident, target_ty: ?ast.TypeExpr) anyerror!void {
-        const enum_name = if (target_ty) |ty| self.enumNameForType(ty) else null;
+    fn emitEnumLiteralWithTarget(self: *CEmitter, literal: ast.Ident, span: ast.Span) anyerror!void {
+        const fact = self.mirTargetTypeFactAt(.enum_literal, span) orelse return error.UnsupportedCEmission;
+        const enum_name = self.enumNameForType(fact.target_ty);
         if (enum_name) |name| {
             try self.out.print(self.allocator, "{s}_{s}", .{ name, literal.text });
             return;

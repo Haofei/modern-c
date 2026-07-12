@@ -720,6 +720,9 @@ const LlvmEmitter = struct {
     }
 
     fn emitGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
+        const previous_function = self.current_function;
+        self.current_function = global.name.text;
+        defer self.current_function = previous_function;
         const ty = global.ty orelse return error.UnsupportedLlvmEmission;
         const llvm_ty = try self.llvmType(ty);
         // `extern global NAME: T;` — a declaration only; storage lives in another unit.
@@ -748,7 +751,13 @@ const LlvmEmitter = struct {
         }
         if (self.enumDeclForType(ty)) |enum_decl| {
             return switch (expr.kind) {
-                .enum_literal => |literal| try self.enumCaseValueByName(enum_decl, literal.text),
+                .enum_literal => |literal| if (self.mirTargetTypeFactAt(.enum_literal, expr.span)) |fact|
+                    if (self.enumDeclForType(fact.target_ty)) |fact_enum|
+                        try self.enumCaseValueByName(fact_enum, literal.text)
+                    else
+                        error.UnsupportedLlvmEmission
+                else
+                    error.UnsupportedLlvmEmission,
                 .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
                 else => try self.emitGlobalInitializer(expr, enumReprType(enum_decl)),
             };
@@ -1328,8 +1337,11 @@ const LlvmEmitter = struct {
             .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(expected_ty)),
             .bool_literal => |value| if (value) "1" else "0",
             .null_literal => "null",
-            .enum_literal => |literal| if (self.enumDeclForType(expected_ty)) |enum_decl|
-                try self.enumCaseValueByName(enum_decl, literal.text)
+            .enum_literal => |literal| if (self.mirTargetTypeFactAt(.enum_literal, expr.span)) |fact|
+                if (self.enumDeclForType(fact.target_ty)) |enum_decl|
+                    try self.enumCaseValueByName(enum_decl, literal.text)
+                else
+                    error.UnsupportedLlvmEmission
             else
                 error.UnsupportedLlvmEmission,
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),

@@ -151,6 +151,41 @@ test "LLVM rejects missing tagged-union target type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_union_target_type_facts.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM rejects missing enum-literal target type facts" {
+    const source =
+        \\enum Mode: u8 { read = 1, write = 2 }
+        \\fn make() -> Mode { return .read; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_missing_enum_target_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "make");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_enum_target_type_facts.mc", .{}, false, .riscv64, null));
+}
+
+test "LLVM consumes enum-literal target type facts across contexts" {
+    const source =
+        \\enum Mode: u8 { read = 1, write = 2 }
+        \\extern fn sink(mode: Mode) -> Mode;
+        \\global global_mode: Mode = .read;
+        \\fn make() -> Mode { return .read; }
+        \\fn pass() -> Mode { return sink(.write); }
+        \\fn compare(mode: Mode) -> bool { return mode == .read; }
+        \\fn cast_mode() -> Mode { return .write as Mode; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_enum_target_type_facts.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "@global_mode = internal global i8 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i8 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "@sink(i8 2)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "icmp eq i8") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i8 2") != null);
+}
+
 test "LLVM consumes tagged-union target type facts without function-name collisions" {
     const source =
         \\union Token { number: i64, eof, ok: u32 }

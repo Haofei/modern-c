@@ -4436,6 +4436,7 @@ const FunctionBuilder = struct {
         defer {
             if (counts_for_semantic_depth) self.semantic_expr_depth -= 1;
         }
+        try self.addTargetTypeFactForExpr(expr);
 
         switch (expr.kind) {
             // The async transform eliminates every `await_expr` pre-sema.
@@ -4571,9 +4572,11 @@ const FunctionBuilder = struct {
                 }
                 try self.addAggregateRangeFactForUncheckedExpr("binary_operand", self.rangeFactTypeForExpr(node.left.*), node.left.*);
                 try self.addAggregateRangeFactForUncheckedExpr("binary_operand", self.rangeFactTypeForExpr(node.right.*), node.right.*);
-                try self.buildExpr(node.left.*);
+                const left_target_ty = if (exprContainsEnumLiteral(node.left.*)) self.typeExprForExpr(node.right.*) else null;
+                const right_target_ty = if (exprContainsEnumLiteral(node.right.*)) self.typeExprForExpr(node.left.*) else null;
+                try self.buildExprWithTargetType(node.left.*, left_target_ty);
                 try self.addRepresentationUseForExpr("binary_operand", node.left.*);
-                try self.buildExpr(node.right.*);
+                try self.buildExprWithTargetType(node.right.*, right_target_ty);
                 try self.addRepresentationUseForExpr("binary_operand", node.right.*);
             },
             .cast => |node| {
@@ -4595,10 +4598,15 @@ const FunctionBuilder = struct {
                 if (self.semantic_expr_depth == 1) {
                     try self.addAggregateRangeFactForUncheckedExpr(self.assignment_target orelse "value", valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases), expr);
                 }
+                const previous_target_ty = self.assignment_target_ty;
+                const previous_target_type_expr = self.assignment_target_type_expr;
+                self.assignment_target_ty = cast_target;
+                self.assignment_target_type_expr = node.ty.*;
                 try self.buildExpr(node.value.*);
+                self.assignment_target_ty = previous_target_ty;
+                self.assignment_target_type_expr = previous_target_type_expr;
             },
             .call => |node| {
-                try self.addTargetTypeFactForCall(node, expr.span);
                 if (self.constGetCallType(node)) |const_get_ty| {
                     try self.addInstr(.index, "const_get", const_get_ty, expr.span);
                     try self.addInstr(.call_target, @tagName(CallTargetKind.const_get), const_get_ty, expr.span);
@@ -4797,6 +4805,10 @@ const FunctionBuilder = struct {
                 }
                 try self.buildExpr(node.callee.*);
                 for (node.args, 0..) |arg, index| {
+                    if (self.targetTypeForTargetTypedCallArg(node, index)) |arg_ty| {
+                        try self.buildExprWithTargetType(arg, arg_ty);
+                        continue;
+                    }
                     if (self.summaries.get(callee_name)) |summary| {
                         if (index < summary.params.len) {
                             const param_ty = valueTypeFromTypeAlias(summary.params[index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
@@ -5115,27 +5127,42 @@ const FunctionBuilder = struct {
         });
     }
 
-    fn addTargetTypeFactForCall(self: *FunctionBuilder, call: anytype, span: ast.Span) !void {
+    fn addTargetTypeFactForExpr(self: *FunctionBuilder, expr: ast.Expr) !void {
         const target_ty = self.assignment_target_type_expr orelse return;
         const result_ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
-        const kind: TargetTypeKind = if (isBindCallNode(call))
-            .bind
-        else if (result_ty == .result)
-            if (resultConstructorCallTag(call)) |tag|
-                if (std.mem.eql(u8, tag, "ok")) .result_ok else .result_err
+        const kind: TargetTypeKind = switch (expr.kind) {
+            .enum_literal => if (result_ty == .closed_enum or result_ty == .open_enum) .enum_literal else return,
+            .call => |call| if (isBindCallNode(call))
+                .bind
+            else if (result_ty == .result)
+                if (resultConstructorCallTag(call)) |tag|
+                    if (std.mem.eql(u8, tag, "ok")) .result_ok else .result_err
+                else
+                    return
+            else if (self.isTargetTypedUnionConstructor(call, target_ty))
+                .tagged_union
             else
-                return
-        else if (self.isTargetTypedUnionConstructor(call, target_ty))
-            .tagged_union
-        else
-            return;
-        try self.addInstr(.target_type, @tagName(kind), result_ty, span);
+                return,
+            else => return,
+        };
+        try self.addInstr(.target_type, @tagName(kind), result_ty, expr.span);
         try self.target_type_facts.append(self.allocator, .{
             .kind = kind,
             .target_ty = target_ty,
             .result_ty = result_ty,
-            .source = .{ .line = span.line, .column = span.column },
+            .source = .{ .line = expr.span.line, .column = expr.span.column },
         });
+    }
+
+    fn buildExprWithTargetType(self: *FunctionBuilder, expr: ast.Expr, target_ty: ?ast.TypeExpr) !void {
+        const ty = target_ty orelse return self.buildExpr(expr);
+        const previous_target_ty = self.assignment_target_ty;
+        const previous_target_type_expr = self.assignment_target_type_expr;
+        self.assignment_target_ty = valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        self.assignment_target_type_expr = ty;
+        try self.buildExpr(expr);
+        self.assignment_target_ty = previous_target_ty;
+        self.assignment_target_type_expr = previous_target_type_expr;
     }
 
     fn isTargetTypedUnionConstructor(self: *FunctionBuilder, call: anytype, target_ty: ast.TypeExpr) bool {
@@ -5150,6 +5177,24 @@ const FunctionBuilder = struct {
             return call.args.len == expected_args;
         }
         return false;
+    }
+
+    fn targetTypeForTargetTypedCallArg(self: *FunctionBuilder, call: anytype, index: usize) ?ast.TypeExpr {
+        if (index != 0) return null;
+        const target_ty = self.assignment_target_type_expr orelse return null;
+        const result_ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        if (result_ty == .result) {
+            const tag = resultConstructorCallTag(call) orelse return null;
+            return resultPayloadTypeExprAlias(target_ty, tag, self.aliases);
+        }
+        if (!self.isTargetTypedUnionConstructor(call, target_ty)) return null;
+        const name = calleeIdentName(call.callee.*) orelse return null;
+        const union_name = unionTypeNameAlias(target_ty, self.aliases) orelse return null;
+        const info = self.unions.get(union_name) orelse return null;
+        for (info.cases) |case| {
+            if (std.mem.eql(u8, case.name.text, name)) return case.ty;
+        }
+        return null;
     }
 
     const SemanticEscapeCallTarget = struct {
@@ -7621,6 +7666,14 @@ fn unionCasePayloadType(info: UnionSummary, case_name: []const u8) ?ast.TypeExpr
         if (std.mem.eql(u8, case.name.text, case_name)) return case.ty;
     }
     return null;
+}
+
+fn exprContainsEnumLiteral(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .enum_literal => true,
+        .grouped => |inner| exprContainsEnumLiteral(inner.*),
+        else => false,
+    };
 }
 
 fn switchArmBodiesHandleResultLocal(self: *FunctionBuilder, name: []const u8, node: ast.Switch) bool {
