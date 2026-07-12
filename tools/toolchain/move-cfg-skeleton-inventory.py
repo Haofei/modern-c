@@ -9,6 +9,29 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+CFG_CONSTRUCTION_HELPERS: dict[str, dict[str, int]] = {
+    "linearMoveCfg": {
+        "cfg.addBlock(": 3,
+        "cfg.addEdge(": 2,
+    },
+    "exitMoveCfg": {
+        "cfg.addBlock(": 2,
+        "cfg.addEdge(": 1,
+    },
+    "shortCircuitMoveCfg": {
+        "cfg.addBlock(": 3,
+        "cfg.addEdge(": 3,
+    },
+    "twoArmMoveCfg": {
+        "cfg.addBlock(": 4,
+        "cfg.addEdge(": 4,
+    },
+    "multiArmMoveCfg": {
+        "cfg.addBlock(": 3,
+        "cfg.addEdge(": 2,
+    },
+}
+
 ANCHORS: dict[str, list[str]] = {
     "src/sema_model.zig": [
         "pub const MoveCfgBlockKind = enum",
@@ -55,6 +78,7 @@ ANCHORS: dict[str, list[str]] = {
         "Move checker bypass CFG construction is centralized",
         "Move checker two-arm branch CFG construction is centralized",
         "Move checker multi-arm branch CFG construction is centralized",
+        "Move checker CFG construction inventory is exact",
         "Move checker return and try exits use CFG worklist state",
         "Move checker loop early exits use CFG worklist state",
         "Move checker function fallthrough exits use CFG worklist state",
@@ -62,6 +86,57 @@ ANCHORS: dict[str, list[str]] = {
         "move-cfg-skeleton-inventory.py",
     ],
 }
+
+
+def function_body(text: str, name: str) -> str | None:
+    signature = f"fn {name}"
+    start = text.find(signature)
+    if start < 0:
+        return None
+    brace = text.find("{", start)
+    if brace < 0:
+        return None
+
+    depth = 0
+    for index in range(brace, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[brace + 1 : index]
+    return None
+
+
+def cfg_construction_errors(text: str) -> list[str]:
+    errors: list[str] = []
+    helper_total = {"cfg.addBlock(": 0, "cfg.addEdge(": 0}
+
+    for helper, expected_counts in sorted(CFG_CONSTRUCTION_HELPERS.items()):
+        body = function_body(text, helper)
+        if body is None:
+            errors.append(f"src/sema_move.zig: missing function body for {helper}")
+            continue
+        for pattern, expected in sorted(expected_counts.items()):
+            actual = body.count(pattern)
+            helper_total[pattern] += actual
+            if actual != expected:
+                errors.append(
+                    "src/sema_move.zig: "
+                    f"{helper} has {actual} occurrences of {pattern!r}, expected {expected}"
+                )
+
+    for pattern, helper_count in sorted(helper_total.items()):
+        total = text.count(pattern)
+        if total != helper_count:
+            outside = total - helper_count
+            errors.append(
+                "src/sema_move.zig: "
+                f"{outside} occurrences of {pattern!r} outside centralized CFG helpers"
+            )
+
+    return errors
 
 
 def main() -> int:
@@ -80,6 +155,11 @@ def main() -> int:
             checked += 1
             if anchor not in text:
                 missing.append(f"{relative}: missing anchor {anchor!r}")
+
+        if relative == "src/sema_move.zig":
+            cfg_errors = cfg_construction_errors(text)
+            checked += len(CFG_CONSTRUCTION_HELPERS) * 2 + 2
+            missing.extend(cfg_errors)
 
     if missing:
         print("FAIL: move CFG skeleton inventory drift", file=sys.stderr)
