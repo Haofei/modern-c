@@ -686,6 +686,41 @@ test "MIR owns value reflection call target facts" {
     try mir.validateCallTargetFactsForLowering(typed_mir);
 }
 
+test "MIR owns byte-view call target facts" {
+    const source =
+        \\fn byte_view(value: u32) -> []const u8 {
+        \\    return mem.as_bytes(&value);
+        \\}
+        \\fn byte_equal(left: []const u8, right: []const u8) -> bool {
+        \\    return mem.bytes_equal(left, right);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_byte_view_call_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const view = functionByName(typed_mir, "byte_view").?;
+    try std.testing.expectEqual(@as(usize, 1), view.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.byte_view_as_bytes, view.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("u8", view.call_target_facts[0].result_ty.name());
+
+    const equal = functionByName(typed_mir, "byte_equal").?;
+    try std.testing.expectEqual(@as(usize, 1), equal.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.byte_view_equal, equal.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("bool", equal.call_target_facts[0].result_ty.name());
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+}
+
 test "MIR rejects duplicate call target facts" {
     const source =
         \\fn checked(xs: []const u32) -> Result<u32, Overflow> {

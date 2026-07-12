@@ -45,6 +45,8 @@ pub const Context = struct {
 
 pub fn emitByteViewCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     const kind = byteViewCallKind(call.callee.*) orelse return false;
+    const expected_fact = mir.byteViewCallTargetKind(call) orelse return error.UnsupportedCEmission;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_fact) return error.UnsupportedCEmission;
     if (call.type_args.len != 0) return error.UnsupportedCEmission;
     switch (kind) {
         .as_bytes => {

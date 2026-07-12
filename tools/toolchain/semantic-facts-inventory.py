@@ -64,6 +64,10 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "mir.reflectionCallTargetKind(call)",
             "ctx.mir_call_target_kind(ctx.type_ctx, call.callee.*.span) != expected_fact",
         ],
+        "src/lower_c_memory.zig": [
+            "mir.byteViewCallTargetKind(call)",
+            "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_fact",
+        ],
     },
     "c-bounds-range-consumption": {
         "docs/typed-semantic-facts.md": ["| `c-bounds-range-consumption` |"],
@@ -756,6 +760,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mir.reflectionCallTargetKind(call)": 1,
         "ctx.mir_call_target_kind(ctx.type_ctx, call.callee.*.span) != expected_fact": 1,
     },
+    "src/lower_c_memory.zig": {
+        "mir.byteViewCallTargetKind(call)": 1,
+        "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_fact": 1,
+    },
     "src/lower_llvm.zig": {
         "try mir.validateIntegerFactsForLowering(module_mir.*);": 1,
         "fn requireMirBoundsFact": 1,
@@ -787,6 +795,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "maybeUninitCallMemberOp(call.callee.*)": 0,
         "reduceCallKind(call.callee.*)": 0,
         "mir.reflectionCallTargetKind(call)": 2,
+        "mir.byteViewCallTargetKind(call)": 2,
     },
     "tests/spec/no_implicit_conversion.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 9,

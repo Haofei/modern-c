@@ -249,6 +249,8 @@ pub const CallTargetKind = enum {
     reflection_field_offset,
     reflection_bit_offset,
     reflection_repr,
+    byte_view_as_bytes,
+    byte_view_equal,
 };
 
 pub const CallTargetFact = struct {

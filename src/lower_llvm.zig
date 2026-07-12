@@ -6474,7 +6474,11 @@ const LlvmEmitter = struct {
             const value = try self.emitExpr(info.base, info.enum_ty);
             return try self.castValue(value, info.enum_ty, info.repr_ty);
         }
-        if (byteViewCallKind(call.callee.*)) |kind| return try self.emitByteViewCall(call, kind);
+        if (byteViewCallKind(call.callee.*)) |kind| {
+            const expected_fact = mir.byteViewCallTargetKind(call) orelse return error.UnsupportedLlvmEmission;
+            if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return error.UnsupportedLlvmEmission;
+            return try self.emitByteViewCall(call, kind);
+        }
         if (resultConstructorCallTag(call)) |tag| return try self.emitResultConstructorValue(call, expected_ty, tag);
         if (self.domainResidueCallInfo(call)) |info| {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
@@ -8435,7 +8439,11 @@ const LlvmEmitter = struct {
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
         if (self.domainOpCallInfo(call)) |info| return info.return_ty;
         if (self.reduceCallInfo(call)) |info| return info.return_ty;
-        if (byteViewCallReturnType(call)) |ty| return ty;
+        if (byteViewCallReturnType(call)) |ty| {
+            const expected_fact = mir.byteViewCallTargetKind(call) orelse return null;
+            if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return null;
+            return ty;
+        }
         if (mmioMapCallPayloadType(call)) |ty| {
             const child = self.scratch.allocator().create(ast.TypeExpr) catch return null;
             child.* = ty;

@@ -23,6 +23,7 @@ const contractName = ast_query.contractName;
 const isSatPreservingBinary = ast_query.isSatPreservingBinary;
 const isWrapPreservingBinary = ast_query.isWrapPreservingBinary;
 const reduceCallKind = ast_query.reduceCallKind;
+const byteViewCallKind = ast_query.byteViewCallKind;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
 const memberCallee = ast_query.memberCallee;
@@ -4488,11 +4489,16 @@ const FunctionBuilder = struct {
                 // so leave it `.unknown` rather than mis-binding to `summaries[method_name]`.
                 const is_dyn_dispatch = self.isDynDispatchMember(node.callee.*);
                 const reflection_target = reflectionCallTargetKind(node);
+                const byte_view_target = byteViewCallTargetKind(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
                 else if (reflection_target != null)
                     .{ .integer = "usize" }
-                else if (reduceCallKind(node.callee.*) != null)
+                else if (byte_view_target) |kind| switch (kind) {
+                    .byte_view_as_bytes => .{ .slice = "u8" },
+                    .byte_view_equal => .bool,
+                    else => unreachable,
+                } else if (reduceCallKind(node.callee.*) != null)
                     self.exprType(expr)
                 else if (self.atomicCallValueType(node)) |ty|
                     ty
@@ -4563,6 +4569,15 @@ const FunctionBuilder = struct {
                     const reflection_ty: ValueType = .{ .integer = "usize" };
                     try self.addInstr(.call_target, @tagName(fact_kind), reflection_ty, expr.span);
                     try self.addCallTargetFact(fact_kind, reflection_ty, expr.span);
+                }
+                if (byte_view_target) |fact_kind| {
+                    const byte_view_ty: ValueType = switch (fact_kind) {
+                        .byte_view_as_bytes => .{ .slice = "u8" },
+                        .byte_view_equal => .bool,
+                        else => unreachable,
+                    };
+                    try self.addInstr(.call_target, @tagName(fact_kind), byte_view_ty, expr.span);
+                    try self.addCallTargetFact(fact_kind, byte_view_ty, expr.span);
                 }
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {
                     try self.addInstr(.unsafe_check, callee_name, .unknown, expr.span);
@@ -7619,6 +7634,15 @@ pub fn reflectionCallTargetKind(call: anytype) ?CallTargetKind {
         .bit_offset => .reflection_bit_offset,
         .repr => .reflection_repr,
         .field_type => unreachable,
+    };
+}
+
+pub fn byteViewCallTargetKind(call: anytype) ?CallTargetKind {
+    const kind = byteViewCallKind(call.callee.*) orelse return null;
+    if (call.type_args.len != 0) return null;
+    return switch (kind) {
+        .as_bytes => if (call.args.len == 1) .byte_view_as_bytes else null,
+        .bytes_equal => if (call.args.len == 2) .byte_view_equal else null,
     };
 }
 
