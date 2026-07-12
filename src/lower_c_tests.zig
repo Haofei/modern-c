@@ -73,6 +73,31 @@ fn clearCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8) !v
     return error.TestUnexpectedResult;
 }
 
+fn clearTargetTypeFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        if (function.target_type_facts.len != 0) module_mir.allocator.free(function.target_type_facts);
+        function.target_type_facts = try module_mir.allocator.alloc(mir.TargetTypeFact, 0);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "lower-c rejects prebuilt MIR with missing target type facts" {
+    const source =
+        \\enum E { bad }
+        \\fn make(value: u32) -> Result<u32, E> { return ok(value); }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_missing_target_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "make");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_target_type_facts.mc", .{}, false, null));
+}
+
 fn retargetCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.CallTargetKind) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;

@@ -109,6 +109,63 @@ fn duplicateCallTargetFact(function: *mir.Function, allocator: std.mem.Allocator
     function.call_target_facts = facts;
 }
 
+fn duplicateTargetTypeFact(function: *mir.Function, allocator: std.mem.Allocator) !void {
+    if (function.target_type_facts.len == 0) return error.TestUnexpectedResult;
+    const facts = try allocator.alloc(mir.TargetTypeFact, function.target_type_facts.len + 1);
+    @memcpy(facts[0..function.target_type_facts.len], function.target_type_facts);
+    facts[function.target_type_facts.len] = function.target_type_facts[0];
+    allocator.free(function.target_type_facts);
+    function.target_type_facts = facts;
+}
+
+test "MIR owns target types for bind and Result constructors" {
+    const source =
+        \\enum E { bad }
+        \\struct Slot { cb: closure(u32) -> u32, result: Result<u32, E> }
+        \\fn add(env: *mut u32, value: u32) -> u32 { return env.* + value; }
+        \\fn consume(value: Result<u32, E>) -> u32 { return 0; }
+        \\fn make_bind(env: *mut u32) -> closure(u32) -> u32 { return bind(env, add); }
+        \\fn make_ok(value: u32) -> Result<u32, E> { return ok(value); }
+        \\fn make_err() -> Result<u32, E> { return err(.bad); }
+        \\fn pass_ok(value: u32) -> u32 { return consume(ok(value)); }
+        \\fn make_slot(env: *mut u32, value: u32) -> Slot { return .{ .cb = bind(env, add), .result = ok(value) }; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_target_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+
+    const bind_fn = functionByName(typed_mir, "make_bind").?;
+    try std.testing.expectEqual(@as(usize, 1), bind_fn.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.bind, bind_fn.target_type_facts[0].kind);
+    try std.testing.expect(bind_fn.target_type_facts[0].target_ty.kind == .closure_type);
+
+    const ok_fn = functionByName(typed_mir, "make_ok").?;
+    try std.testing.expectEqual(mir.TargetTypeKind.result_ok, ok_fn.target_type_facts[0].kind);
+    try std.testing.expect(ok_fn.target_type_facts[0].target_ty.kind == .generic);
+    try std.testing.expectEqualStrings("Result", ok_fn.target_type_facts[0].target_ty.kind.generic.base.text);
+
+    const err_fn = functionByName(typed_mir, "make_err").?;
+    try std.testing.expectEqual(mir.TargetTypeKind.result_err, err_fn.target_type_facts[0].kind);
+    const arg_fn = functionByName(typed_mir, "pass_ok").?;
+    try std.testing.expectEqual(mir.TargetTypeKind.result_ok, arg_fn.target_type_facts[0].kind);
+    const slot_fn = functionByName(typed_mir, "make_slot").?;
+    try std.testing.expectEqual(@as(usize, 2), slot_fn.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.bind, slot_fn.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.result_ok, slot_fn.target_type_facts[1].kind);
+
+    try duplicateTargetTypeFact(&typed_mir.functions[3], std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
+}
+
 fn valueTypeName(ty: mir.ValueType) []const u8 {
     return switch (ty) {
         .void => "void",

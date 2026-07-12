@@ -89,6 +89,7 @@ pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast.Module, t
     try mir.validateRepresentationFactsForLowering(typed_mir.*);
     try mir.validateIntegerFactsForLowering(typed_mir.*);
     try mir.validateCallTargetFactsForLowering(typed_mir.*);
+    try mir.validateTargetTypeFactsForLowering(typed_mir.*);
     const profile_marker = switch (profile) {
         .kernel => "/* mc-profile: kernel (freestanding) */\n",
         .hosted => "/* mc-profile: hosted (links libc + -lm) */\n",

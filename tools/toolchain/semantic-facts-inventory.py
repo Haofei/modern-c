@@ -411,10 +411,13 @@ INTEGER_DEFAULT_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
     "src/mir_model.zig": [
         "integer_literal_conversion",
         "pub const IntegerFact = struct",
+        "pub const TargetTypeFact = struct",
         "integer_facts: []IntegerFact",
+        "target_type_facts: []TargetTypeFact",
     ],
     "src/mir.zig": [
         '"mir integer_fact',
+        '"mir target_type_fact',
         "fn addIntegerLiteralFact(",
         "pub fn validateIntegerFactsForLowering(",
         "fn functionHasMatchingIntegerFact(",
@@ -700,6 +703,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_c.zig": {
         "try mir.validateIntegerFactsForLowering(typed_mir.*);": 1,
+        "try mir.validateTargetTypeFactsForLowering(typed_mir.*);": 1,
     },
     "src/sema.zig": {
         "fn checkIntegerLiteralInitializer": 1,
@@ -736,6 +740,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "ast_query.isPhysCall(call.callee.*)": 0,
     },
     "src/lower_c_emitter.zig": {
+        "fn mirTargetTypeFactAt(": 1,
         "fn requireMirBoundsFact": 1,
         "try self.requireMirBoundsFact(": 3,
         "fn hasMirNoOverflowRangeFactForArith": 1,
@@ -772,6 +777,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_llvm.zig": {
         "try mir.validateIntegerFactsForLowering(module_mir.*);": 1,
+        "try mir.validateTargetTypeFactsForLowering(module_mir.*);": 1,
+        "fn mirTargetTypeFactAt(": 1,
+        "fn bindClosureType(": 0,
         "fn requireMirBoundsFact": 1,
         "try self.requireMirBoundsFact(": 5,
         "fn requireMirNoOverflowRangeFact": 1,

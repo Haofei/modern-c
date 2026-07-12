@@ -2625,8 +2625,8 @@ const CEmitter = struct {
 
     // Emit `bind(&env, f)` as a closure compound literal. `f` names a function whose
     // first parameter is the (typed) env; the closure drops it to void*.
-    fn emitBind(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) !void {
-        const plan = try self.bindEmitPlan(node);
+    fn emitBind(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !void {
+        const plan = try self.bindEmitPlan(node, target_ty);
         if (!self.bindEnvIsPointerLike(plan.info.params[0].ty)) {
             try lower_c_dispatch.emitScalarEnvBind(self.dispatchContext(), node, locals, plan);
             return;
@@ -2634,12 +2634,14 @@ const CEmitter = struct {
         try lower_c_dispatch.emitPointerEnvBind(self.dispatchContext(), node, locals, plan);
     }
 
-    fn bindEmitPlan(self: *CEmitter, node: anytype) !lower_c_dispatch.BindEmitPlan {
+    fn bindEmitPlan(self: *CEmitter, node: anytype, target_ty: ast.TypeExpr) !lower_c_dispatch.BindEmitPlan {
         const fname = calleeIdentName(node.args[1]) orelse return error.UnsupportedCEmission;
         const info = self.functions.get(fname) orelse return error.UnsupportedCEmission;
         if (info.params.len == 0) return error.UnsupportedCEmission; // need the env param
-        const ret_ty: ast.TypeExpr = info.return_type orelse ast.TypeExpr{ .span = node.callee.*.span, .kind = .{ .name = .{ .text = "void", .span = node.callee.*.span } } };
-        const cname = try lower_c_names.closureTypeNameForParams(self.typeNameContext(), ret_ty, info.params[1..]);
+        const closure_ty = self.resolveAliasType(target_ty);
+        if (closure_ty.kind != .closure_type) return error.UnsupportedCEmission;
+        const ret_ty = closure_ty.kind.closure_type.ret.*;
+        const cname = try self.closureTypeName(closure_ty.kind.closure_type);
         return .{
             .fname = fname,
             .info = info,
@@ -4033,7 +4035,8 @@ const CEmitter = struct {
         // (whose first param is the typed env) is cast to take void* —
         // both casts are ABI-identity, so user code stays typed/cast-free.
         if (ast_query.isBindCallNode(node)) {
-            try self.emitBind(node, locals);
+            const fact = self.mirTargetTypeFactAt(.bind, node.callee.*.span) orelse return error.UnsupportedCEmission;
+            try self.emitBind(node, locals, fact.target_ty);
             return true;
         }
         return false;
@@ -4233,8 +4236,13 @@ const CEmitter = struct {
     }
 
     fn emitTargetCallExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, expr: ast.Expr) anyerror!void {
+        if (ast_query.resultConstructorCallTag(node)) |tag| {
+            const kind: mir.TargetTypeKind = if (std.mem.eql(u8, tag, "ok")) .result_ok else .result_err;
+            const fact = self.mirTargetTypeFactAt(kind, expr.span) orelse return error.UnsupportedCEmission;
+            if (try lower_c_aggregate.emitResultConstructor(self.aggregateEmitContext(), node, locals, fact.target_ty)) return;
+            return error.UnsupportedCEmission;
+        }
         if (target_ty) |ty| {
-            if (try lower_c_aggregate.emitResultConstructor(self.aggregateEmitContext(), node, locals, ty)) return;
             if (try lower_c_aggregate.emitTaggedUnionConstructor(self.aggregateEmitContext(), node, locals, ty)) return;
         }
         try self.emitExpr(expr, locals);
@@ -4959,6 +4967,14 @@ const CEmitter = struct {
         const function = self.currentMirFunction() orelse return null;
         for (function.call_target_facts) |fact| {
             if (mirSourceMatches(span, fact.source)) return fact.kind;
+        }
+        return null;
+    }
+
+    fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
+        const function = self.currentMirFunction() orelse return null;
+        for (function.target_type_facts) |fact| {
+            if (fact.kind == kind and mirSourceMatches(span, fact.source)) return fact;
         }
         return null;
     }

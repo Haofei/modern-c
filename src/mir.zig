@@ -24,6 +24,8 @@ const isSatPreservingBinary = ast_query.isSatPreservingBinary;
 const isWrapPreservingBinary = ast_query.isWrapPreservingBinary;
 const reduceCallKind = ast_query.reduceCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
+const isBindCallNode = ast_query.isBindCallNode;
+const resultConstructorCallTag = ast_query.resultConstructorCallTag;
 const isDeclassifyCall = ast_query.isDeclassifyCall;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
@@ -67,6 +69,8 @@ pub const BoundsFactKind = mir_model.BoundsFactKind;
 pub const IntegerFact = mir_model.IntegerFact;
 pub const CallTargetKind = mir_model.CallTargetKind;
 pub const CallTargetFact = mir_model.CallTargetFact;
+pub const TargetTypeKind = mir_model.TargetTypeKind;
+pub const TargetTypeFact = mir_model.TargetTypeFact;
 pub const SourcePoint = mir_model.SourcePoint;
 pub const PointerProvenance = mir_model.PointerProvenance;
 pub const PointerProvenanceFact = mir_model.PointerProvenanceFact;
@@ -321,6 +325,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
                         .bounds_facts = try allocator.alloc(BoundsFact, 0),
                         .integer_facts = try allocator.alloc(IntegerFact, 0),
                         .call_target_facts = try allocator.alloc(CallTargetFact, 0),
+                        .target_type_facts = try allocator.alloc(TargetTypeFact, 0),
                         .pointer_provenance_facts = try allocator.alloc(PointerProvenanceFact, 0),
                         .representation_facts = try allocator.alloc(RepresentationFact, 0),
                         .elided_bounds = try allocator.alloc(SourcePoint, 0),
@@ -350,8 +355,8 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
     for (mir.functions) |function| {
         try out.print(
             allocator,
-            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} call_target_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
-            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.call_target_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
+            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
+            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
         );
         for (function.contract_regions) |region| {
             try out.print(
@@ -436,6 +441,13 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
                 allocator,
                 "mir call_target_fact fn={s} kind={s} result_type={s} recorded=true line={} column={}\n",
                 .{ function.name, @tagName(fact.kind), fact.result_ty.name(), fact.source.line, fact.source.column },
+            );
+        }
+        for (function.target_type_facts) |fact| {
+            try out.print(
+                allocator,
+                "mir target_type_fact fn={s} kind={s} target_type={s} result_type={s} recorded=true line={} column={}\n",
+                .{ function.name, @tagName(fact.kind), typeText(fact.target_ty), fact.result_ty.name(), fact.source.line, fact.source.column },
             );
         }
         for (function.pointer_provenance_facts) |fact| {
@@ -905,6 +917,83 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
             if (countMatchingCallTargetInstructions(function, fact) != 1) return error.InvalidMirCallTargetFacts;
         }
     }
+}
+
+pub fn validateTargetTypeFactsForLowering(module: Module) error{InvalidMirTargetTypeFacts}!void {
+    for (module.functions) |function| {
+        for (function.blocks) |block| for (block.instructions) |instruction| {
+            const kind = targetTypeKindForInstruction(instruction) orelse continue;
+            const fact_count = countMatchingTargetTypeFacts(function, kind, instruction);
+            if (fact_count == 0 or fact_count != countMatchingTargetTypeInstructionsForInstruction(function, kind, instruction)) return error.InvalidMirTargetTypeFacts;
+            if (!matchingTargetTypeFactsAgree(function, kind, instruction)) return error.InvalidMirTargetTypeFacts;
+        };
+        for (function.target_type_facts) |fact| {
+            const instruction_count = countMatchingTargetTypeInstructions(function, fact);
+            if (instruction_count == 0 or instruction_count != countMatchingTargetTypeFactsForFact(function, fact)) return error.InvalidMirTargetTypeFacts;
+        }
+    }
+}
+
+fn targetTypeKindForInstruction(instruction: Instruction) ?TargetTypeKind {
+    if (instruction.kind != .target_type) return null;
+    return std.meta.stringToEnum(TargetTypeKind, instruction.detail);
+}
+
+fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instruction: Instruction) usize {
+    var count: usize = 0;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != kind) continue;
+        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
+        if (fact.source.line == instruction.line and fact.source.column == instruction.column) count += 1;
+    }
+    return count;
+}
+
+fn countMatchingTargetTypeInstructions(function: Function, fact: TargetTypeFact) usize {
+    var count: usize = 0;
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        const kind = targetTypeKindForInstruction(instruction) orelse continue;
+        if (kind != fact.kind) continue;
+        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
+        if (fact.source.line == instruction.line and fact.source.column == instruction.column) count += 1;
+    };
+    return count;
+}
+
+fn countMatchingTargetTypeInstructionsForInstruction(function: Function, kind: TargetTypeKind, target: Instruction) usize {
+    var count: usize = 0;
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        const instruction_kind = targetTypeKindForInstruction(instruction) orelse continue;
+        if (instruction_kind != kind) continue;
+        if (!sameRepresentationValueType(instruction.result_ty, target.result_ty)) continue;
+        if (instruction.line == target.line and instruction.column == target.column) count += 1;
+    };
+    return count;
+}
+
+fn countMatchingTargetTypeFactsForFact(function: Function, target: TargetTypeFact) usize {
+    var count: usize = 0;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != target.kind) continue;
+        if (!sameRepresentationValueType(fact.result_ty, target.result_ty)) continue;
+        if (fact.source.line == target.source.line and fact.source.column == target.source.column) count += 1;
+    }
+    return count;
+}
+
+fn matchingTargetTypeFactsAgree(function: Function, kind: TargetTypeKind, instruction: Instruction) bool {
+    var first: ?ast.TypeExpr = null;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != kind) continue;
+        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
+        if (fact.source.line != instruction.line or fact.source.column != instruction.column) continue;
+        if (first) |expected| {
+            if (!std.meta.eql(expected, fact.target_ty)) return false;
+        } else {
+            first = fact.target_ty;
+        }
+    }
+    return first != null;
 }
 
 fn callTargetKindForInstruction(instruction: Instruction) ?CallTargetKind {
@@ -2969,6 +3058,7 @@ const FunctionBuilder = struct {
     bounds_facts: std.ArrayList(BoundsFact),
     integer_facts: std.ArrayList(IntegerFact),
     call_target_facts: std.ArrayList(CallTargetFact),
+    target_type_facts: std.ArrayList(TargetTypeFact),
     pointer_provenance_facts: std.ArrayList(PointerProvenanceFact),
     representation_facts: std.ArrayList(RepresentationFact),
     live_pointer_provenance: std.ArrayList(LivePointerProvenance),
@@ -3017,6 +3107,7 @@ const FunctionBuilder = struct {
     active_unsafe: bool = false,
     assignment_target: ?[]const u8 = null,
     assignment_target_ty: ValueType = .unknown,
+    assignment_target_type_expr: ?ast.TypeExpr = null,
     expr_depth: usize = 0,
     semantic_expr_depth: usize = 0,
     next_contract_region_id: usize = 1,
@@ -3054,6 +3145,7 @@ const FunctionBuilder = struct {
             .bounds_facts = .empty,
             .integer_facts = .empty,
             .call_target_facts = .empty,
+            .target_type_facts = .empty,
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -3116,6 +3208,7 @@ const FunctionBuilder = struct {
             .bounds_facts = .empty,
             .integer_facts = .empty,
             .call_target_facts = .empty,
+            .target_type_facts = .empty,
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -3158,6 +3251,7 @@ const FunctionBuilder = struct {
         self.bounds_facts.deinit(self.allocator);
         self.integer_facts.deinit(self.allocator);
         self.call_target_facts.deinit(self.allocator);
+        self.target_type_facts.deinit(self.allocator);
         self.pointer_provenance_facts.deinit(self.allocator);
         self.representation_facts.deinit(self.allocator);
         self.live_pointer_provenance.deinit(self.allocator);
@@ -3212,6 +3306,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(integer_facts);
         const call_target_facts = try self.call_target_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(call_target_facts);
+        const target_type_facts = try self.target_type_facts.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(target_type_facts);
         const pointer_provenance_facts = try self.pointer_provenance_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(pointer_provenance_facts);
         const representation_facts = try self.representation_facts.toOwnedSlice(self.allocator);
@@ -3267,6 +3363,7 @@ const FunctionBuilder = struct {
             .bounds_facts = bounds_facts,
             .integer_facts = integer_facts,
             .call_target_facts = call_target_facts,
+            .target_type_facts = target_type_facts,
             .pointer_provenance_facts = pointer_provenance_facts,
             .representation_facts = representation_facts,
             .elided_bounds = elided_bounds,
@@ -3371,8 +3468,10 @@ const FunctionBuilder = struct {
         const target_ty = valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
         const previous_target = self.assignment_target;
         const previous_target_ty = self.assignment_target_ty;
+        const previous_target_type_expr = self.assignment_target_type_expr;
         self.assignment_target = self.name;
         self.assignment_target_ty = target_ty;
+        self.assignment_target_type_expr = ty;
         try self.addNullabilityConversionCheck(target_ty, initializer, initializer.span);
         try self.addConversionCheck(target_ty, initializer, .initializer, initializer.span);
         try self.addResultPayloadConversionCheck(target_ty, initializer, initializer.span);
@@ -3382,6 +3481,7 @@ const FunctionBuilder = struct {
         try self.addRepresentationUseForValue(target_ty, "initializer", initializer.span, exprText(initializer));
         self.assignment_target = previous_target;
         self.assignment_target_ty = previous_target_ty;
+        self.assignment_target_type_expr = previous_target_type_expr;
     }
 
     fn buildBlock(self: *FunctionBuilder, block: ast.Block) anyerror!bool {
@@ -3433,6 +3533,7 @@ const FunctionBuilder = struct {
                 if (local.init) |expr| {
                     const previous_target = self.assignment_target;
                     const previous_target_ty = self.assignment_target_ty;
+                    const previous_target_type_expr = self.assignment_target_type_expr;
                     const previous_alias_initializer = self.direct_local_aggregate_alias_initializer;
                     self.direct_local_aggregate_alias_initializer = self.directLocalAggregatePointerAliasBaseName(expr);
                     defer self.direct_local_aggregate_alias_initializer = previous_alias_initializer;
@@ -3441,6 +3542,7 @@ const FunctionBuilder = struct {
                     defer self.direct_local_pointer_array_alias_initializer = previous_array_alias_initializer;
                     self.assignment_target = if (local.names.len > 0) local.names[0].text else null;
                     self.assignment_target_ty = ty;
+                    self.assignment_target_type_expr = ty_expr;
                     try self.addNullabilityConversionCheck(ty, expr, expr.span);
                     if (local.ty != null) try self.addConversionCheck(ty, expr, .initializer, expr.span);
                     if (local.ty != null) try self.addResultPayloadConversionCheck(ty, expr, expr.span);
@@ -3455,6 +3557,7 @@ const FunctionBuilder = struct {
                     try self.recordLocalPointerArrayAliases(local.names, expr);
                     self.assignment_target = previous_target;
                     self.assignment_target_ty = previous_target_ty;
+                    self.assignment_target_type_expr = previous_target_type_expr;
                 }
                 // OPT (annex E) — a new binding may shadow a fact operand; drop all facts (after
                 // the initializer was built, so a use in it still saw the pre-decl facts).
@@ -3481,6 +3584,7 @@ const FunctionBuilder = struct {
                 try self.buildExpr(node.target);
                 const previous_target = self.assignment_target;
                 const previous_target_ty = self.assignment_target_ty;
+                const previous_target_type_expr = self.assignment_target_type_expr;
                 const previous_alias_initializer = self.direct_local_aggregate_alias_initializer;
                 self.direct_local_aggregate_alias_initializer = if (assignmentTargetIdentName(node.target)) |target_name|
                     if (self.local_types.contains(target_name)) self.directLocalAggregatePointerAliasBaseName(node.value) else null
@@ -3495,6 +3599,7 @@ const FunctionBuilder = struct {
                 defer self.direct_local_pointer_array_alias_initializer = previous_array_alias_initializer;
                 self.assignment_target = exprText(node.target);
                 self.assignment_target_ty = self.typeForAssignmentTarget(node.target);
+                self.assignment_target_type_expr = self.typeExprForAssignmentTarget(node.target);
                 try self.addNullabilityConversionCheck(self.assignment_target_ty, node.value, node.value.span);
                 try self.addConversionCheck(self.assignment_target_ty, node.value, .assignment, node.value.span);
                 try self.addResultPayloadConversionCheck(self.assignment_target_ty, node.value, node.value.span);
@@ -3508,6 +3613,7 @@ const FunctionBuilder = struct {
                 try self.recordLocalPointerArrayAliasAssignment(node.target, node.value, stmt.span);
                 self.assignment_target = previous_target;
                 self.assignment_target_ty = previous_target_ty;
+                self.assignment_target_type_expr = previous_target_type_expr;
                 // OPT (annex E) — a store may change any fact operand; drop all facts (after the
                 // RHS/target were built, so a use on this line still saw the pre-write facts).
                 self.invalidateFacts();
@@ -3544,11 +3650,14 @@ const FunctionBuilder = struct {
                     try self.addResultPayloadConversionCheck(self.return_ty, expr, expr.span);
                     const previous_target = self.assignment_target;
                     const previous_target_ty = self.assignment_target_ty;
+                    const previous_target_type_expr = self.assignment_target_type_expr;
                     self.assignment_target = "value";
                     self.assignment_target_ty = self.return_ty;
+                    self.assignment_target_type_expr = self.return_type_expr;
                     try self.buildExpr(expr);
                     self.assignment_target = previous_target;
                     self.assignment_target_ty = previous_target_ty;
+                    self.assignment_target_type_expr = previous_target_type_expr;
                 }
                 try self.addInstrWithValue(.return_value, if (maybe) |_| "value" else "void", self.return_ty, stmt.span, if (maybe) |expr| exprText(expr) else null);
                 self.setTerminator(.{ .return_ = self.return_ty });
@@ -4344,11 +4453,34 @@ const FunctionBuilder = struct {
             },
             .array_literal => |items| {
                 try self.addInstr(.expr, "array_literal", .{ .array = "array" }, expr.span);
-                for (items) |item| try self.buildExpr(item);
+                const child_ty = if (self.assignment_target_type_expr) |target_ty| arrayElementTypeAlias(aggregateTargetTypeAlias(target_ty, self.aliases), self.aliases) else null;
+                for (items) |item| {
+                    const previous_target_ty = self.assignment_target_ty;
+                    const previous_target_type_expr = self.assignment_target_type_expr;
+                    if (child_ty) |ty| {
+                        self.assignment_target_ty = valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                        self.assignment_target_type_expr = ty;
+                    }
+                    try self.buildExpr(item);
+                    self.assignment_target_ty = previous_target_ty;
+                    self.assignment_target_type_expr = previous_target_type_expr;
+                }
             },
             .struct_literal => |fields| {
                 try self.addInstr(.expr, "struct_literal", .value, expr.span);
-                for (fields) |field| try self.buildExpr(field.value);
+                const struct_name = if (self.assignment_target_type_expr) |target_ty| structTypeNameAlias(aggregateTargetTypeAlias(target_ty, self.aliases), self.aliases) else null;
+                for (fields) |field| {
+                    const field_ty = if (struct_name) |name| self.structFieldTypeExpr(name, field.name.text) else null;
+                    const previous_target_ty = self.assignment_target_ty;
+                    const previous_target_type_expr = self.assignment_target_type_expr;
+                    if (field_ty) |ty| {
+                        self.assignment_target_ty = valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                        self.assignment_target_type_expr = ty;
+                    }
+                    try self.buildExpr(field.value);
+                    self.assignment_target_ty = previous_target_ty;
+                    self.assignment_target_type_expr = previous_target_type_expr;
+                }
             },
             .unreachable_expr => {
                 try self.addTrapEdge(.Unreachable, .unreachable_expr, expr.span);
@@ -4466,6 +4598,7 @@ const FunctionBuilder = struct {
                 try self.buildExpr(node.value.*);
             },
             .call => |node| {
+                try self.addTargetTypeFactForCall(node, expr.span);
                 if (self.constGetCallType(node)) |const_get_ty| {
                     try self.addInstr(.index, "const_get", const_get_ty, expr.span);
                     try self.addInstr(.call_target, @tagName(CallTargetKind.const_get), const_get_ty, expr.span);
@@ -4669,12 +4802,15 @@ const FunctionBuilder = struct {
                             const param_ty = valueTypeFromTypeAlias(summary.params[index].ty, self.enums, self.structs, self.packed_bits, self.aliases);
                             const previous_target = self.assignment_target;
                             const previous_target_ty = self.assignment_target_ty;
+                            const previous_target_type_expr = self.assignment_target_type_expr;
                             self.assignment_target = "call_arg";
                             self.assignment_target_ty = param_ty;
+                            self.assignment_target_type_expr = summary.params[index].ty;
                             try self.buildExpr(arg);
                             try self.addRepresentationUseForValue(param_ty, "call_arg", arg.span, exprText(arg));
                             self.assignment_target = previous_target;
                             self.assignment_target_ty = previous_target_ty;
+                            self.assignment_target_type_expr = previous_target_type_expr;
                             continue;
                         }
                     }
@@ -4974,6 +5110,24 @@ const FunctionBuilder = struct {
     fn addCallTargetFact(self: *FunctionBuilder, kind: CallTargetKind, result_ty: ValueType, span: ast.Span) !void {
         try self.call_target_facts.append(self.allocator, .{
             .kind = kind,
+            .result_ty = result_ty,
+            .source = .{ .line = span.line, .column = span.column },
+        });
+    }
+
+    fn addTargetTypeFactForCall(self: *FunctionBuilder, call: anytype, span: ast.Span) !void {
+        const kind: TargetTypeKind = if (isBindCallNode(call))
+            .bind
+        else if (resultConstructorCallTag(call)) |tag|
+            if (std.mem.eql(u8, tag, "ok")) .result_ok else .result_err
+        else
+            return;
+        const target_ty = self.assignment_target_type_expr orelse return;
+        const result_ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        try self.addInstr(.target_type, @tagName(kind), result_ty, span);
+        try self.target_type_facts.append(self.allocator, .{
+            .kind = kind,
+            .target_ty = target_ty,
             .result_ty = result_ty,
             .source = .{ .line = span.line, .column = span.column },
         });
@@ -7207,6 +7361,8 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     allocator.free(function.range_facts);
     if (function.bounds_facts.len != 0) allocator.free(function.bounds_facts);
     if (function.integer_facts.len != 0) allocator.free(function.integer_facts);
+    if (function.call_target_facts.len != 0) allocator.free(function.call_target_facts);
+    if (function.target_type_facts.len != 0) allocator.free(function.target_type_facts);
     for (function.pointer_provenance_facts) |fact| {
         if (fact.field_path) |field_path| allocator.free(field_path);
     }

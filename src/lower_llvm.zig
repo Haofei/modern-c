@@ -252,6 +252,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
     try mir.validateRepresentationFactsForLowering(module_mir.*);
     try mir.validateIntegerFactsForLowering(module_mir.*);
     try mir.validateCallTargetFactsForLowering(module_mir.*);
+    try mir.validateTargetTypeFactsForLowering(module_mir.*);
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;
@@ -4939,6 +4940,14 @@ const LlvmEmitter = struct {
         return null;
     }
 
+    fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
+        const function = self.currentMirFunction() orelse return null;
+        for (function.target_type_facts) |fact| {
+            if (fact.kind == kind and mirSourceMatches(span, fact.source)) return fact;
+        }
+        return null;
+    }
+
     fn mirSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
         return span.line == source.line and span.column == source.column;
     }
@@ -6076,7 +6085,10 @@ const LlvmEmitter = struct {
         defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
         defer self.local_pointer_array_aliases.clearRetainingCapacity();
         if (isDropCall(call.callee.*)) return error.UnsupportedLlvmEmission;
-        if (isBindCallNode(call)) return try self.emitBindValue(call, expected_ty);
+        if (isBindCallNode(call)) {
+            const fact = self.mirTargetTypeFactAt(.bind, span) orelse return error.UnsupportedLlvmEmission;
+            return try self.emitBindValue(call, fact.target_ty);
+        }
         // `Union.variant(...)` qualified constructor — self-typed from the owner (no target).
         if (try self.emitQualifiedUnionConstructor(call)) |value| return value;
         if (try self.emitTaggedUnionConstructor(call, expected_ty)) |value| return value;
@@ -6503,7 +6515,11 @@ const LlvmEmitter = struct {
             if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return error.UnsupportedLlvmEmission;
             return try self.emitByteViewCall(call, kind);
         }
-        if (resultConstructorCallTag(call)) |tag| return try self.emitResultConstructorValue(call, expected_ty, tag);
+        if (resultConstructorCallTag(call)) |tag| {
+            const kind: mir.TargetTypeKind = if (std.mem.eql(u8, tag, "ok")) .result_ok else .result_err;
+            const fact = self.mirTargetTypeFactAt(kind, span) orelse return error.UnsupportedLlvmEmission;
+            return try self.emitResultConstructorValue(call, fact.target_ty, tag);
+        }
         if (self.domainResidueCallInfo(call)) |info| {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             return try self.emitExpr(info.base, info.domain_ty);
@@ -8420,21 +8436,6 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn bindClosureType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
-        if (!isBindCallNode(call)) return null;
-        const fname = calleeIdentName(call.args[1]) orelse return null;
-        const sig = self.fn_sigs.get(fname) orelse return null;
-        if (sig.params.len == 0) return null;
-        const params = self.scratch.allocator().alloc(ast.TypeExpr, sig.params.len - 1) catch return null;
-        for (sig.params[1..], 0..) |param, i| params[i] = param.ty;
-        const ret = self.scratch.allocator().create(ast.TypeExpr) catch return null;
-        ret.* = sig.ret;
-        return .{
-            .span = call.callee.*.span,
-            .kind = .{ .closure_type = .{ .params = params, .ret = ret } },
-        };
-    }
-
     fn isFnPointerType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
         return self.resolveAliasType(ty).kind == .fn_pointer;
     }
@@ -8498,7 +8499,7 @@ const LlvmEmitter = struct {
             if (std.mem.eql(u8, info.op, "as_slice")) return self.sliceTypeFor(info.payload_ty, .mut, call.callee.*.span) catch null;
         }
         if (self.rawManyOffsetCallInfo(call)) |info| return info.base_ty;
-        if (isBindCallNode(call)) return self.bindClosureType(call);
+        if (isBindCallNode(call)) return if (self.mirTargetTypeFactAt(.bind, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.closureCalleeType(call.callee.*)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
         if (self.fnPointerCalleeType(call.callee.*)) |fn_ty| return fn_ty.kind.fn_pointer.ret.*;
         const callee = self.directCallName(call.callee.*) orelse return null;

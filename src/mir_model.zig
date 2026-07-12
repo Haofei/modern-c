@@ -134,6 +134,7 @@ pub const Instruction = struct {
         call,
         indirect_call,
         call_target,
+        target_type,
         contract_begin,
         contract_end,
         unchecked_assume,
@@ -261,6 +262,19 @@ pub const CallTargetFact = struct {
     source: SourcePoint,
 };
 
+pub const TargetTypeKind = enum {
+    bind,
+    result_ok,
+    result_err,
+};
+
+pub const TargetTypeFact = struct {
+    kind: TargetTypeKind,
+    target_ty: ast.TypeExpr,
+    result_ty: ValueType,
+    source: SourcePoint,
+};
+
 pub const SourcePoint = struct {
     line: usize,
     column: usize,
@@ -341,6 +355,7 @@ pub const Function = struct {
     bounds_facts: []BoundsFact = &.{},
     integer_facts: []IntegerFact = &.{},
     call_target_facts: []CallTargetFact = &.{},
+    target_type_facts: []TargetTypeFact = &.{},
     pointer_provenance_facts: []PointerProvenanceFact,
     representation_facts: []RepresentationFact,
     // OPT (annex E): operand source points of checks the optimizer proved dead and elided
@@ -370,6 +385,7 @@ pub const Module = struct {
             if (function.bounds_facts.len != 0) self.allocator.free(function.bounds_facts);
             if (function.integer_facts.len != 0) self.allocator.free(function.integer_facts);
             if (function.call_target_facts.len != 0) self.allocator.free(function.call_target_facts);
+            if (function.target_type_facts.len != 0) self.allocator.free(function.target_type_facts);
             for (function.pointer_provenance_facts) |fact| {
                 if (fact.field_path) |field_path| self.allocator.free(field_path);
             }
