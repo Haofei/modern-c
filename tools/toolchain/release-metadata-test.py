@@ -452,6 +452,8 @@ def main() -> None:
 
     minimum_zig = zon_field(zon, "minimum_zig_version")
     zigversion = read(".zigversion").strip()
+    if minimum_zig != EXPECTED_ZIG_VERSION:
+        fail(f"minimum_zig_version {minimum_zig!r} does not match expected Zig {EXPECTED_ZIG_VERSION!r}")
     if minimum_zig != zigversion:
         fail(f"minimum_zig_version {minimum_zig!r} does not match .zigversion {zigversion!r}")
 
