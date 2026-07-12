@@ -5539,6 +5539,17 @@ const LlvmEmitter = struct {
         var result: []const u8 = "zeroinitializer";
         const resolved_ty = self.resolveAliasType(ty);
         switch (resolved_ty.kind) {
+            .closure_type => {
+                for (0..2) |i| {
+                    const field_ptr = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ field_ptr, aggregate_ty, ptr, i });
+                    const field_value = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = load atomic ptr, ptr {s} unordered, align 8{s}\n", .{ field_value, field_ptr, try self.debugCallSuffix() });
+                    const next = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, ptr {s}, {d}\n", .{ next, aggregate_ty, result, field_value, i });
+                    result = next;
+                }
+            },
             .array => |array| {
                 const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
                 const len_usize = std.math.cast(usize, len) orelse return error.UnsupportedLlvmEmission;
@@ -5581,6 +5592,15 @@ const LlvmEmitter = struct {
         const aggregate_ty = try self.llvmType(ty);
         const resolved_ty = self.resolveAliasType(ty);
         switch (resolved_ty.kind) {
+            .closure_type => {
+                for (0..2) |i| {
+                    const field_value = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ field_value, aggregate_ty, value, i });
+                    const field_ptr = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ field_ptr, aggregate_ty, ptr, i });
+                    try self.out.print(self.allocator, "  store atomic ptr {s}, ptr {s} unordered, align 8{s}\n", .{ field_value, field_ptr, try self.debugCallSuffix() });
+                }
+            },
             .array => |array| {
                 const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
                 const len_usize = std.math.cast(usize, len) orelse return error.UnsupportedLlvmEmission;

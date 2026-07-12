@@ -652,6 +652,25 @@ test "LLVM emits cpu pause after MIR call-target dispatch" {
     try expectContains(output.items, "call void asm sideeffect \"pause\", \"~{memory}\"()");
 }
 
+test "LLVM pointer-member closure loads lower leaf-wise race-tolerantly" {
+    const source =
+        \\struct Env { tag: u32 }
+        \\fn run_impl(env: *mut Env, value: u32) -> u32 { return value + env.tag; }
+        \\struct Slot { run: closure(u32) -> u32 }
+        \\fn invoke(slot: *Slot, value: u32) -> u32 {
+        \\    let callback: closure(u32) -> u32 = slot.run;
+        \\    return callback(value);
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_pointer_member_closure_load.mc", source, &output);
+    try expectContains(output.items, "load atomic ptr, ptr %");
+    try expectContains(output.items, "insertvalue { ptr, ptr }");
+    try expectContains(output.items, "call i32 %");
+}
+
 test "LLVM rejects prebuilt MIR with missing fence call target facts" {
     const source =
         \\fn fence_call_target_fact_gate() -> void {
