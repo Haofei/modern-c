@@ -4805,6 +4805,10 @@ const FunctionBuilder = struct {
                 }
                 try self.buildExpr(node.callee.*);
                 for (node.args, 0..) |arg, index| {
+                    if (self.targetTypeForBuiltinMemberCallArg(node, index)) |arg_ty| {
+                        try self.buildExprWithTargetType(arg, arg_ty);
+                        continue;
+                    }
                     if (self.targetTypeForTargetTypedCallArg(node, index)) |arg_ty| {
                         try self.buildExprWithTargetType(arg, arg_ty);
                         continue;
@@ -5134,6 +5138,11 @@ const FunctionBuilder = struct {
         const kind: TargetTypeKind = switch (expr.kind) {
             .enum_literal => if (result_ty == .closed_enum or result_ty == .open_enum) .enum_literal else return,
             .string_literal => if (ast_query.isStringLiteralTarget(resolved_target_ty) or ast_query.u8SliceMutability(resolved_target_ty) != null) .string_literal else return,
+            .array_literal => if (resolved_target_ty.kind == .array) .array_literal else return,
+            .struct_literal => switch (result_ty) {
+                .struct_ => .struct_literal,
+                else => return,
+            },
             .call => |call| if (isBindCallNode(call))
                 .bind
             else if (result_ty == .result)
@@ -5195,6 +5204,25 @@ const FunctionBuilder = struct {
         const info = self.unions.get(union_name) orelse return null;
         for (info.cases) |case| {
             if (std.mem.eql(u8, case.name.text, name)) return case.ty;
+        }
+        return null;
+    }
+
+    fn targetTypeForBuiltinMemberCallArg(self: *FunctionBuilder, call: anytype, index: usize) ?ast.TypeExpr {
+        const member = memberExpr(call.callee.*) orelse return null;
+        const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
+        if (index == 0) {
+            if (self.atomicCallTargetKind(call.callee.*)) |kind| {
+                if (kind == .atomic_store or kind == .atomic_fetch_add or kind == .atomic_fetch_sub) {
+                    return atomicPayloadTypeExprAlias(base_ty, self.aliases);
+                }
+            }
+            if (self.maybeUninitCallTargetKind(call.callee.*) == .maybe_uninit_write) {
+                return maybeUninitPayloadTypeExprAlias(base_ty, self.aliases);
+            }
+            if (std.mem.eql(u8, member.name.text, "write")) {
+                return self.mmioReceiverReadTypeExpr(call.callee.*);
+            }
         }
         return null;
     }

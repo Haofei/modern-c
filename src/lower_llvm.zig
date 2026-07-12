@@ -741,15 +741,20 @@ const LlvmEmitter = struct {
     }
 
     fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
-        const resolved_ty = self.resolveAliasType(ty);
+        const semantic_ty = switch (expr.kind) {
+            .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission,
+            .struct_literal => if (self.mirTargetTypeFactAt(.struct_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission,
+            else => ty,
+        };
+        const resolved_ty = self.resolveAliasType(semantic_ty);
         if (self.foldConstGlobalValue(expr)) |value| {
-            return try self.comptimeValueInitializer(value, ty);
+            return try self.comptimeValueInitializer(value, semantic_ty);
         }
         if (self.atomicPayloadType(resolved_ty)) |payload_ty| {
             if (isAtomicInitExpr(expr)) return try self.emitGlobalInitializer(atomicInitValue(expr).?, payload_ty);
             return try self.emitGlobalInitializer(expr, payload_ty);
         }
-        if (self.enumDeclForType(ty)) |enum_decl| {
+        if (self.enumDeclForType(semantic_ty)) |enum_decl| {
             return switch (expr.kind) {
                 .enum_literal => |literal| if (self.mirTargetTypeFactAt(.enum_literal, expr.span)) |fact|
                     if (self.enumDeclForType(fact.target_ty)) |fact_enum|
@@ -758,22 +763,22 @@ const LlvmEmitter = struct {
                         error.UnsupportedLlvmEmission
                 else
                     error.UnsupportedLlvmEmission,
-                .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
+                .grouped => |inner| try self.emitGlobalInitializer(inner.*, semantic_ty),
                 else => try self.emitGlobalInitializer(expr, enumReprType(enum_decl)),
             };
         }
-        if (self.packedBitsInfoForType(ty)) |info| {
+        if (self.packedBitsInfoForType(semantic_ty)) |info| {
             return switch (expr.kind) {
                 .struct_literal => |fields| try self.packedBitsLiteralValue(info, fields),
-                .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
+                .grouped => |inner| try self.emitGlobalInitializer(inner.*, semantic_ty),
                 else => try self.emitGlobalInitializer(expr, info.repr),
             };
         }
         switch (expr.kind) {
             .ident => |ident| {
-                if (!self.isFnPointerType(ty)) {
+                if (!self.isFnPointerType(semantic_ty)) {
                     if (self.global_initializers.get(ident.text)) |initializer| {
-                        return try self.emitGlobalInitializer(initializer, ty);
+                        return try self.emitGlobalInitializer(initializer, semantic_ty);
                     }
                 }
             },
@@ -787,7 +792,7 @@ const LlvmEmitter = struct {
             .array => |array| {
                 const items = switch (expr.kind) {
                     .array_literal => |items| items,
-                    .grouped => |inner| return self.emitGlobalInitializer(inner.*, ty),
+                    .grouped => |inner| return self.emitGlobalInitializer(inner.*, semantic_ty),
                     else => return error.UnsupportedLlvmEmission,
                 };
                 const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
@@ -832,10 +837,10 @@ const LlvmEmitter = struct {
                     .{ global.len, global.name },
                 );
             },
-            .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(ty)),
+            .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(semantic_ty)),
             .unary => |node| blk: {
                 if (node.op != .neg) break :blk error.UnsupportedLlvmEmission;
-                if (self.isFloatTypeOf(ty)) {
+                if (self.isFloatTypeOf(semantic_ty)) {
                     const literal = switch ((node.expr.*).kind) {
                         .float_literal => |literal| literal,
                         .grouped => |inner| switch (inner.kind) {
@@ -844,9 +849,9 @@ const LlvmEmitter = struct {
                         },
                         else => break :blk error.UnsupportedLlvmEmission,
                     };
-                    break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(ty))});
+                    break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(semantic_ty))});
                 }
-                if (self.integerBitsOf(ty) != null) {
+                if (self.integerBitsOf(semantic_ty) != null) {
                     const literal = switch ((node.expr.*).kind) {
                         .int_literal => |literal| literal,
                         .grouped => |inner| switch (inner.kind) {
@@ -861,8 +866,8 @@ const LlvmEmitter = struct {
             },
             .bool_literal => |value| if (value) "1" else "0",
             .null_literal => "null",
-            .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
-            .ident => |ident| if (self.isFnPointerType(ty) and self.fn_sigs.contains(ident.text))
+            .grouped => |inner| try self.emitGlobalInitializer(inner.*, semantic_ty),
+            .ident => |ident| if (self.isFnPointerType(semantic_ty) and self.fn_sigs.contains(ident.text))
                 try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text})
             else
                 error.UnsupportedLlvmEmission,
@@ -1347,11 +1352,17 @@ const LlvmEmitter = struct {
                 error.UnsupportedLlvmEmission,
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
             .call => |call| try self.emitCall(call, expected_ty, expr.span),
-            .array_literal => |items| try self.emitArrayLiteralValue(expected_ty, items),
-            .struct_literal => |fields| if (self.packedBitsInfoForType(expected_ty)) |info|
-                try self.emitPackedBitsLiteralValue(info, fields)
+            .array_literal => |items| if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact|
+                try self.emitArrayLiteralValue(fact.target_ty, items)
             else
-                try self.emitStructLiteralValue(expected_ty, fields),
+                error.UnsupportedLlvmEmission,
+            .struct_literal => |fields| if (self.mirTargetTypeFactAt(.struct_literal, expr.span)) |fact|
+                if (self.packedBitsInfoForType(fact.target_ty)) |info|
+                    try self.emitPackedBitsLiteralValue(info, fields)
+                else
+                    try self.emitStructLiteralValue(fact.target_ty, fields)
+            else
+                error.UnsupportedLlvmEmission,
             .binary => |node| try self.emitBinary(node, expected_ty),
             .unary => |node| try self.emitUnary(node, expected_ty),
             .cast => |node| try self.emitCast(node.value.*, node.ty.*),

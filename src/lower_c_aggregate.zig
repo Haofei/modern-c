@@ -199,13 +199,13 @@ pub fn emitUncheckedAddAggregateLocalInit(ctx: EmitContext, name: []const u8, de
     };
 }
 
-pub fn emitUncheckedAddAggregateAssignmentStmt(ctx: EmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const target_ty = if (ctx.operand_emit_type(ctx.emit_ctx, assignment.target, locals)) |ty| ty else blk: {
+pub fn emitUncheckedAddAggregateAssignmentStmt(ctx: EmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo), target_ty_override: ?ast.TypeExpr) !bool {
+    const target_ty = target_ty_override orelse if (ctx.operand_emit_type(ctx.emit_ctx, assignment.target, locals)) |ty| ty else blk: {
         const target = ctx.global_assignment_target(ctx.emit_ctx, assignment.target, locals) orelse return false;
         break :blk simpleNameType(target.info.type_name, assignment.value.span);
     };
     return switch (assignment.value.kind) {
-        .grouped => |inner| try emitUncheckedAddAggregateAssignmentStmt(ctx, .{ .target = assignment.target, .value = inner.* }, locals),
+        .grouped => |inner| try emitUncheckedAddAggregateAssignmentStmt(ctx, .{ .target = assignment.target, .value = inner.* }, locals, target_ty_override),
         .array_literal => |items| try emitUncheckedAddArrayAggregateAssignmentStmt(ctx, assignment.target, items, locals, target_ty),
         .struct_literal => |fields| try emitUncheckedAddStructAggregateAssignmentStmt(ctx, assignment.target, fields, locals, target_ty),
         else => false,

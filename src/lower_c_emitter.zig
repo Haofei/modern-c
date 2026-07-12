@@ -2070,7 +2070,8 @@ const CEmitter = struct {
 
     fn emitAggregateSequencedArgTempForCall(ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return lower_c_aggregate.emitUncheckedAddAggregateCallArgTemp(self.aggregateEmitContext(), arg, locals, target_ty);
+        const mir_target_ty = (try self.mirAggregateTargetTypeForExpr(arg)) orelse target_ty;
+        return lower_c_aggregate.emitUncheckedAddAggregateCallArgTemp(self.aggregateEmitContext(), arg, locals, mir_target_ty);
     }
 
     fn emitUncheckedAddValueTempForAggregate(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
@@ -2809,7 +2810,8 @@ const CEmitter = struct {
         if (try lower_c_call.emitBitcastLocalInit(self.sequencedArgContext(), name, decl_ty, initializer, locals)) return true;
         if (try lower_c_call.emitExternNonNullCallLocalInit(self.sequencedArgContext(), &self.functions, name, decl_ty, initializer, locals)) return true;
         if (try lower_c_arith.emitUncheckedAddLocalInit(self.arithContext(), name, decl_ty, initializer, locals)) return true;
-        if (try lower_c_aggregate.emitUncheckedAddAggregateLocalInit(self.aggregateEmitContext(), name, decl_ty, initializer, locals)) return true;
+        const aggregate_target_ty = (try self.mirAggregateTargetTypeForExpr(initializer)) orelse decl_ty;
+        if (try lower_c_aggregate.emitUncheckedAddAggregateLocalInit(self.aggregateEmitContext(), name, aggregate_target_ty, initializer, locals)) return true;
         if (try lower_c_flow.emitSequencedComparisonLocalInit(self.flowEmitContext(), name, decl_ty, initializer, locals)) return true;
         if (try lower_c_arith.emitSequencedCheckedBinaryLocalInit(self.sequencedBinaryContext(), name, decl_ty, initializer, locals)) return true;
         if (try lower_c_call.emitSequencedCallLocalInit(self.sequencedArgContext(), &self.functions, name, decl_ty, initializer, locals)) return true;
@@ -2923,7 +2925,7 @@ const CEmitter = struct {
         if (try lower_c_access.emitRawManyOffsetAssignmentStmt(self.accessEmitContext(), assignment, locals)) return true;
         if (try lower_c_call.emitBitcastAssignmentStmt(self.sequencedArgContext(), assignment, locals)) return true;
         if (try lower_c_call.emitExternNonNullCallAssignmentStmt(self.sequencedArgContext(), &self.functions, assignment, locals)) return true;
-        if (try lower_c_aggregate.emitUncheckedAddAggregateAssignmentStmt(self.aggregateEmitContext(), assignment, locals)) return true;
+        if (try lower_c_aggregate.emitUncheckedAddAggregateAssignmentStmt(self.aggregateEmitContext(), assignment, locals, try self.mirAggregateTargetTypeForExpr(assignment.value))) return true;
         if (try lower_c_arith.emitUncheckedAddAssignmentStmt(self.arithContext(), assignment, locals)) return true;
         if (try lower_c_flow.emitSequencedComparisonAssignmentStmt(self.flowEmitContext(), assignment, locals)) return true;
         if (try lower_c_arith.emitSequencedCheckedBinaryAssignmentStmt(self.sequencedBinaryContext(), assignment, locals)) return true;
@@ -2995,7 +2997,8 @@ const CEmitter = struct {
         if (try lower_c_call.emitBitcastReturn(self.sequencedArgContext(), expr, locals, return_ty)) return true;
         if (try lower_c_call.emitExternNonNullCallReturn(self.sequencedArgContext(), &self.functions, expr, locals)) return true;
         if (try lower_c_arith.emitUncheckedAddReturn(self.arithContext(), expr, locals, return_ty)) return true;
-        if (try lower_c_aggregate.emitUncheckedAddAggregateReturn(self.aggregateEmitContext(), expr, locals, return_ty)) return true;
+        const aggregate_target_ty = (try self.mirAggregateTargetTypeForExpr(expr)) orelse return_ty;
+        if (try lower_c_aggregate.emitUncheckedAddAggregateReturn(self.aggregateEmitContext(), expr, locals, aggregate_target_ty)) return true;
         if (try lower_c_flow.emitSequencedComparisonReturn(self.flowEmitContext(), expr, locals, return_ty)) return true;
         if (try lower_c_arith.emitSequencedCheckedBinaryReturn(self.sequencedBinaryContext(), expr, locals, return_ty)) return true;
         if (try lower_c_call.emitSequencedCallReturn(self.sequencedArgContext(), &self.functions, expr, locals)) return true;
@@ -4161,7 +4164,7 @@ const CEmitter = struct {
         if (try self.emitValueOptionalCoercion(expr, locals, target_ty)) return;
         if (try self.emitTargetPreludeExpr(expr, locals, target_ty)) return;
         switch (expr.kind) {
-            .array_literal, .struct_literal => try self.emitAggregateLiteralWithTarget(expr, locals, target_ty),
+            .array_literal, .struct_literal => try self.emitAggregateLiteralWithTarget(expr, locals),
             .binary, .unary => try self.emitArithmeticExprWithTarget(expr, locals, target_ty),
             .call => |node| try self.emitTargetCallExpr(node, locals, target_ty, expr),
             .enum_literal => |literal| try self.emitEnumLiteralWithTarget(literal, expr.span),
@@ -4196,8 +4199,10 @@ const CEmitter = struct {
         return true;
     }
 
-    fn emitAggregateLiteralWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
-        const target = target_ty orelse return error.UnsupportedCEmission;
+    fn emitAggregateLiteralWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        const kind: mir.TargetTypeKind = if (expr.kind == .array_literal) .array_literal else .struct_literal;
+        const fact = self.mirTargetTypeFactAt(kind, expr.span) orelse return error.UnsupportedCEmission;
+        const target = fact.target_ty;
         switch (expr.kind) {
             .array_literal => |items| try lower_c_aggregate.emitArrayLiteral(self.aggregateEmitContext(), items, locals, target),
             .struct_literal => |fields| {
@@ -4996,6 +5001,15 @@ const CEmitter = struct {
             }
         };
         return matched;
+    }
+
+    fn mirAggregateTargetTypeForExpr(self: *CEmitter, expr: ast.Expr) !?ast.TypeExpr {
+        return switch (expr.kind) {
+            .grouped => |inner| self.mirAggregateTargetTypeForExpr(inner.*),
+            .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else error.UnsupportedCEmission,
+            .struct_literal => if (self.mirTargetTypeFactAt(.struct_literal, expr.span)) |fact| fact.target_ty else error.UnsupportedCEmission,
+            else => null,
+        };
     }
 
     fn mirSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
