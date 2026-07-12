@@ -23,12 +23,16 @@ ANCHORS: dict[str, list[str]] = {
     ],
     "docs/compiler-production-readiness.md": [
         "Move checker alias assignment updates use typed storage places",
+        "Move checker alias key formatter has no external callers",
         "move-place-identity-inventory.py",
     ],
 }
 
 EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/sema_move.zig": {
+        # The remaining aliasPlaceKey calls are the recursive formatter body only.
+        # Any external caller would reintroduce display-key identity as an authority.
+        "aliasPlaceKey(self,": 3,
         "state.getPtr(key)": 0,
         "state.remove(key)": 0,
         "state.getPtr(target_info.key)": 0,
