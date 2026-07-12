@@ -125,6 +125,43 @@ fn duplicateTargetTypeFact(function: *mir.Function, allocator: std.mem.Allocator
     function.target_type_facts = facts;
 }
 
+test "MIR owns all scalar conversion builtin call targets" {
+    const source =
+        \\type W = wrap<u8>;
+        \\fn from_value(x: u8) -> u64 { return u64.from(x); }
+        \\fn try_value(x: u64) -> Result<u8, ConversionError> { return u8.try_from(x); }
+        \\fn trap_value(x: u64) -> u8 { return u8.trap_from(x); }
+        \\fn wrap_value(x: u64) -> u8 { return u8.wrap_from(x); }
+        \\fn sat_value(x: u64) -> u8 { return u8.sat_from(x); }
+        \\fn mod_value() -> W { return W.from_mod(300); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_conversion_call_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+
+    const cases = [_]struct { name: []const u8, kind: mir.CallTargetKind }{
+        .{ .name = "from_value", .kind = .conversion_from },
+        .{ .name = "try_value", .kind = .conversion_try_from },
+        .{ .name = "trap_value", .kind = .conversion_trap_from },
+        .{ .name = "wrap_value", .kind = .conversion_wrap_from },
+        .{ .name = "sat_value", .kind = .conversion_sat_from },
+        .{ .name = "mod_value", .kind = .conversion_from_mod },
+    };
+    for (cases) |case| {
+        const function = functionByName(typed_mir, case.name).?;
+        try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
+        try std.testing.expectEqual(case.kind, function.call_target_facts[0].kind);
+    }
+}
+
 test "MIR owns target types for contextual constructors and literals" {
     const source =
         \\enum E { bad }

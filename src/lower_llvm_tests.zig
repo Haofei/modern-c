@@ -305,6 +305,28 @@ fn retargetCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8,
     return error.TestUnexpectedResult;
 }
 
+test "LLVM conversion builtins require exact MIR call-target facts" {
+    const source =
+        \\fn convert(x: u64) -> u8 { return u8.trap_from(x); }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_conversion_call_target_facts.mc", source);
+    defer parsed.deinit();
+
+    var missing_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_mir.deinit();
+    try clearCallTargetFactsForFunction(&missing_mir, "convert");
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_mir, &missing_output, "llvm_conversion_call_target_facts.mc", .{}, false, .riscv64, null));
+
+    var stale_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_mir.deinit();
+    try retargetCallTargetFactsForFunction(&stale_mir, "convert", .conversion_sat_from);
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_mir, &stale_output, "llvm_conversion_call_target_facts.mc", .{}, false, .riscv64, null));
+}
+
 fn retargetIntegerFactsForFunction(module_mir: *mir.Module, name: []const u8, target_ty: mir.ValueType) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;

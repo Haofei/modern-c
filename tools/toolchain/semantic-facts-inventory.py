@@ -70,6 +70,10 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "mir.byteViewCallTargetKind(call)",
             "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_fact",
         ],
+        "src/lower_c_convert.zig": [
+            "mir.conversionCallTargetKindForName(op)",
+            "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_target",
+        ],
     },
     "c-bounds-range-consumption": {
         "docs/typed-semantic-facts.md": ["| `c-bounds-range-consumption` |"],
@@ -767,6 +771,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try self.derefAccessLowering(": 2,
         "fn derefPointerHasProvenLocalStorage(": 1,
     },
+    "src/lower_c_convert.zig": {
+        "mir.conversionCallTargetKindForName(op)": 1,
+        "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_target": 1,
+    },
     "src/lower_c_infer.zig": {
         "fn qualifiedUnionConstructorType(": 0,
         "fn enumVariantPathType(": 0,
@@ -791,6 +799,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn mirTargetTypeFactAt(": 1,
         "mirTargetTypeFactAt(.value_optional_coercion": 1,
         "mirTargetTypeFactAt(.dyn_coercion": 1,
+        "mir.conversionCallTargetKindForName(member.name.text)": 1,
+        "self.mirCallTargetKindAt(call.callee.*.span) != expected_kind": 1,
         "self.current_function = global.name.text;": 1,
         "if (span.line == 0 or span.column == 0) return null;": 1,
         "fn bindClosureType(": 0,

@@ -52,6 +52,7 @@ pub fn emitConversionCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
     const is_cast = std.mem.eql(u8, op, "from") or std.mem.eql(u8, op, "wrap_from") or std.mem.eql(u8, op, "from_mod");
     const is_checked = std.mem.eql(u8, op, "trap_from") or std.mem.eql(u8, op, "sat_from") or std.mem.eql(u8, op, "try_from");
     if (!is_cast and !is_checked) return false;
+    const expected_target = mir.conversionCallTargetKindForName(op) orelse return false;
     const ident = switch (member.base.kind) {
         .ident => |id| id,
         else => return false,
@@ -65,6 +66,7 @@ pub fn emitConversionCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
         (target_name != null and !std.mem.eql(u8, target_name.?, "cstr") and primitiveCTypeName(target_name.?) != null);
     if (!numeric_target) return false;
     if (call.args.len != 1) return error.UnsupportedCEmission;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_target) return error.UnsupportedCEmission;
     const cty = try ctx.c_type(ctx.emit_ctx, resolved);
 
     if (is_checked) {

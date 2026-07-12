@@ -254,6 +254,12 @@ pub const CallTargetKind = enum {
     byte_view_equal,
     declassify,
     assume_noalias,
+    conversion_from,
+    conversion_try_from,
+    conversion_trap_from,
+    conversion_wrap_from,
+    conversion_sat_from,
+    conversion_from_mod,
 };
 
 pub const CallTargetFact = struct {

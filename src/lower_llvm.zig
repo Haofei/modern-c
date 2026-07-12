@@ -8603,6 +8603,8 @@ const LlvmEmitter = struct {
         };
         const target_ty = self.resolveAliasType(simpleType(ident.span, ident.text));
         if (self.integerBitsOf(target_ty) == null) return null;
+        const expected_kind = mir.conversionCallTargetKindForName(member.name.text) orelse return null;
+        if (self.mirCallTargetKindAt(call.callee.*.span) != expected_kind) return null;
         return .{ .target_ty = target_ty, .op = member.name.text };
     }
 

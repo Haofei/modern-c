@@ -4710,6 +4710,10 @@ const FunctionBuilder = struct {
                         try self.addCallTargetFact(fence_kind, .void, expr.span);
                     }
                 }
+                if (self.conversionCallTargetKind(node)) |conversion_kind| {
+                    try self.addInstr(.call_target, @tagName(conversion_kind), call_ty, expr.span);
+                    try self.addCallTargetFact(conversion_kind, call_ty, expr.span);
+                }
                 if (reflection_target) |fact_kind| {
                     const reflection_ty: ValueType = .{ .integer = "usize" };
                     try self.addInstr(.call_target, @tagName(fact_kind), reflection_ty, expr.span);
@@ -7234,6 +7238,17 @@ const FunctionBuilder = struct {
         return null;
     }
 
+    fn conversionCallTargetKind(self: *FunctionBuilder, call: anytype) ?CallTargetKind {
+        if (call.type_args.len != 0 or call.args.len != 1) return null;
+        const member = memberExpr(call.callee.*) orelse return null;
+        const ident_name = calleeIdentName(member.base.*) orelse return null;
+        if (self.local_types.contains(ident_name) or self.globals.contains(ident_name)) return null;
+        const ident = ast.Ident{ .text = ident_name, .span = member.base.*.span };
+        const target_ty = ast.TypeExpr{ .span = ident.span, .kind = .{ .name = ident } };
+        if (arithmeticDomainTypeAlias(target_ty, self.aliases) == null and !self.resolvesToScalarInt(ident_name, 0)) return null;
+        return conversionCallTargetKindForName(member.name.text);
+    }
+
     // D-pass operation legality for typed-resource calls: unknown atomic method
     // on an atomic value, and `.raw()` on a closed enum.
     fn typedResourceCallFinding(self: *FunctionBuilder, callee: ast.Expr) ?[]const u8 {
@@ -8071,6 +8086,16 @@ fn isMirConversionName(m: []const u8) bool {
         std.mem.eql(u8, m, "wrap_from") or
         std.mem.eql(u8, m, "sat_from") or
         std.mem.eql(u8, m, "from_mod");
+}
+
+pub fn conversionCallTargetKindForName(name: []const u8) ?CallTargetKind {
+    if (std.mem.eql(u8, name, "from")) return .conversion_from;
+    if (std.mem.eql(u8, name, "try_from")) return .conversion_try_from;
+    if (std.mem.eql(u8, name, "trap_from")) return .conversion_trap_from;
+    if (std.mem.eql(u8, name, "wrap_from")) return .conversion_wrap_from;
+    if (std.mem.eql(u8, name, "sat_from")) return .conversion_sat_from;
+    if (std.mem.eql(u8, name, "from_mod")) return .conversion_from_mod;
+    return null;
 }
 
 fn isMirSerialOpName(m: []const u8) bool {
