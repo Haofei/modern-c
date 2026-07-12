@@ -221,6 +221,63 @@ fn shortCircuitMoveCfg(self: *Checker) ?ShortCircuitMoveCfg {
     return .{ .cfg = cfg, .entry = entry, .rhs = rhs, .join = join };
 }
 
+const TwoArmMoveCfg = struct {
+    cfg: sema_model.MoveCfg,
+    entry: sema_model.MoveCfgBlockId,
+    then_block: sema_model.MoveCfgBlockId,
+    else_block: sema_model.MoveCfgBlockId,
+    join: sema_model.MoveCfgBlockId,
+
+    fn deinit(self: *TwoArmMoveCfg) void {
+        self.cfg.deinit();
+    }
+};
+
+fn twoArmMoveCfg(self: *Checker) ?TwoArmMoveCfg {
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const then_block = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const else_block = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const join = cfg.addBlock(.branch_join) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(entry, then_block, .branch) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(entry, else_block, .branch) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(then_block, join, .normal) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(else_block, join, .normal) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    return .{ .cfg = cfg, .entry = entry, .then_block = then_block, .else_block = else_block, .join = join };
+}
+
 pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     const body = fn_decl.body orelse return;
     var state = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
@@ -829,42 +886,10 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
 // non-diverging arms reach the join.  This is deliberately the first production
 // CFG slice; switch and loop still use their existing specialized transfer rules.
 fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
-    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
-    defer cfg.deinit();
-    const entry = cfg.addBlock(.entry) catch {
-        self.oom = true;
-        return false;
-    };
-    const then_block = cfg.addBlock(.statement) catch {
-        self.oom = true;
-        return false;
-    };
-    const else_block = cfg.addBlock(.statement) catch {
-        self.oom = true;
-        return false;
-    };
-    const join = cfg.addBlock(.branch_join) catch {
-        self.oom = true;
-        return false;
-    };
-    cfg.addEdge(entry, then_block, .branch) catch {
-        self.oom = true;
-        return false;
-    };
-    cfg.addEdge(entry, else_block, .branch) catch {
-        self.oom = true;
-        return false;
-    };
-    cfg.addEdge(then_block, join, .normal) catch {
-        self.oom = true;
-        return false;
-    };
-    cfg.addEdge(else_block, join, .normal) catch {
-        self.oom = true;
-        return false;
-    };
+    var branch = twoArmMoveCfg(self) orelse return false;
+    defer branch.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &cfg, entry, state) orelse return false;
+    var worklist = MoveStateCfgWorklist.init(self, &branch.cfg, branch.entry, state) orelse return false;
     defer worklist.deinit();
     var then_div = false;
     var else_div = false;
@@ -872,11 +897,11 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *std.StringHashMap(MoveS
 
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == entry) {
+        if (block == branch.entry) {
             // The condition/scrutinee is evaluated before either branch.
             moveConsume(self, node.value, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == then_block) {
+        } else if (block == branch.then_block) {
             const bound_name = addIfLetMoveBinding(self, node.pattern, node.value, block_state, aliases);
             then_div = moveBlock(self, node.then_block, block_state, aliases);
             if (bound_name) |name| {
@@ -891,11 +916,11 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *std.StringHashMap(MoveS
             }
             finalizeBranchLocals(self, block_state, state, !then_div);
             if (!then_div) worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == else_block) {
+        } else if (block == branch.else_block) {
             if (node.else_block) |else_body| else_div = moveBlock(self, else_body, block_state, aliases);
             finalizeBranchLocals(self, block_state, state, !else_div);
             if (!else_div) worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == join) {
+        } else if (block == branch.join) {
             replaceMoveState(self, state, block_state);
             joined = true;
         }
