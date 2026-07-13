@@ -403,11 +403,12 @@ pub fn emitTaggedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*std
 
 // `Union.variant(...)` — qualified, self-typed tagged-union constructor. The union is
 // the callee owner (not a target type), so this lowers the same in any position.
-pub fn emitQualifiedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+pub fn emitQualifiedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), union_ty: ast.TypeExpr) !bool {
     const q = ast_query.qualifiedMemberCallee(call.callee.*) orelse return false;
-    const union_decl = ctx.tagged_unions.get(q.owner) orelse return false;
-    const union_ty = ast.TypeExpr{ .span = call.callee.*.span, .kind = .{ .name = .{ .text = q.owner, .span = call.callee.*.span } } };
-    return emitTaggedUnionCase(ctx, call, locals, union_decl, q.owner, q.member.text, union_ty);
+    const union_name = typeName(union_ty) orelse return false;
+    if (!std.mem.eql(u8, union_name, q.owner)) return error.UnsupportedCEmission;
+    const union_decl = ctx.tagged_unions.get(union_name) orelse return false;
+    return emitTaggedUnionCase(ctx, call, locals, union_decl, union_name, q.member.text, union_ty);
 }
 
 fn emitTaggedUnionCase(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), union_decl: ast.UnionDecl, union_name: []const u8, tag: []const u8, union_ty: ast.TypeExpr) !bool {

@@ -4459,6 +4459,7 @@ const FunctionBuilder = struct {
             if (counts_for_semantic_depth) self.semantic_expr_depth -= 1;
         }
         try self.addTargetTypeFactForExpr(expr);
+        try self.addSelfTypedExpressionFact(expr);
 
         switch (expr.kind) {
             // The async transform eliminates every `await_expr` pre-sema.
@@ -5244,6 +5245,16 @@ const FunctionBuilder = struct {
             }
         }
         try self.addPrimaryTargetTypeFactForExpr(expr, target_ty);
+    }
+
+    fn addSelfTypedExpressionFact(self: *FunctionBuilder, expr: ast.Expr) !void {
+        const fact: ?struct { kind: TargetTypeKind, ty: ast.TypeExpr } = switch (expr.kind) {
+            .call => |call| if (self.qualifiedUnionConstructorTypeExpr(call)) |ty| .{ .kind = .qualified_union_result, .ty = ty } else null,
+            .member => |member| if (self.enumVariantPathTypeExpr(member)) |ty| .{ .kind = .enum_variant_path_result, .ty = ty } else null,
+            else => null,
+        };
+        const owned = fact orelse return;
+        try self.appendTargetTypeFact(owned.kind, owned.ty, valueTypeFromTypeAlias(owned.ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
     }
 
     fn addPrimaryTargetTypeFactForExpr(self: *FunctionBuilder, expr: ast.Expr, target_ty: ast.TypeExpr) !void {
@@ -7560,6 +7571,7 @@ const FunctionBuilder = struct {
         return switch (target.kind) {
             .ident => |ident| self.local_type_exprs.get(ident.text) orelse self.global_type_exprs.get(ident.text),
             .member => |node| blk: {
+                if (self.enumVariantPathTypeExpr(node)) |ty| break :blk ty;
                 const base_ty = self.typeExprForExpr(node.base.*) orelse break :blk null;
                 const struct_name = structTypeNameAlias(base_ty, self.aliases) orelse break :blk null;
                 break :blk self.structFieldTypeExpr(struct_name, node.name.text);
@@ -7642,7 +7654,10 @@ const FunctionBuilder = struct {
                 .bool
             else
                 self.exprType(node.left.*),
-            .member => |node| self.memberType(node),
+            .member => |node| if (self.enumVariantPathTypeExpr(node)) |ty|
+                valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
+            else
+                self.memberType(node),
             .deref, .index, .slice => if (self.typeExprForExpr(expr)) |ty|
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
             else
@@ -7678,6 +7693,20 @@ const FunctionBuilder = struct {
             const expected_args: usize = if (case.ty == null) 0 else 1;
             if (call.type_args.len != 0 or call.args.len != expected_args) return null;
             return ast_query.simpleNameType(owner.text, owner.span);
+        }
+        return null;
+    }
+
+    fn enumVariantPathTypeExpr(self: *FunctionBuilder, member: anytype) ?ast.TypeExpr {
+        const base_ident = switch (member.base.*.kind) {
+            .ident => |ident| ident,
+            else => return null,
+        };
+        const base_is_value = self.local_type_exprs.contains(base_ident.text) or self.global_type_exprs.contains(base_ident.text);
+        if (base_is_value) return null;
+        const info = self.enums.get(base_ident.text) orelse return null;
+        for (info.cases) |case| {
+            if (std.mem.eql(u8, case.name.text, member.name.text)) return ast_query.simpleNameType(base_ident.text, base_ident.span);
         }
         return null;
     }

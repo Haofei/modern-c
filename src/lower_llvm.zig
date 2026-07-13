@@ -32,8 +32,6 @@ const overlayByteArrayElementType = ast_query.overlayByteArrayElementType;
 const overlayArrayElementType = ast_query.overlayArrayElementType;
 const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
 const taggedUnionCase = ast_query.taggedUnionCase;
-const qualifiedTaggedUnionConstructorType = ast_query.qualifiedTaggedUnionConstructorType;
-const enumVariantPathType = ast_query.enumVariantPathType;
 
 const backend_mod = @import("backend.zig");
 const lower_llvm_alias = @import("lower_llvm_alias.zig");
@@ -1388,8 +1386,8 @@ const LlvmEmitter = struct {
             .deref => |inner| try self.emitDeref(inner.*, expected_ty),
             .index => |node| try self.emitIndexLoad(node),
             .slice => |node| try self.emitSlice(node, expr.span),
-            .member => |node| if (enumVariantPathType(&self.enum_types, node, self.memberBaseIsValue(node))) |variant_ty|
-                (if (self.enumDeclForType(variant_ty)) |enum_decl|
+            .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact|
+                (if (self.enumDeclForType(fact.target_ty)) |enum_decl|
                     try self.enumCaseValueByName(enum_decl, node.name.text)
                 else
                     error.UnsupportedLlvmEmission)
@@ -6165,7 +6163,9 @@ const LlvmEmitter = struct {
             return try self.emitBindValue(call, fact.target_ty);
         }
         // `Union.variant(...)` qualified constructor — self-typed from the owner (no target).
-        if (try self.emitQualifiedUnionConstructor(call)) |value| return value;
+        if (self.mirTargetTypeFactAt(.qualified_union_result, span)) |fact| {
+            return (try self.emitQualifiedUnionConstructor(call, fact.target_ty)) orelse error.UnsupportedLlvmEmission;
+        }
         if (self.mirTargetTypeFactAt(.tagged_union, span)) |fact| {
             return (try self.emitTaggedUnionConstructor(call, fact.target_ty)) orelse error.UnsupportedLlvmEmission;
         }
@@ -7407,12 +7407,13 @@ const LlvmEmitter = struct {
     // `Union.variant(...)` — qualified, self-typed tagged-union constructor. The union is
     // the callee owner (not a target type). Returns null when the owner is not a known
     // tagged union (an inherent/associated call, or an intrinsic).
-    fn emitQualifiedUnionConstructor(self: *LlvmEmitter, call: anytype) !?[]const u8 {
+    fn emitQualifiedUnionConstructor(self: *LlvmEmitter, call: anytype, union_ty: ast.TypeExpr) !?[]const u8 {
         const q = ast_query.qualifiedMemberCallee(call.callee.*) orelse return null;
-        const union_decl = self.tagged_unions.get(q.owner) orelse return null;
+        const union_name = typeName(self.resolveAliasType(union_ty)) orelse return null;
+        if (!std.mem.eql(u8, union_name, q.owner)) return error.UnsupportedLlvmEmission;
+        const union_decl = self.tagged_unions.get(union_name) orelse return null;
         const case_index = self.taggedUnionCaseIndex(union_decl, q.member.text) orelse return null;
         const case = union_decl.cases[case_index];
-        const union_ty = ast.TypeExpr{ .span = call.callee.*.span, .kind = .{ .name = .{ .text = q.owner, .span = call.callee.*.span } } };
         const union_llvm = try self.llvmType(union_ty);
         const ptr = try self.nextTemp();
         const tag_ptr = try self.nextTemp();
@@ -7990,8 +7991,8 @@ const LlvmEmitter = struct {
             .int_literal => null,
             .float_literal => null,
             .grouped => |inner| self.exprType(inner.*),
-            .call => |call| if (qualifiedTaggedUnionConstructorType(&self.tagged_unions, call)) |ty|
-                ty
+            .call => |call| if (self.mirTargetTypeFactAt(.qualified_union_result, expr.span)) |fact|
+                fact.target_ty
             else if (isAssumeNoaliasCall(call))
                 if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) self.exprType(call.args[0]) else null
             else if (isDeclassifyCall(call))
@@ -8009,7 +8010,7 @@ const LlvmEmitter = struct {
             .deref => |inner| self.derefPointeeType(inner.*),
             .index => |node| self.indexElementType(node.base.*),
             .slice => |node| if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
-            .member => |node| if (enumVariantPathType(&self.enum_types, node, self.memberBaseIsValue(node))) |variant_ty| variant_ty else if (self.exprType(node.base.*)) |base_ty| blk: {
+            .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else if (self.exprType(node.base.*)) |base_ty| blk: {
                 const resolved_base_ty = self.resolveAliasType(base_ty);
                 if (resolved_base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");
                 if (self.packedBitsInfoForType(base_ty)) |info| {

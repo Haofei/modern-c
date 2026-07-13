@@ -13,6 +13,7 @@ const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const mir = @import("mir.zig");
 
 const FnInfo = lower_c_model.FnInfo;
 const GlobalInfo = lower_c_model.GlobalInfo;
@@ -21,8 +22,6 @@ const RawManyOffsetInfo = lower_c_model.RawManyOffsetInfo;
 const calleeIdentName = ast_query.calleeIdentName;
 const isRawManyPointerType = ast_query.isRawManyPointerType;
 const memberCallee = ast_query.memberCallee;
-const enumVariantPathType = ast_query.enumVariantPathType;
-const qualifiedTaggedUnionConstructorType = ast_query.qualifiedTaggedUnionConstructorType;
 const simpleNameType = ast_query.simpleNameType;
 const exprIsNumericLiteral = lower_c_expr.exprIsNumericLiteral;
 const isNumericValueBinaryOp = lower_c_expr.isNumericValueBinaryOp;
@@ -36,6 +35,7 @@ const typeName = ast_query.typeName;
 
 pub const SourceTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const CallReturnTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 
 pub const TypeQueryContext = struct {
     type_aliases: *const std.StringHashMap(ast.TypeExpr),
@@ -47,6 +47,7 @@ pub const TypeQueryContext = struct {
     source_ctx: *anyopaque,
     source_type_for_expr: SourceTypeFn,
     call_return_type_for_expr: CallReturnTypeFn,
+    mir_target_type: MirTargetTypeFn,
 };
 
 pub fn sliceReturnTypeForCall(functions: *const std.StringHashMap(FnInfo), call: anytype) ?ast.TypeExpr {
@@ -137,12 +138,8 @@ pub fn enumNameForValueExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std
 // name so `Enum.variant.raw()` resolves. The base must name an enum TYPE, not a
 // local/global value shadowing it, and the member must be one of its cases.
 fn enumNameForVariantPath(ctx: TypeQueryContext, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
-    const base_ident = switch (node.base.*.kind) {
-        .ident => |id| id,
-        else => return null,
-    };
-    const base_is_value = (if (locals) |local_set| local_set.contains(base_ident.text) else false) or ctx.globals.contains(base_ident.text);
-    const ty = enumVariantPathType(ctx.enums, node, base_is_value) orelse return null;
+    _ = locals;
+    const ty = ctx.mir_target_type(ctx.source_ctx, .enum_variant_path_result, node.base.*.span) orelse return null;
     return typeName(ty);
 }
 
@@ -223,7 +220,7 @@ pub fn taggedUnionReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.
         .call => |node| blk: {
             // A qualified constructor `Union.variant(...)` is self-typed to its owner,
             // so an untyped `let t = Token.number(9)` infers `Token`.
-            if (qualifiedTaggedUnionConstructorType(ctx.tagged_unions, node)) |ty| break :blk ty;
+            if (ctx.mir_target_type(ctx.source_ctx, .qualified_union_result, expr.span)) |ty| break :blk ty;
             const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
             const info = ctx.functions.get(fn_name) orelse break :blk null;
             const ret_ty = info.return_type orelse break :blk null;

@@ -4023,7 +4023,10 @@ const CEmitter = struct {
     fn emitSpecialCallExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
         if (try lower_c_call.emitTrapCall(self.callContext(), node)) return true;
         // `Union.variant(...)` qualified constructor — self-typed from the owner.
-        if (try lower_c_aggregate.emitQualifiedUnionConstructor(self.aggregateEmitContext(), node, locals)) return true;
+        if (self.mirTargetTypeFactAt(.qualified_union_result, node.callee.*.span)) |fact| {
+            if (try lower_c_aggregate.emitQualifiedUnionConstructor(self.aggregateEmitContext(), node, locals, fact.target_ty)) return true;
+            return error.UnsupportedCEmission;
+        }
         if (try self.emitNamedSpecialCallExpr(node, locals)) return true;
         // Tier 2 dynamic dispatch: `d.method(args)` through a `*dyn Trait` ->
         // `d.vtable->method(d.data, args)` (a genuine load-through-vtable call).
@@ -6924,6 +6927,7 @@ const CEmitter = struct {
             .source_ctx = self,
             .source_type_for_expr = sourceTypeForInfer,
             .call_return_type_for_expr = callReturnTypeForInfer,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 

@@ -294,6 +294,8 @@ pub const TargetTypeKind = enum {
     raw_ptr_result,
     va_start_result,
     va_arg_result,
+    qualified_union_result,
+    enum_variant_path_result,
 };
 
 pub const TargetTypeFact = struct {

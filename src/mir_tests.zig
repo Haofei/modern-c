@@ -352,6 +352,49 @@ test "MIR owns mapped try error target types" {
     try std.testing.expect(found_mapped);
 }
 
+test "MIR owns qualified union and enum variant path result types" {
+    const source =
+        \\enum E { first, second }
+        \\union Token { number: i64, eof }
+        \\struct Holder { first: u32 }
+        \\fn make(value: i64) -> Token { return Token.number(value); }
+        \\fn variant() -> E { return E.second; }
+        \\fn shadow(E: Holder) -> u32 { return E.first; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_self_typed_expression_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+
+    const make = functionByName(typed_mir, "make").?;
+    var qualified_count: usize = 0;
+    for (make.target_type_facts) |fact| if (fact.kind == .qualified_union_result) {
+        try std.testing.expectEqualStrings("Token", fact.target_ty.kind.name.text);
+        qualified_count += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), qualified_count);
+
+    const variant = functionByName(typed_mir, "variant").?;
+    var variant_count: usize = 0;
+    for (variant.target_type_facts) |fact| if (fact.kind == .enum_variant_path_result) {
+        try std.testing.expectEqualStrings("E", fact.target_ty.kind.name.text);
+        variant_count += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), variant_count);
+
+    for (functionByName(typed_mir, "shadow").?.target_type_facts) |fact| {
+        try std.testing.expect(fact.kind != .enum_variant_path_result);
+    }
+}
+
 test "MIR owns dyn coercion targets and excludes pass-through values" {
     const source =
         \\trait Shape { fn area(self: *Self) -> u32; }

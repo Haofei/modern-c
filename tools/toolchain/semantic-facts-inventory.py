@@ -18,14 +18,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
     "c-expression-type-inference": {
         "docs/typed-semantic-facts.md": ["| `c-expression-type-inference` |"],
-        "src/ast_query.zig": [
-            "pub fn enumVariantPathType(",
-        ],
         "src/lower_c_infer.zig": [
             "//! C backend expression type inference helpers.",
             "pub fn operandEmitType(",
             "pub fn derefPointeeType(",
-            "enumVariantPathType(ctx.enums, node, base_is_value)",
         ],
     },
     "c-type-shape-classification": {
@@ -110,8 +106,6 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
     "llvm-expression-type-inference": {
         "docs/typed-semantic-facts.md": ["| `llvm-expression-type-inference` |"],
         "src/ast_query.zig": [
-            "pub fn qualifiedTaggedUnionConstructorType(",
-            "pub fn enumVariantPathType(",
             "pub fn bitcastCallReturnType(",
             "pub fn byteViewCallReturnType(",
             "pub fn reflectionValueCallKind(",
@@ -133,8 +127,6 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
         "src/lower_llvm.zig": [
             "fn exprType(",
             "fn derefPointeeType(",
-            "qualifiedTaggedUnionConstructorType(&self.tagged_unions, call)",
-            "enumVariantPathType(&self.enum_types, node, self.memberBaseIsValue(node))",
             "byteViewCallReturnType(call)",
             "reflectionValueCallReturnType(call)",
             "isDeclassifyCall(call)",
@@ -694,6 +686,9 @@ ANCHORS: dict[str, list[str]] = {
 
 EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/mir.zig": {
+        "fn addSelfTypedExpressionFact(": 1,
+        "qualified_union_result": 1,
+        "enum_variant_path_result": 1,
         "fn vaCallFactInfo(": 1,
         "addCallTargetFact(va.kind": 1,
         "appendTargetTypeFact(.raw_load_result": 1,
@@ -752,6 +747,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.explicit_cast_target": 6,
         "mirTargetTypeFactAt(.view_const_narrow_source": 1,
         "mirTargetTypeFactAt(.view_const_narrow_target": 1,
+        "mirTargetTypeFactAt(.qualified_union_result": 1,
         "self.exprSourceTypeForEmission(value_expr, locals)": 0,
         "self.cTypeFor(node.ty.*, .typedef_name)": 0,
         "self.emitExprWithTarget(node.value.*, locals, node.ty.*)": 0,
@@ -787,6 +783,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "numeric_expr_type:": 0,
     },
     "src/lower_c_infer.zig": {
+        "mir_target_type(ctx.source_ctx, .qualified_union_result": 1,
+        "mir_target_type(ctx.source_ctx, .enum_variant_path_result": 1,
         "fn qualifiedUnionConstructorType(": 0,
         "fn enumVariantPathType(": 0,
         "taggedUnionCase(union_decl": 0,
@@ -826,6 +824,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.raw_ptr_result": 2,
         "mirTargetTypeFactAt(.va_start_result": 3,
         "mirTargetTypeFactAt(.va_arg_result": 2,
+        "mirTargetTypeFactAt(.qualified_union_result": 2,
+        "mirTargetTypeFactAt(.enum_variant_path_result": 2,
         "vaCallReturnType(call)": 0,
         "fn emitCast(self: *LlvmEmitter, value_expr: ast.Expr, target_ty:": 0,
         "const source_ty = self.exprType(value_expr)": 0,

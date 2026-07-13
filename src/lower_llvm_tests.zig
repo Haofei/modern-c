@@ -373,6 +373,25 @@ test "LLVM implicit view const narrowing requires MIR source and target type fac
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_view_const_narrow_type_facts.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM self-typed union and enum paths require MIR result type facts" {
+    const source =
+        \\enum E { first, second }
+        \\union Token { number: i64, eof }
+        \\fn make(value: i64) -> Token { return Token.number(value); }
+        \\fn variant() -> E { return E.second; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_self_typed_expression_facts.mc", source);
+    defer parsed.deinit();
+    for ([_][]const u8{ "make", "variant" }) |name| {
+        var module_mir = try mir.build(std.testing.allocator, parsed.module);
+        defer module_mir.deinit();
+        try clearTargetTypeFactsForFunction(&module_mir, name);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_self_typed_expression_facts.mc", .{}, false, .riscv64, null));
+    }
+}
+
 fn retargetIntegerFactsForFunction(module_mir: *mir.Module, name: []const u8, target_ty: mir.ValueType) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
