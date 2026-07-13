@@ -4773,6 +4773,8 @@ const FunctionBuilder = struct {
                     const reflection_ty: ValueType = .{ .integer = "usize" };
                     try self.addInstr(.call_target, @tagName(fact_kind), reflection_ty, expr.span);
                     try self.addCallTargetFact(fact_kind, reflection_ty, expr.span);
+                    const result_ty = ast_query.simpleNameType("usize", node.callee.*.span);
+                    try self.appendTargetTypeFact(.reflection_result, result_ty, reflection_ty, expr.span);
                 }
                 if (byte_view_target) |fact_kind| {
                     const byte_view_ty: ValueType = switch (fact_kind) {
@@ -4782,6 +4784,8 @@ const FunctionBuilder = struct {
                     };
                     try self.addInstr(.call_target, @tagName(fact_kind), byte_view_ty, expr.span);
                     try self.addCallTargetFact(fact_kind, byte_view_ty, expr.span);
+                    const result_ty = ast_query.byteViewCallReturnType(node) orelse return error.UnsupportedMirConstruction;
+                    try self.appendTargetTypeFact(.byte_view_result, result_ty, byte_view_ty, expr.span);
                 }
                 if (semantic_escape_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
@@ -7597,6 +7601,7 @@ const FunctionBuilder = struct {
                 break :blk self.structFieldTypeExpr(struct_name, node.name.text);
             },
             .call => |node| self.qualifiedUnionConstructorTypeExpr(node) orelse
+                self.reflectionOrByteViewCallTypeExpr(node) orelse
                 self.mmioReceiverReadTypeExpr(node.callee.*) orelse
                 mmioMapCallPayloadType(node) orelse
                 reduceCallReturnTypeExpr(node) orelse
@@ -7695,6 +7700,11 @@ const FunctionBuilder = struct {
             return ast_query.simpleNameType(owner.text, owner.span);
         }
         return null;
+    }
+
+    fn reflectionOrByteViewCallTypeExpr(_: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
+        if (reflectionCallTargetKind(call) != null) return ast_query.simpleNameType("usize", call.callee.*.span);
+        return ast_query.byteViewCallReturnType(call);
     }
 
     fn enumVariantPathTypeExpr(self: *FunctionBuilder, member: anytype) ?ast.TypeExpr {

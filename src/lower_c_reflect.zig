@@ -39,6 +39,7 @@ pub const ReflectEnv = struct {
 
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
@@ -51,6 +52,7 @@ pub const EmitContext = struct {
     type_ctx: *anyopaque,
     c_type: CTypeFn,
     mir_call_target_kind: MirCallTargetKindFn,
+    mir_target_type: MirTargetTypeFn,
 };
 
 pub fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
@@ -62,6 +64,7 @@ pub fn emitReflectionCall(ctx: EmitContext, call: anytype) !bool {
     const kind = reflectionCallKind(call.callee.*) orelse return false;
     const expected_fact = mir.reflectionCallTargetKind(call) orelse return error.UnsupportedCEmission;
     if (ctx.mir_call_target_kind(ctx.type_ctx, call.callee.*.span) != expected_fact) return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.type_ctx, .reflection_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
     if (call.type_args.len != 1) return error.UnsupportedCEmission;
     const target_ty = call.type_args[0];
     switch (kind) {

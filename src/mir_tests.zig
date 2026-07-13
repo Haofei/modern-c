@@ -1002,8 +1002,11 @@ test "MIR owns value reflection call target facts" {
         try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
         try std.testing.expectEqual(item.kind, function.call_target_facts[0].kind);
         try std.testing.expectEqualStrings("usize", function.call_target_facts[0].result_ty.name());
+        try std.testing.expectEqual(@as(usize, 1), function.target_type_facts.len);
+        try std.testing.expectEqual(mir.TargetTypeKind.reflection_result, function.target_type_facts[0].kind);
     }
     try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
 test "MIR owns byte-view call target facts" {
@@ -1033,12 +1036,17 @@ test "MIR owns byte-view call target facts" {
     try std.testing.expectEqual(@as(usize, 1), view.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.byte_view_as_bytes, view.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("u8", view.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 1), view.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.byte_view_result, view.target_type_facts[0].kind);
 
     const equal = functionByName(typed_mir, "byte_equal").?;
     try std.testing.expectEqual(@as(usize, 1), equal.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.byte_view_equal, equal.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("bool", equal.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 1), equal.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.byte_view_result, equal.target_type_facts[0].kind);
     try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
 test "MIR owns semantic escape call target facts" {

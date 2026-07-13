@@ -25,6 +25,7 @@ pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, mut
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
 pub const ExprTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -41,12 +42,14 @@ pub const Context = struct {
     operand_emit_type: ExprTypeFn,
     expr_source_type: ExprTypeFn,
     mir_call_target_kind: MirCallTargetKindFn,
+    mir_target_type: MirTargetTypeFn,
 };
 
 pub fn emitByteViewCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     const kind = byteViewCallKind(call.callee.*) orelse return false;
     const expected_fact = mir.byteViewCallTargetKind(call) orelse return error.UnsupportedCEmission;
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_fact) return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .byte_view_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
     if (call.type_args.len != 0) return error.UnsupportedCEmission;
     switch (kind) {
         .as_bytes => {

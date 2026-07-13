@@ -16,8 +16,6 @@ const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const typeName = ast_query.typeName;
 const ByteViewCallKind = ast_query.ByteViewCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
-const byteViewCallReturnType = ast_query.byteViewCallReturnType;
-const reflectionValueCallReturnType = ast_query.reflectionValueCallReturnType;
 const constGetCallTarget = ast_query.constGetCallTarget;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
@@ -6594,6 +6592,7 @@ const LlvmEmitter = struct {
         if (byteViewCallKind(call.callee.*)) |kind| {
             const expected_fact = mir.byteViewCallTargetKind(call) orelse return error.UnsupportedLlvmEmission;
             if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return error.UnsupportedLlvmEmission;
+            _ = self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span) orelse return error.UnsupportedLlvmEmission;
             return try self.emitByteViewCall(call, kind);
         }
         if (resultConstructorCallTag(call)) |tag| {
@@ -8523,10 +8522,9 @@ const LlvmEmitter = struct {
     }
 
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
-        if (reflectionValueCallReturnType(call)) |ty| {
-            const expected_fact = mir.reflectionCallTargetKind(call) orelse return null;
+        if (mir.reflectionCallTargetKind(call)) |expected_fact| {
             if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return null;
-            return ty;
+            return if (self.mirTargetTypeFactAt(.reflection_result, call.callee.*.span)) |fact| fact.target_ty else null;
         }
         // Tier 2 dynamic dispatch `d.method(args)` through a `*dyn Trait`: the return type is the
         // trait method's declared return type. Without this, exprType() is null for a dispatch call,
@@ -8548,10 +8546,9 @@ const LlvmEmitter = struct {
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
         if (self.domainOpCallInfo(call)) |info| return info.return_ty;
         if (self.reduceCallInfo(call)) |info| return info.return_ty;
-        if (byteViewCallReturnType(call)) |ty| {
-            const expected_fact = mir.byteViewCallTargetKind(call) orelse return null;
+        if (mir.byteViewCallTargetKind(call)) |expected_fact| {
             if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return null;
-            return ty;
+            return if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| fact.target_ty else null;
         }
         if (mmioMapCallPayloadType(call)) |ty| {
             const child = self.scratch.allocator().create(ast.TypeExpr) catch return null;
@@ -8858,6 +8855,7 @@ const LlvmEmitter = struct {
     fn reflectionCallValue(self: *LlvmEmitter, call: anytype) ?[]const u8 {
         const expected_fact = mir.reflectionCallTargetKind(call) orelse return null;
         if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return null;
+        _ = self.mirTargetTypeFactAt(.reflection_result, call.callee.*.span) orelse return null;
         const expr: ast.Expr = .{ .span = call.callee.*.span, .kind = .{ .call = call } };
         var env = self.reflectEnv();
         const value = lower_llvm_reflect.comptimeReflect(&env, expr) orelse return null;

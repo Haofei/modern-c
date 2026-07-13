@@ -111,7 +111,6 @@ const packedBitsNameForExpr = lower_c_access.packedBitsNameForExpr;
 const packedBitsGlobalBase = lower_c_access.packedBitsGlobalBase;
 const packedBitsMaskLiteral = lower_c_access.packedBitsMaskLiteral;
 const globalArrayElementAccess = lower_c_access.globalArrayElementAccess;
-const byteViewCallReturnTypeForCall = lower_c_builtin.byteViewCallReturnTypeForCall;
 const appendLineDirective = lower_c_map.appendLineDirective;
 const emitGlobalDecl = lower_c_global.emitGlobal;
 const appendGlobalLoadExpr = lower_c_global.appendGlobalLoadExpr;
@@ -723,6 +722,7 @@ const CEmitter = struct {
             .type_ctx = self,
             .c_type = cTypeForReflect,
             .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 
@@ -1685,6 +1685,7 @@ const CEmitter = struct {
             .operand_emit_type = operandEmitTypeForMemory,
             .expr_source_type = exprSourceTypeForMemory,
             .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 
@@ -6966,10 +6967,11 @@ const CEmitter = struct {
     }
 
     fn callReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (self.mirTargetTypeFactAt(.reflection_result, call.callee.*.span)) |fact| return fact.target_ty;
+        if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (bitcastReturnTypeForCall(call)) |ty| return ty;
         if (self.assumeNoaliasReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
-        if (byteViewCallReturnTypeForCall(call)) |ty| return ty;
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawMethodReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.enumRawReturnTypeForCall(call, locals)) |ty| return ty;
@@ -7058,10 +7060,11 @@ const CEmitter = struct {
     }
 
     fn callSourceTypeForEmission(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (self.mirTargetTypeFactAt(.reflection_result, call.callee.*.span)) |fact| return fact.target_ty;
+        if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (bitcastReturnTypeForCall(call)) |ty| return ty;
         if (self.assumeNoaliasReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
-        if (byteViewCallReturnTypeForCall(call)) |ty| return ty;
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawMethodReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.enumRawReturnTypeForCall(call, locals)) |ty| return ty;
