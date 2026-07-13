@@ -87,7 +87,6 @@ const GlobalAccess = lower_c_model.GlobalAccess;
 const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
 const hasNakedAttr = lower_c_attr.hasNakedAttr;
 const backendNameOverride = lower_c_attr.backendNameOverride;
-const bitcastReturnTypeForCall = lower_c_expr.bitcastReturnTypeForCall;
 const exprContainsCall = lower_c_expr.exprContainsCall;
 const resolvedArrayChildType = lower_c_shape.resolvedArrayChildType;
 const overlayFieldLayoutForType = lower_c_shape.overlayFieldLayout;
@@ -1557,6 +1556,7 @@ const CEmitter = struct {
             .global_assignment_target = globalAssignmentTargetForArith,
             .emit_assign_target = emitAssignTargetForArith,
             .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 
@@ -6969,7 +6969,8 @@ const CEmitter = struct {
     fn callReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         if (self.mirTargetTypeFactAt(.reflection_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| return fact.target_ty;
-        if (bitcastReturnTypeForCall(call)) |ty| return ty;
+        if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
+        if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.assumeNoaliasReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
@@ -7062,7 +7063,8 @@ const CEmitter = struct {
     fn callSourceTypeForEmission(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         if (self.mirTargetTypeFactAt(.reflection_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| return fact.target_ty;
-        if (bitcastReturnTypeForCall(call)) |ty| return ty;
+        if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
+        if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.assumeNoaliasReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;

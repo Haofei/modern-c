@@ -4718,10 +4718,16 @@ const FunctionBuilder = struct {
                 if (self.bitcastCallValueType(node)) |bitcast_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.bitcast), bitcast_ty, expr.span);
                     try self.addCallTargetFact(.bitcast, bitcast_ty, expr.span);
+                    const target_ty = node.type_args[0];
+                    const source_ty = try self.explicitCastSourceTypeExpr(node.args[0], target_ty);
+                    try self.appendTargetTypeFact(.bitcast_source, source_ty, valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
+                    try self.appendTargetTypeFact(.bitcast_target, target_ty, bitcast_ty, expr.span);
                 }
                 if (self.physCallValueType(node)) |phys_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.phys), phys_ty, expr.span);
                     try self.addCallTargetFact(.phys, phys_ty, expr.span);
+                    const result_ty = ast_query.simpleNameType("PAddr", expr.span);
+                    try self.appendTargetTypeFact(.phys_result, result_ty, phys_ty, expr.span);
                 }
                 if (self.rawLoadCallValueType(node)) |raw_load_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.raw_load), raw_load_ty, expr.span);

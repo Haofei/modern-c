@@ -6479,12 +6479,13 @@ const LlvmEmitter = struct {
             return result;
         }
         if (self.bitcastCallTargetType(call)) |target_ty| {
-            const source_ty = self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission;
+            const source_ty = if (self.mirTargetTypeFactAt(.bitcast_source, call.callee.*.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission;
             const value = try self.emitExpr(call.args[0], source_ty);
             return try self.emitBitcastValue(value, source_ty, target_ty);
         }
         if (self.mirCallTargetKindAt(call.callee.*.span) == .phys) {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+            _ = self.physCallTargetType(call) orelse return error.UnsupportedLlvmEmission;
             return try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
         }
         if (mmioMapCallPayloadType(call)) |_| {
@@ -8764,13 +8765,13 @@ const LlvmEmitter = struct {
     fn bitcastCallTargetType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
         if (self.mirCallTargetKindAt(call.callee.*.span) != .bitcast) return null;
         if (call.type_args.len != 1 or call.args.len != 1) return null;
-        return call.type_args[0];
+        return if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| fact.target_ty else null;
     }
 
     fn physCallTargetType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
         if (self.mirCallTargetKindAt(call.callee.*.span) != .phys) return null;
         if (call.type_args.len != 0 or call.args.len != 1) return null;
-        return simpleType(call.callee.*.span, "PAddr");
+        return if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| fact.target_ty else null;
     }
 
     fn dmaCacheCallInfo(self: *LlvmEmitter, call: anytype) ?DmaCacheCallInfo {

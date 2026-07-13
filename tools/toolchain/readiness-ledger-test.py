@@ -31,9 +31,9 @@ def main() -> int:
     evidence, active, open_workstreams = map(int, header.groups())
     try:
         start = lines.index("### Evidence Register") + 1
-        end = lines.index("### Active Work")
+        end = lines.index("### Bounded Workstream Status")
     except ValueError:
-        return fail("evidence-register or active-work headings are missing")
+        return fail("evidence-register or bounded-workstream headings are missing")
 
     rows = [line for line in lines[start:end] if line.startswith("| ") and not line.startswith("| Item |")]
     if evidence != len(rows):

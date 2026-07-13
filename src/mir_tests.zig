@@ -1231,7 +1231,13 @@ test "MIR records typed call target facts for bitcast calls" {
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.bitcast, function.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("u32", function.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 2), function.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.bitcast_source, function.target_type_facts[0].kind);
+    try std.testing.expectEqualStrings("f32", function.target_type_facts[0].result_ty.name());
+    try std.testing.expectEqual(mir.TargetTypeKind.bitcast_target, function.target_type_facts[1].kind);
+    try std.testing.expectEqualStrings("u32", function.target_type_facts[1].result_ty.name());
     try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
 test "MIR records typed call target facts for phys calls" {
@@ -1257,7 +1263,11 @@ test "MIR records typed call target facts for phys calls" {
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.phys, function.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("PAddr", function.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 1), function.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.phys_result, function.target_type_facts[0].kind);
+    try std.testing.expectEqualStrings("PAddr", function.target_type_facts[0].result_ty.name());
     try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
 test "MIR records typed call target facts for raw address calls" {

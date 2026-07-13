@@ -81,6 +81,7 @@ pub const TempContext = struct {
     global_assignment_target: GlobalAssignmentTargetFn,
     emit_assign_target: EmitAssignTargetFn,
     mir_call_target_kind: MirCallTargetKindFn,
+    mir_target_type: MirTargetTypeFn,
 };
 
 pub const LocalInitContext = struct {
@@ -211,7 +212,7 @@ pub fn emitBitcastValueTemp(ctx: TempContext, expr: ast.Expr, locals: *std.Strin
 pub fn emitBitcastValueTempFromCall(ctx: TempContext, call: anytype, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
     const target = bitcastTargetType(ctx, call) orelse return null;
     const target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, target);
-    const source_ty = ctx.expr_source_type(ctx.emit_ctx, call.args[0], locals) orelse return error.UnsupportedCEmission;
+    const source_ty = ctx.mir_target_type(ctx.emit_ctx, .bitcast_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
     const source_temp = try ctx.emit_arg_temp(ctx.emit_ctx, call.args[0], locals, source_ty);
     const result_temp = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
@@ -226,7 +227,7 @@ pub fn emitBitcastValueTempFromCall(ctx: TempContext, call: anytype, locals: *st
 pub fn emitBitcastLocalInit(ctx: TempContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(initializer) orelse return false;
     if (bitcastTargetType(ctx, call) == null) return false;
-    const source_ty = ctx.expr_source_type(ctx.emit_ctx, call.args[0], locals) orelse return error.UnsupportedCEmission;
+    const source_ty = ctx.mir_target_type(ctx.emit_ctx, .bitcast_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
     const source_temp = try ctx.emit_arg_temp(ctx.emit_ctx, call.args[0], locals, source_ty);
 
     try writeIndent(ctx);
@@ -246,7 +247,7 @@ pub fn emitBitcastInferredLocalInit(ctx: TempContext, name: []const u8, initiali
 fn bitcastTargetType(ctx: TempContext, call: anytype) ?ast.TypeExpr {
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .bitcast) return null;
     if (call.type_args.len != 1 or call.args.len != 1) return null;
-    return call.type_args[0];
+    return ctx.mir_target_type(ctx.emit_ctx, .bitcast_target, call.callee.*.span);
 }
 
 pub fn emitBitcastReturn(ctx: TempContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
@@ -546,6 +547,7 @@ pub fn emitVaCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Local
 pub fn emitPhysCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .phys) return false;
     if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .phys_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
     try ctx.out.appendSlice(ctx.allocator, "((uintptr_t)(");
     try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
     try ctx.out.appendSlice(ctx.allocator, "))");

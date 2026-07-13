@@ -782,6 +782,26 @@ test "LLVM rejects prebuilt MIR with missing bitcast call target facts" {
     );
 }
 
+test "LLVM rejects prebuilt MIR with missing bitcast target type facts" {
+    const source =
+        \\fn bitcast_target_type_fact_gate(value: f32) -> u32 {
+        \\    return bitcast<u32>(value);
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_missing_bitcast_target_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "bitcast_target_type_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirTargetTypeFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_bitcast_target_type_facts.mc", .{}, false, .riscv64, null),
+    );
+}
+
 test "LLVM rejects prebuilt MIR with missing const_get call target facts" {
     const source =
         \\fn const_get_call_target_fact_gate(xs: [3]u32) -> u32 {
@@ -819,6 +839,26 @@ test "LLVM rejects prebuilt MIR with missing phys call target facts" {
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
         lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_phys_call_target_facts.mc", .{}, false, .riscv64, null),
+    );
+}
+
+test "LLVM rejects prebuilt MIR with missing phys result type facts" {
+    const source =
+        \\fn phys_result_type_fact_gate(value: usize) -> PAddr {
+        \\    return phys(value);
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_missing_phys_result_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "phys_result_type_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirTargetTypeFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_phys_result_type_facts.mc", .{}, false, .riscv64, null),
     );
 }
 

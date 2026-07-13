@@ -136,8 +136,9 @@ pub fn emitConversionCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
 pub fn emitBitcastCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .bitcast) return false;
     if (call.type_args.len != 1 or call.args.len != 1) return false;
-    const target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, call.type_args[0]);
-    const source_ty = ctx.expr_source_type(ctx.emit_ctx, call.args[0], locals) orelse return error.UnsupportedCEmission;
+    const mir_target_ty = ctx.mir_target_type(ctx.emit_ctx, .bitcast_target, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    const target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, mir_target_ty);
+    const source_ty = ctx.mir_target_type(ctx.emit_ctx, .bitcast_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
     const source_name = try std.fmt.allocPrint(ctx.scratch, "mc_bc_src{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
     const target_name = try std.fmt.allocPrint(ctx.scratch, "mc_bc_dst{d}", .{ctx.temp_index.*});
