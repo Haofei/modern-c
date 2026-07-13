@@ -4,16 +4,13 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
-const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
-const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const byteViewCallKind = ast_query.byteViewCallKind;
 const dmaBufInfo = ast_query.dmaBufInfo;
-const genericChildType = lower_c_shape.genericChildType;
 const isIdentNamed = ast_query.isIdentNamed;
 const memberCallee = ast_query.memberCallee;
 const simpleNameType = ast_query.simpleNameType;
@@ -114,7 +111,7 @@ pub fn emitMaybeUninitAssumeInitCall(ctx: Context, call: anytype, locals: ?*std.
     if (call.type_args.len != 0 or call.args.len != 0) return false;
     const member = memberCallee(call.callee.*) orelse return false;
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .maybe_uninit_assume_init) return false;
-    _ = maybeUninitPayloadType(ctx, member.base.*, locals) orelse return false;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .maybe_uninit_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
     try ctx.emit_expr(ctx.emit_ctx, member.base.*, locals);
     return true;
 }
@@ -127,20 +124,13 @@ pub fn emitMaybeUninitWriteStmt(ctx: Context, expr: ast.Expr, locals: *std.Strin
     if (call.type_args.len != 0 or call.args.len != 1) return false;
     const member = memberCallee(call.callee.*) orelse return false;
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .maybe_uninit_write) return false;
-    const payload_ty = maybeUninitPayloadType(ctx, member.base.*, locals) orelse return false;
+    const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .maybe_uninit_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
     try writeIndent(ctx);
     try ctx.emit_expr(ctx.emit_ctx, member.base.*, locals);
     try ctx.out.appendSlice(ctx.allocator, " = ");
     try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, payload_ty);
     try ctx.out.appendSlice(ctx.allocator, ";\n");
     return true;
-}
-
-pub fn maybeUninitPayloadType(ctx: Context, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    const ty = ctx.operand_emit_type(ctx.emit_ctx, expr, locals) orelse
-        ctx.expr_source_type(ctx.emit_ctx, expr, locals) orelse
-        return null;
-    return genericChildType(lower_c_alias.resolveAliasType(ctx.type_aliases, ty), "MaybeUninit");
 }
 
 fn writeIndent(ctx: Context) !void {

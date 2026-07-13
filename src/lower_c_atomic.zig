@@ -9,31 +9,26 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const lower_c_model = @import("lower_c_model.zig");
-const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
 
 const isIdentNamed = ast_query.isIdentNamed;
 const memberCallee = ast_query.memberCallee;
 const typeName = ast_query.typeName;
-const GlobalInfo = lower_c_model.GlobalInfo;
 const LocalInfo = lower_c_model.LocalInfo;
-const atomicPayloadOfType = lower_c_shape.atomicPayloadOfType;
-const genericChildType = lower_c_shape.genericChildType;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const ExprIsPointerFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
-    globals: *const std.StringHashMap(GlobalInfo),
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
-    operand_emit_type: OperandEmitTypeFn,
     expr_is_pointer: ExprIsPointerFn,
     mir_call_target_kind: MirCallTargetKindFn,
+    mir_target_type: MirTargetTypeFn,
 };
 
 pub fn orderingArg(args: []ast.Expr) []const u8 {
@@ -97,35 +92,6 @@ pub fn isAtomicIntegerPayload(name: []const u8) bool {
         std.mem.eql(u8, name, "isize");
 }
 
-// Payload type name of an `atomic<T>` place referenced by `expr`, or null if
-// `expr` is not an atomic local/global/member.
-pub fn atomicLocalPayload(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
-    const name = switch (expr.kind) {
-        .ident => |ident| ident.text,
-        .grouped => |inner| return atomicLocalPayload(ctx, inner.*, locals),
-        .member => {
-            if (ctx.operand_emit_type(ctx.emit_ctx, expr, locals)) |field_ty| {
-                if (genericChildType(field_ty, "atomic")) |child| return typeName(child);
-            }
-            return null;
-        },
-        else => return null,
-    };
-    if (locals) |local_set| {
-        if (local_set.get(name)) |info| {
-            if (info.source_ty) |source_ty| {
-                if (atomicPayloadOfType(source_ty)) |child| return typeName(child);
-            }
-        }
-    }
-    if (ctx.globals.get(name)) |global| {
-        if (global.source_ty) |source_ty| {
-            if (atomicPayloadOfType(source_ty)) |child| return typeName(child);
-        }
-    }
-    return null;
-}
-
 pub fn emitAtomicInitCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     const member = memberCallee(call.callee.*) orelse return false;
     if (!isIdentNamed(member.base.*, "atomic")) return false;
@@ -145,8 +111,9 @@ pub fn emitAtomicCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashM
         .atomic_fetch_sub => "fetch_sub",
         else => return false,
     };
+    const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .atomic_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    const payload = typeName(payload_ty) orelse return error.UnsupportedCEmission;
     if (std.mem.eql(u8, op, "load")) {
-        _ = atomicLocalPayload(ctx, member.base.*, locals) orelse return false;
         const ordering = atomicOrderingArg(call.args, 0);
         if (!isAtomicLoadOrdering(ordering)) return false;
         const order_c = atomicOrderCConstant(ordering) orelse return false;
@@ -157,7 +124,6 @@ pub fn emitAtomicCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashM
     }
     if (std.mem.eql(u8, op, "store")) {
         if (call.args.len < 1) return false;
-        _ = atomicLocalPayload(ctx, member.base.*, locals) orelse return false;
         const ordering = atomicOrderingArg(call.args, 1);
         if (!isAtomicStoreOrdering(ordering)) return false;
         const order_c = atomicOrderCConstant(ordering) orelse return false;
@@ -170,7 +136,6 @@ pub fn emitAtomicCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashM
     }
     if (std.mem.eql(u8, op, "fetch_add") or std.mem.eql(u8, op, "fetch_sub")) {
         if (call.args.len < 1) return false;
-        const payload = atomicLocalPayload(ctx, member.base.*, locals) orelse return false;
         if (!isAtomicIntegerPayload(payload)) return false;
         const ordering = atomicOrderingArg(call.args, 1);
         const order_c = atomicOrderCConstant(ordering) orelse return false;
@@ -185,8 +150,7 @@ pub fn emitAtomicCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashM
     return false;
 }
 
-pub fn atomicResultPayload(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
-    const member = memberCallee(call.callee.*) orelse return null;
+pub fn atomicResultPayload(ctx: EmitContext, call: anytype) ?ast.TypeExpr {
     const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
     const op = switch (kind) {
         .atomic_load => "load",
@@ -201,9 +165,9 @@ pub fn atomicResultPayload(ctx: EmitContext, call: anytype, locals: ?*std.String
         return null;
     }
 
-    const payload = atomicLocalPayload(ctx, member.base.*, locals) orelse return null;
-    if (!std.mem.eql(u8, op, "load") and !isAtomicIntegerPayload(payload)) return null;
-    return payload;
+    const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .atomic_payload, call.callee.*.span) orelse return null;
+    if (!std.mem.eql(u8, op, "load") and !isAtomicIntegerPayload(typeName(payload_ty) orelse return null)) return null;
+    return payload_ty;
 }
 
 fn emitAtomicAddr(ctx: EmitContext, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !void {

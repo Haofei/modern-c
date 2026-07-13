@@ -4710,10 +4710,14 @@ const FunctionBuilder = struct {
                 if (self.atomicCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
                     try self.addCallTargetFact(fact_kind, call_ty, expr.span);
+                    const payload_ty = self.atomicCallPayloadTypeExpr(node) orelse return error.UnsupportedMirConstruction;
+                    try self.appendTargetTypeFact(.atomic_payload, payload_ty, valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }
                 if (self.maybeUninitCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
                     try self.addCallTargetFact(fact_kind, call_ty, expr.span);
+                    const payload_ty = self.maybeUninitCallPayloadTypeExpr(node) orelse return error.UnsupportedMirConstruction;
+                    try self.appendTargetTypeFact(.maybe_uninit_payload, payload_ty, valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }
                 if (self.bitcastCallValueType(node)) |bitcast_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.bitcast), bitcast_ty, expr.span);
@@ -5030,10 +5034,15 @@ const FunctionBuilder = struct {
     fn atomicCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
         const kind = self.atomicCallTargetKind(call.callee.*) orelse return null;
         if (kind == .atomic_store) return .void;
+        const payload_ty = self.atomicCallPayloadTypeExpr(call) orelse return null;
+        return valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+    }
+
+    fn atomicCallPayloadTypeExpr(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
+        _ = self.atomicCallTargetKind(call.callee.*) orelse return null;
         const member = memberExpr(call.callee.*) orelse return null;
         const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
-        const payload_ty = atomicPayloadTypeExprAlias(base_ty, self.aliases) orelse return null;
-        return valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        return atomicPayloadTypeExprAlias(base_ty, self.aliases);
     }
 
     fn maybeUninitCallTargetKind(self: *FunctionBuilder, callee: ast.Expr) ?CallTargetKind {
@@ -5048,10 +5057,15 @@ const FunctionBuilder = struct {
     fn maybeUninitCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
         const kind = self.maybeUninitCallTargetKind(call.callee.*) orelse return null;
         if (kind == .maybe_uninit_write) return .void;
+        const payload_ty = self.maybeUninitCallPayloadTypeExpr(call) orelse return null;
+        return valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+    }
+
+    fn maybeUninitCallPayloadTypeExpr(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
+        _ = self.maybeUninitCallTargetKind(call.callee.*) orelse return null;
         const member = memberExpr(call.callee.*) orelse return null;
         const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
-        const payload_ty = maybeUninitPayloadTypeExprAlias(base_ty, self.aliases) orelse return null;
-        return valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        return maybeUninitPayloadTypeExprAlias(base_ty, self.aliases);
     }
 
     fn bitcastCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {

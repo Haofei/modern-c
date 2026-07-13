@@ -693,6 +693,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn semanticEscapeSourceTypeExpr(": 1,
         "try self.appendTargetTypeFact(source_kind, target.source_type_expr": 1,
         "try self.appendTargetTypeFact(result_kind, target.result_type_expr": 1,
+        "appendTargetTypeFact(.atomic_payload": 1,
+        "appendTargetTypeFact(.maybe_uninit_payload": 1,
     },
     "src/numeric.zig": {
         "pub fn parseIntegerLiteral": 1,
@@ -807,6 +809,12 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mir.byteViewCallTargetKind(call)": 1,
         "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_fact": 1,
         "mir_target_type(ctx.emit_ctx, .byte_view_result": 1,
+        "mir_target_type(ctx.emit_ctx, .maybe_uninit_payload": 2,
+        "pub fn maybeUninitPayloadType(": 0,
+    },
+    "src/lower_c_atomic.zig": {
+        "ctx.mir_target_type(ctx.emit_ctx, .atomic_payload": 2,
+        "pub fn atomicLocalPayload(": 0,
     },
     "src/lower_c_call.zig": {
         "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .declassify": 1,
@@ -853,6 +861,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.declassify_result": 2,
         "mirTargetTypeFactAt(.assume_noalias_source": 1,
         "mirTargetTypeFactAt(.assume_noalias_result": 2,
+        "mirTargetTypeFactAt(.atomic_payload": 1,
+        "mirTargetTypeFactAt(.maybe_uninit_payload": 1,
         "reflectionValueCallReturnType(call)": 0,
         "byteViewCallReturnType(call)": 0,
         "vaCallReturnType(call)": 0,
@@ -969,7 +979,15 @@ def main() -> int:
             if anchor not in text:
                 missing.append(f"{relative}: missing anchor {anchor!r}")
 
-        for needle, expected in EXACT_COUNTS.get(relative, {}).items():
+    for relative, counts in sorted(EXACT_COUNTS.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"EXACT_COUNTS: {relative}: file missing")
+            continue
+
+        for needle, expected in counts.items():
             checked += 1
             actual = text.count(needle)
             if actual != expected:

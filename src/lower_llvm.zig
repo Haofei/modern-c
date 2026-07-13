@@ -8727,17 +8727,20 @@ const LlvmEmitter = struct {
             else => return null,
         };
         const member = memberCallee(call) orelse return null;
+        const payload_ty = (self.mirTargetTypeFactAt(.atomic_payload, call.callee.*.span) orelse return null).target_ty;
         const base_ty = self.exprType(member.base.*) orelse return null;
-        if (self.atomicPayloadType(base_ty)) |payload_ty| {
-            return .{ .base = member.base.*, .op = op, .payload_ty = payload_ty };
-        }
-        // A `*atomic<T>` base: the pointer is the atomic's address.
-        const child = switch (self.resolveAliasType(base_ty).kind) {
-            .pointer => |p| p.child.*,
+        const base_is_pointer = if (self.atomicPayloadType(base_ty) != null)
+            false
+        else switch (self.resolveAliasType(base_ty).kind) {
+            .pointer => |pointer| if (self.atomicPayloadType(pointer.child.*) != null) true else return null,
             else => return null,
         };
-        const payload_ty = self.atomicPayloadType(child) orelse return null;
-        return .{ .base = member.base.*, .op = op, .payload_ty = payload_ty, .base_is_pointer = true };
+        return .{
+            .base = member.base.*,
+            .op = op,
+            .payload_ty = payload_ty,
+            .base_is_pointer = base_is_pointer,
+        };
     }
 
     // The address the atomic lives at: for a `*atomic<T>` base the pointer value already IS the
@@ -8758,8 +8761,7 @@ const LlvmEmitter = struct {
             else => return null,
         };
         const member = memberCallee(call) orelse return null;
-        const base_ty = self.exprType(member.base.*) orelse return null;
-        const payload_ty = self.maybeUninitPayloadType(base_ty) orelse return null;
+        const payload_ty = (self.mirTargetTypeFactAt(.maybe_uninit_payload, call.callee.*.span) orelse return null).target_ty;
         return .{ .base = member.base.*, .op = op, .payload_ty = payload_ty };
     }
 

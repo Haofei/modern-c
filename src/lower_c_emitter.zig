@@ -1577,12 +1577,11 @@ const CEmitter = struct {
         return .{
             .allocator = self.allocator,
             .out = self.out,
-            .globals = &self.globals,
             .emit_ctx = self,
             .emit_expr = emitExprForCall,
-            .operand_emit_type = operandEmitTypeForAtomic,
             .expr_is_pointer = exprIsPointerForAtomic,
             .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 
@@ -4150,12 +4149,6 @@ const CEmitter = struct {
 
     fn underlyingIntTypeName(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
         return lower_c_info.underlyingIntTypeName(self.infoContext(), ty);
-    }
-
-    // Payload type name of an `atomic<T>` local referenced by `expr`, or null
-    // if `expr` is not such a local.
-    fn atomicLocalPayload(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
-        return lower_c_atomic.atomicLocalPayload(self.atomicEmitContext(), expr, locals);
     }
 
     fn emitExprWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
@@ -6998,8 +6991,8 @@ const CEmitter = struct {
     // (`atomic<u64>.fetch_add` -> `u64`), so inferred locals and compound
     // operands do not fall back to the C emitter's default `uint32_t`.
     fn atomicResultReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const payload = lower_c_atomic.atomicResultPayload(self.atomicEmitContext(), call, locals) orelse return null;
-        return simpleNameType(payload, call.callee.span);
+        _ = locals;
+        return lower_c_atomic.atomicResultPayload(self.atomicEmitContext(), call);
     }
 
     // `<open-enum expr>.raw()` yields the enum's underlying representation type

@@ -293,6 +293,8 @@ pub const TargetTypeKind = enum {
     declassify_result,
     assume_noalias_source,
     assume_noalias_result,
+    atomic_payload,
+    maybe_uninit_payload,
     explicit_cast_source,
     explicit_cast_target,
     view_const_narrow_source,

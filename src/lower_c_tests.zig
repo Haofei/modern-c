@@ -670,6 +670,33 @@ test "lower-c rejects prebuilt MIR with missing atomic call target facts" {
     );
 }
 
+test "lower-c atomic and MaybeUninit payloads require MIR target facts" {
+    const source =
+        \\struct Node { value: u32 }
+        \\
+        \\fn atomic_payload_fact_gate() -> u32 {
+        \\    var counter: atomic<u32> = atomic.init(0);
+        \\    counter.store(1, .release);
+        \\    return counter.fetch_add(1, .acq_rel);
+        \\}
+        \\fn maybe_uninit_payload_fact_gate() -> u32 {
+        \\    var slot: MaybeUninit<Node> = uninit;
+        \\    slot.write(.{ .value = 7 });
+        \\    return slot.assume_init().value;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_atomic_maybe_uninit_payload_facts.mc", source);
+    defer parsed.deinit();
+    for ([_][]const u8{ "atomic_payload_fact_gate", "maybe_uninit_payload_fact_gate" }) |name| {
+        var module_mir = try mir.build(std.testing.allocator, parsed.module);
+        defer module_mir.deinit();
+        try clearTargetTypeFactsForFunction(&module_mir, name);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_atomic_maybe_uninit_payload_facts.mc", .{}, false, null));
+    }
+}
+
 test "lower-c rejects prebuilt MIR with missing bitcast call target facts" {
     const source =
         \\fn bitcast_call_target_fact_gate(value: f32) -> u32 {

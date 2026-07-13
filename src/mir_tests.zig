@@ -1196,7 +1196,13 @@ test "MIR records typed call target facts for atomic member calls" {
     try std.testing.expectEqual(mir.CallTargetKind.atomic_fetch_sub, function.call_target_facts[2].kind);
     try std.testing.expectEqual(mir.CallTargetKind.atomic_load, function.call_target_facts[3].kind);
     for (function.call_target_facts[1..]) |fact| try std.testing.expectEqualStrings("u32", fact.result_ty.name());
+    try std.testing.expectEqual(@as(usize, 4), function.target_type_facts.len);
+    for (function.target_type_facts) |fact| {
+        try std.testing.expectEqual(mir.TargetTypeKind.atomic_payload, fact.kind);
+        try std.testing.expectEqualStrings("u32", fact.result_ty.name());
+    }
     try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
 test "MIR records typed call target facts for MaybeUninit member calls" {
@@ -1229,7 +1235,15 @@ test "MIR records typed call target facts for MaybeUninit member calls" {
     try std.testing.expectEqualStrings("void", function.call_target_facts[0].result_ty.name());
     try std.testing.expectEqual(mir.CallTargetKind.maybe_uninit_assume_init, function.call_target_facts[1].kind);
     try std.testing.expectEqualStrings("Node", function.call_target_facts[1].result_ty.name());
+    var payload_fact_count: usize = 0;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .maybe_uninit_payload) continue;
+        payload_fact_count += 1;
+        try std.testing.expectEqualStrings("Node", fact.result_ty.name());
+    }
+    try std.testing.expectEqual(@as(usize, 2), payload_fact_count);
     try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
 test "MIR records typed call target facts for bitcast calls" {
