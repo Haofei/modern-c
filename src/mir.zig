@@ -4561,6 +4561,13 @@ const FunctionBuilder = struct {
                 }
                 try self.addTrapEdge(.Unwrap, .unwrap, expr.span);
                 try self.buildExpr(inner.operand.*);
+                if (inner.mapped) |mapped| {
+                    const mapped_ty = if (self.return_type_expr) |return_ty|
+                        resultPayloadTypeExprAlias(return_ty, "err", self.aliases)
+                    else
+                        null;
+                    try self.buildExprWithTargetType(mapped.*, mapped_ty);
+                }
                 try self.addRepresentationUseForValue(try_ty, "try_unwrap", expr.span, exprText(expr));
             },
             .block => |block| _ = try self.buildBlock(block),
@@ -5165,6 +5172,16 @@ const FunctionBuilder = struct {
     fn addTargetTypeFactForExpr(self: *FunctionBuilder, expr: ast.Expr) !void {
         const target_ty = self.assignment_target_type_expr orelse return;
         const result_ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        if (expr.kind != .cast) {
+            if (self.typeExprForExpr(expr)) |source_ty| {
+                const source_value_ty = valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                if (isViewConstNarrowCast(result_ty, source_value_ty)) {
+                    try self.appendTargetTypeFact(.view_const_narrow_source, source_ty, source_value_ty, expr.span);
+                    try self.appendTargetTypeFact(.view_const_narrow_target, target_ty, result_ty, expr.span);
+                    return;
+                }
+            }
+        }
         if (expr.kind != .null_literal and self.isDynOrNullableDynTarget(target_ty) and self.exprNeedsDynCoercion(expr)) {
             try self.appendTargetTypeFact(.dyn_coercion, target_ty, result_ty, expr.span);
             return;

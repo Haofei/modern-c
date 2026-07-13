@@ -285,6 +285,8 @@ pub const TargetTypeKind = enum {
     conversion_target,
     explicit_cast_source,
     explicit_cast_target,
+    view_const_narrow_source,
+    view_const_narrow_target,
 };
 
 pub const TargetTypeFact = struct {

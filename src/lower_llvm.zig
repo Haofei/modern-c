@@ -741,11 +741,16 @@ const LlvmEmitter = struct {
     }
 
     fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
+        const view_narrow_target = self.mirTargetTypeFactAt(.view_const_narrow_target, expr.span);
+        if (view_narrow_target) |fact| {
+            _ = self.mirTargetTypeFactAt(.view_const_narrow_source, expr.span) orelse return error.UnsupportedLlvmEmission;
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(ty))) return error.UnsupportedLlvmEmission;
+        }
         const semantic_ty = switch (expr.kind) {
             .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission,
             .struct_literal => if (self.mirTargetTypeFactAt(.struct_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission,
             .null_literal => if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission,
-            else => ty,
+            else => if (view_narrow_target) |fact| fact.target_ty else ty,
         };
         const resolved_ty = self.resolveAliasType(semantic_ty);
         if (self.foldConstGlobalValue(expr)) |value| {
@@ -1392,13 +1397,20 @@ const LlvmEmitter = struct {
                     error.UnsupportedLlvmEmission)
             else
                 try self.emitMemberLoad(node),
-            .try_expr => |node| try self.emitTryExpr(node.operand.*, expected_ty),
+            .try_expr => |node| try self.emitTryExpr(node.operand.*, node.mapped, expected_ty),
             else => self.unsupportedExprValue(expr),
         };
         return try self.coerceExprValue(value, expr, expected_ty);
     }
 
     fn coerceExprValue(self: *LlvmEmitter, value: []const u8, expr: ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
+        if (self.mirTargetTypeFactAt(.view_const_narrow_target, expr.span)) |target_fact| {
+            const source_fact = self.mirTargetTypeFactAt(.view_const_narrow_source, expr.span) orelse return error.UnsupportedLlvmEmission;
+            if (sema_type.sameTypeSyntax(self.resolveAliasType(target_fact.target_ty), self.resolveAliasType(expected_ty))) {
+                if (!std.mem.eql(u8, try self.llvmType(source_fact.target_ty), try self.llvmType(target_fact.target_ty))) return error.UnsupportedLlvmEmission;
+                return value;
+            }
+        }
         const source_ty = self.exprType(expr) orelse return value;
         if (std.mem.eql(u8, try self.llvmType(source_ty), try self.llvmType(expected_ty))) return value;
         if ((self.integerBitsOf(source_ty) != null or self.enumDeclForType(source_ty) != null) and
@@ -2089,13 +2101,13 @@ const LlvmEmitter = struct {
         try self.emitTrapBranch(condition, cont, trap, trap, cont, "Assert");
     }
 
-    fn emitTryExpr(self: *LlvmEmitter, operand: ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
+    fn emitTryExpr(self: *LlvmEmitter, operand: ast.Expr, mapped: ?*ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
         const operand_ty = self.exprType(operand) orelse return error.UnsupportedLlvmEmission;
         _ = try self.llvmType(expected_ty);
         if (self.resultInfo(operand_ty)) |info| {
             _ = try self.resultPayloadLlvmType(info.ok_ty);
             const value = try self.emitExpr(operand, operand_ty);
-            if (try self.emitResultPropagationCheck(value, operand_ty, info, operand.span)) {
+            if (try self.emitResultPropagationCheck(value, operand_ty, info, mapped, operand.span)) {
                 // continued in the ok block
             } else {
                 try self.emitResultUnwrapCheck(value, operand_ty);
@@ -2125,7 +2137,7 @@ const LlvmEmitter = struct {
         return value;
     }
 
-    fn emitResultPropagationCheck(self: *LlvmEmitter, value: []const u8, operand_ty: ast.TypeExpr, info: ResultTypeInfo, span: ast.Span) !bool {
+    fn emitResultPropagationCheck(self: *LlvmEmitter, value: []const u8, operand_ty: ast.TypeExpr, info: ResultTypeInfo, mapped: ?*ast.Expr, span: ast.Span) !bool {
         const return_ty = self.current_return_ty orelse return false;
         const return_info = self.resultInfo(return_ty) orelse return false;
         // G8: when the operand error (E1) differs from the function error (E2), a
@@ -2134,21 +2146,25 @@ const LlvmEmitter = struct {
         // preserved byte-for-byte. A genuine E1!=E2 with no conversion is rejected
         // by sema (E_NO_ERROR_CONVERSION), so it never reaches here.
         const convert_fn = error_from.resolveTypes(&self.fn_sigs, info.err_ty, return_info.err_ty);
-        if (convert_fn == null and !std.mem.eql(u8, try self.llvmType(info.err_ty), try self.llvmType(return_info.err_ty))) return false;
+        if (mapped == null and convert_fn == null and !std.mem.eql(u8, try self.llvmType(info.err_ty), try self.llvmType(return_info.err_ty))) return false;
 
         const is_ok = try self.nextTemp();
         const ok_label = try self.nextLabel("try_ok");
         const err_label = try self.nextLabel("try_err");
-        const err_value = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ is_ok, try self.llvmType(operand_ty), value });
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ is_ok, ok_label, err_label, try self.debugCallSuffix(), err_label });
-        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 2\n", .{ err_value, try self.llvmType(operand_ty), value });
-        var propagated_err = err_value;
-        if (convert_fn) |cf| {
-            const converted = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} {s}){s}\n", .{ converted, try self.llvmType(return_info.err_ty), cf, try self.llvmType(info.err_ty), err_value, try self.debugCallSuffix() });
-            propagated_err = converted;
-        }
+        const propagated_err = if (mapped) |mapped_expr|
+            try self.emitExpr(mapped_expr.*, return_info.err_ty)
+        else blk: {
+            const err_value = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 2\n", .{ err_value, try self.llvmType(operand_ty), value });
+            if (convert_fn) |cf| {
+                const converted = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} {s}){s}\n", .{ converted, try self.llvmType(return_info.err_ty), cf, try self.llvmType(info.err_ty), err_value, try self.debugCallSuffix() });
+                break :blk converted;
+            }
+            break :blk err_value;
+        };
         const ok_zero = try self.resultPayloadZero(return_info.ok_ty);
         const propagated_value = try self.emitResultValue(return_ty, "false", ok_zero, propagated_err);
         // `?` returns from the function on the error branch, so it must run every active

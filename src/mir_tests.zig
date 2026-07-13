@@ -288,6 +288,70 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 }
 
+test "MIR owns implicit view const narrowing source and target types" {
+    const source =
+        \\fn consume(xs: []const u8) -> usize { return xs.len; }
+        \\fn slice_return(xs: []mut u8) -> []const u8 { return xs; }
+        \\fn slice_local(xs: []mut u8) -> []const u8 { let view: []const u8 = xs; return view; }
+        \\fn slice_argument(xs: []mut u8) -> usize { return consume(xs); }
+        \\fn pointer_return(ptr: *mut u8) -> *const u8 { return ptr; }
+        \\fn slice_passthrough(xs: []const u8) -> []const u8 { return xs; }
+        \\fn raw_many_passthrough(ptr: [*]mut u8) -> [*]mut u8 { return ptr; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_view_const_narrow_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+
+    for ([_][]const u8{ "slice_return", "slice_local", "slice_argument", "pointer_return" }) |name| {
+        const function = functionByName(typed_mir, name).?;
+        try std.testing.expectEqual(@as(usize, 2), function.target_type_facts.len);
+        try std.testing.expectEqual(mir.TargetTypeKind.view_const_narrow_source, function.target_type_facts[0].kind);
+        try std.testing.expectEqual(mir.TargetTypeKind.view_const_narrow_target, function.target_type_facts[1].kind);
+    }
+
+    try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "slice_passthrough").?.target_type_facts.len);
+    try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "raw_many_passthrough").?.target_type_facts.len);
+}
+
+test "MIR owns mapped try error target types" {
+    const source =
+        \\enum LowErr { Failed }
+        \\enum HighErr { Mapped }
+        \\fn low() -> Result<u32, LowErr> { return err(.Failed); }
+        \\fn high() -> Result<u32, HighErr> { let value: u32 = low()? else .Mapped; return ok(value); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_mapped_try_target_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+
+    const function = functionByName(typed_mir, "high").?;
+    var found_mapped = false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .enum_literal) continue;
+        try std.testing.expectEqualStrings("HighErr", fact.target_ty.kind.name.text);
+        found_mapped = true;
+    }
+    try std.testing.expect(found_mapped);
+}
+
 test "MIR owns dyn coercion targets and excludes pass-through values" {
     const source =
         \\trait Shape { fn area(self: *Self) -> u32; }

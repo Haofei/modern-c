@@ -1,7 +1,7 @@
 // `EXPR? else MAPPED`: propagate a remapped error instead of the original, so a layer can
 // translate a subsystem's error type into its own without a hand-written switch.
 enum LowErr { Disk, Net }
-enum HighErr { Failed, Unused }
+enum HighErr { Unused, Failed }
 
 fn low(good: bool) -> Result<u32, LowErr> {
     if good {

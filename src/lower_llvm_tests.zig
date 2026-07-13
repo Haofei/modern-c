@@ -359,6 +359,20 @@ test "LLVM explicit casts require MIR source and target type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_explicit_cast_type_facts.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM implicit view const narrowing requires MIR source and target type facts" {
+    const source =
+        \\fn narrow(xs: []mut u8) -> []const u8 { return xs; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_view_const_narrow_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "narrow");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_view_const_narrow_type_facts.mc", .{}, false, .riscv64, null));
+}
+
 fn retargetIntegerFactsForFunction(module_mir: *mir.Module, name: []const u8, target_ty: mir.ValueType) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;

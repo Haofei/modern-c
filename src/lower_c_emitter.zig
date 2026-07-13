@@ -6,6 +6,7 @@ const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const mir = @import("mir.zig");
+const sema_type = @import("sema_type.zig");
 const switch_lower = @import("switch_lower.zig");
 
 const lower_c_type = @import("lower_c_type.zig");
@@ -4305,10 +4306,18 @@ const CEmitter = struct {
     }
 
     fn emitSliceConstNarrowCoercion(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!bool {
+        const fact_source_ty = if (expr.kind == .cast)
+            (self.mirTargetTypeFactAt(.explicit_cast_source, expr.span) orelse return error.UnsupportedCEmission).target_ty
+        else blk: {
+            const fact = self.mirTargetTypeFactAt(.view_const_narrow_source, expr.span) orelse return false;
+            break :blk fact.target_ty;
+        };
         const fact_target_ty = if (expr.kind == .cast)
-            if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else return error.UnsupportedCEmission
-        else
-            target_ty;
+            (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span) orelse return error.UnsupportedCEmission).target_ty
+        else blk: {
+            break :blk (self.mirTargetTypeFactAt(.view_const_narrow_target, expr.span) orelse return error.UnsupportedCEmission).target_ty;
+        };
+        if (expr.kind != .cast and !sema_type.sameTypeSyntax(self.resolveAliasType(fact_target_ty), self.resolveAliasType(target_ty))) return false;
         const resolved_target = self.resolveAliasType(fact_target_ty);
         const target_node = switch (resolved_target.kind) {
             .slice => |node| node,
@@ -4322,17 +4331,13 @@ const CEmitter = struct {
             .grouped => |inner| inner.*,
             else => expr,
         };
-        const source_ty = if (expr.kind == .cast)
-            if (self.mirTargetTypeFactAt(.explicit_cast_source, expr.span)) |fact| fact.target_ty else return error.UnsupportedCEmission
-        else
-            self.exprSourceTypeForEmission(value_expr, locals) orelse return false;
-        const resolved_source = self.resolveAliasType(source_ty);
+        const resolved_source = self.resolveAliasType(fact_source_ty);
         const source_node = switch (resolved_source.kind) {
             .slice => |node| node,
             else => return false,
         };
         if (source_node.mutability != .mut) return false;
-        const src_c_type = try self.cTypeFor(source_ty, .typedef_name);
+        const src_c_type = try self.cTypeFor(fact_source_ty, .typedef_name);
         const slice_name = try self.sliceTypeName(target_node.child.*, .@"const");
         const ptr_type = try self.pointerTypeForSliceElement(target_node.child.*, .@"const");
         const n = self.temp_index;
