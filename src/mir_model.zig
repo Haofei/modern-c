@@ -283,6 +283,8 @@ pub const TargetTypeKind = enum {
     dyn_coercion,
     conversion_source,
     conversion_target,
+    explicit_cast_source,
+    explicit_cast_target,
 };
 
 pub const TargetTypeFact = struct {
@@ -373,6 +375,7 @@ pub const Function = struct {
     integer_facts: []IntegerFact = &.{},
     call_target_facts: []CallTargetFact = &.{},
     target_type_facts: []TargetTypeFact = &.{},
+    generated_type_expr_nodes: []*ast.TypeExpr = &.{},
     pointer_provenance_facts: []PointerProvenanceFact,
     representation_facts: []RepresentationFact,
     // OPT (annex E): operand source points of checks the optimizer proved dead and elided
@@ -403,6 +406,8 @@ pub const Module = struct {
             if (function.integer_facts.len != 0) self.allocator.free(function.integer_facts);
             if (function.call_target_facts.len != 0) self.allocator.free(function.call_target_facts);
             if (function.target_type_facts.len != 0) self.allocator.free(function.target_type_facts);
+            for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);
+            if (function.generated_type_expr_nodes.len != 0) self.allocator.free(function.generated_type_expr_nodes);
             for (function.pointer_provenance_facts) |fact| {
                 if (fact.field_path) |field_path| self.allocator.free(field_path);
             }

@@ -246,7 +246,11 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, functionByName(typed_mir, "make_union_ok").?.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "make_enum").?.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "compare_enum").?.target_type_facts[0].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "cast_enum").?.target_type_facts[0].kind);
+    const cast_enum_fn = functionByName(typed_mir, "cast_enum").?;
+    try std.testing.expectEqual(@as(usize, 3), cast_enum_fn.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.explicit_cast_source, cast_enum_fn.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.explicit_cast_target, cast_enum_fn.target_type_facts[1].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, cast_enum_fn.target_type_facts[2].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "default_error").?.target_type_facts[0].kind);
     const event_fn = functionByName(typed_mir, "make_event").?;
     try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, event_fn.target_type_facts[0].kind);

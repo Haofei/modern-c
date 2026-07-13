@@ -783,7 +783,11 @@ const LlvmEmitter = struct {
                     }
                 }
             },
-            .cast => |node| return try self.emitGlobalInitializer(node.value.*, node.ty.*),
+            .cast => |node| {
+                _ = self.mirTargetTypeFactAt(.explicit_cast_source, expr.span) orelse return error.UnsupportedLlvmEmission;
+                const target_fact = self.mirTargetTypeFactAt(.explicit_cast_target, expr.span) orelse return error.UnsupportedLlvmEmission;
+                return try self.emitGlobalInitializer(node.value.*, target_fact.target_ty);
+            },
             else => {},
         }
         switch (resolved_ty.kind) {
@@ -1376,7 +1380,7 @@ const LlvmEmitter = struct {
                 error.UnsupportedLlvmEmission,
             .binary => |node| try self.emitBinary(node, expected_ty),
             .unary => |node| try self.emitUnary(node, expected_ty),
-            .cast => |node| try self.emitCast(node.value.*, node.ty.*),
+            .cast => |node| try self.emitCast(expr.span, node.value.*),
             .address_of => |inner| try self.emitAddressOf(inner.*),
             .deref => |inner| try self.emitDeref(inner.*, expected_ty),
             .index => |node| try self.emitIndexLoad(node),
@@ -6810,12 +6814,11 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitCast(self: *LlvmEmitter, value_expr: ast.Expr, target_ty: ast.TypeExpr) ![]const u8 {
-        const source_ty = self.exprType(value_expr) orelse {
-            return self.emitExpr(value_expr, target_ty);
-        };
-        const value = try self.emitExprNatural(value_expr, source_ty);
-        return try self.castValue(value, source_ty, target_ty);
+    fn emitCast(self: *LlvmEmitter, span: ast.Span, value_expr: ast.Expr) ![]const u8 {
+        const source_fact = self.mirTargetTypeFactAt(.explicit_cast_source, span) orelse return error.UnsupportedLlvmEmission;
+        const target_fact = self.mirTargetTypeFactAt(.explicit_cast_target, span) orelse return error.UnsupportedLlvmEmission;
+        const value = try self.emitExprNatural(value_expr, source_fact.target_ty);
+        return try self.castValue(value, source_fact.target_ty, target_fact.target_ty);
     }
 
     fn emitExprNatural(self: *LlvmEmitter, expr: ast.Expr, source_ty: ast.TypeExpr) anyerror![]const u8 {
@@ -7974,7 +7977,7 @@ const LlvmEmitter = struct {
                 if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify and call.args.len == 1) (if (self.exprType(call.args[0])) |ty| secretInnerType(self.resolveAliasType(ty)) orelse ty else null) else null
             else
                 self.callReturnType(call),
-            .cast => |node| node.ty.*,
+            .cast => if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else null,
             // `&f` where f is a function is already a code pointer (the fn_pointer type);
             // do NOT wrap it in another pointer. `&x` for a value x is `*x`'s type.
             .address_of => |inner| if (self.exprType(inner.*)) |ty|

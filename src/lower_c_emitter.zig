@@ -3356,7 +3356,7 @@ const CEmitter = struct {
     fn nullableTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         return switch (expr.kind) {
             .call => self.nullableReturnTypeForExpr(expr),
-            .cast => |node| node.ty.*,
+            .cast => if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else null,
             .grouped => |inner| self.nullableTypeForExpr(inner.*, locals),
             else => self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals),
         };
@@ -3560,7 +3560,7 @@ const CEmitter = struct {
             .address_of => |inner| try self.emitAddressOfExpr(inner.*, locals),
             .deref => |inner| try self.emitDerefExpr(inner.*, locals),
             .member => |node| try self.emitMemberExprOrFallback(node, locals),
-            .cast => |node| try self.emitCastExpr(node, locals),
+            .cast => |node| try self.emitCastExpr(expr.span, node, locals),
             else => try self.emitUnsupportedExpr(expr),
         }
     }
@@ -3683,9 +3683,11 @@ const CEmitter = struct {
         return .{ .name = temp_name, .ty = target_ty };
     }
 
-    fn emitCastExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
-        try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(node.ty.*, .typedef_name)});
-        try self.emitExprWithTarget(node.value.*, locals, node.ty.*);
+    fn emitCastExpr(self: *CEmitter, span: ast.Span, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        const source_fact = self.mirTargetTypeFactAt(.explicit_cast_source, span) orelse return error.UnsupportedCEmission;
+        const target_fact = self.mirTargetTypeFactAt(.explicit_cast_target, span) orelse return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(target_fact.target_ty, .typedef_name)});
+        try self.emitExprWithTarget(node.value.*, locals, source_fact.target_ty);
         try self.out.appendSlice(self.allocator, ")");
     }
 
@@ -4303,7 +4305,11 @@ const CEmitter = struct {
     }
 
     fn emitSliceConstNarrowCoercion(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!bool {
-        const resolved_target = self.resolveAliasType(target_ty);
+        const fact_target_ty = if (expr.kind == .cast)
+            if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else return error.UnsupportedCEmission
+        else
+            target_ty;
+        const resolved_target = self.resolveAliasType(fact_target_ty);
         const target_node = switch (resolved_target.kind) {
             .slice => |node| node,
             else => return false,
@@ -4312,11 +4318,14 @@ const CEmitter = struct {
         // An explicit `m as []const u8` narrow: the cast target is also a slice, so lower the
         // INNER value with the same const reinterpret (the `as` is a no-op reinterpret).
         const value_expr = switch (expr.kind) {
-            .cast => |node| if (self.resolveAliasType(node.ty.*).kind == .slice) node.value.* else expr,
+            .cast => |node| node.value.*,
             .grouped => |inner| inner.*,
             else => expr,
         };
-        const source_ty = self.exprSourceTypeForEmission(value_expr, locals) orelse return false;
+        const source_ty = if (expr.kind == .cast)
+            if (self.mirTargetTypeFactAt(.explicit_cast_source, expr.span)) |fact| fact.target_ty else return error.UnsupportedCEmission
+        else
+            self.exprSourceTypeForEmission(value_expr, locals) orelse return false;
         const resolved_source = self.resolveAliasType(source_ty);
         const source_node = switch (resolved_source.kind) {
             .slice => |node| node,
@@ -4809,7 +4818,7 @@ const CEmitter = struct {
         return switch (expr.kind) {
             .ident, .member => self.operandResolvesToFloat(expr, locals),
             .deref => |inner| self.derefResolvesToFloat(inner.*, locals),
-            .cast => |node| floatCTypeName(node.ty.*) != null,
+            .cast => if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| floatCTypeName(fact.target_ty) != null else false,
             .grouped => |inner| self.exprResolvesToFloat(inner.*, locals),
             .unary => |node| self.exprResolvesToFloat(node.expr.*, locals),
             .binary => |node| self.exprResolvesToFloat(node.left.*, locals) or self.exprResolvesToFloat(node.right.*, locals),
@@ -6821,6 +6830,7 @@ const CEmitter = struct {
     // struct field, or array/slice element) — enough to keep inferred locals and
     // enum-literal comparison operands typed.
     fn operandEmitType(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (expr.kind == .cast) return if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else null;
         return lower_c_infer.operandEmitType(self.inferTypeContext(), expr, locals);
     }
 
@@ -7021,7 +7031,7 @@ const CEmitter = struct {
                 return null;
             },
             .call => |node| self.callSourceTypeForEmission(node, locals),
-            .cast => |node| node.ty.*,
+            .cast => if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else null,
             // A struct-field base (`sp.s` where `s: []T`) has no LocalInfo, so
             // recover its declared type from the struct decl via operandEmitType.
             .member => self.operandEmitType(expr, locals),

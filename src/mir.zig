@@ -3059,6 +3059,7 @@ const FunctionBuilder = struct {
     integer_facts: std.ArrayList(IntegerFact),
     call_target_facts: std.ArrayList(CallTargetFact),
     target_type_facts: std.ArrayList(TargetTypeFact),
+    generated_type_expr_nodes: std.ArrayList(*ast.TypeExpr),
     pointer_provenance_facts: std.ArrayList(PointerProvenanceFact),
     representation_facts: std.ArrayList(RepresentationFact),
     live_pointer_provenance: std.ArrayList(LivePointerProvenance),
@@ -3146,6 +3147,7 @@ const FunctionBuilder = struct {
             .integer_facts = .empty,
             .call_target_facts = .empty,
             .target_type_facts = .empty,
+            .generated_type_expr_nodes = .empty,
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -3209,6 +3211,7 @@ const FunctionBuilder = struct {
             .integer_facts = .empty,
             .call_target_facts = .empty,
             .target_type_facts = .empty,
+            .generated_type_expr_nodes = .empty,
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -3252,6 +3255,8 @@ const FunctionBuilder = struct {
         self.integer_facts.deinit(self.allocator);
         self.call_target_facts.deinit(self.allocator);
         self.target_type_facts.deinit(self.allocator);
+        for (self.generated_type_expr_nodes.items) |node| self.allocator.destroy(node);
+        self.generated_type_expr_nodes.deinit(self.allocator);
         self.pointer_provenance_facts.deinit(self.allocator);
         self.representation_facts.deinit(self.allocator);
         self.live_pointer_provenance.deinit(self.allocator);
@@ -3308,6 +3313,11 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(call_target_facts);
         const target_type_facts = try self.target_type_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(target_type_facts);
+        const generated_type_expr_nodes = try self.generated_type_expr_nodes.toOwnedSlice(self.allocator);
+        errdefer {
+            for (generated_type_expr_nodes) |node| self.allocator.destroy(node);
+            self.allocator.free(generated_type_expr_nodes);
+        }
         const pointer_provenance_facts = try self.pointer_provenance_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(pointer_provenance_facts);
         const representation_facts = try self.representation_facts.toOwnedSlice(self.allocator);
@@ -3350,6 +3360,7 @@ const FunctionBuilder = struct {
         self.break_targets = .empty;
         self.continue_targets.deinit(self.allocator);
         self.continue_targets = .empty;
+        self.generated_type_expr_nodes = .empty;
 
         return .{
             .name = self.name,
@@ -3364,6 +3375,7 @@ const FunctionBuilder = struct {
             .integer_facts = integer_facts,
             .call_target_facts = call_target_facts,
             .target_type_facts = target_type_facts,
+            .generated_type_expr_nodes = generated_type_expr_nodes,
             .pointer_provenance_facts = pointer_provenance_facts,
             .representation_facts = representation_facts,
             .elided_bounds = elided_bounds,
@@ -3880,7 +3892,17 @@ const FunctionBuilder = struct {
                 else => null,
             },
             .tag_bind => |tag_bind| blk: {
-                if (!isResultNarrowingTag(tag_bind.tag.text)) break :blk null;
+                if (!isResultNarrowingTag(tag_bind.tag.text)) {
+                    const subject_ty = self.typeExprForExpr(subject) orelse break :blk null;
+                    const union_name = unionTypeNameAlias(subject_ty, self.aliases) orelse break :blk null;
+                    const info = self.unions.get(union_name) orelse break :blk null;
+                    const payload_ty = unionCasePayloadType(info, tag_bind.tag.text) orelse break :blk null;
+                    break :blk .{
+                        .name = tag_bind.binding.text,
+                        .ty = valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases),
+                        .ty_expr = payload_ty,
+                    };
+                }
                 const shape = switch (self.exprType(subject)) {
                     .result => |shape| shape,
                     else => break :blk null,
@@ -4581,6 +4603,9 @@ const FunctionBuilder = struct {
             },
             .cast => |node| {
                 const cast_target = valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases);
+                const cast_source_ty = try self.explicitCastSourceTypeExpr(node.value.*, node.ty.*);
+                try self.appendTargetTypeFact(.explicit_cast_source, cast_source_ty, valueTypeFromTypeAlias(cast_source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
+                try self.appendTargetTypeFact(.explicit_cast_target, node.ty.*, cast_target, expr.span);
                 if (cast_target == .closed_enum and isMirIntegerType(self.exprType(node.value.*))) {
                     try self.addInstr(.usage_check, "closed_enum_conversion", .unknown, expr.span);
                 }
@@ -7280,6 +7305,67 @@ const FunctionBuilder = struct {
         };
     }
 
+    fn explicitCastSourceTypeExpr(self: *FunctionBuilder, expr: ast.Expr, target_ty: ast.TypeExpr) !ast.TypeExpr {
+        if (self.typeExprForExpr(expr)) |ty| return ty;
+        return switch (expr.kind) {
+            .int_literal, .float_literal, .string_literal, .char_literal, .enum_literal, .null_literal, .array_literal, .struct_literal => target_ty,
+            .bool_literal => ast_query.simpleNameType("bool", expr.span),
+            .grouped => |inner| self.explicitCastSourceTypeExpr(inner.*, target_ty),
+            .unary => |node| if (node.op == .logical_not)
+                ast_query.simpleNameType("bool", expr.span)
+            else
+                self.explicitCastSourceTypeExpr(node.expr.*, target_ty),
+            .binary => |node| if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op))
+                ast_query.simpleNameType("bool", expr.span)
+            else
+                self.typeExprForExpr(node.left.*) orelse
+                    self.typeExprForExpr(node.right.*) orelse
+                    try self.explicitCastSourceTypeExpr(node.left.*, target_ty),
+            .address_of => |inner| blk: {
+                const child_ty = self.typeExprForExpr(inner.*) orelse return error.UnsupportedMirConstruction;
+                const child = try self.allocator.create(ast.TypeExpr);
+                errdefer self.allocator.destroy(child);
+                child.* = child_ty;
+                try self.generated_type_expr_nodes.append(self.allocator, child);
+                break :blk ast.TypeExpr{ .span = expr.span, .kind = .{ .pointer = .{ .mutability = .none, .child = child } } };
+            },
+            .call => |call| self.explicitCastCallSourceTypeExpr(call, target_ty) orelse return error.UnsupportedMirConstruction,
+            else => return error.UnsupportedMirConstruction,
+        };
+    }
+
+    fn explicitCastCallSourceTypeExpr(self: *FunctionBuilder, call: anytype, target_ty: ast.TypeExpr) ?ast.TypeExpr {
+        if (isMirBitcastCallee(call.callee.*) and call.type_args.len == 1 and call.args.len == 1) return call.type_args[0];
+        if (self.conversionCallFactInfo(call)) |conversion| return conversion.target_ty;
+        if (reflectionCallTargetKind(call) != null) return ast_query.simpleNameType("usize", call.callee.*.span);
+        if (reduceCallReturnTypeExpr(call)) |ty| return ty;
+        if (self.physCallValueType(call) != null) return ast_query.simpleNameType("PAddr", call.callee.*.span);
+        if (self.rawLoadCallValueType(call) != null and call.type_args.len == 1) return call.type_args[0];
+        if (self.atomicCallTargetKind(call.callee.*)) |kind| {
+            if (kind == .atomic_store) return null;
+            const member = memberExpr(call.callee.*) orelse return null;
+            const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
+            return atomicPayloadTypeExprAlias(base_ty, self.aliases);
+        }
+        if (self.maybeUninitCallTargetKind(call.callee.*) == .maybe_uninit_assume_init) {
+            const member = memberExpr(call.callee.*) orelse return null;
+            const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
+            return maybeUninitPayloadTypeExprAlias(base_ty, self.aliases);
+        }
+        if (self.mmioReceiverReadTypeExpr(call.callee.*)) |ty| return ty;
+        if (noOverflowUncheckedOp(self.calleeName(call.callee.*)) != null and call.args.len > 0) {
+            return self.typeExprForExpr(call.args[0]) orelse self.conversionSourceTypeExpr(call.args[0]);
+        }
+        if (isDeclassifyCall(call) and call.args.len == 1) {
+            const source_ty = self.typeExprForExpr(call.args[0]) orelse return null;
+            return secretPayloadTypeAlias(source_ty, self.aliases, 0);
+        }
+        if (isAssumeNoaliasDirectCall(call) and call.args.len == 2) {
+            return self.typeExprForExpr(call.args[0]) orelse target_ty;
+        }
+        return null;
+    }
+
     // D-pass operation legality for typed-resource calls: unknown atomic method
     // on an atomic value, and `.raw()` on a closed enum.
     fn typedResourceCallFinding(self: *FunctionBuilder, callee: ast.Expr) ?[]const u8 {
@@ -7424,10 +7510,15 @@ const FunctionBuilder = struct {
             .ident => |ident| self.local_type_exprs.get(ident.text) orelse self.global_type_exprs.get(ident.text),
             .member => |node| blk: {
                 const base_ty = self.typeExprForExpr(node.base.*) orelse break :blk null;
+                const resolved_base = aggregateTargetTypeAlias(base_ty, self.aliases);
+                if ((resolved_base.kind == .slice or resolved_base.kind == .array) and std.mem.eql(u8, node.name.text, "len")) {
+                    break :blk ast_query.simpleNameType("usize", expr.span);
+                }
                 const struct_name = structTypeNameAlias(base_ty, self.aliases) orelse break :blk null;
                 break :blk self.structFieldTypeExpr(struct_name, node.name.text);
             },
-            .call => |node| self.mmioReceiverReadTypeExpr(node.callee.*) orelse
+            .call => |node| self.qualifiedUnionConstructorTypeExpr(node) orelse
+                self.mmioReceiverReadTypeExpr(node.callee.*) orelse
                 mmioMapCallPayloadType(node) orelse
                 reduceCallReturnTypeExpr(node) orelse
                 self.constGetCallTypeExpr(node) orelse
@@ -7451,7 +7542,9 @@ const FunctionBuilder = struct {
             .ident => |ident| self.local_types.get(ident.text) orelse self.globals.get(ident.text) orelse valueTypeFromExpr(expr),
             .grouped => |inner| self.exprType(inner.*),
             .cast => |node| valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases),
-            .call => |node| if (self.mmioReceiverReadTypeExpr(node.callee.*)) |ty|
+            .call => |node| if (self.qualifiedUnionConstructorTypeExpr(node)) |ty|
+                valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
+            else if (self.mmioReceiverReadTypeExpr(node.callee.*)) |ty|
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
             else if (self.constGetCallType(node)) |ty|
                 ty
@@ -7504,6 +7597,22 @@ const FunctionBuilder = struct {
     fn constGetCallType(self: *FunctionBuilder, call: anytype) ?ValueType {
         const ty = self.constGetCallTypeExpr(call) orelse return null;
         return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+    }
+
+    fn qualifiedUnionConstructorTypeExpr(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
+        const member = memberCallee(call.callee.*) orelse return null;
+        const owner = switch (member.base.kind) {
+            .ident => |ident| ident,
+            else => return null,
+        };
+        const info = self.unions.get(owner.text) orelse return null;
+        for (info.cases) |case| {
+            if (!std.mem.eql(u8, case.name.text, member.name.text)) continue;
+            const expected_args: usize = if (case.ty == null) 0 else 1;
+            if (call.type_args.len != 0 or call.args.len != expected_args) return null;
+            return ast_query.simpleNameType(owner.text, owner.span);
+        }
+        return null;
     }
 
     fn constGetCallTypeExpr(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
