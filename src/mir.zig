@@ -4665,7 +4665,7 @@ const FunctionBuilder = struct {
                 const is_dyn_dispatch = self.isDynDispatchMember(node.callee.*);
                 const reflection_target = reflectionCallTargetKind(node);
                 const byte_view_target = byteViewCallTargetKind(node);
-                const semantic_escape_target = self.semanticEscapeCallTarget(node);
+                const semantic_escape_target = try self.semanticEscapeCallTarget(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
                 else if (semantic_escape_target) |target|
@@ -4796,6 +4796,18 @@ const FunctionBuilder = struct {
                 if (semantic_escape_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
                     try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    const source_kind: TargetTypeKind = switch (target.kind) {
+                        .declassify => .declassify_source,
+                        .assume_noalias => .assume_noalias_source,
+                        else => unreachable,
+                    };
+                    const result_kind: TargetTypeKind = switch (target.kind) {
+                        .declassify => .declassify_result,
+                        .assume_noalias => .assume_noalias_result,
+                        else => unreachable,
+                    };
+                    try self.appendTargetTypeFact(source_kind, target.source_type_expr, valueTypeFromTypeAlias(target.source_type_expr, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
+                    try self.appendTargetTypeFact(result_kind, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {
                     try self.addInstr(.unsafe_check, callee_name, .unknown, expr.span);
@@ -5412,32 +5424,52 @@ const FunctionBuilder = struct {
 
     const SemanticEscapeCallTarget = struct {
         kind: CallTargetKind,
+        source_type_expr: ast.TypeExpr,
+        result_type_expr: ast.TypeExpr,
         result_ty: ValueType,
     };
 
-    fn semanticEscapeCallTarget(self: *FunctionBuilder, call: anytype) ?SemanticEscapeCallTarget {
+    fn semanticEscapeCallTarget(self: *FunctionBuilder, call: anytype) !?SemanticEscapeCallTarget {
         if (isDeclassifyCall(call)) {
             if (call.type_args.len != 0 or call.args.len != 1) return null;
             const source_ty = self.typeExprForExpr(call.args[0]) orelse return null;
             const payload_ty = secretPayloadTypeAlias(source_ty, self.aliases, 0) orelse return null;
             return .{
                 .kind = .declassify,
+                .source_type_expr = source_ty,
+                .result_type_expr = payload_ty,
                 .result_ty = valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases),
             };
         }
         if (isAssumeNoaliasDirectCall(call)) {
             if (call.type_args.len != 0 or call.args.len != 2) return null;
-            const result_ty = if (self.typeExprForExpr(call.args[0])) |source_ty|
-                valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases)
-            else
-                self.exprType(call.args[0]);
-            if (result_ty == .unknown) return null;
+            const source_ty = (try self.semanticEscapeSourceTypeExpr(call.args[0])) orelse return null;
+            const result_ty = valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+            if (result_ty == .unknown or result_ty == .value) return null;
             return .{
                 .kind = .assume_noalias,
+                .source_type_expr = source_ty,
+                .result_type_expr = source_ty,
                 .result_ty = result_ty,
             };
         }
         return null;
+    }
+
+    fn semanticEscapeSourceTypeExpr(self: *FunctionBuilder, expr: ast.Expr) !?ast.TypeExpr {
+        if (self.typeExprForExpr(expr)) |ty| return ty;
+        return switch (expr.kind) {
+            .grouped => |inner| try self.semanticEscapeSourceTypeExpr(inner.*),
+            .address_of => |inner| blk: {
+                const child_ty = self.typeExprForExpr(inner.*) orelse return null;
+                const child = try self.allocator.create(ast.TypeExpr);
+                errdefer self.allocator.destroy(child);
+                child.* = child_ty;
+                try self.generated_type_expr_nodes.append(self.allocator, child);
+                break :blk ast.TypeExpr{ .span = expr.span, .kind = .{ .pointer = .{ .mutability = .mut, .child = child } } };
+            },
+            else => null,
+        };
     }
 
     fn addInstrWithValue(self: *FunctionBuilder, kind: Instruction.Kind, detail: []const u8, ty: ValueType, span: ast.Span, value_id: ?[]const u8) !void {

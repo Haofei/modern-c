@@ -6458,13 +6458,15 @@ const LlvmEmitter = struct {
         if (isDeclassifyCall(call)) {
             if (self.mirCallTargetKindAt(call.callee.*.span) != .declassify) return error.UnsupportedLlvmEmission;
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const source_ty = self.exprType(call.args[0]) orelse expected_ty;
+            const source_ty = (self.mirTargetTypeFactAt(.declassify_source, call.callee.*.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+            _ = self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span) orelse return error.UnsupportedLlvmEmission;
             const value = try self.emitExpr(call.args[0], source_ty);
             return try self.coerceExprValue(value, call.args[0], expected_ty);
         }
         if (isAssumeNoaliasCall(call)) {
             if (self.mirCallTargetKindAt(call.callee.*.span) != .assume_noalias) return error.UnsupportedLlvmEmission;
-            const source_ty = self.exprType(call.args[0]) orelse expected_ty;
+            const source_ty = (self.mirTargetTypeFactAt(.assume_noalias_source, call.callee.*.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+            _ = self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span) orelse return error.UnsupportedLlvmEmission;
             const value = try self.emitExpr(call.args[0], source_ty);
             _ = try self.emitExpr(call.args[1], simpleType(call.args[1].span, "usize"));
             return try self.coerceExprValue(value, call.args[0], expected_ty);
@@ -7993,11 +7995,10 @@ const LlvmEmitter = struct {
             .grouped => |inner| self.exprType(inner.*),
             .call => |call| if (self.mirTargetTypeFactAt(.qualified_union_result, expr.span)) |fact|
                 fact.target_ty
-            else if (isAssumeNoaliasCall(call))
-                if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) self.exprType(call.args[0]) else null
-            else if (isDeclassifyCall(call))
-                // declassify/reveal yields the Secret<T> argument's inner T.
-                if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify and call.args.len == 1) (if (self.exprType(call.args[0])) |ty| secretInnerType(self.resolveAliasType(ty)) orelse ty else null) else null
+            else if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias)
+                if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null
+            else if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify)
+                if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null
             else
                 self.callReturnType(call),
             .cast => if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else null,

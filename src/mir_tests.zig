@@ -1051,12 +1051,18 @@ test "MIR owns byte-view call target facts" {
 
 test "MIR owns semantic escape call target facts" {
     const source =
+        \\global shared: u8 = 0;
         \\fn reveal_value(secret: Secret<u8>) -> u8 {
         \\    unsafe { return reveal(secret); }
         \\}
         \\fn noalias_value(p: *mut u8, n: usize) -> *mut u8 {
         \\    #[unsafe_contract(noalias)] {
         \\        return compiler.assume_noalias_unchecked(p, n);
+        \\    }
+        \\}
+        \\fn noalias_address(n: usize) -> *mut u8 {
+        \\    #[unsafe_contract(noalias)] {
+        \\        return compiler.assume_noalias_unchecked(&shared, n);
         \\    }
         \\}
     ;
@@ -1078,12 +1084,30 @@ test "MIR owns semantic escape call target facts" {
     try std.testing.expectEqual(@as(usize, 1), reveal_fn.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.declassify, reveal_fn.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("u8", reveal_fn.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 2), reveal_fn.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.declassify_source, reveal_fn.target_type_facts[0].kind);
+    try std.testing.expectEqualStrings("Secret", reveal_fn.target_type_facts[0].target_ty.kind.generic.base.text);
+    try std.testing.expectEqual(mir.TargetTypeKind.declassify_result, reveal_fn.target_type_facts[1].kind);
+    try std.testing.expectEqualStrings("u8", reveal_fn.target_type_facts[1].result_ty.name());
 
     const noalias_fn = functionByName(typed_mir, "noalias_value").?;
     try std.testing.expectEqual(@as(usize, 1), noalias_fn.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.assume_noalias, noalias_fn.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("*mut", noalias_fn.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 2), noalias_fn.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.assume_noalias_source, noalias_fn.target_type_facts[0].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.assume_noalias_result, noalias_fn.target_type_facts[1].kind);
+
+    const address_fn = functionByName(typed_mir, "noalias_address").?;
+    try std.testing.expectEqual(@as(usize, 1), address_fn.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.assume_noalias, address_fn.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("*mut", address_fn.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 2), address_fn.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.assume_noalias_source, address_fn.target_type_facts[0].kind);
+    try std.testing.expectEqualStrings("*mut", address_fn.target_type_facts[0].result_ty.name());
+    try std.testing.expectEqual(mir.TargetTypeKind.assume_noalias_result, address_fn.target_type_facts[1].kind);
     try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
 test "MIR rejects duplicate call target facts" {

@@ -741,6 +741,29 @@ test "LLVM rejects prebuilt MIR with missing semantic escape call target facts" 
     );
 }
 
+test "LLVM semantic escape types require MIR target facts" {
+    const source =
+        \\fn reveal_type_gate(secret: Secret<u8>) -> u8 {
+        \\    unsafe { return reveal(secret); }
+        \\}
+        \\fn noalias_type_gate(p: *mut u8, n: usize) -> *mut u8 {
+        \\    #[unsafe_contract(noalias)] {
+        \\        return compiler.assume_noalias_unchecked(p, n);
+        \\    }
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_semantic_escape_target_type_facts.mc", source);
+    defer parsed.deinit();
+    for ([_][]const u8{ "reveal_type_gate", "noalias_type_gate" }) |name| {
+        var module_mir = try mir.build(std.testing.allocator, parsed.module);
+        defer module_mir.deinit();
+        try clearTargetTypeFactsForFunction(&module_mir, name);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_semantic_escape_target_type_facts.mc", .{}, false, .riscv64, null));
+    }
+}
+
 test "LLVM rejects prebuilt MIR with missing atomic call target facts" {
     const source =
         \\fn atomic_call_target_fact_gate() -> u32 {

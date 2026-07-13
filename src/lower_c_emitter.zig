@@ -6971,7 +6971,8 @@ const CEmitter = struct {
         if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
-        if (self.assumeNoaliasReturnTypeForCall(call, locals)) |ty| return ty;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) return if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawMethodReturnTypeForCall(call, locals)) |ty| return ty;
@@ -7015,10 +7016,6 @@ const CEmitter = struct {
         const enum_decl = self.enums.get(enum_name) orelse return null;
         if (!enum_decl.is_open) return null;
         return enum_decl.repr;
-    }
-
-    fn assumeNoaliasReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        return lower_c_infer.assumeNoaliasReturnTypeForCall(self.inferTypeContext(), call, locals);
     }
 
     // `<enum expr>.raw()` extracts the enum's representation integer (emitted as the enum value
@@ -7065,7 +7062,8 @@ const CEmitter = struct {
         if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
-        if (self.assumeNoaliasReturnTypeForCall(call, locals)) |ty| return ty;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) return if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.rawMethodReturnTypeForCall(call, locals)) |ty| return ty;

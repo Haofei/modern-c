@@ -558,6 +558,8 @@ pub fn emitDeclassifyCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
     if (!isDeclassifyCall(call)) return false;
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .declassify) return error.UnsupportedCEmission;
     if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .declassify_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .declassify_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
     try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
     return true;
 }
@@ -565,6 +567,8 @@ pub fn emitDeclassifyCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
 pub fn emitAssumeNoaliasCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     if (!isAssumeNoaliasCall(call)) return false;
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .assume_noalias) return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .assume_noalias_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .assume_noalias_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
     try ctx.out.appendSlice(ctx.allocator, "((void)(");
     try ctx.emit_expr(ctx.emit_ctx, call.args[1], locals);
     try ctx.out.appendSlice(ctx.allocator, "), ");

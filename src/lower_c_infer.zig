@@ -8,7 +8,6 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
-const lower_c_builtin = @import("lower_c_builtin.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
@@ -25,7 +24,6 @@ const memberCallee = ast_query.memberCallee;
 const simpleNameType = ast_query.simpleNameType;
 const exprIsNumericLiteral = lower_c_expr.exprIsNumericLiteral;
 const isNumericValueBinaryOp = lower_c_expr.isNumericValueBinaryOp;
-const isAssumeNoaliasCall = lower_c_builtin.isAssumeNoaliasCall;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
 const isBoolType = lower_c_type.isBoolType;
 const isNumericStorageType = lower_c_type.isNumericStorageType;
@@ -266,11 +264,6 @@ pub fn resultTypeFromSourceExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?
     const ty = operandEmitType(ctx, expr, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, expr, locals) orelse return null;
     const resolved = resolveAliasType(ctx, ty);
     return if (resultPayloadTypeForTag(resolved, "ok") != null and resultPayloadTypeForTag(resolved, "err") != null) ty else null;
-}
-
-pub fn assumeNoaliasReturnTypeForCall(ctx: TypeQueryContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    if (!isAssumeNoaliasCall(call)) return null;
-    return ctx.source_type_for_expr(ctx.source_ctx, call.args[0], locals);
 }
 
 pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
