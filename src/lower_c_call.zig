@@ -51,6 +51,7 @@ pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) an
 pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
 pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -59,6 +60,7 @@ pub const Context = struct {
     emit_expr: EmitExprFn,
     c_type: CTypeFn,
     mir_call_target_kind: MirCallTargetKindFn,
+    mir_target_type: MirTargetTypeFn,
 };
 
 pub const TempContext = struct {
@@ -89,6 +91,8 @@ pub const LocalInitContext = struct {
     emit_ctx: *anyopaque,
     emit_declarator: EmitDeclaratorFn,
     c_ident: CIdentFn,
+    mir_call_target_kind: MirCallTargetKindFn,
+    mir_target_type: MirTargetTypeFn,
 };
 
 pub const SpecialTempContext = struct {
@@ -406,6 +410,8 @@ pub fn emitVaStartLocalInit(ctx: LocalInitContext, name: []const u8, decl_ty: as
         else => return false,
     };
     if (!isVaStartCall(node.callee.*)) return false;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, node.callee.*.span) != .va_start) return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .va_start_result, node.callee.*.span) orelse return error.UnsupportedCEmission;
     const last = ctx.current_variadic_last orelse return error.UnsupportedCEmission;
     try writeLocalIndent(ctx);
     try ctx.emit_declarator(ctx.emit_ctx, decl_ty, name);
@@ -481,7 +487,8 @@ pub fn emitNamedDiscardCall(ctx: Context, call: anytype, locals: ?*std.StringHas
 pub fn emitRawAddressCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) == .raw_load) {
         if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
-        if (typeName(call.type_args[0])) |name| {
+        const result_ty = ctx.mir_target_type(ctx.emit_ctx, .raw_load_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
+        if (typeName(result_ty)) |name| {
             if (rawScalarSuffix(name)) |suffix| {
                 try ctx.out.print(ctx.allocator, "mc_raw_load_{s}(", .{suffix});
                 try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
@@ -493,7 +500,7 @@ pub fn emitRawAddressCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
         // `raw.ptr<T>(addr)` + deref already lowers a struct. `(*(T *)(addr))`
         // is a struct-typed lvalue read.
         try ctx.out.appendSlice(ctx.allocator, "(*(");
-        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, call.type_args[0]));
+        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, result_ty));
         try ctx.out.appendSlice(ctx.allocator, " *)(");
         try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
         try ctx.out.appendSlice(ctx.allocator, "))");
@@ -501,9 +508,10 @@ pub fn emitRawAddressCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
     }
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) == .raw_ptr) {
         if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
+        const result_ty = ctx.mir_target_type(ctx.emit_ctx, .raw_ptr_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
         try ctx.out.appendSlice(ctx.allocator, "(");
-        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, call.type_args[0]));
-        try ctx.out.appendSlice(ctx.allocator, " *)(");
+        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, result_ty));
+        try ctx.out.appendSlice(ctx.allocator, ")(");
         try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
         try ctx.out.appendSlice(ctx.allocator, ")");
         return true;
@@ -515,15 +523,18 @@ pub fn emitVaCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Local
     const va_name = vaCallMember(call.callee.*) orelse return false;
     if (std.mem.eql(u8, va_name, "arg")) {
         if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
+        if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .va_arg) return error.UnsupportedCEmission;
+        const result_ty = ctx.mir_target_type(ctx.emit_ctx, .va_arg_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
         try ctx.out.print(ctx.allocator, "__builtin_va_arg(*(", .{});
         try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
         try ctx.out.appendSlice(ctx.allocator, "), ");
-        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, call.type_args[0]));
+        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, result_ty));
         try ctx.out.appendSlice(ctx.allocator, ")");
         return true;
     }
     if (std.mem.eql(u8, va_name, "end")) {
         if (call.args.len != 1) return error.UnsupportedCEmission;
+        if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .va_end) return error.UnsupportedCEmission;
         try ctx.out.appendSlice(ctx.allocator, "__builtin_va_end(*(");
         try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
         try ctx.out.appendSlice(ctx.allocator, "))");

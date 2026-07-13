@@ -4685,6 +4685,8 @@ const FunctionBuilder = struct {
                     ty
                 else if (self.physCallValueType(node)) |ty|
                     ty
+                else if (self.vaCallFactInfo(node)) |info|
+                    info.result_ty
                 else if (self.rawLoadCallValueType(node)) |ty|
                     ty
                 else if (self.rawPtrCallValueType(node)) |ty|
@@ -4731,6 +4733,24 @@ const FunctionBuilder = struct {
                 if (self.rawStoreCallValueType(node)) |raw_store_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.raw_store), raw_store_ty, expr.span);
                     try self.addCallTargetFact(.raw_store, raw_store_ty, expr.span);
+                }
+                if (self.vaCallFactInfo(node)) |va| {
+                    try self.addInstr(.call_target, @tagName(va.kind), va.result_ty, expr.span);
+                    try self.addCallTargetFact(va.kind, va.result_ty, expr.span);
+                    if (va.result_type_expr) |result_ty| {
+                        const target_kind: TargetTypeKind = switch (va.kind) {
+                            .va_start => .va_start_result,
+                            .va_arg => .va_arg_result,
+                            else => unreachable,
+                        };
+                        try self.appendTargetTypeFact(target_kind, result_ty, va.result_ty, expr.span);
+                    }
+                }
+                if (ast_query.rawLoadCallReturnType(node)) |result_ty| {
+                    try self.appendTargetTypeFact(.raw_load_result, result_ty, valueTypeFromTypeAlias(result_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
+                }
+                if (ast_query.rawPtrCallReturnType(node)) |result_ty| {
+                    try self.appendTargetTypeFact(.raw_ptr_result, result_ty, valueTypeFromTypeAlias(result_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }
                 if (self.cpuPauseCallValueType(node)) |cpu_pause_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.cpu_pause), cpu_pause_ty, expr.span);
@@ -5034,6 +5054,36 @@ const FunctionBuilder = struct {
     fn rawStoreCallValueType(_: *FunctionBuilder, call: anytype) ?ValueType {
         if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
         return .void;
+    }
+
+    const VaCallFactInfo = struct {
+        kind: CallTargetKind,
+        result_ty: ValueType,
+        result_type_expr: ?ast.TypeExpr,
+    };
+
+    fn vaCallFactInfo(self: *FunctionBuilder, call: anytype) ?VaCallFactInfo {
+        const name = ast_query.vaCallMember(call.callee.*) orelse return null;
+        if (std.mem.eql(u8, name, "start")) {
+            const result_ty = ast_query.vaCallReturnType(call) orelse return null;
+            return .{
+                .kind = .va_start,
+                .result_ty = valueTypeFromTypeAlias(result_ty, self.enums, self.structs, self.packed_bits, self.aliases),
+                .result_type_expr = result_ty,
+            };
+        }
+        if (std.mem.eql(u8, name, "arg")) {
+            const result_ty = ast_query.vaCallReturnType(call) orelse return null;
+            return .{
+                .kind = .va_arg,
+                .result_ty = valueTypeFromTypeAlias(result_ty, self.enums, self.structs, self.packed_bits, self.aliases),
+                .result_type_expr = result_ty,
+            };
+        }
+        if (std.mem.eql(u8, name, "end") and call.type_args.len == 0 and call.args.len == 1) {
+            return .{ .kind = .va_end, .result_ty = .void, .result_type_expr = null };
+        }
+        return null;
     }
 
     fn cpuPauseCallValueType(_: *FunctionBuilder, call: anytype) ?ValueType {

@@ -94,13 +94,6 @@ pub fn packedBitsClearMask(info: PackedBitsInfo, bit_index: usize) ?u64 {
     return ((@as(u64, 1) << @intCast(bits)) - 1) & ~packedBitsMask(bit_index);
 }
 
-pub fn builtinCallReturnType(call: anytype) ?ast.TypeExpr {
-    if (isAssumeNoaliasCall(call)) return null;
-    if (ast_query.rawLoadCallReturnType(call)) |ty| return ty;
-    if (ast_query.rawPtrCallReturnType(call)) |ty| return ty;
-    return null;
-}
-
 pub fn isAssumeNoaliasCall(call: anytype) bool {
     if (call.type_args.len != 0 or call.args.len != 2) return false;
     return isAssumeNoaliasCallee(call.callee.*);

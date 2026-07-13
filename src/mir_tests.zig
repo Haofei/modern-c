@@ -1250,9 +1250,13 @@ test "MIR records typed call target facts for raw address calls" {
     try std.testing.expectEqual(@as(usize, 1), read.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.raw_load, read.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("u32", read.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 1), read.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.raw_load_result, read.target_type_facts[0].kind);
     try std.testing.expectEqual(@as(usize, 1), pointer.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.raw_ptr, pointer.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("*mut", pointer.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 1), pointer.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.raw_ptr_result, pointer.target_type_facts[0].kind);
     try std.testing.expectEqual(@as(usize, 1), store.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.raw_store, store.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("void", store.call_target_facts[0].result_ty.name());
@@ -1264,6 +1268,46 @@ test "MIR records typed call target facts for raw address calls" {
     try std.testing.expectEqual(mir.CallTargetKind.fence_release, fences.call_target_facts[1].kind);
     try std.testing.expectEqual(mir.CallTargetKind.fence_acquire, fences.call_target_facts[2].kind);
     try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR owns varargs call identities and result types" {
+    const source =
+        \\export fn sum_args(count: i32, ...) -> i64 {
+        \\    var ap: va_list = va.start();
+        \\    var value: i64 = 0;
+        \\    unsafe { value = va.arg<i64>(&ap); }
+        \\    va.end(&ap);
+        \\    return value + (count as i64);
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_varargs_call_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "sum_args").?;
+    try std.testing.expectEqual(@as(usize, 3), function.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.va_start, function.call_target_facts[0].kind);
+    try std.testing.expectEqual(mir.CallTargetKind.va_arg, function.call_target_facts[1].kind);
+    try std.testing.expectEqual(mir.CallTargetKind.va_end, function.call_target_facts[2].kind);
+    var va_start_results: usize = 0;
+    var va_arg_results: usize = 0;
+    for (function.target_type_facts) |fact| switch (fact.kind) {
+        .va_start_result => va_start_results += 1,
+        .va_arg_result => va_arg_results += 1,
+        else => {},
+    };
+    try std.testing.expectEqual(@as(usize, 1), va_start_results);
+    try std.testing.expectEqual(@as(usize, 1), va_arg_results);
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
 test "MIR verifier reports no_lang_trap, fallthrough, contract, and irq findings" {

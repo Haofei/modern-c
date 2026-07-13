@@ -241,6 +241,9 @@ pub const CallTargetKind = enum {
     raw_load,
     raw_ptr,
     raw_store,
+    va_start,
+    va_arg,
+    va_end,
     cpu_pause,
     fence_full,
     fence_release,
@@ -287,6 +290,10 @@ pub const TargetTypeKind = enum {
     explicit_cast_target,
     view_const_narrow_source,
     view_const_narrow_target,
+    raw_load_result,
+    raw_ptr_result,
+    va_start_result,
+    va_arg_result,
 };
 
 pub const TargetTypeFact = struct {

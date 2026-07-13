@@ -756,6 +756,50 @@ test "lower-c rejects prebuilt MIR with missing raw ptr call target facts" {
     );
 }
 
+test "lower-c raw address result types require MIR target type facts" {
+    const source =
+        \\fn read(addr: PAddr) -> u32 { unsafe { return raw.load<u32>(addr); } }
+        \\fn pointer(addr: PAddr) -> *mut u32 { unsafe { return raw.ptr<u32>(addr); } }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_raw_address_result_type_facts.mc", source);
+    defer parsed.deinit();
+    for ([_][]const u8{ "read", "pointer" }) |name| {
+        var module_mir = try mir.build(std.testing.allocator, parsed.module);
+        defer module_mir.deinit();
+        try clearTargetTypeFactsForFunction(&module_mir, name);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_raw_address_result_type_facts.mc", .{}, false, null));
+    }
+}
+
+test "lower-c varargs calls require MIR call and result type facts" {
+    const source =
+        \\export fn first_arg(count: i32, ...) -> i64 {
+        \\    var ap: va_list = va.start();
+        \\    var value: i64 = 0;
+        \\    unsafe { value = va.arg<i64>(&ap); }
+        \\    va.end(&ap);
+        \\    return value + (count as i64);
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_varargs_call_type_facts.mc", source);
+    defer parsed.deinit();
+    var missing_calls = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_calls.deinit();
+    try clearCallTargetFactsForFunction(&missing_calls, "first_arg");
+    var call_output: std.ArrayList(u8) = .empty;
+    defer call_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_calls, &call_output, .kernel, "c_varargs_call_type_facts.mc", .{}, false, null));
+
+    var missing_types = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_types.deinit();
+    try clearTargetTypeFactsForFunction(&missing_types, "first_arg");
+    var type_output: std.ArrayList(u8) = .empty;
+    defer type_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_types, &type_output, .kernel, "c_varargs_call_type_facts.mc", .{}, false, null));
+}
+
 test "lower-c rejects prebuilt MIR with missing cpu pause call target facts" {
     const source =
         \\fn cpu_pause_call_target_fact_gate() -> void {

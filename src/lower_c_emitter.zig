@@ -1520,6 +1520,7 @@ const CEmitter = struct {
             .emit_expr = emitExprForCall,
             .c_type = cTypeForCall,
             .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 
@@ -1532,6 +1533,8 @@ const CEmitter = struct {
             .emit_ctx = self,
             .emit_declarator = emitDeclaratorForCall,
             .c_ident = cIdentForCall,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 

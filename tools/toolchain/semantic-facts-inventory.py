@@ -112,10 +112,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
         "src/ast_query.zig": [
             "pub fn qualifiedTaggedUnionConstructorType(",
             "pub fn enumVariantPathType(",
-            "pub fn rawLoadCallReturnType(",
-            "pub fn rawPtrCallReturnType(",
             "pub fn bitcastCallReturnType(",
-            "pub fn vaCallReturnType(",
             "pub fn byteViewCallReturnType(",
             "pub fn reflectionValueCallKind(",
             "pub fn reflectionValueCallReturnType(",
@@ -133,16 +130,11 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn reduceCallOpName(",
             "pub fn constGetCallTarget(",
         ],
-        "src/lower_llvm_query.zig": [
-            "ast_query.rawLoadCallReturnType(call)",
-            "ast_query.rawPtrCallReturnType(call)",
-        ],
         "src/lower_llvm.zig": [
             "fn exprType(",
             "fn derefPointeeType(",
             "qualifiedTaggedUnionConstructorType(&self.tagged_unions, call)",
             "enumVariantPathType(&self.enum_types, node, self.memberBaseIsValue(node))",
-            "vaCallReturnType(call)",
             "byteViewCallReturnType(call)",
             "reflectionValueCallReturnType(call)",
             "isDeclassifyCall(call)",
@@ -701,6 +693,12 @@ ANCHORS: dict[str, list[str]] = {
 }
 
 EXACT_COUNTS: dict[str, dict[str, int]] = {
+    "src/mir.zig": {
+        "fn vaCallFactInfo(": 1,
+        "addCallTargetFact(va.kind": 1,
+        "appendTargetTypeFact(.raw_load_result": 1,
+        "appendTargetTypeFact(.raw_ptr_result": 1,
+    },
     "src/numeric.zig": {
         "pub fn parseIntegerLiteral": 1,
         "std.fmt.parseInt(u128": 1,
@@ -733,6 +731,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn isDeclassifyCall(": 0,
     },
     "src/lower_llvm_query.zig": {
+        "pub fn builtinCallReturnType(": 0,
+        "ast_query.rawLoadCallReturnType(call)": 0,
+        "ast_query.rawPtrCallReturnType(call)": 0,
         "pub fn isDeclassifyCall(": 0,
         "pub fn isResultConstructorCall(": 0,
         "pub fn isPhysCall(": 0,
@@ -802,6 +803,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/lower_c_call.zig": {
         "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .declassify": 1,
         "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .assume_noalias": 1,
+        "ctx.mir_target_type(ctx.emit_ctx, .raw_load_result": 1,
+        "ctx.mir_target_type(ctx.emit_ctx, .raw_ptr_result": 1,
+        "ctx.mir_target_type(ctx.emit_ctx, .va_start_result": 1,
+        "ctx.mir_target_type(ctx.emit_ctx, .va_arg_result": 1,
     },
     "src/lower_llvm.zig": {
         "try mir.validateIntegerFactsForLowering(module_mir.*);": 1,
@@ -817,6 +822,11 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.explicit_cast_target": 3,
         "mirTargetTypeFactAt(.view_const_narrow_source": 2,
         "mirTargetTypeFactAt(.view_const_narrow_target": 2,
+        "mirTargetTypeFactAt(.raw_load_result": 2,
+        "mirTargetTypeFactAt(.raw_ptr_result": 2,
+        "mirTargetTypeFactAt(.va_start_result": 3,
+        "mirTargetTypeFactAt(.va_arg_result": 2,
+        "vaCallReturnType(call)": 0,
         "fn emitCast(self: *LlvmEmitter, value_expr: ast.Expr, target_ty:": 0,
         "const source_ty = self.exprType(value_expr)": 0,
         "self.exprType(call.args[0]) orelse info.target_ty": 0,
