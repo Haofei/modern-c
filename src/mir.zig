@@ -4856,6 +4856,7 @@ const FunctionBuilder = struct {
                 const domain_target = try self.domainCallTarget(node);
                 const dma_target = self.dmaCallTarget(node);
                 const raw_many_offset_target = self.rawManyOffsetCallTarget(node);
+                const mmio_target = self.mmioCallTarget(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
                 else if (semantic_escape_target) |target|
@@ -4867,6 +4868,8 @@ const FunctionBuilder = struct {
                 else if (dma_target) |target|
                     target.result_ty
                 else if (raw_many_offset_target) |target|
+                    target.result_ty
+                else if (mmio_target) |target|
                     target.result_ty
                 else if (reflection_target != null)
                     .{ .integer = "usize" }
@@ -4937,6 +4940,14 @@ const FunctionBuilder = struct {
                     try self.appendTargetTypeFact(.raw_many_offset_base, target.base_type_expr, target.base_ty, expr.span);
                     try self.appendTargetTypeFact(.raw_many_offset_element, target.element_type_expr, target.element_ty, expr.span);
                     try self.appendTargetTypeFact(.raw_many_offset_result, target.result_type_expr, target.result_ty, expr.span);
+                }
+                if (mmio_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.appendTargetTypeFact(.mmio_struct, target.struct_type_expr, target.struct_ty, expr.span);
+                    try self.appendTargetTypeFact(.mmio_storage, target.storage_type_expr, target.storage_ty, expr.span);
+                    try self.appendTargetTypeFact(.mmio_value, target.value_type_expr, target.value_ty, expr.span);
+                    try self.appendTargetTypeFact(.mmio_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (self.atomicCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
@@ -5389,11 +5400,48 @@ const FunctionBuilder = struct {
         return .{ .access = access, .op = op };
     }
 
-    fn mmioReceiverReadTypeExpr(self: *FunctionBuilder, callee: ast.Expr) ?ast.TypeExpr {
-        const member = memberExpr(callee) orelse return null;
-        if (!std.mem.eql(u8, member.name.text, "read")) return null;
-        const register_ty = self.mmioRegisterTypeExprForExpr(member.base.*) orelse return null;
-        return mmioRegisterReadValueTypeExprAlias(register_ty, self.aliases);
+    const MmioCallTarget = struct {
+        kind: CallTargetKind,
+        struct_type_expr: ast.TypeExpr,
+        struct_ty: ValueType,
+        storage_type_expr: ast.TypeExpr,
+        storage_ty: ValueType,
+        value_type_expr: ast.TypeExpr,
+        value_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+    };
+
+    fn mmioCallTarget(self: *FunctionBuilder, call: anytype) ?MmioCallTarget {
+        if (call.type_args.len != 0) return null;
+        const member = memberExpr(call.callee.*) orelse return null;
+        const kind: CallTargetKind = if (std.mem.eql(u8, member.name.text, "read")) blk: {
+            if (call.args.len != 1) return null;
+            break :blk .mmio_read;
+        } else if (std.mem.eql(u8, member.name.text, "write")) blk: {
+            if (call.args.len != 2) return null;
+            break :blk .mmio_write;
+        } else return null;
+        const register_member = memberExpr(member.base.*) orelse return null;
+        const receiver_ty = self.typeExprForExpr(register_member.base.*) orelse return null;
+        const struct_name = mmioPtrTargetTypeNameAlias(receiver_ty, self.aliases) orelse return null;
+        const register_ty = self.structFieldTypeExpr(struct_name, register_member.name.text) orelse return null;
+        _ = mmioRegisterAccessFromTypeExprAlias(register_ty, self.aliases) orelse return null;
+        const storage_type_expr = aggregateTargetTypeAlias(mmioRegisterStorageTypeExprAlias(register_ty, self.aliases) orelse return null, self.aliases);
+        const value_type_expr = aggregateTargetTypeAlias(mmioRegisterReadValueTypeExprAlias(register_ty, self.aliases) orelse return null, self.aliases);
+        const struct_type_expr = ast_query.simpleNameType(struct_name, register_member.base.*.span);
+        const result_type_expr = if (kind == .mmio_read) value_type_expr else ast_query.simpleNameType("void", call.callee.*.span);
+        return .{
+            .kind = kind,
+            .struct_type_expr = struct_type_expr,
+            .struct_ty = valueTypeFromTypeAlias(struct_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .storage_type_expr = storage_type_expr,
+            .storage_ty = valueTypeFromTypeAlias(storage_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .value_type_expr = value_type_expr,
+            .value_ty = valueTypeFromTypeAlias(value_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .result_type_expr = result_type_expr,
+            .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+        };
     }
 
     fn isMmioRegisterExpr(self: *FunctionBuilder, expr: ast.Expr) bool {
@@ -5681,9 +5729,7 @@ const FunctionBuilder = struct {
             if (self.maybeUninitCallTargetKind(call.callee.*) == .maybe_uninit_write) {
                 return maybeUninitPayloadTypeExprAlias(base_ty, self.aliases);
             }
-            if (std.mem.eql(u8, member.name.text, "write")) {
-                return self.mmioReceiverReadTypeExpr(call.callee.*);
-            }
+            if (self.mmioCallTarget(call)) |target| if (target.kind == .mmio_write) return target.value_type_expr;
         }
         return null;
     }
@@ -7852,7 +7898,7 @@ const FunctionBuilder = struct {
             const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
             return maybeUninitPayloadTypeExprAlias(base_ty, self.aliases);
         }
-        if (self.mmioReceiverReadTypeExpr(call.callee.*)) |ty| return ty;
+        if (self.mmioCallTarget(call)) |target| return target.result_type_expr;
         if (self.dmaCallTarget(call)) |target| return target.result_type_expr;
         if (noOverflowUncheckedOp(self.calleeName(call.callee.*)) != null and call.args.len > 0) {
             return self.typeExprForExpr(call.args[0]) orelse self.conversionSourceTypeExpr(call.args[0]);
@@ -8023,7 +8069,7 @@ const FunctionBuilder = struct {
                 self.reflectionOrByteViewCallTypeExpr(node) orelse
                 (if (self.enumRawCallTarget(node)) |target| target.result_type_expr else null) orelse
                 (if (self.dmaCallTarget(node)) |target| target.result_type_expr else null) orelse
-                self.mmioReceiverReadTypeExpr(node.callee.*) orelse
+                (if (self.mmioCallTarget(node)) |target| target.result_type_expr else null) orelse
                 mmioMapCallPayloadType(node) orelse
                 reduceCallReturnTypeExpr(node) orelse
                 self.constGetCallTypeExpr(node) orelse
@@ -8053,8 +8099,8 @@ const FunctionBuilder = struct {
                 target.result_ty
             else if (self.dmaCallTarget(node)) |target|
                 target.result_ty
-            else if (self.mmioReceiverReadTypeExpr(node.callee.*)) |ty|
-                valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
+            else if (self.mmioCallTarget(node)) |target|
+                target.result_ty
             else if (self.constGetCallType(node)) |ty|
                 ty
             else if (self.rawManyOffsetCallTarget(node)) |target|
@@ -8734,6 +8780,21 @@ fn mmioRegisterAccessFromTypeExprAlias(ty: ast.TypeExpr, aliases: *const std.Str
 
 fn mmioRegisterReadValueTypeExprAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ast.TypeExpr {
     return mmioRegisterReadValueTypeExprAliasDepth(ty, aliases, 0);
+}
+
+fn mmioRegisterStorageTypeExprAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ast.TypeExpr {
+    return mmioRegisterStorageTypeExprAliasDepth(ty, aliases, 0);
+}
+
+fn mmioRegisterStorageTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) ?ast.TypeExpr {
+    if (depth > 64) return null;
+    return switch (ty.kind) {
+        .name => |name| if (aliases.get(name.text)) |resolved| mmioRegisterStorageTypeExprAliasDepth(resolved, aliases, depth + 1) else null,
+        .generic => |node| if ((std.mem.eql(u8, node.base.text, "Reg") and node.args.len == 2) or
+            (std.mem.eql(u8, node.base.text, "RegBits") and node.args.len == 3)) node.args[0] else null,
+        .qualified => |node| mmioRegisterStorageTypeExprAliasDepth(node.child.*, aliases, depth + 1),
+        else => null,
+    };
 }
 
 fn mmioRegisterReadValueTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) ?ast.TypeExpr {

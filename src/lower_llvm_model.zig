@@ -66,6 +66,7 @@ pub const MmioAccessInfo = struct {
     struct_ty: ast.TypeExpr,
     storage_ty: ast.TypeExpr,
     value_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
     offset: u64,
 };
 

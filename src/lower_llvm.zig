@@ -8049,30 +8049,39 @@ const LlvmEmitter = struct {
     }
 
     fn mmioAccessInfo(self: *LlvmEmitter, call: anytype) ?MmioAccessInfo {
+        if (call.type_args.len != 0) return null;
         const member = memberCallee(call) orelse return null;
-        const op = if (std.mem.eql(u8, member.name.text, "read"))
-            "read"
-        else if (std.mem.eql(u8, member.name.text, "write"))
-            "write"
-        else
-            return null;
+        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+        const op: []const u8 = switch (kind) {
+            .mmio_read => blk: {
+                if (!std.mem.eql(u8, member.name.text, "read") or call.args.len != 1) return null;
+                break :blk "read";
+            },
+            .mmio_write => blk: {
+                if (!std.mem.eql(u8, member.name.text, "write") or call.args.len != 2) return null;
+                break :blk "write";
+            },
+            else => return null,
+        };
         const reg_member = switch (member.base.kind) {
             .member => |node| node,
             else => return null,
         };
-        const base_ty = self.exprType(reg_member.base.*) orelse return null;
-        const struct_ty = self.memberBaseStructType(base_ty) orelse return null;
+        const struct_ty = (self.mirTargetTypeFactAt(.mmio_struct, call.callee.*.span) orelse return null).target_ty;
+        const storage_ty = (self.mirTargetTypeFactAt(.mmio_storage, call.callee.*.span) orelse return null).target_ty;
+        const value_ty = (self.mirTargetTypeFactAt(.mmio_value, call.callee.*.span) orelse return null).target_ty;
+        const result_ty = (self.mirTargetTypeFactAt(.mmio_result, call.callee.*.span) orelse return null).target_ty;
         const struct_decl = self.structDeclForType(struct_ty) orelse return null;
         if (!isMmioStructAbi(struct_decl)) return null;
-        const field = self.mmioStructField(struct_decl, reg_member.name.text) orelse return null;
-        const field_info = self.mmioFieldInfo(field) orelse return null;
+        _ = self.mmioStructField(struct_decl, reg_member.name.text) orelse return null;
         const offset = self.mmioFieldOffset(struct_decl, reg_member.name.text) orelse return null;
         return .{
             .op = op,
             .base = reg_member.base.*,
             .struct_ty = struct_ty,
-            .storage_ty = field_info.storage_ty,
-            .value_ty = field_info.value_ty,
+            .storage_ty = storage_ty,
+            .value_ty = value_ty,
+            .result_ty = result_ty,
             .offset = offset,
         };
     }
@@ -8557,8 +8566,7 @@ const LlvmEmitter = struct {
             if (std.mem.eql(u8, info.op, "store")) return simpleType(call.callee.*.span, "void");
         }
         if (self.mmioAccessInfo(call)) |info| {
-            if (std.mem.eql(u8, info.op, "read")) return info.value_ty;
-            if (std.mem.eql(u8, info.op, "write")) return simpleType(call.callee.*.span, "void");
+            return info.result_ty;
         }
         if (self.maybeUninitCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "assume_init")) return info.payload_ty;

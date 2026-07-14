@@ -18,14 +18,13 @@ const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_try = @import("lower_c_try.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const mir = @import("mir.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const FnInfo = lower_c_model.FnInfo;
 const GlobalAccess = lower_c_model.GlobalAccess;
 const MmioAccess = lower_c_model.MmioAccess;
-const MmioField = lower_c_model.MmioField;
 const MmioReadReplacement = lower_c_model.MmioReadReplacement;
-const MmioStruct = lower_c_model.MmioStruct;
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 const appendGlobalStoreValue = lower_c_global.appendGlobalStoreValue;
@@ -57,13 +56,16 @@ pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, lo
 pub const MmioAccessFn = *const fn (ctx: *anyopaque, callee: ast.Expr, args: []ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess;
 pub const ValueCTypeFn = *const fn (ctx: *anyopaque, value_type: []const u8) []const u8;
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 pub const EmitBlockItemsFn = *const fn (ctx: *anyopaque, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void;
 
 pub const AccessContext = struct {
-    mmio_structs: *const std.StringHashMap(MmioStruct),
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     emit_ctx: *anyopaque,
     c_ident: CIdentFn,
+    mir_call_target_kind: MirCallTargetKindFn,
+    mir_target_type: MirTargetTypeFn,
 };
 
 pub const StructEmitContext = struct {
@@ -216,17 +218,27 @@ pub fn emitReadExprWithReplacements(
 }
 
 pub fn classifyAccess(ctx: AccessContext, callee: ast.Expr, args: []ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
+    _ = locals;
     const member = memberExpr(callee) orelse return null;
     const kind = accessKind(member.name.text) orelse return null;
+    const expected: mir.CallTargetKind = if (std.mem.eql(u8, kind, "read")) .mmio_read else .mmio_write;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, callee.span) != expected) return null;
     const reg_member = memberExpr(member.base.*) orelse return null;
-    const param, const struct_name, const field = registerField(ctx, reg_member, locals) orelse return null;
+    const param = calleeIdentName(reg_member.base.*) orelse return null;
+    const struct_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_struct, callee.span) orelse return null;
+    const storage_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_storage, callee.span) orelse return null;
+    const value_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_value, callee.span) orelse return null;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .mmio_result, callee.span) orelse return null;
+    const struct_name = ast_query.typeName(struct_ty) orelse return null;
+    const width = ast_query.typeName(storage_ty) orelse return null;
+    const value_type = ast_query.typeName(value_ty) orelse return null;
     return .{
         .kind = kind,
         .param = param,
         .struct_name = struct_name,
         .field = ctx.c_ident(ctx.emit_ctx, reg_member.name.text) catch reg_member.name.text,
-        .value_type = field.value_type,
-        .width = field.width,
+        .value_type = value_type,
+        .width = width,
         .ordering = orderingArg(args),
     };
 }
@@ -252,14 +264,6 @@ fn accessKind(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "read")) return "read";
     if (std.mem.eql(u8, name, "write")) return "write";
     return null;
-}
-
-fn registerField(ctx: AccessContext, reg_member: anytype, locals: *std.StringHashMap(LocalInfo)) ?struct { []const u8, []const u8, MmioField } {
-    const param = calleeIdentName(reg_member.base.*) orelse return null;
-    const struct_name = if (locals.get(param)) |info| info.mmio_pointee orelse return null else return null;
-    const mmio_struct = ctx.mmio_structs.get(struct_name) orelse return null;
-    const field = mmio_struct.fields.get(reg_member.name.text) orelse return null;
-    return .{ param, struct_name, field };
 }
 
 fn emitStructField(ctx: StructEmitContext, field: ast.Field, running: *u64, pad_n: *usize) !void {

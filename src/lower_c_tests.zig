@@ -947,6 +947,57 @@ test "lower-c raw-many offset consumes MIR identity and complete types" {
     }
 }
 
+test "lower-c MMIO calls consume MIR identities and complete types" {
+    const source =
+        \\packed bits Status: u8 { ready: bool }
+        \\extern mmio struct Device {
+        \\    raw: Reg<u32, .read_write>,
+        \\    flags: RegBits<u8, Status, .read>,
+        \\}
+        \\fn mmio_fact_gate(dev: MmioPtr<Device>, value: u32) -> Status {
+        \\    dev.raw.write(value, .release);
+        \\    let raw = dev.raw.read(.relaxed);
+        \\    return dev.flags.read(.acquire);
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_mmio_facts.mc", source);
+    defer parsed.deinit();
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u32(&dev->raw") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u32(&dev->raw") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u8(&dev->flags") != null);
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try clearCallTargetFactsForFunction(&module_mir, "mmio_fact_gate");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try retargetCallTargetFactsForFunction(&module_mir, "mmio_fact_gate", .const_get);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try clearTargetTypeFactsForFunction(&module_mir, "mmio_fact_gate");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
+    }
+}
+
 test "lower-c reductions require MIR element type facts" {
     const source =
         \\fn reduce_element_fact_gate(xs: []const u32) -> Result<u32, Overflow> {

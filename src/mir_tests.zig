@@ -1416,6 +1416,53 @@ test "MIR owns raw-many offset identity and complete types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns MMIO read write identities and complete types" {
+    const source =
+        \\packed bits Status: u8 { ready: bool }
+        \\extern mmio struct Device {
+        \\    raw: Reg<u32, .read_write>,
+        \\    flags: RegBits<u8, Status, .read>,
+        \\}
+        \\fn read_raw(dev: MmioPtr<Device>) -> u32 { return dev.raw.read(.relaxed); }
+        \\fn write_raw(dev: MmioPtr<Device>, value: u32) -> void { dev.raw.write(value, .release); }
+        \\fn read_flags(dev: MmioPtr<Device>) -> Status { return dev.flags.read(.acquire); }
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_mmio_call_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const cases = [_]struct { name: []const u8, kind: mir.CallTargetKind, storage: []const u8, value: []const u8, result: []const u8 }{
+        .{ .name = "read_raw", .kind = .mmio_read, .storage = "u32", .value = "u32", .result = "u32" },
+        .{ .name = "write_raw", .kind = .mmio_write, .storage = "u32", .value = "u32", .result = "void" },
+        .{ .name = "read_flags", .kind = .mmio_read, .storage = "u8", .value = "Status", .result = "Status" },
+    };
+    for (cases) |case| {
+        const function = functionByName(typed_mir, case.name).?;
+        try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
+        try std.testing.expectEqual(case.kind, function.call_target_facts[0].kind);
+        try std.testing.expectEqual(@as(usize, 4), function.target_type_facts.len);
+        try std.testing.expectEqual(mir.TargetTypeKind.mmio_struct, function.target_type_facts[0].kind);
+        try std.testing.expectEqualStrings("Device", function.target_type_facts[0].target_ty.kind.name.text);
+        try std.testing.expectEqual(mir.TargetTypeKind.mmio_storage, function.target_type_facts[1].kind);
+        try std.testing.expectEqualStrings(case.storage, function.target_type_facts[1].target_ty.kind.name.text);
+        try std.testing.expectEqual(mir.TargetTypeKind.mmio_value, function.target_type_facts[2].kind);
+        try std.testing.expectEqualStrings(case.value, function.target_type_facts[2].target_ty.kind.name.text);
+        try std.testing.expectEqual(mir.TargetTypeKind.mmio_result, function.target_type_facts[3].kind);
+        try std.testing.expectEqualStrings(case.result, function.target_type_facts[3].target_ty.kind.name.text);
+    }
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns semantic escape call target facts" {
     const source =
         \\global shared: u8 = 0;

@@ -1469,10 +1469,11 @@ const CEmitter = struct {
 
     fn mmioAccessContext(self: *CEmitter) lower_c_mmio.AccessContext {
         return .{
-            .mmio_structs = &self.mmio_structs,
             .packed_bits = &self.packed_bits,
             .emit_ctx = self,
             .c_ident = cIdentForMmio,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 
