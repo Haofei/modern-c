@@ -106,16 +106,7 @@ pub fn staticCInitializer(expr: ast.Expr, static_initializers: anytype, function
             value.* = resolved;
             break :blk .{ .span = expr.span, .kind = .{ .cast = .{ .value = value, .ty = node.ty } } };
         } else if (isStaticCInitializer(expr)) expr else null,
-        .call => |node| if (isAtomicInitCallee(node.callee.*) and node.args.len == 1) staticCInitializer(node.args[0], static_initializers, functions, allocator) else null,
         else => if (isStaticCInitializer(expr)) expr else null,
-    };
-}
-
-fn isAtomicInitCallee(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |m| isIdentNamed(m.base.*, "atomic") and std.mem.eql(u8, m.name.text, "init"),
-        .grouped => |inner| isAtomicInitCallee(inner.*),
-        else => false,
     };
 }
 

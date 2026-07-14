@@ -907,6 +907,57 @@ test "LLVM atomic and MaybeUninit payloads require MIR target facts" {
     }
 }
 
+test "LLVM atomic init requires MIR identity and complete types" {
+    const source =
+        \\global boot_counter: atomic<u64> = atomic.init(9);
+        \\fn local_init() -> void {
+        \\    var counter: atomic<u32> = atomic.init(1);
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_atomic_init_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_atomic_init_facts.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "@boot_counter = internal global i64 9") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "store i32 1") != null);
+
+    for ([_][]const u8{ "boot_counter", "local_init" }) |name| {
+        var missing_identity = try mir.build(std.testing.allocator, parsed.module);
+        defer missing_identity.deinit();
+        try clearCallTargetFactsForFunction(&missing_identity, name);
+        var missing_identity_output: std.ArrayList(u8) = .empty;
+        defer missing_identity_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_identity, &missing_identity_output, "llvm_atomic_init_facts.mc", .{}, false, .riscv64, null));
+
+        inline for ([_]mir.TargetTypeKind{ .atomic_init_payload, .atomic_init_result }) |kind| {
+            var missing_type = try mir.build(std.testing.allocator, parsed.module);
+            defer missing_type.deinit();
+            try removeTargetTypeKindForFunction(&missing_type, name, kind);
+            var missing_type_output: std.ArrayList(u8) = .empty;
+            defer missing_type_output.deinit(std.testing.allocator);
+            try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_type, &missing_type_output, "llvm_atomic_init_facts.mc", .{}, false, .riscv64, null));
+        }
+
+        var stale_payload = try mir.build(std.testing.allocator, parsed.module);
+        defer stale_payload.deinit();
+        try renameTargetTypeFactForFunction(&stale_payload, name, .atomic_init_payload, "bool");
+        var stale_payload_output: std.ArrayList(u8) = .empty;
+        defer stale_payload_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_payload, &stale_payload_output, "llvm_atomic_init_facts.mc", .{}, false, .riscv64, null));
+
+        var stale_result = try mir.build(std.testing.allocator, parsed.module);
+        defer stale_result.deinit();
+        try renameTargetTypeFactForFunction(&stale_result, name, .atomic_init_result, "u32");
+        var stale_result_output: std.ArrayList(u8) = .empty;
+        defer stale_result_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_result, &stale_result_output, "llvm_atomic_init_facts.mc", .{}, false, .riscv64, null));
+    }
+}
+
 test "LLVM rejects prebuilt MIR with missing bitcast call target facts" {
     const source =
         \\fn bitcast_call_target_fact_gate(value: f32) -> u32 {

@@ -3309,6 +3309,7 @@ const FunctionBuilder = struct {
     expr_depth: usize = 0,
     semantic_expr_depth: usize = 0,
     next_contract_region_id: usize = 1,
+    next_target_fact_group_id: usize = 1,
 
     fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
@@ -4894,6 +4895,7 @@ const FunctionBuilder = struct {
                 const raw_many_offset_target = self.rawManyOffsetCallTarget(node);
                 const mmio_map_target = try self.mmioMapCallTarget(node);
                 const mmio_target = self.mmioCallTarget(node);
+                const atomic_init_target = self.atomicInitCallTarget(node);
                 const raw_target = self.rawCallTarget(node);
                 const va_target = try self.vaCallTarget(node);
                 const explicit_trap_target = explicitTrapCallTargetKind(node);
@@ -4912,6 +4914,8 @@ const FunctionBuilder = struct {
                 else if (mmio_map_target) |target|
                     target.result_ty
                 else if (mmio_target) |target|
+                    target.result_ty
+                else if (atomic_init_target) |target|
                     target.result_ty
                 else if (reflection_target) |target|
                     target.result_ty
@@ -5008,6 +5012,14 @@ const FunctionBuilder = struct {
                     try self.appendTargetTypeFact(.mmio_storage, target.storage_type_expr, target.storage_ty, expr.span);
                     try self.appendTargetTypeFact(.mmio_value, target.value_type_expr, target.value_ty, expr.span);
                     try self.appendTargetTypeFact(.mmio_result, target.result_type_expr, target.result_ty, expr.span);
+                }
+                if (atomic_init_target) |target| {
+                    const group_id = self.next_target_fact_group_id;
+                    self.next_target_fact_group_id += 1;
+                    try self.addInstr(.call_target, @tagName(CallTargetKind.atomic_init), target.result_ty, expr.span);
+                    try self.addCallTargetFact(.atomic_init, target.result_ty, expr.span);
+                    try self.appendOwnedTargetTypeFact(.atomic_init_payload, target.payload_type_expr, target.payload_ty, expr.span, "atomic.init", group_id);
+                    try self.appendOwnedTargetTypeFact(.atomic_init_result, target.result_type_expr, target.result_ty, expr.span, "atomic.init", group_id);
                 }
                 if (self.atomicCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
@@ -5317,6 +5329,28 @@ const FunctionBuilder = struct {
         if (std.mem.eql(u8, name, "atomic.fetch_add")) return .atomic_fetch_add;
         if (std.mem.eql(u8, name, "atomic.fetch_sub")) return .atomic_fetch_sub;
         return null;
+    }
+
+    const AtomicInitCallTarget = struct {
+        payload_type_expr: ast.TypeExpr,
+        payload_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+    };
+
+    fn atomicInitCallTarget(self: *FunctionBuilder, call: anytype) ?AtomicInitCallTarget {
+        if (call.type_args.len != 0 or call.args.len != 1) return null;
+        const member = memberExpr(call.callee.*) orelse return null;
+        const base_name = calleeIdentName(member.base.*) orelse return null;
+        if (!std.mem.eql(u8, base_name, "atomic") or !std.mem.eql(u8, member.name.text, "init")) return null;
+        const result_type_expr = self.assignment_target_type_expr orelse return null;
+        const payload_type_expr = atomicPayloadTypeExprAlias(result_type_expr, self.aliases) orelse return null;
+        return .{
+            .payload_type_expr = payload_type_expr,
+            .payload_ty = valueTypeFromTypeAlias(payload_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .result_type_expr = result_type_expr,
+            .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+        };
     }
 
     fn atomicCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
@@ -5907,6 +5941,7 @@ const FunctionBuilder = struct {
     }
 
     fn targetTypeForBuiltinMemberCallArg(self: *FunctionBuilder, call: anytype, index: usize) ?ast.TypeExpr {
+        if (index == 0) if (self.atomicInitCallTarget(call)) |target| return target.payload_type_expr;
         const member = memberExpr(call.callee.*) orelse return null;
         const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
         if (index == 0) {

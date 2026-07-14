@@ -11,8 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MIN_LOWER_C_FILES = 40
 MIN_LOWER_LLVM_FILES = 12
-MIN_LOWER_C_UNIVERSE = 1305
-MIN_LOWER_LLVM_UNIVERSE = 409
+MIN_LOWER_C_UNIVERSE = 1439
+MIN_LOWER_LLVM_UNIVERSE = 604
 
 
 def fail(message: str) -> None:
@@ -97,6 +97,8 @@ def main() -> int:
         "12 LLVM backend files",
         "tools/toolchain/lowering-coverage-baseline.tsv",
         "or a growing uncovered count fails `zig build lowering-coverage`",
+        "1281 / 1439",
+        "516 / 604",
     ):
         if needle not in docs:
             fail(f"docs/lowering-coverage.md missing {needle!r}")

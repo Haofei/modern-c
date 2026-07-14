@@ -665,6 +665,13 @@ const CEmitter = struct {
     }
 
     fn emitConstGlobalInitializer(self: *CEmitter, ty: ast.TypeExpr, expr: ast.Expr) !bool {
+        if (ast_query.callExpr(expr)) |call| {
+            if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
+                try self.out.appendSlice(self.allocator, " = ");
+                try self.emitExprWithTarget(expr, null, ty);
+                return true;
+            }
+        }
         const value = self.foldConstGlobalValue(expr) orelse return false;
         try self.out.appendSlice(self.allocator, " = ");
         try self.emitComptimeValueInitializer(value, ty);
@@ -1588,6 +1595,7 @@ const CEmitter = struct {
             .out = self.out,
             .emit_ctx = self,
             .emit_expr = emitExprForCall,
+            .emit_expr_with_target = emitExprWithTargetForArith,
             .expr_is_pointer = exprIsPointerForAtomic,
             .mir_call_target_kind = mirCallTargetKindForLowering,
             .mir_target_type = mirTargetTypeForLowering,
@@ -4040,6 +4048,7 @@ const CEmitter = struct {
             if (try lower_c_aggregate.emitQualifiedUnionConstructor(self.aggregateEmitContext(), node, locals, fact.target_ty)) return true;
             return error.UnsupportedCEmission;
         }
+        if (self.mirHasCallTargetKindAt(.atomic_init, node.callee.*.span)) return error.UnsupportedCEmission;
         if (try self.emitNamedSpecialCallExpr(node, locals)) return true;
         // Tier 2 dynamic dispatch: `d.method(args)` through a `*dyn Trait` ->
         // `d.vtable->method(d.data, args)` (a genuine load-through-vtable call).
@@ -4284,6 +4293,12 @@ const CEmitter = struct {
     }
 
     fn emitTargetCallExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, expr: ast.Expr) anyerror!void {
+        if (self.mirHasCallTargetKindAt(.atomic_init, expr.span)) {
+            const expected_result_ty = target_ty orelse return error.UnsupportedCEmission;
+            const payload_ty = self.atomicInitPayloadTypeAt(expr.span, expected_result_ty) orelse return error.UnsupportedCEmission;
+            if (try lower_c_atomic.emitAtomicInitCall(self.atomicEmitContext(), node, locals, payload_ty)) return;
+            return error.UnsupportedCEmission;
+        }
         const result_constructor = if (self.mirCallTargetKindAt(expr.span)) |kind| mir.resultConstructorFactInfo(kind) else null;
         if (result_constructor) |constructor| {
             if (self.mirTargetTypeFactAt(constructor.target_kind, expr.span)) |fact| {
@@ -4297,7 +4312,6 @@ const CEmitter = struct {
             if (try lower_c_aggregate.emitTaggedUnionConstructor(self.aggregateEmitContext(), node, locals, fact.target_ty)) return;
             return error.UnsupportedCEmission;
         }
-        _ = target_ty;
         try self.emitExpr(expr, locals);
     }
 
@@ -5059,6 +5073,45 @@ const CEmitter = struct {
             if (mirSourceMatches(span, fact.source)) return fact.kind;
         }
         return null;
+    }
+
+    fn mirHasCallTargetKindAt(self: *CEmitter, kind: mir.CallTargetKind, span: ast.Span) bool {
+        const function = self.currentMirFunction() orelse return false;
+        for (function.call_target_facts) |fact| {
+            if (fact.kind == kind and mirSourceMatches(span, fact.source)) return true;
+        }
+        return false;
+    }
+
+    fn atomicInitPayloadTypeAt(self: *CEmitter, span: ast.Span, expected_result_ty: ast.TypeExpr) ?ast.TypeExpr {
+        const function = self.currentMirFunction() orelse return null;
+        const expected_payload_ty = lower_c_shape.atomicPayloadOfType(self.resolveAliasType(expected_result_ty)) orelse return null;
+        var matched_payload_ty: ?ast.TypeExpr = null;
+        var found_result = false;
+        for (function.target_type_facts) |result_fact| {
+            if (result_fact.kind != .atomic_init_result or result_fact.target_owner == null or result_fact.target_index == null or !mirSourceMatches(span, result_fact.source)) continue;
+            if (!std.mem.eql(u8, result_fact.target_owner.?, "atomic.init")) continue;
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_fact.target_ty), self.resolveAliasType(expected_result_ty))) continue;
+            found_result = true;
+
+            var group_payload_ty: ?ast.TypeExpr = null;
+            for (function.target_type_facts) |payload_fact| {
+                if (payload_fact.kind != .atomic_init_payload or payload_fact.target_index != result_fact.target_index or payload_fact.target_owner == null or !mirSourceMatches(span, payload_fact.source)) continue;
+                if (!std.mem.eql(u8, payload_fact.target_owner.?, "atomic.init")) continue;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(payload_fact.target_ty), self.resolveAliasType(expected_payload_ty))) return null;
+                if (group_payload_ty) |known| {
+                    if (!sema_type.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_fact.target_ty))) return null;
+                }
+                group_payload_ty = payload_fact.target_ty;
+            }
+            const payload_ty = group_payload_ty orelse return null;
+            if (matched_payload_ty) |known| {
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_ty))) return null;
+            }
+            matched_payload_ty = payload_ty;
+        }
+        if (!found_result) return null;
+        return matched_payload_ty;
     }
 
     fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {

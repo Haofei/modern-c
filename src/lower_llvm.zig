@@ -123,9 +123,6 @@ const atomicOrderingArg = lower_llvm_atomic.atomicOrderingArg;
 const atomicOrderingExpr = lower_llvm_atomic.atomicOrderingExpr;
 const orderingArg = lower_llvm_atomic.orderingArg;
 const atomicLlvmOrdering = lower_llvm_atomic.atomicLlvmOrdering;
-const isAtomicInitCall = lower_llvm_atomic.isAtomicInitCall;
-const isAtomicInitExpr = lower_llvm_atomic.isAtomicInitExpr;
-const atomicInitValue = lower_llvm_atomic.atomicInitValue;
 const LocalSlot = lower_llvm_model.LocalSlot;
 const LocalSlotKind = lower_llvm_model.LocalSlotKind;
 const FnSig = lower_llvm_model.FnSig;
@@ -753,7 +750,13 @@ const LlvmEmitter = struct {
             return try self.comptimeValueInitializer(value, semantic_ty);
         }
         if (self.atomicPayloadType(resolved_ty)) |payload_ty| {
-            if (isAtomicInitExpr(expr)) return try self.emitGlobalInitializer(atomicInitValue(expr).?, payload_ty);
+            if (ast_query.callExpr(expr)) |call| {
+                if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
+                    const fact_payload_ty = self.atomicInitPayloadTypeAt(call.callee.*.span, semantic_ty) orelse return error.UnsupportedLlvmEmission;
+                    if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+                    return try self.emitGlobalInitializer(call.args[0], fact_payload_ty);
+                }
+            }
             return try self.emitGlobalInitializer(expr, payload_ty);
         }
         if (self.enumDeclForType(semantic_ty)) |enum_decl| {
@@ -4988,6 +4991,45 @@ const LlvmEmitter = struct {
         return null;
     }
 
+    fn mirHasCallTargetKindAt(self: *LlvmEmitter, kind: mir.CallTargetKind, span: ast.Span) bool {
+        const function = self.currentMirFunction() orelse return false;
+        for (function.call_target_facts) |fact| {
+            if (fact.kind == kind and mirSourceMatches(span, fact.source)) return true;
+        }
+        return false;
+    }
+
+    fn atomicInitPayloadTypeAt(self: *LlvmEmitter, span: ast.Span, expected_result_ty: ast.TypeExpr) ?ast.TypeExpr {
+        const function = self.currentMirFunction() orelse return null;
+        const expected_payload_ty = self.atomicPayloadType(self.resolveAliasType(expected_result_ty)) orelse return null;
+        var matched_payload_ty: ?ast.TypeExpr = null;
+        var found_result = false;
+        for (function.target_type_facts) |result_fact| {
+            if (result_fact.kind != .atomic_init_result or result_fact.target_owner == null or result_fact.target_index == null or !mirSourceMatches(span, result_fact.source)) continue;
+            if (!std.mem.eql(u8, result_fact.target_owner.?, "atomic.init")) continue;
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_fact.target_ty), self.resolveAliasType(expected_result_ty))) continue;
+            found_result = true;
+
+            var group_payload_ty: ?ast.TypeExpr = null;
+            for (function.target_type_facts) |payload_fact| {
+                if (payload_fact.kind != .atomic_init_payload or payload_fact.target_index != result_fact.target_index or payload_fact.target_owner == null or !mirSourceMatches(span, payload_fact.source)) continue;
+                if (!std.mem.eql(u8, payload_fact.target_owner.?, "atomic.init")) continue;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(payload_fact.target_ty), self.resolveAliasType(expected_payload_ty))) return null;
+                if (group_payload_ty) |known| {
+                    if (!sema_type.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_fact.target_ty))) return null;
+                }
+                group_payload_ty = payload_fact.target_ty;
+            }
+            const payload_ty = group_payload_ty orelse return null;
+            if (matched_payload_ty) |known| {
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_ty))) return null;
+            }
+            matched_payload_ty = payload_ty;
+        }
+        if (!found_result) return null;
+        return matched_payload_ty;
+    }
+
     fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
         if (self.currentMirFunction()) |function| {
             for (function.target_type_facts) |fact| {
@@ -6540,9 +6582,9 @@ const LlvmEmitter = struct {
             }
             return error.UnsupportedLlvmEmission;
         }
-        if (isAtomicInitCall(call.callee.*)) {
+        if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const payload_ty = self.atomicPayloadType(expected_ty) orelse return error.UnsupportedLlvmEmission;
+            const payload_ty = self.atomicInitPayloadTypeAt(call.callee.*.span, expected_ty) orelse return error.UnsupportedLlvmEmission;
             return try self.emitAtomicValueForStorage(call.args[0], payload_ty);
         }
         if (self.mmioAccessInfo(call)) |info| {

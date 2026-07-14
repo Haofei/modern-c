@@ -52,7 +52,6 @@ pub fn emitBuiltinCallExpr(ctx: Context, node: anytype, locals: ?*std.StringHash
 }
 
 fn emitCoreBuiltinCallExpr(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
-    if (try lower_c_atomic.emitAtomicInitCall(ctx.atomic, node, locals)) return true;
     if (try lower_c_atomic.emitAtomicCall(ctx.atomic, node, locals)) return true;
     if (try lower_c_call.emitPhysCall(ctx.call, node, locals)) return true;
     if (try emitEnumRawCall(ctx, node, locals)) return true;

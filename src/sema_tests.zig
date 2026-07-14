@@ -495,6 +495,7 @@ test "varargs calls require exact shape and mutable va_list cursor" {
     try std.testing.expect(reporter.has_errors);
     try std.testing.expectEqual(@as(usize, 3), countDiagnosticCode(&reporter, "E_CALL_ARG_COUNT"));
     try std.testing.expectEqual(@as(usize, 2), countDiagnosticCode(&reporter, "E_NO_IMPLICIT_CONVERSION"));
+    // DIAGNOSTIC_UNIT: E_VA_START_CONTEXT
     try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_VA_START_CONTEXT"));
 }
 

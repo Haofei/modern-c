@@ -17,6 +17,7 @@ const typeName = ast_query.typeName;
 const LocalInfo = lower_c_model.LocalInfo;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void;
 pub const ExprIsPointerFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
@@ -26,6 +27,7 @@ pub const EmitContext = struct {
     out: *std.ArrayList(u8),
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
+    emit_expr_with_target: EmitExprWithTargetFn,
     expr_is_pointer: ExprIsPointerFn,
     mir_call_target_kind: MirCallTargetKindFn,
     mir_target_type: MirTargetTypeFn,
@@ -92,12 +94,9 @@ pub fn isAtomicIntegerPayload(name: []const u8) bool {
         std.mem.eql(u8, name, "isize");
 }
 
-pub fn emitAtomicInitCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    const member = memberCallee(call.callee.*) orelse return false;
-    if (!isIdentNamed(member.base.*, "atomic")) return false;
-    if (!std.mem.eql(u8, member.name.text, "init")) return false;
-    if (call.args.len != 1) return false;
-    try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+pub fn emitAtomicInitCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), payload_ty: ast.TypeExpr) !bool {
+    if (call.type_args.len != 0 or call.args.len != 1) return false;
+    try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, payload_ty);
     return true;
 }
 

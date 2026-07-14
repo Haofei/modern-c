@@ -792,6 +792,57 @@ test "lower-c atomic and MaybeUninit payloads require MIR target facts" {
     }
 }
 
+test "lower-c atomic init requires MIR identity and complete types" {
+    const source =
+        \\global boot_counter: atomic<u64> = atomic.init(9);
+        \\fn local_init() -> void {
+        \\    var counter: atomic<u32> = atomic.init(1);
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_atomic_init_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "boot_counter = 9") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "counter = 1") != null);
+
+    for ([_][]const u8{ "boot_counter", "local_init" }) |name| {
+        var missing_identity = try mir.build(std.testing.allocator, parsed.module);
+        defer missing_identity.deinit();
+        try clearCallTargetFactsForFunction(&missing_identity, name);
+        var missing_identity_output: std.ArrayList(u8) = .empty;
+        defer missing_identity_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_identity, &missing_identity_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
+
+        inline for ([_]mir.TargetTypeKind{ .atomic_init_payload, .atomic_init_result }) |kind| {
+            var missing_type = try mir.build(std.testing.allocator, parsed.module);
+            defer missing_type.deinit();
+            try removeTargetTypeKindForFunction(&missing_type, name, kind);
+            var missing_type_output: std.ArrayList(u8) = .empty;
+            defer missing_type_output.deinit(std.testing.allocator);
+            try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_type, &missing_type_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
+        }
+
+        var stale_payload = try mir.build(std.testing.allocator, parsed.module);
+        defer stale_payload.deinit();
+        try renameTargetTypeFactForFunction(&stale_payload, name, .atomic_init_payload, "bool");
+        var stale_payload_output: std.ArrayList(u8) = .empty;
+        defer stale_payload_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_payload, &stale_payload_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
+
+        var stale_result = try mir.build(std.testing.allocator, parsed.module);
+        defer stale_result.deinit();
+        try renameTargetTypeFactForFunction(&stale_result, name, .atomic_init_result, "u32");
+        var stale_result_output: std.ArrayList(u8) = .empty;
+        defer stale_result_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_result, &stale_result_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
+    }
+}
+
 test "lower-c rejects prebuilt MIR with missing bitcast call target facts" {
     const source =
         \\fn bitcast_call_target_fact_gate(value: f32) -> u32 {

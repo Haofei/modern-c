@@ -1786,6 +1786,8 @@ test "MIR call target facts do not collide with ordinary call names" {
 
 test "MIR records typed call target facts for atomic member calls" {
     const source =
+        \\global boot_counter: atomic<u64> = atomic.init(9);
+        \\
         \\fn atomic_ops() -> u32 {
         \\    var counter: atomic<u32> = atomic.init(1);
         \\    counter.store(2, .release);
@@ -1807,19 +1809,36 @@ test "MIR records typed call target facts for atomic member calls" {
 
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
+    const global = functionByName(typed_mir, "boot_counter").?;
+    try std.testing.expectEqual(@as(usize, 1), global.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.atomic_init, global.call_target_facts[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(global, .atomic_init_payload));
+    try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(global, .atomic_init_result));
+    const global_payload = targetTypeFactByKind(global, .atomic_init_payload).?;
+    const global_result = targetTypeFactByKind(global, .atomic_init_result).?;
+    try std.testing.expectEqualStrings("atomic.init", global_payload.target_owner.?);
+    try std.testing.expectEqual(global_payload.target_index, global_result.target_index);
+    try std.testing.expectEqualStrings("u64", global_payload.target_ty.kind.name.text);
+    try std.testing.expectEqualStrings("atomic", global_result.target_ty.kind.generic.base.text);
+
     const function = functionByName(typed_mir, "atomic_ops").?;
-    try std.testing.expectEqual(@as(usize, 4), function.call_target_facts.len);
-    try std.testing.expectEqual(mir.CallTargetKind.atomic_store, function.call_target_facts[0].kind);
-    try std.testing.expectEqualStrings("void", function.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(mir.CallTargetKind.atomic_fetch_add, function.call_target_facts[1].kind);
-    try std.testing.expectEqual(mir.CallTargetKind.atomic_fetch_sub, function.call_target_facts[2].kind);
-    try std.testing.expectEqual(mir.CallTargetKind.atomic_load, function.call_target_facts[3].kind);
-    for (function.call_target_facts[1..]) |fact| try std.testing.expectEqualStrings("u32", fact.result_ty.name());
-    try std.testing.expectEqual(@as(usize, 4), function.target_type_facts.len);
-    for (function.target_type_facts) |fact| {
-        try std.testing.expectEqual(mir.TargetTypeKind.atomic_payload, fact.kind);
-        try std.testing.expectEqualStrings("u32", fact.result_ty.name());
-    }
+    try std.testing.expectEqual(@as(usize, 5), function.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.atomic_init, function.call_target_facts[0].kind);
+    try std.testing.expectEqual(mir.CallTargetKind.atomic_store, function.call_target_facts[1].kind);
+    try std.testing.expectEqualStrings("void", function.call_target_facts[1].result_ty.name());
+    try std.testing.expectEqual(mir.CallTargetKind.atomic_fetch_add, function.call_target_facts[2].kind);
+    try std.testing.expectEqual(mir.CallTargetKind.atomic_fetch_sub, function.call_target_facts[3].kind);
+    try std.testing.expectEqual(mir.CallTargetKind.atomic_load, function.call_target_facts[4].kind);
+    for (function.call_target_facts[2..]) |fact| try std.testing.expectEqualStrings("u32", fact.result_ty.name());
+    try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .atomic_init_payload));
+    try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .atomic_init_result));
+    try std.testing.expectEqual(@as(usize, 4), countTargetTypeFactsByKind(function, .atomic_payload));
+    const init_payload = targetTypeFactByKind(function, .atomic_init_payload).?;
+    const init_result = targetTypeFactByKind(function, .atomic_init_result).?;
+    try std.testing.expectEqualStrings("atomic.init", init_payload.target_owner.?);
+    try std.testing.expectEqual(init_payload.target_index, init_result.target_index);
+    try std.testing.expectEqualStrings("u32", init_payload.target_ty.kind.name.text);
+    try std.testing.expectEqualStrings("atomic", init_result.target_ty.kind.generic.base.text);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }

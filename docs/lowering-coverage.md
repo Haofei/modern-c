@@ -53,12 +53,12 @@ The checked build step also ratchets the source set, probe universe, and uncover
 counts via `tools/toolchain/lowering-coverage-baseline.tsv`; a shrinking source set
 or a growing uncovered count fails `zig build lowering-coverage`.
 
-## Current headline (170 host fixtures + 60 mcfuzz programs)
+## Current headline (172 host fixtures + 62 targeted probes + 60 mcfuzz programs)
 
 | file | covered | uncovered | % |
 | --- | --- | --- | --- |
-| `src/lower_c*.zig` | 1038 / 1306 | **268** | 79.5% |
-| `src/lower_llvm*.zig` | 353 / 409 | **56** | 86.3% |
+| `src/lower_c*.zig` | 1281 / 1439 | **158** | 89.0% |
+| `src/lower_llvm*.zig` | 516 / 604 | **88** | 85.4% |
 
 > **Caveat on the LLVM number.** The diff-backend harness *skips* any fixture the
 > LLVM backend cannot yet lower, and the fuzzer's LLVM path is narrower than its C

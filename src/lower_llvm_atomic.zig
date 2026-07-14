@@ -74,27 +74,3 @@ pub fn fenceOrderingForCall(callee: ast.Expr) ?[]const u8 {
         else => null,
     };
 }
-
-pub fn isAtomicInitCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |member| std.mem.eql(u8, member.name.text, "init") and isIdentNamed(member.base.*, "atomic"),
-        .grouped => |inner| isAtomicInitCall(inner.*),
-        else => false,
-    };
-}
-
-pub fn isAtomicInitExpr(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .call => |call| isAtomicInitCall(call.callee.*) and call.type_args.len == 0 and call.args.len == 1,
-        .grouped => |inner| isAtomicInitExpr(inner.*),
-        else => false,
-    };
-}
-
-pub fn atomicInitValue(expr: ast.Expr) ?ast.Expr {
-    return switch (expr.kind) {
-        .call => |call| if (isAtomicInitCall(call.callee.*) and call.args.len == 1) call.args[0] else null,
-        .grouped => |inner| atomicInitValue(inner.*),
-        else => null,
-    };
-}

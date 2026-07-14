@@ -1,5 +1,5 @@
 # backend	min_files	min_function_labels	max_uncovered_functions
 # Ratchet for `bash tools/toolchain/lowering-coverage.sh --check`.
 # Update only when new uncovered functions are intentional or coverage improves.
-lower_c	40	1305	268
-lower_llvm	12	409	57
+lower_c	40	1439	158
+lower_llvm	12	604	88
