@@ -4756,6 +4756,9 @@ const FunctionBuilder = struct {
                     };
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
                     try self.addCallTargetFact(fact_kind, call_ty, expr.span);
+                    if (node.type_args.len != 1) return error.UnsupportedMirConstruction;
+                    const element_ty = node.type_args[0];
+                    try self.appendTargetTypeFact(.reduce_element, element_ty, valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }
                 if (self.atomicCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);

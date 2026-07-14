@@ -790,6 +790,26 @@ test "lower-c rejects prebuilt MIR with missing const_get call target facts" {
     );
 }
 
+test "lower-c reductions require MIR element type facts" {
+    const source =
+        \\fn reduce_element_fact_gate(xs: []const u32) -> Result<u32, Overflow> {
+        \\    return reduce.sum_checked<u32>(xs);
+        \\}
+    ;
+
+    var parsed = try test_support.parseCheckedModule("c_missing_reduce_element_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearTargetTypeFactsForFunction(&module_mir, "reduce_element_fact_gate");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirTargetTypeFacts,
+        lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_reduce_element_facts.mc", .{}, false, null),
+    );
+}
+
 test "lower-c rejects prebuilt MIR with missing phys call target facts" {
     const source =
         \\fn phys_call_target_fact_gate(value: usize) -> PAddr {

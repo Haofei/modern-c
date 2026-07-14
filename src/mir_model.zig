@@ -289,6 +289,7 @@ pub const TargetTypeKind = enum {
     dyn_coercion,
     conversion_source,
     conversion_target,
+    reduce_element,
     bitcast_source,
     bitcast_target,
     phys_result,

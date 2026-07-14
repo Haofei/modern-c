@@ -8663,7 +8663,7 @@ const LlvmEmitter = struct {
         const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
         if (kind != .reduce_sum_checked and kind != .reduce_sum_left and kind != .reduce_sum_fast) return null;
         if (call.type_args.len != 1) return null;
-        const element_ty = call.type_args[0];
+        const element_ty = (self.mirTargetTypeFactAt(.reduce_element, call.callee.*.span) orelse return null).target_ty;
         const return_ty = if (kind == .reduce_sum_checked)
             self.resultType(element_ty, simpleType(call.callee.*.span, "Overflow"), call.callee.*.span) catch return null
         else

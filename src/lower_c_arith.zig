@@ -59,6 +59,7 @@ pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast.TypeExpr, er
 pub const MirCheckElidedFn = *const fn (ctx: *anyopaque, span: ast.Span) bool;
 pub const MirNoOverflowRangeFactFn = *const fn (ctx: *anyopaque, target: []const u8, op: []const u8, span: ast.Span) bool;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo;
 pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
@@ -85,6 +86,7 @@ pub const Context = struct {
     mir_check_elided: MirCheckElidedFn,
     has_mir_no_overflow_range_fact: MirNoOverflowRangeFactFn,
     mir_call_target_kind: MirCallTargetKindFn,
+    mir_target_type: MirTargetTypeFn,
     local_info_from_type: LocalInfoFromTypeFn,
     operand_emit_type: OperandEmitTypeFn,
     global_assignment_target: GlobalAssignmentTargetFn,
@@ -166,20 +168,20 @@ pub fn emitReduceSumCheckedCall(ctx: Context, call: anytype, locals: ?*std.Strin
     if (kind != .reduce_sum_checked and kind != .reduce_sum_left and kind != .reduce_sum_fast) return false;
     const member = memberCallee(call.callee.*) orelse return false;
     if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
+    var element_ty = ctx.mir_target_type(ctx.emit_ctx, .reduce_element, call.callee.*.span) orelse return error.UnsupportedCEmission;
 
     if (kind == .reduce_sum_left or kind == .reduce_sum_fast) {
-        return try emitFloatReduceCall(ctx, call, locals, kind == .reduce_sum_fast);
+        return try emitFloatReduceCall(ctx, call, locals, element_ty, kind == .reduce_sum_fast);
     }
 
-    var t_ty = call.type_args[0];
-    const t_cty = try ctx.c_type(ctx.emit_ctx, t_ty);
-    const int_name = ctx.underlying_int_type_name(ctx.emit_ctx, t_ty) orelse return error.UnsupportedCEmission;
+    const t_cty = try ctx.c_type(ctx.emit_ctx, element_ty);
+    const int_name = ctx.underlying_int_type_name(ctx.emit_ctx, element_ty) orelse return error.UnsupportedCEmission;
     const range = intTypeRange(int_name) orelse return error.UnsupportedCEmission;
-    const struct_name = try ctx.result_type_name(ctx.emit_ctx, t_ty, simpleNameType("Overflow", member.name.span));
+    const struct_name = try ctx.result_type_name(ctx.emit_ctx, element_ty, simpleNameType("Overflow", member.name.span));
 
     const n = ctx.temp_index.*;
     ctx.temp_index.* += 1;
-    const slice_ty: ast.TypeExpr = .{ .span = call.args[0].span, .kind = .{ .slice = .{ .mutability = .@"const", .child = &t_ty } } };
+    const slice_ty: ast.TypeExpr = .{ .span = call.args[0].span, .kind = .{ .slice = .{ .mutability = .@"const", .child = &element_ty } } };
 
     try ctx.out.print(ctx.allocator, "({{ __auto_type mc_xs{d} = (", .{n});
     try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, slice_ty);
@@ -423,12 +425,12 @@ fn checkedSequencedBinaryPlan(ctx: Context, node: anytype, op: ast.BinaryOp, tar
     return if (checkedHelperParts(op, target_name)) |helper| .{ .helper = helper } else null;
 }
 
-fn emitFloatReduceCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo), fast: bool) !bool {
-    var t_ty = call.type_args[0];
-    const t_cty = floatCTypeName(t_ty) orelse return error.UnsupportedCEmission;
+fn emitFloatReduceCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo), element_ty: ast.TypeExpr, fast: bool) !bool {
+    var owned_element_ty = element_ty;
+    const t_cty = floatCTypeName(owned_element_ty) orelse return error.UnsupportedCEmission;
     const n = ctx.temp_index.*;
     ctx.temp_index.* += 1;
-    const slice_ty: ast.TypeExpr = .{ .span = call.args[0].span, .kind = .{ .slice = .{ .mutability = .@"const", .child = &t_ty } } };
+    const slice_ty: ast.TypeExpr = .{ .span = call.args[0].span, .kind = .{ .slice = .{ .mutability = .@"const", .child = &owned_element_ty } } };
 
     try ctx.out.print(ctx.allocator, "({{ __auto_type mc_xs{d} = (", .{n});
     try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, slice_ty);

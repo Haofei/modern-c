@@ -1637,6 +1637,7 @@ const CEmitter = struct {
             .mir_check_elided = mirCheckElidedForArith,
             .has_mir_no_overflow_range_fact = hasMirNoOverflowRangeFactForArith,
             .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
             .local_info_from_type = localInfoFromTypeForArith,
             .operand_emit_type = operandEmitTypeForArith,
             .global_assignment_target = globalAssignmentTargetForArith,
@@ -2429,6 +2430,9 @@ const CEmitter = struct {
     }
 
     fn collectFunctionSliceTypes(self: *CEmitter, fn_decl: ast.FnDecl) !void {
+        const previous_function = self.current_function;
+        self.current_function = fn_decl.name.text;
+        defer self.current_function = previous_function;
         try lower_c_collect.collectFunctionTypeArtifacts(self.typeArtifactContext(), fn_decl);
     }
 
@@ -2489,6 +2493,7 @@ const CEmitter = struct {
         return .{
             .emit_ctx = self,
             .collect_type_artifacts = collectTypeArtifactsForCollect,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 

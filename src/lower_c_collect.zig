@@ -25,6 +25,7 @@ const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
 const typeName = ast_query.typeName;
 
 pub const TypeArtifactFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!void;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 pub const TypeNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
 pub const ArrayTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, len_expr: ast.Expr) anyerror![]const u8;
 pub const ExprTextFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8;
@@ -34,6 +35,7 @@ pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, mut
 pub const TypeArtifactContext = struct {
     emit_ctx: *anyopaque,
     collect_type_artifacts: TypeArtifactFn,
+    mir_target_type: MirTargetTypeFn,
 };
 
 pub const FnPtrArtifactContext = struct {
@@ -147,8 +149,8 @@ fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast.Expr) anyerror!v
     switch (expr.kind) {
         .call => |node| {
             if (byteViewCallReturnTypeForCall(node)) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
-            if (reduceCallUsesConstSliceOperand(node)) {
-                var child_ty = node.type_args[0];
+            if (reduceCallElementType(ctx, node)) |element_ty| {
+                var child_ty = element_ty;
                 const slice_ty: ast.TypeExpr = .{ .span = node.args[0].span, .kind = .{ .slice = .{ .mutability = .@"const", .child = &child_ty } } };
                 try ctx.collect_type_artifacts(ctx.emit_ctx, slice_ty);
             }
@@ -178,9 +180,9 @@ fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast.Expr) anyerror!v
     }
 }
 
-fn reduceCallUsesConstSliceOperand(call: anytype) bool {
-    if (call.type_args.len != 1 or call.args.len != 1) return false;
-    return ast_query.reduceCallKind(call.callee.*) != null;
+fn reduceCallElementType(ctx: TypeArtifactContext, call: anytype) ?ast.TypeExpr {
+    if (call.type_args.len != 1 or call.args.len != 1) return null;
+    return ctx.mir_target_type(ctx.emit_ctx, .reduce_element, call.callee.*.span);
 }
 
 pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast.TypeExpr) anyerror!void {

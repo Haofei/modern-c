@@ -975,12 +975,19 @@ test "MIR records typed call target facts for reductions" {
     try std.testing.expectEqual(@as(usize, 1), checked.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.reduce_sum_checked, checked.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("Result", checked.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 1), checked.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.reduce_element, checked.target_type_facts[0].kind);
+    try std.testing.expectEqualStrings("u32", checked.target_type_facts[0].target_ty.kind.name.text);
 
     const left = functionByName(typed_mir, "left").?;
     try std.testing.expectEqual(@as(usize, 1), left.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.reduce_sum_left, left.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("f64", left.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 1), left.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.reduce_element, left.target_type_facts[0].kind);
+    try std.testing.expectEqualStrings("f64", left.target_type_facts[0].target_ty.kind.name.text);
     try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
 test "MIR owns value reflection call target facts" {
