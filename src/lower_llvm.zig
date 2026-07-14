@@ -195,6 +195,12 @@ const LocalSliceAggregatePointerArrayBase = struct {
     range: LocalSlicePointerArrayRange,
 };
 
+fn directCallFactMatchesDeclared(fact_ty: ast.TypeExpr, declared_ty: ast.TypeExpr) bool {
+    if (std.meta.eql(fact_ty, declared_ty)) return true;
+    return (typeNameEql(fact_ty, "void") and typeNameEql(declared_ty, "void")) or
+        (typeNameEql(fact_ty, "never") and typeNameEql(declared_ty, "never"));
+}
+
 /// Construct the `Backend` registry entry for the LLVM backend. The LLVM
 /// backend is profile-agnostic and has no source-map artifact.
 pub fn mcBackend() backend_mod.Backend {
@@ -4985,13 +4991,32 @@ const LlvmEmitter = struct {
     fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
         if (self.currentMirFunction()) |function| {
             for (function.target_type_facts) |fact| {
-                if (fact.kind == kind and mirSourceMatches(span, fact.source)) return fact;
+                if (fact.kind == kind and fact.target_index == null and fact.target_owner == null and mirSourceMatches(span, fact.source)) return fact;
             }
         }
         if (span.line == 0 or span.column == 0) return null;
         var matched: ?mir.TargetTypeFact = null;
         for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
-            if (fact.kind != kind or !mirSourceMatches(span, fact.source)) continue;
+            if (fact.kind != kind or fact.target_index != null or fact.target_owner != null or !mirSourceMatches(span, fact.source)) continue;
+            if (matched) |existing| {
+                if (!std.meta.eql(existing.target_ty, fact.target_ty)) return null;
+            } else {
+                matched = fact;
+            }
+        };
+        return matched;
+    }
+
+    fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
+        if (self.currentMirFunction()) |function| {
+            for (function.target_type_facts) |fact| {
+                if (fact.kind == kind and fact.target_index == target_index and fact.target_owner != null and std.mem.eql(u8, fact.target_owner.?, target_owner) and mirSourceMatches(span, fact.source)) return fact;
+            }
+        }
+        if (span.line == 0 or span.column == 0) return null;
+        var matched: ?mir.TargetTypeFact = null;
+        for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
+            if (fact.kind != kind or fact.target_index != target_index or fact.target_owner == null or !std.mem.eql(u8, fact.target_owner.?, target_owner) or !mirSourceMatches(span, fact.source)) continue;
             if (matched) |existing| {
                 if (!std.meta.eql(existing.target_ty, fact.target_ty)) return null;
             } else {
@@ -6292,13 +6317,19 @@ const LlvmEmitter = struct {
     }
 
     fn emitDirectCall(self: *LlvmEmitter, callee: []const u8, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
-        const ret_ast_ty = if (self.fn_sigs.get(callee)) |sig| sig.ret else expected_ty;
+        const sig = self.fn_sigs.get(callee) orelse return error.UnsupportedLlvmEmission;
+        const ret_ast_ty = (self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, callee, null) orelse return error.UnsupportedLlvmEmission).target_ty;
+        if (!directCallFactMatchesDeclared(ret_ast_ty, sig.ret)) return error.UnsupportedLlvmEmission;
         const ret_ty = try self.llvmType(ret_ast_ty);
         if (typeNameEql(ret_ast_ty, "void")) return error.UnsupportedLlvmEmission;
         var args: std.ArrayList(ArgValue) = .empty;
         defer args.deinit(self.allocator);
         for (call.args, 0..) |arg, i| {
-            const arg_ty = self.expectedTyForCallArg(callee, i) orelse expected_ty;
+            const arg_ty = if (i < sig.params.len) blk: {
+                const fact_ty = (self.mirTargetTypeFactAtOwned(.direct_call_argument, arg.span, callee, i) orelse return error.UnsupportedLlvmEmission).target_ty;
+                if (!std.meta.eql(fact_ty, sig.params[i].ty)) return error.UnsupportedLlvmEmission;
+                break :blk fact_ty;
+            } else self.exprType(arg) orelse expected_ty;
             try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg") });
         }
         const result = try self.nextTemp();
@@ -6669,10 +6700,16 @@ const LlvmEmitter = struct {
         // A `-> never` function lowers to a `void` LLVM declaration, so its call statement is a
         // plain `call void @fn(args)` (no result name) — handled here alongside `-> void`.
         if (!typeNameEql(sig.ret, "void") and !typeNameEql(sig.ret, "never")) return error.UnsupportedLlvmEmission;
+        const fact_ret_ty = (self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, callee, null) orelse return error.UnsupportedLlvmEmission).target_ty;
+        if (!directCallFactMatchesDeclared(fact_ret_ty, sig.ret)) return error.UnsupportedLlvmEmission;
         var args: std.ArrayList(ArgValue) = .empty;
         defer args.deinit(self.allocator);
         for (call.args, 0..) |arg, i| {
-            const arg_ty = self.expectedTyForCallArg(callee, i) orelse self.exprType(arg) orelse return error.UnsupportedLlvmEmission;
+            const arg_ty = if (i < sig.params.len) blk: {
+                const fact_ty = (self.mirTargetTypeFactAtOwned(.direct_call_argument, arg.span, callee, i) orelse return error.UnsupportedLlvmEmission).target_ty;
+                if (!std.meta.eql(fact_ty, sig.params[i].ty)) return error.UnsupportedLlvmEmission;
+                break :blk fact_ty;
+            } else self.exprType(arg) orelse return error.UnsupportedLlvmEmission;
             try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg") });
         }
         try self.out.print(self.allocator, "  call void @{s}(", .{callee});
@@ -8530,12 +8567,6 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn expectedTyForCallArg(self: *LlvmEmitter, callee: []const u8, index: usize) ?ast.TypeExpr {
-        const sig = self.fn_sigs.get(callee) orelse return null;
-        if (index >= sig.params.len) return null;
-        return sig.params[index].ty;
-    }
-
     fn directCallName(self: *LlvmEmitter, callee: ast.Expr) ?[]const u8 {
         const name = calleeIdentName(callee) orelse return null;
         return if (self.fn_sigs.contains(name)) name else null;
@@ -8625,7 +8656,10 @@ const LlvmEmitter = struct {
         if (self.closureCalleeType(call.callee.*)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
         if (self.fnPointerCalleeType(call.callee.*)) |fn_ty| return fn_ty.kind.fn_pointer.ret.*;
         const callee = self.directCallName(call.callee.*) orelse return null;
-        return if (self.fn_sigs.get(callee)) |sig| sig.ret else null;
+        const sig = self.fn_sigs.get(callee) orelse return null;
+        const fact_ty = if (self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, callee, null)) |fact| fact.target_ty else return null;
+        if (!directCallFactMatchesDeclared(fact_ty, sig.ret)) return null;
+        return fact_ty;
     }
 
     fn enumRawCallInfo(self: *LlvmEmitter, call: anytype) ?EnumRawCallInfo {

@@ -24,6 +24,19 @@ fn functionByName(module: mir.Module, name: []const u8) ?mir.Function {
     return null;
 }
 
+fn targetTypeFactByKind(function: mir.Function, kind: mir.TargetTypeKind) ?mir.TargetTypeFact {
+    for (function.target_type_facts) |fact| if (fact.kind == kind) return fact;
+    return null;
+}
+
+fn countTargetTypeFactsByKind(function: mir.Function, kind: mir.TargetTypeKind) usize {
+    var count: usize = 0;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind == kind) count += 1;
+    }
+    return count;
+}
+
 fn functionByNameMut(module: *mir.Module, name: []const u8) ?*mir.Function {
     for (module.functions) |*function| {
         if (std.mem.eql(u8, function.name, name)) return function;
@@ -266,13 +279,16 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectEqual(mir.TargetTypeKind.result_err, err_fn.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, err_fn.target_type_facts[1].kind);
     const arg_fn = functionByName(typed_mir, "pass_ok").?;
-    try std.testing.expectEqual(mir.TargetTypeKind.result_ok, arg_fn.target_type_facts[0].kind);
+    try std.testing.expect(targetTypeFactByKind(arg_fn, .result_ok) != null);
     const slot_fn = functionByName(typed_mir, "make_slot").?;
     try std.testing.expectEqual(@as(usize, 3), slot_fn.target_type_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, slot_fn.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.bind, slot_fn.target_type_facts[1].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.result_ok, slot_fn.target_type_facts[2].kind);
-    try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "make_number").?.target_type_facts.len);
+    const number_fn = functionByName(typed_mir, "make_number").?;
+    try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(number_fn, .tagged_union));
+    try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(number_fn, .direct_call_result));
+    try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(number_fn, .direct_call_argument));
     try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, functionByName(typed_mir, "make_eof").?.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, functionByName(typed_mir, "make_union_ok").?.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "make_enum").?.target_type_facts[0].kind);
@@ -344,9 +360,8 @@ test "MIR owns implicit view const narrowing source and target types" {
 
     for ([_][]const u8{ "slice_return", "slice_local", "slice_argument", "pointer_return" }) |name| {
         const function = functionByName(typed_mir, name).?;
-        try std.testing.expectEqual(@as(usize, 2), function.target_type_facts.len);
-        try std.testing.expectEqual(mir.TargetTypeKind.view_const_narrow_source, function.target_type_facts[0].kind);
-        try std.testing.expectEqual(mir.TargetTypeKind.view_const_narrow_target, function.target_type_facts[1].kind);
+        try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .view_const_narrow_source));
+        try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .view_const_narrow_target));
     }
 
     try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "slice_passthrough").?.target_type_facts.len);
@@ -454,7 +469,7 @@ test "MIR owns dyn coercion targets and excludes pass-through values" {
     const holder = functionByName(typed_mir, "hold").?;
     try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, holder.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.dyn_coercion, holder.target_type_facts[1].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.dyn_coercion, functionByName(typed_mir, "pass_arg").?.target_type_facts[0].kind);
+    try std.testing.expect(targetTypeFactByKind(functionByName(typed_mir, "pass_arg").?, .dyn_coercion) != null);
     try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "pass_through").?.target_type_facts.len);
     try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "pass_nullable").?.target_type_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.null_literal, functionByName(typed_mir, "no_dyn").?.target_type_facts[0].kind);
@@ -895,6 +910,58 @@ test "MIR owns runtime assert condition types" {
     try std.testing.expectEqual(mir.TargetTypeKind.assert_condition, fact.kind);
     try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
     try std.testing.expectEqualStrings("bool", fact.result_ty.name());
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR owns ordinary direct call result and fixed argument types" {
+    const source =
+        \\trait Width { fn widen(self: *Self) -> u32; }
+        \\struct Narrow { value: u32 }
+        \\impl Width for Narrow { fn widen(self: *Narrow) -> u32 { return self.value; } }
+        \\extern fn log(level: u32, ...) -> void;
+        \\fn widen(value: u64) -> u64 { return value; }
+        \\fn caller(value: u64) -> u64 {
+        \\    log(1, value);
+        \\    return widen(value);
+        \\}
+        \\fn method_caller(value: *Narrow) -> u32 { return value.widen(); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_direct_call_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const caller = functionByName(typed_mir, "caller").?;
+    var result_count: usize = 0;
+    var argument_count: usize = 0;
+    for (caller.target_type_facts) |fact| switch (fact.kind) {
+        .direct_call_result => {
+            result_count += 1;
+            try std.testing.expect(fact.target_owner != null);
+            try std.testing.expect(fact.target_index == null);
+            try std.testing.expect(std.mem.eql(u8, fact.target_owner.?, "log") or std.mem.eql(u8, fact.target_owner.?, "widen"));
+            try std.testing.expect(std.mem.eql(u8, fact.target_ty.kind.name.text, "void") or std.mem.eql(u8, fact.target_ty.kind.name.text, "u64"));
+        },
+        .direct_call_argument => {
+            argument_count += 1;
+            try std.testing.expect(fact.target_owner != null);
+            try std.testing.expectEqual(@as(?usize, 0), fact.target_index);
+            try std.testing.expect(std.mem.eql(u8, fact.target_owner.?, "log") or std.mem.eql(u8, fact.target_owner.?, "widen"));
+            try std.testing.expect(std.mem.eql(u8, fact.target_ty.kind.name.text, "u32") or std.mem.eql(u8, fact.target_ty.kind.name.text, "u64"));
+        },
+        else => {},
+    };
+    try std.testing.expectEqual(@as(usize, 2), result_count);
+    try std.testing.expectEqual(@as(usize, 2), argument_count);
+    const method_caller = functionByName(typed_mir, "method_caller").?;
+    try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(method_caller, .direct_call_result));
+    try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(method_caller, .direct_call_argument));
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 

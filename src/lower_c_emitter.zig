@@ -1565,6 +1565,7 @@ const CEmitter = struct {
             .emit_assign_target = emitAssignTargetForArith,
             .mir_call_target_kind = mirCallTargetKindForLowering,
             .mir_target_type = mirTargetTypeForLowering,
+            .mir_owned_target_type = mirOwnedTargetTypeForLowering,
         };
     }
 
@@ -2148,6 +2149,11 @@ const CEmitter = struct {
     fn mirTargetTypeForLowering(ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return if (self.mirTargetTypeFactAt(kind, span)) |fact| fact.target_ty else null;
+    }
+
+    fn mirOwnedTargetTypeForLowering(ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?ast.TypeExpr {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        return if (self.mirTargetTypeFactAtOwned(kind, span, target_owner, target_index)) |fact| fact.target_ty else null;
     }
 
     fn mirConstGetIndexForLowering(ctx: *anyopaque, span: ast.Span) ?usize {
@@ -4071,12 +4077,20 @@ const CEmitter = struct {
     }
 
     fn emitDefaultCallExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
-        const fn_info = if (calleeIdentName(node.callee.*)) |name| self.functions.get(name) else null;
+        const fn_name = calleeIdentName(node.callee.*);
+        const fn_info = if (fn_name) |name| self.functions.get(name) else null;
         try self.emitExpr(node.callee.*, locals);
         try self.out.appendSlice(self.allocator, "(");
         for (node.args, 0..) |arg, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            const target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
+            const target_ty = if (fn_info) |info|
+                if (i < info.params.len) blk: {
+                    const fact_ty = (self.mirTargetTypeFactAtOwned(.direct_call_argument, arg.span, fn_name.?, i) orelse return error.UnsupportedCEmission).target_ty;
+                    if (!std.meta.eql(fact_ty, info.params[i].ty)) return error.UnsupportedCEmission;
+                    break :blk fact_ty;
+                } else null
+            else
+                null;
             try self.emitExprWithTarget(arg, locals, target_ty);
         }
         try self.out.appendSlice(self.allocator, ")");
@@ -4886,7 +4900,7 @@ const CEmitter = struct {
     }
 
     fn emitSequencedCallArgTemps(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo) anyerror!std.ArrayList(SequencedArgTemp) {
-        return lower_c_call.collectSequencedArgTemps(self.scratch.allocator(), self, emitSequencedArgTempForCall, call.args, locals, fn_info);
+        return lower_c_call.collectSequencedArgTemps(self.sequencedArgContext(), call, locals, fn_info);
     }
 
     fn emitSequencedCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
@@ -5050,13 +5064,32 @@ const CEmitter = struct {
     fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
         if (self.currentMirFunction()) |function| {
             for (function.target_type_facts) |fact| {
-                if (fact.kind == kind and mirSourceMatches(span, fact.source)) return fact;
+                if (fact.kind == kind and fact.target_index == null and fact.target_owner == null and mirSourceMatches(span, fact.source)) return fact;
             }
         }
         if (span.line == 0 or span.column == 0) return null;
         var matched: ?mir.TargetTypeFact = null;
         for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
-            if (fact.kind != kind or !mirSourceMatches(span, fact.source)) continue;
+            if (fact.kind != kind or fact.target_index != null or fact.target_owner != null or !mirSourceMatches(span, fact.source)) continue;
+            if (matched) |existing| {
+                if (!std.meta.eql(existing.target_ty, fact.target_ty)) return null;
+            } else {
+                matched = fact;
+            }
+        };
+        return matched;
+    }
+
+    fn mirTargetTypeFactAtOwned(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
+        if (self.currentMirFunction()) |function| {
+            for (function.target_type_facts) |fact| {
+                if (fact.kind == kind and fact.target_index == target_index and fact.target_owner != null and std.mem.eql(u8, fact.target_owner.?, target_owner) and mirSourceMatches(span, fact.source)) return fact;
+            }
+        }
+        if (span.line == 0 or span.column == 0) return null;
+        var matched: ?mir.TargetTypeFact = null;
+        for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
+            if (fact.kind != kind or fact.target_index != target_index or fact.target_owner == null or !std.mem.eql(u8, fact.target_owner.?, target_owner) or !mirSourceMatches(span, fact.source)) continue;
             if (matched) |existing| {
                 if (!std.meta.eql(existing.target_ty, fact.target_ty)) return null;
             } else {
@@ -6835,7 +6868,7 @@ const CEmitter = struct {
     }
 
     fn sliceReturnTypeForCall(self: *CEmitter, call: anytype) ?ast.TypeExpr {
-        return lower_c_infer.sliceReturnTypeForCall(&self.functions, call);
+        return lower_c_infer.sliceReturnTypeForCall(self.inferTypeContext(), call);
     }
 
     fn sliceReturnTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -6951,6 +6984,7 @@ const CEmitter = struct {
             .source_type_for_expr = sourceTypeForInfer,
             .call_return_type_for_expr = callReturnTypeForInfer,
             .mir_target_type = mirTargetTypeForLowering,
+            .mir_owned_target_type = mirOwnedTargetTypeForLowering,
         };
     }
 
@@ -6965,7 +6999,7 @@ const CEmitter = struct {
     }
 
     fn arrayReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
-        return lower_c_infer.arrayReturnTypeForExpr(&self.functions, expr);
+        return lower_c_infer.arrayReturnTypeForExpr(self.inferTypeContext(), expr);
     }
 
     fn resultTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -6973,7 +7007,7 @@ const CEmitter = struct {
     }
 
     fn enumReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
-        return lower_c_infer.enumReturnTypeForExpr(&self.functions, &self.enums, expr);
+        return lower_c_infer.enumReturnTypeForExpr(self.inferTypeContext(), expr);
     }
 
     fn nullableReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
@@ -7004,7 +7038,11 @@ const CEmitter = struct {
         if (self.closureCalleeType(call.callee.*, locals)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
-        return info.return_type;
+        const fact_ty = if (self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null)) |fact| fact.target_ty else return null;
+        if (info.return_type) |declared_ty| {
+            if (!std.meta.eql(fact_ty, declared_ty)) return null;
+        } else if (!isVoidType(fact_ty)) return null;
+        return fact_ty;
     }
 
     fn dynDispatchReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {

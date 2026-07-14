@@ -116,6 +116,8 @@ pub const Instruction = struct {
     result_ty: ValueType,
     detail: []const u8,
     const_index: ?usize = null,
+    target_index: ?usize = null,
+    target_owner: ?[]const u8 = null,
     value_id: ?[]const u8 = null,
     contract_region_id: ?usize = null,
     line: usize,
@@ -307,6 +309,8 @@ pub const CallTargetFact = struct {
 
 pub const TargetTypeKind = enum {
     assert_condition,
+    direct_call_result,
+    direct_call_argument,
     bind,
     result_ok,
     result_err,
@@ -374,6 +378,8 @@ pub const TargetTypeFact = struct {
     kind: TargetTypeKind,
     target_ty: ast.TypeExpr,
     result_ty: ValueType,
+    target_index: ?usize = null,
+    target_owner: ?[]const u8 = null,
     source: SourcePoint,
 };
 

@@ -711,6 +711,9 @@ ANCHORS: dict[str, list[str]] = {
 EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/mir.zig": {
         "appendTargetTypeFact(.assert_condition": 1,
+        "appendOwnedTargetTypeFact(.direct_call_result": 1,
+        ".direct_call_argument,": 1,
+        "fn appendOwnedTargetTypeFact(": 1,
         "fn addSelfTypedExpressionFact(": 1,
         "qualified_union_result": 1,
         "enum_variant_path_result": 1,
@@ -846,8 +849,11 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_c_emitter.zig": {
         "fn mirTargetTypeFactAt(": 1,
+        "fn mirTargetTypeFactAtOwned(": 1,
         "mirTargetTypeFactAt(.assert_condition": 1,
         "emitExprWithTarget(expr, locals, condition_ty)": 1,
+        "mirTargetTypeFactAtOwned(.direct_call_result": 1,
+        "mirTargetTypeFactAtOwned(.direct_call_argument": 1,
         "mirTargetTypeFactAt(.value_optional_coercion": 1,
         "mirTargetTypeFactAt(.dyn_coercion": 1,
         "mirTargetTypeFactAt(.explicit_cast_source": 2,
@@ -882,7 +888,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "self.cTypeFor(node.ty.*, .typedef_name)": 0,
         "self.emitExprWithTarget(node.value.*, locals, node.ty.*)": 0,
         "self.current_function = global.name.text;": 1,
-        "if (span.line == 0 or span.column == 0) return null;": 1,
+        "if (span.line == 0 or span.column == 0) return null;": 2,
         "fn emitEnumLiteralWithTarget(self: *CEmitter, literal: ast.Ident, target_ty:": 0,
         "fn emitStringLiteralWithTarget(self: *CEmitter, literal: []const u8, target_ty:": 0,
         "fn emitAggregateLiteralWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty:": 0,
@@ -916,6 +922,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "numeric_expr_type:": 0,
     },
     "src/lower_c_infer.zig": {
+        "mir_owned_target_type(ctx.source_ctx, .direct_call_result": 1,
         "mir_target_type(ctx.source_ctx, .qualified_union_result": 1,
         "mir_target_type(ctx.source_ctx, .enum_variant_path_result": 1,
         "fn qualifiedUnionConstructorType(": 0,
@@ -1030,6 +1037,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mmioMapCallPayloadType": 0,
     },
     "src/lower_c_call.zig": {
+        "ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_result": 2,
+        "ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_argument": 1,
         "mir.explicitTrapHelperForTarget(kind)": 1,
         "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .declassify": 1,
         "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .assume_noalias": 1,
@@ -1061,6 +1070,11 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try mir.validateConstGetFactsForLowering(module_mir.*);": 1,
         "try mir.validateTargetTypeFactsForLowering(module_mir.*);": 1,
         "fn mirTargetTypeFactAt(": 1,
+        "fn mirTargetTypeFactAtOwned(": 1,
+        "mirTargetTypeFactAtOwned(.direct_call_result": 3,
+        "mirTargetTypeFactAtOwned(.direct_call_argument": 2,
+        "fn expectedTyForCallArg(": 0,
+        "return if (self.fn_sigs.get(callee)) |sig| sig.ret else null;": 0,
         "mirTargetTypeFactAt(.value_optional_coercion": 1,
         "mirTargetTypeFactAt(.dyn_coercion": 1,
         "mir.conversionCallTargetKindForName(member.name.text)": 1,
@@ -1124,7 +1138,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "self.exprType(call.args[0]) orelse info.target_ty": 0,
         "self.exprType(call.args[0]) orelse expected_ty": 0,
         "self.current_function = global.name.text;": 1,
-        "if (span.line == 0 or span.column == 0) return null;": 1,
+        "if (span.line == 0 or span.column == 0) return null;": 2,
         "fn bindClosureType(": 0,
         "emitTaggedUnionConstructor(call, expected_ty)": 0,
         "enumDeclForType(expected_ty)) |enum_decl|\n                try self.enumCaseValueByName": 0,
@@ -1218,14 +1232,17 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/mir_tests.zig": {
         "MIR owns DMA call identities and complete types": 1,
         "MIR owns runtime assert condition types": 1,
+        "MIR owns ordinary direct call result and fixed argument types": 1,
     },
     "src/lower_c_tests.zig": {
         "lower-c DMA calls consume MIR identities and complete types": 1,
         "lower-c runtime asserts require MIR bool condition types": 1,
+        "lower-c ordinary direct calls require MIR result and argument types": 1,
     },
     "src/lower_llvm_tests.zig": {
         "LLVM DMA calls consume MIR identities and complete types": 1,
         "LLVM runtime asserts require MIR bool condition types": 1,
+        "LLVM ordinary direct calls require MIR result and argument types": 1,
     },
     "tests/spec/no_implicit_conversion.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 9,

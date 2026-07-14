@@ -425,7 +425,20 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
             try out.append(allocator, '\n');
             for (block.instructions) |instruction| {
                 const value_id = instruction.value_id orelse "none";
-                if (instruction.const_index) |index| {
+                if (instruction.target_index) |index| {
+                    const target_owner = instruction.target_owner orelse "none";
+                    try out.print(
+                        allocator,
+                        "mir instr fn={s} block={} kind={s} detail={s} type={s} target_owner={s} target_index={} value_id={s} contract_region_id=none line={} column={}\n",
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), target_owner, index, value_id, instruction.line, instruction.column },
+                    );
+                } else if (instruction.target_owner) |owner| {
+                    try out.print(
+                        allocator,
+                        "mir instr fn={s} block={} kind={s} detail={s} type={s} target_owner={s} target_index=none value_id={s} contract_region_id=none line={} column={}\n",
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), owner, value_id, instruction.line, instruction.column },
+                    );
+                } else if (instruction.const_index) |index| {
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} const_index={} value_id={s} contract_region_id=none line={} column={}\n",
@@ -504,10 +517,13 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
             );
         }
         for (function.target_type_facts) |fact| {
+            const target_index = if (fact.target_index) |index| try std.fmt.allocPrint(allocator, "{}", .{index}) else "none";
+            defer if (fact.target_index != null) allocator.free(target_index);
+            const target_owner = fact.target_owner orelse "none";
             try out.print(
                 allocator,
-                "mir target_type_fact fn={s} kind={s} target_type={s} result_type={s} recorded=true line={} column={}\n",
-                .{ function.name, @tagName(fact.kind), typeText(fact.target_ty), fact.result_ty.name(), fact.source.line, fact.source.column },
+                "mir target_type_fact fn={s} kind={s} target_type={s} result_type={s} target_owner={s} target_index={s} recorded=true line={} column={}\n",
+                .{ function.name, @tagName(fact.kind), typeText(fact.target_ty), fact.result_ty.name(), target_owner, target_index, fact.source.line, fact.source.column },
             );
         }
         for (function.pointer_provenance_facts) |fact| {
@@ -1069,10 +1085,17 @@ fn targetTypeKindForInstruction(instruction: Instruction) ?TargetTypeKind {
     return std.meta.stringToEnum(TargetTypeKind, instruction.detail);
 }
 
+fn optionalTextEql(left: ?[]const u8, right: ?[]const u8) bool {
+    if (left == null or right == null) return left == null and right == null;
+    return std.mem.eql(u8, left.?, right.?);
+}
+
 fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instruction: Instruction) usize {
     var count: usize = 0;
     for (function.target_type_facts) |fact| {
         if (fact.kind != kind) continue;
+        if (fact.target_index != instruction.target_index) continue;
+        if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (fact.source.line == instruction.line and fact.source.column == instruction.column) count += 1;
     }
@@ -1084,6 +1107,8 @@ fn countMatchingTargetTypeInstructions(function: Function, fact: TargetTypeFact)
     for (function.blocks) |block| for (block.instructions) |instruction| {
         const kind = targetTypeKindForInstruction(instruction) orelse continue;
         if (kind != fact.kind) continue;
+        if (instruction.target_index != fact.target_index) continue;
+        if (!optionalTextEql(instruction.target_owner, fact.target_owner)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (fact.source.line == instruction.line and fact.source.column == instruction.column) count += 1;
     };
@@ -1095,6 +1120,8 @@ fn countMatchingTargetTypeInstructionsForInstruction(function: Function, kind: T
     for (function.blocks) |block| for (block.instructions) |instruction| {
         const instruction_kind = targetTypeKindForInstruction(instruction) orelse continue;
         if (instruction_kind != kind) continue;
+        if (instruction.target_index != target.target_index) continue;
+        if (!optionalTextEql(instruction.target_owner, target.target_owner)) continue;
         if (!sameRepresentationValueType(instruction.result_ty, target.result_ty)) continue;
         if (instruction.line == target.line and instruction.column == target.column) count += 1;
     };
@@ -1105,6 +1132,8 @@ fn countMatchingTargetTypeFactsForFact(function: Function, target: TargetTypeFac
     var count: usize = 0;
     for (function.target_type_facts) |fact| {
         if (fact.kind != target.kind) continue;
+        if (fact.target_index != target.target_index) continue;
+        if (!optionalTextEql(fact.target_owner, target.target_owner)) continue;
         if (!sameRepresentationValueType(fact.result_ty, target.result_ty)) continue;
         if (fact.source.line == target.source.line and fact.source.column == target.source.column) count += 1;
     }
@@ -1115,6 +1144,8 @@ fn matchingTargetTypeFactsAgree(function: Function, kind: TargetTypeKind, instru
     var first: ?ast.TypeExpr = null;
     for (function.target_type_facts) |fact| {
         if (fact.kind != kind) continue;
+        if (fact.target_index != instruction.target_index) continue;
+        if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (fact.source.line != instruction.line or fact.source.column != instruction.column) continue;
         if (first) |expected| {
@@ -4850,6 +4881,10 @@ const FunctionBuilder = struct {
                 // method's, not a same-named free function's. The verifier carries no trait sigs,
                 // so leave it `.unknown` rather than mis-binding to `summaries[method_name]`.
                 const is_dyn_dispatch = self.isDynDispatchMember(node.callee.*);
+                const direct_decl_summary = if (!is_dyn_dispatch and calleeIdentName(node.callee.*) != null)
+                    self.summaries.get(callee_name)
+                else
+                    null;
                 const reflection_target = self.reflectionCallTarget(node);
                 const byte_view_target = self.byteViewCallTarget(node);
                 const semantic_escape_target = try self.semanticEscapeCallTarget(node);
@@ -4902,6 +4937,21 @@ const FunctionBuilder = struct {
                     ty
                 else if (self.fenceCallTargetKind(node.callee.*)) |_| .void else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
+                if (direct_decl_summary) |summary| {
+                    const result_ty = summary.return_type_expr orelse ast_query.simpleNameType("void", node.callee.*.span);
+                    try self.appendOwnedTargetTypeFact(.direct_call_result, result_ty, summary.return_ty, node.callee.*.span, callee_name, null);
+                    const fixed_arg_count = @min(node.args.len, summary.params.len);
+                    for (node.args[0..fixed_arg_count], summary.params[0..fixed_arg_count], 0..) |arg, param, index| {
+                        try self.appendOwnedTargetTypeFact(
+                            .direct_call_argument,
+                            param.ty,
+                            valueTypeFromTypeAlias(param.ty, self.enums, self.structs, self.packed_bits, self.aliases),
+                            arg.span,
+                            callee_name,
+                            index,
+                        );
+                    }
+                }
                 if (reduceCallKind(node.callee.*)) |kind| {
                     const fact_kind: CallTargetKind = switch (kind) {
                         .sum_checked => .reduce_sum_checked,
@@ -5758,6 +5808,21 @@ const FunctionBuilder = struct {
             .kind = kind,
             .target_ty = target_ty,
             .result_ty = result_ty,
+            .source = .{ .line = span.line, .column = span.column },
+        });
+    }
+
+    fn appendOwnedTargetTypeFact(self: *FunctionBuilder, kind: TargetTypeKind, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span, target_owner: []const u8, target_index: ?usize) !void {
+        try self.addInstr(.target_type, @tagName(kind), result_ty, span);
+        const instructions = &self.blocks.items[self.current].instructions;
+        instructions.items[instructions.items.len - 1].target_index = target_index;
+        instructions.items[instructions.items.len - 1].target_owner = target_owner;
+        try self.target_type_facts.append(self.allocator, .{
+            .kind = kind,
+            .target_ty = target_ty,
+            .result_ty = result_ty,
+            .target_index = target_index,
+            .target_owner = target_owner,
             .source = .{ .line = span.line, .column = span.column },
         });
     }
