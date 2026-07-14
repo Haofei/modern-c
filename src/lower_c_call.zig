@@ -58,6 +58,7 @@ pub const Context = struct {
     out: *std.ArrayList(u8),
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
+    emit_expr_with_target: EmitExprWithTargetFn,
     c_type: CTypeFn,
     mir_call_target_kind: MirCallTargetKindFn,
     mir_target_type: MirTargetTypeFn,
@@ -486,13 +487,16 @@ pub fn emitNamedDiscardCall(ctx: Context, call: anytype, locals: ?*std.StringHas
 }
 
 pub fn emitRawAddressCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) == .raw_load) {
-        if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
-        const result_ty = ctx.mir_target_type(ctx.emit_ctx, .raw_load_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
-        if (typeName(result_ty)) |name| {
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span);
+    if (kind == .raw_load) {
+        if (!ast_query.isRawLoadCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
+        const address_ty = ctx.mir_target_type(ctx.emit_ctx, .raw_address, call.callee.*.span) orelse return error.UnsupportedCEmission;
+        const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .raw_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
+        const result_ty = ctx.mir_target_type(ctx.emit_ctx, .raw_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
+        if (typeName(payload_ty)) |name| {
             if (rawScalarSuffix(name)) |suffix| {
                 try ctx.out.print(ctx.allocator, "mc_raw_load_{s}(", .{suffix});
-                try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+                try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, address_ty);
                 try ctx.out.appendSlice(ctx.allocator, ")");
                 return true;
             }
@@ -503,17 +507,19 @@ pub fn emitRawAddressCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
         try ctx.out.appendSlice(ctx.allocator, "(*(");
         try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, result_ty));
         try ctx.out.appendSlice(ctx.allocator, " *)(");
-        try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+        try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, address_ty);
         try ctx.out.appendSlice(ctx.allocator, "))");
         return true;
     }
-    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) == .raw_ptr) {
-        if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
-        const result_ty = ctx.mir_target_type(ctx.emit_ctx, .raw_ptr_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    if (kind == .raw_ptr) {
+        if (!ast_query.isRawPtrCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
+        const address_ty = ctx.mir_target_type(ctx.emit_ctx, .raw_address, call.callee.*.span) orelse return error.UnsupportedCEmission;
+        _ = ctx.mir_target_type(ctx.emit_ctx, .raw_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
+        const result_ty = ctx.mir_target_type(ctx.emit_ctx, .raw_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
         try ctx.out.appendSlice(ctx.allocator, "(");
         try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, result_ty));
         try ctx.out.appendSlice(ctx.allocator, ")(");
-        try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+        try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, address_ty);
         try ctx.out.appendSlice(ctx.allocator, ")");
         return true;
     }

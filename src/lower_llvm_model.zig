@@ -1,4 +1,5 @@
 const ast = @import("ast.zig");
+const mir_model = @import("mir_model.zig");
 
 pub const LocalSlot = struct {
     ty: ast.TypeExpr,
@@ -72,6 +73,13 @@ pub const MmioAccessInfo = struct {
 
 pub const MmioMapInfo = struct {
     source_ty: ast.TypeExpr,
+    payload_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
+};
+
+pub const RawCallInfo = struct {
+    kind: mir_model.CallTargetKind,
+    address_ty: ast.TypeExpr,
     payload_ty: ast.TypeExpr,
     result_ty: ast.TypeExpr,
 };

@@ -1524,6 +1524,7 @@ const CEmitter = struct {
             .out = self.out,
             .emit_ctx = self,
             .emit_expr = emitExprForCall,
+            .emit_expr_with_target = emitExprWithTargetForArith,
             .c_type = cTypeForCall,
             .mir_call_target_kind = mirCallTargetKindForLowering,
             .mir_target_type = mirTargetTypeForLowering,
@@ -3449,12 +3450,15 @@ const CEmitter = struct {
     fn emitRawStoreStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const call = callExpr(expr) orelse return false;
         if (self.mirCallTargetKindAt(call.callee.*.span) != .raw_store) return false;
-        if (call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedCEmission;
+        if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedCEmission;
 
-        const addr_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, simpleNameType("PAddr", call.args[0].span));
-        const value_temp = try self.emitSequencedCallArgTemp(call.args[1], locals, call.type_args[0]);
+        const address_ty = (self.mirTargetTypeFactAt(.raw_address, call.callee.*.span) orelse return error.UnsupportedCEmission).target_ty;
+        const payload_ty = (self.mirTargetTypeFactAt(.raw_payload, call.callee.*.span) orelse return error.UnsupportedCEmission).target_ty;
+        _ = self.mirTargetTypeFactAt(.raw_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
+        const addr_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, address_ty);
+        const value_temp = try self.emitSequencedCallArgTemp(call.args[1], locals, payload_ty);
         try self.writeIndent();
-        if (typeName(call.type_args[0])) |type_name| {
+        if (typeName(payload_ty)) |type_name| {
             if (rawScalarSuffix(type_name)) |suffix| {
                 try self.out.print(self.allocator, "mc_raw_store_{s}({s}, {s});\n", .{ suffix, addr_temp.name, value_temp.name });
                 return true;
@@ -3462,7 +3466,7 @@ const CEmitter = struct {
         }
         // Aggregate (non-scalar) T: whole-object typed store, mirroring how
         // `raw.ptr<T>(addr)` + deref already lowers a struct assignment.
-        try self.out.print(self.allocator, "*({s} *){s} = {s};\n", .{ try self.cTypeFor(call.type_args[0], .typedef_name), addr_temp.name, value_temp.name });
+        try self.out.print(self.allocator, "*({s} *){s} = {s};\n", .{ try self.cTypeFor(payload_ty, .typedef_name), addr_temp.name, value_temp.name });
         return true;
     }
 
@@ -4868,7 +4872,8 @@ const CEmitter = struct {
 
     fn callResolvesToFloat(self: *CEmitter, expr: ast.Expr, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) bool {
         if (self.mirCallTargetKindAt(node.callee.*.span) == .raw_load and node.type_args.len == 1) {
-            return floatCTypeName(node.type_args[0]) != null;
+            const result_ty = (self.mirTargetTypeFactAt(.raw_result, node.callee.*.span) orelse return false).target_ty;
+            return floatCTypeName(result_ty) != null;
         }
         const return_ty = self.callReturnTypeForExpr(expr, locals) orelse return false;
         return floatCTypeName(return_ty) != null;

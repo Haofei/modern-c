@@ -1294,20 +1294,21 @@ test "lower-c rejects prebuilt MIR with missing raw ptr call target facts" {
     );
 }
 
-test "lower-c raw address result types require MIR target type facts" {
+test "lower-c raw memory calls require complete MIR target type facts" {
     const source =
         \\fn read(addr: PAddr) -> u32 { unsafe { return raw.load<u32>(addr); } }
         \\fn pointer(addr: PAddr) -> *mut u32 { unsafe { return raw.ptr<u32>(addr); } }
+        \\fn write(addr: PAddr, value: u32) -> void { unsafe { raw.store<u32>(addr, value); } }
     ;
-    var parsed = try test_support.parseCheckedModule("c_raw_address_result_type_facts.mc", source);
+    var parsed = try test_support.parseCheckedModule("c_raw_memory_type_facts.mc", source);
     defer parsed.deinit();
-    for ([_][]const u8{ "read", "pointer" }) |name| {
+    for ([_][]const u8{ "read", "pointer", "write" }) |name| {
         var module_mir = try mir.build(std.testing.allocator, parsed.module);
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, name);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_raw_address_result_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_raw_memory_type_facts.mc", .{}, false, null));
     }
 }
 

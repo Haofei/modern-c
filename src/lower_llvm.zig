@@ -140,6 +140,7 @@ const TaggedUnionLayout = lower_llvm_model.TaggedUnionLayout;
 const MmioFieldInfo = lower_llvm_model.MmioFieldInfo;
 const MmioAccessInfo = lower_llvm_model.MmioAccessInfo;
 const MmioMapInfo = lower_llvm_model.MmioMapInfo;
+const RawCallInfo = lower_llvm_model.RawCallInfo;
 const MmioFencePlacement = lower_llvm_model.MmioFencePlacement;
 const DmaBufCallInfo = lower_llvm_model.DmaBufCallInfo;
 const DmaCacheCallInfo = lower_llvm_model.DmaCacheCallInfo;
@@ -2542,20 +2543,19 @@ const LlvmEmitter = struct {
             return true;
         }
         if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_store) {
-            if (call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedLlvmEmission;
-            const value_ty = call.type_args[0];
-            const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
-            const value = try self.emitExpr(call.args[1], value_ty);
+            const info = self.rawCallInfo(call) orelse return error.UnsupportedLlvmEmission;
+            const addr = try self.emitExpr(call.args[0], info.address_ty);
+            const value = try self.emitExpr(call.args[1], info.payload_ty);
             const ptr = try self.nextTemp();
-            const llvm_ty = try self.llvmType(value_ty);
-            if (rawScalarTypeName(value_ty) == null) {
+            const llvm_ty = try self.llvmType(info.payload_ty);
+            if (rawScalarTypeName(info.payload_ty) == null) {
                 // Aggregate (non-scalar) T: whole-object typed store, mirroring how
                 // `raw.ptr<T>(addr)` + deref already lowers a struct assignment. The
                 // sanitizer hooks below key off scalar-sized accesses, so aggregate
                 // stores lower to a plain (uninstrumented) typed store, matching the C
                 // backend where aggregate stores bypass the mc_raw_store_* helpers.
                 try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}, align {d}{s}\n", .{ llvm_ty, value, ptr, self.llvmAlignOf(value_ty), try self.debugCallSuffix() });
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}, align {d}{s}\n", .{ llvm_ty, value, ptr, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
                 return true;
             }
             // KASAN (D2.1): consult the shadow before the store — a poisoned (freed/
@@ -2563,13 +2563,13 @@ const LlvmEmitter = struct {
             // KMSAN (D2.2): call mc_ksan_store before the write. The hook must not reject
             // UNINIT bytes because first writes initialize them, but it does reject POISON.
             if (self.msan) {
-                try self.out.print(self.allocator, "  call void @mc_ksan_store(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
+                try self.out.print(self.allocator, "  call void @mc_ksan_store(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(info.payload_ty) });
             } else if (self.ksan) {
-                try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
+                try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(info.payload_ty) });
             }
             // KCSAN (D2.3): bracket the unsynchronized store with a write watchpoint hook so a
             // concurrent access lands inside the watch window. Mirrors the C backend's csan path.
-            if (self.csan) try self.out.print(self.allocator, "  call void @mc_csan_write(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
+            if (self.csan) try self.out.print(self.allocator, "  call void @mc_csan_write(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(info.payload_ty) });
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
             try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
             return true;
@@ -6531,9 +6531,9 @@ const LlvmEmitter = struct {
             return result;
         }
         if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_load) {
-            if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const value_ty = (self.mirTargetTypeFactAt(.raw_load_result, call.callee.*.span) orelse return error.UnsupportedLlvmEmission).target_ty;
-            const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
+            const info = self.rawCallInfo(call) orelse return error.UnsupportedLlvmEmission;
+            const value_ty = info.payload_ty;
+            const addr = try self.emitExpr(call.args[0], info.address_ty);
             const ptr = try self.nextTemp();
             const result = try self.nextTemp();
             const llvm_ty = try self.llvmType(value_ty);
@@ -6573,9 +6573,8 @@ const LlvmEmitter = struct {
             return error.UnsupportedLlvmEmission; // va.start only valid as a let initializer
         }
         if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_ptr) {
-            if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            _ = self.mirTargetTypeFactAt(.raw_ptr_result, call.callee.*.span) orelse return error.UnsupportedLlvmEmission;
-            const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
+            const info = self.rawCallInfo(call) orelse return error.UnsupportedLlvmEmission;
+            const addr = try self.emitExpr(call.args[0], info.address_ty);
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ result, addr });
             return result;
@@ -8096,6 +8095,23 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn rawCallInfo(self: *LlvmEmitter, call: anytype) ?RawCallInfo {
+        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+        const valid_shape = switch (kind) {
+            .raw_load => ast_query.isRawLoadCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1,
+            .raw_ptr => ast_query.isRawPtrCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1,
+            .raw_store => ast_query.isRawStoreCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 2,
+            else => false,
+        };
+        if (!valid_shape) return null;
+        return .{
+            .kind = kind,
+            .address_ty = (self.mirTargetTypeFactAt(.raw_address, call.callee.*.span) orelse return null).target_ty,
+            .payload_ty = (self.mirTargetTypeFactAt(.raw_payload, call.callee.*.span) orelse return null).target_ty,
+            .result_ty = (self.mirTargetTypeFactAt(.raw_result, call.callee.*.span) orelse return null).target_ty,
+        };
+    }
+
     fn emitMmioRegisterAddress(self: *LlvmEmitter, info: MmioAccessInfo) ![]const u8 {
         const base = try self.emitExpr(info.base, try self.mmioPointerType(info.struct_ty, info.base.span));
         if (info.offset == 0) return base;
@@ -8547,8 +8563,7 @@ const LlvmEmitter = struct {
         if (self.constGetCallInfo(call)) |info| return info.element_ty;
         if (self.bitcastCallTargetType(call)) |ty| return ty;
         if (self.physCallTargetType(call)) |ty| return ty;
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_load) return if (self.mirTargetTypeFactAt(.raw_load_result, call.callee.*.span)) |fact| fact.target_ty else null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_ptr) return if (self.mirTargetTypeFactAt(.raw_ptr_result, call.callee.*.span)) |fact| fact.target_ty else null;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_load or self.mirCallTargetKindAt(call.callee.*.span) == .raw_ptr) return if (self.rawCallInfo(call)) |info| info.result_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .va_start) return if (self.mirTargetTypeFactAt(.va_start_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .va_arg) return if (self.mirTargetTypeFactAt(.va_arg_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;

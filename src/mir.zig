@@ -4858,6 +4858,7 @@ const FunctionBuilder = struct {
                 const raw_many_offset_target = self.rawManyOffsetCallTarget(node);
                 const mmio_map_target = try self.mmioMapCallTarget(node);
                 const mmio_target = self.mmioCallTarget(node);
+                const raw_target = self.rawCallTarget(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
                 else if (semantic_escape_target) |target|
@@ -4892,12 +4893,8 @@ const FunctionBuilder = struct {
                     ty
                 else if (self.vaCallFactInfo(node)) |info|
                     info.result_ty
-                else if (self.rawLoadCallValueType(node)) |ty|
-                    ty
-                else if (self.rawPtrCallValueType(node)) |ty|
-                    ty
-                else if (self.rawStoreCallValueType(node)) |ty|
-                    ty
+                else if (raw_target) |target|
+                    target.result_ty
                 else if (self.cpuPauseCallValueType(node)) |ty|
                     ty
                 else if (self.fenceCallTargetKind(node.callee.*)) |_| .void else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
@@ -4985,17 +4982,12 @@ const FunctionBuilder = struct {
                     const result_ty = ast_query.simpleNameType("PAddr", expr.span);
                     try self.appendTargetTypeFact(.phys_result, result_ty, phys_ty, expr.span);
                 }
-                if (self.rawLoadCallValueType(node)) |raw_load_ty| {
-                    try self.addInstr(.call_target, @tagName(CallTargetKind.raw_load), raw_load_ty, expr.span);
-                    try self.addCallTargetFact(.raw_load, raw_load_ty, expr.span);
-                }
-                if (self.rawPtrCallValueType(node)) |raw_ptr_ty| {
-                    try self.addInstr(.call_target, @tagName(CallTargetKind.raw_ptr), raw_ptr_ty, expr.span);
-                    try self.addCallTargetFact(.raw_ptr, raw_ptr_ty, expr.span);
-                }
-                if (self.rawStoreCallValueType(node)) |raw_store_ty| {
-                    try self.addInstr(.call_target, @tagName(CallTargetKind.raw_store), raw_store_ty, expr.span);
-                    try self.addCallTargetFact(.raw_store, raw_store_ty, expr.span);
+                if (raw_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.appendTargetTypeFact(.raw_address, target.address_type_expr, target.address_ty, expr.span);
+                    try self.appendTargetTypeFact(.raw_payload, target.payload_type_expr, target.payload_ty, expr.span);
+                    try self.appendTargetTypeFact(.raw_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (self.vaCallFactInfo(node)) |va| {
                     try self.addInstr(.call_target, @tagName(va.kind), va.result_ty, expr.span);
@@ -5008,12 +5000,6 @@ const FunctionBuilder = struct {
                         };
                         try self.appendTargetTypeFact(target_kind, result_ty, va.result_ty, expr.span);
                     }
-                }
-                if (ast_query.rawLoadCallReturnType(node)) |result_ty| {
-                    try self.appendTargetTypeFact(.raw_load_result, result_ty, valueTypeFromTypeAlias(result_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
-                }
-                if (ast_query.rawPtrCallReturnType(node)) |result_ty| {
-                    try self.appendTargetTypeFact(.raw_ptr_result, result_ty, valueTypeFromTypeAlias(result_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }
                 if (self.cpuPauseCallValueType(node)) |cpu_pause_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.cpu_pause), cpu_pause_ty, expr.span);
@@ -5330,19 +5316,44 @@ const FunctionBuilder = struct {
         return .{ .address = .paddr };
     }
 
-    fn rawLoadCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
-        const ty = ast_query.rawLoadCallReturnType(call) orelse return null;
-        return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
-    }
+    const RawCallTarget = struct {
+        kind: CallTargetKind,
+        address_type_expr: ast.TypeExpr,
+        address_ty: ValueType,
+        payload_type_expr: ast.TypeExpr,
+        payload_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+    };
 
-    fn rawPtrCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
-        const ty = ast_query.rawPtrCallReturnType(call) orelse return null;
-        return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
-    }
-
-    fn rawStoreCallValueType(_: *FunctionBuilder, call: anytype) ?ValueType {
-        if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
-        return .void;
+    fn rawCallTarget(self: *FunctionBuilder, call: anytype) ?RawCallTarget {
+        if (call.type_args.len != 1) return null;
+        const shape: struct { kind: CallTargetKind, expected_args: usize } = if (ast_query.isRawLoadCall(call.callee.*))
+            .{ .kind = .raw_load, .expected_args = 1 }
+        else if (ast_query.isRawPtrCall(call.callee.*))
+            .{ .kind = .raw_ptr, .expected_args = 1 }
+        else if (ast_query.isRawStoreCall(call.callee.*))
+            .{ .kind = .raw_store, .expected_args = 2 }
+        else
+            return null;
+        if (call.args.len != shape.expected_args) return null;
+        const address_type_expr = ast_query.simpleNameType("PAddr", call.args[0].span);
+        const payload_type_expr = call.type_args[0];
+        const result_type_expr = switch (shape.kind) {
+            .raw_load => payload_type_expr,
+            .raw_ptr => ast_query.rawPtrCallReturnType(call) orelse return null,
+            .raw_store => ast_query.simpleNameType("void", call.callee.*.span),
+            else => unreachable,
+        };
+        return .{
+            .kind = shape.kind,
+            .address_type_expr = address_type_expr,
+            .address_ty = valueTypeFromTypeAlias(address_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .payload_type_expr = payload_type_expr,
+            .payload_ty = valueTypeFromTypeAlias(payload_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .result_type_expr = result_type_expr,
+            .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+        };
     }
 
     const VaCallFactInfo = struct {
@@ -7925,7 +7936,11 @@ const FunctionBuilder = struct {
         if (reflectionCallTargetKind(call) != null) return ast_query.simpleNameType("usize", call.callee.*.span);
         if (reduceCallReturnTypeExpr(call)) |ty| return ty;
         if (self.physCallValueType(call) != null) return ast_query.simpleNameType("PAddr", call.callee.*.span);
-        if (self.rawLoadCallValueType(call) != null and call.type_args.len == 1) return call.type_args[0];
+        if (self.rawCallTarget(call)) |raw| return switch (raw.kind) {
+            .raw_load, .raw_ptr => raw.result_type_expr,
+            .raw_store => null,
+            else => unreachable,
+        };
         if (self.atomicCallTargetKind(call.callee.*)) |kind| {
             if (kind == .atomic_store) return null;
             const member = memberExpr(call.callee.*) orelse return null;

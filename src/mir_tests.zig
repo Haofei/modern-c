@@ -1823,16 +1823,23 @@ test "MIR records typed call target facts for raw address calls" {
     try std.testing.expectEqual(@as(usize, 1), read.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.raw_load, read.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("u32", read.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 1), read.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.raw_load_result, read.target_type_facts[0].kind);
     try std.testing.expectEqual(@as(usize, 1), pointer.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.raw_ptr, pointer.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("*mut", pointer.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 1), pointer.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.raw_ptr_result, pointer.target_type_facts[0].kind);
     try std.testing.expectEqual(@as(usize, 1), store.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.raw_store, store.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("void", store.call_target_facts[0].result_ty.name());
+    for ([_]mir.Function{ read, pointer, store }) |function| {
+        try std.testing.expectEqual(@as(usize, 3), function.target_type_facts.len);
+        try std.testing.expectEqual(mir.TargetTypeKind.raw_address, function.target_type_facts[0].kind);
+        try std.testing.expectEqualStrings("PAddr", function.target_type_facts[0].target_ty.kind.name.text);
+        try std.testing.expectEqual(mir.TargetTypeKind.raw_payload, function.target_type_facts[1].kind);
+        try std.testing.expectEqualStrings("u32", function.target_type_facts[1].target_ty.kind.name.text);
+        try std.testing.expectEqual(mir.TargetTypeKind.raw_result, function.target_type_facts[2].kind);
+    }
+    try std.testing.expectEqualStrings("u32", read.target_type_facts[2].target_ty.kind.name.text);
+    try std.testing.expectEqualStrings("u32", pointer.target_type_facts[2].target_ty.kind.pointer.child.kind.name.text);
+    try std.testing.expectEqualStrings("void", store.target_type_facts[2].target_ty.kind.name.text);
     try std.testing.expectEqual(@as(usize, 1), pause.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.cpu_pause, pause.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("void", pause.call_target_facts[0].result_ty.name());
