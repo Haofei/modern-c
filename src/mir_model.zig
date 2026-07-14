@@ -115,6 +115,7 @@ pub const Instruction = struct {
     kind: Kind,
     result_ty: ValueType,
     detail: []const u8,
+    const_index: ?usize = null,
     value_id: ?[]const u8 = null,
     contract_region_id: ?usize = null,
     line: usize,
@@ -225,6 +226,11 @@ pub const IntegerFact = struct {
     source: SourcePoint,
 };
 
+pub const ConstGetFact = struct {
+    index: usize,
+    source: SourcePoint,
+};
+
 pub const CallTargetKind = enum {
     bind,
     result_ok,
@@ -305,6 +311,8 @@ pub const TargetTypeKind = enum {
     domain_payload,
     domain_result,
     domain_interval,
+    const_get_base,
+    const_get_result,
     bitcast_source,
     bitcast_target,
     phys_result,
@@ -414,6 +422,7 @@ pub const Function = struct {
     range_facts: []RangeFact,
     bounds_facts: []BoundsFact = &.{},
     integer_facts: []IntegerFact = &.{},
+    const_get_facts: []ConstGetFact = &.{},
     call_target_facts: []CallTargetFact = &.{},
     target_type_facts: []TargetTypeFact = &.{},
     generated_type_expr_nodes: []*ast.TypeExpr = &.{},
@@ -446,6 +455,7 @@ pub const Module = struct {
             self.allocator.free(function.range_facts);
             if (function.bounds_facts.len != 0) self.allocator.free(function.bounds_facts);
             if (function.integer_facts.len != 0) self.allocator.free(function.integer_facts);
+            if (function.const_get_facts.len != 0) self.allocator.free(function.const_get_facts);
             if (function.call_target_facts.len != 0) self.allocator.free(function.call_target_facts);
             if (function.target_type_facts.len != 0) self.allocator.free(function.target_type_facts);
             for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);

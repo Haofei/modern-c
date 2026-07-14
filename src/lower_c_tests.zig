@@ -63,6 +63,26 @@ fn clearIntegerFactsForFunction(module_mir: *mir.Module, name: []const u8) !void
     return error.TestUnexpectedResult;
 }
 
+fn clearConstGetFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        if (function.const_get_facts.len != 0) module_mir.allocator.free(function.const_get_facts);
+        function.const_get_facts = try module_mir.allocator.alloc(mir.ConstGetFact, 0);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn retargetConstGetFactForFunction(module_mir: *mir.Module, name: []const u8, index: usize) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        if (function.const_get_facts.len != 1) return error.TestUnexpectedResult;
+        function.const_get_facts[0].index = index;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn clearCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -788,6 +808,47 @@ test "lower-c rejects prebuilt MIR with missing const_get call target facts" {
         error.InvalidMirCallTargetFacts,
         lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_const_get_call_target_facts.mc", .{}, false, null),
     );
+}
+
+test "lower-c const_get consumes MIR base result and index facts" {
+    const source =
+        \\type Words = [3]u32;
+        \\fn const_get_fact_gate(xs: Words) -> u32 { let value = xs.const_get<2>(); return value; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_const_get_facts.mc", source);
+    defer parsed.deinit();
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_const_get_facts.mc", .{}, false, null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "[2]") != null);
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try clearTargetTypeFactsForFunction(&module_mir, "const_get_fact_gate");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_const_get_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try clearConstGetFactsForFunction(&module_mir, "const_get_fact_gate");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirConstGetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_const_get_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try retargetConstGetFactForFunction(&module_mir, "const_get_fact_gate", 1);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirConstGetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_const_get_facts.mc", .{}, false, null));
+    }
 }
 
 test "lower-c reductions require MIR element type facts" {

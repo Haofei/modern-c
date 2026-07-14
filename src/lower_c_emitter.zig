@@ -1747,6 +1747,8 @@ const CEmitter = struct {
             .array_return_type_for_expr = arrayReturnTypeForAccess,
             .array_len_text = arrayLenTextForAccess,
             .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
+            .mir_const_get_index = mirConstGetIndexForLowering,
         };
     }
 
@@ -2143,6 +2145,11 @@ const CEmitter = struct {
     fn mirTargetTypeForLowering(ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return if (self.mirTargetTypeFactAt(kind, span)) |fact| fact.target_ty else null;
+    }
+
+    fn mirConstGetIndexForLowering(ctx: *anyopaque, span: ast.Span) ?usize {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        return self.mirConstGetIndexAt(span);
     }
 
     fn localInfoFromTypeForArith(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo {
@@ -5064,6 +5071,20 @@ const CEmitter = struct {
         return matched;
     }
 
+    fn mirConstGetIndexAt(self: *CEmitter, span: ast.Span) ?usize {
+        const function = self.currentMirFunction() orelse return null;
+        var matched: ?usize = null;
+        for (function.const_get_facts) |fact| {
+            if (!mirSourceMatches(span, fact.source)) continue;
+            if (matched) |index| {
+                if (index != fact.index) return null;
+            } else {
+                matched = fact.index;
+            }
+        }
+        return matched;
+    }
+
     fn mirAggregateTargetTypeForExpr(self: *CEmitter, expr: ast.Expr) !?ast.TypeExpr {
         return switch (expr.kind) {
             .grouped => |inner| self.mirAggregateTargetTypeForExpr(inner.*),
@@ -6978,6 +6999,7 @@ const CEmitter = struct {
         if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .enum_raw) return if (self.mirTargetTypeFactAt(.enum_raw_result, call.callee.*.span)) |fact| fact.target_ty else null;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .const_get) return if (self.mirTargetTypeFactAt(.const_get_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| if (mir.domainCallFactInfo(kind) != null) return if (self.mirTargetTypeFactAt(.domain_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) return if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;
@@ -7038,6 +7060,7 @@ const CEmitter = struct {
         if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .enum_raw) return if (self.mirTargetTypeFactAt(.enum_raw_result, call.callee.*.span)) |fact| fact.target_ty else null;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .const_get) return if (self.mirTargetTypeFactAt(.const_get_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| if (mir.domainCallFactInfo(kind) != null) return if (self.mirTargetTypeFactAt(.domain_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) return if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;

@@ -106,6 +106,7 @@ pub fn resultConstructorFactInfo(kind: CallTargetKind) ?ResultConstructorFactInf
 pub const SourcePoint = mir_model.SourcePoint;
 pub const PointerProvenance = mir_model.PointerProvenance;
 pub const PointerProvenanceFact = mir_model.PointerProvenanceFact;
+pub const ConstGetFact = mir_model.ConstGetFact;
 pub const AggregateReturnSummaryFact = mir_model.AggregateReturnSummaryFact;
 pub const AggregateReturnPointerFact = mir_model.AggregateReturnPointerFact;
 pub const RepresentationFact = mir_model.RepresentationFact;
@@ -132,7 +133,6 @@ const enumLiteralText = mir_syntax.enumLiteralText;
 const isTrapCall = mir_syntax.isTrapCall;
 const isUnwrapCall = mir_syntax.isUnwrapCall;
 const assignmentTargetIdentName = mir_syntax.assignmentTargetIdentName;
-const constGetBase = mir_syntax.constGetBase;
 const patternText = mir_syntax.patternText;
 const typeText = mir_syntax.typeText;
 const ConversionContext = mir_verify_util.ConversionContext;
@@ -387,8 +387,8 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
     for (mir.functions) |function| {
         try out.print(
             allocator,
-            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
-            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
+            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} const_get_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
+            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.const_get_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
         );
         for (function.contract_regions) |region| {
             try out.print(
@@ -410,7 +410,13 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
             try out.append(allocator, '\n');
             for (block.instructions) |instruction| {
                 const value_id = instruction.value_id orelse "none";
-                if (instruction.contract_region_id) |region_id| {
+                if (instruction.const_index) |index| {
+                    try out.print(
+                        allocator,
+                        "mir instr fn={s} block={} kind={s} detail={s} type={s} const_index={} value_id={s} contract_region_id=none line={} column={}\n",
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.result_ty.name(), index, value_id, instruction.line, instruction.column },
+                    );
+                } else if (instruction.contract_region_id) |region_id| {
                     try out.print(
                         allocator,
                         "mir instr fn={s} block={} kind={s} detail={s} type={s} value_id={s} contract_region_id={} line={} column={}\n",
@@ -466,6 +472,13 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
                 allocator,
                 "mir integer_fact fn={s} literal={s} target_type={s} recorded=true line={} column={}\n",
                 .{ function.name, fact.literal, fact.target_ty.name(), fact.source.line, fact.source.column },
+            );
+        }
+        for (function.const_get_facts) |fact| {
+            try out.print(
+                allocator,
+                "mir const_get_fact fn={s} index={} recorded=true line={} column={}\n",
+                .{ function.name, fact.index, fact.source.line, fact.source.column },
             );
         }
         for (function.call_target_facts) |fact| {
@@ -937,6 +950,73 @@ pub fn validateIntegerFactsForLowering(module: Module) error{InvalidMirIntegerFa
             if (!functionHasMatchingIntegerInstruction(function, fact)) return error.InvalidMirIntegerFacts;
         }
     }
+}
+
+pub fn validateConstGetFactsForLowering(module: Module) error{InvalidMirConstGetFacts}!void {
+    for (module.functions) |function| {
+        for (function.blocks) |block| for (block.instructions) |instruction| {
+            if (callTargetKindForInstruction(instruction) == .const_get) {
+                const call_count = countConstGetCallTargetsAtSource(function, instruction.line, instruction.column);
+                if (countConstGetInstructionsAtSource(function, instruction.line, instruction.column) != call_count) return error.InvalidMirConstGetFacts;
+                if (countTargetTypeInstructionsAtSource(function, .const_get_base, instruction.line, instruction.column) != call_count) return error.InvalidMirConstGetFacts;
+                if (countTargetTypeInstructionsAtSource(function, .const_get_result, instruction.line, instruction.column) != call_count) return error.InvalidMirConstGetFacts;
+            }
+            const is_const_get = instruction.kind == .index and std.mem.eql(u8, instruction.detail, "const_get");
+            if (!is_const_get) {
+                if (instruction.const_index != null) return error.InvalidMirConstGetFacts;
+                continue;
+            }
+            if (countConstGetCallTargetsAtSource(function, instruction.line, instruction.column) != countConstGetInstructionsAtSource(function, instruction.line, instruction.column)) return error.InvalidMirConstGetFacts;
+            const index = instruction.const_index orelse return error.InvalidMirConstGetFacts;
+            const fact_count = countMatchingConstGetFacts(function, index, instruction.line, instruction.column);
+            if (fact_count == 0 or fact_count != countMatchingConstGetInstructions(function, index, instruction.line, instruction.column)) return error.InvalidMirConstGetFacts;
+        };
+        for (function.const_get_facts) |fact| {
+            const instruction_count = countMatchingConstGetInstructions(function, fact.index, fact.source.line, fact.source.column);
+            if (instruction_count == 0 or instruction_count != countMatchingConstGetFacts(function, fact.index, fact.source.line, fact.source.column)) return error.InvalidMirConstGetFacts;
+        }
+    }
+}
+
+fn countConstGetCallTargetsAtSource(function: Function, line: usize, column: usize) usize {
+    var count: usize = 0;
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (callTargetKindForInstruction(instruction) == .const_get and instruction.line == line and instruction.column == column) count += 1;
+    };
+    return count;
+}
+
+fn countConstGetInstructionsAtSource(function: Function, line: usize, column: usize) usize {
+    var count: usize = 0;
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind == .index and std.mem.eql(u8, instruction.detail, "const_get") and instruction.line == line and instruction.column == column) count += 1;
+    };
+    return count;
+}
+
+fn countTargetTypeInstructionsAtSource(function: Function, kind: TargetTypeKind, line: usize, column: usize) usize {
+    var count: usize = 0;
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (targetTypeKindForInstruction(instruction) == kind and instruction.line == line and instruction.column == column) count += 1;
+    };
+    return count;
+}
+
+fn countMatchingConstGetFacts(function: Function, index: usize, line: usize, column: usize) usize {
+    var count: usize = 0;
+    for (function.const_get_facts) |fact| {
+        if (fact.index == index and fact.source.line == line and fact.source.column == column) count += 1;
+    }
+    return count;
+}
+
+fn countMatchingConstGetInstructions(function: Function, index: usize, line: usize, column: usize) usize {
+    var count: usize = 0;
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind != .index or !std.mem.eql(u8, instruction.detail, "const_get")) continue;
+        if (instruction.const_index == index and instruction.line == line and instruction.column == column) count += 1;
+    };
+    return count;
 }
 
 pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTargetFacts}!void {
@@ -3126,6 +3206,7 @@ const FunctionBuilder = struct {
     range_facts: std.ArrayList(RangeFact),
     bounds_facts: std.ArrayList(BoundsFact),
     integer_facts: std.ArrayList(IntegerFact),
+    const_get_facts: std.ArrayList(ConstGetFact),
     call_target_facts: std.ArrayList(CallTargetFact),
     target_type_facts: std.ArrayList(TargetTypeFact),
     generated_type_expr_nodes: std.ArrayList(*ast.TypeExpr),
@@ -3215,6 +3296,7 @@ const FunctionBuilder = struct {
             .range_facts = .empty,
             .bounds_facts = .empty,
             .integer_facts = .empty,
+            .const_get_facts = .empty,
             .call_target_facts = .empty,
             .target_type_facts = .empty,
             .generated_type_expr_nodes = .empty,
@@ -3280,6 +3362,7 @@ const FunctionBuilder = struct {
             .range_facts = .empty,
             .bounds_facts = .empty,
             .integer_facts = .empty,
+            .const_get_facts = .empty,
             .call_target_facts = .empty,
             .target_type_facts = .empty,
             .generated_type_expr_nodes = .empty,
@@ -3325,6 +3408,7 @@ const FunctionBuilder = struct {
         self.range_facts.deinit(self.allocator);
         self.bounds_facts.deinit(self.allocator);
         self.integer_facts.deinit(self.allocator);
+        self.const_get_facts.deinit(self.allocator);
         self.call_target_facts.deinit(self.allocator);
         self.target_type_facts.deinit(self.allocator);
         for (self.generated_type_expr_nodes.items) |node| self.allocator.destroy(node);
@@ -3383,6 +3467,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(bounds_facts);
         const integer_facts = try self.integer_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(integer_facts);
+        const const_get_facts = try self.const_get_facts.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(const_get_facts);
         const call_target_facts = try self.call_target_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(call_target_facts);
         const target_type_facts = try self.target_type_facts.toOwnedSlice(self.allocator);
@@ -3453,6 +3539,7 @@ const FunctionBuilder = struct {
             .range_facts = range_facts,
             .bounds_facts = bounds_facts,
             .integer_facts = integer_facts,
+            .const_get_facts = const_get_facts,
             .call_target_facts = call_target_facts,
             .target_type_facts = target_type_facts,
             .generated_type_expr_nodes = generated_type_expr_nodes,
@@ -4721,15 +4808,18 @@ const FunctionBuilder = struct {
                 self.assignment_target_type_expr = previous_target_type_expr;
             },
             .call => |node| {
-                if (self.constGetCallType(node)) |const_get_ty| {
-                    try self.addInstr(.index, "const_get", const_get_ty, expr.span);
-                    try self.addInstr(.call_target, @tagName(CallTargetKind.const_get), const_get_ty, expr.span);
-                    try self.addCallTargetFact(.const_get, const_get_ty, expr.span);
-                    if (representationCheckKind(const_get_ty) != null) {
-                        try self.addInstr(.typed_load, exprText(expr), const_get_ty, expr.span);
-                        try self.addRuntimeRepresentationCheck(const_get_ty, expr.span, exprText(expr));
+                if (self.constGetCallTarget(node)) |target| {
+                    try self.addConstGetInstr(target.result_ty, target.index, expr.span);
+                    try self.addInstr(.call_target, @tagName(CallTargetKind.const_get), target.result_ty, expr.span);
+                    try self.addCallTargetFact(.const_get, target.result_ty, expr.span);
+                    try self.appendTargetTypeFact(.const_get_base, target.base_type_expr, target.base_ty, expr.span);
+                    try self.appendTargetTypeFact(.const_get_result, target.result_type_expr, target.result_ty, expr.span);
+                    try self.const_get_facts.append(self.allocator, .{ .index = target.index, .source = .{ .line = expr.span.line, .column = expr.span.column } });
+                    if (representationCheckKind(target.result_ty) != null) {
+                        try self.addInstr(.typed_load, exprText(expr), target.result_ty, expr.span);
+                        try self.addRuntimeRepresentationCheck(target.result_ty, expr.span, exprText(expr));
                     }
-                    try self.buildExpr(constGetBase(node).?.*);
+                    try self.buildExpr(target.base.*);
                     return;
                 }
                 const callee_name = self.calleeName(node.callee.*);
@@ -5352,6 +5442,17 @@ const FunctionBuilder = struct {
 
     fn addInstr(self: *FunctionBuilder, kind: Instruction.Kind, detail: []const u8, ty: ValueType, span: ast.Span) !void {
         try self.addInstrWithValue(kind, detail, ty, span, null);
+    }
+
+    fn addConstGetInstr(self: *FunctionBuilder, ty: ValueType, index: usize, span: ast.Span) !void {
+        try self.blocks.items[self.current].instructions.append(self.allocator, .{
+            .kind = .index,
+            .result_ty = ty,
+            .detail = "const_get",
+            .const_index = index,
+            .line = span.line,
+            .column = span.column,
+        });
     }
 
     fn addCallTargetFact(self: *FunctionBuilder, kind: CallTargetKind, result_ty: ValueType, span: ast.Span) !void {
@@ -7966,9 +8067,38 @@ const FunctionBuilder = struct {
         };
     }
 
+    const ConstGetCallTarget = struct {
+        base: *ast.Expr,
+        base_type_expr: ast.TypeExpr,
+        base_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+        index: usize,
+    };
+
+    fn constGetCallTarget(self: *FunctionBuilder, call: anytype) ?ConstGetCallTarget {
+        const syntax = ast_query.constGetCallTarget(call) orelse return null;
+        const base_type_expr = self.typeExprForExpr(syntax.base.*) orelse return null;
+        const resolved = aggregateTargetTypeAlias(base_type_expr, self.aliases);
+        const array = switch (resolved.kind) {
+            .array => |node| node,
+            else => return null,
+        };
+        const len = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse return null;
+        if (syntax.index >= len) return null;
+        const result_type_expr = array.child.*;
+        return .{
+            .base = syntax.base,
+            .base_type_expr = base_type_expr,
+            .base_ty = valueTypeFromTypeAlias(base_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .result_type_expr = result_type_expr,
+            .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .index = syntax.index,
+        };
+    }
+
     fn constGetCallType(self: *FunctionBuilder, call: anytype) ?ValueType {
-        const ty = self.constGetCallTypeExpr(call) orelse return null;
-        return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        return if (self.constGetCallTarget(call)) |target| target.result_ty else null;
     }
 
     fn qualifiedUnionConstructorTypeExpr(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
@@ -8007,9 +8137,7 @@ const FunctionBuilder = struct {
     }
 
     fn constGetCallTypeExpr(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
-        const base = constGetBase(call) orelse return null;
-        const base_ty = self.typeExprForExpr(base.*) orelse return null;
-        return storageElementTypeAlias(base_ty, self.aliases);
+        return if (self.constGetCallTarget(call)) |target| target.result_type_expr else null;
     }
 
     fn ptrOffsetReceiverTypeExpr(self: *FunctionBuilder, callee: ast.Expr) ?ast.TypeExpr {
@@ -8065,6 +8193,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     allocator.free(function.range_facts);
     if (function.bounds_facts.len != 0) allocator.free(function.bounds_facts);
     if (function.integer_facts.len != 0) allocator.free(function.integer_facts);
+    if (function.const_get_facts.len != 0) allocator.free(function.const_get_facts);
     if (function.call_target_facts.len != 0) allocator.free(function.call_target_facts);
     if (function.target_type_facts.len != 0) allocator.free(function.target_type_facts);
     for (function.generated_type_expr_nodes) |node| allocator.destroy(node);

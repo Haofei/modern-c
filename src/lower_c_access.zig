@@ -2,7 +2,6 @@
 
 const std = @import("std");
 
-const array_len = @import("array_len.zig");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -27,7 +26,6 @@ const SliceAccess = lower_c_model.SliceAccess;
 const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 const TryReplacement = lower_c_model.TryReplacement;
 const arrayElementType = lower_c_shape.arrayElementType;
-const constGetIndexArg = array_len.constGetIndexArg;
 const isRawManyPointerType = ast_query.isRawManyPointerType;
 const memberCallee = ast_query.memberCallee;
 const simpleNameType = ast_query.simpleNameType;
@@ -49,6 +47,8 @@ pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Exp
 pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitRaceLoadTempFn = *const fn (ctx: *anyopaque, ptr_name: []const u8, target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
+pub const MirConstGetIndexFn = *const fn (ctx: *anyopaque, span: ast.Span) ?usize;
 
 pub const DirectCallIndexTemps = struct {
     base: SequencedArgTemp,
@@ -76,6 +76,8 @@ pub const EmitContext = struct {
     array_return_type_for_expr: ArrayReturnTypeForExprFn,
     array_len_text: ArrayLenTextFn,
     mir_call_target_kind: MirCallTargetKindFn,
+    mir_target_type: MirTargetTypeFn,
+    mir_const_get_index: MirConstGetIndexFn,
 };
 
 pub fn cloneLocals(allocator: std.mem.Allocator, locals: std.StringHashMap(LocalInfo)) !std.StringHashMap(LocalInfo) {
@@ -115,8 +117,13 @@ pub fn arrayElemsFieldForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalI
 
 pub fn constGetCallInfo(ctx: EmitContext, call: anytype) ?ConstGetCallInfo {
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .const_get) return null;
-    const target = ast_query.constGetCallTarget(call) orelse return null;
-    return .{ .base = target.base, .index = target.index };
+    if (call.args.len != 0 or call.type_args.len != 1) return null;
+    const member = memberCallee(call.callee.*) orelse return null;
+    if (!std.mem.eql(u8, member.name.text, "const_get")) return null;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .const_get_base, call.callee.*.span) orelse return null;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .const_get_result, call.callee.*.span) orelse return null;
+    const index = ctx.mir_const_get_index(ctx.emit_ctx, call.callee.*.span) orelse return null;
+    return .{ .base = member.base, .index = index };
 }
 
 pub fn emitConstGetCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {

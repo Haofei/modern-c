@@ -16,7 +16,6 @@ const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const typeName = ast_query.typeName;
 const ByteViewCallKind = ast_query.ByteViewCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
-const constGetCallTarget = ast_query.constGetCallTarget;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
@@ -48,7 +47,6 @@ const isPayloadDomainGenericName = lower_llvm_type.isPayloadDomainGenericName;
 const libraryScalarLlvmType = lower_llvm_type.libraryScalarLlvmType;
 const typeNameEql = lower_llvm_type.typeNameEql;
 const secretInnerType = lower_llvm_type.secretInnerType;
-const constGetIndexArg = lower_llvm_type.constGetIndexArg;
 const rawScalarTypeName = lower_llvm_type.rawScalarTypeName;
 const parseU64Literal = lower_llvm_type.parseU64Literal;
 const integerBits = lower_llvm_type.integerBits;
@@ -242,6 +240,7 @@ fn appendLlvmCheckedReport(allocator: std.mem.Allocator, module: ast.Module, out
 pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, reporter: ?*diagnostics.Reporter) !void {
     try mir.validateRepresentationFactsForLowering(module_mir.*);
     try mir.validateIntegerFactsForLowering(module_mir.*);
+    try mir.validateConstGetFactsForLowering(module_mir.*);
     try mir.validateCallTargetFactsForLowering(module_mir.*);
     try mir.validateTargetTypeFactsForLowering(module_mir.*);
     const ksan = checks.ksan;
@@ -5000,6 +4999,20 @@ const LlvmEmitter = struct {
         return matched;
     }
 
+    fn mirConstGetIndexAt(self: *LlvmEmitter, span: ast.Span) ?usize {
+        const function = self.currentMirFunction() orelse return null;
+        var matched: ?usize = null;
+        for (function.const_get_facts) |fact| {
+            if (!mirSourceMatches(span, fact.source)) continue;
+            if (matched) |index| {
+                if (index != fact.index) return null;
+            } else {
+                matched = fact.index;
+            }
+        }
+        return matched;
+    }
+
     fn mirSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
         return span.line == source.line and span.column == source.column;
     }
@@ -8645,24 +8658,17 @@ const LlvmEmitter = struct {
 
     fn constGetCallInfo(self: *LlvmEmitter, call: anytype) ?ConstGetCallInfo {
         if (self.mirCallTargetKindAt(call.callee.*.span) != .const_get) return null;
-        const target = constGetCallTarget(call) orelse return null;
-        const base_ty = self.exprType(target.base.*) orelse return null;
-        const array_ty = self.resolveAliasType(base_ty);
-        const array = switch (array_ty.kind) {
-            .array => |node| node,
-            .qualified => |node| switch (self.resolveAliasType(node.child.*).kind) {
-                .array => |array_node| array_node,
-                else => return null,
-            },
-            else => return null,
-        };
-        const len = self.arrayLenValue(array.len) orelse return null;
-        if (target.index >= len) return null;
+        if (call.args.len != 0 or call.type_args.len != 1) return null;
+        const member = memberCallee(call) orelse return null;
+        if (!std.mem.eql(u8, member.name.text, "const_get")) return null;
+        const array_ty = (self.mirTargetTypeFactAt(.const_get_base, call.callee.*.span) orelse return null).target_ty;
+        const element_ty = (self.mirTargetTypeFactAt(.const_get_result, call.callee.*.span) orelse return null).target_ty;
+        const index = self.mirConstGetIndexAt(call.callee.*.span) orelse return null;
         return .{
-            .base = target.base.*,
+            .base = member.base.*,
             .array_ty = array_ty,
-            .element_ty = array.child.*,
-            .index = target.index,
+            .element_ty = element_ty,
+            .index = index,
         };
     }
 

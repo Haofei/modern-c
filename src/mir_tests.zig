@@ -1117,6 +1117,100 @@ test "MIR owns arithmetic domain call identities and complete types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns const_get base result and index facts" {
+    const source =
+        \\type Words = [3]u32;
+        \\fn get_word(values: Words) -> u32 { return values.const_get<2>(); }
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_const_get_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "get_word").?;
+    try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.const_get, function.call_target_facts[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), function.const_get_facts.len);
+    try std.testing.expectEqual(@as(usize, 2), function.const_get_facts[0].index);
+
+    var base_fact: ?mir.TargetTypeFact = null;
+    var result_fact: ?mir.TargetTypeFact = null;
+    var instruction_index: ?usize = null;
+    for (function.target_type_facts) |fact| switch (fact.kind) {
+        .const_get_base => base_fact = fact,
+        .const_get_result => result_fact = fact,
+        else => {},
+    };
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind == .index and std.mem.eql(u8, instruction.detail, "const_get")) instruction_index = instruction.const_index;
+    };
+    try std.testing.expectEqualStrings("Words", typeExprHeadName(base_fact.?.target_ty).?);
+    try std.testing.expectEqualStrings("u32", typeExprHeadName(result_fact.?.target_ty).?);
+    try std.testing.expectEqual(@as(?usize, 2), instruction_index);
+    try mir.validateConstGetFactsForLowering(typed_mir);
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, module, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=index detail=const_get type=u32 const_index=2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir const_get_fact fn=get_word index=2 recorded=true") != null);
+}
+
+test "MIR rejects const_get with both index instruction and fact removed" {
+    const source =
+        \\fn get_word(values: [3]u32) -> u32 { return values.const_get<2>(); }
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_const_get_missing_pair.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.validateConstGetFactsForLowering(typed_mir);
+
+    const function = functionByNameMut(&typed_mir, "get_word").?;
+    std.testing.allocator.free(function.const_get_facts);
+    function.const_get_facts = &.{};
+
+    var removed = false;
+    for (function.blocks) |*block| {
+        var remove_count: usize = 0;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .index and std.mem.eql(u8, instruction.detail, "const_get")) remove_count += 1;
+        }
+        if (remove_count == 0) continue;
+        const filtered = try std.testing.allocator.alloc(Instruction, block.instructions.len - remove_count);
+        var next: usize = 0;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .index and std.mem.eql(u8, instruction.detail, "const_get")) continue;
+            filtered[next] = instruction;
+            next += 1;
+        }
+        std.testing.allocator.free(block.instructions);
+        block.instructions = filtered;
+        removed = true;
+    }
+    try std.testing.expect(removed);
+    try std.testing.expectError(error.InvalidMirConstGetFacts, mir.validateConstGetFactsForLowering(typed_mir));
+}
+
 test "MIR owns value reflection call target facts" {
     const source =
         \\extern struct Packet {
