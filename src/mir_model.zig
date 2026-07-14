@@ -233,6 +233,14 @@ pub const CallTargetKind = enum {
     reduce_sum_left,
     reduce_sum_fast,
     enum_raw,
+    wrap_residue,
+    serial_before,
+    serial_after,
+    serial_distance,
+    serial_compare,
+    counter_delta_mod,
+    counter_elapsed_assume_within,
+    counter_elapsed_bounded,
     const_get,
     atomic_load,
     atomic_store,
@@ -293,6 +301,10 @@ pub const TargetTypeKind = enum {
     reduce_element,
     enum_raw_source,
     enum_raw_result,
+    domain_type,
+    domain_payload,
+    domain_result,
+    domain_interval,
     bitcast_source,
     bitcast_target,
     phys_result,
@@ -405,6 +417,7 @@ pub const Function = struct {
     call_target_facts: []CallTargetFact = &.{},
     target_type_facts: []TargetTypeFact = &.{},
     generated_type_expr_nodes: []*ast.TypeExpr = &.{},
+    generated_type_expr_args: [][]ast.TypeExpr = &.{},
     pointer_provenance_facts: []PointerProvenanceFact,
     representation_facts: []RepresentationFact,
     // OPT (annex E): operand source points of checks the optimizer proved dead and elided
@@ -437,6 +450,8 @@ pub const Module = struct {
             if (function.target_type_facts.len != 0) self.allocator.free(function.target_type_facts);
             for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);
             if (function.generated_type_expr_nodes.len != 0) self.allocator.free(function.generated_type_expr_nodes);
+            for (function.generated_type_expr_args) |args| self.allocator.free(args);
+            if (function.generated_type_expr_args.len != 0) self.allocator.free(function.generated_type_expr_args);
             for (function.pointer_provenance_facts) |fact| {
                 if (fact.field_path) |field_path| self.allocator.free(field_path);
             }

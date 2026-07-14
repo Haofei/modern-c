@@ -161,6 +161,7 @@ pub const DomainOpCallInfo = struct {
     domain_ty: ast.TypeExpr,
     payload_ty: ast.TypeExpr,
     return_ty: ast.TypeExpr,
+    interval_ty: ?ast.TypeExpr,
     op: []const u8,
 };
 

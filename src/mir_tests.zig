@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
 const mir = @import("mir.zig");
@@ -37,6 +38,14 @@ fn functionHasInstruction(function: mir.Function, kind: mir.Instruction.Kind, de
         }
     }
     return false;
+}
+
+fn typeExprHeadName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .name => |name| name.text,
+        .generic => |node| node.base.text,
+        else => null,
+    };
 }
 
 fn countTrapEdges(function: mir.Function, kind: mir.TrapKind) usize {
@@ -1033,6 +1042,76 @@ test "MIR owns enum raw call identities and source result types" {
         };
         try std.testing.expectEqualStrings(case.source_name, source_fact.?.target_ty.kind.name.text);
         try std.testing.expectEqualStrings(case.result_name, result_fact.?.target_ty.kind.name.text);
+    }
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR owns arithmetic domain call identities and complete types" {
+    const source =
+        \\type Raw = u16;
+        \\type Word = wrap<Raw>;
+        \\type Seq = serial<u32>;
+        \\type Ticks = counter<u64>;
+        \\fn residue(value: Word) -> u16 { return value.residue(); }
+        \\fn before(a: Seq, b: Seq) -> bool { return Seq.before(a, b); }
+        \\fn after(a: Seq, b: Seq) -> bool { return Seq.after(a, b); }
+        \\fn distance(a: Seq, b: Seq) -> wrap<u32> { return Seq.distance(a, b); }
+        \\fn compare(a: Seq, b: Seq) -> Result<Order, AmbiguousSerialOrder> { return Seq.compare(a, b); }
+        \\fn delta(now: Ticks, start: Ticks) -> wrap<u64> { return Ticks.delta_mod(now, start); }
+        \\fn elapsed(now: Ticks, start: Ticks, max: Duration<u64>) -> Duration<u64> { return Ticks.elapsed_assume_within(now, start, max); }
+        \\fn bounded(now: Ticks, start: Ticks, max: Duration<u64>) -> Result<Duration<u64>, AmbiguousCounterInterval> { return Ticks.elapsed_bounded(now, start, max); }
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_domain_call_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    for ([_]struct {
+        name: []const u8,
+        kind: mir.CallTargetKind,
+        domain_name: []const u8,
+        payload_name: []const u8,
+        result_name: []const u8,
+        has_interval: bool = false,
+    }{
+        .{ .name = "residue", .kind = .wrap_residue, .domain_name = "Word", .payload_name = "Raw", .result_name = "Raw" },
+        .{ .name = "before", .kind = .serial_before, .domain_name = "Seq", .payload_name = "u32", .result_name = "bool" },
+        .{ .name = "after", .kind = .serial_after, .domain_name = "Seq", .payload_name = "u32", .result_name = "bool" },
+        .{ .name = "distance", .kind = .serial_distance, .domain_name = "Seq", .payload_name = "u32", .result_name = "wrap" },
+        .{ .name = "compare", .kind = .serial_compare, .domain_name = "Seq", .payload_name = "u32", .result_name = "Result" },
+        .{ .name = "delta", .kind = .counter_delta_mod, .domain_name = "Ticks", .payload_name = "u64", .result_name = "wrap" },
+        .{ .name = "elapsed", .kind = .counter_elapsed_assume_within, .domain_name = "Ticks", .payload_name = "u64", .result_name = "Duration", .has_interval = true },
+        .{ .name = "bounded", .kind = .counter_elapsed_bounded, .domain_name = "Ticks", .payload_name = "u64", .result_name = "Result", .has_interval = true },
+    }) |case| {
+        const function = functionByName(typed_mir, case.name).?;
+        try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
+        try std.testing.expectEqual(case.kind, function.call_target_facts[0].kind);
+        var domain_fact: ?mir.TargetTypeFact = null;
+        var payload_fact: ?mir.TargetTypeFact = null;
+        var result_fact: ?mir.TargetTypeFact = null;
+        var interval_fact: ?mir.TargetTypeFact = null;
+        for (function.target_type_facts) |fact| switch (fact.kind) {
+            .domain_type => domain_fact = fact,
+            .domain_payload => payload_fact = fact,
+            .domain_result => result_fact = fact,
+            .domain_interval => interval_fact = fact,
+            else => {},
+        };
+        try std.testing.expectEqualStrings(case.domain_name, typeExprHeadName(domain_fact.?.target_ty).?);
+        try std.testing.expectEqualStrings(case.payload_name, typeExprHeadName(payload_fact.?.target_ty).?);
+        try std.testing.expectEqualStrings(case.result_name, typeExprHeadName(result_fact.?.target_ty).?);
+        try std.testing.expectEqual(case.has_interval, interval_fact != null);
+        if (interval_fact) |fact| try std.testing.expectEqualStrings("Duration", typeExprHeadName(fact.target_ty).?);
     }
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);

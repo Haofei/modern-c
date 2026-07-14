@@ -77,6 +77,25 @@ pub const ResultConstructorFactInfo = struct {
     tag: []const u8,
 };
 
+pub const DomainCallFactInfo = struct {
+    op: []const u8,
+    has_interval: bool = false,
+};
+
+pub fn domainCallFactInfo(kind: CallTargetKind) ?DomainCallFactInfo {
+    return switch (kind) {
+        .wrap_residue => .{ .op = "residue" },
+        .serial_before => .{ .op = "before" },
+        .serial_after => .{ .op = "after" },
+        .serial_distance => .{ .op = "distance" },
+        .serial_compare => .{ .op = "compare" },
+        .counter_delta_mod => .{ .op = "delta_mod" },
+        .counter_elapsed_assume_within => .{ .op = "elapsed_assume_within", .has_interval = true },
+        .counter_elapsed_bounded => .{ .op = "elapsed_bounded", .has_interval = true },
+        else => null,
+    };
+}
+
 pub fn resultConstructorFactInfo(kind: CallTargetKind) ?ResultConstructorFactInfo {
     return switch (kind) {
         .result_ok => .{ .target_kind = .result_ok, .tag = "ok" },
@@ -3110,6 +3129,7 @@ const FunctionBuilder = struct {
     call_target_facts: std.ArrayList(CallTargetFact),
     target_type_facts: std.ArrayList(TargetTypeFact),
     generated_type_expr_nodes: std.ArrayList(*ast.TypeExpr),
+    generated_type_expr_args: std.ArrayList([]ast.TypeExpr),
     pointer_provenance_facts: std.ArrayList(PointerProvenanceFact),
     representation_facts: std.ArrayList(RepresentationFact),
     live_pointer_provenance: std.ArrayList(LivePointerProvenance),
@@ -3198,6 +3218,7 @@ const FunctionBuilder = struct {
             .call_target_facts = .empty,
             .target_type_facts = .empty,
             .generated_type_expr_nodes = .empty,
+            .generated_type_expr_args = .empty,
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -3262,6 +3283,7 @@ const FunctionBuilder = struct {
             .call_target_facts = .empty,
             .target_type_facts = .empty,
             .generated_type_expr_nodes = .empty,
+            .generated_type_expr_args = .empty,
             .pointer_provenance_facts = .empty,
             .representation_facts = .empty,
             .live_pointer_provenance = .empty,
@@ -3307,6 +3329,8 @@ const FunctionBuilder = struct {
         self.target_type_facts.deinit(self.allocator);
         for (self.generated_type_expr_nodes.items) |node| self.allocator.destroy(node);
         self.generated_type_expr_nodes.deinit(self.allocator);
+        for (self.generated_type_expr_args.items) |args| self.allocator.free(args);
+        self.generated_type_expr_args.deinit(self.allocator);
         self.pointer_provenance_facts.deinit(self.allocator);
         self.representation_facts.deinit(self.allocator);
         self.live_pointer_provenance.deinit(self.allocator);
@@ -3368,6 +3392,11 @@ const FunctionBuilder = struct {
             for (generated_type_expr_nodes) |node| self.allocator.destroy(node);
             self.allocator.free(generated_type_expr_nodes);
         }
+        const generated_type_expr_args = try self.generated_type_expr_args.toOwnedSlice(self.allocator);
+        errdefer {
+            for (generated_type_expr_args) |args| self.allocator.free(args);
+            self.allocator.free(generated_type_expr_args);
+        }
         const pointer_provenance_facts = try self.pointer_provenance_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(pointer_provenance_facts);
         const representation_facts = try self.representation_facts.toOwnedSlice(self.allocator);
@@ -3411,6 +3440,7 @@ const FunctionBuilder = struct {
         self.continue_targets.deinit(self.allocator);
         self.continue_targets = .empty;
         self.generated_type_expr_nodes = .empty;
+        self.generated_type_expr_args = .empty;
 
         return .{
             .name = self.name,
@@ -3426,6 +3456,7 @@ const FunctionBuilder = struct {
             .call_target_facts = call_target_facts,
             .target_type_facts = target_type_facts,
             .generated_type_expr_nodes = generated_type_expr_nodes,
+            .generated_type_expr_args = generated_type_expr_args,
             .pointer_provenance_facts = pointer_provenance_facts,
             .representation_facts = representation_facts,
             .elided_bounds = elided_bounds,
@@ -4717,11 +4748,14 @@ const FunctionBuilder = struct {
                 const byte_view_target = byteViewCallTargetKind(node);
                 const semantic_escape_target = try self.semanticEscapeCallTarget(node);
                 const enum_raw_target = self.enumRawCallTarget(node);
+                const domain_target = try self.domainCallTarget(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
                 else if (semantic_escape_target) |target|
                     target.result_ty
                 else if (enum_raw_target) |target|
+                    target.result_ty
+                else if (domain_target) |target|
                     target.result_ty
                 else if (reflection_target != null)
                     .{ .integer = "usize" }
@@ -4768,6 +4802,16 @@ const FunctionBuilder = struct {
                     try self.addCallTargetFact(.enum_raw, target.result_ty, expr.span);
                     try self.appendTargetTypeFact(.enum_raw_source, target.source_type_expr, target.source_ty, expr.span);
                     try self.appendTargetTypeFact(.enum_raw_result, target.result_type_expr, target.result_ty, expr.span);
+                }
+                if (domain_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.appendTargetTypeFact(.domain_type, target.domain_type_expr, target.domain_ty, expr.span);
+                    try self.appendTargetTypeFact(.domain_payload, target.payload_type_expr, target.payload_ty, expr.span);
+                    try self.appendTargetTypeFact(.domain_result, target.result_type_expr, target.result_ty, expr.span);
+                    if (target.interval_type_expr) |interval_ty| {
+                        try self.appendTargetTypeFact(.domain_interval, interval_ty, valueTypeFromTypeAlias(interval_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
+                    }
                 }
                 if (self.atomicCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
@@ -5549,6 +5593,84 @@ const FunctionBuilder = struct {
             .member => |member| self.enumVariantPathTypeExpr(member),
             else => null,
         };
+    }
+
+    const DomainCallTarget = struct {
+        kind: CallTargetKind,
+        domain_type_expr: ast.TypeExpr,
+        domain_ty: ValueType,
+        payload_type_expr: ast.TypeExpr,
+        payload_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+        interval_type_expr: ?ast.TypeExpr = null,
+    };
+
+    fn domainCallTarget(self: *FunctionBuilder, call: anytype) !?DomainCallTarget {
+        if (call.type_args.len != 0) return null;
+        const member = memberExpr(call.callee.*) orelse return null;
+        const op = member.name.text;
+
+        var kind: CallTargetKind = undefined;
+        var domain_type_expr: ast.TypeExpr = undefined;
+        if (std.mem.eql(u8, op, "residue")) {
+            if (call.args.len != 0) return null;
+            domain_type_expr = self.typeExprForExpr(member.base.*) orelse return null;
+            if (arithmeticDomainTypeAlias(domain_type_expr, self.aliases) != .wrap) return null;
+            kind = .wrap_residue;
+        } else {
+            const domain_name = calleeIdentName(member.base.*) orelse return null;
+            if (self.local_types.contains(domain_name) or self.globals.contains(domain_name)) return null;
+            domain_type_expr = ast_query.simpleNameType(domain_name, member.base.*.span);
+            const domain = arithmeticDomainTypeAlias(domain_type_expr, self.aliases) orelse return null;
+            kind = domainStaticCallTargetKind(domain, op) orelse return null;
+            const expected_args: usize = if (kind == .counter_elapsed_assume_within or kind == .counter_elapsed_bounded) 3 else 2;
+            if (call.args.len != expected_args) return null;
+        }
+
+        const resolved = aggregateTargetTypeAlias(domain_type_expr, self.aliases);
+        const generic = switch (resolved.kind) {
+            .generic => |node| node,
+            else => return null,
+        };
+        if (generic.args.len != 1) return null;
+        const payload_type_expr = generic.args[0];
+        const interval_type_expr: ?ast.TypeExpr = if (kind == .counter_elapsed_assume_within or kind == .counter_elapsed_bounded)
+            genericTypeExpr("Duration", generic.args, member.name.span)
+        else
+            null;
+        const result_type_expr = switch (kind) {
+            .wrap_residue => payload_type_expr,
+            .serial_before, .serial_after => ast_query.simpleNameType("bool", member.name.span),
+            .serial_distance, .counter_delta_mod => genericTypeExpr("wrap", generic.args, member.name.span),
+            .serial_compare => try self.generatedGenericTypeExpr("Result", &.{
+                ast_query.simpleNameType("Order", member.name.span),
+                ast_query.simpleNameType("AmbiguousSerialOrder", member.name.span),
+            }, member.name.span),
+            .counter_elapsed_assume_within => interval_type_expr.?,
+            .counter_elapsed_bounded => try self.generatedGenericTypeExpr("Result", &.{
+                interval_type_expr.?,
+                ast_query.simpleNameType("AmbiguousCounterInterval", member.name.span),
+            }, member.name.span),
+            else => unreachable,
+        };
+        return .{
+            .kind = kind,
+            .domain_type_expr = domain_type_expr,
+            .domain_ty = valueTypeFromTypeAlias(domain_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .payload_type_expr = payload_type_expr,
+            .payload_ty = valueTypeFromTypeAlias(payload_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .result_type_expr = result_type_expr,
+            .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .interval_type_expr = interval_type_expr,
+        };
+    }
+
+    fn generatedGenericTypeExpr(self: *FunctionBuilder, base: []const u8, args: []const ast.TypeExpr, span: ast.Span) !ast.TypeExpr {
+        const owned_args = try self.allocator.dupe(ast.TypeExpr, args);
+        errdefer self.allocator.free(owned_args);
+        try self.generated_type_expr_args.append(self.allocator, owned_args);
+        return genericTypeExpr(base, owned_args, span);
     }
 
     fn semanticEscapeCallTarget(self: *FunctionBuilder, call: anytype) !?SemanticEscapeCallTarget {
@@ -7945,6 +8067,10 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.integer_facts.len != 0) allocator.free(function.integer_facts);
     if (function.call_target_facts.len != 0) allocator.free(function.call_target_facts);
     if (function.target_type_facts.len != 0) allocator.free(function.target_type_facts);
+    for (function.generated_type_expr_nodes) |node| allocator.destroy(node);
+    if (function.generated_type_expr_nodes.len != 0) allocator.free(function.generated_type_expr_nodes);
+    for (function.generated_type_expr_args) |args| allocator.free(args);
+    if (function.generated_type_expr_args.len != 0) allocator.free(function.generated_type_expr_args);
     for (function.pointer_provenance_facts) |fact| {
         if (fact.field_path) |field_path| allocator.free(field_path);
     }
@@ -8518,6 +8644,34 @@ fn isMirCounterOpName(m: []const u8) bool {
     return std.mem.eql(u8, m, "delta_mod") or
         std.mem.eql(u8, m, "elapsed_assume_within") or
         std.mem.eql(u8, m, "elapsed_bounded");
+}
+
+fn domainStaticCallTargetKind(domain: ArithmeticDomain, op: []const u8) ?CallTargetKind {
+    return switch (domain) {
+        .serial => if (std.mem.eql(u8, op, "before"))
+            .serial_before
+        else if (std.mem.eql(u8, op, "after"))
+            .serial_after
+        else if (std.mem.eql(u8, op, "distance"))
+            .serial_distance
+        else if (std.mem.eql(u8, op, "compare"))
+            .serial_compare
+        else
+            null,
+        .counter => if (std.mem.eql(u8, op, "delta_mod"))
+            .counter_delta_mod
+        else if (std.mem.eql(u8, op, "elapsed_assume_within"))
+            .counter_elapsed_assume_within
+        else if (std.mem.eql(u8, op, "elapsed_bounded"))
+            .counter_elapsed_bounded
+        else
+            null,
+        .wrap, .sat => null,
+    };
+}
+
+fn genericTypeExpr(base: []const u8, args: []ast.TypeExpr, span: ast.Span) ast.TypeExpr {
+    return .{ .span = span, .kind = .{ .generic = .{ .base = .{ .text = base, .span = span }, .args = args } } };
 }
 
 fn callResultRepresentationCheckTraps(name: []const u8) bool {

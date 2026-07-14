@@ -7486,7 +7486,7 @@ const LlvmEmitter = struct {
             return try self.emitResultValue(info.return_ty, not_ambiguous, selected_order, "0");
         }
         if (std.mem.eql(u8, info.op, "elapsed_bounded")) {
-            const max = try self.emitExpr(call.args[2], try self.durationType(info.payload_ty, call.args[2].span));
+            const max = try self.emitExpr(call.args[2], info.interval_ty orelse return error.UnsupportedLlvmEmission);
             const in_range = try self.nextTemp();
             const selected_delta = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = icmp ule {s} {s}, {s}\n", .{ in_range, llvm_ty, diff, max });
@@ -7494,12 +7494,6 @@ const LlvmEmitter = struct {
             return try self.emitResultValue(info.return_ty, in_range, selected_delta, "0");
         }
         return diff;
-    }
-
-    fn durationType(self: *LlvmEmitter, payload_ty: ast.TypeExpr, span: ast.Span) !ast.TypeExpr {
-        const args = try self.scratch.allocator().alloc(ast.TypeExpr, 1);
-        args[0] = payload_ty;
-        return .{ .span = span, .kind = .{ .generic = .{ .base = .{ .text = "Duration", .span = span }, .args = args } } };
     }
 
     fn emitReduceCall(self: *LlvmEmitter, call: anytype, info: ReduceCallInfo) ![]const u8 {
@@ -8584,15 +8578,11 @@ const LlvmEmitter = struct {
     fn domainResidueCallInfo(self: *LlvmEmitter, call: anytype) ?DomainResidueCallInfo {
         const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "residue")) return null;
-        const domain_ty = self.exprType(member.base.*) orelse return null;
-        const payload_ty = self.domainPayloadType(domain_ty) orelse return null;
-        const resolved = self.resolveAliasType(domain_ty);
-        const generic = switch (resolved.kind) {
-            .generic => |node| node,
-            else => return null,
-        };
-        if (!std.mem.eql(u8, generic.base.text, "wrap")) return null;
-        return .{ .base = member.base.*, .domain_ty = domain_ty, .payload_ty = payload_ty };
+        if (self.mirCallTargetKindAt(call.callee.*.span) != .wrap_residue) return null;
+        const domain_ty = (self.mirTargetTypeFactAt(.domain_type, call.callee.*.span) orelse return null).target_ty;
+        _ = self.mirTargetTypeFactAt(.domain_payload, call.callee.*.span) orelse return null;
+        const result_ty = (self.mirTargetTypeFactAt(.domain_result, call.callee.*.span) orelse return null).target_ty;
+        return .{ .base = member.base.*, .domain_ty = domain_ty, .payload_ty = result_ty };
     }
 
     fn conversionCallInfo(self: *LlvmEmitter, call: anytype) ?ConversionCallInfo {
@@ -8622,41 +8612,17 @@ const LlvmEmitter = struct {
     fn domainOpCallInfo(self: *LlvmEmitter, call: anytype) ?DomainOpCallInfo {
         if (call.type_args.len != 0) return null;
         const member = memberCallee(call) orelse return null;
-        const op = member.name.text;
-        const is_serial_op = std.mem.eql(u8, op, "before") or
-            std.mem.eql(u8, op, "after") or
-            std.mem.eql(u8, op, "distance") or
-            std.mem.eql(u8, op, "compare");
-        const is_counter_op = std.mem.eql(u8, op, "delta_mod") or
-            std.mem.eql(u8, op, "elapsed_assume_within") or
-            std.mem.eql(u8, op, "elapsed_bounded");
-        if (!is_serial_op and !is_counter_op) return null;
-        const ident = switch (member.base.kind) {
-            .ident => |id| id,
-            else => return null,
-        };
-        if (self.local_types.contains(ident.text)) return null;
-        const domain_ty = self.resolveAliasType(simpleType(ident.span, ident.text));
-        const generic = switch (domain_ty.kind) {
-            .generic => |node| node,
-            else => return null,
-        };
-        if (generic.args.len != 1) return null;
-        const is_serial = std.mem.eql(u8, generic.base.text, "serial");
-        const is_counter = std.mem.eql(u8, generic.base.text, "counter");
-        if ((is_serial_op and !is_serial) or (is_counter_op and !is_counter)) return null;
-        const duration_ty: ast.TypeExpr = .{ .span = member.name.span, .kind = .{ .generic = .{ .base = .{ .text = "Duration", .span = member.name.span }, .args = generic.args } } };
-        const return_ty: ast.TypeExpr = if (std.mem.eql(u8, op, "before") or std.mem.eql(u8, op, "after"))
-            simpleType(member.name.span, "bool")
-        else if (std.mem.eql(u8, op, "compare"))
-            self.resultType(simpleType(member.name.span, "Order"), simpleType(member.name.span, "AmbiguousSerialOrder"), member.name.span) catch return null
-        else if (std.mem.eql(u8, op, "elapsed_assume_within"))
-            duration_ty
-        else if (std.mem.eql(u8, op, "elapsed_bounded"))
-            self.resultType(duration_ty, simpleType(member.name.span, "AmbiguousCounterInterval"), member.name.span) catch return null
+        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+        const fact_info = mir.domainCallFactInfo(kind) orelse return null;
+        if (kind == .wrap_residue or !std.mem.eql(u8, member.name.text, fact_info.op)) return null;
+        const domain_ty = (self.mirTargetTypeFactAt(.domain_type, call.callee.*.span) orelse return null).target_ty;
+        const payload_ty = (self.mirTargetTypeFactAt(.domain_payload, call.callee.*.span) orelse return null).target_ty;
+        const return_ty = (self.mirTargetTypeFactAt(.domain_result, call.callee.*.span) orelse return null).target_ty;
+        const interval_ty = if (fact_info.has_interval)
+            (self.mirTargetTypeFactAt(.domain_interval, call.callee.*.span) orelse return null).target_ty
         else
-            .{ .span = member.name.span, .kind = .{ .generic = .{ .base = .{ .text = "wrap", .span = member.name.span }, .args = generic.args } } };
-        return .{ .domain_ty = domain_ty, .payload_ty = generic.args[0], .return_ty = return_ty, .op = op };
+            null;
+        return .{ .domain_ty = domain_ty, .payload_ty = payload_ty, .return_ty = return_ty, .interval_ty = interval_ty, .op = fact_info.op };
     }
 
     fn reduceCallInfo(self: *LlvmEmitter, call: anytype) ?ReduceCallInfo {

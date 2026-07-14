@@ -154,7 +154,10 @@ pub fn emitResidueCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(
     if (call.type_args.len != 0) return false;
     const member = memberCallee(call.callee.*) orelse return false;
     if (!std.mem.eql(u8, member.name.text, "residue")) return false;
-    _ = ctx.numeric_expr_type(ctx.emit_ctx, member.base.*, locals) orelse return false;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .wrap_residue) return false;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .domain_type, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .domain_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .domain_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
     if (call.args.len != 0) return error.UnsupportedCEmission;
     try ctx.emit_expr(ctx.emit_ctx, member.base.*, locals);
     return true;

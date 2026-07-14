@@ -854,6 +854,68 @@ test "lower-c enum raw requires MIR call and target type facts" {
     }
 }
 
+test "lower-c arithmetic domain calls require MIR identities and complete types" {
+    const source =
+        \\type Raw = u16;
+        \\type Word = wrap<Raw>;
+        \\type Seq = serial<u32>;
+        \\type Ticks = counter<u64>;
+        \\fn domain_fact_gate(value: Word) -> u16 { return value.residue(); }
+        \\fn before(a: Seq, b: Seq) -> bool { return Seq.before(a, b); }
+        \\fn after(a: Seq, b: Seq) -> bool { return Seq.after(a, b); }
+        \\fn distance(a: Seq, b: Seq) -> wrap<u32> { return Seq.distance(a, b); }
+        \\fn compare(a: Seq, b: Seq) -> Result<Order, AmbiguousSerialOrder> { return Seq.compare(a, b); }
+        \\fn delta(now: Ticks, start: Ticks) -> wrap<u64> { return Ticks.delta_mod(now, start); }
+        \\fn elapsed(now: Ticks, start: Ticks, max: Duration<u64>) -> Duration<u64> { return Ticks.elapsed_assume_within(now, start, max); }
+        \\fn bounded(now: Ticks, start: Ticks, max: Duration<u64>) -> Result<Duration<u64>, AmbiguousCounterInterval> { return Ticks.elapsed_bounded(now, start, max); }
+        \\fn inferred_distance(a: Seq, b: Seq) -> wrap<u32> { let value = Seq.distance(a, b); return value; }
+        \\fn inferred_bounded(now: Ticks, start: Ticks, max: Duration<u64>) -> Result<Duration<u64>, AmbiguousCounterInterval> { let value = Ticks.elapsed_bounded(now, start, max); return value; }
+    ;
+
+    var parsed = try test_support.parseCheckedModule("c_domain_call_facts.mc", source);
+    defer parsed.deinit();
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_domain_call_facts.mc", .{}, false, null);
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try clearCallTargetFactsForFunction(&module_mir, "domain_fact_gate");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(
+            error.InvalidMirCallTargetFacts,
+            lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_domain_call_facts.mc", .{}, false, null),
+        );
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try retargetCallTargetFactsForFunction(&module_mir, "before", .serial_after);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(
+            error.InvalidMirCallTargetFacts,
+            lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_domain_call_facts.mc", .{}, false, null),
+        );
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try clearTargetTypeFactsForFunction(&module_mir, "bounded");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(
+            error.InvalidMirTargetTypeFacts,
+            lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_domain_call_facts.mc", .{}, false, null),
+        );
+    }
+}
+
 test "lower-c rejects prebuilt MIR with missing phys call target facts" {
     const source =
         \\fn phys_call_target_fact_gate(value: usize) -> PAddr {

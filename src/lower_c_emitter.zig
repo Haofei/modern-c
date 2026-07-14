@@ -1610,10 +1610,12 @@ const CEmitter = struct {
         return .{
             .allocator = self.allocator,
             .out = self.out,
-            .type_aliases = &self.type_aliases,
             .emit_ctx = self,
             .emit_expr = emitExprForCall,
-            .result_type_name = resultTypeNameForConvert,
+            .c_type = cTypeForCall,
+            .underlying_int_type_name = underlyingIntTypeNameForConvert,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 
@@ -6976,6 +6978,7 @@ const CEmitter = struct {
         if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .enum_raw) return if (self.mirTargetTypeFactAt(.enum_raw_result, call.callee.*.span)) |fact| fact.target_ty else null;
+        if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| if (mir.domainCallFactInfo(kind) != null) return if (self.mirTargetTypeFactAt(.domain_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) return if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
@@ -7035,6 +7038,7 @@ const CEmitter = struct {
         if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .enum_raw) return if (self.mirTargetTypeFactAt(.enum_raw_result, call.callee.*.span)) |fact| fact.target_ty else null;
+        if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| if (mir.domainCallFactInfo(kind) != null) return if (self.mirTargetTypeFactAt(.domain_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) return if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
