@@ -1017,6 +1017,49 @@ test "LLVM DMA calls consume MIR identities and complete types" {
     }
 }
 
+test "LLVM raw-many offset consumes MIR identity and complete types" {
+    const source =
+        \\type Words = [*]mut u16;
+        \\fn raw_many_offset_fact_gate(p: Words, index: usize) -> Words {
+        \\    unsafe { let q = p.offset(index); return q; }
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_raw_many_offset_facts.mc", source);
+    defer parsed.deinit();
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_raw_many_offset_facts.mc", .{}, false, .riscv64, null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "getelementptr i16") != null);
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try clearCallTargetFactsForFunction(&module_mir, "raw_many_offset_fact_gate");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_raw_many_offset_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try retargetCallTargetFactsForFunction(&module_mir, "raw_many_offset_fact_gate", .const_get);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_raw_many_offset_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try clearTargetTypeFactsForFunction(&module_mir, "raw_many_offset_fact_gate");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_raw_many_offset_facts.mc", .{}, false, .riscv64, null));
+    }
+}
+
 test "LLVM reductions require MIR element type facts" {
     const source =
         \\fn reduce_element_fact_gate(xs: []const u32) -> Result<u32, Overflow> {

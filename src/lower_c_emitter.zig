@@ -1741,7 +1741,6 @@ const CEmitter = struct {
             .global_assignment_target = globalAssignmentTargetForAccess,
             .emit_assign_target = emitAssignTargetForAccess,
             .emit_race_load_temp = emitRaceLoadTempForAccess,
-            .raw_many_offset_expr_type = rawManyOffsetExprTypeForAccess,
             .slice_return_type_for_call = sliceReturnTypeForAccess,
             .array_return_type_for_expr = arrayReturnTypeForAccess,
             .array_len_text = arrayLenTextForAccess,
@@ -2305,11 +2304,6 @@ const CEmitter = struct {
     fn exprSourceTypeForMemory(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.exprSourceTypeForEmission(expr, locals);
-    }
-
-    fn rawManyOffsetExprTypeForAccess(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.rawManyOffsetExprTypeForEmission(expr, locals);
     }
 
     fn mmioAccessForMmio(ctx: *anyopaque, callee: ast.Expr, args: []ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
@@ -7002,7 +6996,7 @@ const CEmitter = struct {
         if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| if (mir.domainCallFactInfo(kind) != null) return if (self.mirTargetTypeFactAt(.domain_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) return if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;
-        if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_many_offset) return if (self.mirTargetTypeFactAt(.raw_many_offset_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.dynDispatchReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.closureCalleeType(call.callee.*, locals)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
@@ -7063,7 +7057,7 @@ const CEmitter = struct {
         if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| if (mir.domainCallFactInfo(kind) != null) return if (self.mirTargetTypeFactAt(.domain_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) return if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;
-        if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_many_offset) return if (self.mirTargetTypeFactAt(.raw_many_offset_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
@@ -7158,13 +7152,5 @@ const CEmitter = struct {
     fn arrayLenTextForInfo(ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.arrayLenTextForExpr(expr);
-    }
-
-    fn rawManyOffsetReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        return lower_c_infer.rawManyOffsetReturnTypeForCall(self.inferTypeContext(), call, locals);
-    }
-
-    fn rawManyOffsetExprTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        return lower_c_infer.rawManyOffsetExprTypeForEmission(self.inferTypeContext(), expr, locals);
     }
 };

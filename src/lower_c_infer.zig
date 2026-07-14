@@ -17,17 +17,13 @@ const mir = @import("mir.zig");
 const FnInfo = lower_c_model.FnInfo;
 const GlobalInfo = lower_c_model.GlobalInfo;
 const LocalInfo = lower_c_model.LocalInfo;
-const RawManyOffsetInfo = lower_c_model.RawManyOffsetInfo;
 const calleeIdentName = ast_query.calleeIdentName;
-const isRawManyPointerType = ast_query.isRawManyPointerType;
-const memberCallee = ast_query.memberCallee;
 const simpleNameType = ast_query.simpleNameType;
 const exprIsNumericLiteral = lower_c_expr.exprIsNumericLiteral;
 const isNumericValueBinaryOp = lower_c_expr.isNumericValueBinaryOp;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
 const isBoolType = lower_c_type.isBoolType;
 const isNumericStorageType = lower_c_type.isNumericStorageType;
-const rawManyElementType = lower_c_type.rawManyElementType;
 const sameCStorageType = lower_c_type.sameCStorageType;
 const typeName = ast_query.typeName;
 
@@ -352,7 +348,7 @@ pub fn exprIsPointer(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.String
 pub fn derefPointeeType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return switch (expr.kind) {
         .ident => |id| pointeeTypeFromPointerLike(ctx, sourceTypeForIdent(ctx, id.text, locals) orelse return null),
-        .call => |node| pointeeTypeFromPointerLike(ctx, rawManyOffsetReturnTypeForCall(ctx, node, locals) orelse callReturnType(ctx.functions, node) orelse return null),
+        .call => |node| pointeeTypeFromPointerLike(ctx, ctx.mir_target_type(ctx.source_ctx, .raw_many_offset_result, node.callee.*.span) orelse callReturnType(ctx.functions, node) orelse return null),
         .cast => |node| pointeeTypeFromPointerLike(ctx, node.ty.*),
         .member, .index => pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null),
         .grouped => |inner| derefPointeeType(ctx, inner.*, locals),
@@ -388,56 +384,6 @@ pub fn structTypeNameForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
             break :blk structNameFromType(ctx, ty);
         },
         .grouped => |inner| structTypeNameForExpr(ctx, inner.*, locals),
-        else => null,
-    };
-}
-
-pub fn rawManyOffsetTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    return switch (expr.kind) {
-        .call => |call| rawManyOffsetReturnTypeForCall(ctx, call, locals),
-        .grouped => |inner| rawManyOffsetTypeForExpr(ctx, inner.*, locals),
-        else => null,
-    };
-}
-
-pub fn rawManyOffsetDerefTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    const inner = switch (expr.kind) {
-        .grouped => |grouped| return rawManyOffsetDerefTypeForExpr(ctx, grouped.*, locals),
-        .deref => |inner| inner.*,
-        else => return null,
-    };
-    const ptr_ty = rawManyOffsetTypeForExpr(ctx, inner, locals) orelse return null;
-    return rawManyElementType(ptr_ty);
-}
-
-pub fn rawManyOffsetReturnTypeForCall(ctx: TypeQueryContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    const info = rawManyOffsetCallInfo(ctx, call, locals) orelse return null;
-    return info.ty;
-}
-
-pub fn rawManyOffsetCallInfo(ctx: TypeQueryContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?RawManyOffsetInfo {
-    if (call.type_args.len != 0 or call.args.len != 1) return null;
-    const member = memberCallee(call.callee.*) orelse return null;
-    if (!std.mem.eql(u8, member.name.text, "offset")) return null;
-    const base_ty = rawManyOffsetExprTypeForEmission(ctx, member.base.*, locals) orelse return null;
-    if (!isRawManyPointerType(base_ty)) return null;
-    return .{ .base = member.base.*, .ty = base_ty };
-}
-
-pub fn rawManyOffsetExprTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    return switch (expr.kind) {
-        .ident => |ident| {
-            const local_set = locals orelse return null;
-            const info = local_set.get(ident.text) orelse return null;
-            return info.source_ty;
-        },
-        .call => |node| blk: {
-            if (rawManyOffsetReturnTypeForCall(ctx, node, locals)) |ty| break :blk ty;
-            const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
-            const info = ctx.functions.get(fn_name) orelse break :blk null;
-            break :blk info.return_type;
-        },
-        .grouped => |inner| rawManyOffsetExprTypeForEmission(ctx, inner.*, locals),
         else => null,
     };
 }

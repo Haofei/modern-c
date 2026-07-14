@@ -8,7 +8,6 @@ const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
-const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
 
 const callExpr = ast_query.callExpr;
@@ -26,16 +25,13 @@ const SliceAccess = lower_c_model.SliceAccess;
 const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 const TryReplacement = lower_c_model.TryReplacement;
 const arrayElementType = lower_c_shape.arrayElementType;
-const isRawManyPointerType = ast_query.isRawManyPointerType;
 const memberCallee = ast_query.memberCallee;
 const simpleNameType = ast_query.simpleNameType;
 const sliceElementType = lower_c_shape.sliceElementType;
 const appendGlobalStoreValue = lower_c_global.appendGlobalStoreValue;
-const rawManyElementType = lower_c_type.rawManyElementType;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp;
-pub const RawManyOffsetExprTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const SliceReturnTypeForCallFn = *const fn (ctx: *anyopaque, call: ast_query.CallExpr) ?ast.TypeExpr;
 pub const ArrayReturnTypeForExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr) ?ast.TypeExpr;
 pub const ArrayLenTextFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!?[]const u8;
@@ -71,7 +67,6 @@ pub const EmitContext = struct {
     global_assignment_target: GlobalAssignmentTargetFn,
     emit_assign_target: EmitAssignTargetFn,
     emit_race_load_temp: EmitRaceLoadTempFn,
-    raw_many_offset_expr_type: RawManyOffsetExprTypeFn,
     slice_return_type_for_call: SliceReturnTypeForCallFn,
     array_return_type_for_expr: ArrayReturnTypeForExprFn,
     array_len_text: ArrayLenTextFn,
@@ -137,14 +132,10 @@ pub fn emitConstGetCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHas
 }
 
 pub fn emitRawManyOffsetCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    if (call.type_args.len != 0) return false;
-    const member = memberCallee(call.callee.*) orelse return false;
-    if (!std.mem.eql(u8, member.name.text, "offset")) return false;
-    if (call.args.len != 1) return error.UnsupportedCEmission;
-    if (ctx.raw_many_offset_expr_type(ctx.emit_ctx, member.base.*, locals) == null) return false;
+    const info = rawManyOffsetCallInfo(ctx, call, locals) orelse return false;
 
     try ctx.out.appendSlice(ctx.allocator, "(");
-    try ctx.emit_expr(ctx.emit_ctx, member.base.*, locals);
+    try ctx.emit_expr(ctx.emit_ctx, info.base, locals);
     try ctx.out.appendSlice(ctx.allocator, " + ");
     try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
     try ctx.out.appendSlice(ctx.allocator, ")");
@@ -152,12 +143,15 @@ pub fn emitRawManyOffsetCall(ctx: EmitContext, call: anytype, locals: ?*std.Stri
 }
 
 pub fn rawManyOffsetCallInfo(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?RawManyOffsetInfo {
+    _ = locals;
     if (call.type_args.len != 0 or call.args.len != 1) return null;
     const member = memberCallee(call.callee.*) orelse return null;
     if (!std.mem.eql(u8, member.name.text, "offset")) return null;
-    const base_ty = ctx.raw_many_offset_expr_type(ctx.emit_ctx, member.base.*, locals) orelse return null;
-    if (!isRawManyPointerType(base_ty)) return null;
-    return .{ .base = member.base.*, .ty = base_ty };
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .raw_many_offset) return null;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .raw_many_offset_base, call.callee.*.span) orelse return null;
+    const element_ty = ctx.mir_target_type(ctx.emit_ctx, .raw_many_offset_element, call.callee.*.span) orelse return null;
+    const result_ty = ctx.mir_target_type(ctx.emit_ctx, .raw_many_offset_result, call.callee.*.span) orelse return null;
+    return .{ .base = member.base.*, .ty = result_ty, .element_ty = element_ty };
 }
 
 pub fn emitRawManyOffsetValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
@@ -298,8 +292,9 @@ pub fn emitRawManyOffsetDerefTargetAssignmentStmt(ctx: EmitContext, assignment: 
         else => return false,
     };
     const call = callExpr(inner) orelse return false;
-    const ptr_ty = (rawManyOffsetCallInfo(ctx, call, locals) orelse return false).ty;
-    const element_ty = rawManyElementType(ptr_ty) orelse return false;
+    const info = rawManyOffsetCallInfo(ctx, call, locals) orelse return false;
+    const ptr_ty = info.ty;
+    const element_ty = info.element_ty;
     const should_sequence = exprContainsCall(inner) or exprContainsCall(assignment.value);
     if (!should_sequence) return false;
 
@@ -378,8 +373,8 @@ pub fn rawManyOffsetDerefTypeForExpr(ctx: EmitContext, expr: ast.Expr, locals: ?
         .deref => |inner| inner.*,
         else => return null,
     };
-    const ptr_ty = rawManyOffsetTypeForExpr(ctx, inner, locals) orelse return null;
-    return rawManyElementType(ptr_ty);
+    const call = callExpr(inner) orelse return null;
+    return (rawManyOffsetCallInfo(ctx, call, locals) orelse return null).element_ty;
 }
 
 pub fn sliceAccessForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?SliceAccess {

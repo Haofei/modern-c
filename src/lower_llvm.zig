@@ -8566,7 +8566,7 @@ const LlvmEmitter = struct {
         }
         if (self.dmaCacheCallInfo(call)) |info| return info.result_ty;
         if (self.dmaBufCallInfo(call)) |info| return info.result_ty;
-        if (self.rawManyOffsetCallInfo(call)) |info| return info.base_ty;
+        if (self.rawManyOffsetCallInfo(call)) |info| return info.result_ty;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .bind) return if (self.mirTargetTypeFactAt(.bind, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.closureCalleeType(call.callee.*)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
         if (self.fnPointerCalleeType(call.callee.*)) |fn_ty| return fn_ty.kind.fn_pointer.ret.*;
@@ -8932,12 +8932,11 @@ const LlvmEmitter = struct {
         if (call.type_args.len != 0 or call.args.len != 1) return null;
         const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "offset")) return null;
-        const base_ty = self.exprType(member.base.*) orelse return null;
-        const element_ty = switch (self.resolveAliasType(base_ty).kind) {
-            .raw_many_pointer => |node| node.child.*,
-            else => return null,
-        };
-        return .{ .base = member.base.*, .base_ty = base_ty, .element_ty = element_ty };
+        if (self.mirCallTargetKindAt(call.callee.*.span) != .raw_many_offset) return null;
+        const base_ty = (self.mirTargetTypeFactAt(.raw_many_offset_base, call.callee.*.span) orelse return null).target_ty;
+        const element_ty = (self.mirTargetTypeFactAt(.raw_many_offset_element, call.callee.*.span) orelse return null).target_ty;
+        const result_ty = (self.mirTargetTypeFactAt(.raw_many_offset_result, call.callee.*.span) orelse return null).target_ty;
+        return .{ .base = member.base.*, .base_ty = base_ty, .element_ty = element_ty, .result_ty = result_ty };
     }
 
     fn isAggregateType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {

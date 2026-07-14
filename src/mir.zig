@@ -4855,6 +4855,7 @@ const FunctionBuilder = struct {
                 const enum_raw_target = self.enumRawCallTarget(node);
                 const domain_target = try self.domainCallTarget(node);
                 const dma_target = self.dmaCallTarget(node);
+                const raw_many_offset_target = self.rawManyOffsetCallTarget(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
                 else if (semantic_escape_target) |target|
@@ -4864,6 +4865,8 @@ const FunctionBuilder = struct {
                 else if (domain_target) |target|
                     target.result_ty
                 else if (dma_target) |target|
+                    target.result_ty
+                else if (raw_many_offset_target) |target|
                     target.result_ty
                 else if (reflection_target != null)
                     .{ .integer = "usize" }
@@ -4927,6 +4930,13 @@ const FunctionBuilder = struct {
                     try self.appendTargetTypeFact(.dma_buffer, target.buffer_type_expr, target.buffer_ty, expr.span);
                     try self.appendTargetTypeFact(.dma_payload, target.payload_type_expr, target.payload_ty, expr.span);
                     try self.appendTargetTypeFact(.dma_result, target.result_type_expr, target.result_ty, expr.span);
+                }
+                if (raw_many_offset_target) |target| {
+                    try self.addInstr(.call_target, @tagName(CallTargetKind.raw_many_offset), target.result_ty, expr.span);
+                    try self.addCallTargetFact(.raw_many_offset, target.result_ty, expr.span);
+                    try self.appendTargetTypeFact(.raw_many_offset_base, target.base_type_expr, target.base_ty, expr.span);
+                    try self.appendTargetTypeFact(.raw_many_offset_element, target.element_type_expr, target.element_ty, expr.span);
+                    try self.appendTargetTypeFact(.raw_many_offset_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (self.atomicCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
@@ -5064,7 +5074,7 @@ const FunctionBuilder = struct {
                     }
                 }
                 if (instr_kind == .unchecked_assume) try self.addRangeFactForUncheckedCall(callee_name, node.args, expr.span);
-                const preserves_pointer_provenance = self.ptrOffsetReceiverType(node.callee.*) != null or reflectionCallPreservesPointerProvenance(node);
+                const preserves_pointer_provenance = raw_many_offset_target != null or reflectionCallPreservesPointerProvenance(node);
                 if (!preserves_pointer_provenance and instr_kind == .call) try self.recordPointerProvenanceCallInvalidation(.call, expr.span);
                 if (!preserves_pointer_provenance and instr_kind == .indirect_call) try self.recordPointerProvenanceCallInvalidation(.indirect_call, expr.span);
                 if (isTrapCall(node.callee.*)) try self.addTrapEdge(.ExplicitTrap, .explicit_trap, expr.span);
@@ -8017,7 +8027,7 @@ const FunctionBuilder = struct {
                 mmioMapCallPayloadType(node) orelse
                 reduceCallReturnTypeExpr(node) orelse
                 self.constGetCallTypeExpr(node) orelse
-                self.ptrOffsetReceiverTypeExpr(node.callee.*) orelse
+                (if (self.rawManyOffsetCallTarget(node)) |target| target.result_type_expr else null) orelse
                 // A `*dyn Trait` method call dispatches virtually to the trait method; its return
                 // type is the trait's, which the verifier does not carry. Resolve to `null`
                 // (unknown) rather than a same-named free function's summary return type.
@@ -8047,8 +8057,8 @@ const FunctionBuilder = struct {
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
             else if (self.constGetCallType(node)) |ty|
                 ty
-            else if (self.ptrOffsetReceiverType(node.callee.*)) |ty|
-                ty
+            else if (self.rawManyOffsetCallTarget(node)) |target|
+                target.result_ty
             else if (mmioMapCallPayloadType(node)) |ty|
                 .{ .nullable_pointer = .{ .kind = .single, .mutability = .none, .child = typeText(ty) } }
             else if (reduceCallValueType(node, self.enums, self.structs, self.packed_bits, self.aliases)) |ty|
@@ -8214,6 +8224,37 @@ const FunctionBuilder = struct {
         return if (self.constGetCallTarget(call)) |target| target.result_ty else null;
     }
 
+    const RawManyOffsetCallTarget = struct {
+        base_type_expr: ast.TypeExpr,
+        base_ty: ValueType,
+        element_type_expr: ast.TypeExpr,
+        element_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+    };
+
+    fn rawManyOffsetCallTarget(self: *FunctionBuilder, call: anytype) ?RawManyOffsetCallTarget {
+        if (call.type_args.len != 0 or call.args.len != 1) return null;
+        const member = memberExpr(call.callee.*) orelse return null;
+        if (!std.mem.eql(u8, member.name.text, "offset")) return null;
+        const base_type_expr = self.typeExprForExpr(member.base.*) orelse return null;
+        const resolved = aggregateTargetTypeAlias(base_type_expr, self.aliases);
+        const raw_many = switch (resolved.kind) {
+            .raw_many_pointer => |node| node,
+            else => return null,
+        };
+        const base_ty = valueTypeFromTypeAlias(base_type_expr, self.enums, self.structs, self.packed_bits, self.aliases);
+        const element_type_expr = raw_many.child.*;
+        return .{
+            .base_type_expr = base_type_expr,
+            .base_ty = base_ty,
+            .element_type_expr = element_type_expr,
+            .element_ty = valueTypeFromTypeAlias(element_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .result_type_expr = base_type_expr,
+            .result_ty = base_ty,
+        };
+    }
+
     fn qualifiedUnionConstructorTypeExpr(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
         const member = memberCallee(call.callee.*) orelse return null;
         const owner = switch (member.base.kind) {
@@ -8251,19 +8292,6 @@ const FunctionBuilder = struct {
 
     fn constGetCallTypeExpr(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
         return if (self.constGetCallTarget(call)) |target| target.result_type_expr else null;
-    }
-
-    fn ptrOffsetReceiverTypeExpr(self: *FunctionBuilder, callee: ast.Expr) ?ast.TypeExpr {
-        const member = memberExpr(callee) orelse return null;
-        if (!std.mem.eql(u8, member.name.text, "offset")) return null;
-        return self.typeExprForExpr(member.base.*);
-    }
-
-    fn ptrOffsetReceiverType(self: *FunctionBuilder, callee: ast.Expr) ?ValueType {
-        const member = memberExpr(callee) orelse return null;
-        if (!std.mem.eql(u8, member.name.text, "offset")) return null;
-        const base_ty = self.exprType(member.base.*);
-        return if (isRawManyPointerValue(base_ty)) base_ty else null;
     }
 
     fn structFieldType(self: *FunctionBuilder, struct_name: []const u8, field_name: []const u8) ?ValueType {

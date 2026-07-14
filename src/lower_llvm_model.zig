@@ -140,6 +140,7 @@ pub const RawManyOffsetInfo = struct {
     base: ast.Expr,
     base_ty: ast.TypeExpr,
     element_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
 };
 
 pub const EnumRawCallInfo = struct {

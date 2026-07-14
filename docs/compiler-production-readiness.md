@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-13, based on the current compiler worktree**.
-Evidence register: **577 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **578 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -673,6 +673,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | MIR aggregate-return nested fixed struct arrays are supported | Returned aggregates with nested fixed arrays of pointer-bearing structs such as `[2][2]Cell` now emit leaf `AggregateReturnPointerFact` rows like `groups[0][0].ptr` when every modeled path initializes that leaf from global-backed storage. C and LLVM consume the same nested indexed field path and keep missing leaf facts conservative. | `src/mir.zig` recursive aggregate-return struct-array fact collection; `src/mir_tests.zig` `cell_matrix_holder`; `src/lower_c_tests.zig` `lower-c consumes MIR aggregate-return nested struct-array facts`; `src/lower_llvm_tests.zig` `LLVM consumes MIR aggregate-return nested struct-array facts`; focused MIR/C/LLVM aggregate-return tests; `git diff --check`. |
 | MIR aggregate-return same-address dynamic pointer-array writes are bounded | Dynamic-index writes to a tracked returned fixed pointer-array field now preserve the aggregate-return summary when every possible existing element and the assigned value are the same direct address. MIR emits per-element `AggregateReturnPointerFact` rows for the modeled fixed array; C and LLVM consume those facts, and deleting a leaf fact keeps the final scalar load race-tolerant. Mixed dynamic writes remain fail-closed and emit no summary. | `src/mir.zig` `aggregateReturnLocalDynamicArrayElementAssignmentTarget`, `tryTrackAggregateReturnLiteralLocalDynamicArrayElementAssignment`, and `aggregateReturnDynamicArrayWritePreservesAllElements`; `src/mir_tests.zig` `trailing_dynamic_array_updated_holder` / `trailing_mixed_dynamic_array_updated_holder`; `src/lower_c_tests.zig` `lower-c consumes MIR aggregate-return same-address dynamic-index facts`; `src/lower_llvm_tests.zig` `LLVM consumes MIR aggregate-return same-address dynamic-index facts`; focused MIR/C/LLVM aggregate-return tests; `git diff --check`. |
 
+| Raw-many pointer offset semantics are MIR-owned | Every accepted `[*]T.offset(index)` operation now carries a typed MIR call identity plus complete receiver, element, and result type facts. Alias resolution and operation classification happen once in MIR; C and LLVM retain only admitted syntax shape and emission mechanics. Removing call/type facts or retargeting the identity rejects prebuilt MIR, while nonzero and dynamic offsets continue to use the documented conservative provenance policy. | `src/mir.zig` `rawManyOffsetCallTarget`; `src/mir_model.zig` `raw_many_offset*`; `src/lower_c_access.zig` / `src/lower_llvm.zig` MIR consumers; MIR/C/LLVM positive and missing/stale-fact tests; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig build test c-test llvm-test`; `git diff --check`. |
+
 ### Bounded Workstream Status
 
 This section records the latest bounded aggregate-return implementation state.
@@ -815,10 +817,17 @@ stale prebuilt facts before lowering. The representation-fact slice is also
 gated: both backends reject missing, retargeted stale, and extra stale
 representation facts at MIR admission.
 
-Next actionable slices: none in this workstream. Remaining typed-MIR work is
-tracked by the closure matrix and semantic-inference budget; a new slice must
-name the next registered inference family being migrated or explicitly accepted
-as a conservative fallback.
+The raw-many pointer `.offset(index)` operation family is now MIR-owned for call
+identity and complete receiver/element/result types. C no longer recursively
+infers raw-many receiver types from locals or function returns, and LLVM no
+longer re-resolves receiver aliases to recover the element type. This advances
+the legacy AST inference row; it does not grant nonzero or dynamic offsets a
+positive storage-provenance proof, so those accesses retain conservative race
+lowering.
+
+Next actionable slice: select the next bounded operation family from the
+registered C call-target or LLVM expression-type inference rows, migrate its
+identity and complete types to MIR, and add C/LLVM missing/stale-fact gates.
 
 #### CFG/Place-Based Move Checker
 

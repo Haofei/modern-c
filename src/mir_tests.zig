@@ -1380,6 +1380,42 @@ test "MIR owns byte-view call target facts" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns raw-many offset identity and complete types" {
+    const source =
+        \\type Words = [*]mut u16;
+        \\fn shifted(p: Words, index: usize) -> Words {
+        \\    unsafe { return p.offset(index); }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_raw_many_offset_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const shifted = functionByName(typed_mir, "shifted").?;
+    try std.testing.expectEqual(@as(usize, 1), shifted.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.raw_many_offset, shifted.call_target_facts[0].kind);
+    try std.testing.expectEqualStrings("[*]mut", shifted.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 3), shifted.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.raw_many_offset_base, shifted.target_type_facts[0].kind);
+    try std.testing.expectEqualStrings("Words", shifted.target_type_facts[0].target_ty.kind.name.text);
+    try std.testing.expectEqual(mir.TargetTypeKind.raw_many_offset_element, shifted.target_type_facts[1].kind);
+    try std.testing.expectEqualStrings("u16", shifted.target_type_facts[1].target_ty.kind.name.text);
+    try std.testing.expectEqual(mir.TargetTypeKind.raw_many_offset_result, shifted.target_type_facts[2].kind);
+    try std.testing.expectEqualStrings("Words", shifted.target_type_facts[2].target_ty.kind.name.text);
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns semantic escape call target facts" {
     const source =
         \\global shared: u8 = 0;

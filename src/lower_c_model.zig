@@ -50,6 +50,7 @@ pub const AggregateEmitUnit = union(enum) {
 pub const RawManyOffsetInfo = struct {
     base: ast.Expr,
     ty: ast.TypeExpr,
+    element_ty: ast.TypeExpr,
 };
 
 // Which of `break`/`continue` does this loop body use targeting *this* loop
