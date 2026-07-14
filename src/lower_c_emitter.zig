@@ -1451,11 +1451,14 @@ const CEmitter = struct {
             .temp_index = &self.temp_index,
             .emit_ctx = self,
             .emit_expr = emitExprForCall,
+            .emit_expr_with_target = emitExprWithTargetForArith,
             .c_type = cTypeForCall,
             .c_ident = cIdentForMmio,
             .mmio_access = mmioAccessForMmio,
             .value_c_type = valueCTypeForMmio,
             .emit_sequenced_arg_temp = emitSequencedArgTempForCall,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 
@@ -1818,6 +1821,8 @@ const CEmitter = struct {
             .emit_assign_target = emitAssignTargetForTry,
             .emit_result_try_sequenced_binary_value_temp = emitResultTrySequencedBinaryValueTempForTry,
             .emit_nullable_try_sequenced_binary_value_temp = emitNullableTrySequencedBinaryValueTempForTry,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 
@@ -7142,6 +7147,8 @@ const CEmitter = struct {
             .emit_ctx = self,
             .c_type_for = cTypeForInfo,
             .array_len_text_for_expr = arrayLenTextForInfo,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 

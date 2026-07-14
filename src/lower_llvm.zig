@@ -12,7 +12,6 @@ const sema_type = @import("sema_type.zig");
 // Pure AST-shape queries shared with sema/mir/lower_c (see `ast_query.zig`); aliased so the
 // existing call sites read unchanged.
 const isIdentNamed = ast_query.isIdentNamed;
-const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const typeName = ast_query.typeName;
 const ByteViewCallKind = ast_query.ByteViewCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
@@ -140,6 +139,7 @@ const OverlayLayout = lower_llvm_model.OverlayLayout;
 const TaggedUnionLayout = lower_llvm_model.TaggedUnionLayout;
 const MmioFieldInfo = lower_llvm_model.MmioFieldInfo;
 const MmioAccessInfo = lower_llvm_model.MmioAccessInfo;
+const MmioMapInfo = lower_llvm_model.MmioMapInfo;
 const MmioFencePlacement = lower_llvm_model.MmioFencePlacement;
 const DmaBufCallInfo = lower_llvm_model.DmaBufCallInfo;
 const DmaCacheCallInfo = lower_llvm_model.DmaCacheCallInfo;
@@ -6484,9 +6484,9 @@ const LlvmEmitter = struct {
             _ = self.physCallTargetType(call) orelse return error.UnsupportedLlvmEmission;
             return try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
         }
-        if (mmioMapCallPayloadType(call)) |_| {
-            if (call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
+        if (ast_query.isMmioMapCallName(call.callee.*)) {
+            const info = self.mmioMapCallInfo(call) orelse return error.UnsupportedLlvmEmission;
+            const addr = try self.emitExpr(call.args[0], info.source_ty);
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ result, addr });
             return result;
@@ -8086,6 +8086,16 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn mmioMapCallInfo(self: *LlvmEmitter, call: anytype) ?MmioMapInfo {
+        if (!ast_query.isMmioMapCallName(call.callee.*) or call.type_args.len != 1 or call.args.len != 1) return null;
+        if (self.mirCallTargetKindAt(call.callee.*.span) != .mmio_map) return null;
+        return .{
+            .source_ty = (self.mirTargetTypeFactAt(.mmio_map_source, call.callee.*.span) orelse return null).target_ty,
+            .payload_ty = (self.mirTargetTypeFactAt(.mmio_map_payload, call.callee.*.span) orelse return null).target_ty,
+            .result_ty = (self.mirTargetTypeFactAt(.mmio_map_result, call.callee.*.span) orelse return null).target_ty,
+        };
+    }
+
     fn emitMmioRegisterAddress(self: *LlvmEmitter, info: MmioAccessInfo) ![]const u8 {
         const base = try self.emitExpr(info.base, try self.mmioPointerType(info.struct_ty, info.base.span));
         if (info.offset == 0) return base;
@@ -8549,11 +8559,7 @@ const LlvmEmitter = struct {
             if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return null;
             return if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| fact.target_ty else null;
         }
-        if (mmioMapCallPayloadType(call)) |ty| {
-            const child = self.scratch.allocator().create(ast.TypeExpr) catch return null;
-            child.* = ty;
-            return .{ .span = call.callee.*.span, .kind = .{ .nullable = child } };
-        }
+        if (self.mmioMapCallInfo(call)) |info| return info.result_ty;
         if (self.conversionCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "try_from")) {
                 return self.resultType(info.target_ty, simpleType(call.callee.*.span, "ConversionError"), call.callee.*.span) catch null;

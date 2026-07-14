@@ -32,7 +32,6 @@ const appendGlobalStorePrefix = lower_c_global.appendGlobalStorePrefix;
 const appendGlobalStoreSuffix = lower_c_global.appendGlobalStoreSuffix;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
-const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
 const mmioFieldWidthBytes = lower_c_type.mmioFieldWidthBytes;
 const orderingArg = lower_c_atomic.orderingArg;
@@ -80,11 +79,14 @@ pub const EmitContext = struct {
     temp_index: *usize,
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
+    emit_expr_with_target: EmitExprWithTargetFn,
     c_type: CTypeFn,
     c_ident: CIdentFn,
     mmio_access: MmioAccessFn,
     value_c_type: ValueCTypeFn,
     emit_sequenced_arg_temp: EmitSequencedArgTempFn,
+    mir_call_target_kind: MirCallTargetKindFn,
+    mir_target_type: MirTargetTypeFn,
 };
 
 pub const ReplacementEmitContext = struct {
@@ -308,10 +310,14 @@ fn emitPackedBitsMaskTestWithReplacements(ctx: ReplacementEmitContext, base: ast
 }
 
 pub fn emitMmioMapCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    const payload_ty = mmioMapCallPayloadType(call) orelse return false;
-    if (call.args.len != 1) return error.UnsupportedCEmission;
+    if (!ast_query.isMmioMapCallName(call.callee.*)) return false;
+    if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .mmio_map) return error.UnsupportedCEmission;
+    const source_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
     try ctx.context.out.print(ctx.context.allocator, "(({s})", .{try ctx.c_type(ctx.emit_ctx, payload_ty)});
-    try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+    try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, source_ty);
     try ctx.context.out.appendSlice(ctx.context.allocator, ")");
     return true;
 }

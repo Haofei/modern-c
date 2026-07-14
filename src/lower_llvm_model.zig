@@ -70,6 +70,12 @@ pub const MmioAccessInfo = struct {
     offset: u64,
 };
 
+pub const MmioMapInfo = struct {
+    source_ty: ast.TypeExpr,
+    payload_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
+};
+
 pub const MmioFencePlacement = enum {
     before_store,
     after_load,

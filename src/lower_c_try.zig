@@ -79,6 +79,8 @@ pub const TryReplacementEmitContext = struct {
     emit_assign_target: EmitAssignTargetFn,
     emit_result_try_sequenced_binary_value_temp: EmitResultTrySequencedBinaryValueTempFn,
     emit_nullable_try_sequenced_binary_value_temp: EmitNullableTrySequencedBinaryValueTempFn,
+    mir_call_target_kind: lower_c_call.MirCallTargetKindFn,
+    mir_target_type: lower_c_call.MirTargetTypeFn,
 };
 
 pub const TryCallEmitContext = struct {
@@ -157,10 +159,13 @@ pub fn emitTryExprWithReplacements(
         },
         .call => |node| {
             if (ast_query.isMmioMapCallName(node.callee.*)) {
-                const payload_ty = ast_query.mmioMapCallPayloadType(node) orelse return error.UnsupportedCEmission;
-                if (node.args.len != 1) return error.UnsupportedCEmission;
+                if (node.type_args.len != 1 or node.args.len != 1) return error.UnsupportedCEmission;
+                if (ctx.mir_call_target_kind(ctx.emit_ctx, node.callee.*.span) != .mmio_map) return error.UnsupportedCEmission;
+                const source_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_source, node.callee.*.span) orelse return error.UnsupportedCEmission;
+                const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_payload, node.callee.*.span) orelse return error.UnsupportedCEmission;
+                _ = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_result, node.callee.*.span) orelse return error.UnsupportedCEmission;
                 try ctx.out.print(ctx.allocator, "(({s})", .{try ctx.c_type(ctx.emit_ctx, payload_ty)});
-                try emitTryExprWithReplacements(ctx, mode, node.args[0], locals, null, replacements);
+                try emitTryExprWithReplacements(ctx, mode, node.args[0], locals, source_ty, replacements);
                 try ctx.out.appendSlice(ctx.allocator, ")");
                 return;
             }

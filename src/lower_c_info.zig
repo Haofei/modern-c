@@ -14,6 +14,7 @@ const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const mir = @import("mir.zig");
 
 const GlobalElementInfo = lower_c_model.GlobalElementInfo;
 const GlobalInfo = lower_c_model.GlobalInfo;
@@ -28,13 +29,14 @@ const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const intTypeRange = lower_c_type.intTypeRange;
 const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
 const mmioPointee = ast_query.mmioPointee;
-const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const calleeIdentName = ast_query.calleeIdentName;
 const typeName = ast_query.typeName;
 const widthBits = lower_c_op.widthBits;
 
 pub const CTypeForFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, style: StructTypeStyle) anyerror![]const u8;
 pub const ArrayLenTextForExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 
 pub const Context = struct {
     type_aliases: *const std.StringHashMap(ast.TypeExpr),
@@ -47,6 +49,8 @@ pub const Context = struct {
     emit_ctx: *anyopaque,
     c_type_for: CTypeForFn,
     array_len_text_for_expr: ArrayLenTextForExprFn,
+    mir_call_target_kind: MirCallTargetKindFn,
+    mir_target_type: MirTargetTypeFn,
 };
 
 pub fn localInfoFromType(ctx: Context, ty: ast.TypeExpr) anyerror!LocalInfo {
@@ -277,7 +281,11 @@ pub fn nullableInnerCTypeForExpr(ctx: Context, expr: ast.Expr, locals: *std.Stri
             break :blk info.nullable_inner_c_type;
         },
         .call => |node| blk: {
-            if (mmioMapCallPayloadType(node)) |ty| break :blk try cTypeFor(ctx, ty);
+            if (ast_query.isMmioMapCallName(node.callee.*)) {
+                if (ctx.mir_call_target_kind(ctx.emit_ctx, node.callee.*.span) != .mmio_map) break :blk null;
+                const ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_payload, node.callee.*.span) orelse break :blk null;
+                break :blk try cTypeFor(ctx, ty);
+            }
             const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
             const info = ctx.functions.get(fn_name) orelse break :blk null;
             const ret_ty = info.return_type orelse break :blk null;

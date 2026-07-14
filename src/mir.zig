@@ -4856,6 +4856,7 @@ const FunctionBuilder = struct {
                 const domain_target = try self.domainCallTarget(node);
                 const dma_target = self.dmaCallTarget(node);
                 const raw_many_offset_target = self.rawManyOffsetCallTarget(node);
+                const mmio_map_target = try self.mmioMapCallTarget(node);
                 const mmio_target = self.mmioCallTarget(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
@@ -4868,6 +4869,8 @@ const FunctionBuilder = struct {
                 else if (dma_target) |target|
                     target.result_ty
                 else if (raw_many_offset_target) |target|
+                    target.result_ty
+                else if (mmio_map_target) |target|
                     target.result_ty
                 else if (mmio_target) |target|
                     target.result_ty
@@ -4940,6 +4943,13 @@ const FunctionBuilder = struct {
                     try self.appendTargetTypeFact(.raw_many_offset_base, target.base_type_expr, target.base_ty, expr.span);
                     try self.appendTargetTypeFact(.raw_many_offset_element, target.element_type_expr, target.element_ty, expr.span);
                     try self.appendTargetTypeFact(.raw_many_offset_result, target.result_type_expr, target.result_ty, expr.span);
+                }
+                if (mmio_map_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.appendTargetTypeFact(.mmio_map_source, target.source_type_expr, target.source_ty, expr.span);
+                    try self.appendTargetTypeFact(.mmio_map_payload, target.payload_type_expr, target.payload_ty, expr.span);
+                    try self.appendTargetTypeFact(.mmio_map_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (mmio_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
@@ -5411,6 +5421,35 @@ const FunctionBuilder = struct {
         result_type_expr: ast.TypeExpr,
         result_ty: ValueType,
     };
+
+    const MmioMapCallTarget = struct {
+        kind: CallTargetKind = .mmio_map,
+        source_type_expr: ast.TypeExpr,
+        source_ty: ValueType,
+        payload_type_expr: ast.TypeExpr,
+        payload_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+    };
+
+    fn mmioMapCallTarget(self: *FunctionBuilder, call: anytype) !?MmioMapCallTarget {
+        const payload_type_expr = mmioMapCallPayloadType(call) orelse return null;
+        if (call.args.len != 1) return null;
+        const child = try self.allocator.create(ast.TypeExpr);
+        errdefer self.allocator.destroy(child);
+        child.* = payload_type_expr;
+        try self.generated_type_expr_nodes.append(self.allocator, child);
+        const source_type_expr = ast_query.simpleNameType("PAddr", call.args[0].span);
+        const result_type_expr = ast.TypeExpr{ .span = call.callee.*.span, .kind = .{ .nullable = child } };
+        return .{
+            .source_type_expr = source_type_expr,
+            .source_ty = valueTypeFromTypeAlias(source_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .payload_type_expr = payload_type_expr,
+            .payload_ty = valueTypeFromTypeAlias(payload_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .result_type_expr = result_type_expr,
+            .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+        };
+    }
 
     fn mmioCallTarget(self: *FunctionBuilder, call: anytype) ?MmioCallTarget {
         if (call.type_args.len != 0) return null;

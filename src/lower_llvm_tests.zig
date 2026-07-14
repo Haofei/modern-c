@@ -1111,6 +1111,51 @@ test "LLVM MMIO calls consume MIR identities and complete types" {
     }
 }
 
+test "LLVM MMIO map consumes MIR identity and complete types" {
+    const source =
+        \\extern mmio struct Device {
+        \\    raw: Reg<u32, .read>,
+        \\}
+        \\fn map_fact_gate(pa: PAddr) -> MmioPtr<Device> {
+        \\    unsafe { return mmio.map<Device>(pa)?; }
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_mmio_map_facts.mc", source);
+    defer parsed.deinit();
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_mmio_map_facts.mc", .{}, false, .riscv64, null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "inttoptr i64 %pa to ptr") != null);
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try clearCallTargetFactsForFunction(&module_mir, "map_fact_gate");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_mmio_map_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try retargetCallTargetFactsForFunction(&module_mir, "map_fact_gate", .mmio_read);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_mmio_map_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try clearTargetTypeFactsForFunction(&module_mir, "map_fact_gate");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_mmio_map_facts.mc", .{}, false, .riscv64, null));
+    }
+}
+
 test "LLVM reductions require MIR element type facts" {
     const source =
         \\fn reduce_element_fact_gate(xs: []const u32) -> Result<u32, Overflow> {
