@@ -306,6 +306,7 @@ pub const CallTargetFact = struct {
 };
 
 pub const TargetTypeKind = enum {
+    assert_condition,
     bind,
     result_ok,
     result_err,

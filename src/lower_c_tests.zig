@@ -125,6 +125,19 @@ fn removeTargetTypeKindForFunction(module_mir: *mir.Module, name: []const u8, ki
     return error.TestUnexpectedResult;
 }
 
+fn renameTargetTypeFactForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind, target_name: []const u8) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        for (function.target_type_facts) |*fact| {
+            if (fact.kind != kind) continue;
+            fact.target_ty = .{ .span = fact.target_ty.span, .kind = .{ .name = .{ .text = target_name, .span = fact.target_ty.span } } };
+            return;
+        }
+        return error.TestUnexpectedResult;
+    }
+    return error.TestUnexpectedResult;
+}
+
 test "lower-c rejects prebuilt MIR with missing target type facts" {
     const source =
         \\enum E { bad }
@@ -1422,6 +1435,35 @@ test "lower-c explicit traps require exact MIR reason identities" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_explicit_trap_target_facts.mc", .{}, false, null));
+}
+
+test "lower-c runtime asserts require MIR bool condition types" {
+    const source =
+        \\fn require_flag(flag: bool) -> void { assert(flag); }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_assert_condition_type_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "if (!(flag)) mc_trap_Assert();") != null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeKindForFunction(&missing, "require_flag", .assert_condition);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactForFunction(&stale, "require_flag", .assert_condition, "u32");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c rejects prebuilt MIR with missing cpu pause call target facts" {

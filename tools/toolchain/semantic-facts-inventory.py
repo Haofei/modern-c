@@ -710,6 +710,7 @@ ANCHORS: dict[str, list[str]] = {
 
 EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/mir.zig": {
+        "appendTargetTypeFact(.assert_condition": 1,
         "fn addSelfTypedExpressionFact(": 1,
         "qualified_union_result": 1,
         "enum_variant_path_result": 1,
@@ -845,6 +846,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_c_emitter.zig": {
         "fn mirTargetTypeFactAt(": 1,
+        "mirTargetTypeFactAt(.assert_condition": 1,
+        "emitExprWithTarget(expr, locals, condition_ty)": 1,
         "mirTargetTypeFactAt(.value_optional_coercion": 1,
         "mirTargetTypeFactAt(.dyn_coercion": 1,
         "mirTargetTypeFactAt(.explicit_cast_source": 2,
@@ -1084,6 +1087,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.va_arg_result": 0,
         "else => try self.emitExpr(expr, self.exprType(expr) orelse return error.UnsupportedLlvmEmission),": 0,
         "mir.explicitTrapHelperForTarget(kind)": 1,
+        "mirTargetTypeFactAt(.assert_condition": 1,
         "mirTargetTypeFactAt(.qualified_union_result": 2,
         "mirTargetTypeFactAt(.enum_variant_path_result": 2,
         "fn reflectionCallInfo(": 1,
@@ -1213,12 +1217,15 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/mir_tests.zig": {
         "MIR owns DMA call identities and complete types": 1,
+        "MIR owns runtime assert condition types": 1,
     },
     "src/lower_c_tests.zig": {
         "lower-c DMA calls consume MIR identities and complete types": 1,
+        "lower-c runtime asserts require MIR bool condition types": 1,
     },
     "src/lower_llvm_tests.zig": {
         "LLVM DMA calls consume MIR identities and complete types": 1,
+        "LLVM runtime asserts require MIR bool condition types": 1,
     },
     "tests/spec/no_implicit_conversion.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 9,

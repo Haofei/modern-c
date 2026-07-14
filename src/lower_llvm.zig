@@ -2067,7 +2067,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitAssert(self: *LlvmEmitter, expr: ast.Expr) !void {
-        const ty = self.exprType(expr) orelse return error.UnsupportedLlvmEmission;
+        const ty = (self.mirTargetTypeFactAt(.assert_condition, expr.span) orelse return error.UnsupportedLlvmEmission).target_ty;
         if (!typeNameEql(ty, "bool")) return error.UnsupportedLlvmEmission;
         const condition = try self.emitExpr(expr, ty);
         const cont = try self.nextLabel("assert_ok");

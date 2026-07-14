@@ -3825,6 +3825,7 @@ const FunctionBuilder = struct {
             },
             .assert => |expr| {
                 try self.addInstr(.assert_condition, "condition", .bool, stmt.span);
+                try self.appendTargetTypeFact(.assert_condition, ast_query.simpleNameType("bool", expr.span), .bool, expr.span);
                 try self.addConversionCheck(.bool, expr, .condition, expr.span);
                 try self.buildExpr(expr);
                 try self.addTrapEdge(.Assert, .assert_stmt, stmt.span);

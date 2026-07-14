@@ -19,6 +19,7 @@ const floatCTypeName = lower_c_type.floatCTypeName;
 const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const isCVoidType = lower_c_type.isCVoidType;
 const isVoidType = lower_c_type.isVoidType;
+const isBoolType = lower_c_type.isBoolType;
 
 const lower_c_op = @import("lower_c_op.zig");
 const isCheckedBinaryOp = lower_c_op.isCheckedBinaryOp;
@@ -3050,11 +3051,13 @@ const CEmitter = struct {
     }
 
     fn emitAssertStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
+        const condition_ty = (self.mirTargetTypeFactAt(.assert_condition, expr.span) orelse return error.UnsupportedCEmission).target_ty;
+        if (!isBoolType(condition_ty)) return error.UnsupportedCEmission;
         if (try lower_c_mmio.emitReadAssert(self.mmioCallEmitContext(), expr, locals)) return;
         if (try lower_c_flow.emitSequencedConditionAssert(self.flowEmitContext(), expr, locals)) return;
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "if (!(");
-        try self.emitExpr(expr, locals);
+        try self.emitExprWithTarget(expr, locals, condition_ty);
         try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
     }
 

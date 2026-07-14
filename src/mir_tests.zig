@@ -872,6 +872,32 @@ test "MIR owns every explicit trap reason identity" {
     try mir.validateCallTargetFactsForLowering(typed_mir);
 }
 
+test "MIR owns runtime assert condition types" {
+    const source =
+        \\fn require_flag(flag: bool) -> void {
+        \\    assert(flag);
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_assert_condition_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "require_flag").?;
+    try std.testing.expectEqual(@as(usize, 1), function.target_type_facts.len);
+    const fact = function.target_type_facts[0];
+    try std.testing.expectEqual(mir.TargetTypeKind.assert_condition, fact.kind);
+    try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
+    try std.testing.expectEqualStrings("bool", fact.result_ty.name());
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR records complete checked binary trap edges for division remainder and shifts" {
     const source =
         \\fn unsigned_div(a: u32, b: u32) -> u32 {
