@@ -141,6 +141,7 @@ const MmioAccessInfo = lower_llvm_model.MmioAccessInfo;
 const MmioMapInfo = lower_llvm_model.MmioMapInfo;
 const RawCallInfo = lower_llvm_model.RawCallInfo;
 const ByteViewCallInfo = lower_llvm_model.ByteViewCallInfo;
+const ReflectionCallInfo = lower_llvm_model.ReflectionCallInfo;
 const MmioFencePlacement = lower_llvm_model.MmioFencePlacement;
 const DmaBufCallInfo = lower_llvm_model.DmaBufCallInfo;
 const DmaCacheCallInfo = lower_llvm_model.DmaCacheCallInfo;
@@ -6446,7 +6447,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitBuiltinValueCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr, span: ast.Span) !?[]const u8 {
-        if (self.reflectionCallValue(call)) |value| return value;
+        if (mir.reflectionCallTargetKind(call) != null) return self.reflectionCallValue(call) orelse error.UnsupportedLlvmEmission;
         // `declassify(x)` / `reveal(x)` strip the constant-time `Secret<T>` tag.
         // Secret shares T's representation, so this is a value-identity pass-through.
         if (isDeclassifyCall(call)) {
@@ -8117,6 +8118,16 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn reflectionCallInfo(self: *LlvmEmitter, call: anytype) ?ReflectionCallInfo {
+        const kind = mir.reflectionCallTargetKind(call) orelse return null;
+        if (self.mirCallTargetKindAt(call.callee.*.span) != kind) return null;
+        return .{
+            .kind = kind,
+            .target_ty = (self.mirTargetTypeFactAt(.reflection_target, call.callee.*.span) orelse return null).target_ty,
+            .result_ty = (self.mirTargetTypeFactAt(.reflection_result, call.callee.*.span) orelse return null).target_ty,
+        };
+    }
+
     fn emitMmioRegisterAddress(self: *LlvmEmitter, info: MmioAccessInfo) ![]const u8 {
         const base = try self.emitExpr(info.base, try self.mmioPointerType(info.struct_ty, info.base.span));
         if (info.offset == 0) return base;
@@ -8546,10 +8557,7 @@ const LlvmEmitter = struct {
     }
 
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
-        if (mir.reflectionCallTargetKind(call)) |expected_fact| {
-            if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return null;
-            return if (self.mirTargetTypeFactAt(.reflection_result, call.callee.*.span)) |fact| fact.target_ty else null;
-        }
+        if (self.reflectionCallInfo(call)) |info| return info.result_ty;
         // Tier 2 dynamic dispatch `d.method(args)` through a `*dyn Trait`: the return type is the
         // trait method's declared return type. Without this, exprType() is null for a dispatch call,
         // so a dispatch used directly as a switch/if subject (`if self.inner.poll() { ... }`) fell
@@ -8832,12 +8840,16 @@ const LlvmEmitter = struct {
     }
 
     fn reflectionCallValue(self: *LlvmEmitter, call: anytype) ?[]const u8 {
-        const expected_fact = mir.reflectionCallTargetKind(call) orelse return null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return null;
-        _ = self.mirTargetTypeFactAt(.reflection_result, call.callee.*.span) orelse return null;
-        const expr: ast.Expr = .{ .span = call.callee.*.span, .kind = .{ .call = call } };
+        const info = self.reflectionCallInfo(call) orelse return null;
         var env = self.reflectEnv();
-        const value = lower_llvm_reflect.comptimeReflect(&env, expr) orelse return null;
+        const value = switch (info.kind) {
+            .reflection_size => lower_llvm_reflect.comptimeSizeOf(&env, info.target_ty, 0),
+            .reflection_alignment => lower_llvm_reflect.comptimeAlignOf(&env, info.target_ty, 0),
+            .reflection_field_offset => lower_llvm_reflect.comptimeFieldOffset(&env, info.target_ty, ast_query.reflectionFieldName(call.args[0]) orelse return null, 0),
+            .reflection_bit_offset => lower_llvm_reflect.comptimeBitOffset(&env, info.target_ty, ast_query.reflectionFieldName(call.args[0]) orelse return null),
+            .reflection_repr => lower_llvm_reflect.comptimeReprOf(&env, info.target_ty, 0),
+            else => null,
+        } orelse return null;
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value}) catch null;
     }
 

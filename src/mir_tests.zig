@@ -1321,20 +1321,23 @@ test "MIR owns value reflection call target facts" {
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
 
-    const expected = [_]struct { name: []const u8, kind: mir.CallTargetKind }{
-        .{ .name = "reflected_size", .kind = .reflection_size },
-        .{ .name = "reflected_alignment", .kind = .reflection_alignment },
-        .{ .name = "reflected_field_offset", .kind = .reflection_field_offset },
-        .{ .name = "reflected_bit_offset", .kind = .reflection_bit_offset },
-        .{ .name = "reflected_repr", .kind = .reflection_repr },
+    const expected = [_]struct { name: []const u8, kind: mir.CallTargetKind, target: []const u8 }{
+        .{ .name = "reflected_size", .kind = .reflection_size, .target = "Packet" },
+        .{ .name = "reflected_alignment", .kind = .reflection_alignment, .target = "Packet" },
+        .{ .name = "reflected_field_offset", .kind = .reflection_field_offset, .target = "Packet" },
+        .{ .name = "reflected_bit_offset", .kind = .reflection_bit_offset, .target = "Packet" },
+        .{ .name = "reflected_repr", .kind = .reflection_repr, .target = "Mode" },
     };
     for (expected) |item| {
         const function = functionByName(typed_mir, item.name).?;
         try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
         try std.testing.expectEqual(item.kind, function.call_target_facts[0].kind);
         try std.testing.expectEqualStrings("usize", function.call_target_facts[0].result_ty.name());
-        try std.testing.expectEqual(@as(usize, 1), function.target_type_facts.len);
-        try std.testing.expectEqual(mir.TargetTypeKind.reflection_result, function.target_type_facts[0].kind);
+        try std.testing.expectEqual(@as(usize, 2), function.target_type_facts.len);
+        try std.testing.expectEqual(mir.TargetTypeKind.reflection_target, function.target_type_facts[0].kind);
+        try std.testing.expectEqualStrings(item.target, function.target_type_facts[0].target_ty.kind.name.text);
+        try std.testing.expectEqual(mir.TargetTypeKind.reflection_result, function.target_type_facts[1].kind);
+        try std.testing.expectEqualStrings("usize", function.target_type_facts[1].target_ty.kind.name.text);
     }
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);

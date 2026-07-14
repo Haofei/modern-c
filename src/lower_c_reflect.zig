@@ -64,9 +64,9 @@ pub fn emitReflectionCall(ctx: EmitContext, call: anytype) !bool {
     const kind = reflectionCallKind(call.callee.*) orelse return false;
     const expected_fact = mir.reflectionCallTargetKind(call) orelse return error.UnsupportedCEmission;
     if (ctx.mir_call_target_kind(ctx.type_ctx, call.callee.*.span) != expected_fact) return error.UnsupportedCEmission;
+    const target_ty = ctx.mir_target_type(ctx.type_ctx, .reflection_target, call.callee.*.span) orelse return error.UnsupportedCEmission;
     _ = ctx.mir_target_type(ctx.type_ctx, .reflection_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
     if (call.type_args.len != 1) return error.UnsupportedCEmission;
-    const target_ty = call.type_args[0];
     switch (kind) {
         .size => {
             if (call.args.len != 0) return error.UnsupportedCEmission;

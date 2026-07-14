@@ -354,6 +354,7 @@ pub const TargetTypeKind = enum {
     va_arg_result,
     qualified_union_result,
     enum_variant_path_result,
+    reflection_target,
     reflection_result,
     byte_view_source,
     byte_view_result,

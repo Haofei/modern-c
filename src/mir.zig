@@ -4849,7 +4849,7 @@ const FunctionBuilder = struct {
                 // method's, not a same-named free function's. The verifier carries no trait sigs,
                 // so leave it `.unknown` rather than mis-binding to `summaries[method_name]`.
                 const is_dyn_dispatch = self.isDynDispatchMember(node.callee.*);
-                const reflection_target = reflectionCallTargetKind(node);
+                const reflection_target = self.reflectionCallTarget(node);
                 const byte_view_target = self.byteViewCallTarget(node);
                 const semantic_escape_target = try self.semanticEscapeCallTarget(node);
                 const enum_raw_target = self.enumRawCallTarget(node);
@@ -4875,8 +4875,8 @@ const FunctionBuilder = struct {
                     target.result_ty
                 else if (mmio_target) |target|
                     target.result_ty
-                else if (reflection_target != null)
-                    .{ .integer = "usize" }
+                else if (reflection_target) |target|
+                    target.result_ty
                 else if (byte_view_target) |target|
                     target.result_ty
                 else if (reduceCallKind(node.callee.*) != null)
@@ -5015,12 +5015,11 @@ const FunctionBuilder = struct {
                     try self.appendTargetTypeFact(.conversion_source, conversion.source_ty, valueTypeFromTypeAlias(conversion.source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                     try self.appendTargetTypeFact(.conversion_target, conversion.target_ty, valueTypeFromTypeAlias(conversion.target_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }
-                if (reflection_target) |fact_kind| {
-                    const reflection_ty: ValueType = .{ .integer = "usize" };
-                    try self.addInstr(.call_target, @tagName(fact_kind), reflection_ty, expr.span);
-                    try self.addCallTargetFact(fact_kind, reflection_ty, expr.span);
-                    const result_ty = ast_query.simpleNameType("usize", node.callee.*.span);
-                    try self.appendTargetTypeFact(.reflection_result, result_ty, reflection_ty, expr.span);
+                if (reflection_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.appendTargetTypeFact(.reflection_target, target.target_type_expr, target.target_ty, expr.span);
+                    try self.appendTargetTypeFact(.reflection_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (byte_view_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
@@ -5372,6 +5371,27 @@ const FunctionBuilder = struct {
             .kind = kind,
             .source_type_expr = source_type_expr,
             .source_ty = valueTypeFromTypeAlias(source_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .result_type_expr = result_type_expr,
+            .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+        };
+    }
+
+    const ReflectionCallTarget = struct {
+        kind: CallTargetKind,
+        target_type_expr: ast.TypeExpr,
+        target_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+    };
+
+    fn reflectionCallTarget(self: *FunctionBuilder, call: anytype) ?ReflectionCallTarget {
+        const kind = reflectionCallTargetKind(call) orelse return null;
+        const target_type_expr = call.type_args[0];
+        const result_type_expr = ast_query.simpleNameType("usize", call.callee.*.span);
+        return .{
+            .kind = kind,
+            .target_type_expr = target_type_expr,
+            .target_ty = valueTypeFromTypeAlias(target_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
             .result_type_expr = result_type_expr,
             .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
         };

@@ -90,6 +90,12 @@ pub const ByteViewCallInfo = struct {
     result_ty: ast.TypeExpr,
 };
 
+pub const ReflectionCallInfo = struct {
+    kind: mir_model.CallTargetKind,
+    target_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
+};
+
 pub const MmioFencePlacement = enum {
     before_store,
     after_load,
