@@ -5377,6 +5377,7 @@ const FunctionBuilder = struct {
         };
         try self.appendTargetTypeFact(kind, target_ty, result_ty, expr.span);
         const call_kind: ?CallTargetKind = switch (kind) {
+            .bind => .bind,
             .result_ok => .result_ok,
             .result_err => .result_err,
             else => null,

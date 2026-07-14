@@ -116,6 +116,21 @@ test "lower-c Result constructors require MIR call target facts" {
     }
 }
 
+test "lower-c bind closures require MIR call target facts" {
+    const source =
+        \\fn add_scalar(env: u32, value: u32) -> u32 { return env + value; }
+        \\fn make() -> closure(u32) -> u32 { return (bind(3, add_scalar)); }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_bind_call_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try clearCallTargetFactsForFunction(&module_mir, "make");
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_bind_call_facts.mc", .{}, false, null));
+}
+
 test "lower-c rejects missing tagged-union target type facts" {
     const source =
         \\union Token { number: i64, eof }

@@ -226,6 +226,7 @@ pub const IntegerFact = struct {
 };
 
 pub const CallTargetKind = enum {
+    bind,
     result_ok,
     result_err,
     reduce_sum_checked,

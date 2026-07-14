@@ -7,6 +7,10 @@
 extern fn make_mut_u8_pointer() -> *mut u8;
 extern fn make_seed() -> u32;
 
+fn bind_global_add(env: u32, value: u32) -> u32 {
+    return env + value;
+}
+
 struct Table {
     items: [2]u32,
 }
@@ -96,3 +100,6 @@ global reject_uninit_initializer: u32 = uninit;
 
 // EXPECT_ERROR: E_GLOBAL_INITIALIZER_NOT_STATIC
 global reject_runtime_initializer: u32 = make_seed();
+
+// EXPECT_ERROR: E_GLOBAL_INITIALIZER_NOT_STATIC
+global reject_bind_initializer: closure(u32) -> u32 = bind(3, bind_global_add);

@@ -8,6 +8,7 @@ const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_builtin = @import("lower_c_builtin.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
+const mir = @import("mir.zig");
 
 const ArrayInfo = lower_c_model.ArrayInfo;
 const BindThunk = lower_c_model.BindThunk;
@@ -71,6 +72,7 @@ pub const BindThunkContext = struct {
     type_aliases: *const std.StringHashMap(ast.TypeExpr),
     functions: *const std.StringHashMap(FnInfo),
     bind_thunks: *std.StringHashMap(BindThunk),
+    mir_function: *const mir.Function,
 };
 
 pub fn collectPackedBits(
@@ -336,7 +338,7 @@ pub fn collectBlockBindThunks(ctx: BindThunkContext, block: ast.Block) anyerror!
 fn collectExprBindThunks(ctx: BindThunkContext, expr: ast.Expr) anyerror!void {
     switch (expr.kind) {
         .call => |node| {
-            if (ast_query.isBindCallNode(node)) try collectBindThunk(ctx, node);
+            if (hasCallTargetFact(ctx.mir_function.*, .bind, expr.span)) try collectBindThunk(ctx, node);
             try collectExprBindThunks(ctx, node.callee.*);
             for (node.args) |arg| try collectExprBindThunks(ctx, arg);
         },
@@ -361,10 +363,18 @@ fn collectExprBindThunks(ctx: BindThunkContext, expr: ast.Expr) anyerror!void {
 }
 
 fn collectBindThunk(ctx: BindThunkContext, node: anytype) !void {
+    if (node.type_args.len != 0 or node.args.len != 2) return error.UnsupportedCEmission;
     const fname = calleeIdentName(node.args[1]) orelse return;
     const info = ctx.functions.get(fname) orelse return;
     if (info.params.len == 0 or info.is_extern) return;
     if (bindEnvIsPointerLike(ctx.type_aliases, info.params[0].ty)) return;
     const name = try std.fmt.allocPrint(ctx.name_allocator, "mc_envthunk_{s}", .{fname});
     if (!ctx.bind_thunks.contains(name)) try ctx.bind_thunks.put(name, .{ .fname = fname, .info = info });
+}
+
+fn hasCallTargetFact(function: mir.Function, kind: mir.CallTargetKind, span: ast.Span) bool {
+    for (function.call_target_facts) |fact| {
+        if (fact.kind == kind and fact.source.line == span.line and fact.source.column == span.column) return true;
+    }
+    return false;
 }

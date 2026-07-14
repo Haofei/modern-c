@@ -238,6 +238,8 @@ test "MIR owns target types for contextual constructors and literals" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 
     const bind_fn = functionByName(typed_mir, "make_bind").?;
+    try std.testing.expectEqual(@as(usize, 1), bind_fn.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.bind, bind_fn.call_target_facts[0].kind);
     try std.testing.expectEqual(@as(usize, 1), bind_fn.target_type_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.bind, bind_fn.target_type_facts[0].kind);
     try std.testing.expect(bind_fn.target_type_facts[0].target_ty.kind == .closure_type);

@@ -535,7 +535,10 @@ const CEmitter = struct {
         // `bind(scalar, f)` closures that need an env-widening thunk.
         for (module.decls) |decl| {
             if (decl.kind == .fn_decl) {
-                if (decl.kind.fn_decl.body) |body| try self.collectBlockBindThunks(body);
+                if (decl.kind.fn_decl.body) |body| {
+                    const mir_function = self.mirFunctionNamed(decl.kind.fn_decl.name.text) orelse return error.UnsupportedCEmission;
+                    try self.collectBlockBindThunks(body, mir_function);
+                }
             }
         }
     }
@@ -2627,12 +2630,13 @@ const CEmitter = struct {
         return lower_c_collect.bindEnvIsPointerLike(&self.type_aliases, ty);
     }
 
-    fn collectBlockBindThunks(self: *CEmitter, block: ast.Block) anyerror!void {
+    fn collectBlockBindThunks(self: *CEmitter, block: ast.Block, mir_function: *const mir.Function) anyerror!void {
         try lower_c_collect.collectBlockBindThunks(.{
             .name_allocator = self.scratch.allocator(),
             .type_aliases = &self.type_aliases,
             .functions = &self.functions,
             .bind_thunks = &self.bind_thunks,
+            .mir_function = mir_function,
         }, block);
     }
 
@@ -4054,11 +4058,12 @@ const CEmitter = struct {
         // env pointer is type-erased to void* and the function pointer
         // (whose first param is the typed env) is cast to take void* —
         // both casts are ABI-identity, so user code stays typed/cast-free.
-        if (ast_query.isBindCallNode(node)) {
+        if (self.mirCallTargetKindAt(node.callee.*.span) == .bind) {
             const fact = self.mirTargetTypeFactAt(.bind, node.callee.*.span) orelse return error.UnsupportedCEmission;
             try self.emitBind(node, locals, fact.target_ty);
             return true;
         }
+        if (self.mirTargetTypeFactAt(.bind, node.callee.*.span) != null) return error.UnsupportedCEmission;
         return false;
     }
 
@@ -5020,6 +5025,10 @@ const CEmitter = struct {
 
     fn currentMirFunction(self: *CEmitter) ?*const mir.Function {
         const function_name = self.current_function orelse return null;
+        return self.mirFunctionNamed(function_name);
+    }
+
+    fn mirFunctionNamed(self: *CEmitter, function_name: []const u8) ?*const mir.Function {
         for (self.mir_module.functions) |*function| {
             if (std.mem.eql(u8, function.name, function_name)) return function;
         }

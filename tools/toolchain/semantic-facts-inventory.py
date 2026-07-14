@@ -72,9 +72,13 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
         ],
         "src/lower_c_emitter.zig": [
             "mir.resultConstructorFactInfo(kind)",
+            "self.mirCallTargetKindAt(node.callee.*.span) == .bind",
         ],
         "src/lower_c_try.zig": [
             "ctx.call_ctx.mir_call_target_kind(ctx.call_ctx.emit_ctx, expr.span)",
+        ],
+        "src/lower_c_collect.zig": [
+            "hasCallTargetFact(ctx.mir_function.*, .bind, expr.span)",
         ],
     },
     "c-bounds-range-consumption": {
@@ -131,8 +135,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "fn exprType(",
             "fn derefPointeeType(",
             "isDeclassifyCall(call)",
-            "isBindCallExpr(expr)",
-            "isBindCallNode(call)",
+            "self.mirCallTargetKindAt(span) == .bind",
             "fn physCallTargetType(",
             "self.mirCallTargetKindAt(call.callee.*.span) != .phys",
             "constGetCallTarget(call)",
@@ -593,6 +596,7 @@ ANCHORS: dict[str, list[str]] = {
     ],
     "tests/spec/global_initializers.mc": [
         "reject_out_of_range_initializer",
+        "reject_bind_initializer",
     ],
     "tests/spec/return_types.mc": [
         "reject_out_of_range_literal_return",
@@ -707,6 +711,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn countMatchingCallTargetInstructionsForInstruction(": 1,
         "fn countMatchingCallTargetFactsForFact(": 1,
         "fn matchingCallTargetFactsAgreeAtSource(": 1,
+        ".bind => .bind,": 1,
     },
     "src/numeric.zig": {
         "pub fn parseIntegerLiteral": 1,
@@ -768,6 +773,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.assume_noalias_result": 2,
         "mir.resultConstructorFactInfo(kind)": 1,
         "ast_query.resultConstructorCallTag(": 0,
+        "ast_query.isBindCallNode(": 0,
+        "fn mirFunctionNamed(": 1,
+        "self.mirCallTargetKindAt(node.callee.*.span) == .bind": 1,
         "self.exprSourceTypeForEmission(value_expr, locals)": 0,
         "self.cTypeFor(node.ty.*, .typedef_name)": 0,
         "self.emitExprWithTarget(node.value.*, locals, node.ty.*)": 0,
@@ -833,6 +841,11 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/lower_c_aggregate.zig": {
         "resultConstructorCallTag(call)": 0,
     },
+    "src/lower_c_collect.zig": {
+        "ast_query.isBindCallNode(": 0,
+        "hasCallTargetFact(ctx.mir_function.*, .bind, expr.span)": 1,
+        "fn hasCallTargetFact(": 1,
+    },
     "src/lower_c_try.zig": {
         "resultConstructorCallTag(call)": 0,
         "mir.resultConstructorFactInfo(": 1,
@@ -887,6 +900,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.maybe_uninit_payload": 1,
         "mir.resultConstructorFactInfo(kind)": 1,
         "resultConstructorCallTag(call)": 0,
+        "isBindCallExpr(": 0,
+        "isBindCallNode(": 0,
+        "self.mirCallTargetKindAt(span) == .bind": 1,
+        "fn emitGlobalBindInitializer(": 0,
         "reflectionValueCallReturnType(call)": 0,
         "byteViewCallReturnType(call)": 0,
         "vaCallReturnType(call)": 0,
@@ -950,6 +967,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "tests/spec/global_initializers.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 1,
+        "EXPECT_ERROR: E_GLOBAL_INITIALIZER_NOT_STATIC": 2,
     },
     "tests/spec/return_types.mc": {
         "EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE": 1,
@@ -982,12 +1000,44 @@ def duplicate_exact_count_files() -> list[str]:
     return []
 
 
+def duplicate_semantic_family_files() -> list[tuple[str, str]]:
+    """Detect duplicate file keys inside an inference family before dict parsing hides them."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for node in tree.body:
+        if not isinstance(node, ast.AnnAssign):
+            continue
+        if not isinstance(node.target, ast.Name) or node.target.id != "SEMANTIC_INFERENCE_FAMILIES":
+            continue
+        if not isinstance(node.value, ast.Dict):
+            return []
+        duplicates: list[tuple[str, str]] = []
+        for family_key, family_value in zip(node.value.keys, node.value.values):
+            if not isinstance(family_key, ast.Constant) or not isinstance(family_key.value, str):
+                continue
+            if not isinstance(family_value, ast.Dict):
+                continue
+            seen: set[str] = set()
+            for file_key in family_value.keys:
+                if not isinstance(file_key, ast.Constant) or not isinstance(file_key.value, str):
+                    continue
+                pair = (family_key.value, file_key.value)
+                if file_key.value in seen and pair not in duplicates:
+                    duplicates.append(pair)
+                seen.add(file_key.value)
+        return duplicates
+    return []
+
+
 def main() -> int:
     missing: list[str] = []
     checked = 0
 
     for duplicate in duplicate_exact_count_files():
         missing.append(f"EXACT_COUNTS: duplicate top-level file key {duplicate!r}")
+        checked += 1
+    for family, duplicate in duplicate_semantic_family_files():
+        missing.append(f"SEMANTIC_INFERENCE_FAMILIES: {family}: duplicate file key {duplicate!r}")
         checked += 1
 
     for relative, anchors in sorted(ANCHORS.items()):

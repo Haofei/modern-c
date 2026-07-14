@@ -104,8 +104,6 @@ const comptimeStructFieldValue = lower_llvm_query.comptimeStructFieldValue;
 const derefTarget = lower_llvm_query.derefTarget;
 const implMethodMangledLlvm = lower_llvm_query.implMethodMangledLlvm;
 const isAssumeNoaliasCall = lower_llvm_query.isAssumeNoaliasCall;
-const isBindCallExpr = ast_query.isBindCallExpr;
-const isBindCallNode = ast_query.isBindCallNode;
 const isDeclassifyCall = ast_query.isDeclassifyCall;
 const isDropCall = lower_llvm_query.isDropCall;
 const isUninitExpr = lower_llvm_query.isUninitExpr;
@@ -789,9 +787,6 @@ const LlvmEmitter = struct {
             else => {},
         }
         switch (resolved_ty.kind) {
-            .closure_type => if (isBindCallExpr(expr)) {
-                return try self.emitGlobalBindInitializer(expr, resolved_ty);
-            },
             .array => |array| {
                 const items = switch (expr.kind) {
                     .array_literal => |items| items,
@@ -893,19 +888,6 @@ const LlvmEmitter = struct {
             .grouped => |inner| try self.globalAddressInitializer(inner.*),
             else => error.UnsupportedLlvmEmission,
         };
-    }
-
-    fn emitGlobalBindInitializer(self: *LlvmEmitter, expr: ast.Expr, closure_ty: ast.TypeExpr) ![]const u8 {
-        const call = switch (expr.kind) {
-            .call => |call| call,
-            .grouped => |inner| return self.emitGlobalBindInitializer(inner.*, closure_ty),
-            else => return error.UnsupportedLlvmEmission,
-        };
-        if (self.resolveAliasType(closure_ty).kind != .closure_type) return error.UnsupportedLlvmEmission;
-        const fname = calleeIdentName(call.args[1]) orelse return error.UnsupportedLlvmEmission;
-        if (!self.fn_sigs.contains(fname)) return error.UnsupportedLlvmEmission;
-        const env = try self.globalAddressInitializer(call.args[0]);
-        return try std.fmt.allocPrint(self.scratch.allocator(), "{{ ptr @{s}, ptr {s} }}", .{ fname, env });
     }
 
     fn globalIndexAddressInitializer(self: *LlvmEmitter, node: anytype) anyerror![]const u8 {
@@ -6155,10 +6137,11 @@ const LlvmEmitter = struct {
         defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
         defer self.local_pointer_array_aliases.clearRetainingCapacity();
         if (isDropCall(call.callee.*)) return error.UnsupportedLlvmEmission;
-        if (isBindCallNode(call)) {
+        if (self.mirCallTargetKindAt(span) == .bind) {
             const fact = self.mirTargetTypeFactAt(.bind, span) orelse return error.UnsupportedLlvmEmission;
             return try self.emitBindValue(call, fact.target_ty);
         }
+        if (self.mirTargetTypeFactAt(.bind, span) != null) return error.UnsupportedLlvmEmission;
         // `Union.variant(...)` qualified constructor — self-typed from the owner (no target).
         if (self.mirTargetTypeFactAt(.qualified_union_result, span)) |fact| {
             return (try self.emitQualifiedUnionConstructor(call, fact.target_ty)) orelse error.UnsupportedLlvmEmission;
@@ -8582,7 +8565,7 @@ const LlvmEmitter = struct {
             if (std.mem.eql(u8, info.op, "as_slice")) return self.sliceTypeFor(info.payload_ty, .mut, call.callee.*.span) catch null;
         }
         if (self.rawManyOffsetCallInfo(call)) |info| return info.base_ty;
-        if (isBindCallNode(call)) return if (self.mirTargetTypeFactAt(.bind, call.callee.*.span)) |fact| fact.target_ty else null;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .bind) return if (self.mirTargetTypeFactAt(.bind, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.closureCalleeType(call.callee.*)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
         if (self.fnPointerCalleeType(call.callee.*)) |fn_ty| return fn_ty.kind.fn_pointer.ret.*;
         const callee = self.directCallName(call.callee.*) orelse return null;
