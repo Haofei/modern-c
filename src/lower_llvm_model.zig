@@ -74,20 +74,17 @@ pub const MmioFencePlacement = enum {
     after_load,
 };
 
-pub const DmaBufInfo = struct {
-    payload_ty: ast.TypeExpr,
-};
-
 pub const DmaBufCallInfo = struct {
     base: ast.Expr,
     op: []const u8,
     dma_ty: ast.TypeExpr,
-    payload_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
 };
 
 pub const DmaCacheCallInfo = struct {
     op: []const u8,
     dma_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
 };
 
 pub const ArgValue = struct {

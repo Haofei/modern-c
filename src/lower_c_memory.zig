@@ -10,7 +10,6 @@ const mir = @import("mir.zig");
 const LocalInfo = lower_c_model.LocalInfo;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const byteViewCallKind = ast_query.byteViewCallKind;
-const dmaBufInfo = ast_query.dmaBufInfo;
 const isIdentNamed = ast_query.isIdentNamed;
 const memberCallee = ast_query.memberCallee;
 const simpleNameType = ast_query.simpleNameType;
@@ -19,7 +18,6 @@ pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std
 pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void;
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
 pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, mutability: ast.Mutability) anyerror![]const u8;
-pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
 pub const ExprTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
@@ -35,7 +33,6 @@ pub const Context = struct {
     emit_expr_with_target: EmitExprWithTargetFn,
     c_type: CTypeFn,
     slice_type_name: SliceTypeNameFn,
-    c_ident: CIdentFn,
     operand_emit_type: ExprTypeFn,
     expr_source_type: ExprTypeFn,
     mir_call_target_kind: MirCallTargetKindFn,
@@ -77,34 +74,44 @@ pub fn emitByteViewCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap
 
 pub fn emitDmaCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     const member = memberCallee(call.callee.*) orelse return false;
-
-    if (isIdentNamed(member.base.*, "cache")) {
-        if (!std.mem.eql(u8, member.name.text, "clean") and !std.mem.eql(u8, member.name.text, "invalidate")) return false;
-        if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
-        try ctx.out.appendSlice(ctx.allocator, if (std.mem.eql(u8, member.name.text, "clean")) "mc_barrier_release_before()" else "mc_barrier_acquire_after()");
-        return true;
-    }
-
-    const local_set = locals orelse return false;
-    const base_name = switch (member.base.kind) {
-        .ident => |ident| ident.text,
-        else => return false,
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse {
+        if ((isIdentNamed(member.base.*, "cache") and
+            (std.mem.eql(u8, member.name.text, "clean") or std.mem.eql(u8, member.name.text, "invalidate"))) or
+            std.mem.eql(u8, member.name.text, "dma_addr") or
+            std.mem.eql(u8, member.name.text, "as_slice")) return error.UnsupportedCEmission;
+        return false;
     };
-    const info = local_set.get(base_name) orelse return false;
-    const dma = dmaBufInfo(info.source_ty orelse return false) orelse return false;
+    const fact_info = mir.dmaCallFactInfo(kind) orelse return false;
+    const buffer_ty = ctx.mir_target_type(ctx.emit_ctx, .dma_buffer, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .dma_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .dma_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
 
-    if (std.mem.eql(u8, member.name.text, "dma_addr")) {
-        if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedCEmission;
-        try ctx.out.print(ctx.allocator, "((uintptr_t){s})", .{try ctx.c_ident(ctx.emit_ctx, base_name)});
+    if (fact_info.cache) {
+        if (!isIdentNamed(member.base.*, "cache") or !std.mem.eql(u8, member.name.text, fact_info.op)) return error.UnsupportedCEmission;
+        if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
+        try ctx.out.appendSlice(ctx.allocator, "((void)(");
+        try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, buffer_ty);
+        try ctx.out.appendSlice(ctx.allocator, if (kind == .dma_cache_clean) "), mc_barrier_release_before())" else "), mc_barrier_acquire_after())");
         return true;
     }
-    if (std.mem.eql(u8, member.name.text, "as_slice")) {
+
+    if (!std.mem.eql(u8, member.name.text, fact_info.op)) return error.UnsupportedCEmission;
+    if (kind == .dma_addr) {
         if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedCEmission;
-        const slice_name = try ctx.slice_type_name(ctx.emit_ctx, dma.payload, .mut);
-        try ctx.out.print(ctx.allocator, "(({s}){{ .ptr = {s}, .len = 1 }})", .{ slice_name, try ctx.c_ident(ctx.emit_ctx, base_name) });
+        try ctx.out.appendSlice(ctx.allocator, "((uintptr_t)(");
+        try ctx.emit_expr_with_target(ctx.emit_ctx, member.base.*, locals, buffer_ty);
+        try ctx.out.appendSlice(ctx.allocator, "))");
         return true;
     }
-    return false;
+    if (kind == .dma_as_slice) {
+        if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedCEmission;
+        const slice_name = try ctx.slice_type_name(ctx.emit_ctx, payload_ty, .mut);
+        try ctx.out.print(ctx.allocator, "(({s}){{ .ptr = ", .{slice_name});
+        try ctx.emit_expr_with_target(ctx.emit_ctx, member.base.*, locals, buffer_ty);
+        try ctx.out.appendSlice(ctx.allocator, ", .len = 1 }})");
+        return true;
+    }
+    return error.UnsupportedCEmission;
 }
 
 pub fn emitMaybeUninitAssumeInitCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {

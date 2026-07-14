@@ -82,6 +82,21 @@ pub const DomainCallFactInfo = struct {
     has_interval: bool = false,
 };
 
+pub const DmaCallFactInfo = struct {
+    op: []const u8,
+    cache: bool,
+};
+
+pub fn dmaCallFactInfo(kind: CallTargetKind) ?DmaCallFactInfo {
+    return switch (kind) {
+        .dma_cache_clean => .{ .op = "clean", .cache = true },
+        .dma_cache_invalidate => .{ .op = "invalidate", .cache = true },
+        .dma_addr => .{ .op = "dma_addr", .cache = false },
+        .dma_as_slice => .{ .op = "as_slice", .cache = false },
+        else => null,
+    };
+}
+
 pub fn domainCallFactInfo(kind: CallTargetKind) ?DomainCallFactInfo {
     return switch (kind) {
         .wrap_residue => .{ .op = "residue" },
@@ -4839,6 +4854,7 @@ const FunctionBuilder = struct {
                 const semantic_escape_target = try self.semanticEscapeCallTarget(node);
                 const enum_raw_target = self.enumRawCallTarget(node);
                 const domain_target = try self.domainCallTarget(node);
+                const dma_target = self.dmaCallTarget(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
                 else if (semantic_escape_target) |target|
@@ -4846,6 +4862,8 @@ const FunctionBuilder = struct {
                 else if (enum_raw_target) |target|
                     target.result_ty
                 else if (domain_target) |target|
+                    target.result_ty
+                else if (dma_target) |target|
                     target.result_ty
                 else if (reflection_target != null)
                     .{ .integer = "usize" }
@@ -4902,6 +4920,13 @@ const FunctionBuilder = struct {
                     if (target.interval_type_expr) |interval_ty| {
                         try self.appendTargetTypeFact(.domain_interval, interval_ty, valueTypeFromTypeAlias(interval_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                     }
+                }
+                if (dma_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.appendTargetTypeFact(.dma_buffer, target.buffer_type_expr, target.buffer_ty, expr.span);
+                    try self.appendTargetTypeFact(.dma_payload, target.payload_type_expr, target.payload_ty, expr.span);
+                    try self.appendTargetTypeFact(.dma_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (self.atomicCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
@@ -7818,6 +7843,7 @@ const FunctionBuilder = struct {
             return maybeUninitPayloadTypeExprAlias(base_ty, self.aliases);
         }
         if (self.mmioReceiverReadTypeExpr(call.callee.*)) |ty| return ty;
+        if (self.dmaCallTarget(call)) |target| return target.result_type_expr;
         if (noOverflowUncheckedOp(self.calleeName(call.callee.*)) != null and call.args.len > 0) {
             return self.typeExprForExpr(call.args[0]) orelse self.conversionSourceTypeExpr(call.args[0]);
         }
@@ -7986,6 +8012,7 @@ const FunctionBuilder = struct {
             .call => |node| self.qualifiedUnionConstructorTypeExpr(node) orelse
                 self.reflectionOrByteViewCallTypeExpr(node) orelse
                 (if (self.enumRawCallTarget(node)) |target| target.result_type_expr else null) orelse
+                (if (self.dmaCallTarget(node)) |target| target.result_type_expr else null) orelse
                 self.mmioReceiverReadTypeExpr(node.callee.*) orelse
                 mmioMapCallPayloadType(node) orelse
                 reduceCallReturnTypeExpr(node) orelse
@@ -8013,6 +8040,8 @@ const FunctionBuilder = struct {
             .call => |node| if (self.qualifiedUnionConstructorTypeExpr(node)) |ty|
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
             else if (self.enumRawCallTarget(node)) |target|
+                target.result_ty
+            else if (self.dmaCallTarget(node)) |target|
                 target.result_ty
             else if (self.mmioReceiverReadTypeExpr(node.callee.*)) |ty|
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
@@ -8075,6 +8104,90 @@ const FunctionBuilder = struct {
         result_ty: ValueType,
         index: usize,
     };
+
+    const DmaBufTypeInfo = struct {
+        payload_type_expr: ast.TypeExpr,
+        payload_type_ptr: *ast.TypeExpr,
+        mode: []const u8,
+    };
+
+    const DmaCallTarget = struct {
+        kind: CallTargetKind,
+        buffer_type_expr: ast.TypeExpr,
+        buffer_ty: ValueType,
+        payload_type_expr: ast.TypeExpr,
+        payload_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+    };
+
+    fn dmaCallTarget(self: *FunctionBuilder, call: anytype) ?DmaCallTarget {
+        if (call.type_args.len != 0) return null;
+        const member = memberExpr(call.callee.*) orelse return null;
+
+        var kind: CallTargetKind = undefined;
+        var buffer_type_expr: ast.TypeExpr = undefined;
+        var info: DmaBufTypeInfo = undefined;
+        if (exprIsIdentNamed(member.base.*, "cache")) {
+            if (call.args.len != 1) return null;
+            kind = if (std.mem.eql(u8, member.name.text, "clean"))
+                .dma_cache_clean
+            else if (std.mem.eql(u8, member.name.text, "invalidate"))
+                .dma_cache_invalidate
+            else
+                return null;
+            buffer_type_expr = self.typeExprForExpr(call.args[0]) orelse return null;
+            info = self.dmaBufTypeInfo(buffer_type_expr) orelse return null;
+            if (!std.mem.eql(u8, info.mode, "noncoherent")) return null;
+        } else {
+            if (call.args.len != 0) return null;
+            kind = if (std.mem.eql(u8, member.name.text, "dma_addr"))
+                .dma_addr
+            else if (std.mem.eql(u8, member.name.text, "as_slice"))
+                .dma_as_slice
+            else
+                return null;
+            buffer_type_expr = self.typeExprForExpr(member.base.*) orelse return null;
+            info = self.dmaBufTypeInfo(buffer_type_expr) orelse return null;
+        }
+
+        const result_type_expr: ast.TypeExpr = switch (kind) {
+            .dma_cache_clean, .dma_cache_invalidate => ast_query.simpleNameType("void", call.callee.*.span),
+            .dma_addr => ast_query.simpleNameType("DmaAddr", call.callee.*.span),
+            .dma_as_slice => .{
+                .span = call.callee.*.span,
+                .kind = .{ .slice = .{ .mutability = .mut, .child = info.payload_type_ptr } },
+            },
+            else => unreachable,
+        };
+        return .{
+            .kind = kind,
+            .buffer_type_expr = buffer_type_expr,
+            .buffer_ty = valueTypeFromTypeAlias(buffer_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .payload_type_expr = info.payload_type_expr,
+            .payload_ty = valueTypeFromTypeAlias(info.payload_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .result_type_expr = result_type_expr,
+            .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+        };
+    }
+
+    fn dmaBufTypeInfo(self: *FunctionBuilder, ty: ast.TypeExpr) ?DmaBufTypeInfo {
+        const resolved = aggregateTargetTypeAlias(ty, self.aliases);
+        const generic = switch (resolved.kind) {
+            .generic => |node| node,
+            else => return null,
+        };
+        if (!std.mem.eql(u8, generic.base.text, "DmaBuf") or generic.args.len != 2) return null;
+        const mode = switch (generic.args[1].kind) {
+            .enum_literal => |value| value.text,
+            else => return null,
+        };
+        return .{
+            .payload_type_expr = generic.args[0],
+            .payload_type_ptr = &generic.args[0],
+            .mode = mode,
+        };
+    }
 
     fn constGetCallTarget(self: *FunctionBuilder, call: anytype) ?ConstGetCallTarget {
         const syntax = ast_query.constGetCallTarget(call) orelse return null;

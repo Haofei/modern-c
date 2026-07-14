@@ -1211,6 +1211,87 @@ test "MIR rejects const_get with both index instruction and fact removed" {
     try std.testing.expectError(error.InvalidMirConstGetFacts, mir.validateConstGetFactsForLowering(typed_mir));
 }
 
+test "MIR owns DMA call identities and complete types" {
+    const source =
+        \\extern struct Packet { len: u16, tag: u8 }
+        \\type Buffer = DmaBuf<Packet, .noncoherent>;
+        \\fn dma_cycle(buf: Buffer) -> []mut Packet {
+        \\    cache.clean(buf);
+        \\    cache.invalidate(buf);
+        \\    let addr: DmaAddr = buf.dma_addr();
+        \\    return buf.as_slice();
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_dma_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "dma_cycle").?;
+    try std.testing.expectEqual(@as(usize, 4), function.call_target_facts.len);
+
+    var clean = false;
+    var invalidate = false;
+    var dma_addr = false;
+    var as_slice = false;
+    for (function.call_target_facts) |fact| switch (fact.kind) {
+        .dma_cache_clean => clean = true,
+        .dma_cache_invalidate => invalidate = true,
+        .dma_addr => dma_addr = true,
+        .dma_as_slice => as_slice = true,
+        else => {},
+    };
+    try std.testing.expect(clean and invalidate and dma_addr and as_slice);
+
+    var buffer_count: usize = 0;
+    var payload_count: usize = 0;
+    var result_count: usize = 0;
+    var void_results: usize = 0;
+    var address_results: usize = 0;
+    var slice_results: usize = 0;
+    for (function.target_type_facts) |fact| switch (fact.kind) {
+        .dma_buffer => {
+            buffer_count += 1;
+            try std.testing.expectEqualStrings("Buffer", typeExprHeadName(fact.target_ty).?);
+        },
+        .dma_payload => {
+            payload_count += 1;
+            try std.testing.expectEqualStrings("Packet", typeExprHeadName(fact.target_ty).?);
+        },
+        .dma_result => {
+            result_count += 1;
+            switch (fact.target_ty.kind) {
+                .name => |name| {
+                    if (std.mem.eql(u8, name.text, "void")) void_results += 1 else if (std.mem.eql(u8, name.text, "DmaAddr")) address_results += 1;
+                },
+                .slice => |slice| {
+                    try std.testing.expectEqual(ast.Mutability.mut, slice.mutability);
+                    try std.testing.expectEqualStrings("Packet", typeExprHeadName(slice.child.*).?);
+                    slice_results += 1;
+                },
+                else => return error.TestUnexpectedResult,
+            }
+        },
+        else => {},
+    };
+    try std.testing.expectEqual(@as(usize, 4), buffer_count);
+    try std.testing.expectEqual(@as(usize, 4), payload_count);
+    try std.testing.expectEqual(@as(usize, 4), result_count);
+    try std.testing.expectEqual(@as(usize, 2), void_results);
+    try std.testing.expectEqual(@as(usize, 1), address_results);
+    try std.testing.expectEqual(@as(usize, 1), slice_results);
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns value reflection call target facts" {
     const source =
         \\extern struct Packet {

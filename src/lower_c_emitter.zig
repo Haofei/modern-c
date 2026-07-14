@@ -1686,7 +1686,6 @@ const CEmitter = struct {
             .emit_expr_with_target = emitExprWithTargetForMemory,
             .c_type = cTypeForCall,
             .slice_type_name = sliceTypeNameForMemory,
-            .c_ident = cIdentForMemory,
             .operand_emit_type = operandEmitTypeForMemory,
             .expr_source_type = exprSourceTypeForMemory,
             .mir_call_target_kind = mirCallTargetKindForLowering,
