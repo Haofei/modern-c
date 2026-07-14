@@ -116,6 +116,21 @@ fn duplicateCallTargetFact(function: *mir.Function, allocator: std.mem.Allocator
     function.call_target_facts = facts;
 }
 
+fn duplicateCallTargetInstruction(function: *mir.Function, allocator: std.mem.Allocator) !void {
+    for (function.blocks) |*block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .call_target) continue;
+            const instructions = try allocator.alloc(mir.Instruction, block.instructions.len + 1);
+            @memcpy(instructions[0..block.instructions.len], block.instructions);
+            instructions[block.instructions.len] = instruction;
+            allocator.free(block.instructions);
+            block.instructions = instructions;
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn duplicateTargetTypeFact(function: *mir.Function, allocator: std.mem.Allocator) !void {
     if (function.target_type_facts.len == 0) return error.TestUnexpectedResult;
     const facts = try allocator.alloc(mir.TargetTypeFact, function.target_type_facts.len + 1);
@@ -219,6 +234,7 @@ test "MIR owns target types for contextual constructors and literals" {
 
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
+    try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 
     const bind_fn = functionByName(typed_mir, "make_bind").?;
@@ -227,11 +243,15 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expect(bind_fn.target_type_facts[0].target_ty.kind == .closure_type);
 
     const ok_fn = functionByName(typed_mir, "make_ok").?;
+    try std.testing.expectEqual(@as(usize, 1), ok_fn.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.result_ok, ok_fn.call_target_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.result_ok, ok_fn.target_type_facts[0].kind);
     try std.testing.expect(ok_fn.target_type_facts[0].target_ty.kind == .generic);
     try std.testing.expectEqualStrings("Result", ok_fn.target_type_facts[0].target_ty.kind.generic.base.text);
 
     const err_fn = functionByName(typed_mir, "make_err").?;
+    try std.testing.expectEqual(@as(usize, 1), err_fn.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.result_err, err_fn.call_target_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.result_err, err_fn.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, err_fn.target_type_facts[1].kind);
     const arg_fn = functionByName(typed_mir, "pass_ok").?;
@@ -1135,6 +1155,30 @@ test "MIR rejects duplicate call target facts" {
         break;
     }
     try std.testing.expectError(error.InvalidMirCallTargetFacts, mir.validateCallTargetFactsForLowering(typed_mir));
+}
+
+test "MIR accepts matching call target multiplicity at one source point" {
+    const source =
+        \\enum E { bad }
+        \\fn make(value: u32) -> Result<u32, E> { return ok(value); }
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_call_target_multiplicity.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "make").?;
+    try duplicateCallTargetFact(function, typed_mir.allocator);
+    try duplicateCallTargetInstruction(function, typed_mir.allocator);
+    try mir.validateCallTargetFactsForLowering(typed_mir);
 }
 
 test "MIR call target facts do not collide with ordinary call names" {

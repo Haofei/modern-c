@@ -98,6 +98,24 @@ test "lower-c rejects prebuilt MIR with missing target type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_target_type_facts.mc", .{}, false, null));
 }
 
+test "lower-c Result constructors require MIR call target facts" {
+    const source =
+        \\enum E { bad }
+        \\fn make(value: u32) -> Result<u32, E> { return ok(value); }
+        \\fn forward(value: Result<u32, E>) -> Result<u32, E> { return ok(value?); }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_result_constructor_call_facts.mc", source);
+    defer parsed.deinit();
+    for ([_][]const u8{ "make", "forward" }) |name| {
+        var module_mir = try mir.build(std.testing.allocator, parsed.module);
+        defer module_mir.deinit();
+        try clearCallTargetFactsForFunction(&module_mir, name);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_result_constructor_call_facts.mc", .{}, false, null));
+    }
+}
+
 test "lower-c rejects missing tagged-union target type facts" {
     const source =
         \\union Token { number: i64, eof }

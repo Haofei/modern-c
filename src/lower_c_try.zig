@@ -17,6 +17,7 @@ const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const mir = @import("mir.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const FnInfo = lower_c_model.FnInfo;
@@ -30,7 +31,6 @@ const appendGlobalStoreSuffix = lower_c_global.appendGlobalStoreSuffix;
 const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
-const resultConstructorCallTag = ast_query.resultConstructorCallTag;
 
 pub const TryPredicateFn = *const fn (ctx: *anyopaque, operand: ast.Expr) bool;
 pub const TryPredicateErrorFn = *const fn (ctx: *anyopaque, operand: ast.Expr) anyerror!bool;
@@ -403,17 +403,22 @@ pub fn emitNullableTryCallReturn(ctx: TryCallEmitContext, expr: ast.Expr, locals
 }
 
 pub fn emitResultTryConstructorReturn(ctx: TryCallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
-    const target_ty = return_ty orelse return false;
+    const enclosing_return_ty = return_ty orelse return false;
     const call = callExpr(expr) orelse return false;
-    const tag = resultConstructorCallTag(call) orelse return false;
+    if (call.type_args.len != 0 or call.args.len != 1) return false;
+    const constructor = mir.resultConstructorFactInfo(ctx.call_ctx.mir_call_target_kind(ctx.call_ctx.emit_ctx, expr.span) orelse {
+        if (ctx.call_ctx.mir_target_type(ctx.call_ctx.emit_ctx, .result_ok, expr.span) != null or ctx.call_ctx.mir_target_type(ctx.call_ctx.emit_ctx, .result_err, expr.span) != null) return error.UnsupportedCEmission;
+        return false;
+    }) orelse return false;
+    const target_ty = ctx.call_ctx.mir_target_type(ctx.call_ctx.emit_ctx, constructor.target_kind, expr.span) orelse return error.UnsupportedCEmission;
     if (!ctx.expr_contains_result_try(ctx.replacement.emit_ctx, call.args[0], locals)) return false;
-    const payload_ty = resultPayloadTypeForTag(target_ty, tag) orelse return false;
+    const payload_ty = resultPayloadTypeForTag(target_ty, constructor.tag) orelse return false;
 
-    const temp = try emitResultTryCallArgTempWithMode(ctx, call.args[0], locals, payload_ty, return_ty, .stmt);
+    const temp = try emitResultTryCallArgTempWithMode(ctx, call.args[0], locals, payload_ty, enclosing_return_ty, .stmt);
 
     try writeIndent(ctx.replacement);
     try ctx.replacement.out.print(ctx.replacement.allocator, "return (({s}){{ .is_ok = ", .{try ctx.replacement.c_type(ctx.replacement.emit_ctx, target_ty)});
-    try ctx.replacement.out.appendSlice(ctx.replacement.allocator, if (std.mem.eql(u8, tag, "ok")) "true, .payload.ok = " else "false, .payload.err = ");
+    try ctx.replacement.out.appendSlice(ctx.replacement.allocator, if (std.mem.eql(u8, constructor.tag, "ok")) "true, .payload.ok = " else "false, .payload.err = ");
     try ctx.replacement.out.appendSlice(ctx.replacement.allocator, temp.name);
     try ctx.replacement.out.appendSlice(ctx.replacement.allocator, " });\n");
     return true;

@@ -4262,13 +4262,15 @@ const CEmitter = struct {
     }
 
     fn emitTargetCallExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, expr: ast.Expr) anyerror!void {
-        if (ast_query.resultConstructorCallTag(node)) |tag| {
-            const kind: mir.TargetTypeKind = if (std.mem.eql(u8, tag, "ok")) .result_ok else .result_err;
-            if (self.mirTargetTypeFactAt(kind, expr.span)) |fact| {
-                if (try lower_c_aggregate.emitResultConstructor(self.aggregateEmitContext(), node, locals, fact.target_ty)) return;
+        const result_constructor = if (self.mirCallTargetKindAt(expr.span)) |kind| mir.resultConstructorFactInfo(kind) else null;
+        if (result_constructor) |constructor| {
+            if (self.mirTargetTypeFactAt(constructor.target_kind, expr.span)) |fact| {
+                if (try lower_c_aggregate.emitResultConstructor(self.aggregateEmitContext(), node, locals, fact.target_ty, constructor.tag)) return;
                 return error.UnsupportedCEmission;
             }
+            return error.UnsupportedCEmission;
         }
+        if (self.mirTargetTypeFactAt(.result_ok, expr.span) != null or self.mirTargetTypeFactAt(.result_err, expr.span) != null) return error.UnsupportedCEmission;
         if (self.mirTargetTypeFactAt(.tagged_union, expr.span)) |fact| {
             if (try lower_c_aggregate.emitTaggedUnionConstructor(self.aggregateEmitContext(), node, locals, fact.target_ty)) return;
             return error.UnsupportedCEmission;

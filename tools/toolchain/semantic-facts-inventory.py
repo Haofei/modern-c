@@ -70,6 +70,12 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "mir.conversionCallTargetKindForName(op)",
             "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_target",
         ],
+        "src/lower_c_emitter.zig": [
+            "mir.resultConstructorFactInfo(kind)",
+        ],
+        "src/lower_c_try.zig": [
+            "ctx.call_ctx.mir_call_target_kind(ctx.call_ctx.emit_ctx, expr.span)",
+        ],
     },
     "c-bounds-range-consumption": {
         "docs/typed-semantic-facts.md": ["| `c-bounds-range-consumption` |"],
@@ -125,7 +131,6 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "fn exprType(",
             "fn derefPointeeType(",
             "isDeclassifyCall(call)",
-            "resultConstructorCallTag(call)",
             "isBindCallExpr(expr)",
             "isBindCallNode(call)",
             "fn physCallTargetType(",
@@ -695,6 +700,13 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try self.appendTargetTypeFact(result_kind, target.result_type_expr": 1,
         "appendTargetTypeFact(.atomic_payload": 1,
         "appendTargetTypeFact(.maybe_uninit_payload": 1,
+        "try self.addCallTargetFact(owned_kind, result_ty": 1,
+        "pub fn resultConstructorFactInfo(": 1,
+        ".result_ok => .{ .target_kind = .result_ok": 1,
+        ".result_err => .{ .target_kind = .result_err": 1,
+        "fn countMatchingCallTargetInstructionsForInstruction(": 1,
+        "fn countMatchingCallTargetFactsForFact(": 1,
+        "fn matchingCallTargetFactsAgreeAtSource(": 1,
     },
     "src/numeric.zig": {
         "pub fn parseIntegerLiteral": 1,
@@ -754,6 +766,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.byte_view_result": 2,
         "mirTargetTypeFactAt(.declassify_result": 2,
         "mirTargetTypeFactAt(.assume_noalias_result": 2,
+        "mir.resultConstructorFactInfo(kind)": 1,
+        "ast_query.resultConstructorCallTag(": 0,
         "self.exprSourceTypeForEmission(value_expr, locals)": 0,
         "self.cTypeFor(node.ty.*, .typedef_name)": 0,
         "self.emitExprWithTarget(node.value.*, locals, node.ty.*)": 0,
@@ -816,6 +830,14 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "ctx.mir_target_type(ctx.emit_ctx, .atomic_payload": 2,
         "pub fn atomicLocalPayload(": 0,
     },
+    "src/lower_c_aggregate.zig": {
+        "resultConstructorCallTag(call)": 0,
+    },
+    "src/lower_c_try.zig": {
+        "resultConstructorCallTag(call)": 0,
+        "mir.resultConstructorFactInfo(": 1,
+        "ctx.call_ctx.mir_call_target_kind(ctx.call_ctx.emit_ctx, expr.span)": 1,
+    },
     "src/lower_c_call.zig": {
         "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .declassify": 1,
         "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .assume_noalias": 1,
@@ -863,6 +885,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.assume_noalias_result": 2,
         "mirTargetTypeFactAt(.atomic_payload": 1,
         "mirTargetTypeFactAt(.maybe_uninit_payload": 1,
+        "mir.resultConstructorFactInfo(kind)": 1,
+        "resultConstructorCallTag(call)": 0,
         "reflectionValueCallReturnType(call)": 0,
         "byteViewCallReturnType(call)": 0,
         "vaCallReturnType(call)": 0,

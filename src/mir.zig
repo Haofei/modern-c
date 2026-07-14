@@ -71,6 +71,19 @@ pub const CallTargetKind = mir_model.CallTargetKind;
 pub const CallTargetFact = mir_model.CallTargetFact;
 pub const TargetTypeKind = mir_model.TargetTypeKind;
 pub const TargetTypeFact = mir_model.TargetTypeFact;
+
+pub const ResultConstructorFactInfo = struct {
+    target_kind: TargetTypeKind,
+    tag: []const u8,
+};
+
+pub fn resultConstructorFactInfo(kind: CallTargetKind) ?ResultConstructorFactInfo {
+    return switch (kind) {
+        .result_ok => .{ .target_kind = .result_ok, .tag = "ok" },
+        .result_err => .{ .target_kind = .result_err, .tag = "err" },
+        else => null,
+    };
+}
 pub const SourcePoint = mir_model.SourcePoint;
 pub const PointerProvenance = mir_model.PointerProvenance;
 pub const PointerProvenanceFact = mir_model.PointerProvenanceFact;
@@ -911,10 +924,13 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
     for (module.functions) |function| {
         for (function.blocks) |block| for (block.instructions) |instruction| {
             const kind = callTargetKindForInstruction(instruction) orelse continue;
-            if (countMatchingCallTargetFacts(function, kind, instruction) != 1) return error.InvalidMirCallTargetFacts;
+            const fact_count = countMatchingCallTargetFacts(function, kind, instruction);
+            if (fact_count == 0 or fact_count != countMatchingCallTargetInstructionsForInstruction(function, kind, instruction)) return error.InvalidMirCallTargetFacts;
+            if (!matchingCallTargetFactsAgreeAtSource(function, instruction)) return error.InvalidMirCallTargetFacts;
         };
         for (function.call_target_facts) |fact| {
-            if (countMatchingCallTargetInstructions(function, fact) != 1) return error.InvalidMirCallTargetFacts;
+            const instruction_count = countMatchingCallTargetInstructions(function, fact);
+            if (instruction_count == 0 or instruction_count != countMatchingCallTargetFactsForFact(function, fact)) return error.InvalidMirCallTargetFacts;
         }
     }
 }
@@ -1020,6 +1036,40 @@ fn countMatchingCallTargetInstructions(function: Function, fact: CallTargetFact)
         if (fact.source.line == instruction.line and fact.source.column == instruction.column) count += 1;
     };
     return count;
+}
+
+fn countMatchingCallTargetInstructionsForInstruction(function: Function, kind: CallTargetKind, target: Instruction) usize {
+    var count: usize = 0;
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        const instruction_kind = callTargetKindForInstruction(instruction) orelse continue;
+        if (instruction_kind != kind) continue;
+        if (!sameRepresentationValueType(instruction.result_ty, target.result_ty)) continue;
+        if (instruction.line == target.line and instruction.column == target.column) count += 1;
+    };
+    return count;
+}
+
+fn countMatchingCallTargetFactsForFact(function: Function, target: CallTargetFact) usize {
+    var count: usize = 0;
+    for (function.call_target_facts) |fact| {
+        if (fact.kind != target.kind) continue;
+        if (!sameRepresentationValueType(fact.result_ty, target.result_ty)) continue;
+        if (fact.source.line == target.source.line and fact.source.column == target.source.column) count += 1;
+    }
+    return count;
+}
+
+fn matchingCallTargetFactsAgreeAtSource(function: Function, instruction: Instruction) bool {
+    var first: ?CallTargetKind = null;
+    for (function.call_target_facts) |fact| {
+        if (fact.source.line != instruction.line or fact.source.column != instruction.column) continue;
+        if (first) |expected| {
+            if (fact.kind != expected) return false;
+        } else {
+            first = fact.kind;
+        }
+    }
+    return first != null;
 }
 
 fn functionHasMatchingIntegerFact(function: Function, instruction: Instruction) bool {
@@ -5326,6 +5376,15 @@ const FunctionBuilder = struct {
             else => return,
         };
         try self.appendTargetTypeFact(kind, target_ty, result_ty, expr.span);
+        const call_kind: ?CallTargetKind = switch (kind) {
+            .result_ok => .result_ok,
+            .result_err => .result_err,
+            else => null,
+        };
+        if (call_kind) |owned_kind| {
+            try self.addInstr(.call_target, @tagName(owned_kind), result_ty, expr.span);
+            try self.addCallTargetFact(owned_kind, result_ty, expr.span);
+        }
     }
 
     fn appendTargetTypeFact(self: *FunctionBuilder, kind: TargetTypeKind, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span) !void {

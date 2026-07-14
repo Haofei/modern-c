@@ -108,7 +108,6 @@ const isBindCallExpr = ast_query.isBindCallExpr;
 const isBindCallNode = ast_query.isBindCallNode;
 const isDeclassifyCall = ast_query.isDeclassifyCall;
 const isDropCall = lower_llvm_query.isDropCall;
-const resultConstructorCallTag = ast_query.resultConstructorCallTag;
 const isUninitExpr = lower_llvm_query.isUninitExpr;
 const llvmTraitIsObjectSafe = lower_llvm_query.llvmTraitIsObjectSafe;
 const memberCallee = lower_llvm_query.memberCallee;
@@ -6598,11 +6597,12 @@ const LlvmEmitter = struct {
             _ = self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span) orelse return error.UnsupportedLlvmEmission;
             return try self.emitByteViewCall(call, kind);
         }
-        if (resultConstructorCallTag(call)) |tag| {
-            const kind: mir.TargetTypeKind = if (std.mem.eql(u8, tag, "ok")) .result_ok else .result_err;
-            const fact = self.mirTargetTypeFactAt(kind, span) orelse return error.UnsupportedLlvmEmission;
-            return try self.emitResultConstructorValue(call, fact.target_ty, tag);
+        const result_constructor = if (self.mirCallTargetKindAt(span)) |kind| mir.resultConstructorFactInfo(kind) else null;
+        if (result_constructor) |constructor| {
+            const fact = self.mirTargetTypeFactAt(constructor.target_kind, span) orelse return error.UnsupportedLlvmEmission;
+            return try self.emitResultConstructorValue(call, fact.target_ty, constructor.tag);
         }
+        if (self.mirTargetTypeFactAt(.result_ok, span) != null or self.mirTargetTypeFactAt(.result_err, span) != null) return error.UnsupportedLlvmEmission;
         if (self.domainResidueCallInfo(call)) |info| {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             return try self.emitExpr(info.base, info.domain_ty);

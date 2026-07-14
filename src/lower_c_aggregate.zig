@@ -25,7 +25,6 @@ const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const packedBitsMaskLiteral = lower_c_access.packedBitsMaskLiteral;
 const resolvedArrayChildType = lower_c_shape.resolvedArrayChildType;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
-const resultConstructorCallTag = ast_query.resultConstructorCallTag;
 const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 const structFieldType = lower_c_shape.structFieldType;
 const taggedUnionCase = ast_query.taggedUnionCase;
@@ -382,8 +381,8 @@ fn writeIndent(ctx: EmitContext) !void {
     for (0..ctx.indent.*) |_| try ctx.out.appendSlice(ctx.allocator, "    ");
 }
 
-pub fn emitResultConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
-    const tag = resultConstructorCallTag(call) orelse return false;
+pub fn emitResultConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, tag: []const u8) !bool {
+    if (call.type_args.len != 0 or call.args.len != 1) return false;
     const payload_ty = resultPayloadTypeForTag(target_ty, tag) orelse return false;
     const result_ty = try ctx.c_type(ctx.emit_ctx, target_ty);
 
