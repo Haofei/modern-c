@@ -84,6 +84,12 @@ pub const RawCallInfo = struct {
     result_ty: ast.TypeExpr,
 };
 
+pub const ByteViewCallInfo = struct {
+    kind: mir_model.CallTargetKind,
+    source_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
+};
+
 pub const MmioFencePlacement = enum {
     before_store,
     after_load,

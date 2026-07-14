@@ -1366,16 +1366,22 @@ test "MIR owns byte-view call target facts" {
     const view = functionByName(typed_mir, "byte_view").?;
     try std.testing.expectEqual(@as(usize, 1), view.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.byte_view_as_bytes, view.call_target_facts[0].kind);
-    try std.testing.expectEqualStrings("u8", view.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 1), view.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.byte_view_result, view.target_type_facts[0].kind);
+    try std.testing.expectEqualStrings("[]const", view.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqual(@as(usize, 2), view.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.byte_view_source, view.target_type_facts[0].kind);
+    try std.testing.expectEqualStrings("u32", view.target_type_facts[0].target_ty.kind.name.text);
+    try std.testing.expectEqual(mir.TargetTypeKind.byte_view_result, view.target_type_facts[1].kind);
+    try std.testing.expectEqual(ast.Mutability.@"const", view.target_type_facts[1].target_ty.kind.slice.mutability);
 
     const equal = functionByName(typed_mir, "byte_equal").?;
     try std.testing.expectEqual(@as(usize, 1), equal.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.byte_view_equal, equal.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("bool", equal.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 1), equal.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.byte_view_result, equal.target_type_facts[0].kind);
+    try std.testing.expectEqual(@as(usize, 2), equal.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.byte_view_source, equal.target_type_facts[0].kind);
+    try std.testing.expectEqual(ast.Mutability.@"const", equal.target_type_facts[0].target_ty.kind.slice.mutability);
+    try std.testing.expectEqual(mir.TargetTypeKind.byte_view_result, equal.target_type_facts[1].kind);
+    try std.testing.expectEqualStrings("bool", equal.target_type_facts[1].target_ty.kind.name.text);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }

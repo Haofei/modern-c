@@ -13,7 +13,6 @@ const sema_type = @import("sema_type.zig");
 // existing call sites read unchanged.
 const isIdentNamed = ast_query.isIdentNamed;
 const typeName = ast_query.typeName;
-const ByteViewCallKind = ast_query.ByteViewCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
@@ -141,6 +140,7 @@ const MmioFieldInfo = lower_llvm_model.MmioFieldInfo;
 const MmioAccessInfo = lower_llvm_model.MmioAccessInfo;
 const MmioMapInfo = lower_llvm_model.MmioMapInfo;
 const RawCallInfo = lower_llvm_model.RawCallInfo;
+const ByteViewCallInfo = lower_llvm_model.ByteViewCallInfo;
 const MmioFencePlacement = lower_llvm_model.MmioFencePlacement;
 const DmaBufCallInfo = lower_llvm_model.DmaBufCallInfo;
 const DmaCacheCallInfo = lower_llvm_model.DmaCacheCallInfo;
@@ -6584,11 +6584,8 @@ const LlvmEmitter = struct {
             const value = try self.emitExpr(info.base, info.enum_ty);
             return try self.castValue(value, info.enum_ty, info.repr_ty);
         }
-        if (byteViewCallKind(call.callee.*)) |kind| {
-            const expected_fact = mir.byteViewCallTargetKind(call) orelse return error.UnsupportedLlvmEmission;
-            if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return error.UnsupportedLlvmEmission;
-            _ = self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span) orelse return error.UnsupportedLlvmEmission;
-            return try self.emitByteViewCall(call, kind);
+        if (byteViewCallKind(call.callee.*) != null) {
+            return try self.emitByteViewCall(call, self.byteViewCallInfo(call) orelse return error.UnsupportedLlvmEmission);
         }
         const result_constructor = if (self.mirCallTargetKindAt(span)) |kind| mir.resultConstructorFactInfo(kind) else null;
         if (result_constructor) |constructor| {
@@ -6985,22 +6982,21 @@ const LlvmEmitter = struct {
         return try self.castValue(current, source_ty, target_ty);
     }
 
-    fn emitByteViewCall(self: *LlvmEmitter, call: anytype, kind: ByteViewCallKind) ![]const u8 {
+    fn emitByteViewCall(self: *LlvmEmitter, call: anytype, info: ByteViewCallInfo) ![]const u8 {
         if (call.type_args.len != 0) return error.UnsupportedLlvmEmission;
-        return switch (kind) {
-            .as_bytes => try self.emitAsBytesCall(call),
-            .bytes_equal => try self.emitBytesEqualCall(call),
+        return switch (info.kind) {
+            .byte_view_as_bytes => try self.emitAsBytesCall(call, info),
+            .byte_view_equal => try self.emitBytesEqualCall(call, info),
+            else => error.UnsupportedLlvmEmission,
         };
     }
 
-    fn emitAsBytesCall(self: *LlvmEmitter, call: anytype) ![]const u8 {
+    fn emitAsBytesCall(self: *LlvmEmitter, call: anytype, info: ByteViewCallInfo) ![]const u8 {
         if (call.args.len != 1) return error.UnsupportedLlvmEmission;
-        const target = byteViewAddressTarget(call.args[0]) orelse return error.UnsupportedLlvmEmission;
-        const source_ty = self.exprType(target) orelse return error.UnsupportedLlvmEmission;
-        const size = self.comptimeSizeOf(source_ty, 0) orelse return error.UnsupportedLlvmEmission;
-        const ptr = try self.emitExpr(call.args[0], try self.pointerTypeFor(source_ty));
-        const slice_ty = try self.constU8SliceType(call.callee.*.span);
-        const slice_llvm = try self.llvmType(slice_ty);
+        _ = byteViewAddressTarget(call.args[0]) orelse return error.UnsupportedLlvmEmission;
+        const size = self.comptimeSizeOf(info.source_ty, 0) orelse return error.UnsupportedLlvmEmission;
+        const ptr = try self.emitExpr(call.args[0], try self.pointerTypeFor(info.source_ty));
+        const slice_llvm = try self.llvmType(info.result_ty);
         const with_ptr = try self.nextTemp();
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, ptr {s}, 0\n", .{ with_ptr, slice_llvm, ptr });
@@ -7008,12 +7004,11 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitBytesEqualCall(self: *LlvmEmitter, call: anytype) ![]const u8 {
+    fn emitBytesEqualCall(self: *LlvmEmitter, call: anytype, info: ByteViewCallInfo) ![]const u8 {
         if (call.args.len != 2) return error.UnsupportedLlvmEmission;
-        const slice_ty = try self.constU8SliceType(call.callee.*.span);
-        const slice_llvm = try self.llvmType(slice_ty);
-        const left = try self.emitExpr(call.args[0], self.exprType(call.args[0]) orelse slice_ty);
-        const right = try self.emitExpr(call.args[1], self.exprType(call.args[1]) orelse slice_ty);
+        const slice_llvm = try self.llvmType(info.source_ty);
+        const left = try self.emitExpr(call.args[0], info.source_ty);
+        const right = try self.emitExpr(call.args[1], info.source_ty);
         const left_ptr = try self.nextTemp();
         const left_len = try self.nextTemp();
         const right_ptr = try self.nextTemp();
@@ -8112,6 +8107,16 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn byteViewCallInfo(self: *LlvmEmitter, call: anytype) ?ByteViewCallInfo {
+        const kind = mir.byteViewCallTargetKind(call) orelse return null;
+        if (self.mirCallTargetKindAt(call.callee.*.span) != kind) return null;
+        return .{
+            .kind = kind,
+            .source_ty = (self.mirTargetTypeFactAt(.byte_view_source, call.callee.*.span) orelse return null).target_ty,
+            .result_ty = (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span) orelse return null).target_ty,
+        };
+    }
+
     fn emitMmioRegisterAddress(self: *LlvmEmitter, info: MmioAccessInfo) ![]const u8 {
         const base = try self.emitExpr(info.base, try self.mmioPointerType(info.struct_ty, info.base.span));
         if (info.offset == 0) return base;
@@ -8200,12 +8205,6 @@ const LlvmEmitter = struct {
         const child = try self.scratch.allocator().create(ast.TypeExpr);
         child.* = child_ty;
         return .{ .span = span, .kind = .{ .slice = .{ .mutability = mutability, .child = child } } };
-    }
-
-    fn constU8SliceType(self: *LlvmEmitter, span: ast.Span) !ast.TypeExpr {
-        const child = try self.scratch.allocator().create(ast.TypeExpr);
-        child.* = simpleType(span, "u8");
-        return .{ .span = span, .kind = .{ .slice = .{ .mutability = .@"const", .child = child } } };
     }
 
     fn structDeclForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.StructDecl {

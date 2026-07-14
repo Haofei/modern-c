@@ -1691,8 +1691,6 @@ const CEmitter = struct {
             .emit_expr_with_target = emitExprWithTargetForMemory,
             .c_type = cTypeForCall,
             .slice_type_name = sliceTypeNameForMemory,
-            .operand_emit_type = operandEmitTypeForMemory,
-            .expr_source_type = exprSourceTypeForMemory,
             .mir_call_target_kind = mirCallTargetKindForLowering,
             .mir_target_type = mirTargetTypeForLowering,
         };
@@ -2301,16 +2299,6 @@ const CEmitter = struct {
     fn emitExprWithTargetForMemory(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitExprWithTarget(expr, locals, target_ty);
-    }
-
-    fn operandEmitTypeForMemory(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.operandEmitType(expr, locals);
-    }
-
-    fn exprSourceTypeForMemory(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.exprSourceTypeForEmission(expr, locals);
     }
 
     fn mmioAccessForMmio(ctx: *anyopaque, callee: ast.Expr, args: []ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {

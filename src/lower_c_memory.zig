@@ -12,13 +12,11 @@ const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const byteViewCallKind = ast_query.byteViewCallKind;
 const isIdentNamed = ast_query.isIdentNamed;
 const memberCallee = ast_query.memberCallee;
-const simpleNameType = ast_query.simpleNameType;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void;
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
 pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, mutability: ast.Mutability) anyerror![]const u8;
-pub const ExprTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 
@@ -33,8 +31,6 @@ pub const Context = struct {
     emit_expr_with_target: EmitExprWithTargetFn,
     c_type: CTypeFn,
     slice_type_name: SliceTypeNameFn,
-    operand_emit_type: ExprTypeFn,
-    expr_source_type: ExprTypeFn,
     mir_call_target_kind: MirCallTargetKindFn,
     mir_target_type: MirTargetTypeFn,
 };
@@ -43,17 +39,14 @@ pub fn emitByteViewCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap
     const kind = byteViewCallKind(call.callee.*) orelse return false;
     const expected_fact = mir.byteViewCallTargetKind(call) orelse return error.UnsupportedCEmission;
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_fact) return error.UnsupportedCEmission;
-    _ = ctx.mir_target_type(ctx.emit_ctx, .byte_view_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    const source_ty = ctx.mir_target_type(ctx.emit_ctx, .byte_view_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    const result_ty = ctx.mir_target_type(ctx.emit_ctx, .byte_view_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
     if (call.type_args.len != 0) return error.UnsupportedCEmission;
     switch (kind) {
         .as_bytes => {
             if (call.args.len != 1) return error.UnsupportedCEmission;
-            const target = byteViewAddressTarget(call.args[0]) orelse return error.UnsupportedCEmission;
-            const source_ty = ctx.operand_emit_type(ctx.emit_ctx, target, locals) orelse
-                ctx.expr_source_type(ctx.emit_ctx, target, locals) orelse
-                return error.UnsupportedCEmission;
-            const slice_name = try ctx.slice_type_name(ctx.emit_ctx, simpleNameType("u8", call.callee.*.span), .@"const");
-            try ctx.out.print(ctx.allocator, "(({s}){{ .ptr = (uint8_t const *)(void *)(", .{slice_name});
+            _ = byteViewAddressTarget(call.args[0]) orelse return error.UnsupportedCEmission;
+            try ctx.out.print(ctx.allocator, "(({s}){{ .ptr = (uint8_t const *)(void *)(", .{try ctx.c_type(ctx.emit_ctx, result_ty)});
             try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
             try ctx.out.print(ctx.allocator, "), .len = (uintptr_t)sizeof({s}) }})", .{try ctx.c_type(ctx.emit_ctx, source_ty)});
             return true;
@@ -63,9 +56,9 @@ pub fn emitByteViewCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap
             const n = ctx.temp_index.*;
             ctx.temp_index.* += 1;
             try ctx.out.print(ctx.allocator, "({{ __auto_type mc_a{d} = (", .{n});
-            try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+            try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, source_ty);
             try ctx.out.print(ctx.allocator, "); __auto_type mc_b{d} = (", .{n});
-            try ctx.emit_expr(ctx.emit_ctx, call.args[1], locals);
+            try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[1], locals, source_ty);
             try ctx.out.print(ctx.allocator, "); (mc_a{d}.len == mc_b{d}.len) && (__builtin_memcmp(mc_a{d}.ptr, mc_b{d}.ptr, mc_a{d}.len) == 0); }})", .{ n, n, n, n, n });
             return true;
         },

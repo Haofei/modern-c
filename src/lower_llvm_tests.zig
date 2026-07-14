@@ -741,20 +741,21 @@ test "LLVM rejects prebuilt MIR with missing byte-view call target facts" {
     );
 }
 
-test "LLVM reflection and byte-view result types require MIR target facts" {
+test "LLVM reflection and complete byte-view types require MIR target facts" {
     const source =
         \\fn reflected() -> usize { return size_of<u32>(); }
+        \\fn view(value: u32) -> []const u8 { return mem.as_bytes(&value); }
         \\fn equal(left: []const u8, right: []const u8) -> bool { return mem.bytes_equal(left, right); }
     ;
-    var parsed = try test_support.parseModule("llvm_reflection_byte_view_result_facts.mc", source);
+    var parsed = try test_support.parseModule("llvm_reflection_byte_view_type_facts.mc", source);
     defer parsed.deinit();
-    for ([_][]const u8{ "reflected", "equal" }) |name| {
+    for ([_][]const u8{ "reflected", "view", "equal" }) |name| {
         var module_mir = try mir.build(std.testing.allocator, parsed.module);
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, name);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_reflection_byte_view_result_facts.mc", .{}, false, .riscv64, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_reflection_byte_view_type_facts.mc", .{}, false, .riscv64, null));
     }
 }
 

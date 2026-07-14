@@ -355,6 +355,7 @@ pub const TargetTypeKind = enum {
     qualified_union_result,
     enum_variant_path_result,
     reflection_result,
+    byte_view_source,
     byte_view_result,
 };
 

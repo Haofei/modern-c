@@ -4850,7 +4850,7 @@ const FunctionBuilder = struct {
                 // so leave it `.unknown` rather than mis-binding to `summaries[method_name]`.
                 const is_dyn_dispatch = self.isDynDispatchMember(node.callee.*);
                 const reflection_target = reflectionCallTargetKind(node);
-                const byte_view_target = byteViewCallTargetKind(node);
+                const byte_view_target = self.byteViewCallTarget(node);
                 const semantic_escape_target = try self.semanticEscapeCallTarget(node);
                 const enum_raw_target = self.enumRawCallTarget(node);
                 const domain_target = try self.domainCallTarget(node);
@@ -4877,11 +4877,9 @@ const FunctionBuilder = struct {
                     target.result_ty
                 else if (reflection_target != null)
                     .{ .integer = "usize" }
-                else if (byte_view_target) |kind| switch (kind) {
-                    .byte_view_as_bytes => .{ .slice = "u8" },
-                    .byte_view_equal => .bool,
-                    else => unreachable,
-                } else if (reduceCallKind(node.callee.*) != null)
+                else if (byte_view_target) |target|
+                    target.result_ty
+                else if (reduceCallKind(node.callee.*) != null)
                     self.exprType(expr)
                 else if (self.atomicCallValueType(node)) |ty|
                     ty
@@ -5024,16 +5022,11 @@ const FunctionBuilder = struct {
                     const result_ty = ast_query.simpleNameType("usize", node.callee.*.span);
                     try self.appendTargetTypeFact(.reflection_result, result_ty, reflection_ty, expr.span);
                 }
-                if (byte_view_target) |fact_kind| {
-                    const byte_view_ty: ValueType = switch (fact_kind) {
-                        .byte_view_as_bytes => .{ .slice = "u8" },
-                        .byte_view_equal => .bool,
-                        else => unreachable,
-                    };
-                    try self.addInstr(.call_target, @tagName(fact_kind), byte_view_ty, expr.span);
-                    try self.addCallTargetFact(fact_kind, byte_view_ty, expr.span);
-                    const result_ty = ast_query.byteViewCallReturnType(node) orelse return error.UnsupportedMirConstruction;
-                    try self.appendTargetTypeFact(.byte_view_result, result_ty, byte_view_ty, expr.span);
+                if (byte_view_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.appendTargetTypeFact(.byte_view_source, target.source_type_expr, target.source_ty, expr.span);
+                    try self.appendTargetTypeFact(.byte_view_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (semantic_escape_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
@@ -5351,6 +5344,34 @@ const FunctionBuilder = struct {
             .address_ty = valueTypeFromTypeAlias(address_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
             .payload_type_expr = payload_type_expr,
             .payload_ty = valueTypeFromTypeAlias(payload_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .result_type_expr = result_type_expr,
+            .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+        };
+    }
+
+    const ByteViewCallTarget = struct {
+        kind: CallTargetKind,
+        source_type_expr: ast.TypeExpr,
+        source_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+    };
+
+    fn byteViewCallTarget(self: *FunctionBuilder, call: anytype) ?ByteViewCallTarget {
+        const kind = byteViewCallTargetKind(call) orelse return null;
+        const source_type_expr = switch (kind) {
+            .byte_view_as_bytes => blk: {
+                const target = ast_query.byteViewAddressTarget(call.args[0]) orelse return null;
+                break :blk self.typeExprForExpr(target) orelse return null;
+            },
+            .byte_view_equal => ast_query.constU8SliceType(call.callee.*.span),
+            else => unreachable,
+        };
+        const result_type_expr = ast_query.byteViewCallReturnType(call) orelse return null;
+        return .{
+            .kind = kind,
+            .source_type_expr = source_type_expr,
+            .source_ty = valueTypeFromTypeAlias(source_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
             .result_type_expr = result_type_expr,
             .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
         };
