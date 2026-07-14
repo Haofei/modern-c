@@ -829,6 +829,49 @@ test "builds typed MIR CFG with explicit trap edge" {
     try std.testing.expectEqual(TrapKind.IntegerOverflow, typed_mir.functions[0].trap_edges[0].kind);
 }
 
+test "MIR owns every explicit trap reason identity" {
+    const source =
+        \\fn trap_bounds() -> never { return trap(.Bounds); }
+        \\fn trap_null_unwrap() -> never { return trap(.NullUnwrap); }
+        \\fn trap_integer_overflow() -> never { return trap(.IntegerOverflow); }
+        \\fn trap_divide_by_zero() -> never { return trap(.DivideByZero); }
+        \\fn trap_invalid_shift() -> never { return trap(.InvalidShift); }
+        \\fn trap_invalid_representation() -> never { return trap(.InvalidRepresentation); }
+        \\fn trap_assert() -> never { return trap(.Assert); }
+        \\fn trap_unreachable() -> never { return trap(.Unreachable); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_explicit_trap_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const cases = [_]struct { name: []const u8, kind: mir.CallTargetKind }{
+        .{ .name = "trap_bounds", .kind = .trap_bounds },
+        .{ .name = "trap_null_unwrap", .kind = .trap_null_unwrap },
+        .{ .name = "trap_integer_overflow", .kind = .trap_integer_overflow },
+        .{ .name = "trap_divide_by_zero", .kind = .trap_divide_by_zero },
+        .{ .name = "trap_invalid_shift", .kind = .trap_invalid_shift },
+        .{ .name = "trap_invalid_representation", .kind = .trap_invalid_representation },
+        .{ .name = "trap_assert", .kind = .trap_assert },
+        .{ .name = "trap_unreachable", .kind = .trap_unreachable },
+    };
+    for (cases) |case| {
+        const function = functionByName(typed_mir, case.name).?;
+        try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
+        try std.testing.expectEqual(case.kind, function.call_target_facts[0].kind);
+        try std.testing.expectEqualStrings("never", function.call_target_facts[0].result_ty.name());
+        try std.testing.expectEqual(@as(usize, 1), function.trap_edges.len);
+        try std.testing.expectEqual(mir.TrapSource.explicit_trap, function.trap_edges[0].source);
+    }
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+}
+
 test "MIR records complete checked binary trap edges for division remainder and shifts" {
     const source =
         \\fn unsigned_div(a: u32, b: u32) -> u32 {

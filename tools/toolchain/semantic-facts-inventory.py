@@ -725,6 +725,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "appendTargetTypeFact(.va_payload": 1,
         "appendTargetTypeFact(.va_result": 1,
         "addCallTargetFact(va.kind": 0,
+        "pub fn explicitTrapCallTargetKind(": 1,
+        "pub fn explicitTrapHelperForTarget(": 1,
         "fn rawCallTarget(": 1,
         "fn rawLoadCallValueType(": 0,
         "fn rawPtrCallValueType(": 0,
@@ -750,6 +752,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn mmioCallTarget(": 1,
         "fn mmioMapCallTarget(": 1,
         "try self.addCallTargetFact(target.kind": 9,
+        "try self.addCallTargetFact(target, .never": 1,
         "appendTargetTypeFact(.domain_type": 1,
         "appendTargetTypeFact(.domain_payload": 1,
         "appendTargetTypeFact(.domain_result": 1,
@@ -813,6 +816,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn checkVaCall(": 1,
         "fn vaCursorArgumentValid(": 1,
         "E_VA_START_CONTEXT": 1,
+        "fn checkTrapKind(": 1,
         "fn byteViewCallReturnType(": 0,
         "std.mem.eql(u8, member.name.text, \"fetch_add\")": 0,
         "std.mem.eql(u8, member.name.text, \"assume_init\")": 0,
@@ -1023,6 +1027,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mmioMapCallPayloadType": 0,
     },
     "src/lower_c_call.zig": {
+        "mir.explicitTrapHelperForTarget(kind)": 1,
         "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .declassify": 1,
         "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .assume_noalias": 1,
         "ctx.mir_target_type(ctx.emit_ctx, .raw_address": 2,
@@ -1043,6 +1048,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "ctx.mir_target_type(ctx.emit_ctx, .assume_noalias_source": 1,
         "ctx.mir_target_type(ctx.emit_ctx, .assume_noalias_result": 1,
         "return call.type_args[0];": 0,
+    },
+    "src/lower_c_op.zig": {
+        "trapHelperForCall(": 0,
+        "isTrapCallee(": 0,
     },
     "src/lower_llvm.zig": {
         "try mir.validateIntegerFactsForLowering(module_mir.*);": 1,
@@ -1074,6 +1083,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.va_start_result": 0,
         "mirTargetTypeFactAt(.va_arg_result": 0,
         "else => try self.emitExpr(expr, self.exprType(expr) orelse return error.UnsupportedLlvmEmission),": 0,
+        "mir.explicitTrapHelperForTarget(kind)": 1,
         "mirTargetTypeFactAt(.qualified_union_result": 2,
         "mirTargetTypeFactAt(.enum_variant_path_result": 2,
         "fn reflectionCallInfo(": 1,
@@ -1197,6 +1207,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirCallTargetKindAt(call.callee.*.span) == .declassify": 1,
         "mirCallTargetKindAt(call.callee.*.span) != .assume_noalias": 1,
         "mirCallTargetKindAt(call.callee.*.span) == .assume_noalias": 1,
+    },
+    "src/lower_llvm_op.zig": {
+        "trapHelperForCall(": 0,
     },
     "src/mir_tests.zig": {
         "MIR owns DMA call identities and complete types": 1,

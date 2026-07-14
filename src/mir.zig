@@ -4860,6 +4860,7 @@ const FunctionBuilder = struct {
                 const mmio_target = self.mmioCallTarget(node);
                 const raw_target = self.rawCallTarget(node);
                 const va_target = try self.vaCallTarget(node);
+                const explicit_trap_target = explicitTrapCallTargetKind(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
                 else if (semantic_escape_target) |target|
@@ -4892,6 +4893,8 @@ const FunctionBuilder = struct {
                     ty
                 else if (va_target) |target|
                     target.result_ty
+                else if (explicit_trap_target != null)
+                    .never
                 else if (raw_target) |target|
                     target.result_ty
                 else if (self.cpuPauseCallValueType(node)) |ty|
@@ -4998,6 +5001,10 @@ const FunctionBuilder = struct {
                         try self.appendTargetTypeFact(.va_payload, payload_ty, target.payload_ty.?, expr.span);
                     }
                     try self.appendTargetTypeFact(.va_result, target.result_type_expr, target.result_ty, expr.span);
+                }
+                if (explicit_trap_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target), .never, expr.span);
+                    try self.addCallTargetFact(target, .never, expr.span);
                 }
                 if (self.cpuPauseCallValueType(node)) |cpu_pause_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.cpu_pause), cpu_pause_ty, expr.span);
@@ -8981,6 +8988,42 @@ fn reflectionCallPreservesPointerProvenance(call: anytype) bool {
     if (call.type_args.len != 1) return false;
     const expected_args: usize = if (reflectionRequiresField(kind)) 1 else 0;
     return call.args.len == expected_args;
+}
+
+pub fn explicitTrapCallTargetKind(call: anytype) ?CallTargetKind {
+    if (!isTrapCall(call.callee.*) or call.type_args.len != 0 or call.args.len != 1) return null;
+    const name = explicitTrapReasonName(call.args[0]) orelse return null;
+    if (std.mem.eql(u8, name, "Bounds")) return .trap_bounds;
+    if (std.mem.eql(u8, name, "NullUnwrap")) return .trap_null_unwrap;
+    if (std.mem.eql(u8, name, "IntegerOverflow")) return .trap_integer_overflow;
+    if (std.mem.eql(u8, name, "DivideByZero")) return .trap_divide_by_zero;
+    if (std.mem.eql(u8, name, "InvalidShift")) return .trap_invalid_shift;
+    if (std.mem.eql(u8, name, "InvalidRepresentation")) return .trap_invalid_representation;
+    if (std.mem.eql(u8, name, "Assert")) return .trap_assert;
+    if (std.mem.eql(u8, name, "Unreachable")) return .trap_unreachable;
+    return null;
+}
+
+fn explicitTrapReasonName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .enum_literal => |literal| literal.text,
+        .grouped => |inner| explicitTrapReasonName(inner.*),
+        else => null,
+    };
+}
+
+pub fn explicitTrapHelperForTarget(kind: CallTargetKind) ?[]const u8 {
+    return switch (kind) {
+        .trap_bounds => "mc_trap_Bounds",
+        .trap_null_unwrap => "mc_trap_NullUnwrap",
+        .trap_integer_overflow => "mc_trap_IntegerOverflow",
+        .trap_divide_by_zero => "mc_trap_DivideByZero",
+        .trap_invalid_shift => "mc_trap_InvalidShift",
+        .trap_invalid_representation => "mc_trap_InvalidRepresentation",
+        .trap_assert => "mc_trap_Assert",
+        .trap_unreachable => "mc_trap_Unreachable",
+        else => null,
+    };
 }
 
 pub fn reflectionCallTargetKind(call: anytype) ?CallTargetKind {

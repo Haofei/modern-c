@@ -24,7 +24,6 @@ const lower_c_op = @import("lower_c_op.zig");
 const isCheckedBinaryOp = lower_c_op.isCheckedBinaryOp;
 const checkedHelperParts = lower_c_op.checkedHelperParts;
 const satHelperParts = lower_c_op.satHelperParts;
-const trapHelperForCall = lower_c_op.trapHelperForCall;
 
 const lower_c_atomic = @import("lower_c_atomic.zig");
 
@@ -3423,9 +3422,10 @@ const CEmitter = struct {
                 return true;
             },
             .call => |node| {
-                if (trapHelperForCall(node)) |helper| {
+                if (ast_query.isIdentNamed(node.callee.*, "trap")) {
                     try self.writeIndent();
-                    try self.out.print(self.allocator, "{s}();\n", .{helper});
+                    if (!try lower_c_call.emitTrapCall(self.callContext(), node)) return error.UnsupportedCEmission;
+                    try self.out.appendSlice(self.allocator, ";\n");
                     return true;
                 }
                 return false;

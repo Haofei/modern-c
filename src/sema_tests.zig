@@ -498,6 +498,21 @@ test "varargs calls require exact shape and mutable va_list cursor" {
     try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_VA_START_CONTEXT"));
 }
 
+test "explicit trap rejects type arguments before MIR construction" {
+    const source =
+        \\fn rejected() -> never {
+        \\    return trap<u32>(.Assert);
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "trap_type_arguments.mc", source);
+    defer reporter.deinit();
+
+    try checkSource(source, &reporter);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_INVALID_TRAP_KIND"));
+}
+
 test "rejects by-value struct signatures at extern and export ABI boundaries" {
     const source =
         \\extern "C" struct Packet {

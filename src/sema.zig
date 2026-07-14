@@ -3027,7 +3027,7 @@ pub const Checker = struct {
                 if (self.checkDeclassifyCall(expr.span, node, ctx)) |class| return class;
                 const const_get_class = self.checkConstGetCall(expr.span, node, ctx);
                 if (const_get_class) |class| return class;
-                if (trap_call) self.checkTrapKind(expr.span, node.args);
+                if (trap_call) self.checkTrapKind(expr.span, node.type_args, node.args);
                 self.checkCallCallee(node.callee.*, ctx);
                 for (node.type_args) |ty| self.checkType(ty, .normal, ctx);
                 const direct_function = if (!trap_call and node.type_args.len == 0) directCallFunction(node.callee.*, ctx) else null;
@@ -4755,8 +4755,8 @@ pub const Checker = struct {
         }
     }
 
-    fn checkTrapKind(self: *Checker, span: diagnostics.Span, args: []ast.Expr) void {
-        if (args.len != 1) {
+    fn checkTrapKind(self: *Checker, span: diagnostics.Span, type_args: []ast.TypeExpr, args: []ast.Expr) void {
+        if (type_args.len != 0 or args.len != 1) {
             self.errorCode(span, "E_INVALID_TRAP_KIND", "trap expects exactly one language TrapKind");
             return;
         }

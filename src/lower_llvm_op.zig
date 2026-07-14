@@ -84,37 +84,6 @@ pub fn uncheckedBuiltinOp(callee: ast.Expr) ?[]const u8 {
     };
 }
 
-pub fn trapHelperForCall(call: anytype) ?[]const u8 {
-    const callee = switch (call.callee.kind) {
-        .ident => |ident| ident.text,
-        .grouped => |inner| switch (inner.kind) {
-            .ident => |ident| ident.text,
-            else => return null,
-        },
-        else => return null,
-    };
-    if (!std.mem.eql(u8, callee, "trap") or call.type_args.len != 0 or call.args.len != 1) return null;
-    return switch (call.args[0].kind) {
-        .enum_literal => |literal| trapHelperForKind(literal.text),
-        .grouped => |inner| switch (inner.kind) {
-            .enum_literal => |literal| trapHelperForKind(literal.text),
-            else => null,
-        },
-        else => null,
-    };
-}
-
-pub fn trapHelperForKind(kind: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, kind, "Bounds")) return "mc_trap_Bounds";
-    if (std.mem.eql(u8, kind, "IntegerOverflow")) return "mc_trap_IntegerOverflow";
-    if (std.mem.eql(u8, kind, "DivideByZero")) return "mc_trap_DivideByZero";
-    if (std.mem.eql(u8, kind, "InvalidShift")) return "mc_trap_InvalidShift";
-    if (std.mem.eql(u8, kind, "InvalidRepresentation")) return "mc_trap_InvalidRepresentation";
-    if (std.mem.eql(u8, kind, "Assert")) return "mc_trap_Assert";
-    if (std.mem.eql(u8, kind, "Unreachable")) return "mc_trap_Unreachable";
-    return null;
-}
-
 pub fn normalizedIntLiteral(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
     var cleaned: std.ArrayList(u8) = .empty;
     for (literal) |ch| {

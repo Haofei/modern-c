@@ -13,7 +13,6 @@ const lower_c_builtin = @import("lower_c_builtin.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
-const lower_c_op = @import("lower_c_op.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
 
@@ -28,7 +27,6 @@ const isPAddrType = lower_c_type.isPAddrType;
 const isPointerLikeAddressType = lower_c_type.isPointerLikeAddressType;
 const isVaListType = lower_c_type.isVaListType;
 const isVoidType = lower_c_type.isVoidType;
-const trapHelperForCall = lower_c_op.trapHelperForCall;
 const uncheckedNoOverflowCallOp = lower_c_expr.uncheckedNoOverflowCallOp;
 const uncheckedNoOverflowOperator = lower_c_expr.uncheckedNoOverflowOperator;
 const vaCallMember = ast_query.vaCallMember;
@@ -453,7 +451,10 @@ pub fn emitSpecialSequencedArgTemp(ctx: SpecialTempContext, arg: ast.Expr, local
 }
 
 pub fn emitTrapCall(ctx: Context, call: anytype) !bool {
-    const helper = trapHelperForCall(call) orelse return false;
+    if (!isIdentNamed(call.callee.*, "trap")) return false;
+    if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    const helper = mir.explicitTrapHelperForTarget(kind) orelse return error.UnsupportedCEmission;
     try ctx.out.print(ctx.allocator, "{s}()", .{helper});
     return true;
 }

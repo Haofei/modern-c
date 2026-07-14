@@ -1384,6 +1384,46 @@ test "lower-c varargs calls require complete MIR cursor payload and result facts
     }
 }
 
+test "lower-c explicit traps require exact MIR reason identities" {
+    const source =
+        \\fn trap_bounds() -> never { return trap(.Bounds); }
+        \\fn trap_null_unwrap() -> never { return trap(.NullUnwrap); }
+        \\fn trap_integer_overflow() -> never { return trap(.IntegerOverflow); }
+        \\fn trap_divide_by_zero() -> never { return trap(.DivideByZero); }
+        \\fn trap_invalid_shift() -> never { return trap(.InvalidShift); }
+        \\fn trap_invalid_representation() -> never { return trap(.InvalidRepresentation); }
+        \\fn trap_assert() -> never { return trap(.Assert); }
+        \\fn trap_unreachable() -> never { return trap(.Unreachable); }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_explicit_trap_target_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_explicit_trap_target_facts.mc", .{}, false, null);
+    for ([_][]const u8{ "Bounds", "NullUnwrap", "IntegerOverflow", "DivideByZero", "InvalidShift", "InvalidRepresentation", "Assert", "Unreachable" }) |reason| {
+        const helper = try std.fmt.allocPrint(std.testing.allocator, "mc_trap_{s}();", .{reason});
+        defer std.testing.allocator.free(helper);
+        try std.testing.expect(std.mem.indexOf(u8, complete_output.items, helper) != null);
+    }
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try clearCallTargetFactsForFunction(&missing, "trap_bounds");
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_explicit_trap_target_facts.mc", .{}, false, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try retargetCallTargetFactsForFunction(&stale, "trap_bounds", .trap_assert);
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_explicit_trap_target_facts.mc", .{}, false, null));
+}
+
 test "lower-c rejects prebuilt MIR with missing cpu pause call target facts" {
     const source =
         \\fn cpu_pause_call_target_fact_gate() -> void {

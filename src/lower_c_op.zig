@@ -9,7 +9,6 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 
 const lower_c_type = @import("lower_c_type.zig");
 const checkedTypeSuffix = lower_c_type.checkedTypeSuffix;
@@ -117,30 +116,6 @@ pub fn arithmeticDomainOpName(op: ast.BinaryOp) []const u8 {
         .shr => "shr",
         else => "unknown",
     };
-}
-
-pub fn trapHelperForCall(call: anytype) ?[]const u8 {
-    if (!isTrapCallee(call.callee.*) or call.args.len != 1) return null;
-    return switch (call.args[0].kind) {
-        .enum_literal => |literal| trapHelperForKind(literal.text),
-        else => null,
-    };
-}
-
-pub fn isTrapCallee(expr: ast.Expr) bool {
-    return ast_query.isIdentNamed(expr, "trap");
-}
-
-pub fn trapHelperForKind(kind: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, kind, "Bounds")) return "mc_trap_Bounds";
-    if (std.mem.eql(u8, kind, "NullUnwrap")) return "mc_trap_NullUnwrap";
-    if (std.mem.eql(u8, kind, "IntegerOverflow")) return "mc_trap_IntegerOverflow";
-    if (std.mem.eql(u8, kind, "DivideByZero")) return "mc_trap_DivideByZero";
-    if (std.mem.eql(u8, kind, "InvalidShift")) return "mc_trap_InvalidShift";
-    if (std.mem.eql(u8, kind, "InvalidRepresentation")) return "mc_trap_InvalidRepresentation";
-    if (std.mem.eql(u8, kind, "Assert")) return "mc_trap_Assert";
-    if (std.mem.eql(u8, kind, "Unreachable")) return "mc_trap_Unreachable";
-    return null;
 }
 
 pub const CheckedOp = union(enum) {
