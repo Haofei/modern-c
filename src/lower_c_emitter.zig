@@ -1648,9 +1648,9 @@ const CEmitter = struct {
     fn builtinEmitContext(self: *CEmitter) lower_c_builtin_emit.Context {
         return .{
             .enum_ctx = self,
-            .enum_name_for_value_expr = enumNameForValueExprForBuiltin,
             .emit_expr = emitExprForCall,
-            .enums = &self.enums,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
+            .mir_target_type = mirTargetTypeForLowering,
             .atomic = self.atomicEmitContext(),
             .call = self.callContext(),
             .convert = self.convertContext(),
@@ -1879,11 +1879,6 @@ const CEmitter = struct {
     fn optTypeNameForType(ctx: *anyopaque, payload_ty: ast.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return lower_c_names.optTypeName(self.typeNameContext(), self.resolveAliasType(payload_ty));
-    }
-
-    fn enumNameForValueExprForBuiltin(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.enumNameForValueExpr(expr, locals);
     }
 
     fn sliceTypeNameForType(ctx: *anyopaque, child: ast.TypeExpr, mutability: ast.Mutability) anyerror![]const u8 {
@@ -6980,12 +6975,11 @@ const CEmitter = struct {
         if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .enum_raw) return if (self.mirTargetTypeFactAt(.enum_raw_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) return if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
-        if (self.rawMethodReturnTypeForCall(call, locals)) |ty| return ty;
-        if (self.enumRawReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.dynDispatchReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.closureCalleeType(call.callee.*, locals)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
@@ -7009,37 +7003,6 @@ const CEmitter = struct {
     fn atomicResultReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         _ = locals;
         return lower_c_atomic.atomicResultPayload(self.atomicEmitContext(), call);
-    }
-
-    // `<open-enum expr>.raw()` yields the enum's underlying representation type
-    // (`open enum E: u32` -> `u32`), so a comparison/return whose operand is a raw
-    // conversion — `e.raw() == 1` — can be typed for emission in a value context
-    // (return / let-init) instead of failing UnsupportedCEmission. The `if`-condition
-    // path emits this inline and never needs the operand type; the sequenced value path does.
-    fn rawMethodReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        if (call.type_args.len != 0) return null;
-        if (call.args.len != 0) return null;
-        const member = memberCallee(call.callee.*) orelse return null;
-        if (!std.mem.eql(u8, member.name.text, "raw")) return null;
-        const enum_name = self.enumNameForValueExpr(member.base.*, locals) orelse return null;
-        const enum_decl = self.enums.get(enum_name) orelse return null;
-        if (!enum_decl.is_open) return null;
-        return enum_decl.repr;
-    }
-
-    // `<enum expr>.raw()` extracts the enum's representation integer (emitted as the enum value
-    // itself, whose C typedef IS that repr). Recovering this type lets a value-producing compare
-    // over a raw operand — `k.raw() == 1` in a typed `let bool` or `return` — type its operands
-    // instead of failing UnsupportedCEmission the way an `if`-condition path already avoids.
-    fn enumRawReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        if (call.type_args.len != 0 or call.args.len != 0) return null;
-        const member = memberCallee(call.callee.*) orelse return null;
-        if (!std.mem.eql(u8, member.name.text, "raw")) return null;
-        const enum_name = self.enumNameForValueExpr(member.base.*, locals) orelse return null;
-        const enum_decl = self.enums.get(enum_name) orelse return null;
-        // `.raw()` yields the declared repr integer (`: T`), defaulting to the enum's own
-        // storage typedef when unannotated — both are integer C storage.
-        return enum_decl.repr orelse simpleNameType(enum_name, member.name.span);
     }
 
     fn exprSourceTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -7071,12 +7034,11 @@ const CEmitter = struct {
         if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .enum_raw) return if (self.mirTargetTypeFactAt(.enum_raw_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) return if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
-        if (self.rawMethodReturnTypeForCall(call, locals)) |ty| return ty;
-        if (self.enumRawReturnTypeForCall(call, locals)) |ty| return ty;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
         return info.return_type;

@@ -990,6 +990,54 @@ test "MIR records typed call target facts for reductions" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns enum raw call identities and source result types" {
+    const source =
+        \\enum Color: u32 { red = 1, blue = 2 }
+        \\open enum Tag: u8 { ready = 3 }
+        \\enum DefaultTag { idle }
+        \\fn closed_raw(value: Color) -> u32 { return value.raw(); }
+        \\fn open_raw(value: Tag) -> u8 { return value.raw(); }
+        \\fn path_raw() -> u32 { return Color.blue.raw(); }
+        \\fn default_raw(value: DefaultTag) -> isize { return value.raw(); }
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_enum_raw_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    for ([_]struct { name: []const u8, source_name: []const u8, result_name: []const u8 }{
+        .{ .name = "closed_raw", .source_name = "Color", .result_name = "u32" },
+        .{ .name = "open_raw", .source_name = "Tag", .result_name = "u8" },
+        .{ .name = "path_raw", .source_name = "Color", .result_name = "u32" },
+        .{ .name = "default_raw", .source_name = "DefaultTag", .result_name = "isize" },
+    }) |case| {
+        const function = functionByName(typed_mir, case.name).?;
+        try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
+        try std.testing.expectEqual(mir.CallTargetKind.enum_raw, function.call_target_facts[0].kind);
+        try std.testing.expectEqualStrings(case.result_name, function.call_target_facts[0].result_ty.name());
+        var source_fact: ?mir.TargetTypeFact = null;
+        var result_fact: ?mir.TargetTypeFact = null;
+        for (function.target_type_facts) |fact| switch (fact.kind) {
+            .enum_raw_source => source_fact = fact,
+            .enum_raw_result => result_fact = fact,
+            else => {},
+        };
+        try std.testing.expectEqualStrings(case.source_name, source_fact.?.target_ty.kind.name.text);
+        try std.testing.expectEqualStrings(case.result_name, result_fact.?.target_ty.kind.name.text);
+    }
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns value reflection call target facts" {
     const source =
         \\extern struct Packet {

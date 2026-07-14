@@ -925,6 +925,50 @@ test "LLVM reductions require MIR element type facts" {
     );
 }
 
+test "LLVM enum raw requires MIR call and target type facts" {
+    const source =
+        \\enum Color: u32 { red = 1 }
+        \\open enum Tag: u8 { ready = 2 }
+        \\enum DefaultTag { idle }
+        \\fn enum_raw_fact_gate(value: Color) -> u32 { return value.raw(); }
+        \\fn open_raw(value: Tag) -> u8 { return value.raw(); }
+        \\fn default_raw(value: DefaultTag) -> isize { return value.raw(); }
+        \\fn path_raw() -> u32 { return Color.red.raw(); }
+    ;
+
+    var parsed = try test_support.parseModule("llvm_enum_raw_facts.mc", source);
+    defer parsed.deinit();
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_enum_raw_facts.mc", .{}, false, .riscv64, null);
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try clearCallTargetFactsForFunction(&module_mir, "enum_raw_fact_gate");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(
+            error.InvalidMirCallTargetFacts,
+            lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_enum_raw_facts.mc", .{}, false, .riscv64, null),
+        );
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try clearTargetTypeFactsForFunction(&module_mir, "enum_raw_fact_gate");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(
+            error.InvalidMirTargetTypeFacts,
+            lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_enum_raw_facts.mc", .{}, false, .riscv64, null),
+        );
+    }
+}
+
 test "LLVM rejects prebuilt MIR with missing phys call target facts" {
     const source =
         \\fn phys_call_target_fact_gate(value: usize) -> PAddr {

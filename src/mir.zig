@@ -4716,9 +4716,12 @@ const FunctionBuilder = struct {
                 const reflection_target = reflectionCallTargetKind(node);
                 const byte_view_target = byteViewCallTargetKind(node);
                 const semantic_escape_target = try self.semanticEscapeCallTarget(node);
+                const enum_raw_target = self.enumRawCallTarget(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
                 else if (semantic_escape_target) |target|
+                    target.result_ty
+                else if (enum_raw_target) |target|
                     target.result_ty
                 else if (reflection_target != null)
                     .{ .integer = "usize" }
@@ -4759,6 +4762,12 @@ const FunctionBuilder = struct {
                     if (node.type_args.len != 1) return error.UnsupportedMirConstruction;
                     const element_ty = node.type_args[0];
                     try self.appendTargetTypeFact(.reduce_element, element_ty, valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
+                }
+                if (enum_raw_target) |target| {
+                    try self.addInstr(.call_target, @tagName(CallTargetKind.enum_raw), target.result_ty, expr.span);
+                    try self.addCallTargetFact(.enum_raw, target.result_ty, expr.span);
+                    try self.appendTargetTypeFact(.enum_raw_source, target.source_type_expr, target.source_ty, expr.span);
+                    try self.appendTargetTypeFact(.enum_raw_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (self.atomicCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
@@ -5505,6 +5514,42 @@ const FunctionBuilder = struct {
         result_type_expr: ast.TypeExpr,
         result_ty: ValueType,
     };
+
+    const EnumRawCallTarget = struct {
+        source_type_expr: ast.TypeExpr,
+        source_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+    };
+
+    fn enumRawCallTarget(self: *FunctionBuilder, call: anytype) ?EnumRawCallTarget {
+        if (call.type_args.len != 0 or call.args.len != 0) return null;
+        const member = memberExpr(call.callee.*) orelse return null;
+        if (!std.mem.eql(u8, member.name.text, "raw")) return null;
+        const source_type_expr = self.enumRawSourceTypeExpr(member.base.*) orelse return null;
+        const source_ty = valueTypeFromTypeAlias(source_type_expr, self.enums, self.structs, self.packed_bits, self.aliases);
+        const enum_name = switch (source_ty) {
+            .closed_enum, .open_enum => |name| name,
+            else => return null,
+        };
+        const enum_info = self.enums.get(enum_name) orelse return null;
+        const result_type_expr = enum_info.repr orelse ast_query.simpleNameType("isize", member.name.span);
+        return .{
+            .source_type_expr = source_type_expr,
+            .source_ty = source_ty,
+            .result_type_expr = result_type_expr,
+            .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+        };
+    }
+
+    fn enumRawSourceTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
+        if (self.typeExprForExpr(expr)) |ty| return ty;
+        return switch (expr.kind) {
+            .grouped => |inner| self.enumRawSourceTypeExpr(inner.*),
+            .member => |member| self.enumVariantPathTypeExpr(member),
+            else => null,
+        };
+    }
 
     fn semanticEscapeCallTarget(self: *FunctionBuilder, call: anytype) !?SemanticEscapeCallTarget {
         if (isDeclassifyCall(call)) {
@@ -7717,6 +7762,7 @@ const FunctionBuilder = struct {
             },
             .call => |node| self.qualifiedUnionConstructorTypeExpr(node) orelse
                 self.reflectionOrByteViewCallTypeExpr(node) orelse
+                (if (self.enumRawCallTarget(node)) |target| target.result_type_expr else null) orelse
                 self.mmioReceiverReadTypeExpr(node.callee.*) orelse
                 mmioMapCallPayloadType(node) orelse
                 reduceCallReturnTypeExpr(node) orelse
@@ -7743,6 +7789,8 @@ const FunctionBuilder = struct {
             .cast => |node| valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases),
             .call => |node| if (self.qualifiedUnionConstructorTypeExpr(node)) |ty|
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
+            else if (self.enumRawCallTarget(node)) |target|
+                target.result_ty
             else if (self.mmioReceiverReadTypeExpr(node.callee.*)) |ty|
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
             else if (self.constGetCallType(node)) |ty|

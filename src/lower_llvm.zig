@@ -8575,10 +8575,10 @@ const LlvmEmitter = struct {
     fn enumRawCallInfo(self: *LlvmEmitter, call: anytype) ?EnumRawCallInfo {
         const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "raw")) return null;
-        const enum_ty = self.exprType(member.base.*) orelse return null;
-        // `.raw()` is a transparent-repr read; valid on both open and closed enums.
-        const enum_decl = self.enumDeclForType(enum_ty) orelse return null;
-        return .{ .base = member.base.*, .enum_ty = enum_ty, .repr_ty = enumReprType(enum_decl) };
+        if (self.mirCallTargetKindAt(call.callee.*.span) != .enum_raw) return null;
+        const enum_ty = (self.mirTargetTypeFactAt(.enum_raw_source, call.callee.*.span) orelse return null).target_ty;
+        const repr_ty = (self.mirTargetTypeFactAt(.enum_raw_result, call.callee.*.span) orelse return null).target_ty;
+        return .{ .base = member.base.*, .enum_ty = enum_ty, .repr_ty = repr_ty };
     }
 
     fn domainResidueCallInfo(self: *LlvmEmitter, call: anytype) ?DomainResidueCallInfo {
