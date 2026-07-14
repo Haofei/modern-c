@@ -124,6 +124,7 @@ pub const Context = struct {
     in_comptime: bool = false,
     returns_never: bool = false,
     returns_void: bool = false,
+    is_variadic: bool = false,
     return_ty: ?ast.TypeExpr = null,
     return_kind: TypeClass = .void,
     loop_depth: usize = 0,

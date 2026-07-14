@@ -1452,6 +1452,7 @@ pub const Checker = struct {
                 .in_unsafe = is_naked,
                 .returns_never = returns_never,
                 .returns_void = returns_void,
+                .is_variadic = fn_decl.is_variadic,
                 .return_ty = fn_decl.return_type,
                 .return_kind = return_kind,
                 .unsafe_contracts = .{},
@@ -3018,6 +3019,7 @@ pub const Checker = struct {
                 self.checkResidueCall(expr.span, node.callee.*, node.args, ctx);
                 self.checkReduceCall(expr.span, node, ctx);
                 self.checkByteViewCall(expr.span, node, ctx);
+                self.checkVaCall(expr.span, node, ctx);
                 const bitcast_class = self.checkBitcastCall(expr.span, node, ctx);
                 const raw_many_offset_class = self.checkRawManyOffsetCall(expr.span, node, ctx);
                 const reflection_class = self.checkReflectionCall(expr.span, node, ctx);
@@ -3963,6 +3965,34 @@ pub const Checker = struct {
                     }
                 }
             },
+        }
+    }
+
+    fn checkVaCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) void {
+        const name = vaCallMember(call.callee.*) orelse return;
+        if (std.mem.eql(u8, name, "start")) {
+            if (call.type_args.len != 0 or call.args.len != 0) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "va.start expects no type or runtime arguments");
+            } else if (!ctx.is_variadic) {
+                self.errorCode(span, "E_VA_START_CONTEXT", "va.start is only valid inside a variadic function");
+            }
+            return;
+        }
+        if (std.mem.eql(u8, name, "arg")) {
+            if (call.type_args.len != 1 or call.args.len != 1) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "va.arg expects one result type and one va_list cursor argument");
+                return;
+            }
+        } else if (std.mem.eql(u8, name, "end")) {
+            if (call.type_args.len != 0 or call.args.len != 1) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "va.end expects one va_list cursor argument");
+                return;
+            }
+        } else {
+            return;
+        }
+        if (!vaCursorArgumentValid(call.args[0], ctx)) {
+            self.errorCode(call.args[0].span, "E_NO_IMPLICIT_CONVERSION", "varargs cursor must be &va_list or *mut va_list");
         }
     }
 
@@ -7731,6 +7761,25 @@ fn isConstU8SliceType(ty: ast.TypeExpr) bool {
         .slice => |node| node.mutability == .@"const" and isTypeName(node.child.*, "u8"),
         .qualified => |node| isConstU8SliceType(node.child.*),
         else => false,
+    };
+}
+
+fn vaCursorArgumentValid(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        .grouped => |inner| vaCursorArgumentValid(inner.*, ctx),
+        .address_of => |inner| blk: {
+            const ty = exprResultType(inner.*, ctx) orelse exprStorageType(inner.*, ctx) orelse break :blk false;
+            break :blk isTypeName(resolveAliasType(ty, ctx), "va_list");
+        },
+        else => blk: {
+            const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse break :blk false;
+            const resolved = resolveAliasType(ty, ctx);
+            const pointer = switch (resolved.kind) {
+                .pointer => |node| node,
+                else => break :blk false,
+            };
+            break :blk pointer.mutability == .mut and isTypeName(resolveAliasType(pointer.child.*, ctx), "va_list");
+        },
     };
 }
 

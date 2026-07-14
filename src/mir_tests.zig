@@ -1860,7 +1860,7 @@ test "MIR records typed call target facts for raw address calls" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
-test "MIR owns varargs call identities and result types" {
+test "MIR owns complete varargs cursor payload and result types" {
     const source =
         \\export fn sum_args(count: i32, ...) -> i64 {
         \\    var ap: va_list = va.start();
@@ -1886,15 +1886,34 @@ test "MIR owns varargs call identities and result types" {
     try std.testing.expectEqual(mir.CallTargetKind.va_start, function.call_target_facts[0].kind);
     try std.testing.expectEqual(mir.CallTargetKind.va_arg, function.call_target_facts[1].kind);
     try std.testing.expectEqual(mir.CallTargetKind.va_end, function.call_target_facts[2].kind);
-    var va_start_results: usize = 0;
-    var va_arg_results: usize = 0;
+    var cursor_count: usize = 0;
+    var payload_count: usize = 0;
+    var va_list_result_count: usize = 0;
+    var i64_result_count: usize = 0;
+    var void_result_count: usize = 0;
     for (function.target_type_facts) |fact| switch (fact.kind) {
-        .va_start_result => va_start_results += 1,
-        .va_arg_result => va_arg_results += 1,
+        .va_cursor => {
+            cursor_count += 1;
+            try std.testing.expectEqual(ast.Mutability.mut, fact.target_ty.kind.pointer.mutability);
+            try std.testing.expectEqualStrings("va_list", fact.target_ty.kind.pointer.child.kind.name.text);
+        },
+        .va_payload => {
+            payload_count += 1;
+            try std.testing.expectEqualStrings("i64", fact.target_ty.kind.name.text);
+        },
+        .va_result => {
+            const name = fact.target_ty.kind.name.text;
+            if (std.mem.eql(u8, name, "va_list")) va_list_result_count += 1;
+            if (std.mem.eql(u8, name, "i64")) i64_result_count += 1;
+            if (std.mem.eql(u8, name, "void")) void_result_count += 1;
+        },
         else => {},
     };
-    try std.testing.expectEqual(@as(usize, 1), va_start_results);
-    try std.testing.expectEqual(@as(usize, 1), va_arg_results);
+    try std.testing.expectEqual(@as(usize, 2), cursor_count);
+    try std.testing.expectEqual(@as(usize, 1), payload_count);
+    try std.testing.expectEqual(@as(usize, 1), va_list_result_count);
+    try std.testing.expectEqual(@as(usize, 1), i64_result_count);
+    try std.testing.expectEqual(@as(usize, 1), void_result_count);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }

@@ -455,6 +455,49 @@ test "const_get requires in-bounds fixed array index" {
     try std.testing.expect(!hasDiagnosticCode(&reporter, "E_UNKNOWN_FUNCTION"));
 }
 
+test "varargs calls require exact shape and mutable va_list cursor" {
+    const source =
+        \\fn accepted_local(last: i32, ...) -> i64 {
+        \\    var local: va_list = va.start();
+        \\    var value: i64 = 0;
+        \\    unsafe { value = va.arg<i64>(&local); }
+        \\    va.end(&local);
+        \\    return value + (last as i64);
+        \\}
+        \\
+        \\fn accepted_parameter(ap: *mut va_list) -> i64 {
+        \\    var value: i64 = 0;
+        \\    unsafe { value = va.arg<i64>(ap); }
+        \\    va.end(ap);
+        \\    return value;
+        \\}
+        \\
+        \\fn rejected(value: u32, ap: *const va_list, ...) -> void {
+        \\    var local: va_list = va.start<u32>();
+        \\    var result: i64 = 0;
+        \\    unsafe { result = va.arg<i64>(); }
+        \\    unsafe { result = va.arg<i64>(&value); }
+        \\    unsafe { result = va.arg<i64>(ap); }
+        \\    va.end();
+        \\}
+        \\
+        \\fn rejected_start_context() -> void {
+        \\    var local: va_list = va.start();
+        \\    va.end(&local);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "varargs_call_contract.mc", source);
+    defer reporter.deinit();
+
+    try checkSource(source, &reporter);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 3), countDiagnosticCode(&reporter, "E_CALL_ARG_COUNT"));
+    try std.testing.expectEqual(@as(usize, 2), countDiagnosticCode(&reporter, "E_NO_IMPLICIT_CONVERSION"));
+    try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_VA_START_CONTEXT"));
+}
+
 test "rejects by-value struct signatures at extern and export ABI boundaries" {
     const source =
         \\extern "C" struct Packet {

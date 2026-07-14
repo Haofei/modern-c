@@ -4859,6 +4859,7 @@ const FunctionBuilder = struct {
                 const mmio_map_target = try self.mmioMapCallTarget(node);
                 const mmio_target = self.mmioCallTarget(node);
                 const raw_target = self.rawCallTarget(node);
+                const va_target = try self.vaCallTarget(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
                 else if (semantic_escape_target) |target|
@@ -4889,8 +4890,8 @@ const FunctionBuilder = struct {
                     ty
                 else if (self.physCallValueType(node)) |ty|
                     ty
-                else if (self.vaCallFactInfo(node)) |info|
-                    info.result_ty
+                else if (va_target) |target|
+                    target.result_ty
                 else if (raw_target) |target|
                     target.result_ty
                 else if (self.cpuPauseCallValueType(node)) |ty|
@@ -4987,17 +4988,16 @@ const FunctionBuilder = struct {
                     try self.appendTargetTypeFact(.raw_payload, target.payload_type_expr, target.payload_ty, expr.span);
                     try self.appendTargetTypeFact(.raw_result, target.result_type_expr, target.result_ty, expr.span);
                 }
-                if (self.vaCallFactInfo(node)) |va| {
-                    try self.addInstr(.call_target, @tagName(va.kind), va.result_ty, expr.span);
-                    try self.addCallTargetFact(va.kind, va.result_ty, expr.span);
-                    if (va.result_type_expr) |result_ty| {
-                        const target_kind: TargetTypeKind = switch (va.kind) {
-                            .va_start => .va_start_result,
-                            .va_arg => .va_arg_result,
-                            else => unreachable,
-                        };
-                        try self.appendTargetTypeFact(target_kind, result_ty, va.result_ty, expr.span);
+                if (va_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    if (target.cursor_type_expr) |cursor_ty| {
+                        try self.appendTargetTypeFact(.va_cursor, cursor_ty, target.cursor_ty.?, expr.span);
                     }
+                    if (target.payload_type_expr) |payload_ty| {
+                        try self.appendTargetTypeFact(.va_payload, payload_ty, target.payload_ty.?, expr.span);
+                    }
+                    try self.appendTargetTypeFact(.va_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (self.cpuPauseCallValueType(node)) |cpu_pause_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.cpu_pause), cpu_pause_ty, expr.span);
@@ -5397,34 +5397,59 @@ const FunctionBuilder = struct {
         };
     }
 
-    const VaCallFactInfo = struct {
+    const VaCallTarget = struct {
         kind: CallTargetKind,
+        cursor_type_expr: ?ast.TypeExpr = null,
+        cursor_ty: ?ValueType = null,
+        payload_type_expr: ?ast.TypeExpr = null,
+        payload_ty: ?ValueType = null,
+        result_type_expr: ast.TypeExpr,
         result_ty: ValueType,
-        result_type_expr: ?ast.TypeExpr,
     };
 
-    fn vaCallFactInfo(self: *FunctionBuilder, call: anytype) ?VaCallFactInfo {
+    fn vaCallTarget(self: *FunctionBuilder, call: anytype) !?VaCallTarget {
         const name = ast_query.vaCallMember(call.callee.*) orelse return null;
-        if (std.mem.eql(u8, name, "start")) {
-            const result_ty = ast_query.vaCallReturnType(call) orelse return null;
+        if (std.mem.eql(u8, name, "start") and call.type_args.len == 0 and call.args.len == 0) {
+            const result_type_expr = ast_query.simpleNameType("va_list", call.callee.*.span);
             return .{
                 .kind = .va_start,
-                .result_ty = valueTypeFromTypeAlias(result_ty, self.enums, self.structs, self.packed_bits, self.aliases),
-                .result_type_expr = result_ty,
+                .result_type_expr = result_type_expr,
+                .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
             };
         }
-        if (std.mem.eql(u8, name, "arg")) {
-            const result_ty = ast_query.vaCallReturnType(call) orelse return null;
+        if (std.mem.eql(u8, name, "arg") and call.type_args.len == 1 and call.args.len == 1) {
+            const cursor_type_expr = try self.vaCursorTypeExpr(call.args[0].span);
+            const payload_type_expr = call.type_args[0];
             return .{
                 .kind = .va_arg,
-                .result_ty = valueTypeFromTypeAlias(result_ty, self.enums, self.structs, self.packed_bits, self.aliases),
-                .result_type_expr = result_ty,
+                .cursor_type_expr = cursor_type_expr,
+                .cursor_ty = valueTypeFromTypeAlias(cursor_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+                .payload_type_expr = payload_type_expr,
+                .payload_ty = valueTypeFromTypeAlias(payload_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+                .result_type_expr = payload_type_expr,
+                .result_ty = valueTypeFromTypeAlias(payload_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
             };
         }
         if (std.mem.eql(u8, name, "end") and call.type_args.len == 0 and call.args.len == 1) {
-            return .{ .kind = .va_end, .result_ty = .void, .result_type_expr = null };
+            const cursor_type_expr = try self.vaCursorTypeExpr(call.args[0].span);
+            const result_type_expr = ast_query.simpleNameType("void", call.callee.*.span);
+            return .{
+                .kind = .va_end,
+                .cursor_type_expr = cursor_type_expr,
+                .cursor_ty = valueTypeFromTypeAlias(cursor_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+                .result_type_expr = result_type_expr,
+                .result_ty = .void,
+            };
         }
         return null;
+    }
+
+    fn vaCursorTypeExpr(self: *FunctionBuilder, span: ast.Span) !ast.TypeExpr {
+        const child = try self.allocator.create(ast.TypeExpr);
+        errdefer self.allocator.destroy(child);
+        child.* = ast_query.simpleNameType("va_list", span);
+        try self.generated_type_expr_nodes.append(self.allocator, child);
+        return .{ .span = span, .kind = .{ .pointer = .{ .mutability = .mut, .child = child } } };
     }
 
     fn cpuPauseCallValueType(_: *FunctionBuilder, call: anytype) ?ValueType {

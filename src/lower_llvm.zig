@@ -142,6 +142,7 @@ const MmioMapInfo = lower_llvm_model.MmioMapInfo;
 const RawCallInfo = lower_llvm_model.RawCallInfo;
 const ByteViewCallInfo = lower_llvm_model.ByteViewCallInfo;
 const ReflectionCallInfo = lower_llvm_model.ReflectionCallInfo;
+const VaCallInfo = lower_llvm_model.VaCallInfo;
 const MmioFencePlacement = lower_llvm_model.MmioFencePlacement;
 const DmaBufCallInfo = lower_llvm_model.DmaBufCallInfo;
 const DmaCacheCallInfo = lower_llvm_model.DmaCacheCallInfo;
@@ -1492,11 +1493,11 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitVaListCursorArg(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+    fn emitVaListCursorArg(self: *LlvmEmitter, expr: ast.Expr, cursor_ty: ast.TypeExpr) ![]const u8 {
         return switch (expr.kind) {
             .address_of => |inner| try self.emitAddressOf(inner.*),
-            .grouped => |inner| try self.emitVaListCursorArg(inner.*),
-            else => try self.emitExpr(expr, self.exprType(expr) orelse return error.UnsupportedLlvmEmission),
+            .grouped => |inner| try self.emitVaListCursorArg(inner.*, cursor_ty),
+            else => try self.emitExpr(expr, cursor_ty),
         };
     }
 
@@ -2378,8 +2379,8 @@ const LlvmEmitter = struct {
             try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr, .kind = .va_list_local });
             const dst = try self.vaListCursorPtrFromStorage(ptr);
             if (init.kind == .call and isVaStartCall(init.kind.call.callee.*)) {
-                if (self.mirCallTargetKindAt(init.kind.call.callee.*.span) != .va_start) return error.UnsupportedLlvmEmission;
-                _ = self.mirTargetTypeFactAt(.va_start_result, init.kind.call.callee.*.span) orelse return error.UnsupportedLlvmEmission;
+                const info = self.vaCallInfo(init.kind.call) orelse return error.UnsupportedLlvmEmission;
+                if (info.kind != .va_start) return error.UnsupportedLlvmEmission;
                 try self.out.print(self.allocator, "  call void @llvm.va_start(ptr {s})\n", .{dst});
                 return;
             }
@@ -2402,8 +2403,8 @@ const LlvmEmitter = struct {
         // `var ap: va_list = va.start();` — the slot IS the va_list cursor storage; initialize
         // it in place with llvm.va_start (it has no value to store).
         if (init.kind == .call and isVaStartCall(init.kind.call.callee.*)) {
-            if (self.mirCallTargetKindAt(init.kind.call.callee.*.span) != .va_start) return error.UnsupportedLlvmEmission;
-            _ = self.mirTargetTypeFactAt(.va_start_result, init.kind.call.callee.*.span) orelse return error.UnsupportedLlvmEmission;
+            const info = self.vaCallInfo(init.kind.call) orelse return error.UnsupportedLlvmEmission;
+            if (info.kind != .va_start) return error.UnsupportedLlvmEmission;
             try self.out.print(self.allocator, "  call void @llvm.va_start(ptr {s})\n", .{ptr});
             return;
         }
@@ -6558,16 +6559,15 @@ const LlvmEmitter = struct {
         if (vaCallMember(call.callee.*)) |va_name| {
             // The cursor argument is either `&ap` for a local va_list or a `*mut va_list`
             // parameter. Normalize both to the ABI cursor pointer that va_arg / va_end want.
-            if (call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const ap_ptr = try self.emitVaListCursorArg(call.args[0]);
+            const info = self.vaCallInfo(call) orelse return error.UnsupportedLlvmEmission;
+            const cursor_ty = info.cursor_ty orelse return error.UnsupportedLlvmEmission;
+            const ap_ptr = try self.emitVaListCursorArg(call.args[0], cursor_ty);
             if (std.mem.eql(u8, va_name, "arg")) {
-                if (call.type_args.len != 1) return error.UnsupportedLlvmEmission;
-                if (self.mirCallTargetKindAt(call.callee.*.span) != .va_arg) return error.UnsupportedLlvmEmission;
-                const result_ty = (self.mirTargetTypeFactAt(.va_arg_result, call.callee.*.span) orelse return error.UnsupportedLlvmEmission).target_ty;
-                return try self.emitVaArg(ap_ptr, result_ty);
+                if (info.kind != .va_arg) return error.UnsupportedLlvmEmission;
+                return try self.emitVaArg(ap_ptr, info.payload_ty orelse return error.UnsupportedLlvmEmission);
             }
             if (std.mem.eql(u8, va_name, "end")) {
-                if (self.mirCallTargetKindAt(call.callee.*.span) != .va_end) return error.UnsupportedLlvmEmission;
+                if (info.kind != .va_end) return error.UnsupportedLlvmEmission;
                 try self.out.print(self.allocator, "  call void @llvm.va_end(ptr {s})\n", .{ap_ptr});
                 return ""; // void
             }
@@ -8128,6 +8128,24 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn vaCallInfo(self: *LlvmEmitter, call: anytype) ?VaCallInfo {
+        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+        const name = vaCallMember(call.callee.*) orelse return null;
+        const valid_shape = switch (kind) {
+            .va_start => std.mem.eql(u8, name, "start") and call.type_args.len == 0 and call.args.len == 0,
+            .va_arg => std.mem.eql(u8, name, "arg") and call.type_args.len == 1 and call.args.len == 1,
+            .va_end => std.mem.eql(u8, name, "end") and call.type_args.len == 0 and call.args.len == 1,
+            else => false,
+        };
+        if (!valid_shape) return null;
+        return .{
+            .kind = kind,
+            .cursor_ty = if (kind == .va_start) null else (self.mirTargetTypeFactAt(.va_cursor, call.callee.*.span) orelse return null).target_ty,
+            .payload_ty = if (kind == .va_arg) (self.mirTargetTypeFactAt(.va_payload, call.callee.*.span) orelse return null).target_ty else null,
+            .result_ty = (self.mirTargetTypeFactAt(.va_result, call.callee.*.span) orelse return null).target_ty,
+        };
+    }
+
     fn emitMmioRegisterAddress(self: *LlvmEmitter, info: MmioAccessInfo) ![]const u8 {
         const base = try self.emitExpr(info.base, try self.mmioPointerType(info.struct_ty, info.base.span));
         if (info.offset == 0) return base;
@@ -8571,8 +8589,7 @@ const LlvmEmitter = struct {
         if (self.bitcastCallTargetType(call)) |ty| return ty;
         if (self.physCallTargetType(call)) |ty| return ty;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_load or self.mirCallTargetKindAt(call.callee.*.span) == .raw_ptr) return if (self.rawCallInfo(call)) |info| info.result_ty else null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .va_start) return if (self.mirTargetTypeFactAt(.va_start_result, call.callee.*.span)) |fact| fact.target_ty else null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .va_arg) return if (self.mirTargetTypeFactAt(.va_arg_result, call.callee.*.span)) |fact| fact.target_ty else null;
+        if (self.vaCallInfo(call)) |info| return info.result_ty;
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
         if (self.domainOpCallInfo(call)) |info| return info.return_ty;

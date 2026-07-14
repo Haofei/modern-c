@@ -96,6 +96,13 @@ pub const ReflectionCallInfo = struct {
     result_ty: ast.TypeExpr,
 };
 
+pub const VaCallInfo = struct {
+    kind: mir_model.CallTargetKind,
+    cursor_ty: ?ast.TypeExpr = null,
+    payload_ty: ?ast.TypeExpr = null,
+    result_ty: ast.TypeExpr,
+};
+
 pub const MmioFencePlacement = enum {
     before_store,
     after_load,

@@ -413,7 +413,7 @@ pub fn emitVaStartLocalInit(ctx: LocalInitContext, name: []const u8, decl_ty: as
     };
     if (!isVaStartCall(node.callee.*)) return false;
     if (ctx.mir_call_target_kind(ctx.emit_ctx, node.callee.*.span) != .va_start) return error.UnsupportedCEmission;
-    _ = ctx.mir_target_type(ctx.emit_ctx, .va_start_result, node.callee.*.span) orelse return error.UnsupportedCEmission;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .va_result, node.callee.*.span) orelse return error.UnsupportedCEmission;
     const last = ctx.current_variadic_last orelse return error.UnsupportedCEmission;
     try writeLocalIndent(ctx);
     try ctx.emit_declarator(ctx.emit_ctx, decl_ty, name);
@@ -531,19 +531,23 @@ pub fn emitVaCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Local
     if (std.mem.eql(u8, va_name, "arg")) {
         if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
         if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .va_arg) return error.UnsupportedCEmission;
-        const result_ty = ctx.mir_target_type(ctx.emit_ctx, .va_arg_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
+        const cursor_ty = ctx.mir_target_type(ctx.emit_ctx, .va_cursor, call.callee.*.span) orelse return error.UnsupportedCEmission;
+        const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .va_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
+        _ = ctx.mir_target_type(ctx.emit_ctx, .va_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
         try ctx.out.print(ctx.allocator, "__builtin_va_arg(*(", .{});
-        try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+        try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, cursor_ty);
         try ctx.out.appendSlice(ctx.allocator, "), ");
-        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, result_ty));
+        try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, payload_ty));
         try ctx.out.appendSlice(ctx.allocator, ")");
         return true;
     }
     if (std.mem.eql(u8, va_name, "end")) {
-        if (call.args.len != 1) return error.UnsupportedCEmission;
+        if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
         if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .va_end) return error.UnsupportedCEmission;
+        const cursor_ty = ctx.mir_target_type(ctx.emit_ctx, .va_cursor, call.callee.*.span) orelse return error.UnsupportedCEmission;
+        _ = ctx.mir_target_type(ctx.emit_ctx, .va_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
         try ctx.out.appendSlice(ctx.allocator, "__builtin_va_end(*(");
-        try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+        try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, cursor_ty);
         try ctx.out.appendSlice(ctx.allocator, "))");
         return true;
     }
