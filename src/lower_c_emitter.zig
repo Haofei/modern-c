@@ -4848,15 +4848,17 @@ const CEmitter = struct {
 
     fn emitArrayCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const array_ty = self.arrayReturnTypeForExpr(initializer) orelse return false;
-        try locals.put(name, try self.localInfoFromType(array_ty));
-        try self.emitInferredCallLocalInitValue(name, array_ty, initializer, locals);
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, array_ty)) orelse array_ty;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+        try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
     fn emitSliceCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const slice_ty = self.sliceReturnTypeForExpr(initializer, locals) orelse return false;
-        try locals.put(name, try self.localInfoFromType(slice_ty));
-        try self.emitInferredCallLocalInitValue(name, slice_ty, initializer, locals);
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, slice_ty)) orelse slice_ty;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+        try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
@@ -4870,22 +4872,25 @@ const CEmitter = struct {
 
     fn emitTaggedUnionCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const union_ty = self.taggedUnionReturnTypeForExpr(initializer) orelse return false;
-        try locals.put(name, try self.localInfoFromType(union_ty));
-        try self.emitInferredCallLocalInitValue(name, union_ty, initializer, locals);
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, union_ty)) orelse union_ty;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+        try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
     fn emitResultCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const result_ty = self.resultTypeForExpr(initializer, locals) orelse return false;
-        try locals.put(name, try self.localInfoFromType(result_ty));
-        try self.emitInferredCallLocalInitValue(name, result_ty, initializer, locals);
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, result_ty)) orelse result_ty;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+        try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
     fn emitNullableCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const nullable_ty = self.nullableReturnTypeForExpr(initializer) orelse return false;
-        try locals.put(name, try self.localInfoFromType(nullable_ty));
-        try self.emitInferredCallLocalInitValue(name, nullable_ty, initializer, locals);
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, nullable_ty)) orelse nullable_ty;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+        try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
