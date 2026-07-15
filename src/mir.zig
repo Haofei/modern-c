@@ -1107,6 +1107,16 @@ fn optionalTextEql(left: ?[]const u8, right: ?[]const u8) bool {
     return std.mem.eql(u8, left.?, right.?);
 }
 
+fn targetTypeSourceMatches(kind: TargetTypeKind, fact: TargetTypeFact, instruction: Instruction) bool {
+    if (fact.source.line != instruction.line or fact.source.column != instruction.column) return false;
+    return kind != .expression_result or (fact.source.offset == instruction.source_offset and fact.source.len == instruction.source_len);
+}
+
+fn targetTypeInstructionSourceMatches(kind: TargetTypeKind, left: Instruction, right: Instruction) bool {
+    if (left.line != right.line or left.column != right.column) return false;
+    return kind != .expression_result or (left.source_offset == right.source_offset and left.source_len == right.source_len);
+}
+
 fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instruction: Instruction) usize {
     var count: usize = 0;
     for (function.target_type_facts) |fact| {
@@ -1114,7 +1124,7 @@ fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instru
         if (fact.target_index != instruction.target_index) continue;
         if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (fact.source.line == instruction.line and fact.source.column == instruction.column) count += 1;
+        if (targetTypeSourceMatches(kind, fact, instruction)) count += 1;
     }
     return count;
 }
@@ -1127,7 +1137,7 @@ fn countMatchingTargetTypeInstructions(function: Function, fact: TargetTypeFact)
         if (instruction.target_index != fact.target_index) continue;
         if (!optionalTextEql(instruction.target_owner, fact.target_owner)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (fact.source.line == instruction.line and fact.source.column == instruction.column) count += 1;
+        if (targetTypeSourceMatches(kind, fact, instruction)) count += 1;
     };
     return count;
 }
@@ -1140,7 +1150,7 @@ fn countMatchingTargetTypeInstructionsForInstruction(function: Function, kind: T
         if (instruction.target_index != target.target_index) continue;
         if (!optionalTextEql(instruction.target_owner, target.target_owner)) continue;
         if (!sameRepresentationValueType(instruction.result_ty, target.result_ty)) continue;
-        if (instruction.line == target.line and instruction.column == target.column) count += 1;
+        if (targetTypeInstructionSourceMatches(kind, target, instruction)) count += 1;
     };
     return count;
 }
@@ -1152,7 +1162,7 @@ fn countMatchingTargetTypeFactsForFact(function: Function, target: TargetTypeFac
         if (fact.target_index != target.target_index) continue;
         if (!optionalTextEql(fact.target_owner, target.target_owner)) continue;
         if (!sameRepresentationValueType(fact.result_ty, target.result_ty)) continue;
-        if (fact.source.line == target.source.line and fact.source.column == target.source.column) count += 1;
+        if (fact.source.line == target.source.line and fact.source.column == target.source.column and (target.kind != .expression_result or (fact.source.offset == target.source.offset and fact.source.len == target.source.len))) count += 1;
     }
     return count;
 }
@@ -1164,7 +1174,7 @@ fn matchingTargetTypeFactsAgree(function: Function, kind: TargetTypeKind, instru
         if (fact.target_index != instruction.target_index) continue;
         if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (fact.source.line != instruction.line or fact.source.column != instruction.column) continue;
+        if (!targetTypeSourceMatches(kind, fact, instruction)) continue;
         if (first) |expected| {
             if (!sema_type.sameTypeSyntax(expected, fact.target_ty)) return false;
         } else {
@@ -4867,6 +4877,7 @@ const FunctionBuilder = struct {
         }
         try self.addTargetTypeFactForExpr(expr);
         try self.addSelfTypedExpressionFact(expr);
+        try self.addExpressionResultFact(expr);
 
         switch (expr.kind) {
             // The async transform eliminates every `await_expr` pre-sema.
@@ -6138,6 +6149,20 @@ const FunctionBuilder = struct {
         try self.appendTargetTypeFact(owned.kind, owned.ty, valueTypeFromTypeAlias(owned.ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
     }
 
+    fn addExpressionResultFact(self: *FunctionBuilder, expr: ast.Expr) !void {
+        switch (expr.kind) {
+            .member, .index, .deref => {},
+            else => return,
+        }
+        const ty = self.typeExprForExpr(expr) orelse return;
+        try self.appendTargetTypeFact(
+            .expression_result,
+            ty,
+            valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases),
+            expr.span,
+        );
+    }
+
     fn addPrimaryTargetTypeFactForExpr(self: *FunctionBuilder, expr: ast.Expr, target_ty: ast.TypeExpr) !void {
         const result_ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
         const resolved_target_ty = aggregateTargetTypeAlias(target_ty, self.aliases);
@@ -6189,7 +6214,7 @@ const FunctionBuilder = struct {
             .kind = kind,
             .target_ty = target_ty,
             .result_ty = result_ty,
-            .source = .{ .line = span.line, .column = span.column },
+            .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
         });
     }
 
@@ -6204,7 +6229,7 @@ const FunctionBuilder = struct {
             .result_ty = result_ty,
             .target_index = target_index,
             .target_owner = target_owner,
-            .source = .{ .line = span.line, .column = span.column },
+            .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
         });
     }
 
@@ -6479,6 +6504,8 @@ const FunctionBuilder = struct {
             .contract_region_id = if (kind == .unchecked_assume) self.active_contract_region_id else null,
             .line = span.line,
             .column = span.column,
+            .source_offset = span.offset,
+            .source_len = span.len,
         });
         if (representationFactKind(kind, ty)) {
             try self.representation_facts.append(self.allocator, .{

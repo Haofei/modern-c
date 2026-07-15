@@ -122,6 +122,8 @@ pub const Instruction = struct {
     contract_region_id: ?usize = null,
     line: usize,
     column: usize,
+    source_offset: usize = 0,
+    source_len: usize = 0,
 
     pub const Kind = enum {
         param,
@@ -195,6 +197,8 @@ pub const TrapEdge = struct {
     source: TrapSource,
     line: usize,
     column: usize,
+    source_offset: usize = 0,
+    source_len: usize = 0,
 };
 
 pub const ContractRegion = struct {
@@ -399,6 +403,7 @@ pub const TargetTypeKind = enum {
     for_iterable,
     for_element,
     inferred_local,
+    expression_result,
 };
 
 pub const TargetTypeFact = struct {
@@ -413,6 +418,8 @@ pub const TargetTypeFact = struct {
 pub const SourcePoint = struct {
     line: usize,
     column: usize,
+    offset: usize = 0,
+    len: usize = 0,
 };
 
 pub const PointerProvenance = enum {

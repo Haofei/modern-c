@@ -2228,6 +2228,40 @@ test "MIR owns inferred local types for raw-many offset dereferences" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns span-identified result types for member index and dereference expressions" {
+    const source =
+        \\struct Packet { values: [2]u32 }
+        \\fn expression_results(packet: Packet, index: usize, ptr: *mut u32) -> u32 {
+        \\    unsafe {
+        \\        let value = packet.values[index];
+        \\        return value + ptr.*;
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_expression_result_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "expression_results").?;
+    try std.testing.expectEqual(@as(usize, 3), countTargetTypeFactsByKind(function, .expression_result));
+    var last_source: ?mir.SourcePoint = null;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .expression_result) continue;
+        try std.testing.expect(fact.source.len != 0);
+        if (last_source) |previous| try std.testing.expect(previous.offset != fact.source.offset or previous.len != fact.source.len);
+        last_source = fact.source;
+    }
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns MMIO read write identities and complete types" {
     const source =
         \\packed bits Status: u8 { ready: bool }

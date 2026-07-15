@@ -1175,6 +1175,32 @@ test "lower-c raw-many offset consumes MIR identity and complete types" {
     }
 }
 
+test "lower-c member index and dereference expressions require complete MIR result facts" {
+    const source =
+        \\struct Packet { values: [2]u32 }
+        \\fn expression_facts(packet: Packet, index: usize, ptr: *mut u32) -> u32 {
+        \\    unsafe { return packet.values[index] + ptr.*; }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_expression_result_facts.mc", source);
+    defer parsed.deinit();
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null);
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try removeTargetTypeKindForFunction(&module_mir, "expression_facts", .expression_result);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+    }
+}
+
 test "lower-c MMIO calls consume MIR identities and complete types" {
     const source =
         \\packed bits Status: u8 { ready: bool }

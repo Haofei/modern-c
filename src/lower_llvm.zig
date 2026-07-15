@@ -5103,13 +5103,13 @@ const LlvmEmitter = struct {
     fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
         if (self.currentMirFunction()) |function| {
             for (function.target_type_facts) |fact| {
-                if (fact.kind == kind and fact.target_index == null and fact.target_owner == null and mirSourceMatches(span, fact.source)) return fact;
+                if (fact.kind == kind and fact.target_index == null and fact.target_owner == null and mirTargetTypeSourceMatches(kind, span, fact.source)) return fact;
             }
         }
         if (span.line == 0 or span.column == 0) return null;
         var matched: ?mir.TargetTypeFact = null;
         for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
-            if (fact.kind != kind or fact.target_index != null or fact.target_owner != null or !mirSourceMatches(span, fact.source)) continue;
+            if (fact.kind != kind or fact.target_index != null or fact.target_owner != null or !mirTargetTypeSourceMatches(kind, span, fact.source)) continue;
             if (matched) |existing| {
                 if (!std.meta.eql(existing.target_ty, fact.target_ty)) return null;
             } else {
@@ -5154,6 +5154,11 @@ const LlvmEmitter = struct {
 
     fn mirSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
         return span.line == source.line and span.column == source.column;
+    }
+
+    fn mirTargetTypeSourceMatches(kind: mir.TargetTypeKind, span: ast.Span, source: mir.SourcePoint) bool {
+        if (!mirSourceMatches(span, source)) return false;
+        return kind != .expression_result or (span.offset == source.offset and span.len == source.len);
     }
 
     fn mirPointerFactIsLiveGlobal(fact: mir.PointerProvenanceFact) bool {
@@ -8150,10 +8155,10 @@ const LlvmEmitter = struct {
                 (if (self.resolveAliasType(ty).kind == .fn_pointer) ty else self.pointerTypeFor(ty) catch null)
             else
                 null,
-            .deref => |inner| self.derefPointeeType(inner.*),
-            .index => |node| self.indexElementType(node.base.*),
+            .deref => |inner| self.expressionResultType(expr, self.derefPointeeType(inner.*)),
+            .index => |node| self.expressionResultType(expr, self.indexElementType(node.base.*)),
             .slice => |node| if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
-            .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else if (self.exprType(node.base.*)) |base_ty| blk: {
+            .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else self.expressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| blk: {
                 const resolved_base_ty = self.resolveAliasType(base_ty);
                 if (resolved_base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");
                 if (self.packedBitsInfoForType(base_ty)) |info| {
@@ -8162,7 +8167,7 @@ const LlvmEmitter = struct {
                 if (self.overlayField(node.base.*, node.name.text)) |field| break :blk field.ty;
                 if (self.memberField(node.base.*, node.name.text)) |field| break :blk field.ty;
                 break :blk null;
-            } else null,
+            } else null),
             .binary => |node| if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*),
             .try_expr => |node| blk: {
                 const fact = self.mirTargetTypeFactAt(.try_operand, node.operand.*.span) orelse break :blk null;
@@ -8173,6 +8178,13 @@ const LlvmEmitter = struct {
             },
             else => null,
         };
+    }
+
+    fn expressionResultType(self: *LlvmEmitter, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {
+        const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return inferred;
+        const expected = inferred orelse return fact.target_ty;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected))) return null;
+        return fact.target_ty;
     }
 
     fn derefPointeeType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {

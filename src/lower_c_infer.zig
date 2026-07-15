@@ -265,21 +265,29 @@ pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Stri
             const struct_name = structNameFromType(ctx, base_ty) orelse return null;
             const struct_decl = ctx.structs.get(struct_name) orelse return null;
             for (struct_decl.fields) |field| {
-                if (std.mem.eql(u8, field.name.text, node.name.text)) return field.ty;
+                if (std.mem.eql(u8, field.name.text, node.name.text)) return expressionResultType(ctx, expr, field.ty);
             }
             return null;
         },
         .index => |node| {
             const base_ty = operandEmitType(ctx, node.base.*, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, node.base.*, locals) orelse return null;
             const resolved = resolveAliasType(ctx, base_ty);
-            return switch (resolved.kind) {
+            const inferred = switch (resolved.kind) {
                 .array => resolved.kind.array.child.*,
                 .slice => resolved.kind.slice.child.*,
                 else => null,
             };
+            return if (inferred) |ty| expressionResultType(ctx, expr, ty) else null;
         },
+        .deref => return ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span),
         else => return null,
     }
+}
+
+fn expressionResultType(ctx: TypeQueryContext, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
+    const fact = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return inferred;
+    if (!sameCStorageType(resolveAliasType(ctx, fact), resolveAliasType(ctx, inferred))) return null;
+    return fact;
 }
 
 pub fn arrayTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -400,7 +408,7 @@ pub fn numericExprTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals:
             for (struct_decl.fields) |field| {
                 if (std.mem.eql(u8, field.name.text, node.name.text)) {
                     const resolved = resolveAliasType(ctx, field.ty);
-                    return if (isNumericStorageType(resolved)) resolved else null;
+                    return if (isNumericStorageType(resolved)) numericExpressionResultType(ctx, expr, resolved) else null;
                 }
             }
             return null;
@@ -408,13 +416,13 @@ pub fn numericExprTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals:
         .index => |node| {
             const elem = arrayTypeForExpr(ctx, node.base.*, locals) orelse return null;
             const resolved = resolveAliasType(ctx, elem.kind.array.child.*);
-            return if (isNumericStorageType(resolved)) resolved else null;
+            return if (isNumericStorageType(resolved)) numericExpressionResultType(ctx, expr, resolved) else null;
         },
         // `p.*` over `p: *T` recovers `T`, so `p.* + 1` lowers checked.
         .deref => |inner| {
             const pointee = derefPointeeType(ctx, inner.*, locals) orelse return null;
             const resolved = resolveAliasType(ctx, pointee);
-            return if (isNumericStorageType(resolved)) resolved else null;
+            return if (isNumericStorageType(resolved)) numericExpressionResultType(ctx, expr, resolved) else null;
         },
         // A cast's result type is its target type, so `(x as u32) << 8` and
         // similar recover their width.
@@ -444,6 +452,13 @@ pub fn numericExprTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals:
         },
         else => null,
     };
+}
+
+fn numericExpressionResultType(ctx: TypeQueryContext, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
+    const fact = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return inferred;
+    const resolved_fact = resolveAliasType(ctx, fact);
+    if (!isNumericStorageType(resolved_fact) or !sameCStorageType(resolved_fact, inferred)) return null;
+    return fact;
 }
 
 pub fn conditionOperandTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {

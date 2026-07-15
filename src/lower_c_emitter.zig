@@ -5252,13 +5252,13 @@ const CEmitter = struct {
     fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
         if (self.currentMirFunction()) |function| {
             for (function.target_type_facts) |fact| {
-                if (fact.kind == kind and fact.target_index == null and fact.target_owner == null and mirSourceMatches(span, fact.source)) return fact;
+                if (fact.kind == kind and fact.target_index == null and fact.target_owner == null and mirTargetTypeSourceMatches(kind, span, fact.source)) return fact;
             }
         }
         if (span.line == 0 or span.column == 0) return null;
         var matched: ?mir.TargetTypeFact = null;
         for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
-            if (fact.kind != kind or fact.target_index != null or fact.target_owner != null or !mirSourceMatches(span, fact.source)) continue;
+            if (fact.kind != kind or fact.target_index != null or fact.target_owner != null or !mirTargetTypeSourceMatches(kind, span, fact.source)) continue;
             if (matched) |existing| {
                 if (!std.meta.eql(existing.target_ty, fact.target_ty)) return null;
             } else {
@@ -5272,7 +5272,7 @@ const CEmitter = struct {
         const function = self.currentMirFunction() orelse return null;
         for (function.target_type_facts) |fact| {
             if (fact.kind != kind or fact.target_index != null or fact.target_owner != null) continue;
-            if (!mirSourceMatches(span, fact.source)) continue;
+            if (!mirTargetTypeSourceMatches(kind, span, fact.source)) continue;
             if (sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected_ty))) return fact;
         }
         return null;
@@ -5339,6 +5339,11 @@ const CEmitter = struct {
 
     fn mirSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
         return span.line == source.line and span.column == source.column;
+    }
+
+    fn mirTargetTypeSourceMatches(kind: mir.TargetTypeKind, span: ast.Span, source: mir.SourcePoint) bool {
+        if (!mirSourceMatches(span, source)) return false;
+        return kind != .expression_result or (span.offset == source.offset and span.len == source.len);
     }
 
     fn mirPointerFactIsLiveGlobal(fact: mir.PointerProvenanceFact) bool {
