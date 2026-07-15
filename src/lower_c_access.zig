@@ -276,11 +276,13 @@ pub fn emitRawManyOffsetDerefAssignmentStmt(ctx: EmitContext, assignment: anytyp
 
 pub fn emitRawManyOffsetDerefInferredLocalInit(ctx: EmitContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const element_ty = rawManyOffsetDerefTypeForExpr(ctx, initializer, locals) orelse return false;
-    try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, element_ty));
-    if (try emitRawManyOffsetDerefLocalInit(ctx, name, element_ty, initializer, locals)) return true;
+    const inferred_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .inferred_local, initializer.span, name, null) orelse return error.UnsupportedCEmission;
+    if (!std.meta.eql(inferred_ty, element_ty)) return error.UnsupportedCEmission;
+    try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, inferred_ty));
+    if (try emitRawManyOffsetDerefLocalInit(ctx, name, inferred_ty, initializer, locals)) return true;
 
     try writeIndent(ctx);
-    try ctx.emit_declarator(ctx.emit_ctx, element_ty, name);
+    try ctx.emit_declarator(ctx.emit_ctx, inferred_ty, name);
     try ctx.out.appendSlice(ctx.allocator, " = ");
     try ctx.emit_expr(ctx.emit_ctx, initializer, locals);
     try ctx.out.appendSlice(ctx.allocator, ";\n");

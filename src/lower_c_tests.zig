@@ -1102,6 +1102,9 @@ test "lower-c raw-many offset consumes MIR identity and complete types" {
         \\fn raw_many_offset_fact_gate(p: Words, index: usize) -> Words {
         \\    unsafe { let q = p.offset(index); return q; }
         \\}
+        \\fn raw_many_offset_deref_fact_gate(p: Words, index: usize) -> u16 {
+        \\    unsafe { let value = p.offset(index).*; return value; }
+        \\}
     ;
     var parsed = try test_support.parseCheckedModule("c_raw_many_offset_facts.mc", source);
     defer parsed.deinit();
@@ -1112,6 +1115,7 @@ test "lower-c raw-many offset consumes MIR identity and complete types" {
         defer output.deinit(std.testing.allocator);
         try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "(p + index)") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t value =") != null);
     }
     {
         var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
@@ -1149,6 +1153,22 @@ test "lower-c raw-many offset consumes MIR identity and complete types" {
         var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
         defer module_mir.deinit();
         try renameTargetTypeFactForFunction(&module_mir, "raw_many_offset_fact_gate", .inferred_local, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try removeTargetTypeKindForFunction(&module_mir, "raw_many_offset_deref_fact_gate", .inferred_local);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try renameTargetTypeFactForFunction(&module_mir, "raw_many_offset_deref_fact_gate", .inferred_local, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));

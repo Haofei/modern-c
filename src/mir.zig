@@ -9014,11 +9014,21 @@ fn inferredLocalTypeFactEligible(builder: *FunctionBuilder, maybe_initializer: ?
         .cast => true,
         .int_literal, .bool_literal => true,
         .call => |node| builder.inferredLocalCallType(node) != null,
+        .deref => |inner| rawManyOffsetDerefType(builder, inner.*) != null,
         .unary => |node| node.op == .logical_not or inferredLocalTypeFactEligible(builder, node.expr.*),
         .binary => |node| mirIsArithmeticBinary(node.op) or mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op),
         .grouped => |inner| inferredLocalTypeFactEligible(builder, inner.*),
         else => false,
     };
+}
+
+fn rawManyOffsetDerefType(builder: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
+    const inner = switch (expr.kind) {
+        .grouped => |grouped| return rawManyOffsetDerefType(builder, grouped.*),
+        .call => |call| call,
+        else => return null,
+    };
+    return (builder.rawManyOffsetCallTarget(inner) orelse return null).element_type_expr;
 }
 
 fn dynTraitNameFromTypeAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
