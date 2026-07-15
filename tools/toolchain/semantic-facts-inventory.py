@@ -726,6 +726,7 @@ ANCHORS: dict[str, list[str]] = {
 EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/mir.zig": {
         "appendTargetTypeFact(.assert_condition": 1,
+        "appendTargetTypeFact(.loop_condition": 1,
         "appendOwnedTargetTypeFact(.direct_call_result": 1,
         ".direct_call_argument,": 1,
         "appendTargetTypeFact(.indirect_call_callee": 1,
@@ -881,6 +882,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn atomicInitPayloadTypeAt(": 1,
         "mirHasCallTargetKindAt(.atomic_init": 3,
         "mirTargetTypeFactAt(.assert_condition": 1,
+        "mirTargetTypeFactAt(.loop_condition": 1,
         "emitExprWithTarget(expr, locals, condition_ty)": 1,
         "mirTargetTypeFactAtOwned(.direct_call_result": 1,
         "mirTargetTypeFactAtOwned(.direct_call_argument": 1,
@@ -1161,6 +1163,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "else => try self.emitExpr(expr, self.exprType(expr) orelse return error.UnsupportedLlvmEmission),": 0,
         "mir.explicitTrapHelperForTarget(kind)": 2,
         "mirTargetTypeFactAt(.assert_condition": 1,
+        "mirTargetTypeFactAt(.loop_condition": 1,
         "mirTargetTypeFactAt(.qualified_union_result": 2,
         "mirTargetTypeFactAt(.enum_variant_path_result": 2,
         "fn reflectionCallInfo(": 1,

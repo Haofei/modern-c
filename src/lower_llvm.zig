@@ -2748,7 +2748,7 @@ const LlvmEmitter = struct {
     fn emitWhile(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
         if (loop.kind != .@"while") return error.UnsupportedLlvmEmission;
         const condition_expr = loop.iterable orelse return error.UnsupportedLlvmEmission;
-        const condition_ty = self.exprType(condition_expr) orelse return error.UnsupportedLlvmEmission;
+        const condition_ty = (self.mirTargetTypeFactAt(.loop_condition, condition_expr.span) orelse return error.UnsupportedLlvmEmission).target_ty;
         if (!typeNameEql(condition_ty, "bool")) return error.UnsupportedLlvmEmission;
 
         const cond_label = try self.nextLabel("while_cond");

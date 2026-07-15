@@ -3115,6 +3115,9 @@ const CEmitter = struct {
         // The for-binding (re)binds its name; see clearMirPointerProvenanceForPattern.
         if (loop.label) |binding| _ = self.mir_pointer_local_provenance.remove(binding.text);
         if (loop.kind == .@"while") {
+            const condition = loop.iterable orelse return error.UnsupportedCEmission;
+            const condition_ty = (self.mirTargetTypeFactAt(.loop_condition, condition.span) orelse return error.UnsupportedCEmission).target_ty;
+            if (!isBoolType(condition_ty)) return error.UnsupportedCEmission;
             if (try lower_c_mmio.emitReadWhileLoop(self.mmioWhileEmitContext(), loop, locals, return_ty)) return;
             if (try lower_c_flow.emitSequencedConditionWhileLoop(self.flowEmitContext(), loop, locals, return_ty)) return;
             try self.emitPlainWhileLoop(loop, locals, return_ty);

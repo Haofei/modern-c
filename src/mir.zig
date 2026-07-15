@@ -4590,7 +4590,10 @@ const FunctionBuilder = struct {
         self.local_pointer_array_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, @tagName(node.kind), .branch, span);
         if (node.iterable) |iterable| {
-            if (node.kind == .@"while") try self.addConversionCheck(.bool, iterable, .condition, iterable.span);
+            if (node.kind == .@"while") {
+                try self.appendTargetTypeFact(.loop_condition, ast_query.simpleNameType("bool", iterable.span), .bool, iterable.span);
+                try self.addConversionCheck(.bool, iterable, .condition, iterable.span);
+            }
             if (node.kind == .@"for") try self.addForIterableCheck(iterable, iterable.span);
             try self.buildExpr(iterable);
         }

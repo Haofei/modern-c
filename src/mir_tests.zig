@@ -913,6 +913,30 @@ test "MIR owns runtime assert condition types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns while-loop condition types" {
+    const source =
+        \\fn wait_for_flag(flag: bool) -> void {
+        \\    while flag { return; }
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_loop_condition_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "wait_for_flag").?;
+    const fact = targetTypeFactByKind(function, .loop_condition) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
+    try std.testing.expectEqualStrings("bool", fact.result_ty.name());
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns ordinary direct call result and fixed argument types" {
     const source =
         \\trait Width { fn widen(self: *Self) -> u32; }
