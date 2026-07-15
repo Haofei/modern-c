@@ -4152,6 +4152,10 @@ const FunctionBuilder = struct {
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         self.local_pointer_array_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, "switch_subject", .branch, span);
+        const subject_type_expr = self.switchSubjectTypeExpr(node.subject);
+        if (subject_type_expr) |ty| {
+            try self.appendTargetTypeFact(.switch_subject, ty, valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases), node.subject.span);
+        } else return error.InvalidMirTargetTypeFacts;
         try self.buildExpr(node.subject);
         try self.addRepresentationUseForExpr("switch_subject", node.subject);
         try self.addSwitchPatternChecks(node);
@@ -4232,6 +4236,19 @@ const FunctionBuilder = struct {
         self.blocks.items[dispatch_id].terminator = .switch_;
         self.current = after_id;
         return false;
+    }
+
+    fn switchSubjectTypeExpr(self: *FunctionBuilder, subject: ast.Expr) ?ast.TypeExpr {
+        const known_ty = self.typeExprForExpr(subject);
+        if (known_ty) |ty| {
+            return ty;
+        }
+        return switch (subject.kind) {
+            .binary => |node| if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op)) ast_query.simpleNameType("bool", subject.span) else null,
+            .unary => |node| if (node.op == .logical_not) ast_query.simpleNameType("bool", subject.span) else null,
+            .grouped => |inner| self.switchSubjectTypeExpr(inner.*),
+            else => null,
+        };
     }
 
     fn addSwitchPatternChecks(self: *FunctionBuilder, node: ast.Switch) !void {

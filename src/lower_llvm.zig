@@ -1649,19 +1649,20 @@ const LlvmEmitter = struct {
                 return true;
             },
             .@"switch" => |node| {
-                if (try self.emitNullableSwitch(node, ret_ty)) |terminated| {
+                const subject_ty = try self.requireMirSwitchSubjectType(node.subject);
+                if (try self.emitNullableSwitch(node, ret_ty, subject_ty)) |terminated| {
                     if (terminated) return true;
                     return false;
                 }
-                if (try self.emitResultSwitch(node, ret_ty)) |terminated| {
+                if (try self.emitResultSwitch(node, ret_ty, subject_ty)) |terminated| {
                     if (terminated) return true;
                     return false;
                 }
-                if (try self.emitTaggedUnionSwitch(node, ret_ty)) |terminated| {
+                if (try self.emitTaggedUnionSwitch(node, ret_ty, subject_ty)) |terminated| {
                     if (terminated) return true;
                     return false;
                 }
-                if (try self.emitScalarSwitch(node, ret_ty)) |terminated| {
+                if (try self.emitScalarSwitch(node, ret_ty, subject_ty)) |terminated| {
                     if (terminated) return true;
                     return false;
                 }
@@ -2766,6 +2767,14 @@ const LlvmEmitter = struct {
         return false;
     }
 
+    fn requireMirSwitchSubjectType(self: *LlvmEmitter, subject: ast.Expr) !ast.TypeExpr {
+        const fact_ty = (self.mirTargetTypeFactAt(.switch_subject, subject.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+        if (self.exprType(subject)) |known_ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
+        }
+        return fact_ty;
+    }
+
     fn emitFor(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
         const binding = loop.label orelse return error.UnsupportedLlvmEmission;
         const iterable = loop.iterable orelse return error.UnsupportedLlvmEmission;
@@ -2889,8 +2898,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitNullableSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !?bool {
-        const subject_ty = self.exprType(node.subject) orelse return null;
+    fn emitNullableSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !?bool {
         const inner_ty = self.nullableInnerType(subject_ty) orelse return null;
         if (node.arms.len == 0) return error.UnsupportedLlvmEmission;
 
@@ -2963,8 +2971,7 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn emitResultSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !?bool {
-        const subject_ty = self.exprType(node.subject) orelse return null;
+    fn emitResultSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !?bool {
         const info = self.resultInfo(subject_ty) orelse return null;
         if (node.arms.len != 2) return error.UnsupportedLlvmEmission;
 
@@ -3059,8 +3066,7 @@ const LlvmEmitter = struct {
         return try self.emitSwitchBody(arm.body, ret_ty);
     }
 
-    fn emitTaggedUnionSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !?bool {
-        const subject_ty = self.taggedUnionSwitchSubjectType(node) orelse return null;
+    fn emitTaggedUnionSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !?bool {
         const union_decl = self.taggedUnionForType(subject_ty) orelse return null;
         const subject = try self.emitExpr(node.subject, subject_ty);
         const subject_ptr = try self.nextTemp();
@@ -3109,29 +3115,6 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn taggedUnionSwitchSubjectType(self: *LlvmEmitter, node: ast.Switch) ?ast.TypeExpr {
-        if (self.exprType(node.subject)) |subject_ty| {
-            if (self.taggedUnionForType(subject_ty) != null) return subject_ty;
-        }
-
-        var candidate: ?ast.TypeExpr = null;
-        var unions = self.tagged_unions.iterator();
-        union_candidate: while (unions.next()) |entry| {
-            var matched_named_pattern = false;
-            for (node.arms) |arm| {
-                for (arm.patterns) |pattern| {
-                    const case_name = taggedUnionPatternName(pattern) orelse continue;
-                    if (taggedUnionCase(entry.value_ptr.*, case_name) == null) continue :union_candidate;
-                    matched_named_pattern = true;
-                }
-            }
-            if (!matched_named_pattern) continue;
-            if (candidate != null) return null;
-            candidate = simpleType(node.subject.span, entry.key_ptr.*);
-        }
-        return candidate;
-    }
-
     fn emitTaggedUnionSwitchArm(self: *LlvmEmitter, arm: ast.SwitchArm, ret_ty: ast.TypeExpr, subject_ptr: []const u8, subject_ty: ast.TypeExpr, union_decl: ast.UnionDecl) !bool {
         if (taggedUnionBindingPattern(arm)) |binding| {
             const case = taggedUnionCase(union_decl, binding.tag) orelse return error.UnsupportedLlvmEmission;
@@ -3167,8 +3150,7 @@ const LlvmEmitter = struct {
         return try self.emitSwitchBody(arm.body, ret_ty);
     }
 
-    fn emitScalarSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !?bool {
-        const subject_ty = self.exprType(node.subject) orelse return null;
+    fn emitScalarSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !?bool {
         if (!typeNameEql(self.resolveAliasType(subject_ty), "bool") and self.integerBitsOf(subject_ty) == null and self.enumDeclForType(subject_ty) == null) return null;
 
         const subject = try self.emitExpr(node.subject, subject_ty);

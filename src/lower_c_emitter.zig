@@ -3306,32 +3306,50 @@ const CEmitter = struct {
     }
 
     fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        const subject_ty = try self.requireMirSwitchSubjectType(node.subject, locals);
+        const resolved_subject_ty = self.resolveAliasType(subject_ty);
         for (node.arms) |arm| {
             for (arm.patterns) |pattern| self.clearMirPointerProvenanceForPattern(pattern);
         }
-        if (try self.emitResultSwitch(node, locals, return_ty)) return;
-        if (try self.emitTaggedUnionSwitch(node, locals, return_ty)) return;
-        if (try self.emitNullableSwitch(node, locals, return_ty)) return;
-        if (try self.emitEnumCallSwitch(node, locals, return_ty)) return;
+        const subject_is_result = switch (resolved_subject_ty.kind) {
+            .generic => |generic| std.mem.eql(u8, generic.base.text, "Result"),
+            else => false,
+        };
+        if (subject_is_result) {
+            if (try self.emitResultSwitch(node, locals, return_ty)) return;
+            return error.UnsupportedCEmission;
+        }
+        if (resolved_subject_ty.kind == .nullable) {
+            if (try self.emitNullableSwitch(node, locals, return_ty)) return;
+            return error.UnsupportedCEmission;
+        }
+        if (typeName(resolved_subject_ty)) |name| {
+            if (self.tagged_unions.contains(name)) {
+                if (try self.emitTaggedUnionSwitch(node, locals, return_ty)) return;
+                return error.UnsupportedCEmission;
+            }
+            if (self.enums.contains(name) and try self.emitEnumCallSwitch(node, locals, return_ty, subject_ty)) return;
+        }
 
-        try self.emitGenericSwitchWithMmioSubjectHoists(node, locals, return_ty);
+        try self.emitGenericSwitchWithMmioSubjectHoists(node, locals, return_ty, subject_ty);
     }
 
-    fn emitEnumCallSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
-        const enum_ty = self.enumReturnTypeForExpr(node.subject) orelse return false;
+    fn emitEnumCallSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, enum_ty: ast.TypeExpr) anyerror!bool {
+        _ = callExpr(node.subject) orelse return false;
         const temp = try self.emitSequencedCallArgTemp(node.subject, locals, enum_ty);
 
         var switch_locals = try cloneLocals(self.allocator, locals.*);
         defer switch_locals.deinit();
         try switch_locals.put(temp.name, try self.localInfoFromType(enum_ty));
         const temp_subject = ast.Expr{ .kind = .{ .ident = .{ .text = temp.name, .span = node.subject.span } }, .span = node.subject.span };
-        try self.emitGenericSwitch(.{ .subject = temp_subject, .arms = node.arms }, &switch_locals, return_ty, &[_]MmioReadReplacement{});
+        try self.emitGenericSwitch(.{ .subject = temp_subject, .arms = node.arms }, &switch_locals, return_ty, enum_ty, &[_]MmioReadReplacement{});
         return true;
     }
 
-    fn emitGenericSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject_replacements: []const MmioReadReplacement) anyerror!void {
-        const subject_enum_name = self.enumNameForExpr(node.subject, locals);
-        const subject_is_bool = self.exprIsBoolForEmission(node.subject, locals);
+    fn emitGenericSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject_ty: ast.TypeExpr, subject_replacements: []const MmioReadReplacement) anyerror!void {
+        const resolved_subject_ty = self.resolveAliasType(subject_ty);
+        const subject_enum_name = if (typeName(resolved_subject_ty)) |name| if (self.enums.contains(name)) name else null else null;
+        const subject_is_bool = isBoolType(resolved_subject_ty);
         try lower_c_switch.emitGenericSwitch(self.switchEmitContext(), .{
             .node = node,
             .locals = locals,
@@ -3342,9 +3360,10 @@ const CEmitter = struct {
         });
     }
 
-    fn emitGenericSwitchWithMmioSubjectHoists(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        const subject_enum_name = self.enumNameForExpr(node.subject, locals);
-        const subject_is_bool = self.exprIsBoolForEmission(node.subject, locals);
+    fn emitGenericSwitchWithMmioSubjectHoists(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject_ty: ast.TypeExpr) anyerror!void {
+        const resolved_subject_ty = self.resolveAliasType(subject_ty);
+        const subject_enum_name = if (typeName(resolved_subject_ty)) |name| if (self.enums.contains(name)) name else null else null;
+        const subject_is_bool = isBoolType(resolved_subject_ty);
         try lower_c_switch.emitGenericSwitchWithMmioSubjectHoists(self.switchEmitContext(), self.mmioEmitContext(), .{
             .node = node,
             .locals = locals,
@@ -3353,6 +3372,15 @@ const CEmitter = struct {
             .subject_is_bool = subject_is_bool,
             .subject_replacements = &[_]MmioReadReplacement{},
         });
+    }
+
+    fn requireMirSwitchSubjectType(self: *CEmitter, subject: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !ast.TypeExpr {
+        const fact_ty = (self.mirTargetTypeFactAt(.switch_subject, subject.span) orelse return error.UnsupportedCEmission).target_ty;
+        const known_ty = self.operandEmitType(subject, locals) orelse self.resultTypeForExpr(subject, locals) orelse self.nullableTypeForExpr(subject, locals) orelse self.taggedUnionTypeForExpr(subject, locals);
+        if (known_ty) |ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
+        }
+        return fact_ty;
     }
 
     fn emitResultSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {

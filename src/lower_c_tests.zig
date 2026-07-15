@@ -1647,6 +1647,45 @@ test "lower-c while loops require MIR bool condition types" {
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_loop_condition_type_facts.mc", .{}, false, null));
 }
 
+test "lower-c switches require MIR subject types" {
+    const source =
+        \\enum Choice { left, right }
+        \\union Token { number: u32, eof }
+        \\fn result_subject(value: Result<u32, u32>) -> u32 { switch value { ok(v) => { return v; }, err(e) => { return e; }, } }
+        \\fn nullable_subject(value: ?*const u8) -> u32 { switch value { p => { return 1; }, _ => { return 0; }, } }
+        \\fn union_subject(value: Token) -> u32 { switch value { number(v) => { return v; }, .eof => { return 0; }, } }
+        \\fn enum_subject(value: Choice) -> u32 { switch value { .left => { return 1; }, .right => { return 0; }, } }
+        \\fn bool_subject(value: bool) -> u32 { switch (value) { true => { return 1; }, false => { return 0; }, } }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_switch_subject_type_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null);
+    for ([_][]const u8{ "result_subject", "nullable_subject", "union_subject", "enum_subject", "bool_subject" }) |name| {
+        try std.testing.expect(std.mem.indexOf(u8, complete_output.items, name) != null);
+    }
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeKindForFunction(&missing, "result_subject", .switch_subject);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
+
+    for ([_][]const u8{ "result_subject", "nullable_subject", "union_subject", "enum_subject", "bool_subject" }) |name| {
+        var stale = try mir.build(std.testing.allocator, parsed.module);
+        defer stale.deinit();
+        try renameTargetTypeFactForFunction(&stale, name, .switch_subject, "u32");
+        var stale_output: std.ArrayList(u8) = .empty;
+        defer stale_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
+    }
+}
+
 test "lower-c ordinary direct calls require MIR result and argument types" {
     const source =
         \\fn widen(value: u64) -> u64 { return value; }

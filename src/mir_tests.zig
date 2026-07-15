@@ -937,6 +937,40 @@ test "MIR owns while-loop condition types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns switch subject types" {
+    const source =
+        \\enum Choice { left, right }
+        \\union Token { number: u32, eof }
+        \\fn result_subject(value: Result<u32, u32>) -> u32 { switch value { ok(v) => { return v; }, err(e) => { return e; }, } }
+        \\fn nullable_subject(value: ?*const u8) -> u32 { switch value { p => { return 1; }, _ => { return 0; }, } }
+        \\fn union_subject(value: Token) -> u32 { switch value { number(v) => { return v; }, .eof => { return 0; }, } }
+        \\fn enum_subject(value: Choice) -> u32 { switch value { .left => { return 1; }, .right => { return 0; }, } }
+        \\fn bool_subject(value: bool) -> u32 { switch (value) { true => { return 1; }, false => { return 0; }, } }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_switch_subject_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const result_fact = targetTypeFactByKind(functionByName(typed_mir, "result_subject").?, .switch_subject) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Result", result_fact.target_ty.kind.generic.base.text);
+    const nullable_fact = targetTypeFactByKind(functionByName(typed_mir, "nullable_subject").?, .switch_subject) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(nullable_fact.target_ty.kind == .nullable);
+    const union_fact = targetTypeFactByKind(functionByName(typed_mir, "union_subject").?, .switch_subject) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Token", union_fact.target_ty.kind.name.text);
+    const enum_fact = targetTypeFactByKind(functionByName(typed_mir, "enum_subject").?, .switch_subject) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Choice", enum_fact.target_ty.kind.name.text);
+    const bool_fact = targetTypeFactByKind(functionByName(typed_mir, "bool_subject").?, .switch_subject) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("bool", bool_fact.target_ty.kind.name.text);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns ordinary direct call result and fixed argument types" {
     const source =
         \\trait Width { fn widen(self: *Self) -> u32; }
