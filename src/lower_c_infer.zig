@@ -296,6 +296,11 @@ fn expressionResultType(ctx: TypeQueryContext, expr: ast.Expr, inferred: ast.Typ
 
 pub fn arrayTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     switch (expr.kind) {
+        .call => |node| {
+            const return_ty = callReturnType(ctx, node) orelse return null;
+            const resolved = resolveAliasType(ctx, return_ty);
+            return if (resolved.kind == .array) resolved else null;
+        },
         .ident => |ident| {
             const resolved_source_ty = sourceTypeForIdentNoLocalFallback(ctx, ident.text, locals) orelse return null;
             const resolved = resolveAliasType(ctx, resolved_source_ty);

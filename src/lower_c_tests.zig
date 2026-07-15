@@ -1204,6 +1204,24 @@ test "lower-c compound expressions require complete MIR result facts" {
     }
 }
 
+test "lower-c indexes direct fixed-array call results through MIR return types" {
+    const source =
+        \\fn make_matrix() -> [2][2]u32 { return .{ .{ 1, 2 }, .{ 3, 4 } }; }
+        \\fn read_matrix_row() -> u32 {
+        \\    let row = make_matrix()[0];
+        \\    return row[1];
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_direct_array_call_index.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_direct_array_call_index.mc", .{}, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_matrix().elems[mc_check_index_usize(0, 2)]") != null);
+}
+
 test "lower-c MMIO calls consume MIR identities and complete types" {
     const source =
         \\packed bits Status: u8 { ready: bool }
