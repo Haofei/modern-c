@@ -2,7 +2,7 @@
 //! normalization helpers.
 //!
 //! Pure (no `LlvmEmitter` state) helpers that map MC binary operators to LLVM
-//! comparison predicates, recognize wrapping/unchecked builtin ops, resolve
+//! comparison predicates, recognize wrapping builtin ops, resolve
 //! trap-helper symbol names, and normalize integer/float/char literals to
 //! their LLVM textual forms. Extracted from `lower_llvm.zig` verbatim as part
 //! of the Phase-2c structural split; behavior is unchanged. The spine
@@ -62,24 +62,6 @@ pub fn wrappingBuiltinOp(callee: ast.Expr) ?[]const u8 {
         else
             null,
         .grouped => |inner| wrappingBuiltinOp(inner.*),
-        else => null,
-    };
-}
-
-pub fn uncheckedBuiltinOp(callee: ast.Expr) ?[]const u8 {
-    return switch (callee.kind) {
-        .member => |member| if (isIdentNamed(member.base.*, "unchecked"))
-            if (std.mem.eql(u8, member.name.text, "add"))
-                "add"
-            else if (std.mem.eql(u8, member.name.text, "sub"))
-                "sub"
-            else if (std.mem.eql(u8, member.name.text, "mul"))
-                "mul"
-            else
-                null
-        else
-            null,
-        .grouped => |inner| uncheckedBuiltinOp(inner.*),
         else => null,
     };
 }

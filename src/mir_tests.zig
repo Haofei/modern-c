@@ -2714,6 +2714,39 @@ test "MIR records no_overflow range facts for unchecked add contract" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accumulate pass=range finding=no_overflow_range target=sum op=add left=sum right=b") != null);
 }
 
+test "MIR records unchecked call identity and operand/result type facts" {
+    const source =
+        \\fn unchecked_ops(a: u32, b: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        let sum = unchecked.add(a, b);
+        \\        return unchecked.sub(sum, unchecked.mul(a, 1));
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_unchecked_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "unchecked_ops") orelse return error.TestUnexpectedResult;
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+    try std.testing.expect(functionHasInstruction(function, .call_target, "unchecked_add"));
+    try std.testing.expect(functionHasInstruction(function, .call_target, "unchecked_sub"));
+    try std.testing.expect(functionHasInstruction(function, .call_target, "unchecked_mul"));
+    try std.testing.expectEqual(@as(usize, 3), countTargetTypeFactsByKind(function, .unchecked_left));
+    try std.testing.expectEqual(@as(usize, 3), countTargetTypeFactsByKind(function, .unchecked_right));
+    try std.testing.expectEqual(@as(usize, 3), countTargetTypeFactsByKind(function, .unchecked_result));
+    try std.testing.expectEqualStrings("u32", typeExprHeadName((targetTypeFactByKind(function, .unchecked_result) orelse return error.TestUnexpectedResult).target_ty).?);
+}
+
 test "MIR dump exposes elided bounds facts" {
     const source =
         \\fn read_const_index() -> u32 {

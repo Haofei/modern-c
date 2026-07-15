@@ -9,8 +9,6 @@ const lower_c_op = @import("lower_c_op.zig");
 const lower_c_type = @import("lower_c_type.zig");
 
 const calleeIdentName = ast_query.calleeIdentName;
-const isIdentNamed = ast_query.isIdentNamed;
-const memberCallee = ast_query.memberCallee;
 const binaryCOp = lower_c_op.binaryCOp;
 const isCheckedBinaryOp = lower_c_op.isCheckedBinaryOp;
 const isComparisonOp = lower_c_op.isComparisonOp;
@@ -170,16 +168,6 @@ pub fn isNumericValueBinaryOp(op: ast.BinaryOp) bool {
         .add, .sub, .mul, .div, .mod, .shl, .shr, .bit_and, .bit_or, .bit_xor => true,
         else => false,
     };
-}
-
-pub fn uncheckedNoOverflowCallOp(call: anytype) ?[]const u8 {
-    if (call.type_args.len != 0 or call.args.len != 2) return null;
-    const member = memberCallee(call.callee.*) orelse return null;
-    if (!isIdentNamed(member.base.*, "unchecked")) return null;
-    if (std.mem.eql(u8, member.name.text, "add")) return "add";
-    if (std.mem.eql(u8, member.name.text, "sub")) return "sub";
-    if (std.mem.eql(u8, member.name.text, "mul")) return "mul";
-    return null;
 }
 
 pub fn uncheckedNoOverflowOperator(op: []const u8) []const u8 {

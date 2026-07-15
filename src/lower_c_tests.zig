@@ -775,6 +775,41 @@ test "lower-c discard calls require MIR identity and argument type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_type, &type_output, .kernel, "c_discard_call_facts.mc", .{}, false, null));
 }
 
+test "lower-c unchecked arithmetic requires MIR identity and operand/result type facts" {
+    const source =
+        \\fn unchecked_fact_gate(a: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        return unchecked.add(a, 1);
+        \\    }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_unchecked_call_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_unchecked_call_facts.mc", .{}, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "(a + 1)") != null);
+
+    var missing_identity = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_identity.deinit();
+    try clearCallTargetFactsForFunction(&missing_identity, "unchecked_fact_gate");
+    var identity_output: std.ArrayList(u8) = .empty;
+    defer identity_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_identity, &identity_output, .kernel, "c_unchecked_call_facts.mc", .{}, false, null));
+
+    inline for ([_]mir.TargetTypeKind{ .unchecked_left, .unchecked_right, .unchecked_result }) |kind| {
+        var missing_type = try mir.build(std.testing.allocator, parsed.module);
+        defer missing_type.deinit();
+        try removeTargetTypeKindForFunction(&missing_type, "unchecked_fact_gate", kind);
+        var type_output: std.ArrayList(u8) = .empty;
+        defer type_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_type, &type_output, .kernel, "c_unchecked_call_facts.mc", .{}, false, null));
+    }
+}
+
 test "lower-c rejects prebuilt MIR with missing atomic call target facts" {
     const source =
         \\fn atomic_call_target_fact_gate() -> u32 {

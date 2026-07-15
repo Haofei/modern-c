@@ -24,7 +24,6 @@ const isPAddrType = lower_c_type.isPAddrType;
 const isPointerLikeAddressType = lower_c_type.isPointerLikeAddressType;
 const isVaListType = lower_c_type.isVaListType;
 const isVoidType = lower_c_type.isVoidType;
-const uncheckedNoOverflowCallOp = lower_c_expr.uncheckedNoOverflowCallOp;
 const uncheckedNoOverflowOperator = lower_c_expr.uncheckedNoOverflowOperator;
 const typeName = ast_query.typeName;
 const LocalInfo = lower_c_model.LocalInfo;
@@ -57,6 +56,22 @@ pub const Context = struct {
     mir_call_target_kind: MirCallTargetKindFn,
     mir_target_type: MirTargetTypeFn,
 };
+
+const UncheckedCallInfo = struct {
+    op: []const u8,
+    left_ty: ast.TypeExpr,
+    right_ty: ast.TypeExpr,
+};
+
+fn uncheckedCallInfo(ctx: Context, call: anytype) ?UncheckedCallInfo {
+    if (call.type_args.len != 0 or call.args.len != 2) return null;
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
+    const op = mir.uncheckedCallFactInfo(kind) orelse return null;
+    const left_ty = ctx.mir_target_type(ctx.emit_ctx, .unchecked_left, call.args[0].span) orelse return null;
+    const right_ty = ctx.mir_target_type(ctx.emit_ctx, .unchecked_right, call.args[1].span) orelse return null;
+    _ = ctx.mir_target_type(ctx.emit_ctx, .unchecked_result, call.callee.*.span) orelse return null;
+    return .{ .op = op, .left_ty = left_ty, .right_ty = right_ty };
+}
 
 pub const TempContext = struct {
     allocator: std.mem.Allocator,
@@ -594,12 +609,11 @@ pub fn emitAssumeNoaliasCall(ctx: Context, call: anytype, locals: ?*std.StringHa
 }
 
 pub fn emitUncheckedCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    const op = uncheckedNoOverflowCallOp(call) orelse return false;
-    if (call.args.len != 2) return error.UnsupportedCEmission;
+    const info = uncheckedCallInfo(ctx, call) orelse return false;
     try ctx.out.appendSlice(ctx.allocator, "(");
-    try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
-    try ctx.out.print(ctx.allocator, " {s} ", .{uncheckedNoOverflowOperator(op)});
-    try ctx.emit_expr(ctx.emit_ctx, call.args[1], locals);
+    try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, info.left_ty);
+    try ctx.out.print(ctx.allocator, " {s} ", .{uncheckedNoOverflowOperator(info.op)});
+    try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[1], locals, info.right_ty);
     try ctx.out.appendSlice(ctx.allocator, ")");
     return true;
 }

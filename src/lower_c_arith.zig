@@ -32,7 +32,6 @@ const floatCTypeName = lower_c_type.floatCTypeName;
 const genericChildType = lower_c_shape.genericChildType;
 const intTypeRange = lower_c_type.intTypeRange;
 const isCheckedBinaryOp = lower_c_op.isCheckedBinaryOp;
-const exprIsNumericLiteral = lower_c_expr.exprIsNumericLiteral;
 const isNoTrapBitwiseInfixOp = lower_c_op.isNoTrapBitwiseInfixOp;
 const isIdentNamed = ast_query.isIdentNamed;
 const isSatType = ast_query.isSatType;
@@ -45,7 +44,6 @@ const simpleNameType = ast_query.simpleNameType;
 const sameCStorageType = lower_c_type.sameCStorageType;
 const typeName = ast_query.typeName;
 const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
-const uncheckedNoOverflowCallOp = lower_c_expr.uncheckedNoOverflowCallOp;
 const uncheckedNoOverflowOperator = lower_c_expr.uncheckedNoOverflowOperator;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
@@ -99,6 +97,23 @@ pub const SequencedBinaryContext = struct {
     expr_needs_sequenced_binary: ExprNeedsSequencedBinaryFn,
     emit_operand_temp: EmitSequencedBinaryOperandTempFn,
 };
+
+pub const UncheckedCallInfo = struct {
+    op: []const u8,
+    left_ty: ast.TypeExpr,
+    right_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
+};
+
+pub fn uncheckedCallInfo(ctx: Context, call: anytype) ?UncheckedCallInfo {
+    if (call.type_args.len != 0 or call.args.len != 2) return null;
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
+    const op = mir.uncheckedCallFactInfo(kind) orelse return null;
+    const left_ty = (ctx.mir_target_type(ctx.emit_ctx, .unchecked_left, call.args[0].span) orelse return null);
+    const right_ty = (ctx.mir_target_type(ctx.emit_ctx, .unchecked_right, call.args[1].span) orelse return null);
+    const result_ty = (ctx.mir_target_type(ctx.emit_ctx, .unchecked_result, call.callee.*.span) orelse return null);
+    return .{ .op = op, .left_ty = left_ty, .right_ty = right_ty, .result_ty = result_ty };
+}
 
 pub fn exprNeedsDefaultSequencedBinary(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
     const node = switch (expr.kind) {
@@ -279,20 +294,21 @@ pub fn emitUncheckedAddValueTemp(ctx: Context, expr: ast.Expr, locals: *std.Stri
 }
 
 pub fn emitUncheckedAddValueTempFromCall(ctx: Context, call: anytype, call_span: ast.Span, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
-    const op = uncheckedNoOverflowCallOp(call) orelse return null;
-    if (!ctx.has_mir_no_overflow_range_fact(ctx.emit_ctx, range_target, op, call_span)) return null;
+    const info = uncheckedCallInfo(ctx, call) orelse return null;
+    if (!ctx.has_mir_no_overflow_range_fact(ctx.emit_ctx, range_target, info.op, call_span)) return null;
 
     try writeIndent(ctx);
-    try ctx.out.print(ctx.allocator, "/* MC_MIR_RANGE no_overflow target={s} op={s} */\n", .{ range_target, op });
+    try ctx.out.print(ctx.allocator, "/* MC_MIR_RANGE no_overflow target={s} op={s} */\n", .{ range_target, info.op });
 
-    const left_temp = try emitUncheckedOperandTemp(ctx, call.args[0], locals, target_ty);
-    const right_temp = try emitUncheckedOperandTemp(ctx, call.args[1], locals, target_ty);
+    const left_temp = try emitUncheckedOperandTemp(ctx, call.args[0], locals, info.left_ty);
+    const right_temp = try emitUncheckedOperandTemp(ctx, call.args[1], locals, info.right_ty);
     const result_temp = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
 
     try writeIndent(ctx);
-    try ctx.out.print(ctx.allocator, "{s} {s} = ({s} {s} {s});\n", .{ try ctx.c_type(ctx.emit_ctx, target_ty), result_temp, left_temp.name, uncheckedNoOverflowOperator(op), right_temp.name });
-    return .{ .name = result_temp, .ty = target_ty };
+    try ctx.out.print(ctx.allocator, "{s} {s} = ({s} {s} {s});\n", .{ try ctx.c_type(ctx.emit_ctx, info.result_ty), result_temp, left_temp.name, uncheckedNoOverflowOperator(info.op), right_temp.name });
+    if (!sameCStorageType(info.result_ty, target_ty)) return error.UnsupportedCEmission;
+    return .{ .name = result_temp, .ty = info.result_ty };
 }
 
 fn emitUncheckedOperandTemp(ctx: Context, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
@@ -300,9 +316,8 @@ fn emitUncheckedOperandTemp(ctx: Context, expr: ast.Expr, locals: *std.StringHas
         .grouped => |inner| return emitUncheckedOperandTemp(ctx, inner.*, locals, target_ty),
         .cast => |node| return emitUncheckedOperandTemp(ctx, node.value.*, locals, node.ty.*),
         .call => |call| {
-            if (uncheckedNoOverflowCallOp(call)) |_| {
-                if (call.args.len != 2) return error.UnsupportedCEmission;
-                const temp = try emitUncheckedOperandCallTemp(ctx, call, locals, target_ty);
+            if (uncheckedCallInfo(ctx, call)) |info| {
+                const temp = try emitUncheckedOperandCallTemp(ctx, call, locals, info);
                 return temp;
             }
         },
@@ -311,16 +326,15 @@ fn emitUncheckedOperandTemp(ctx: Context, expr: ast.Expr, locals: *std.StringHas
     return ctx.emit_sequenced_arg_temp(ctx.emit_ctx, expr, locals, target_ty);
 }
 
-fn emitUncheckedOperandCallTemp(ctx: Context, call: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
-    const op = uncheckedNoOverflowCallOp(call) orelse return error.UnsupportedCEmission;
-    const left_temp = try emitUncheckedOperandTemp(ctx, call.args[0], locals, target_ty);
-    const right_temp = try emitUncheckedOperandTemp(ctx, call.args[1], locals, target_ty);
+fn emitUncheckedOperandCallTemp(ctx: Context, call: anytype, locals: *std.StringHashMap(LocalInfo), info: UncheckedCallInfo) anyerror!SequencedArgTemp {
+    const left_temp = try emitUncheckedOperandTemp(ctx, call.args[0], locals, info.left_ty);
+    const right_temp = try emitUncheckedOperandTemp(ctx, call.args[1], locals, info.right_ty);
     const result_temp = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
 
     try writeIndent(ctx);
-    try ctx.out.print(ctx.allocator, "{s} {s} = ({s} {s} {s});\n", .{ try ctx.c_type(ctx.emit_ctx, target_ty), result_temp, left_temp.name, uncheckedNoOverflowOperator(op), right_temp.name });
-    return .{ .name = result_temp, .ty = target_ty };
+    try ctx.out.print(ctx.allocator, "{s} {s} = ({s} {s} {s});\n", .{ try ctx.c_type(ctx.emit_ctx, info.result_ty), result_temp, left_temp.name, uncheckedNoOverflowOperator(info.op), right_temp.name });
+    return .{ .name = result_temp, .ty = info.result_ty };
 }
 
 pub fn emitUncheckedAddReturn(ctx: Context, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
@@ -348,33 +362,18 @@ pub fn emitUncheckedAddInferredLocalInit(ctx: Context, name: []const u8, initial
 }
 
 fn uncheckedInferredLocalType(ctx: Context, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), range_target: []const u8) !?ast.TypeExpr {
-    if (ctx.numeric_expr_type(ctx.emit_ctx, initializer, locals)) |ty| return ty;
     return switch (initializer.kind) {
         .grouped => |inner| try uncheckedInferredLocalType(ctx, inner.*, locals, range_target),
         .call => |call| try uncheckedCallResultType(ctx, call, initializer.span, locals, range_target),
-        else => null,
+        else => ctx.numeric_expr_type(ctx.emit_ctx, initializer, locals),
     };
 }
 
 fn uncheckedCallResultType(ctx: Context, call: anytype, call_span: ast.Span, locals: *std.StringHashMap(LocalInfo), range_target: []const u8) !?ast.TypeExpr {
-    const op = uncheckedNoOverflowCallOp(call) orelse return null;
-    if (!ctx.has_mir_no_overflow_range_fact(ctx.emit_ctx, range_target, op, call_span)) return null;
-
-    const left_ty = ctx.numeric_expr_type(ctx.emit_ctx, call.args[0], locals);
-    const right_ty = ctx.numeric_expr_type(ctx.emit_ctx, call.args[1], locals);
-    if (left_ty != null and right_ty != null) {
-        if (sameCStorageType(left_ty.?, right_ty.?)) return left_ty.?;
-        return error.UnsupportedCEmission;
-    }
-    if (left_ty) |ty| {
-        if (exprIsNumericLiteral(call.args[1])) return ty;
-        return error.UnsupportedCEmission;
-    }
-    if (right_ty) |ty| {
-        if (exprIsNumericLiteral(call.args[0])) return ty;
-        return error.UnsupportedCEmission;
-    }
-    return error.UnsupportedCEmission;
+    _ = locals;
+    const info = uncheckedCallInfo(ctx, call) orelse return null;
+    if (!ctx.has_mir_no_overflow_range_fact(ctx.emit_ctx, range_target, info.op, call_span)) return null;
+    return info.result_ty;
 }
 
 pub fn emitUncheckedAddAssignmentStmt(ctx: Context, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {

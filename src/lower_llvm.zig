@@ -59,7 +59,6 @@ const binaryIsComparison = lower_llvm_op.binaryIsComparison;
 const comparisonPredicate = lower_llvm_op.comparisonPredicate;
 const floatComparisonPredicate = lower_llvm_op.floatComparisonPredicate;
 const wrappingBuiltinOp = lower_llvm_op.wrappingBuiltinOp;
-const uncheckedBuiltinOp = lower_llvm_op.uncheckedBuiltinOp;
 const normalizedIntLiteral = lower_llvm_op.normalizedIntLiteral;
 const normalizedFloatLiteral = lower_llvm_op.normalizedFloatLiteral;
 const charLiteralValue = lower_llvm_op.charLiteralValue;
@@ -154,6 +153,13 @@ const IntRange = lower_llvm_model.IntRange;
 const AtomicCallInfo = lower_llvm_model.AtomicCallInfo;
 const MaybeUninitCallInfo = lower_llvm_model.MaybeUninitCallInfo;
 const ResultTypeInfo = lower_llvm_model.ResultTypeInfo;
+
+const UncheckedCallInfo = struct {
+    op: []const u8,
+    left_ty: ast.TypeExpr,
+    right_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
+};
 
 const DebugBasicType = struct {
     name: []const u8,
@@ -6713,13 +6719,12 @@ const LlvmEmitter = struct {
             const right = try self.emitExpr(call.args[1], expected_ty);
             return try self.emitPlainBinaryValues(op, try self.llvmType(expected_ty), left, right);
         }
-        if (uncheckedBuiltinOp(call.callee.*)) |op| {
-            if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
-            if (self.integerBitsOf(expected_ty) == null) return error.UnsupportedLlvmEmission;
-            try self.requireMirNoOverflowRangeFact(op, span);
-            const left = try self.emitExpr(call.args[0], expected_ty);
-            const right = try self.emitExpr(call.args[1], expected_ty);
-            return try self.emitPlainBinaryValues(op, try self.llvmType(expected_ty), left, right);
+        if (self.uncheckedCallInfo(call)) |info| {
+            if (self.integerBitsOf(info.result_ty) == null) return error.UnsupportedLlvmEmission;
+            try self.requireMirNoOverflowRangeFact(info.op, span);
+            const left = try self.emitExpr(call.args[0], info.left_ty);
+            const right = try self.emitExpr(call.args[1], info.right_ty);
+            return try self.emitPlainBinaryValues(info.op, try self.llvmType(info.result_ty), left, right);
         }
         if (self.atomicCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "load")) {
@@ -8700,7 +8705,7 @@ const LlvmEmitter = struct {
             }
             return info.target_ty;
         }
-        if (uncheckedBuiltinOp(call.callee.*) != null and call.args.len == 2) return self.exprType(call.args[0]);
+        if (self.uncheckedCallInfo(call)) |info| return info.result_ty;
         if (self.atomicCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "load") or std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) return info.payload_ty;
             if (std.mem.eql(u8, info.op, "store")) return simpleType(call.callee.*.span, "void");
@@ -8766,6 +8771,16 @@ const LlvmEmitter = struct {
         const expected_kind = mir.conversionCallTargetKindForName(member.name.text) orelse return null;
         if (self.mirCallTargetKindAt(call.callee.*.span) != expected_kind) return null;
         return .{ .source_ty = source_fact.target_ty, .target_ty = target_ty, .op = member.name.text };
+    }
+
+    fn uncheckedCallInfo(self: *LlvmEmitter, call: anytype) ?UncheckedCallInfo {
+        if (call.type_args.len != 0 or call.args.len != 2) return null;
+        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+        const op = mir.uncheckedCallFactInfo(kind) orelse return null;
+        const left_ty = (self.mirTargetTypeFactAt(.unchecked_left, call.args[0].span) orelse return null).target_ty;
+        const right_ty = (self.mirTargetTypeFactAt(.unchecked_right, call.args[1].span) orelse return null).target_ty;
+        const result_ty = (self.mirTargetTypeFactAt(.unchecked_result, call.callee.*.span) orelse return null).target_ty;
+        return .{ .op = op, .left_ty = left_ty, .right_ty = right_ty, .result_ty = result_ty };
     }
 
     fn domainOpCallInfo(self: *LlvmEmitter, call: anytype) ?DomainOpCallInfo {

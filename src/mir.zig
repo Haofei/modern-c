@@ -87,6 +87,15 @@ pub const DmaCallFactInfo = struct {
     cache: bool,
 };
 
+pub fn uncheckedCallFactInfo(kind: CallTargetKind) ?[]const u8 {
+    return switch (kind) {
+        .unchecked_add => "add",
+        .unchecked_sub => "sub",
+        .unchecked_mul => "mul",
+        else => null,
+    };
+}
+
 pub fn dmaCallFactInfo(kind: CallTargetKind) ?DmaCallFactInfo {
     return switch (kind) {
         .dma_cache_clean => .{ .op = "clean", .cache = true },
@@ -4898,6 +4907,7 @@ const FunctionBuilder = struct {
                 const atomic_init_target = self.atomicInitCallTarget(node);
                 const raw_target = self.rawCallTarget(node);
                 const va_target = try self.vaCallTarget(node);
+                const unchecked_target = self.uncheckedCallTarget(node);
                 const discard_target = self.discardCallTargetKind(node);
                 const explicit_trap_target = explicitTrapCallTargetKind(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
@@ -4921,6 +4931,8 @@ const FunctionBuilder = struct {
                 else if (reflection_target) |target|
                     target.result_ty
                 else if (byte_view_target) |target|
+                    target.result_ty
+                else if (unchecked_target) |target|
                     target.result_ty
                 else if (reduceCallKind(node.callee.*) != null)
                     self.exprType(expr)
@@ -4972,6 +4984,13 @@ const FunctionBuilder = struct {
                     const source_ty = self.typeExprForExpr(node.args[0]) orelse return error.UnsupportedMirConstruction;
                     try self.appendTargetTypeFact(.reduce_source, source_ty, valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases), node.args[0].span);
                     try self.appendTargetTypeFact(.reduce_element, element_ty, valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
+                }
+                if (unchecked_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.appendTargetTypeFact(.unchecked_left, target.left_ty, target.left_value_ty, node.args[0].span);
+                    try self.appendTargetTypeFact(.unchecked_right, target.right_ty, target.right_value_ty, node.args[1].span);
+                    try self.appendTargetTypeFact(.unchecked_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (enum_raw_target) |target| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.enum_raw), target.result_ty, expr.span);
@@ -5560,6 +5579,55 @@ const FunctionBuilder = struct {
         if (ast_query.isIdentNamed(call.callee.*, "drop")) return .drop;
         if (ast_query.isIdentNamed(call.callee.*, "forget_unchecked")) return .forget_unchecked;
         return null;
+    }
+
+    const UncheckedCallTarget = struct {
+        kind: CallTargetKind,
+        left_ty: ast.TypeExpr,
+        left_value_ty: ValueType,
+        right_ty: ast.TypeExpr,
+        right_value_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+    };
+
+    fn uncheckedCallTarget(self: *FunctionBuilder, call: anytype) ?UncheckedCallTarget {
+        if (call.type_args.len != 0 or call.args.len != 2) return null;
+        const op = noOverflowUncheckedOp(self.calleeName(call.callee.*)) orelse return null;
+        const kind: CallTargetKind = if (std.mem.eql(u8, op, "add"))
+            .unchecked_add
+        else if (std.mem.eql(u8, op, "sub"))
+            .unchecked_sub
+        else if (std.mem.eql(u8, op, "mul"))
+            .unchecked_mul
+        else
+            return null;
+        const left_known_ty = self.typeExprForExpr(call.args[0]);
+        const right_known_ty = self.typeExprForExpr(call.args[1]);
+        const fallback_ty = left_known_ty orelse right_known_ty orelse self.conversionSourceTypeExpr(call.args[0]) orelse return null;
+        const left_ty = self.uncheckedOperandTypeExpr(call.args[0], fallback_ty) orelse return null;
+        const right_ty = self.uncheckedOperandTypeExpr(call.args[1], left_ty) orelse return null;
+        const left_value_ty = valueTypeFromTypeAlias(left_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        const right_value_ty = valueTypeFromTypeAlias(right_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        return .{
+            .kind = kind,
+            .left_ty = left_ty,
+            .left_value_ty = left_value_ty,
+            .right_ty = right_ty,
+            .right_value_ty = right_value_ty,
+            .result_type_expr = left_ty,
+            .result_ty = left_value_ty,
+        };
+    }
+
+    fn uncheckedOperandTypeExpr(self: *FunctionBuilder, expr: ast.Expr, fallback_ty: ast.TypeExpr) ?ast.TypeExpr {
+        if (self.typeExprForExpr(expr)) |ty| return ty;
+        return switch (expr.kind) {
+            .int_literal, .float_literal, .char_literal => fallback_ty,
+            .grouped => |inner| self.uncheckedOperandTypeExpr(inner.*, fallback_ty),
+            .unary => |node| if (node.op == .neg) self.uncheckedOperandTypeExpr(node.expr.*, fallback_ty) else null,
+            else => null,
+        };
     }
 
     fn cpuPauseCallValueType(_: *FunctionBuilder, call: anytype) ?ValueType {

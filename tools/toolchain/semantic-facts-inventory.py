@@ -633,8 +633,8 @@ ANCHORS: dict[str, list[str]] = {
         "ctx.mir_target_type(ctx.emit_ctx, .domain_interval",
     ],
     "src/lower_c_builtin_emit.zig": [
-        "uncheckedNoOverflowCallOp",
-        "return error.UnsupportedCEmission",
+        "lower_c_call.emitUncheckedCall(ctx.call, node, locals)",
+        "lower_c_arith.uncheckedCallInfo(ctx.arith, node)",
     ],
     "src/lower_c_emitter.zig": [
         "fn arithContext",
@@ -768,7 +768,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn rawManyOffsetCallTarget(": 1,
         "fn mmioCallTarget(": 1,
         "fn mmioMapCallTarget(": 1,
-        "try self.addCallTargetFact(target.kind": 9,
+        "try self.addCallTargetFact(target.kind": 10,
         "try self.addCallTargetFact(target, .never": 1,
         "appendTargetTypeFact(.domain_type": 1,
         "appendTargetTypeFact(.domain_payload": 1,
