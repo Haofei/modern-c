@@ -6151,16 +6151,33 @@ const FunctionBuilder = struct {
 
     fn addExpressionResultFact(self: *FunctionBuilder, expr: ast.Expr) !void {
         switch (expr.kind) {
-            .member, .index, .slice, .deref => {},
+            .member, .index, .slice, .deref, .unary, .binary => {},
             else => return,
         }
-        const ty = self.typeExprForExpr(expr) orelse return;
+        const ty = self.expressionResultTypeExpr(expr) orelse return;
         try self.appendTargetTypeFact(
             .expression_result,
             ty,
             valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases),
             expr.span,
         );
+    }
+
+    fn expressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
+        if (self.typeExprForExpr(expr)) |ty| return ty;
+        return switch (expr.kind) {
+            .unary => |node| if (node.op == .logical_not)
+                ast_query.simpleNameType("bool", expr.span)
+            else
+                self.typeExprForExpr(node.expr.*),
+            .binary => |node| if (mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op))
+                ast_query.simpleNameType("bool", expr.span)
+            else if (mirIsArithmeticBinary(node.op) or mirIsBitwiseBinary(node.op))
+                self.typeExprForExpr(node.left.*) orelse self.typeExprForExpr(node.right.*)
+            else
+                null,
+            else => null,
+        };
     }
 
     fn addPrimaryTargetTypeFactForExpr(self: *FunctionBuilder, expr: ast.Expr, target_ty: ast.TypeExpr) !void {

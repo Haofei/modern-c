@@ -395,6 +395,10 @@ pub fn structTypeNameForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
 }
 
 pub fn numericExprTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    return expressionResultTypeOptional(ctx, expr, numericExprTypeForEmissionInferred(ctx, expr, locals));
+}
+
+fn numericExprTypeForEmissionInferred(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return switch (expr.kind) {
         .ident => |ident| {
             const source_ty = sourceTypeForIdent(ctx, ident.text, locals) orelse return null;
@@ -456,6 +460,13 @@ pub fn numericExprTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals:
         },
         else => null,
     };
+}
+
+fn expressionResultTypeOptional(ctx: TypeQueryContext, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {
+    const fact = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return inferred;
+    const expected = inferred orelse return fact;
+    if (!sameCStorageType(resolveAliasType(ctx, fact), resolveAliasType(ctx, expected))) return null;
+    return fact;
 }
 
 fn numericExpressionResultType(ctx: TypeQueryContext, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {

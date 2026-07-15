@@ -1258,7 +1258,9 @@ test "LLVM compound expressions require complete MIR result facts" {
         \\fn expression_facts(index: usize) -> u8 {
         \\    let values: [4]u8 = .{ 7, 0, 0, 0 };
         \\    let window: []const u8 = values[0..index];
-        \\    return window[0];
+        \\    let nonzero = !(window[0] == 0);
+        \\    if (nonzero) { return window[0]; }
+        \\    return 0;
         \\}
     ;
     var parsed = try test_support.parseModule("llvm_expression_result_facts.mc", source);

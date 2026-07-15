@@ -2235,7 +2235,9 @@ test "MIR owns span-identified result types for compound expressions" {
         \\    unsafe {
         \\        let value = packet.values[index];
         \\        let window: []u32 = packet.values[0..1];
-        \\        return value + window[0] + ptr.*;
+        \\        let same = !(value == window[0]);
+        \\        if (same) { return value + window[0] + ptr.*; }
+        \\        return value;
         \\    }
         \\}
     ;
@@ -2252,7 +2254,7 @@ test "MIR owns span-identified result types for compound expressions" {
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "expression_results").?;
-    try std.testing.expectEqual(@as(usize, 6), countTargetTypeFactsByKind(function, .expression_result));
+    try std.testing.expectEqual(@as(usize, 11), countTargetTypeFactsByKind(function, .expression_result));
     var last_source: ?mir.SourcePoint = null;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .expression_result) continue;

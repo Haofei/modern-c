@@ -8136,7 +8136,7 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .ident => |ident| self.local_types.get(ident.text) orelse self.global_types.get(ident.text) orelse self.fnPointerTypeForName(ident.text),
             .bool_literal => simpleType(expr.span, "bool"),
-            .unary => |node| if (node.op == .logical_not) simpleType(expr.span, "bool") else self.exprType(node.expr.*),
+            .unary => |node| self.expressionResultType(expr, if (node.op == .logical_not) simpleType(expr.span, "bool") else self.exprType(node.expr.*)),
             .int_literal => null,
             .float_literal => null,
             .grouped => |inner| self.exprType(inner.*),
@@ -8168,7 +8168,7 @@ const LlvmEmitter = struct {
                 if (self.memberField(node.base.*, node.name.text)) |field| break :blk field.ty;
                 break :blk null;
             } else null),
-            .binary => |node| if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*),
+            .binary => |node| self.expressionResultType(expr, if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*)),
             .try_expr => |node| blk: {
                 const fact = self.mirTargetTypeFactAt(.try_operand, node.operand.*.span) orelse break :blk null;
                 if (self.exprType(node.operand.*)) |known_ty| {
