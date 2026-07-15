@@ -1454,6 +1454,26 @@ test "move root ownership lookup uses typed places rather than compatibility key
     try std.testing.expect(!state.get("compat:owner").?.live);
 }
 
+test "move short-circuit joins use typed roots rather than compatibility keys" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-short-root.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    const field = root.project(.{ .field = "resource" }).?;
+    var bypass = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer bypass.deinit();
+    var rhs = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer rhs.deinit();
+
+    try bypass.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    try rhs.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    try rhs.put("compat:field", .{ .live = false, .span = span, .place = field });
+    mergeShortCircuitMoveStates(&checker, &bypass, &rhs, span, false);
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(!bypass.get("compat:owner").?.live);
+}
+
 fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
     return .{
         .live = false,
@@ -2048,7 +2068,7 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *std.StringHashMap(MoveSlo
     while (rhs_it.next()) |entry| {
         if (moveStateSlotMatches(state, entry.key_ptr.*, entry.value_ptr.*)) continue;
         const root = trackedSubplaceRoot(entry.value_ptr.*, entry.key_ptr.*) orelse continue;
-        if (state.getPtr(root)) |root_slot| {
+        if (rootMoveSlotPtrForPlace(.{ .root = root }, state)) |root_slot| {
             self.errorCode(span, "E_MOVE_BRANCH_MISMATCH", if (deferred) "cannot defer-consume a linear `move` place only on one side of a short-circuit expression" else "cannot move a linear `move` place only on one side of a short-circuit expression");
             root_slot.live = false;
             root_slot.deferred = false;
@@ -4043,8 +4063,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
         .unary => |u| moveDefer(self, u.expr.*, state, aliases),
         .address_of => |inner| {
             if (deferredBorrowPlaceKey(self, inner.*, state, aliases)) |pp| {
-                const root = pp.place.root;
-                if (state.get(root)) |slot| {
+                if (rootMoveSlotForPlace(pp.place, state)) |slot| {
                     if (slot.cleanup_local) {
                         moveBorrow(self, inner.*, state, aliases);
                     } else {
