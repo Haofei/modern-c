@@ -2656,6 +2656,10 @@ const CEmitter = struct {
         const base_ty = self.operandEmitType(member.base.*, locals) orelse self.exprSourceTypeForEmission(member.base.*, locals) orelse return null;
         return switch (self.resolveAliasType(base_ty).kind) {
             .dyn_trait => |d| d.trait_name.text,
+            .pointer => |p| switch (self.resolveAliasType(p.child.*).kind) {
+                .dyn_trait => |d| d.trait_name.text,
+                else => null,
+            },
             else => null,
         };
     }
@@ -3889,7 +3893,7 @@ const CEmitter = struct {
     }
 
     fn emitOrdinaryMemberLoadExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
-        const op: []const u8 = if (self.exprIsPointer(node.base.*, locals)) "->" else ".";
+        const op: []const u8 = if (self.exprHasPointerType(node.base.*, locals)) "->" else ".";
         const field_name = try self.cIdent(node.name.text);
         if (self.ordinaryLoadHookName()) |hook| {
             try self.emitHookedMemberLoadExpr(node, locals, hook, op, field_name);
@@ -5250,6 +5254,12 @@ const CEmitter = struct {
     }
 
     fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
+        // Async lowering creates synthetic expressions with a zero source span.
+        // `expression_result` facts are keyed by the complete source span, so a
+        // zero span cannot identify one uniquely. Falling through to the first
+        // line-zero fact mis-types unrelated synthetic fields and can turn an
+        // assignment target into a race-load expression.
+        if (kind == .expression_result and (span.line == 0 or span.column == 0)) return null;
         if (self.currentMirFunction()) |function| {
             for (function.target_type_facts) |fact| {
                 if (fact.kind == kind and fact.target_index == null and fact.target_owner == null and mirTargetTypeSourceMatches(kind, span, fact.source)) return fact;

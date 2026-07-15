@@ -452,9 +452,57 @@ pub fn sameCStorageType(left: ast.TypeExpr, right: ast.TypeExpr) bool {
             .qualified => |right_node| sameCStorageType(left, right_node.child.*),
             else => false,
         },
+        .pointer => |left_node| switch (right.kind) {
+            .pointer => |right_node| left_node.mutability == right_node.mutability and sameCStorageType(left_node.child.*, right_node.child.*),
+            .qualified => |right_node| sameCStorageType(left, right_node.child.*),
+            else => false,
+        },
+        .raw_many_pointer => |left_node| switch (right.kind) {
+            .raw_many_pointer => |right_node| left_node.mutability == right_node.mutability and sameCStorageType(left_node.child.*, right_node.child.*),
+            .qualified => |right_node| sameCStorageType(left, right_node.child.*),
+            else => false,
+        },
+        .slice => |left_node| switch (right.kind) {
+            .slice => |right_node| left_node.mutability == right_node.mutability and sameCStorageType(left_node.child.*, right_node.child.*),
+            .qualified => |right_node| sameCStorageType(left, right_node.child.*),
+            else => false,
+        },
+        .array => |left_node| switch (right.kind) {
+            .array => |right_node| std.meta.eql(left_node.len, right_node.len) and sameCStorageType(left_node.child.*, right_node.child.*),
+            .qualified => |right_node| sameCStorageType(left, right_node.child.*),
+            else => false,
+        },
+        .fn_pointer => |left_node| switch (right.kind) {
+            .fn_pointer => |right_node| sameCallableStorageType(left_node.params, left_node.ret.*, right_node.params, right_node.ret.*),
+            .qualified => |right_node| sameCStorageType(left, right_node.child.*),
+            else => false,
+        },
+        .closure_type => |left_node| switch (right.kind) {
+            .closure_type => |right_node| sameCallableStorageType(left_node.params, left_node.ret.*, right_node.params, right_node.ret.*),
+            .qualified => |right_node| sameCStorageType(left, right_node.child.*),
+            else => false,
+        },
+        .dyn_trait => |left_node| switch (right.kind) {
+            .dyn_trait => |right_node| left_node.mutability == right_node.mutability and std.mem.eql(u8, left_node.trait_name.text, right_node.trait_name.text),
+            .qualified => |right_node| sameCStorageType(left, right_node.child.*),
+            else => false,
+        },
+        .nullable => |left_node| switch (right.kind) {
+            .nullable => |right_node| sameCStorageType(left_node.*, right_node.*),
+            .qualified => |right_node| sameCStorageType(left, right_node.child.*),
+            else => false,
+        },
         .qualified => |left_node| sameCStorageType(left_node.child.*, right),
         else => false,
     };
+}
+
+fn sameCallableStorageType(left_params: []const ast.TypeExpr, left_ret: ast.TypeExpr, right_params: []const ast.TypeExpr, right_ret: ast.TypeExpr) bool {
+    if (left_params.len != right_params.len) return false;
+    for (left_params, right_params) |left_param, right_param| {
+        if (!sameCStorageType(left_param, right_param)) return false;
+    }
+    return sameCStorageType(left_ret, right_ret);
 }
 
 pub fn isNonNullPointerType(ty: ast.TypeExpr) bool {
