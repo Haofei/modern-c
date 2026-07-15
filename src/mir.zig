@@ -3767,8 +3767,15 @@ const FunctionBuilder = struct {
     fn buildStmt(self: *FunctionBuilder, stmt: ast.Stmt) anyerror!bool {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| {
-                const ty = if (local.ty) |local_ty| valueTypeFromTypeAlias(local_ty, self.enums, self.structs, self.packed_bits, self.aliases) else if (local.init) |init_expr| self.exprType(init_expr) else .unknown;
-                const ty_expr = local.ty orelse if (local.init) |init_expr| self.inferredLocalTypeExpr(init_expr) else null;
+                const ty_expr = local.ty orelse if (local.init) |init_expr| try self.inferredLocalTypeExpr(init_expr) else null;
+                const ty = if (local.ty) |local_ty|
+                    valueTypeFromTypeAlias(local_ty, self.enums, self.structs, self.packed_bits, self.aliases)
+                else if (ty_expr) |inferred_ty|
+                    valueTypeFromTypeAlias(inferred_ty, self.enums, self.structs, self.packed_bits, self.aliases)
+                else if (local.init) |init_expr|
+                    self.exprType(init_expr)
+                else
+                    .unknown;
                 const mutable = std.meta.activeTag(stmt.kind) == .var_decl;
                 if (local.ty == null and local.names.len == 1 and inferredLocalTypeFactEligible(self, local.init)) {
                     if (local.init) |init_expr| {
@@ -4292,7 +4299,7 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn inferredLocalTypeExpr(self: *FunctionBuilder, initializer: ast.Expr) ?ast.TypeExpr {
+    fn inferredLocalTypeExpr(self: *FunctionBuilder, initializer: ast.Expr) !?ast.TypeExpr {
         if (self.typeExprForExpr(initializer)) |ty| return ty;
         return switch (initializer.kind) {
             .call => |node| self.inferredLocalCallType(node),
@@ -4308,8 +4315,32 @@ const FunctionBuilder = struct {
                 self.typeExprForExpr(node.left.*) orelse self.typeExprForExpr(node.right.*)
             else
                 null,
-            .grouped => |inner| self.inferredLocalTypeExpr(inner.*),
+            .address_of => |inner| self.inferredLocalAddressTypeExpr(initializer.span, inner.*),
+            .grouped => |inner| try self.inferredLocalTypeExpr(inner.*),
             else => null,
+        };
+    }
+
+    // This narrow inferred-address slice is deliberately limited to a direct
+    // previously declared local. It gives the binding an owned type without
+    // broadening address-of inference to members, indices, globals, or calls.
+    fn inferredLocalAddressTypeExpr(self: *FunctionBuilder, span: ast.Span, operand: ast.Expr) !?ast.TypeExpr {
+        const name = switch (operand.kind) {
+            .ident => |ident| ident.text,
+            .grouped => |inner| return try self.inferredLocalAddressTypeExpr(span, inner.*),
+            else => return null,
+        };
+        const child_ty = self.local_type_exprs.get(name) orelse return null;
+        const child = try self.allocator.create(ast.TypeExpr);
+        errdefer self.allocator.destroy(child);
+        child.* = child_ty;
+        try self.generated_type_expr_nodes.append(self.allocator, child);
+        return .{
+            .span = span,
+            .kind = .{ .pointer = .{
+                .mutability = if (self.local_mutability.get(name) orelse false) .mut else .@"const",
+                .child = child,
+            } },
         };
     }
 
@@ -9063,12 +9094,21 @@ fn inferredLocalTypeFactEligible(builder: *FunctionBuilder, maybe_initializer: ?
         // to make that result type authoritative while allocating the binding.
         .member, .index, .slice => builder.typeExprForExpr(initializer) != null,
         .deref => rawManyOffsetDerefType(builder, initializer) != null or builder.typeExprForExpr(initializer) != null,
+        .address_of => |inner| inferredLocalDirectAddressOfLocal(builder, inner.*),
         // The try operand has a MIR-owned type fact, and its payload type is
         // already resolved by typeExprForExpr.
         .try_expr => builder.typeExprForExpr(initializer) != null,
         .unary => |node| node.op == .logical_not or inferredLocalTypeFactEligible(builder, node.expr.*),
         .binary => |node| mirIsArithmeticBinary(node.op) or mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op),
         .grouped => |inner| inferredLocalTypeFactEligible(builder, inner.*),
+        else => false,
+    };
+}
+
+fn inferredLocalDirectAddressOfLocal(builder: *FunctionBuilder, operand: ast.Expr) bool {
+    return switch (operand.kind) {
+        .ident => |ident| builder.local_type_exprs.contains(ident.text),
+        .grouped => |inner| inferredLocalDirectAddressOfLocal(builder, inner.*),
         else => false,
     };
 }

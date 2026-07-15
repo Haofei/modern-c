@@ -1220,6 +1220,41 @@ test "MIR owns inferred local try payload types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local direct address types" {
+    const source =
+        \\fn address_local() -> u32 {
+        \\    var value: u32 = 4;
+        \\    let pointer = &value;
+        \\    pointer.* = 9;
+        \\    return pointer.*;
+        \\}
+        \\fn address_const_local() -> u32 {
+        \\    let value: u32 = 4;
+        \\    let pointer = &value;
+        \\    return pointer.*;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_address_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const fact = targetTypeFactByKind(functionByName(typed_mir, "address_local").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    const pointer = fact.target_ty.kind.pointer;
+    try std.testing.expectEqual(ast.Mutability.mut, pointer.mutability);
+    try std.testing.expectEqualStrings("u32", pointer.child.kind.name.text);
+    const const_fact = targetTypeFactByKind(functionByName(typed_mir, "address_const_local").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ast.Mutability.@"const", const_fact.target_ty.kind.pointer.mutability);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns inferred local cast types" {
     const source =
         \\fn casts(value: u64, ptr: *const u64) -> u32 {

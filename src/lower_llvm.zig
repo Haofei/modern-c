@@ -2478,10 +2478,31 @@ const LlvmEmitter = struct {
 
     fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast.Expr) !ast.TypeExpr {
         const fact_ty = (self.mirTargetTypeFactAtOwned(.inferred_local, initializer.span, name, null) orelse return error.UnsupportedLlvmEmission).target_ty;
+        if (self.directAddressOfLocalPointeeType(initializer)) |pointee_ty| {
+            const pointer = switch (self.resolveAliasType(fact_ty).kind) {
+                .pointer => |node| node,
+                else => return error.UnsupportedLlvmEmission,
+            };
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(pointee_ty))) return error.UnsupportedLlvmEmission;
+            return fact_ty;
+        }
         if (self.exprType(initializer) orelse inferredLocalLiteralType(initializer) orelse self.inferredLocalCallReturnType(initializer)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
         }
         return fact_ty;
+    }
+
+    // The MIR fact owns the pointer qualification for this bounded `&local`
+    // form. The backend uses the source local only to reject a stale pointee.
+    fn directAddressOfLocalPointeeType(self: *LlvmEmitter, initializer: ast.Expr) ?ast.TypeExpr {
+        return switch (initializer.kind) {
+            .address_of => |inner| switch (inner.kind) {
+                .ident => |ident| self.local_types.get(ident.text),
+                else => null,
+            },
+            .grouped => |inner| self.directAddressOfLocalPointeeType(inner.*),
+            else => null,
+        };
     }
 
     fn inferredLocalCallReturnType(self: *LlvmEmitter, initializer: ast.Expr) ?ast.TypeExpr {

@@ -2818,6 +2818,7 @@ const CEmitter = struct {
     }
 
     fn emitSpecialInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+        if (try self.emitAddressOfInferredLocalInit(name, initializer, locals)) return true;
         if (self.tryPayloadTypeForInferredLocal(initializer)) |known_ty| {
             const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse return error.UnsupportedCEmission;
             try locals.put(name, try self.localInfoFromType(inferred_ty));
@@ -2846,6 +2847,27 @@ const CEmitter = struct {
         if (try lower_c_mmio.emitDirectReadInferredLocalInitExpr(self.mmioEmitContext(), name, initializer, locals)) return true;
         if (try lower_c_mmio.emitReadExprInferredLocalInit(self.mmioCallEmitContext(), name, initializer, locals)) return true;
         return false;
+    }
+
+    fn emitAddressOfInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const operand = switch (initializer.kind) {
+            .address_of => |inner| inner.*,
+            .grouped => |inner| return try self.emitAddressOfInferredLocalInit(name, inner.*, locals),
+            else => return false,
+        };
+        const pointee_ty = self.operandEmitType(operand, locals) orelse return false;
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, null)) orelse return error.UnsupportedCEmission;
+        const pointer = switch (self.resolveAliasType(inferred_ty).kind) {
+            .pointer => |node| node,
+            else => return error.UnsupportedCEmission,
+        };
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(pointee_ty))) return error.UnsupportedCEmission;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), try self.cIdent(name) });
+        try self.emitExprWithTarget(initializer, locals, inferred_ty);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
     }
 
     // A direct `source?` initializer is already typed by the MIR-owned operand
