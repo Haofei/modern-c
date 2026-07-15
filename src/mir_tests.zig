@@ -1245,6 +1245,17 @@ test "MIR owns inferred local direct address types" {
         \\    let pointer = &holder.value;
         \\    return pointer.*;
         \\}
+        \\fn address_element() -> u32 {
+        \\    var values: [2]u32 = .{ 4, 5 };
+        \\    let pointer = &values[0];
+        \\    pointer.* = 9;
+        \\    return pointer.*;
+        \\}
+        \\fn address_const_element() -> u32 {
+        \\    let values: [2]u32 = .{ 4, 5 };
+        \\    let pointer = &values[0];
+        \\    return pointer.*;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_address_types.mc", source);
@@ -1269,6 +1280,11 @@ test "MIR owns inferred local direct address types" {
     try std.testing.expectEqualStrings("u32", field_fact.target_ty.kind.pointer.child.kind.name.text);
     const const_field_fact = targetTypeFactByKind(functionByName(typed_mir, "address_const_field").?, .inferred_local) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(ast.Mutability.@"const", const_field_fact.target_ty.kind.pointer.mutability);
+    const element_fact = targetTypeFactByKind(functionByName(typed_mir, "address_element").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ast.Mutability.mut, element_fact.target_ty.kind.pointer.mutability);
+    try std.testing.expectEqualStrings("u32", element_fact.target_ty.kind.pointer.child.kind.name.text);
+    const const_element_fact = targetTypeFactByKind(functionByName(typed_mir, "address_const_element").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ast.Mutability.@"const", const_element_fact.target_ty.kind.pointer.mutability);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 

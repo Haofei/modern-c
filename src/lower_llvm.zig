@@ -2506,6 +2506,11 @@ const LlvmEmitter = struct {
         return switch (operand.kind) {
             .ident => |ident| self.local_types.get(ident.text),
             .member => |node| if (self.directAddressOfLocalPlaceType(node.base.*) != null) self.exprType(operand) else null,
+            .index => |node| blk: {
+                const base_ty = self.directAddressOfLocalPlaceType(node.base.*) orelse break :blk null;
+                if (self.resolveAliasType(base_ty).kind != .array) break :blk null;
+                break :blk self.exprType(operand);
+            },
             .grouped => |inner| self.directAddressOfLocalPlaceType(inner.*),
             else => null,
         };

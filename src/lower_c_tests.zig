@@ -1271,6 +1271,17 @@ test "lower-c inferred local direct addresses require MIR types" {
         \\    let pointer = &holder.value;
         \\    return pointer.*;
         \\}
+        \\fn address_element() -> u32 {
+        \\    var values: [2]u32 = .{ 4, 5 };
+        \\    let pointer = &values[0];
+        \\    pointer.* = 9;
+        \\    return pointer.*;
+        \\}
+        \\fn address_const_element() -> u32 {
+        \\    let values: [2]u32 = .{ 4, 5 };
+        \\    let pointer = &values[0];
+        \\    return pointer.*;
+        \\}
     ;
     var parsed = try test_support.parseCheckedModule("c_inferred_local_address.mc", source);
     defer parsed.deinit();
@@ -1284,17 +1295,19 @@ test "lower-c inferred local direct addresses require MIR types" {
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t const * pointer = &value") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &holder.value") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t const * pointer = &holder.value") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &values.elems[") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t const * pointer = &values.elems[") != null);
 
     var missing = try mir.build(std.testing.allocator, parsed.module);
     defer missing.deinit();
-    try removeTargetTypeKindForFunction(&missing, "address_field", .inferred_local);
+    try removeTargetTypeKindForFunction(&missing, "address_element", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
 
     var stale = try mir.build(std.testing.allocator, parsed.module);
     defer stale.deinit();
-    try renameTargetTypeFactForFunction(&stale, "address_field", .inferred_local, "u64");
+    try renameTargetTypeFactForFunction(&stale, "address_element", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));

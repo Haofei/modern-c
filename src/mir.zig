@@ -4323,8 +4323,9 @@ const FunctionBuilder = struct {
 
     // This narrow inferred-address slice is deliberately limited to a direct
     // local place or a field path rooted in one. It gives the binding an owned
-    // type without broadening address-of inference to indices, dereferences,
-    // globals, or calls.
+    // type without broadening address-of inference to slices, dereferences,
+    // globals, or calls. Fixed-array indexes are included because their
+    // element mutability is determined by the root local binding.
     fn inferredLocalAddressTypeExpr(self: *FunctionBuilder, span: ast.Span, operand: ast.Expr) !?ast.TypeExpr {
         const root_name = inferredLocalAddressRootLocal(self, operand) orelse return null;
         const child_ty = self.typeExprForExpr(operand) orelse return null;
@@ -9106,6 +9107,11 @@ fn inferredLocalAddressRootLocal(builder: *FunctionBuilder, operand: ast.Expr) ?
     return switch (operand.kind) {
         .ident => |ident| if (builder.local_type_exprs.contains(ident.text)) ident.text else null,
         .member => |node| inferredLocalAddressRootLocal(builder, node.base.*),
+        .index => |node| blk: {
+            const base_ty = builder.typeExprForExpr(node.base.*) orelse break :blk null;
+            if (aggregateTargetTypeAlias(base_ty, builder.aliases).kind != .array) break :blk null;
+            break :blk inferredLocalAddressRootLocal(builder, node.base.*);
+        },
         .grouped => |inner| inferredLocalAddressRootLocal(builder, inner.*),
         else => null,
     };
