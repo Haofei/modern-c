@@ -1321,6 +1321,11 @@ fn moveStateSlotMatches(state: *const std.StringHashMap(MoveSlot), key: []const 
 fn sameAliasFact(left: MoveSlot, right: MoveSlot) bool {
     if (left.alias_of == null and right.alias_of == null) return true;
     if (left.alias_of == null or right.alias_of == null) return false;
+    if (left.alias_place) |left_place| {
+        if (right.alias_place) |right_place| {
+            return left_place.eql(right_place) and left.full_deref_alias == right.full_deref_alias;
+        }
+    }
     return std.mem.eql(u8, left.alias_of.?, right.alias_of.?) and
         sameMaybePlace(left.alias_place, right.alias_place) and
         left.full_deref_alias == right.full_deref_alias;
@@ -1403,6 +1408,34 @@ test "move CFG boundary state handlers match ownership subplaces by typed place"
     preserveOuterScopedMoveState(&checker, &after_scope, &before_scope);
     try std.testing.expectEqual(@as(usize, 2), after_scope.count());
     try std.testing.expect(after_scope.contains("owner.resource:before"));
+}
+
+test "move CFG alias facts match typed referent places" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-cfg-alias.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+
+    const owner: sema_model.MovePlace = .{ .root = "owner" };
+    const referent = owner.project(.{ .field = "resource" }).?;
+    const storage: sema_model.MovePlace = .{ .root = "borrow" };
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const left_slot = MoveSlot{ .live = false, .span = span, .place = storage, .alias_of = "owner.resource:left", .alias_place = referent };
+    const right_slot = MoveSlot{ .live = false, .span = span, .place = storage, .alias_of = "owner.resource:right", .alias_place = referent };
+
+    try std.testing.expect(sameAliasFact(left_slot, right_slot));
+    var left = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer left.deinit();
+    var right = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer right.deinit();
+    var joined = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer joined.deinit();
+    try left.put("borrow", left_slot);
+    try right.put("borrow", right_slot);
+
+    try std.testing.expect(moveStatesEqual(&left, &right));
+    mergeMoveBranches(&checker, &joined, &left, &right);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 1), joined.count());
 }
 
 fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
@@ -2044,11 +2077,9 @@ fn moveSlotStateEqual(left: MoveSlot, right: MoveSlot) bool {
         left.type_only == right.type_only and
         left.const_index == right.const_index and
         sameMaybeKey(left.symbolic_index, right.symbolic_index) and
-        sameMaybeKey(left.alias_of, right.alias_of) and
-        sameMaybePlace(left.alias_place, right.alias_place) and
+        sameAliasFact(left, right) and
         sameMaybeSpan(left.escaped_borrow, right.escaped_borrow) and
-        left.cleanup_local == right.cleanup_local and
-        left.full_deref_alias == right.full_deref_alias;
+        left.cleanup_local == right.cleanup_local;
 }
 
 fn deferredAliasBorrowPlace(place: ?MovePlace) ?MovePlace {
