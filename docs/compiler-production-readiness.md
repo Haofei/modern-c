@@ -1382,24 +1382,19 @@ asserting file/function/line rows survive `llc`; opaque `ptr` + no
 with one known `getelementptr inbounds` exception on the va_list path,
 `src/lower_llvm.zig:1215`).
 
-- **[P0] LLVM backend passes/returns structs as first-class IR aggregates at
-  `extern`/`export` boundaries — no per-target C ABI classification.** Params are
-  emitted as `%struct_ty %param` directly (`src/lower_llvm.zig:1008-1012`), and
-  extern declarations use the same `llvmType` path; sema has no rejection of
-  struct-by-value on `extern "C"`/`export` (none found; `docs/c-abi-interop.md`
-  implies it is allowed). `llc` does not implement C struct-passing ABI (SysV
-  eightbyte classification, RISC-V LP64 float/pair rules, AAPCS HFAs) — clang does
-  that in its *frontend*. The team clearly knows per-arch ABI matters (hand-built
-  `%mc.va_list.x86_64/aarch64`, `src/lower_llvm_prelude.zig:96-101`) but only
-  va_list is handled. Passing/returning an `extern struct` by value between an
-  `emit-llvm` object and a clang object puts arguments in the wrong
-  registers/memory — a silent ABI miscompile no current gate covers (abi-test checks
-  *layout*, not calls; diff-backend drivers exchange scalars). Fix now: sema-reject
-  by-value struct params/returns on `extern`/`export` (S) + a diff-backend driver
-  passing {u8,u8}/{f32,f32}/>16-byte structs across a clang boundary; implement
-  classification later if the feature is wanted (L). **[inspected — run the
-  10-minute probe: `extern "C" fn f(t: Timespec)`, diff `emit-llvm` IR against
-  clang's IR for the same C signature]**
+- **[fixed, feature boundary] Struct-by-value C ABI at `extern`/`export`
+  boundaries is rejected until per-target classification exists.** LLVM still
+  represents internal MC aggregate calls directly, but `Checker.checkExternExportStructAbi`
+  rejects struct parameters and returns at every extern/export boundary with
+  `E_EXTERN_STRUCT_BY_VALUE`, including aliases and ordinary plain structs. The
+  diagnostic fixtures run on both C and LLVM paths, so no accepted MC program can
+  silently cross a C ABI boundary using LLVM's unclassified aggregate calling
+  convention. Supporting this feature later requires per-target ABI classification
+  plus cross-compiler call tests for SysV, RISC-V, and AAPCS; it is not a current
+  qualified-subset ABI promise. Evidence: `src/sema.zig`
+  `checkExternExportStructAbi`; `src/sema_tests.zig` `rejects by-value struct
+  signatures at extern and export ABI boundaries`; `tests/c_emit/bad/*struct*_by_value.mc`;
+  `tests/diagnostics/bad-golden.tsv` C/LLVM rows.
 - **[retired] Release-mode check elision function filtering.** The original audit
   flagged a possible LLVM/C parity divergence if LLVM matched optimized MIR
   `elided_bounds` by line/column across all functions while C filtered by function.
