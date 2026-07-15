@@ -2747,6 +2747,33 @@ test "MIR records unchecked call identity and operand/result type facts" {
     try std.testing.expectEqualStrings("u32", typeExprHeadName((targetTypeFactByKind(function, .unchecked_result) orelse return error.TestUnexpectedResult).target_ty).?);
 }
 
+test "MIR records wrapping facts through inferred local results" {
+    const source =
+        \\fn wrapping_ops(a: u32, b: u32) -> u32 {
+        \\    let sum = wrapping.add(a, b);
+        \\    return wrapping.add(sum, 1);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_wrapping_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "wrapping_ops") orelse return error.TestUnexpectedResult;
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .wrapping_left));
+    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .wrapping_right));
+    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .wrapping_result));
+}
+
 test "MIR dump exposes elided bounds facts" {
     const source =
         \\fn read_const_index() -> u32 {

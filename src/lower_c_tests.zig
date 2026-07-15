@@ -824,7 +824,7 @@ test "lower-c unchecked arithmetic requires MIR identity and operand/result type
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_unchecked_call_facts.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "(a + 1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "MC_MIR_RANGE no_overflow target=value op=add") != null);
 
     var missing_identity = try mir.build(std.testing.allocator, parsed.module);
     defer missing_identity.deinit();

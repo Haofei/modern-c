@@ -297,10 +297,29 @@ pub fn emitSequencedCheckedBinaryAssignmentStmt(ctx: SequencedBinaryContext, ass
 pub fn emitUncheckedAddValueTemp(ctx: Context, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
     return switch (expr.kind) {
         .grouped => |inner| try emitUncheckedAddValueTemp(ctx, inner.*, locals, target_ty, range_target),
-        .cast => |node| try emitUncheckedAddValueTemp(ctx, node.value.*, locals, node.ty.*, range_target),
+        .cast => |node| try emitUncheckedCastValueTemp(ctx, node, locals, target_ty, range_target),
         .call => |call| try emitUncheckedAddValueTempFromCall(ctx, call, expr.span, locals, target_ty, range_target),
         else => null,
     };
+}
+
+fn emitUncheckedCastValueTemp(ctx: Context, node: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
+    const cast_ty = node.ty.*;
+    if (!sameCStorageType(cast_ty, target_ty)) return null;
+    const source_ty = (try uncheckedInferredLocalType(ctx, node.value.*, locals, range_target)) orelse return null;
+    const source_temp = (try emitUncheckedAddValueTemp(ctx, node.value.*, locals, source_ty, range_target)) orelse return null;
+    if (sameCStorageType(source_ty, cast_ty)) return source_temp;
+
+    const result_temp = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
+    ctx.temp_index.* += 1;
+    try writeIndent(ctx);
+    try ctx.out.print(ctx.allocator, "{s} {s} = ({s}){s};\n", .{
+        try ctx.c_type(ctx.emit_ctx, cast_ty),
+        result_temp,
+        try ctx.c_type(ctx.emit_ctx, cast_ty),
+        source_temp.name,
+    });
+    return .{ .name = result_temp, .ty = cast_ty };
 }
 
 pub fn emitUncheckedAddValueTempFromCall(ctx: Context, call: anytype, call_span: ast.Span, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {

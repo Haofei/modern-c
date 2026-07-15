@@ -27,8 +27,9 @@ const ArrayMoveShape = struct { len: usize, embeds: bool };
 
 // The first production consumer of the move CFG.  Unlike the small model-level
 // worklist tests, this carries the real ownership state used by the checker.
-// Transfer functions still operate on a block-local MoveSlot map; edges clone
-// that map and joins use the same ownership merge as the legacy recursive pass.
+// Transfer functions still retain a block-local MoveSlot map for bindings and
+// compatibility metadata. Ownership subplaces are matched by MovePlace at joins,
+// rather than by their formatted map keys.
 const MoveStateCfgWorklist = struct {
     allocator: std.mem.Allocator,
     cfg: *const sema_model.MoveCfg,
@@ -1250,7 +1251,7 @@ pub fn mergeMoveBranches(
 
     var it = left.iterator();
     while (it.next()) |entry| {
-        const other = right.get(entry.key_ptr.*) orelse {
+        const other = matchingMoveStateSlot(right, entry.key_ptr.*, entry.value_ptr.*) orelse {
             if (entry.value_ptr.live and !entry.value_ptr.deferred) {
                 self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value created in only one branch is never consumed before the branch exits");
             } else if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*)) {
@@ -1280,7 +1281,7 @@ pub fn mergeMoveBranches(
 
     var right_it = right.iterator();
     while (right_it.next()) |entry| {
-        if (left.contains(entry.key_ptr.*)) continue;
+        if (moveStateSlotMatches(left, entry.key_ptr.*, entry.value_ptr.*)) continue;
         if (entry.value_ptr.live and !entry.value_ptr.deferred) {
             self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value created in only one branch is never consumed before the branch exits");
         } else if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*)) {
@@ -1294,12 +1295,59 @@ pub fn mergeMoveBranches(
     replaceMoveState(self, dest, &merged);
 }
 
+// Child places are ownership facts, not source-level binding names. A join must
+// therefore recognize the same field/element even when a compatibility key was
+// formatted differently along the two incoming paths. Roots, aliases, and index
+// facts still use their binding key because they carry lexical metadata.
+fn matchingMoveStateSlot(state: *const std.StringHashMap(MoveSlot), key: []const u8, slot: MoveSlot) ?MoveSlot {
+    if (isOwnershipMoveSubplace(slot, key)) {
+        const place = slot.place.?;
+        var it = state.iterator();
+        while (it.next()) |entry| {
+            if (!isOwnershipMoveSubplace(entry.value_ptr.*, entry.key_ptr.*)) continue;
+            const candidate = entry.value_ptr.*;
+            if (candidate.place.?.eql(place)) return candidate;
+        }
+        return null;
+    }
+    return state.get(key);
+}
+
+fn moveStateSlotMatches(state: *const std.StringHashMap(MoveSlot), key: []const u8, slot: MoveSlot) bool {
+    return matchingMoveStateSlot(state, key, slot) != null;
+}
+
 fn sameAliasFact(left: MoveSlot, right: MoveSlot) bool {
     if (left.alias_of == null and right.alias_of == null) return true;
     if (left.alias_of == null or right.alias_of == null) return false;
     return std.mem.eql(u8, left.alias_of.?, right.alias_of.?) and
         sameMaybePlace(left.alias_place, right.alias_place) and
         left.full_deref_alias == right.full_deref_alias;
+}
+
+test "move branch joins match subplaces by typed place rather than compatibility key" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-join.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+
+    var left = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer left.deinit();
+    var right = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer right.deinit();
+    var joined = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer joined.deinit();
+
+    const root: sema_model.MovePlace = .{ .root = "owner" };
+    const place = root.project(.{ .field = "resource" }).?;
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    try left.put("owner.resource:left", .{ .live = false, .span = span, .place = place });
+    try right.put("owner.resource:right", .{ .live = false, .span = span, .place = place });
+
+    try std.testing.expect(moveStatesEqual(&left, &right));
+    mergeMoveBranches(&checker, &joined, &left, &right);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 1), joined.count());
+    try std.testing.expect(joined.contains("owner.resource:left"));
 }
 
 fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
@@ -1316,6 +1364,10 @@ fn isTrackedMoveSubplace(slot: MoveSlot, key: []const u8) bool {
     _ = key;
     const place = slot.place orelse return false;
     return place.isSubplace();
+}
+
+fn isOwnershipMoveSubplace(slot: MoveSlot, key: []const u8) bool {
+    return slot.alias_of == null and !slot.type_only and !isPureIndexFactSlot(slot) and isTrackedMoveSubplace(slot, key);
 }
 
 fn moveSubplaceRootInOuter(slot: MoveSlot, key: []const u8, outer: *const std.StringHashMap(MoveSlot)) bool {
@@ -1896,7 +1948,7 @@ fn moveStatesEqual(left: *const std.StringHashMap(MoveSlot), right: *const std.S
     if (left.count() != right.count()) return false;
     var it = left.iterator();
     while (it.next()) |entry| {
-        const other = right.get(entry.key_ptr.*) orelse return false;
+        const other = matchingMoveStateSlot(right, entry.key_ptr.*, entry.value_ptr.*) orelse return false;
         if (!moveSlotStateEqual(entry.value_ptr.*, other)) return false;
     }
     return true;

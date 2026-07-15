@@ -8432,6 +8432,19 @@ const FunctionBuilder = struct {
                 reduceCallReturnTypeExpr(node) orelse
                 self.constGetCallTypeExpr(node) orelse
                 (if (self.rawManyOffsetCallTarget(node)) |target| target.result_type_expr else null) orelse
+                // These arithmetic builtins return the type of their first operand.
+                // Keep this query structural rather than calling their fact producers:
+                // inferred locals use it while the producer is still establishing the
+                // nested call facts, so recursing through `uncheckedCallTarget` here
+                // would re-enter binary operand resolution.
+                (if (noOverflowUncheckedOp(self.calleeName(node.callee.*)) != null and node.args.len == 2)
+                    self.typeExprForExpr(node.args[0]) orelse self.conversionSourceTypeExpr(node.args[0])
+                else
+                    null) orelse
+                (if (wrappingAddCall(node.callee.*) and node.args.len == 2)
+                    self.typeExprForExpr(node.args[0]) orelse self.conversionSourceTypeExpr(node.args[0])
+                else
+                    null) orelse
                 // A `*dyn Trait` method call dispatches virtually to the trait method; its return
                 // type is the trait's, which the verifier does not carry. Resolve to `null`
                 // (unknown) rather than a same-named free function's summary return type.
@@ -9212,6 +9225,11 @@ fn isUncheckedCall(callee: ast.Expr) bool {
     }
     const name = calleeIdentName(callee) orelse return false;
     return std.mem.startsWith(u8, name, "unchecked_") or std.mem.eql(u8, name, "assume_noalias_unchecked");
+}
+
+fn wrappingAddCall(callee: ast.Expr) bool {
+    const member = memberExpr(callee) orelse return false;
+    return ast_query.isIdentNamed(member.base.*, "wrapping") and std.mem.eql(u8, member.name.text, "add");
 }
 
 fn reflectionCallPreservesPointerProvenance(call: anytype) bool {
