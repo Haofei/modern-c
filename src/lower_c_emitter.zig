@@ -5011,7 +5011,8 @@ const CEmitter = struct {
     }
 
     fn emitCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const return_ty = self.callReturnTypeForExpr(initializer, locals) orelse return false;
+        const known_return_ty = self.callReturnTypeForExpr(initializer, locals) orelse return false;
+        const return_ty = (try self.mirInferredLocalType(name, initializer, known_return_ty)) orelse return error.UnsupportedCEmission;
         if (isCVoidType(return_ty)) return false;
         try locals.put(name, try self.localInfoFromType(return_ty));
 

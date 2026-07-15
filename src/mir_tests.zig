@@ -1245,6 +1245,32 @@ test "MIR owns inferred local unary types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local direct call types" {
+    const source =
+        \\fn make_count() -> u64 { return 7; }
+        \\fn caller() -> u64 {
+        \\    let count = make_count();
+        \\    return count;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_call_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "caller").?;
+    const fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("count", fact.target_owner.?);
+    try std.testing.expectEqualStrings("u64", fact.target_ty.kind.name.text);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns ordinary direct call result and fixed argument types" {
     const source =
         \\trait Width { fn widen(self: *Self) -> u32; }

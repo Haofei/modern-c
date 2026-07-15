@@ -3754,7 +3754,7 @@ const FunctionBuilder = struct {
                 const ty = if (local.ty) |local_ty| valueTypeFromTypeAlias(local_ty, self.enums, self.structs, self.packed_bits, self.aliases) else if (local.init) |init_expr| self.exprType(init_expr) else .unknown;
                 const ty_expr = local.ty orelse if (local.init) |init_expr| self.inferredLocalTypeExpr(init_expr) else null;
                 const mutable = std.meta.activeTag(stmt.kind) == .var_decl;
-                if (local.ty == null and local.names.len == 1 and inferredLocalTypeFactEligible(local.init)) {
+                if (local.ty == null and local.names.len == 1 and inferredLocalTypeFactEligible(self, local.init)) {
                     if (local.init) |init_expr| {
                         if (ty_expr) |inferred_ty| {
                             try self.appendOwnedTargetTypeFact(
@@ -4275,6 +4275,7 @@ const FunctionBuilder = struct {
     fn inferredLocalTypeExpr(self: *FunctionBuilder, initializer: ast.Expr) ?ast.TypeExpr {
         if (self.typeExprForExpr(initializer)) |ty| return ty;
         return switch (initializer.kind) {
+            .call => |node| self.inferredLocalDirectCallType(node),
             .int_literal => ast_query.simpleNameType("u32", initializer.span),
             .bool_literal => ast_query.simpleNameType("bool", initializer.span),
             .unary => |node| if (node.op == .logical_not)
@@ -4290,6 +4291,17 @@ const FunctionBuilder = struct {
             .grouped => |inner| self.inferredLocalTypeExpr(inner.*),
             else => null,
         };
+    }
+
+    // Direct calls already have an MIR-owned `direct_call_result` fact. Mirror the
+    // same summary result into the destination local so neither backend has to
+    // rediscover a declaration type merely to allocate an unannotated binding.
+    // Builtins and dynamic dispatch deliberately remain outside this narrow slice.
+    fn inferredLocalDirectCallType(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
+        if (self.isDynDispatchMember(call.callee.*)) return null;
+        const callee = directCalleeName(call.callee.*) orelse return null;
+        const summary = self.summaries.get(callee) orelse return null;
+        return summary.return_type_expr;
     }
 
     fn booleanSwitchSubjectType(node: ast.Switch) ?ast.TypeExpr {
@@ -8883,15 +8895,16 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     allocator.free(function.elided_bounds);
 }
 
-fn inferredLocalTypeFactEligible(maybe_initializer: ?ast.Expr) bool {
+fn inferredLocalTypeFactEligible(builder: *FunctionBuilder, maybe_initializer: ?ast.Expr) bool {
     const initializer = maybe_initializer orelse return false;
     return switch (initializer.kind) {
         .ident => true,
         .cast => true,
         .int_literal, .bool_literal => true,
-        .unary => |node| node.op == .logical_not or inferredLocalTypeFactEligible(node.expr.*),
+        .call => |node| builder.inferredLocalDirectCallType(node) != null,
+        .unary => |node| node.op == .logical_not or inferredLocalTypeFactEligible(builder, node.expr.*),
         .binary => |node| mirIsArithmeticBinary(node.op) or mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op),
-        .grouped => |inner| inferredLocalTypeFactEligible(inner.*),
+        .grouped => |inner| inferredLocalTypeFactEligible(builder, inner.*),
         else => false,
     };
 }
