@@ -819,7 +819,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                     moveConsume(self, a.value, state, aliases);
                     markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
                     if (place_opt) |pp| {
-                        _ = state.remove(pp.key); // the field now holds a fresh live resource
+                        _ = removeOwnershipMovePlace(pp.place, state); // the field now holds a fresh live resource
                     }
                     recordAssignedAggregateFieldAliasOrEscape(self, a.target, a.value, a.target.span, state, aliases);
                 },
@@ -834,7 +834,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                         }
                         moveConsume(self, a.value, state, aliases);
                         markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
-                        _ = state.remove(pp.key);
+                        _ = removeOwnershipMovePlace(pp.place, state);
                     } else if (wildcardMoveIndexedPlaceKey(self, a.target, state, aliases)) |pp| {
                         if (stateHasActivePlaceOrConflict(pp.place, state)) {
                             self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "cannot assign a linear `move` array element through an unknown dynamic index after an overlapping element was moved out");
@@ -1348,6 +1348,12 @@ test "move branch joins match subplaces by typed place rather than compatibility
     try std.testing.expect(!reporter.has_errors);
     try std.testing.expectEqual(@as(usize, 1), joined.count());
     try std.testing.expect(joined.contains("owner.resource:left"));
+
+    recordOwnershipMovePlace(&checker, "owner.resource:replacement", place, .{ .live = true, .span = span, .place = place, .deferred = true }, &joined);
+    try std.testing.expectEqual(@as(usize, 1), joined.count());
+    try std.testing.expect(joined.get("owner.resource:left").?.deferred);
+    try std.testing.expect(removeOwnershipMovePlace(place, &joined));
+    try std.testing.expectEqual(@as(usize, 0), joined.count());
 }
 
 fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
@@ -1368,6 +1374,39 @@ fn isTrackedMoveSubplace(slot: MoveSlot, key: []const u8) bool {
 
 fn isOwnershipMoveSubplace(slot: MoveSlot, key: []const u8) bool {
     return slot.alias_of == null and !slot.type_only and !isPureIndexFactSlot(slot) and isTrackedMoveSubplace(slot, key);
+}
+
+fn ownershipMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) ?*MoveSlot {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr;
+        if (isOwnershipMoveSubplace(slot.*, entry.key_ptr.*) and slot.place.?.eql(place)) return slot;
+    }
+    return null;
+}
+
+// Map keys remain compatibility indexes, but ownership updates are addressed by
+// the structured place. A repeated producer for the same place updates its
+// existing slot rather than adding another formatted-key entry.
+fn recordOwnershipMovePlace(self: *Checker, key: []const u8, place: MovePlace, slot: MoveSlot, state: *std.StringHashMap(MoveSlot)) void {
+    if (ownershipMoveSlotPtrForPlace(place, state)) |existing| {
+        existing.* = slot;
+        return;
+    }
+    state.put(key, slot) catch {
+        self.oom = true;
+    };
+}
+
+fn removeOwnershipMovePlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) bool {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (isOwnershipMoveSubplace(slot, entry.key_ptr.*) and slot.place.?.eql(place)) {
+            return state.remove(entry.key_ptr.*);
+        }
+    }
+    return false;
 }
 
 fn moveSubplaceRootInOuter(slot: MoveSlot, key: []const u8, outer: *const std.StringHashMap(MoveSlot)) bool {
@@ -1572,9 +1611,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
                 } else if (stateHasMovedPlaceOrChild(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` field after it was moved out");
                 } else {
-                    state.put(pp.key, .{ .live = false, .span = expr.span, .place = pp.place }) catch {
-                        self.oom = true;
-                    };
+                    recordOwnershipMovePlace(self, pp.key, pp.place, .{ .live = false, .span = expr.span, .place = pp.place }, state);
                 }
             }
         },
@@ -1628,9 +1665,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
                 } else if (stateHasActivePlaceOrConflict(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` array element after it was moved out");
                 } else {
-                    state.put(pp.key, .{ .live = false, .span = expr.span, .place = pp.place }) catch {
-                        self.oom = true;
-                    };
+                    recordOwnershipMovePlace(self, pp.key, pp.place, .{ .live = false, .span = expr.span, .place = pp.place }, state);
                 }
             } else if (wildcardMoveIndexedPlaceKey(self, expr, state, aliases)) |pp| {
                 if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
@@ -1638,9 +1673,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
                 } else if (stateHasActivePlaceOrConflict(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` array element after it was moved out");
                 } else {
-                    state.put(pp.key, .{ .live = false, .span = expr.span, .place = pp.place }) catch {
-                        self.oom = true;
-                    };
+                    recordOwnershipMovePlace(self, pp.key, pp.place, .{ .live = false, .span = expr.span, .place = pp.place }, state);
                 }
             } else if (nonNameableSingletonMoveIndex(self, expr, state, aliases)) {
                 moveConsume(self, ix.base.*, state, aliases);
@@ -1775,9 +1808,7 @@ fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, sp
         self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` field after it was moved out");
         return;
     }
-    state.put(key, .{ .live = false, .span = span, .place = place }) catch {
-        self.oom = true;
-    };
+    recordOwnershipMovePlace(self, key, place, .{ .live = false, .span = span, .place = place }, state);
 }
 
 // A while condition has a zero-iteration bypass and an evaluated-condition path.
@@ -3921,9 +3952,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
                 } else if (stateHasMovedPlaceOrChild(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer reserves a linear `move` field already moved out");
                 } else {
-                    state.put(pp.key, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }) catch {
-                        self.oom = true;
-                    };
+                    recordOwnershipMovePlace(self, pp.key, pp.place, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }, state);
                 }
             }
         },
@@ -3942,9 +3971,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
                 } else if (stateHasActivePlaceOrConflict(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer reserves a linear `move` array element already moved out");
                 } else {
-                    state.put(pp.key, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }) catch {
-                        self.oom = true;
-                    };
+                    recordOwnershipMovePlace(self, pp.key, pp.place, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }, state);
                 }
             } else if (wildcardMoveIndexedPlaceKey(self, expr, state, aliases)) |pp| {
                 if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
@@ -3952,9 +3979,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
                 } else if (stateHasActivePlaceOrConflict(pp.place, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer reserves a linear `move` array element already moved out");
                 } else {
-                    state.put(pp.key, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }) catch {
-                        self.oom = true;
-                    };
+                    recordOwnershipMovePlace(self, pp.key, pp.place, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }, state);
                 }
             } else if (nonNameableSingletonMoveIndex(self, expr, state, aliases)) {
                 moveDefer(self, ix.base.*, state, aliases);
