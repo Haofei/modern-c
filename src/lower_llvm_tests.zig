@@ -859,6 +859,38 @@ test "LLVM semantic escape types require MIR target facts" {
     }
 }
 
+test "LLVM discard calls require MIR identity and argument type facts" {
+    const source =
+        \\fn discard_values(value: u32) -> void {
+        \\    drop(value);
+        \\    unsafe { forget_unchecked(value); }
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_discard_call_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_discard_call_facts.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "define internal void @discard_values") != null);
+
+    var missing_identity = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_identity.deinit();
+    try clearCallTargetFactsForFunction(&missing_identity, "discard_values");
+    var identity_output: std.ArrayList(u8) = .empty;
+    defer identity_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_identity, &identity_output, "llvm_discard_call_facts.mc", .{}, false, .riscv64, null));
+
+    var missing_type = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_type.deinit();
+    try removeTargetTypeKindForFunction(&missing_type, "discard_values", .discard_argument);
+    var type_output: std.ArrayList(u8) = .empty;
+    defer type_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_type, &type_output, "llvm_discard_call_facts.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM rejects prebuilt MIR with missing atomic call target facts" {
     const source =
         \\fn atomic_call_target_fact_gate() -> u32 {

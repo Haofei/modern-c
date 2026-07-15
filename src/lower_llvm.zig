@@ -96,7 +96,6 @@ const comptimeStructFieldValue = lower_llvm_query.comptimeStructFieldValue;
 const derefTarget = lower_llvm_query.derefTarget;
 const implMethodMangledLlvm = lower_llvm_query.implMethodMangledLlvm;
 const isAssumeNoaliasCall = lower_llvm_query.isAssumeNoaliasCall;
-const isDropCall = lower_llvm_query.isDropCall;
 const isUninitExpr = lower_llvm_query.isUninitExpr;
 const llvmTraitIsObjectSafe = lower_llvm_query.llvmTraitIsObjectSafe;
 const memberCallee = lower_llvm_query.memberCallee;
@@ -1990,11 +1989,16 @@ const LlvmEmitter = struct {
                 // the program; emit the trap/call followed by `unreachable` (no value needed even
                 // in a value-returning function, since this path does not fall through).
                 if (try self.emitNeverExpr(expr)) return;
-                if (isDropCall(call.callee.*)) {
-                    if (call.args.len != 1) return error.UnsupportedLlvmEmission;
-                    const arg_ty = self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission;
-                    _ = try self.emitExpr(call.args[0], arg_ty);
-                    return;
+                if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| {
+                    switch (kind) {
+                        .drop, .forget_unchecked => {
+                            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+                            const argument_ty = (self.mirTargetTypeFactAt(.discard_argument, call.args[0].span) orelse return error.UnsupportedLlvmEmission).target_ty;
+                            _ = try self.emitExpr(call.args[0], argument_ty);
+                            return;
+                        },
+                        else => {},
+                    }
                 }
                 // A trait-object dispatch as a statement (`d.m(args);`) — including a
                 // `-> void` method, whose result is simply discarded.
@@ -6228,7 +6232,10 @@ const LlvmEmitter = struct {
         defer self.local_slice_pointer_array_ranges.clearRetainingCapacity();
         defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
         defer self.local_pointer_array_aliases.clearRetainingCapacity();
-        if (isDropCall(call.callee.*)) return error.UnsupportedLlvmEmission;
+        if (self.mirCallTargetKindAt(span)) |kind| switch (kind) {
+            .drop, .forget_unchecked => return error.UnsupportedLlvmEmission,
+            else => {},
+        };
         if (self.mirCallTargetKindAt(span) == .bind) {
             const fact = self.mirTargetTypeFactAt(.bind, span) orelse return error.UnsupportedLlvmEmission;
             return try self.emitBindValue(call, fact.target_ty);

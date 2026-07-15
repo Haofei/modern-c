@@ -744,6 +744,38 @@ test "lower-c semantic escape types require MIR target facts" {
     }
 }
 
+test "lower-c discard calls require MIR identity and argument type facts" {
+    const source =
+        \\fn discard_values(value: u32) -> void {
+        \\    drop(value);
+        \\    unsafe { forget_unchecked(value); }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_discard_call_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_discard_call_facts.mc", .{}, false, null);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, complete_output.items, "(void)(value)"));
+
+    var missing_identity = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_identity.deinit();
+    try clearCallTargetFactsForFunction(&missing_identity, "discard_values");
+    var identity_output: std.ArrayList(u8) = .empty;
+    defer identity_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_identity, &identity_output, .kernel, "c_discard_call_facts.mc", .{}, false, null));
+
+    var missing_type = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_type.deinit();
+    try removeTargetTypeKindForFunction(&missing_type, "discard_values", .discard_argument);
+    var type_output: std.ArrayList(u8) = .empty;
+    defer type_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_type, &type_output, .kernel, "c_discard_call_facts.mc", .{}, false, null));
+}
+
 test "lower-c rejects prebuilt MIR with missing atomic call target facts" {
     const source =
         \\fn atomic_call_target_fact_gate() -> u32 {

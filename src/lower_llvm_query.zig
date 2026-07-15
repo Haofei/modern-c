@@ -108,11 +108,6 @@ fn isAssumeNoaliasCallee(callee: ast.Expr) bool {
     };
 }
 
-// `drop(x)` and `forget_unchecked(x)` lower identically; they differ only in the checker.
-pub fn isDropCall(callee: ast.Expr) bool {
-    return ast_query.isIdentNamed(callee, "drop") or ast_query.isIdentNamed(callee, "forget_unchecked");
-}
-
 pub fn isUninitExpr(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .uninit_literal => true,

@@ -292,6 +292,8 @@ pub const CallTargetKind = enum {
     reflection_repr,
     byte_view_as_bytes,
     byte_view_equal,
+    drop,
+    forget_unchecked,
     declassify,
     assume_noalias,
     conversion_from,
@@ -375,6 +377,7 @@ pub const TargetTypeKind = enum {
     reflection_result,
     byte_view_source,
     byte_view_result,
+    discard_argument,
 };
 
 pub const TargetTypeFact = struct {

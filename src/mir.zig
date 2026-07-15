@@ -4898,6 +4898,7 @@ const FunctionBuilder = struct {
                 const atomic_init_target = self.atomicInitCallTarget(node);
                 const raw_target = self.rawCallTarget(node);
                 const va_target = try self.vaCallTarget(node);
+                const discard_target = self.discardCallTargetKind(node);
                 const explicit_trap_target = explicitTrapCallTargetKind(node);
                 const call_ty: ValueType = if (is_dyn_dispatch)
                     .unknown
@@ -4933,6 +4934,8 @@ const FunctionBuilder = struct {
                     ty
                 else if (va_target) |target|
                     target.result_ty
+                else if (discard_target != null)
+                    .void
                 else if (explicit_trap_target != null)
                     .never
                 else if (raw_target) |target|
@@ -5064,6 +5067,12 @@ const FunctionBuilder = struct {
                         try self.appendTargetTypeFact(.va_payload, payload_ty, target.payload_ty.?, expr.span);
                     }
                     try self.appendTargetTypeFact(.va_result, target.result_type_expr, target.result_ty, expr.span);
+                }
+                if (discard_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target), .void, expr.span);
+                    try self.addCallTargetFact(target, .void, expr.span);
+                    const argument_ty = self.typeExprForExpr(node.args[0]) orelse return error.UnsupportedMirConstruction;
+                    try self.appendTargetTypeFact(.discard_argument, argument_ty, valueTypeFromTypeAlias(argument_ty, self.enums, self.structs, self.packed_bits, self.aliases), node.args[0].span);
                 }
                 if (explicit_trap_target) |target| {
                     try self.addInstr(.call_target, @tagName(target), .never, expr.span);
@@ -5542,6 +5551,13 @@ const FunctionBuilder = struct {
         child.* = ast_query.simpleNameType("va_list", span);
         try self.generated_type_expr_nodes.append(self.allocator, child);
         return .{ .span = span, .kind = .{ .pointer = .{ .mutability = .mut, .child = child } } };
+    }
+
+    fn discardCallTargetKind(_: *FunctionBuilder, call: anytype) ?CallTargetKind {
+        if (call.type_args.len != 0 or call.args.len != 1) return null;
+        if (ast_query.isIdentNamed(call.callee.*, "drop")) return .drop;
+        if (ast_query.isIdentNamed(call.callee.*, "forget_unchecked")) return .forget_unchecked;
+        return null;
     }
 
     fn cpuPauseCallValueType(_: *FunctionBuilder, call: anytype) ?ValueType {

@@ -1705,6 +1705,37 @@ test "MIR owns semantic escape call target facts" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns discard call identities and argument types" {
+    const source =
+        \\fn discard_values(value: u32) -> void {
+        \\    drop(value);
+        \\    unsafe { forget_unchecked(value); }
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_discard_call_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "discard_values").?;
+    try std.testing.expectEqual(@as(usize, 2), function.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.drop, function.call_target_facts[0].kind);
+    try std.testing.expectEqual(mir.CallTargetKind.forget_unchecked, function.call_target_facts[1].kind);
+    try std.testing.expectEqual(@as(usize, 2), function.target_type_facts.len);
+    for (function.target_type_facts) |fact| {
+        try std.testing.expectEqual(mir.TargetTypeKind.discard_argument, fact.kind);
+        try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+    }
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR rejects duplicate call target facts" {
     const source =
         \\fn checked(xs: []const u32) -> Result<u32, Overflow> {

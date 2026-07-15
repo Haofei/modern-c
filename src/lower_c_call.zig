@@ -482,10 +482,12 @@ fn writeLocalIndent(ctx: LocalInitContext) !void {
 }
 
 pub fn emitNamedDiscardCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    const name = calleeIdentName(call.callee.*) orelse return false;
-    if ((!std.mem.eql(u8, name, "drop") and !std.mem.eql(u8, name, "forget_unchecked")) or call.args.len != 1) return false;
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return false;
+    if (kind != .drop and kind != .forget_unchecked) return false;
+    if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
+    const argument_ty = ctx.mir_target_type(ctx.emit_ctx, .discard_argument, call.args[0].span) orelse return error.UnsupportedCEmission;
     try ctx.out.appendSlice(ctx.allocator, "(void)(");
-    try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+    try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, argument_ty);
     try ctx.out.appendSlice(ctx.allocator, ")");
     return true;
 }
