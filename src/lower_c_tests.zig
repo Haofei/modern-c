@@ -1175,11 +1175,12 @@ test "lower-c raw-many offset consumes MIR identity and complete types" {
     }
 }
 
-test "lower-c member index and dereference expressions require complete MIR result facts" {
+test "lower-c compound expressions require complete MIR result facts" {
     const source =
-        \\struct Packet { values: [2]u32 }
-        \\fn expression_facts(packet: Packet, index: usize, ptr: *mut u32) -> u32 {
-        \\    unsafe { return packet.values[index] + ptr.*; }
+        \\fn expression_facts(index: usize) -> u8 {
+        \\    let values: [4]u8 = .{ 7, 0, 0, 0 };
+        \\    let window: []const u8 = values[0..index];
+        \\    return window[0];
         \\}
     ;
     var parsed = try test_support.parseCheckedModule("c_expression_result_facts.mc", source);

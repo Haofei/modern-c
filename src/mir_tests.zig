@@ -2228,13 +2228,14 @@ test "MIR owns inferred local types for raw-many offset dereferences" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
-test "MIR owns span-identified result types for member index and dereference expressions" {
+test "MIR owns span-identified result types for compound expressions" {
     const source =
         \\struct Packet { values: [2]u32 }
         \\fn expression_results(packet: Packet, index: usize, ptr: *mut u32) -> u32 {
         \\    unsafe {
         \\        let value = packet.values[index];
-        \\        return value + ptr.*;
+        \\        let window: []u32 = packet.values[0..1];
+        \\        return value + window[0] + ptr.*;
         \\    }
         \\}
     ;
@@ -2251,7 +2252,7 @@ test "MIR owns span-identified result types for member index and dereference exp
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "expression_results").?;
-    try std.testing.expectEqual(@as(usize, 3), countTargetTypeFactsByKind(function, .expression_result));
+    try std.testing.expectEqual(@as(usize, 6), countTargetTypeFactsByKind(function, .expression_result));
     var last_source: ?mir.SourcePoint = null;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .expression_result) continue;

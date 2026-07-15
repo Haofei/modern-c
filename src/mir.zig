@@ -6151,7 +6151,7 @@ const FunctionBuilder = struct {
 
     fn addExpressionResultFact(self: *FunctionBuilder, expr: ast.Expr) !void {
         switch (expr.kind) {
-            .member, .index, .deref => {},
+            .member, .index, .slice, .deref => {},
             else => return,
         }
         const ty = self.typeExprForExpr(expr) orelse return;

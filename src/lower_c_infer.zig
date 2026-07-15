@@ -54,7 +54,11 @@ pub fn sliceReturnTypeForCall(ctx: TypeQueryContext, call: anytype) ?ast.TypeExp
 pub fn sliceReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |call| sliceReturnTypeForCall(ctx, call),
-        .slice => |node| if (ctx.source_type_for_expr(ctx.source_ctx, node.base.*, locals)) |base_ty| sliceTypeForBase(ctx, base_ty, node.base.*.span) else null,
+        .slice => |node| blk: {
+            const base_ty = ctx.source_type_for_expr(ctx.source_ctx, node.base.*, locals) orelse break :blk null;
+            const inferred = sliceTypeForBase(ctx, base_ty, node.base.*.span) orelse break :blk null;
+            break :blk expressionResultType(ctx, expr, inferred);
+        },
         .grouped => |inner| sliceReturnTypeForExpr(ctx, inner.*, locals),
         else => null,
     };

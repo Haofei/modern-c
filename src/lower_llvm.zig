@@ -8157,7 +8157,7 @@ const LlvmEmitter = struct {
                 null,
             .deref => |inner| self.expressionResultType(expr, self.derefPointeeType(inner.*)),
             .index => |node| self.expressionResultType(expr, self.indexElementType(node.base.*)),
-            .slice => |node| if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
+            .slice => |node| self.expressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null),
             .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else self.expressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| blk: {
                 const resolved_base_ty = self.resolveAliasType(base_ty);
                 if (resolved_base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");
