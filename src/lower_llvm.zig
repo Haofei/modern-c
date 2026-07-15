@@ -2362,10 +2362,10 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "  call void @mc_trap_Unreachable(){s}\n  unreachable\n", .{try self.debugCallSuffix()});
                 return true;
             },
-            .call => |call| if (ast_query.isIdentNamed(call.callee.*, "trap")) {
+            .call => |call| {
+                const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return false;
+                const helper = mir.explicitTrapHelperForTarget(kind) orelse return false;
                 if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-                const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return error.UnsupportedLlvmEmission;
-                const helper = mir.explicitTrapHelperForTarget(kind) orelse return error.UnsupportedLlvmEmission;
                 try self.out.print(self.allocator, "  call void @{s}(){s}\n  unreachable\n", .{ helper, try self.debugCallSuffix() });
                 return true;
             },
@@ -2382,7 +2382,10 @@ const LlvmEmitter = struct {
     fn exprStatementDiverges(self: *LlvmEmitter, expr: ast.Expr) bool {
         return switch (expr.kind) {
             .unreachable_expr => true,
-            .call => |call| ast_query.isIdentNamed(call.callee.*, "trap"),
+            .call => |call| blk: {
+                const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse break :blk false;
+                break :blk mir.explicitTrapHelperForTarget(kind) != null;
+            },
             .grouped => |inner| self.exprStatementDiverges(inner.*),
             else => false,
         };

@@ -17,7 +17,6 @@ const mir = @import("mir.zig");
 
 const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
-const isIdentNamed = ast_query.isIdentNamed;
 const rawScalarSuffix = lower_c_type.rawScalarSuffix;
 const isNonNullPointerType = lower_c_type.isNonNullPointerType;
 const isPAddrType = lower_c_type.isPAddrType;
@@ -469,10 +468,9 @@ pub fn emitSpecialSequencedArgTemp(ctx: SpecialTempContext, arg: ast.Expr, local
 }
 
 pub fn emitTrapCall(ctx: Context, call: anytype) !bool {
-    if (!isIdentNamed(call.callee.*, "trap")) return false;
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return false;
+    const helper = mir.explicitTrapHelperForTarget(kind) orelse return false;
     if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
-    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return error.UnsupportedCEmission;
-    const helper = mir.explicitTrapHelperForTarget(kind) orelse return error.UnsupportedCEmission;
     try ctx.out.print(ctx.allocator, "{s}()", .{helper});
     return true;
 }

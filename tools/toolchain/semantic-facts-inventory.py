@@ -1069,6 +1069,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mmioMapCallPayloadType": 0,
     },
     "src/lower_c_call.zig": {
+        'isIdentNamed(call.callee.*, "trap")': 0,
         "ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_result": 2,
         "ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_argument": 1,
         "mir.explicitTrapHelperForTarget(kind)": 1,
@@ -1102,6 +1103,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "isTrapCallee(": 0,
     },
     "src/lower_llvm.zig": {
+        'ast_query.isIdentNamed(call.callee.*, "trap")': 0,
         "try mir.validateIntegerFactsForLowering(module_mir.*);": 1,
         "try mir.validateConstGetFactsForLowering(module_mir.*);": 1,
         "try mir.validateTargetTypeFactsForLowering(module_mir.*);": 1,
@@ -1145,7 +1147,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.va_start_result": 0,
         "mirTargetTypeFactAt(.va_arg_result": 0,
         "else => try self.emitExpr(expr, self.exprType(expr) orelse return error.UnsupportedLlvmEmission),": 0,
-        "mir.explicitTrapHelperForTarget(kind)": 1,
+        "mir.explicitTrapHelperForTarget(kind)": 2,
         "mirTargetTypeFactAt(.assert_condition": 1,
         "mirTargetTypeFactAt(.qualified_union_result": 2,
         "mirTargetTypeFactAt(.enum_variant_path_result": 2,
