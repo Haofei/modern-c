@@ -1474,6 +1474,18 @@ test "move short-circuit joins use typed roots rather than compatibility keys" {
     try std.testing.expect(!bypass.get("compat:owner").?.live);
 }
 
+test "move escaped borrows use typed roots rather than compatibility keys" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    const field = root.project(.{ .field = "resource" }).?;
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    markEscapedBorrowForPlace(field, span, &state);
+    try std.testing.expect(state.get("compat:owner").?.escaped_borrow != null);
+}
+
 fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
     return .{
         .live = false,
@@ -1529,6 +1541,26 @@ fn rootMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)
         if (std.mem.eql(u8, tracked.root, place.root)) return slot;
     }
     return null;
+}
+
+// A direct `&place` has a typed storage place before it crosses an aggregate or
+// call boundary. Escape tracking only needs to poison the owning root, but it
+// must find that owner through the typed place while that information exists.
+fn borrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
+    const target = switch (expr.kind) {
+        .address_of => |inner| inner.*,
+        .grouped => |inner| return borrowedMoveRootPlace(self, inner.*, state),
+        else => return null,
+    };
+    const place = (placeKeyAndType(self, target, state) orelse return null).place;
+    if (rootMoveSlotForPlace(place, state) == null) return null;
+    return .{ .root = place.root };
+}
+
+fn markEscapedBorrowForPlace(place: MovePlace, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+    if (rootMoveSlotPtrForPlace(place, state)) |slot| {
+        if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
+    }
 }
 
 // Map keys remain compatibility indexes, but ownership updates are addressed by
@@ -3256,6 +3288,10 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
             if (self.move_ctx) |mctx| {
                 if (spine.isIntegerLike(spine.classifyTypeCtx(c.ty.*, mctx.*))) {
                     // `(&<move>) as int`: the cast operand is itself the `&<move>` borrow.
+                    if (borrowedMoveRootPlace(self, c.value.*, state)) |place| {
+                        markEscapedBorrowForPlace(place, escape_span, state);
+                        return;
+                    }
                     if (spine.borrowedMoveRoot(c.value.*, state)) |root| {
                         if (state.getPtr(root)) |slot| {
                             if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
@@ -3283,6 +3319,10 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
         },
         .grouped => |inner| return markBorrowEscape(self, inner.*, escape_span, state),
         else => {},
+    }
+    if (borrowedMoveRootPlace(self, value, state)) |place| {
+        markEscapedBorrowForPlace(place, escape_span, state);
+        return;
     }
     const root = spine.borrowedMoveRoot(value, state) orelse return;
     if (state.getPtr(root)) |slot| {
@@ -3329,23 +3369,32 @@ pub fn markBorrowEscapeCapturedCallResult(self: *Checker, value: ast.Expr, escap
     if (spine.isPointerLike(spine.classifyTypeCtx(ret_ty, ctx.*))) return;
     if (!typeCanCarryBorrowInStoredValue(ret_ty, ctx.*, aliases, 0)) return;
 
-    for (call.args) |arg| markBorrowEscapeCapturedCallArg(arg, escape_span, state);
+    for (call.args) |arg| markBorrowEscapeCapturedCallArg(self, arg, escape_span, state);
 }
 
-fn markBorrowEscapeCapturedCallArg(arg: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+fn markBorrowEscapeCapturedCallArg(self: *Checker, arg: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
     switch (arg.kind) {
-        .grouped => |inner| return markBorrowEscapeCapturedCallArg(inner.*, escape_span, state),
+        .grouped => |inner| return markBorrowEscapeCapturedCallArg(self, inner.*, escape_span, state),
         .struct_literal => |fields| {
-            for (fields) |field| markBorrowEscapeCapturedCallArg(field.value, escape_span, state);
+            for (fields) |field| markBorrowEscapeCapturedCallArg(self, field.value, escape_span, state);
             return;
         },
         .array_literal => |items| {
-            for (items) |item| markBorrowEscapeCapturedCallArg(item, escape_span, state);
+            for (items) |item| markBorrowEscapeCapturedCallArg(self, item, escape_span, state);
             return;
         },
         else => {},
     }
 
+    // This helper does not need type information for the aggregate walk, but a
+    // direct address expression can still be typed through the move checker.
+    // Reuse that path before the legacy root-name fallback below.
+    if (borrowedMoveRootPlace(self, arg, state)) |place| {
+        if (rootMoveSlotPtrForPlace(place, state)) |slot| {
+            if (slot.live and slot.alias_of == null and slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
+        }
+        return;
+    }
     const root = spine.borrowedMoveRoot(arg, state) orelse blk: {
         if (spine.aliasReferentOf(arg, state)) |referent| {
             if (state.contains(referent)) break :blk referent;
