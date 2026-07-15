@@ -4969,6 +4969,8 @@ const FunctionBuilder = struct {
                     try self.addCallTargetFact(fact_kind, call_ty, expr.span);
                     if (node.type_args.len != 1) return error.UnsupportedMirConstruction;
                     const element_ty = node.type_args[0];
+                    const source_ty = self.typeExprForExpr(node.args[0]) orelse return error.UnsupportedMirConstruction;
+                    try self.appendTargetTypeFact(.reduce_source, source_ty, valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases), node.args[0].span);
                     try self.appendTargetTypeFact(.reduce_element, element_ty, valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }
                 if (enum_raw_target) |target| {

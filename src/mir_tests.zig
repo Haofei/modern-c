@@ -1120,17 +1120,47 @@ test "MIR records typed call target facts for reductions" {
     try std.testing.expectEqual(@as(usize, 1), checked.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.reduce_sum_checked, checked.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("Result", checked.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 1), checked.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.reduce_element, checked.target_type_facts[0].kind);
-    try std.testing.expectEqualStrings("u32", checked.target_type_facts[0].target_ty.kind.name.text);
+    try std.testing.expectEqual(@as(usize, 2), checked.target_type_facts.len);
+    var checked_has_source = false;
+    var checked_has_element = false;
+    for (checked.target_type_facts) |fact| switch (fact.kind) {
+        .reduce_source => {
+            const slice = fact.target_ty.kind.slice;
+            try std.testing.expectEqual(.@"const", slice.mutability);
+            try std.testing.expectEqualStrings("u32", slice.child.kind.name.text);
+            checked_has_source = true;
+        },
+        .reduce_element => {
+            try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+            checked_has_element = true;
+        },
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(checked_has_source);
+    try std.testing.expect(checked_has_element);
 
     const left = functionByName(typed_mir, "left").?;
     try std.testing.expectEqual(@as(usize, 1), left.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.reduce_sum_left, left.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("f64", left.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 1), left.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.reduce_element, left.target_type_facts[0].kind);
-    try std.testing.expectEqualStrings("f64", left.target_type_facts[0].target_ty.kind.name.text);
+    try std.testing.expectEqual(@as(usize, 2), left.target_type_facts.len);
+    var left_has_source = false;
+    var left_has_element = false;
+    for (left.target_type_facts) |fact| switch (fact.kind) {
+        .reduce_source => {
+            const slice = fact.target_ty.kind.slice;
+            try std.testing.expectEqual(.@"const", slice.mutability);
+            try std.testing.expectEqualStrings("f64", slice.child.kind.name.text);
+            left_has_source = true;
+        },
+        .reduce_element => {
+            try std.testing.expectEqualStrings("f64", fact.target_ty.kind.name.text);
+            left_has_element = true;
+        },
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(left_has_source);
+    try std.testing.expect(left_has_element);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }

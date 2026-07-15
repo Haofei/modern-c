@@ -7602,16 +7602,15 @@ const LlvmEmitter = struct {
 
     fn emitReduceCall(self: *LlvmEmitter, call: anytype, info: ReduceCallInfo) ![]const u8 {
         if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-        const slice_ty = self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission;
-        const slice = switch (self.resolveAliasType(slice_ty).kind) {
+        const slice = switch (self.resolveAliasType(info.source_ty).kind) {
             .slice => |node| node,
             else => return error.UnsupportedLlvmEmission,
         };
         if (!std.mem.eql(u8, try self.llvmType(slice.child.*), try self.llvmType(info.element_ty))) return error.UnsupportedLlvmEmission;
 
-        if (std.mem.eql(u8, info.op, "sum_checked")) return try self.emitReduceSumChecked(call.args[0], slice_ty, info.element_ty, info.return_ty);
-        if (std.mem.eql(u8, info.op, "sum_left")) return try self.emitReduceFloat(call.args[0], slice_ty, info.element_ty, false);
-        if (std.mem.eql(u8, info.op, "sum_fast")) return try self.emitReduceFloat(call.args[0], slice_ty, info.element_ty, true);
+        if (std.mem.eql(u8, info.op, "sum_checked")) return try self.emitReduceSumChecked(call.args[0], info.source_ty, info.element_ty, info.return_ty);
+        if (std.mem.eql(u8, info.op, "sum_left")) return try self.emitReduceFloat(call.args[0], info.source_ty, info.element_ty, false);
+        if (std.mem.eql(u8, info.op, "sum_fast")) return try self.emitReduceFloat(call.args[0], info.source_ty, info.element_ty, true);
         return error.UnsupportedLlvmEmission;
     }
 
@@ -8784,6 +8783,7 @@ const LlvmEmitter = struct {
         const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
         if (kind != .reduce_sum_checked and kind != .reduce_sum_left and kind != .reduce_sum_fast) return null;
         if (call.type_args.len != 1) return null;
+        const source_ty = (self.mirTargetTypeFactAt(.reduce_source, call.args[0].span) orelse return null).target_ty;
         const element_ty = (self.mirTargetTypeFactAt(.reduce_element, call.callee.*.span) orelse return null).target_ty;
         const return_ty = if (kind == .reduce_sum_checked)
             self.resultType(element_ty, simpleType(call.callee.*.span, "Overflow"), call.callee.*.span) catch return null
@@ -8795,7 +8795,7 @@ const LlvmEmitter = struct {
             .reduce_sum_fast => "sum_fast",
             else => return null,
         };
-        return .{ .element_ty = element_ty, .return_ty = return_ty, .op = op };
+        return .{ .source_ty = source_ty, .element_ty = element_ty, .return_ty = return_ty, .op = op };
     }
 
     fn constGetCallInfo(self: *LlvmEmitter, call: anytype) ?ConstGetCallInfo {

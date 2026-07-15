@@ -1281,7 +1281,7 @@ test "LLVM MMIO map consumes MIR identity and complete types" {
     }
 }
 
-test "LLVM reductions require MIR element type facts" {
+test "LLVM reductions require MIR source and element type facts" {
     const source =
         \\fn reduce_element_fact_gate(xs: []const u32) -> Result<u32, Overflow> {
         \\    return reduce.sum_checked<u32>(xs);
@@ -1290,15 +1290,17 @@ test "LLVM reductions require MIR element type facts" {
 
     var parsed = try test_support.parseModule("llvm_missing_reduce_element_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
-    defer module_mir.deinit();
-    try clearTargetTypeFactsForFunction(&module_mir, "reduce_element_fact_gate");
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(
-        error.InvalidMirTargetTypeFacts,
-        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_reduce_element_facts.mc", .{}, false, .riscv64, null),
-    );
+    for ([_]mir.TargetTypeKind{ .reduce_source, .reduce_element }) |kind| {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try removeTargetTypeKindForFunction(&module_mir, "reduce_element_fact_gate", kind);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(
+            error.InvalidMirTargetTypeFacts,
+            lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_reduce_element_facts.mc", .{}, false, .riscv64, null),
+        );
+    }
 }
 
 test "LLVM enum raw requires MIR call and target type facts" {

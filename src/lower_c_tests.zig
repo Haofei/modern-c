@@ -1168,7 +1168,7 @@ test "lower-c MMIO map consumes MIR identity and complete types" {
     }
 }
 
-test "lower-c reductions require MIR element type facts" {
+test "lower-c reductions require MIR source and element type facts" {
     const source =
         \\fn reduce_element_fact_gate(xs: []const u32) -> Result<u32, Overflow> {
         \\    return reduce.sum_checked<u32>(xs);
@@ -1177,15 +1177,17 @@ test "lower-c reductions require MIR element type facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_reduce_element_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
-    defer module_mir.deinit();
-    try clearTargetTypeFactsForFunction(&module_mir, "reduce_element_fact_gate");
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(
-        error.InvalidMirTargetTypeFacts,
-        lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_reduce_element_facts.mc", .{}, false, null),
-    );
+    for ([_]mir.TargetTypeKind{ .reduce_source, .reduce_element }) |kind| {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try removeTargetTypeKindForFunction(&module_mir, "reduce_element_fact_gate", kind);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(
+            error.InvalidMirTargetTypeFacts,
+            lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_reduce_element_facts.mc", .{}, false, null),
+        );
+    }
 }
 
 test "lower-c enum raw requires MIR call and target type facts" {

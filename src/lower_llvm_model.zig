@@ -204,6 +204,7 @@ pub const ConversionCallInfo = struct {
 };
 
 pub const ReduceCallInfo = struct {
+    source_ty: ast.TypeExpr,
     element_ty: ast.TypeExpr,
     return_ty: ast.TypeExpr,
     op: []const u8,
