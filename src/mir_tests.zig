@@ -235,6 +235,35 @@ test "MIR owns inferred local types for conversion results" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local types for reflection results" {
+    const source =
+        \\fn inferred_reflection() -> usize {
+        \\    let size = size_of<u32>();
+        \\    return size;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_reflection_local_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "inferred_reflection").?;
+    const result_fact = targetTypeFactByKind(function, .reflection_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("usize", result_fact.target_ty.kind.name.text);
+    const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("size", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("usize", local_fact.target_ty.kind.name.text);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns target types for contextual constructors and literals" {
     const source =
         \\enum E { bad }

@@ -4320,6 +4320,7 @@ const FunctionBuilder = struct {
         if (self.maybeUninitCallTargetKind(call.callee.*) == .maybe_uninit_assume_init) return self.maybeUninitCallPayloadTypeExpr(call);
         if (self.bitcastCallValueType(call) != null) return call.type_args[0];
         if (self.inferredLocalSemanticEscapeType(call)) |ty| return ty;
+        if (self.reflectionCallTarget(call)) |target| return target.result_type_expr;
         if (self.byteViewCallTarget(call)) |target| return target.result_type_expr;
         if (self.enumRawCallTarget(call)) |target| return target.result_type_expr;
         if (self.constGetCallTarget(call)) |target| return target.result_type_expr;

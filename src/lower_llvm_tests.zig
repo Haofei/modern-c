@@ -2331,6 +2331,38 @@ test "LLVM inferred local conversion calls require MIR types" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_conversion_local_type.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM inferred local reflection calls require MIR types" {
+    const source =
+        \\fn inferred_reflection() -> usize {
+        \\    let size = size_of<u32>();
+        \\    return size;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_inferred_reflection_local_type.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_inferred_reflection_local_type.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%size") != null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeKindForFunction(&missing, "inferred_reflection", .inferred_local);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_inferred_reflection_local_type.mc", .{}, false, .riscv64, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactForFunction(&stale, "inferred_reflection", .inferred_local, "u64");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_reflection_local_type.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM inferred local semantic escape calls require MIR types" {
     const source =
         \\fn inferred_noalias(pointer: *mut u8, len: usize) -> *mut u8 {
