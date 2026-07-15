@@ -5,7 +5,6 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
-const lower_c_builtin = @import("lower_c_builtin.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
@@ -18,13 +17,13 @@ const PackedBitsField = lower_c_model.PackedBitsField;
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const ResultInfo = lower_c_model.ResultInfo;
 const SliceInfo = lower_c_model.SliceInfo;
-const byteViewCallReturnTypeForCall = lower_c_builtin.byteViewCallReturnTypeForCall;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberCallee = ast_query.memberCallee;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
 const typeName = ast_query.typeName;
 
 pub const TypeArtifactFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!void;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 pub const TypeNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
 pub const ArrayTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, len_expr: ast.Expr) anyerror![]const u8;
@@ -35,6 +34,7 @@ pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, mut
 pub const TypeArtifactContext = struct {
     emit_ctx: *anyopaque,
     collect_type_artifacts: TypeArtifactFn,
+    mir_call_target_kind: MirCallTargetKindFn,
     mir_target_type: MirTargetTypeFn,
 };
 
@@ -148,7 +148,7 @@ pub fn collectBlockTypeArtifacts(ctx: TypeArtifactContext, block: ast.Block) any
 fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast.Expr) anyerror!void {
     switch (expr.kind) {
         .call => |node| {
-            if (byteViewCallReturnTypeForCall(node)) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
+            if (byteViewCallResultType(ctx, node)) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
             if (reduceCallSourceType(ctx, node)) |source_ty| try ctx.collect_type_artifacts(ctx.emit_ctx, source_ty);
             for (node.type_args) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
             try collectExprTypeArtifacts(ctx, node.callee.*);
@@ -174,6 +174,12 @@ fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast.Expr) anyerror!v
         .struct_literal => |fields| for (fields) |field| try collectExprTypeArtifacts(ctx, field.value),
         else => {},
     }
+}
+
+fn byteViewCallResultType(ctx: TypeArtifactContext, call: anytype) ?ast.TypeExpr {
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
+    if (kind != .byte_view_as_bytes and kind != .byte_view_equal) return null;
+    return ctx.mir_target_type(ctx.emit_ctx, .byte_view_result, call.callee.*.span);
 }
 
 fn reduceCallSourceType(ctx: TypeArtifactContext, call: anytype) ?ast.TypeExpr {

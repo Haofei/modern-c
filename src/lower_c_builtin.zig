@@ -7,11 +7,8 @@ const ast_query = @import("ast_query.zig");
 const lower_c_model = @import("lower_c_model.zig");
 
 const ReflectionCallKind = lower_c_model.ReflectionCallKind;
-const byteViewCallKind = ast_query.byteViewCallKind;
-const constU8SliceType = ast_query.constU8SliceType;
 const isIdentNamed = ast_query.isIdentNamed;
 const memberCallee = ast_query.memberCallee;
-const simpleNameType = ast_query.simpleNameType;
 
 pub fn knownContractCalleeName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
@@ -39,14 +36,6 @@ pub fn contractMatchesCallee(contract: []const u8, callee: []const u8) bool {
     if (std.mem.eql(u8, contract, "no_overflow")) return std.mem.startsWith(u8, callee, "unchecked.");
     if (std.mem.eql(u8, contract, "noalias")) return std.mem.eql(u8, callee, "compiler.assume_noalias_unchecked");
     return false;
-}
-
-pub fn byteViewCallReturnTypeForCall(call: anytype) ?ast.TypeExpr {
-    const kind = byteViewCallKind(call.callee.*) orelse return null;
-    return switch (kind) {
-        .as_bytes => constU8SliceType(call.callee.*.span),
-        .bytes_equal => simpleNameType("bool", call.callee.*.span),
-    };
 }
 
 pub fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {

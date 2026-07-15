@@ -2499,6 +2499,7 @@ const CEmitter = struct {
         return .{
             .emit_ctx = self,
             .collect_type_artifacts = collectTypeArtifactsForCollect,
+            .mir_call_target_kind = mirCallTargetKindForLowering,
             .mir_target_type = mirTargetTypeForLowering,
         };
     }
