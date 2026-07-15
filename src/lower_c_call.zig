@@ -18,7 +18,6 @@ const mir = @import("mir.zig");
 
 const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
-const isDeclassifyCall = ast_query.isDeclassifyCall;
 const isIdentNamed = ast_query.isIdentNamed;
 const rawScalarSuffix = lower_c_type.rawScalarSuffix;
 const isNonNullPointerType = lower_c_type.isNonNullPointerType;
@@ -573,8 +572,7 @@ pub fn emitPhysCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Loc
 }
 
 pub fn emitDeclassifyCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    if (!isDeclassifyCall(call)) return false;
-    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .declassify) return error.UnsupportedCEmission;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .declassify) return false;
     if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
     _ = ctx.mir_target_type(ctx.emit_ctx, .declassify_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
     _ = ctx.mir_target_type(ctx.emit_ctx, .declassify_result, call.callee.*.span) orelse return error.UnsupportedCEmission;

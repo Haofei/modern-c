@@ -96,7 +96,6 @@ const comptimeStructFieldValue = lower_llvm_query.comptimeStructFieldValue;
 const derefTarget = lower_llvm_query.derefTarget;
 const implMethodMangledLlvm = lower_llvm_query.implMethodMangledLlvm;
 const isAssumeNoaliasCall = lower_llvm_query.isAssumeNoaliasCall;
-const isDeclassifyCall = ast_query.isDeclassifyCall;
 const isDropCall = lower_llvm_query.isDropCall;
 const isUninitExpr = lower_llvm_query.isUninitExpr;
 const llvmTraitIsObjectSafe = lower_llvm_query.llvmTraitIsObjectSafe;
@@ -6536,8 +6535,7 @@ const LlvmEmitter = struct {
         if (mir.reflectionCallTargetKind(call) != null) return self.reflectionCallValue(call) orelse error.UnsupportedLlvmEmission;
         // `declassify(x)` / `reveal(x)` strip the constant-time `Secret<T>` tag.
         // Secret shares T's representation, so this is a value-identity pass-through.
-        if (isDeclassifyCall(call)) {
-            if (self.mirCallTargetKindAt(call.callee.*.span) != .declassify) return error.UnsupportedLlvmEmission;
+        if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const source_ty = (self.mirTargetTypeFactAt(.declassify_source, call.callee.*.span) orelse return error.UnsupportedLlvmEmission).target_ty;
             _ = self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span) orelse return error.UnsupportedLlvmEmission;
