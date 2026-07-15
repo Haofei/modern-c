@@ -1722,10 +1722,6 @@ const CEmitter = struct {
             .emit_block_items = emitBlockItemsForFlow,
             .local_info_from_type = localInfoFromTypeForFlow,
             .array_len_text = arrayLenTextForFlow,
-            .array_type_for_expr = arrayTypeForFlow,
-            .iterable_type_for_expr = iterableTypeForFlow,
-            .slice_return_type_for_expr = sliceReturnTypeForFlow,
-            .array_return_type_for_expr = arrayReturnTypeForFlow,
             .emit_sequenced_arg_temp = emitSequencedArgTempForCall,
             .emit_loop = emitLoopForFlow,
             .condition_operand_type = conditionOperandTypeForFlow,
@@ -2027,27 +2023,6 @@ const CEmitter = struct {
     fn arrayLenTextForFlow(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!?[]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.arrayLenText(ty);
-    }
-
-    fn arrayTypeForFlow(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.arrayTypeForExpr(expr, locals);
-    }
-
-    fn iterableTypeForFlow(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.iterableTypeForExpr(expr, locals);
-    }
-
-    fn sliceReturnTypeForFlow(ctx: *anyopaque, expr: ast.Expr) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        const call = callExpr(expr) orelse return null;
-        return self.sliceReturnTypeForCall(call);
-    }
-
-    fn arrayReturnTypeForFlow(ctx: *anyopaque, expr: ast.Expr) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.arrayReturnTypeForExpr(expr);
     }
 
     fn conditionOperandTypeForFlow(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -3418,10 +3393,29 @@ const CEmitter = struct {
         const header = try lower_c_flow.forLoopHeader(self.flowEmitContext(), loop);
         const binding = header.binding;
         const iterable = header.iterable;
-        if (try lower_c_flow.emitForLoopSequencedIterable(self.flowEmitContext(), loop, iterable, locals, return_ty)) return;
-        if (try lower_c_flow.emitForLoopCallIterable(self.flowEmitContext(), loop, iterable, locals, return_ty)) return;
-        const element = try lower_c_flow.forLoopElementPlan(self.flowEmitContext(), iterable, locals);
+        const types = try self.requireMirForLoopTypes(iterable, locals);
+        if (try lower_c_flow.emitForLoopSequencedIterable(self.flowEmitContext(), loop, iterable, types.iterable, locals, return_ty)) return;
+        const iterable_array_ty = switch (self.resolveAliasType(types.iterable).kind) {
+            .array => types.iterable,
+            else => null,
+        };
+        const element = try lower_c_flow.forLoopElementPlan(self.flowEmitContext(), iterable_array_ty, types.element);
         try lower_c_flow.emitForLoopWithElementPlan(self.flowEmitContext(), loop, binding, iterable, locals, return_ty, element, self.defer_stack.items.len);
+    }
+
+    fn requireMirForLoopTypes(self: *CEmitter, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !struct { iterable: ast.TypeExpr, element: ast.TypeExpr } {
+        const iterable_ty = (self.mirTargetTypeFactAt(.for_iterable, iterable.span) orelse return error.UnsupportedCEmission).target_ty;
+        const element_ty = (self.mirTargetTypeFactAt(.for_element, iterable.span) orelse return error.UnsupportedCEmission).target_ty;
+        const expected_element = switch (self.resolveAliasType(iterable_ty).kind) {
+            .array => |node| node.child.*,
+            .slice => |node| node.child.*,
+            else => return error.UnsupportedCEmission,
+        };
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(expected_element))) return error.UnsupportedCEmission;
+        if (self.iterableTypeForExpr(iterable, locals)) |known_ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(iterable_ty), self.resolveAliasType(known_ty))) return error.UnsupportedCEmission;
+        }
+        return .{ .iterable = iterable_ty, .element = element_ty };
     }
 
     fn iterableTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {

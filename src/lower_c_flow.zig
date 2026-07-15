@@ -10,20 +10,16 @@ const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
-const lower_c_target = @import("lower_c_target.zig");
 const lower_c_type = @import("lower_c_type.zig");
 
 const GlobalAccess = lower_c_model.GlobalAccess;
 const LocalInfo = lower_c_model.LocalInfo;
 const LoopJumps = lower_c_model.LoopJumps;
 const SequencedArgTemp = lower_c_model.SequencedArgTemp;
-const arrayElementType = lower_c_shape.arrayElementType;
 const binaryCOp = lower_c_op.binaryCOp;
-const callExpr = ast_query.callExpr;
 const comparisonExpr = lower_c_expr.comparisonExpr;
 const exprContainsCall = lower_c_expr.exprContainsCall;
 const exprIsNumericLiteral = lower_c_expr.exprIsNumericLiteral;
-const iterableElementCTypeForExpr = lower_c_target.iterableElementCTypeForExpr;
 const isBoolType = lower_c_type.isBoolType;
 const isComparisonOp = lower_c_op.isComparisonOp;
 const sameCStorageType = lower_c_type.sameCStorageType;
@@ -35,10 +31,8 @@ pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, loc
 pub const EmitBlockItemsFn = *const fn (ctx: *anyopaque, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void;
 pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo;
 pub const ArrayLenTextFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!?[]const u8;
-pub const ArrayTypeForExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
 pub const ExprTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
-pub const ExprReturnTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr) ?ast.TypeExpr;
 pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp;
 pub const EmitLoopFn = *const fn (ctx: *anyopaque, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void;
 pub const ConditionOperandTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
@@ -64,10 +58,6 @@ pub const EmitContext = struct {
     emit_block_items: EmitBlockItemsFn,
     local_info_from_type: LocalInfoFromTypeFn,
     array_len_text: ArrayLenTextFn,
-    array_type_for_expr: ArrayTypeForExprFn,
-    iterable_type_for_expr: ExprTypeFn,
-    slice_return_type_for_expr: ExprReturnTypeFn,
-    array_return_type_for_expr: ExprReturnTypeFn,
     emit_sequenced_arg_temp: EmitSequencedArgTempFn,
     emit_loop: EmitLoopFn,
     condition_operand_type: ConditionOperandTypeFn,
@@ -172,15 +162,8 @@ pub fn writeUnsupportedForLoop(ctx: EmitContext, message: []const u8) !void {
     try ctx.out.print(ctx.allocator, "/* {s} */\n", .{message});
 }
 
-pub fn forLoopElementPlan(ctx: EmitContext, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !ForLoopElementPlan {
-    const iterable_array_ty = ctx.array_type_for_expr(ctx.emit_ctx, iterable, locals);
-    const element_ty = if (iterable_array_ty) |array_ty| arrayElementType(array_ty) else null;
-    const element_c_type = iterableElementCTypeForExpr(iterable, locals) orelse if (element_ty) |ty|
-        try ctx.c_type(ctx.emit_ctx, ty)
-    else {
-        try writeUnsupportedForLoop(ctx, "unsupported for iterable");
-        return error.UnsupportedCEmission;
-    };
+pub fn forLoopElementPlan(ctx: EmitContext, iterable_array_ty: ?ast.TypeExpr, element_ty: ast.TypeExpr) !ForLoopElementPlan {
+    const element_c_type = try ctx.c_type(ctx.emit_ctx, element_ty);
     return .{
         .iterable_array_ty = iterable_array_ty,
         .element_ty = element_ty,
@@ -206,16 +189,8 @@ pub fn emitForLoopWithElementPlan(ctx: EmitContext, loop: ast.Loop, binding: ast
     });
 }
 
-pub fn emitForLoopSequencedIterable(ctx: EmitContext, loop: ast.Loop, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitForLoopSequencedIterable(ctx: EmitContext, loop: ast.Loop, iterable: ast.Expr, iterable_ty: ast.TypeExpr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
     if (!exprContainsCall(iterable)) return false;
-    const iterable_ty = ctx.iterable_type_for_expr(ctx.emit_ctx, iterable, locals) orelse return false;
-    try emitForLoopWithMaterializedIterable(ctx, loop, iterable, locals, return_ty, iterable_ty);
-    return true;
-}
-
-pub fn emitForLoopCallIterable(ctx: EmitContext, loop: ast.Loop, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
-    _ = callExpr(iterable) orelse return false;
-    const iterable_ty = ctx.slice_return_type_for_expr(ctx.emit_ctx, iterable) orelse ctx.array_return_type_for_expr(ctx.emit_ctx, iterable) orelse return false;
     try emitForLoopWithMaterializedIterable(ctx, loop, iterable, locals, return_ty, iterable_ty);
     return true;
 }

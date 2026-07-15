@@ -1019,6 +1019,36 @@ test "MIR owns try operand types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns for-loop iterable and element types" {
+    const source =
+        \\extern fn make_slice() -> []const u32;
+        \\fn array_loop(values: [2]u32) -> u32 { for value in values { return value; } return 0; }
+        \\fn slice_loop(values: []const u32) -> u32 { for value in values { return value; } return 0; }
+        \\fn call_loop() -> u32 { for value in make_slice() { return value; } return 0; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_for_loop_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const array_iterable = targetTypeFactByKind(functionByName(typed_mir, "array_loop").?, .for_iterable) orelse return error.TestUnexpectedResult;
+    const array_element = targetTypeFactByKind(functionByName(typed_mir, "array_loop").?, .for_element) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(array_iterable.target_ty.kind == .array);
+    try std.testing.expectEqualStrings("u32", array_element.target_ty.kind.name.text);
+    const slice_iterable = targetTypeFactByKind(functionByName(typed_mir, "slice_loop").?, .for_iterable) orelse return error.TestUnexpectedResult;
+    const slice_element = targetTypeFactByKind(functionByName(typed_mir, "slice_loop").?, .for_element) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(slice_iterable.target_ty.kind == .slice);
+    try std.testing.expectEqualStrings("u32", slice_element.target_ty.kind.name.text);
+    _ = targetTypeFactByKind(functionByName(typed_mir, "call_loop").?, .for_iterable) orelse return error.TestUnexpectedResult;
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns ordinary direct call result and fixed argument types" {
     const source =
         \\trait Width { fn widen(self: *Self) -> u32; }

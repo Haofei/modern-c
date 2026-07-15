@@ -4612,12 +4612,20 @@ const FunctionBuilder = struct {
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         self.local_pointer_array_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, @tagName(node.kind), .branch, span);
+        var for_binding_ty_expr: ?ast.TypeExpr = null;
         if (node.iterable) |iterable| {
             if (node.kind == .@"while") {
                 try self.appendTargetTypeFact(.loop_condition, ast_query.simpleNameType("bool", iterable.span), .bool, iterable.span);
                 try self.addConversionCheck(.bool, iterable, .condition, iterable.span);
             }
-            if (node.kind == .@"for") try self.addForIterableCheck(iterable, iterable.span);
+            if (node.kind == .@"for") {
+                const iterable_ty = self.typeExprForExpr(iterable) orelse return error.UnsupportedMirConstruction;
+                const element_ty = storageElementTypeAlias(iterable_ty, self.aliases) orelse return error.UnsupportedMirConstruction;
+                try self.appendTargetTypeFact(.for_iterable, iterable_ty, self.exprType(iterable), iterable.span);
+                try self.appendTargetTypeFact(.for_element, element_ty, valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases), iterable.span);
+                for_binding_ty_expr = element_ty;
+                try self.addForIterableCheck(iterable, iterable.span);
+            }
             try self.buildExpr(iterable);
         }
         const header_id = self.current;
@@ -4639,10 +4647,6 @@ const FunctionBuilder = struct {
         var previous_type_expr: ast.TypeExpr = undefined;
         var had_previous_mutability = false;
         var previous_mutability = false;
-        const for_binding_ty_expr = if (node.kind == .@"for" and node.label != null and node.iterable != null)
-            if (self.typeExprForExpr(node.iterable.?)) |iterable_ty| storageElementTypeAlias(iterable_ty, self.aliases) else null
-        else
-            null;
         if (node.kind == .@"for" and node.label != null) {
             const binding = node.label.?;
             if (self.local_types.get(binding.text)) |old| {

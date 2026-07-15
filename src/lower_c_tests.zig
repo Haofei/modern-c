@@ -1759,6 +1759,42 @@ test "lower-c try expressions require MIR operand types" {
     }
 }
 
+test "lower-c for loops require MIR iterable and element types" {
+    const source =
+        \\extern fn make_slice() -> []const u32;
+        \\fn array_loop(values: [2]u32) -> u32 { for value in values { return value; } return 0; }
+        \\fn slice_loop(values: []const u32) -> u32 { for value in values { return value; } return 0; }
+        \\fn call_loop() -> u32 { for value in make_slice() { return value; } return 0; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_for_loop_type_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_for_loop_type_facts.mc", .{}, false, null);
+    for ([_][]const u8{ "array_loop", "slice_loop", "call_loop" }) |name| {
+        try std.testing.expect(std.mem.indexOf(u8, complete_output.items, name) != null);
+    }
+
+    for ([_]mir.TargetTypeKind{ .for_iterable, .for_element }) |kind| {
+        var missing = try mir.build(std.testing.allocator, parsed.module);
+        defer missing.deinit();
+        try removeTargetTypeKindForFunction(&missing, "array_loop", kind);
+        var missing_output: std.ArrayList(u8) = .empty;
+        defer missing_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_for_loop_type_facts.mc", .{}, false, null));
+
+        var stale = try mir.build(std.testing.allocator, parsed.module);
+        defer stale.deinit();
+        try renameTargetTypeFactForFunction(&stale, "array_loop", kind, "u64");
+        var stale_output: std.ArrayList(u8) = .empty;
+        defer stale_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_for_loop_type_facts.mc", .{}, false, null));
+    }
+}
+
 test "lower-c ordinary direct calls require MIR result and argument types" {
     const source =
         \\fn widen(value: u64) -> u64 { return value; }

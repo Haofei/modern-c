@@ -394,6 +394,8 @@ pub const TargetTypeKind = enum {
     switch_subject,
     if_let_subject,
     try_operand,
+    for_iterable,
+    for_element,
 };
 
 pub const TargetTypeFact = struct {

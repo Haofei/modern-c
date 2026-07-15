@@ -2790,11 +2790,27 @@ const LlvmEmitter = struct {
         return fact_ty;
     }
 
+    fn requireMirForLoopTypes(self: *LlvmEmitter, iterable: ast.Expr) !struct { iterable: ast.TypeExpr, element: ast.TypeExpr } {
+        const iterable_ty = (self.mirTargetTypeFactAt(.for_iterable, iterable.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+        const element_ty = (self.mirTargetTypeFactAt(.for_element, iterable.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+        const expected_element = switch (self.resolveAliasType(iterable_ty).kind) {
+            .array => |node| node.child.*,
+            .slice => |node| node.child.*,
+            else => return error.UnsupportedLlvmEmission,
+        };
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(expected_element))) return error.UnsupportedLlvmEmission;
+        if (self.exprType(iterable)) |known_ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(iterable_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
+        }
+        return .{ .iterable = iterable_ty, .element = element_ty };
+    }
+
     fn emitFor(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
         const binding = loop.label orelse return error.UnsupportedLlvmEmission;
         const iterable = loop.iterable orelse return error.UnsupportedLlvmEmission;
-        const iterable_ty = self.exprType(iterable) orelse return error.UnsupportedLlvmEmission;
-        const element_ty = self.indexElementType(iterable) orelse return error.UnsupportedLlvmEmission;
+        const types = try self.requireMirForLoopTypes(iterable);
+        const iterable_ty = types.iterable;
+        const element_ty = types.element;
         const element_llvm = try self.llvmType(element_ty);
 
         const index_ptr = try self.nextTemp();
