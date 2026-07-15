@@ -4302,12 +4302,18 @@ const FunctionBuilder = struct {
     // Direct calls already have an MIR-owned `direct_call_result` fact, while
     // function-pointer and closure calls have an `indirect_call_callee`
     // signature fact, and a non-void trait-object dispatch has a
-    // `dyn_dispatch_result` fact. Mirror either established return type into the
-    // destination local so neither backend has to rediscover a type merely to
-    // allocate an unannotated binding. Builtins remain outside this narrow slice.
+    // `dyn_dispatch_result` fact. Atomic value operations and MaybeUninit
+    // extraction already own their payload type facts. Mirror each established
+    // return type into the destination local so neither backend has to
+    // rediscover a type merely to allocate an unannotated binding.
     fn inferredLocalCallType(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
         if (self.dynDispatchCallTarget(call)) |target| return target.result_type_expr;
         if (self.isDynDispatchMember(call.callee.*)) return null;
+        if (self.atomicCallTargetKind(call.callee.*)) |kind| {
+            if (kind == .atomic_load or kind == .atomic_fetch_add or kind == .atomic_fetch_sub) return self.atomicCallPayloadTypeExpr(call);
+            return null;
+        }
+        if (self.maybeUninitCallTargetKind(call.callee.*) == .maybe_uninit_assume_init) return self.maybeUninitCallPayloadTypeExpr(call);
         if (directCalleeName(call.callee.*)) |callee| {
             if (self.summaries.get(callee)) |summary| return summary.return_type_expr;
         }

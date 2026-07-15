@@ -2434,6 +2434,52 @@ test "MIR records typed call target facts for MaybeUninit member calls" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local types for atomic and MaybeUninit result calls" {
+    const source =
+        \\struct Node { value: u32 }
+        \\
+        \\fn atomic_inferred_locals() -> u32 {
+        \\    var counter: atomic<u32> = atomic.init(1);
+        \\    let previous = counter.fetch_add(3, .acq_rel);
+        \\    let loaded = counter.load(.acquire);
+        \\    return previous + loaded;
+        \\}
+        \\
+        \\fn maybe_uninit_inferred_local() -> u32 {
+        \\    var slot: MaybeUninit<Node> = uninit;
+        \\    slot.write(.{ .value = 7 });
+        \\    let value = slot.assume_init();
+        \\    return value.value;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_builtin_inferred_local_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const atomic_function = functionByName(typed_mir, "atomic_inferred_locals").?;
+    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(atomic_function, .inferred_local));
+    for (atomic_function.target_type_facts) |fact| {
+        if (fact.kind != .inferred_local) continue;
+        try std.testing.expect(fact.target_owner != null);
+        try std.testing.expect(std.mem.eql(u8, fact.target_owner.?, "previous") or std.mem.eql(u8, fact.target_owner.?, "loaded"));
+        try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+    }
+    const maybe_function = functionByName(typed_mir, "maybe_uninit_inferred_local").?;
+    const maybe_fact = targetTypeFactByKind(maybe_function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("value", maybe_fact.target_owner.?);
+    try std.testing.expectEqualStrings("Node", maybe_fact.target_ty.kind.name.text);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR records typed call target facts for bitcast calls" {
     const source =
         \\fn bitcast_bits(value: f32) -> u32 {

@@ -2114,6 +2114,53 @@ test "LLVM inferred local indirect calls require MIR types" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_local_indirect_call_types.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM inferred local atomic and MaybeUninit calls require MIR types" {
+    const source =
+        \\struct Node { value: u32 }
+        \\
+        \\fn atomic_inferred_locals() -> u32 {
+        \\    var counter: atomic<u32> = atomic.init(1);
+        \\    let previous = counter.fetch_add(3, .acq_rel);
+        \\    let loaded = counter.load(.acquire);
+        \\    return previous + loaded;
+        \\}
+        \\
+        \\fn maybe_uninit_inferred_local() -> u32 {
+        \\    var slot: MaybeUninit<Node> = uninit;
+        \\    slot.write(.{ .value = 7 });
+        \\    let value = slot.assume_init();
+        \\    return value.value;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_builtin_inferred_local_types.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_builtin_inferred_local_types.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%previous") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%loaded") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%value") != null);
+
+    for ([_][]const u8{ "atomic_inferred_locals", "maybe_uninit_inferred_local" }) |name| {
+        var missing = try mir.build(std.testing.allocator, parsed.module);
+        defer missing.deinit();
+        try removeTargetTypeKindForFunction(&missing, name, .inferred_local);
+        var missing_output: std.ArrayList(u8) = .empty;
+        defer missing_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_builtin_inferred_local_types.mc", .{}, false, .riscv64, null));
+
+        var stale = try mir.build(std.testing.allocator, parsed.module);
+        defer stale.deinit();
+        try renameTargetTypeFactForFunction(&stale, name, .inferred_local, "u64");
+        var stale_output: std.ArrayList(u8) = .empty;
+        defer stale_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_builtin_inferred_local_types.mc", .{}, false, .riscv64, null));
+    }
+}
+
 test "LLVM inferred local dyn dispatch calls require MIR types" {
     const source =
         \\trait Shape { fn scale(self: *Self, amount: u32) -> u32; fn set(self: *mut Self, value: u32) -> void; }

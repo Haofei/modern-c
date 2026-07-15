@@ -7230,6 +7230,7 @@ const CEmitter = struct {
         if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_many_offset) return if (self.mirTargetTypeFactAt(.raw_many_offset_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
+        if (self.maybeUninitResultReturnTypeForCall(call)) |ty| return ty;
         if (self.dynDispatchReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.closureCalleeType(call.callee.*, locals)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
         if (self.indirectCallCalleeType(call.callee.*)) |callee_ty| return switch (callee_ty.kind) {
@@ -7297,6 +7298,14 @@ const CEmitter = struct {
         return lower_c_atomic.atomicResultPayload(self.atomicEmitContext(), call);
     }
 
+    // MaybeUninit extraction returns its MIR-owned payload type. The emitted
+    // value is the backing storage itself, so an inferred local must use this
+    // type before it is added to the C local environment.
+    fn maybeUninitResultReturnTypeForCall(self: *CEmitter, call: anytype) ?ast.TypeExpr {
+        if (self.mirCallTargetKindAt(call.callee.*.span) != .maybe_uninit_assume_init) return null;
+        return (self.mirTargetTypeFactAt(.maybe_uninit_payload, call.callee.*.span) orelse return null).target_ty;
+    }
+
     fn exprSourceTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         return switch (expr.kind) {
             .ident => |ident| {
@@ -7333,6 +7342,7 @@ const CEmitter = struct {
         if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_many_offset) return if (self.mirTargetTypeFactAt(.raw_many_offset_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
+        if (self.maybeUninitResultReturnTypeForCall(call)) |ty| return ty;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
         return info.return_type;
