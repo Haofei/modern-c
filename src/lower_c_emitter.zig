@@ -7253,8 +7253,12 @@ const CEmitter = struct {
         const trait_name = self.dynCalleeTrait(call.callee.*, locals) orelse return null;
         const trait = self.trait_decls.get(trait_name) orelse return null;
         const method_name = dynCalleeMethodName(call.callee.*) orelse return null;
-        for (trait.methods) |method| {
-            if (std.mem.eql(u8, method.name.text, method_name)) return method.return_type;
+        for (trait.methods, 0..) |method, index| {
+            if (!std.mem.eql(u8, method.name.text, method_name)) continue;
+            const declared_ty = method.return_type orelse return null;
+            const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, call.callee.*.span, trait_name, index) orelse return null).target_ty;
+            if (!std.meta.eql(fact_ty, declared_ty)) return null;
+            return fact_ty;
         }
         return null;
     }

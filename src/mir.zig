@@ -280,6 +280,8 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
     defer packed_bits.deinit();
     var aliases = std.StringHashMap(ast.TypeExpr).init(allocator);
     defer aliases.deinit();
+    var traits = std.StringHashMap(ast.TraitDecl).init(allocator);
+    defer traits.deinit();
 
     for (module.decls) |decl| {
         switch (decl.kind) {
@@ -289,6 +291,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
             .overlay_union_decl => |overlay_union_decl| try structs.put(overlay_union_decl.name.text, .{ .fields = overlay_union_decl.fields }),
             .packed_bits_decl => |decl_packed_bits| try packed_bits.put(decl_packed_bits.name.text, .{ .repr = decl_packed_bits.repr, .fields = decl_packed_bits.fields }),
             .type_alias => |alias| try aliases.put(alias.name.text, alias.ty),
+            .trait_decl => |trait| try traits.put(trait.name.text, trait),
             else => {},
         }
     }
@@ -358,7 +361,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
             .global_decl => |global| {
                 if (global.ty) |ty| {
                     if (global.init) |initializer| {
-                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals, &globals, &global_type_exprs, &pointer_return_summaries);
+                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &pointer_return_summaries);
                         builder.optimize = options.optimize;
                         errdefer builder.deinit();
                         try builder.buildGlobalInitializer(ty, initializer);
@@ -368,7 +371,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
             },
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
-                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals, &globals, &global_type_exprs, &pointer_return_summaries);
+                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &pointer_return_summaries);
                     builder.optimize = options.optimize;
                     errdefer builder.deinit();
                     try builder.buildBody(body);
@@ -3255,6 +3258,7 @@ const FunctionBuilder = struct {
     unions: *const std.StringHashMap(UnionSummary),
     packed_bits: *const std.StringHashMap(PackedBitsSummary),
     aliases: *const std.StringHashMap(ast.TypeExpr),
+    traits: *const std.StringHashMap(ast.TraitDecl),
     const_fns: *const std.StringHashMap(ast.FnDecl),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
     globals: *const std.StringHashMap(ValueType),
@@ -3325,7 +3329,7 @@ const FunctionBuilder = struct {
     next_contract_region_id: usize = 1,
     next_target_fact_group_id: usize = 1,
 
-    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
+    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "entry" });
@@ -3346,6 +3350,7 @@ const FunctionBuilder = struct {
             .unions = unions,
             .packed_bits = packed_bits,
             .aliases = aliases,
+            .traits = traits,
             .const_fns = const_fns,
             .const_globals = const_globals,
             .globals = globals,
@@ -3394,7 +3399,7 @@ const FunctionBuilder = struct {
         return builder;
     }
 
-    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
+    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "global_init" });
@@ -3412,6 +3417,7 @@ const FunctionBuilder = struct {
             .unions = unions,
             .packed_bits = packed_bits,
             .aliases = aliases,
+            .traits = traits,
             .const_fns = const_fns,
             .const_globals = const_globals,
             .globals = globals,
@@ -4295,17 +4301,47 @@ const FunctionBuilder = struct {
 
     // Direct calls already have an MIR-owned `direct_call_result` fact, while
     // function-pointer and closure calls have an `indirect_call_callee`
-    // signature fact. Mirror either established return type into the destination
-    // local so neither backend has to rediscover a type merely to allocate an
-    // unannotated binding. Builtins and dynamic dispatch remain outside this
-    // narrow slice.
+    // signature fact, and a non-void trait-object dispatch has a
+    // `dyn_dispatch_result` fact. Mirror either established return type into the
+    // destination local so neither backend has to rediscover a type merely to
+    // allocate an unannotated binding. Builtins remain outside this narrow slice.
     fn inferredLocalCallType(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
+        if (self.dynDispatchCallTarget(call)) |target| return target.result_type_expr;
         if (self.isDynDispatchMember(call.callee.*)) return null;
         if (directCalleeName(call.callee.*)) |callee| {
             if (self.summaries.get(callee)) |summary| return summary.return_type_expr;
         }
         const target = self.indirectCallTarget(call) orelse return null;
         return target.result_type_expr;
+    }
+
+    const DynDispatchCallTarget = struct {
+        trait_name: []const u8,
+        method_index: usize,
+        result_type_expr: ast.TypeExpr,
+        result_ty: ValueType,
+    };
+
+    // Trait-object calls have no identifier-form callee owner. Resolve their
+    // signature from the receiver's declared `dyn Trait` and retain the trait
+    // name plus vtable slot as the MIR fact identity, preventing a same-named
+    // free function from supplying the result type.
+    fn dynDispatchCallTarget(self: *FunctionBuilder, call: anytype) ?DynDispatchCallTarget {
+        const member = memberCallee(call.callee.*) orelse return null;
+        const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
+        const trait_name = dynTraitNameFromTypeAlias(base_ty, self.aliases) orelse return null;
+        const trait = self.traits.get(trait_name) orelse return null;
+        for (trait.methods, 0..) |method, index| {
+            if (!std.mem.eql(u8, method.name.text, member.name.text)) continue;
+            const result_type_expr = method.return_type orelse return null;
+            return .{
+                .trait_name = trait_name,
+                .method_index = index,
+                .result_type_expr = result_type_expr,
+                .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            };
+        }
+        return null;
     }
 
     fn booleanSwitchSubjectType(node: ast.Switch) ?ast.TypeExpr {
@@ -4995,9 +5031,10 @@ const FunctionBuilder = struct {
                 else
                     .indirect_call;
                 // A `*dyn Trait` method call is a virtual dispatch — its return type is the trait
-                // method's, not a same-named free function's. The verifier carries no trait sigs,
-                // so leave it `.unknown` rather than mis-binding to `summaries[method_name]`.
+                // method's, not a same-named free function's. Its non-void result is recorded
+                // below with the trait and vtable slot as identity.
                 const is_dyn_dispatch = self.isDynDispatchMember(node.callee.*);
+                const dyn_dispatch_target = self.dynDispatchCallTarget(node);
                 const direct_decl_summary = if (!is_dyn_dispatch and calleeIdentName(node.callee.*) != null)
                     self.summaries.get(callee_name)
                 else
@@ -5019,7 +5056,9 @@ const FunctionBuilder = struct {
                 const unchecked_target = self.uncheckedCallTarget(node);
                 const discard_target = self.discardCallTargetKind(node);
                 const explicit_trap_target = explicitTrapCallTargetKind(node);
-                const call_ty: ValueType = if (is_dyn_dispatch)
+                const call_ty: ValueType = if (dyn_dispatch_target) |target|
+                    target.result_ty
+                else if (is_dyn_dispatch)
                     .unknown
                 else if (semantic_escape_target) |target|
                     target.result_ty
@@ -5081,6 +5120,16 @@ const FunctionBuilder = struct {
                             index,
                         );
                     }
+                }
+                if (dyn_dispatch_target) |target| {
+                    try self.appendOwnedTargetTypeFact(
+                        .dyn_dispatch_result,
+                        target.result_type_expr,
+                        target.result_ty,
+                        node.callee.*.span,
+                        target.trait_name,
+                        target.method_index,
+                    );
                 }
                 if (indirect_call_target) |target| {
                     try self.appendTargetTypeFact(.indirect_call_callee, target.callee_type_expr, target.callee_ty, node.callee.*.span);
@@ -8912,6 +8961,22 @@ fn inferredLocalTypeFactEligible(builder: *FunctionBuilder, maybe_initializer: ?
         .binary => |node| mirIsArithmeticBinary(node.op) or mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op),
         .grouped => |inner| inferredLocalTypeFactEligible(builder, inner.*),
         else => false,
+    };
+}
+
+fn dynTraitNameFromTypeAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+    return dynTraitNameFromTypeAliasDepth(ty, aliases, 0);
+}
+
+fn dynTraitNameFromTypeAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) ?[]const u8 {
+    if (depth > 64) return null;
+    return switch (ty.kind) {
+        .dyn_trait => |dyn| dyn.trait_name.text,
+        .name => |name| if (aliases.get(name.text)) |resolved| dynTraitNameFromTypeAliasDepth(resolved, aliases, depth + 1) else null,
+        .qualified => |node| dynTraitNameFromTypeAliasDepth(node.child.*, aliases, depth + 1),
+        .nullable => |child| dynTraitNameFromTypeAliasDepth(child.*, aliases, depth + 1),
+        .pointer => |node| dynTraitNameFromTypeAliasDepth(node.child.*, aliases, depth + 1),
+        else => null,
     };
 }
 

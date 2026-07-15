@@ -8743,7 +8743,10 @@ const LlvmEmitter = struct {
         if (self.dynDispatchTrait(call.callee.*)) |trait| {
             const member = memberCallee(call) orelse return null;
             const slot = traitMethodIndex(trait, member.name.text) orelse return null;
-            return trait.methods[slot].return_type orelse simpleType(call.callee.*.span, "void");
+            const declared_ty = trait.methods[slot].return_type orelse return simpleType(call.callee.*.span, "void");
+            const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, call.callee.*.span, trait.name.text, slot) orelse return null).target_ty;
+            if (!std.meta.eql(fact_ty, declared_ty)) return null;
+            return fact_ty;
         }
         if (self.constGetCallInfo(call)) |info| return info.element_ty;
         if (self.bitcastCallTargetType(call)) |ty| return ty;

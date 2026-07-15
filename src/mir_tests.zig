@@ -1303,6 +1303,38 @@ test "MIR owns inferred local indirect call types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local dyn dispatch call types" {
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\struct Square { side: u32 }
+        \\impl Shape for Square { fn area(self: *Square) -> u32 { return self.side; } }
+        \\fn caller(shape: *dyn Shape) -> u32 {
+        \\    let result = shape.area();
+        \\    return result;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_dyn_dispatch_call_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "caller").?;
+    const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("result", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("u32", local_fact.target_ty.kind.name.text);
+    const dispatch_fact = targetTypeFactByKind(function, .dyn_dispatch_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Shape", dispatch_fact.target_owner.?);
+    try std.testing.expectEqual(@as(?usize, 0), dispatch_fact.target_index);
+    try std.testing.expectEqualStrings("u32", dispatch_fact.target_ty.kind.name.text);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns ordinary direct call result and fixed argument types" {
     const source =
         \\trait Width { fn widen(self: *Self) -> u32; }

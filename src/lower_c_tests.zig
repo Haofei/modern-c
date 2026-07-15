@@ -2034,6 +2034,41 @@ test "lower-c inferred local indirect calls require MIR types" {
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_local_indirect_call_types.mc", .{}, false, null));
 }
 
+test "lower-c inferred local dyn dispatch calls require MIR types" {
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\struct Square { side: u32 }
+        \\impl Shape for Square { fn area(self: *Square) -> u32 { return self.side; } }
+        \\fn caller(shape: *dyn Shape) -> u32 {
+        \\    let result = shape.area();
+        \\    return result;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_inferred_local_dyn_dispatch_call_types.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t result") != null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeKindForFunction(&missing, "caller", .dyn_dispatch_result);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactForFunction(&stale, "caller", .dyn_dispatch_result, "u64");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
+}
+
 test "lower-c ordinary direct calls require MIR result and argument types" {
     const source =
         \\fn widen(value: u64) -> u64 { return value; }
