@@ -542,7 +542,7 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *std.StringHa
     while (iter_it.next()) |entry| {
         if (moveStateSlotMatches(entry_state, entry.key_ptr.*, entry.value_ptr.*)) continue;
         const root = trackedSubplaceRoot(entry.value_ptr.*, entry.key_ptr.*) orelse continue;
-        if (entry_state.getPtr(root)) |root_slot| {
+        if (rootMoveSlotPtrForPlace(.{ .root = root }, entry_state)) |root_slot| {
             self.errorCode(entry.value_ptr.span, "E_MOVE_LOOP_RESOURCE", "cannot move an outer linear `move` place inside a loop; the loop may run zero or multiple times");
             root_slot.live = false;
             root_slot.deferred = false;
@@ -1438,6 +1438,22 @@ test "move CFG alias facts match typed referent places" {
     try std.testing.expectEqual(@as(usize, 1), joined.count());
 }
 
+test "move root ownership lookup uses typed places rather than compatibility keys" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    const field = root.project(.{ .field = "resource" }).?;
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+
+    // The string key intentionally does not equal `owner`. The typed root is
+    // the authority for ownership paths that begin from the field projection.
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    try std.testing.expect(rootMoveSlotForPlace(field, &state) != null);
+    const root_slot = rootMoveSlotPtrForPlace(field, &state) orelse return error.TestUnexpectedResult;
+    root_slot.live = false;
+    try std.testing.expect(!state.get("compat:owner").?.live);
+}
+
 fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
     return .{
         .live = false,
@@ -1463,6 +1479,34 @@ fn ownershipMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(Move
     while (it.next()) |entry| {
         const slot = entry.value_ptr;
         if (isOwnershipMoveSubplace(slot.*, entry.key_ptr.*) and slot.place.?.eql(place)) return slot;
+    }
+    return null;
+}
+
+// Binding names remain the map index while the checker carries compatibility
+// metadata, but ownership checks must not recover a root by formatting or
+// looking up a string key. A root place is matched structurally so a renamed
+// compatibility entry cannot change move semantics.
+fn rootMoveSlotForPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (slot.alias_of != null or isPureIndexFactSlot(slot)) continue;
+        const tracked = slot.place orelse continue;
+        if (tracked.isSubplace()) continue;
+        if (std.mem.eql(u8, tracked.root, place.root)) return slot;
+    }
+    return null;
+}
+
+fn rootMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) ?*MoveSlot {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr;
+        if (slot.alias_of != null or isPureIndexFactSlot(slot.*)) continue;
+        const tracked = slot.place orelse continue;
+        if (tracked.isSubplace()) continue;
+        if (std.mem.eql(u8, tracked.root, place.root)) return slot;
     }
     return null;
 }
@@ -1610,7 +1654,7 @@ const AliasReferent = struct {
 };
 
 fn aliasReferentIsTracked(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot)) bool {
-    if (referent.place) |place| return state.contains(place.root);
+    if (referent.place) |place| return rootMoveSlotForPlace(place, state) != null;
     return state.contains(referent.key);
 }
 
@@ -1877,7 +1921,7 @@ fn consumeTrackedMoveReferent(self: *Checker, referent: AliasReferent, span: dia
 }
 
 fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    const root = state.get(place.root) orelse return;
+    const root = rootMoveSlotForPlace(place, state) orelse return;
     if (!root.live) {
         self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` field after its owner was moved");
         return;
@@ -3028,7 +3072,7 @@ fn stateHasMovedPlaceOrChild(place: MovePlace, state: *const std.StringHashMap(M
 }
 
 fn deferredBorrowConflictsWithTrackedPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
-    const root_slot = state.get(place.root) orelse return false;
+    const root_slot = rootMoveSlotForPlace(place, state) orelse return false;
     const borrowed = root_slot.deferred_borrow_place orelse return false;
     return borrowed.eql(place) or borrowed.isPrefixOf(place) or place.isPrefixOf(borrowed) or borrowed.conflicts(place);
 }
@@ -3765,7 +3809,7 @@ fn aliasSlotReferentMoved(slot: MoveSlot, state: *const std.StringHashMap(MoveSl
 }
 
 fn referentPlaceMoved(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
-    if (state.get(place.root)) |root| {
+    if (rootMoveSlotForPlace(place, state)) |root| {
         if (!root.live) return true;
     }
     return stateHasMovedPlaceChildOrConflict(place, state);
@@ -3917,7 +3961,10 @@ fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.Stri
 fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
     const borrowed_place = place;
     const root = referentRoot(referent, borrowed_place);
-    const root_slot = state.getPtr(root) orelse return;
+    const root_slot = (if (borrowed_place) |typed|
+        rootMoveSlotPtrForPlace(typed, state)
+    else
+        state.getPtr(root)) orelse return;
     if (root_slot.cleanup_local) {
         checkStaleAlias(self, "", .{ .live = false, .span = span, .alias_of = referent, .alias_place = borrowed_place }, span, state);
         return;
