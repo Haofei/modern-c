@@ -1291,6 +1291,39 @@ test "LLVM direct storage-read inferred locals require MIR facts" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_storage_reads.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM inferred local try payloads require MIR types" {
+    const source =
+        \\extern fn make_result() -> Result<u32, u32>;
+        \\extern fn make_nullable() -> ?*const u8;
+        \\fn result_local() -> Result<u32, u32> { let value = make_result()?; return ok(value); }
+        \\fn nullable_local() -> *const u8 { let value = make_nullable()?; return value; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_inferred_local_try_payloads.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_inferred_local_try_payloads.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "@result_local") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "@nullable_local") != null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeKindForFunction(&missing, "result_local", .inferred_local);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_inferred_local_try_payloads.mc", .{}, false, .riscv64, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactForFunction(&stale, "result_local", .inferred_local, "u64");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_local_try_payloads.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM compound expressions require complete MIR result facts" {
     const source =
         \\fn expression_facts(index: usize) -> u8 {

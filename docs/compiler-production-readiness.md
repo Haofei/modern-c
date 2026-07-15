@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-15, based on the current compiler worktree**.
-Evidence register: **624 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **625 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -720,6 +720,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Raw-many pointer offset semantics are MIR-owned | Every accepted `[*]T.offset(index)` operation now carries a typed MIR call identity plus complete receiver, element, and result type facts. Alias resolution and operation classification happen once in MIR; C and LLVM retain only admitted syntax shape and emission mechanics. Removing call/type facts or retargeting the identity rejects prebuilt MIR, while nonzero and dynamic offsets continue to use the documented conservative provenance policy. | `src/mir.zig` `rawManyOffsetCallTarget`; `src/mir_model.zig` `raw_many_offset*`; `src/lower_c_access.zig` / `src/lower_llvm.zig` MIR consumers; MIR/C/LLVM positive and missing/stale-fact tests; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig build test c-test llvm-test`; `git diff --check`. |
 | Direct storage-read inferred local types are MIR-owned | One-name unannotated locals initialized by a resolved member, index, slice, or ordinary dereference now carry an owned `inferred_local` fact. C and LLVM consume it when allocating the binding, and both reject missing or retargeted prebuilt facts rather than treating backend-local storage-read inference as authoritative. This is a bounded direct-read migration; non-direct pointer reads, member calls, and broader computed initializers remain in the registered expression-inference boundary. | `src/mir.zig` `inferredLocalTypeFactEligible`; `src/mir_tests.zig` `MIR owns inferred local direct storage read types`; `src/lower_c_tests.zig` `lower-c direct storage-read inferred locals require MIR facts`; `src/lower_llvm_tests.zig` `LLVM direct storage-read inferred locals require MIR facts`; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
+| Direct `try` payload inferred local types are MIR-owned | One-name unannotated locals initialized by a direct Result or nullable `source?` now carry an owned `inferred_local` fact. C derives the expected payload only from the MIR-owned `try_operand` fact before dispatching to its existing typed-`try` lowering; LLVM uses the same binding fact before storage allocation. Missing or retargeted prebuilt facts reject before either backend can treat a backend-local payload query as authoritative. This is limited to direct `try` payload initializers; broader computed initializers remain in the registered expression-inference boundary. | `src/mir.zig` `inferredLocalTypeFactEligible`; `src/lower_c_emitter.zig` `tryPayloadTypeForInferredLocal`; `src/mir_tests.zig` `MIR owns inferred local try payload types`; `src/lower_c_tests.zig` `lower-c inferred local try payloads require MIR types`; `src/lower_llvm_tests.zig` `LLVM inferred local try payloads require MIR types`; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
 
 ### Bounded Workstream Status
 
@@ -872,10 +873,12 @@ positive storage-provenance proof, so those accesses retain conservative race
 lowering.
 
 Unannotated local copies, direct member/index/slice/dereference reads with a
-resolved storage type, ordinary direct function/extern calls, direct casts,
+resolved storage type, direct Result/nullable `try` payload reads, ordinary
+direct function/extern calls, direct casts,
 typed unary/binary expressions, and the language-defined targetless `u32`/`bool`
 literals now have a narrow typed-fact path: when a one-name `let`/`var` is
-initialized from an existing local value, an ordinary direct call, a function-pointer
+initialized from an existing local value, a direct Result/nullable `try` payload,
+an ordinary direct call, a function-pointer
 or closure call, a direct typed storage read, `value as T`,
 `-x`, `!x`, `a + b`, `a < b`, `a && b`, an integer literal, or a bool literal,
 MIR records an owned `inferred_local` type fact. C and LLVM consume that fact for

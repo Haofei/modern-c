@@ -1194,6 +1194,32 @@ test "MIR owns inferred local direct storage read types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local try payload types" {
+    const source =
+        \\extern fn make_result() -> Result<u32, u32>;
+        \\extern fn make_nullable() -> ?*const u8;
+        \\fn result_local() -> Result<u32, u32> { let value = make_result()?; return ok(value); }
+        \\fn nullable_local() -> *const u8 { let value = make_nullable()?; return value; }
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_try_payload_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const result_fact = targetTypeFactByKind(functionByName(typed_mir, "result_local").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("u32", result_fact.target_ty.kind.name.text);
+    const nullable_fact = targetTypeFactByKind(functionByName(typed_mir, "nullable_local").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(nullable_fact.target_ty.kind == .pointer);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns inferred local cast types" {
     const source =
         \\fn casts(value: u64, ptr: *const u64) -> u32 {

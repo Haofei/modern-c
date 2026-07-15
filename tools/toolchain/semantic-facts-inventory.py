@@ -894,7 +894,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn requireMirSwitchSubjectType(": 1,
         "mirTargetTypeFactAt(.if_let_subject": 1,
         "fn requireMirIfLetSubjectType(": 1,
-        "mirTargetTypeFactAt(.try_operand": 2,
+        "mirTargetTypeFactAt(.try_operand": 3,
         "mirTargetTypeFactAt(.for_iterable": 1,
         "mirTargetTypeFactAt(.for_element": 1,
         "fn requireMirForLoopTypes(": 1,

@@ -2770,7 +2770,7 @@ const CEmitter = struct {
             return try self.emitSpecialTypedLocalInit(name, decl_ty, initializer, locals, return_ty);
         }
         const initializer = local.init orelse return false;
-        return try self.emitSpecialInferredLocalInit(name, initializer, locals);
+        return try self.emitSpecialInferredLocalInit(name, initializer, locals, return_ty);
     }
 
     fn emitSpecialTypedLocalInit(
@@ -2817,7 +2817,12 @@ const CEmitter = struct {
         return false;
     }
 
-    fn emitSpecialInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
+    fn emitSpecialInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+        if (self.tryPayloadTypeForInferredLocal(initializer)) |known_ty| {
+            const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse return error.UnsupportedCEmission;
+            try locals.put(name, try self.localInfoFromType(inferred_ty));
+            return try self.emitSpecialTypedLocalInit(name, inferred_ty, initializer, locals, return_ty);
+        }
         // A cast can wrap `unchecked.add/sub/mul`; give the MIR range-fact
         // lowering first claim so it does not fall through to targetless call
         // emission inside the generic cast path.
@@ -2841,6 +2846,25 @@ const CEmitter = struct {
         if (try lower_c_mmio.emitDirectReadInferredLocalInitExpr(self.mmioEmitContext(), name, initializer, locals)) return true;
         if (try lower_c_mmio.emitReadExprInferredLocalInit(self.mmioCallEmitContext(), name, initializer, locals)) return true;
         return false;
+    }
+
+    // A direct `source?` initializer is already typed by the MIR-owned operand
+    // fact. Use that payload only to validate the owned inferred-local fact;
+    // the typed try emitter still owns control-flow lowering.
+    fn tryPayloadTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) ?ast.TypeExpr {
+        return switch (initializer.kind) {
+            .grouped => |inner| self.tryPayloadTypeForInferredLocal(inner.*),
+            .try_expr => |node| blk: {
+                const operand_ty = (self.mirTargetTypeFactAt(.try_operand, node.operand.*.span) orelse break :blk null).target_ty;
+                const resolved = self.resolveAliasType(operand_ty);
+                if (resultPayloadTypeForTag(resolved, "ok")) |payload_ty| break :blk payload_ty;
+                break :blk switch (resolved.kind) {
+                    .nullable => |child| child.*,
+                    else => null,
+                };
+            },
+            else => null,
+        };
     }
 
     fn emitCastInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
