@@ -1305,13 +1305,14 @@ test "MIR owns inferred local indirect call types" {
 
 test "MIR owns inferred local dyn dispatch call types" {
     const source =
-        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\trait Shape { fn scale(self: *Self, amount: u32) -> u32; fn set(self: *mut Self, value: u32) -> void; }
         \\struct Square { side: u32 }
-        \\impl Shape for Square { fn area(self: *Square) -> u32 { return self.side; } }
-        \\fn caller(shape: *dyn Shape) -> u32 {
-        \\    let result = shape.area();
+        \\impl Shape for Square { fn scale(self: *Square, amount: u32) -> u32 { return self.side * amount; } fn set(self: *mut Square, value: u32) -> void { self.side = value; } }
+        \\fn caller(shape: *dyn Shape, amount: u32) -> u32 {
+        \\    let result = shape.scale(amount);
         \\    return result;
         \\}
+        \\fn notify(shape: *mut dyn Shape, value: u32) -> void { shape.set(value); }
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_dyn_dispatch_call_types.mc", source);
     defer reporter.deinit();
@@ -1332,6 +1333,14 @@ test "MIR owns inferred local dyn dispatch call types" {
     try std.testing.expectEqualStrings("Shape", dispatch_fact.target_owner.?);
     try std.testing.expectEqual(@as(?usize, 0), dispatch_fact.target_index);
     try std.testing.expectEqualStrings("u32", dispatch_fact.target_ty.kind.name.text);
+    const argument_fact = targetTypeFactByKind(function, .dyn_dispatch_argument) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Shape", argument_fact.target_owner.?);
+    try std.testing.expectEqual(@as(?usize, mir.dynDispatchArgumentFactIndex(0, 0)), argument_fact.target_index);
+    try std.testing.expectEqualStrings("u32", argument_fact.target_ty.kind.name.text);
+    const notify = functionByName(typed_mir, "notify").?;
+    try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(notify, .dyn_dispatch_result));
+    const void_argument_fact = targetTypeFactByKind(notify, .dyn_dispatch_argument) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?usize, mir.dynDispatchArgumentFactIndex(1, 0)), void_argument_fact.target_index);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 

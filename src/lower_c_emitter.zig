@@ -1440,6 +1440,7 @@ const CEmitter = struct {
             .dyn_type_name = dynTypeNameForType,
             .emit_expr = emitExprForCall,
             .is_void_type = isVoidTypeForDispatch,
+            .require_dyn_dispatch_argument = requireDynDispatchArgumentForDispatch,
         };
     }
 
@@ -4116,7 +4117,8 @@ const CEmitter = struct {
         // Tier 2 dynamic dispatch: `d.method(args)` through a `*dyn Trait` ->
         // `d.vtable->method(d.data, args)` (a genuine load-through-vtable call).
         if (self.dynCalleeTrait(node.callee.*, locals)) |trait_name| {
-            try lower_c_dispatch.emitDynDispatch(self.dispatchContext(), node, trait_name, locals);
+            const method_index = self.dynDispatchMethodIndex(node.callee.*, trait_name) orelse return error.UnsupportedCEmission;
+            try lower_c_dispatch.emitDynDispatch(self.dispatchContext(), node, trait_name, method_index, locals);
             return true;
         }
         // Calling a closure-typed value: `c(args)` -> `c.code(c.env, args)`.
@@ -7261,6 +7263,30 @@ const CEmitter = struct {
             return fact_ty;
         }
         return null;
+    }
+
+    fn dynDispatchMethodIndex(self: *CEmitter, callee: ast.Expr, trait_name: []const u8) ?usize {
+        const trait = self.trait_decls.get(trait_name) orelse return null;
+        const method_name = dynCalleeMethodName(callee) orelse return null;
+        for (trait.methods, 0..) |method, index| {
+            if (std.mem.eql(u8, method.name.text, method_name)) return index;
+        }
+        return null;
+    }
+
+    fn requireDynDispatchArgument(self: *CEmitter, span: ast.Span, trait_name: []const u8, method_index: usize, argument_index: usize) !void {
+        const trait = self.trait_decls.get(trait_name) orelse return error.UnsupportedCEmission;
+        if (method_index >= trait.methods.len) return error.UnsupportedCEmission;
+        const method = trait.methods[method_index];
+        if (argument_index + 1 >= method.params.len) return error.UnsupportedCEmission;
+        const declared_ty = method.params[argument_index + 1].ty;
+        const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_argument, span, trait_name, mir.dynDispatchArgumentFactIndex(method_index, argument_index)) orelse return error.UnsupportedCEmission).target_ty;
+        if (!std.meta.eql(fact_ty, declared_ty)) return error.UnsupportedCEmission;
+    }
+
+    fn requireDynDispatchArgumentForDispatch(ctx: *anyopaque, span: ast.Span, trait_name: []const u8, method_index: usize, argument_index: usize) anyerror!void {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        try self.requireDynDispatchArgument(span, trait_name, method_index, argument_index);
     }
 
     // Atomic value-producing calls return the atomic payload type

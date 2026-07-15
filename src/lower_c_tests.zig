@@ -2036,13 +2036,14 @@ test "lower-c inferred local indirect calls require MIR types" {
 
 test "lower-c inferred local dyn dispatch calls require MIR types" {
     const source =
-        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\trait Shape { fn scale(self: *Self, amount: u32) -> u32; fn set(self: *mut Self, value: u32) -> void; }
         \\struct Square { side: u32 }
-        \\impl Shape for Square { fn area(self: *Square) -> u32 { return self.side; } }
-        \\fn caller(shape: *dyn Shape) -> u32 {
-        \\    let result = shape.area();
+        \\impl Shape for Square { fn scale(self: *Square, amount: u32) -> u32 { return self.side * amount; } fn set(self: *mut Square, value: u32) -> void { self.side = value; } }
+        \\fn caller(shape: *dyn Shape, amount: u32) -> u32 {
+        \\    let result = shape.scale(amount);
         \\    return result;
         \\}
+        \\fn notify(shape: *mut dyn Shape, value: u32) -> void { shape.set(value); }
     ;
     var parsed = try test_support.parseCheckedModule("c_inferred_local_dyn_dispatch_call_types.mc", source);
     defer parsed.deinit();
@@ -2061,12 +2062,26 @@ test "lower-c inferred local dyn dispatch calls require MIR types" {
     defer missing_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
 
+    var missing_argument = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_argument.deinit();
+    try removeTargetTypeKindForFunction(&missing_argument, "caller", .dyn_dispatch_argument);
+    var missing_argument_output: std.ArrayList(u8) = .empty;
+    defer missing_argument_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_argument, &missing_argument_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
+
     var stale = try mir.build(std.testing.allocator, parsed.module);
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "caller", .dyn_dispatch_result, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
+
+    var stale_argument = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_argument.deinit();
+    try renameTargetTypeFactForFunction(&stale_argument, "caller", .dyn_dispatch_argument, "u64");
+    var stale_argument_output: std.ArrayList(u8) = .empty;
+    defer stale_argument_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_argument, &stale_argument_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
 }
 
 test "lower-c ordinary direct calls require MIR result and argument types" {

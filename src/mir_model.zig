@@ -319,6 +319,7 @@ pub const TargetTypeKind = enum {
     direct_call_result,
     direct_call_argument,
     dyn_dispatch_result,
+    dyn_dispatch_argument,
     bind,
     result_ok,
     result_err,

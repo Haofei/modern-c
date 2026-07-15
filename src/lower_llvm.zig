@@ -6537,7 +6537,10 @@ const LlvmEmitter = struct {
         var args: std.ArrayList(ArgValue) = .empty;
         defer args.deinit(self.allocator);
         for (call.args, 0..) |arg, i| {
-            const arg_ty = if (i + 1 < msig.params.len) msig.params[i + 1].ty else self.exprType(arg) orelse return error.UnsupportedLlvmEmission;
+            if (i + 1 >= msig.params.len) return error.UnsupportedLlvmEmission;
+            const declared_ty = msig.params[i + 1].ty;
+            const arg_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_argument, arg.span, trait.name.text, mir.dynDispatchArgumentFactIndex(slot, i)) orelse return error.UnsupportedLlvmEmission).target_ty;
+            if (!std.meta.eql(arg_ty, declared_ty)) return error.UnsupportedLlvmEmission;
             try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg") });
         }
         const ret_ty: ast.TypeExpr = msig.return_type orelse simpleType(member.name.span, "void");

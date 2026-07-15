@@ -20,6 +20,7 @@ pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]con
 pub const DynTypeNameFn = *const fn (ctx: *anyopaque, trait_name: []const u8) anyerror![]const u8;
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const IsVoidTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) bool;
+pub const RequireDynDispatchArgumentFn = *const fn (ctx: *anyopaque, span: ast.Span, trait_name: []const u8, method_index: usize, argument_index: usize) anyerror!void;
 
 const LocalInfo = lower_c_model.LocalInfo;
 
@@ -33,6 +34,7 @@ pub const Context = struct {
     dyn_type_name: DynTypeNameFn,
     emit_expr: EmitExprFn,
     is_void_type: IsVoidTypeFn,
+    require_dyn_dispatch_argument: RequireDynDispatchArgumentFn,
 };
 
 pub const BindEmitPlan = struct {
@@ -104,14 +106,15 @@ pub fn emitPointerEnvBind(ctx: Context, node: anytype, locals: ?*std.StringHashM
     try ctx.out.appendSlice(ctx.allocator, ") }");
 }
 
-pub fn emitDynDispatch(ctx: Context, node: anytype, trait_name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) !void {
+pub fn emitDynDispatch(ctx: Context, node: anytype, trait_name: []const u8, method_index: usize, locals: ?*std.StringHashMap(LocalInfo)) !void {
     const member = memberCallee(node.callee.*) orelse return error.UnsupportedCEmission;
     const temp_name = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
     try ctx.out.print(ctx.allocator, "({{ {s} {s} = ", .{ try ctx.dyn_type_name(ctx.emit_ctx, trait_name), temp_name });
     try ctx.emit_expr(ctx.emit_ctx, member.base.*, locals);
     try ctx.out.print(ctx.allocator, "; {s}.vtable->{s}({s}.data", .{ temp_name, member.name.text, temp_name });
-    for (node.args) |arg| {
+    for (node.args, 0..) |arg, index| {
+        try ctx.require_dyn_dispatch_argument(ctx.emit_ctx, arg.span, trait_name, method_index, index);
         try ctx.out.appendSlice(ctx.allocator, ", ");
         try ctx.emit_expr(ctx.emit_ctx, arg, locals);
     }

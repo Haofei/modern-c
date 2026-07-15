@@ -4318,7 +4318,8 @@ const FunctionBuilder = struct {
     const DynDispatchCallTarget = struct {
         trait_name: []const u8,
         method_index: usize,
-        result_type_expr: ast.TypeExpr,
+        params: []const ast.Param,
+        result_type_expr: ?ast.TypeExpr,
         result_ty: ValueType,
     };
 
@@ -4333,12 +4334,12 @@ const FunctionBuilder = struct {
         const trait = self.traits.get(trait_name) orelse return null;
         for (trait.methods, 0..) |method, index| {
             if (!std.mem.eql(u8, method.name.text, member.name.text)) continue;
-            const result_type_expr = method.return_type orelse return null;
             return .{
                 .trait_name = trait_name,
                 .method_index = index,
-                .result_type_expr = result_type_expr,
-                .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+                .params = method.params,
+                .result_type_expr = method.return_type,
+                .result_ty = if (method.return_type) |result_type_expr| valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases) else .void,
             };
         }
         return null;
@@ -5122,14 +5123,28 @@ const FunctionBuilder = struct {
                     }
                 }
                 if (dyn_dispatch_target) |target| {
-                    try self.appendOwnedTargetTypeFact(
-                        .dyn_dispatch_result,
-                        target.result_type_expr,
-                        target.result_ty,
-                        node.callee.*.span,
-                        target.trait_name,
-                        target.method_index,
-                    );
+                    if (target.result_type_expr) |result_type_expr| {
+                        try self.appendOwnedTargetTypeFact(
+                            .dyn_dispatch_result,
+                            result_type_expr,
+                            target.result_ty,
+                            node.callee.*.span,
+                            target.trait_name,
+                            target.method_index,
+                        );
+                    }
+                    if (target.params.len == 0) return error.UnsupportedMirConstruction;
+                    const fixed_arg_count = @min(node.args.len, target.params.len - 1);
+                    for (node.args[0..fixed_arg_count], target.params[1..], 0..) |arg, param, index| {
+                        try self.appendOwnedTargetTypeFact(
+                            .dyn_dispatch_argument,
+                            param.ty,
+                            valueTypeFromTypeAlias(param.ty, self.enums, self.structs, self.packed_bits, self.aliases),
+                            arg.span,
+                            target.trait_name,
+                            dynDispatchArgumentFactIndex(target.method_index, index),
+                        );
+                    }
                 }
                 if (indirect_call_target) |target| {
                     try self.appendTargetTypeFact(.indirect_call_callee, target.callee_type_expr, target.callee_ty, node.callee.*.span);
@@ -8966,6 +8981,16 @@ fn inferredLocalTypeFactEligible(builder: *FunctionBuilder, maybe_initializer: ?
 
 fn dynTraitNameFromTypeAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
     return dynTraitNameFromTypeAliasDepth(ty, aliases, 0);
+}
+
+// TargetTypeFact has one owner/index pair. Reserve a compact, target-independent
+// index namespace for trait-object fixed arguments: the owner is the trait name,
+// the high bits identify the vtable slot, and the low bits identify the explicit
+// argument position. The bound is far beyond any supported trait signature while
+// keeping the identity stable on 32-bit hosts too.
+pub fn dynDispatchArgumentFactIndex(method_index: usize, argument_index: usize) usize {
+    const bits = 16;
+    return (method_index << bits) | argument_index;
 }
 
 fn dynTraitNameFromTypeAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) ?[]const u8 {
