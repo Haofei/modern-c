@@ -4275,7 +4275,7 @@ const FunctionBuilder = struct {
     fn inferredLocalTypeExpr(self: *FunctionBuilder, initializer: ast.Expr) ?ast.TypeExpr {
         if (self.typeExprForExpr(initializer)) |ty| return ty;
         return switch (initializer.kind) {
-            .binary => |node| if (mirIsComparisonBinary(node.op))
+            .binary => |node| if (mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op))
                 ast_query.simpleNameType("bool", initializer.span)
             else if (mirIsArithmeticBinary(node.op))
                 self.typeExprForExpr(node.left.*) orelse self.typeExprForExpr(node.right.*)
@@ -8882,7 +8882,7 @@ fn inferredLocalTypeFactEligible(maybe_initializer: ?ast.Expr) bool {
     return switch (initializer.kind) {
         .ident => true,
         .cast => true,
-        .binary => |node| mirIsArithmeticBinary(node.op) or mirIsComparisonBinary(node.op),
+        .binary => |node| mirIsArithmeticBinary(node.op) or mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op),
         .grouped => |inner| inferredLocalTypeFactEligible(inner.*),
         else => false,
     };

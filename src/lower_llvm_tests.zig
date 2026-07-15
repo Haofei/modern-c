@@ -1944,10 +1944,11 @@ test "LLVM inferred local casts require MIR types" {
 
 test "LLVM inferred local binary expressions require MIR types" {
     const source =
-        \\fn binary(base: u64, limit: u64) -> u64 {
+        \\fn binary(base: u64, limit: u64, left: bool, right: bool) -> u64 {
         \\    let sum = base + 1;
         \\    let is_less = base < limit;
-        \\    if is_less { return sum; }
+        \\    let both = left && right;
+        \\    if is_less && both { return sum; }
         \\    return base;
         \\}
     ;
@@ -1961,6 +1962,7 @@ test "LLVM inferred local binary expressions require MIR types" {
     try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_inferred_local_binary_types.mc", .{}, false, .riscv64, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%sum") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%is_less") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%both") != null);
 
     var missing = try mir.build(std.testing.allocator, parsed.module);
     defer missing.deinit();

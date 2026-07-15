@@ -1120,10 +1120,11 @@ test "MIR owns inferred local cast types" {
 
 test "MIR owns inferred local binary types" {
     const source =
-        \\fn binary(base: u64, limit: u64) -> u64 {
+        \\fn binary(base: u64, limit: u64, left: bool, right: bool) -> u64 {
         \\    let sum = base + 1;
         \\    let is_less = base < limit;
-        \\    if is_less { return sum; }
+        \\    let both = left && right;
+        \\    if is_less && both { return sum; }
         \\    return base;
         \\}
     ;
@@ -1139,9 +1140,10 @@ test "MIR owns inferred local binary types" {
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "binary").?;
-    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .inferred_local));
+    try std.testing.expectEqual(@as(usize, 3), countTargetTypeFactsByKind(function, .inferred_local));
     var saw_sum = false;
     var saw_is_less = false;
+    var saw_both = false;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .inferred_local) continue;
         if (std.mem.eql(u8, fact.target_owner.?, "sum")) {
@@ -1152,9 +1154,14 @@ test "MIR owns inferred local binary types" {
             try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
             saw_is_less = true;
         }
+        if (std.mem.eql(u8, fact.target_owner.?, "both")) {
+            try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
+            saw_both = true;
+        }
     }
     try std.testing.expect(saw_sum);
     try std.testing.expect(saw_is_less);
+    try std.testing.expect(saw_both);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 

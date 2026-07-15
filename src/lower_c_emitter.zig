@@ -2823,7 +2823,7 @@ const CEmitter = struct {
         if (try lower_c_call.emitExternNonNullCallInferredLocalInit(self.sequencedArgContext(), &self.functions, name, initializer, locals)) return true;
         if (try lower_c_arith.emitUncheckedAddInferredLocalInit(self.arithContext(), name, initializer, locals)) return true;
         if (try self.emitLocalCopyInferredLocalInit(name, initializer, locals)) return true;
-        if (try self.emitComparisonInferredLocalInit(name, initializer, locals)) return true;
+        if (try self.emitBooleanInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitCallInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitNumericInferredLocalInit(name, initializer, locals)) return true;
         if (try lower_c_mmio.emitDirectReadInferredLocalInitExpr(self.mmioEmitContext(), name, initializer, locals)) return true;
@@ -4891,18 +4891,28 @@ const CEmitter = struct {
         return true;
     }
 
-    fn emitComparisonInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        if (!lower_c_expr.comparisonExpr(initializer)) return false;
+    fn emitBooleanInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        if (!inferredLocalBooleanBinary(initializer)) return false;
         const bool_ty = ast_query.simpleNameType("bool", initializer.span);
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, bool_ty)) orelse return error.UnsupportedCEmission;
         if (!isBoolType(self.resolveAliasType(inferred_ty))) return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
-        if (try lower_c_flow.emitSequencedComparisonLocalInit(self.flowEmitContext(), name, inferred_ty, initializer, locals)) return true;
+        if (lower_c_expr.comparisonExpr(initializer)) {
+            if (try lower_c_flow.emitSequencedComparisonLocalInit(self.flowEmitContext(), name, inferred_ty, initializer, locals)) return true;
+        }
         try self.writeIndent();
         try self.out.print(self.allocator, "bool {s} = ", .{name});
         try self.emitExprWithTarget(initializer, locals, inferred_ty);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
+    }
+
+    fn inferredLocalBooleanBinary(initializer: ast.Expr) bool {
+        return switch (initializer.kind) {
+            .binary => |node| node.op == .logical_and or node.op == .logical_or or lower_c_expr.comparisonExpr(initializer),
+            .grouped => |inner| inferredLocalBooleanBinary(inner.*),
+            else => false,
+        };
     }
 
     fn inferredLocalCastInitializer(initializer: ast.Expr) bool {

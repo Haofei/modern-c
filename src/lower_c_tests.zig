@@ -1864,10 +1864,11 @@ test "lower-c inferred local casts require MIR types" {
 
 test "lower-c inferred local binary expressions require MIR types" {
     const source =
-        \\fn binary(base: u64, limit: u64) -> u64 {
+        \\fn binary(base: u64, limit: u64, left: bool, right: bool) -> u64 {
         \\    let sum = base + 1;
         \\    let is_less = base < limit;
-        \\    if is_less { return sum; }
+        \\    let both = left && right;
+        \\    if is_less && both { return sum; }
         \\    return base;
         \\}
     ;
@@ -1881,6 +1882,7 @@ test "lower-c inferred local binary expressions require MIR types" {
     try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint64_t sum") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "bool is_less") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "bool both") != null);
 
     var missing = try mir.build(std.testing.allocator, parsed.module);
     defer missing.deinit();
