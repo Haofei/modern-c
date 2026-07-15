@@ -4904,7 +4904,7 @@ const CEmitter = struct {
     }
 
     fn emitBooleanInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        if (!inferredLocalBooleanBinary(initializer)) return false;
+        if (!inferredLocalBooleanInitializer(initializer)) return false;
         const bool_ty = ast_query.simpleNameType("bool", initializer.span);
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, bool_ty)) orelse return error.UnsupportedCEmission;
         if (!isBoolType(self.resolveAliasType(inferred_ty))) return error.UnsupportedCEmission;
@@ -4919,10 +4919,11 @@ const CEmitter = struct {
         return true;
     }
 
-    fn inferredLocalBooleanBinary(initializer: ast.Expr) bool {
+    fn inferredLocalBooleanInitializer(initializer: ast.Expr) bool {
         return switch (initializer.kind) {
+            .unary => |node| node.op == .logical_not,
             .binary => |node| node.op == .logical_and or node.op == .logical_or or lower_c_expr.comparisonExpr(initializer),
-            .grouped => |inner| inferredLocalBooleanBinary(inner.*),
+            .grouped => |inner| inferredLocalBooleanInitializer(inner.*),
             else => false,
         };
     }

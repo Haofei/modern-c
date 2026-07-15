@@ -1205,6 +1205,46 @@ test "MIR owns inferred local literal types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local unary types" {
+    const source =
+        \\fn unary(value: i64, enabled: bool) -> i64 {
+        \\    let negated = -value;
+        \\    let disabled = !enabled;
+        \\    if disabled { return negated; }
+        \\    return value;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_unary_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "unary").?;
+    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .inferred_local));
+    var saw_negated = false;
+    var saw_disabled = false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .inferred_local) continue;
+        if (std.mem.eql(u8, fact.target_owner.?, "negated")) {
+            try std.testing.expectEqualStrings("i64", fact.target_ty.kind.name.text);
+            saw_negated = true;
+        }
+        if (std.mem.eql(u8, fact.target_owner.?, "disabled")) {
+            try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
+            saw_disabled = true;
+        }
+    }
+    try std.testing.expect(saw_negated);
+    try std.testing.expect(saw_disabled);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns ordinary direct call result and fixed argument types" {
     const source =
         \\trait Width { fn widen(self: *Self) -> u32; }

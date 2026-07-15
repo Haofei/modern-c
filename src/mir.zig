@@ -4277,6 +4277,10 @@ const FunctionBuilder = struct {
         return switch (initializer.kind) {
             .int_literal => ast_query.simpleNameType("u32", initializer.span),
             .bool_literal => ast_query.simpleNameType("bool", initializer.span),
+            .unary => |node| if (node.op == .logical_not)
+                ast_query.simpleNameType("bool", initializer.span)
+            else
+                self.typeExprForExpr(node.expr.*),
             .binary => |node| if (mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op))
                 ast_query.simpleNameType("bool", initializer.span)
             else if (mirIsArithmeticBinary(node.op))
@@ -8885,6 +8889,7 @@ fn inferredLocalTypeFactEligible(maybe_initializer: ?ast.Expr) bool {
         .ident => true,
         .cast => true,
         .int_literal, .bool_literal => true,
+        .unary => |node| node.op == .logical_not or inferredLocalTypeFactEligible(node.expr.*),
         .binary => |node| mirIsArithmeticBinary(node.op) or mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op),
         .grouped => |inner| inferredLocalTypeFactEligible(inner.*),
         else => false,
