@@ -1009,8 +1009,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "ast_query.isBindCallNode(": 0,
         "hasCallTargetFact(ctx.mir_function.*, .bind, expr.span)": 1,
         "fn hasCallTargetFact(": 1,
-        "mir_target_type(ctx.emit_ctx, .reduce_element": 1,
-        "var child_ty = node.type_args[0]": 0,
+        "mir_target_type(ctx.emit_ctx, .reduce_source": 1,
+        "fn reduceCallElementType(": 0,
     },
     "src/lower_c_arith.zig": {
         "mir_target_type(ctx.emit_ctx, .reduce_source": 1,

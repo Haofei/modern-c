@@ -149,11 +149,7 @@ fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast.Expr) anyerror!v
     switch (expr.kind) {
         .call => |node| {
             if (byteViewCallReturnTypeForCall(node)) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
-            if (reduceCallElementType(ctx, node)) |element_ty| {
-                var child_ty = element_ty;
-                const slice_ty: ast.TypeExpr = .{ .span = node.args[0].span, .kind = .{ .slice = .{ .mutability = .@"const", .child = &child_ty } } };
-                try ctx.collect_type_artifacts(ctx.emit_ctx, slice_ty);
-            }
+            if (reduceCallSourceType(ctx, node)) |source_ty| try ctx.collect_type_artifacts(ctx.emit_ctx, source_ty);
             for (node.type_args) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
             try collectExprTypeArtifacts(ctx, node.callee.*);
             for (node.args) |arg| try collectExprTypeArtifacts(ctx, arg);
@@ -180,9 +176,9 @@ fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast.Expr) anyerror!v
     }
 }
 
-fn reduceCallElementType(ctx: TypeArtifactContext, call: anytype) ?ast.TypeExpr {
+fn reduceCallSourceType(ctx: TypeArtifactContext, call: anytype) ?ast.TypeExpr {
     if (call.type_args.len != 1 or call.args.len != 1) return null;
-    return ctx.mir_target_type(ctx.emit_ctx, .reduce_element, call.callee.*.span);
+    return ctx.mir_target_type(ctx.emit_ctx, .reduce_source, call.args[0].span);
 }
 
 pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast.TypeExpr) anyerror!void {
