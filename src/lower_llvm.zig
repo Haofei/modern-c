@@ -6550,6 +6550,8 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
             return "0";
         }
+        const result_fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, call.callee.*.span, trait.name.text, slot) orelse return error.UnsupportedLlvmEmission).target_ty;
+        if (!std.meta.eql(result_fact_ty, ret_ty)) return error.UnsupportedLlvmEmission;
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = call {s} {s}(ptr {s}", .{ result, try self.llvmType(ret_ty), code, data });
         for (args.items) |arg| try self.out.print(self.allocator, ", {s} {s}", .{ try self.llvmType(arg.ty), arg.value });

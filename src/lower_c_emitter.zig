@@ -1441,6 +1441,7 @@ const CEmitter = struct {
             .emit_expr = emitExprForCall,
             .is_void_type = isVoidTypeForDispatch,
             .require_dyn_dispatch_argument = requireDynDispatchArgumentForDispatch,
+            .require_dyn_dispatch_result = requireDynDispatchResultForDispatch,
         };
     }
 
@@ -2811,6 +2812,10 @@ const CEmitter = struct {
     }
 
     fn emitSpecialInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
+        // A cast can wrap `unchecked.add/sub/mul`; give the MIR range-fact
+        // lowering first claim so it does not fall through to targetless call
+        // emission inside the generic cast path.
+        if (try lower_c_arith.emitUncheckedAddInferredLocalInit(self.arithContext(), name, initializer, locals)) return true;
         if (try self.emitCastInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitLiteralInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitArrayCallInferredLocalInit(name, initializer, locals)) return true;
@@ -2823,7 +2828,6 @@ const CEmitter = struct {
         if (try lower_c_access.emitRawManyOffsetInferredLocalInit(self.accessEmitContext(), name, initializer, locals)) return true;
         if (try lower_c_call.emitBitcastInferredLocalInit(self.sequencedArgContext(), name, initializer, locals)) return true;
         if (try lower_c_call.emitExternNonNullCallInferredLocalInit(self.sequencedArgContext(), &self.functions, name, initializer, locals)) return true;
-        if (try lower_c_arith.emitUncheckedAddInferredLocalInit(self.arithContext(), name, initializer, locals)) return true;
         if (try self.emitLocalCopyInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitBooleanInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitCallInferredLocalInit(name, initializer, locals)) return true;
@@ -7289,6 +7293,20 @@ const CEmitter = struct {
     fn requireDynDispatchArgumentForDispatch(ctx: *anyopaque, span: ast.Span, trait_name: []const u8, method_index: usize, argument_index: usize) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.requireDynDispatchArgument(span, trait_name, method_index, argument_index);
+    }
+
+    fn requireDynDispatchResult(self: *CEmitter, span: ast.Span, trait_name: []const u8, method_index: usize) !void {
+        const trait = self.trait_decls.get(trait_name) orelse return error.UnsupportedCEmission;
+        if (method_index >= trait.methods.len) return error.UnsupportedCEmission;
+        const declared_ty = trait.methods[method_index].return_type orelse return;
+        if (isVoidType(self.resolveAliasType(declared_ty))) return;
+        const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, span, trait_name, method_index) orelse return error.UnsupportedCEmission).target_ty;
+        if (!std.meta.eql(fact_ty, declared_ty)) return error.UnsupportedCEmission;
+    }
+
+    fn requireDynDispatchResultForDispatch(ctx: *anyopaque, span: ast.Span, trait_name: []const u8, method_index: usize) anyerror!void {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        try self.requireDynDispatchResult(span, trait_name, method_index);
     }
 
     // Atomic value-producing calls return the atomic payload type

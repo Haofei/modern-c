@@ -2193,6 +2193,114 @@ test "LLVM inferred local phys calls require MIR types" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_phys_local_type.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM inferred local bitcast calls require MIR types" {
+    const source =
+        \\fn inferred_bitcast(value: f32) -> u32 {
+        \\    let bits = bitcast<u32>(value);
+        \\    return bits;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_inferred_bitcast_local_type.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_inferred_bitcast_local_type.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%bits") != null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeKindForFunction(&missing, "inferred_bitcast", .inferred_local);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_inferred_bitcast_local_type.mc", .{}, false, .riscv64, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactForFunction(&stale, "inferred_bitcast", .inferred_local, "u64");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_bitcast_local_type.mc", .{}, false, .riscv64, null));
+}
+
+test "LLVM inferred local byte-view calls require MIR types" {
+    const source =
+        \\fn inferred_byte_view(value: u32) -> u8 {
+        \\    var storage: u32 = value;
+        \\    let bytes = mem.as_bytes(&storage);
+        \\    return bytes[0];
+        \\}
+        \\
+        \\fn inferred_byte_equal(left: []const u8, right: []const u8) -> bool {
+        \\    let equal = mem.bytes_equal(left, right);
+        \\    return equal;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_inferred_byte_view_local_types.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_inferred_byte_view_local_types.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%bytes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%equal") != null);
+
+    for ([_][]const u8{ "inferred_byte_view", "inferred_byte_equal" }) |name| {
+        var missing = try mir.build(std.testing.allocator, parsed.module);
+        defer missing.deinit();
+        try removeTargetTypeKindForFunction(&missing, name, .inferred_local);
+        var missing_output: std.ArrayList(u8) = .empty;
+        defer missing_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_inferred_byte_view_local_types.mc", .{}, false, .riscv64, null));
+
+        var stale = try mir.build(std.testing.allocator, parsed.module);
+        defer stale.deinit();
+        try renameTargetTypeFactForFunction(&stale, name, .inferred_local, "u64");
+        var stale_output: std.ArrayList(u8) = .empty;
+        defer stale_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_byte_view_local_types.mc", .{}, false, .riscv64, null));
+    }
+}
+
+test "LLVM inferred local semantic escape calls require MIR types" {
+    const source =
+        \\fn inferred_noalias(pointer: *mut u8, len: usize) -> *mut u8 {
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        let alias = compiler.assume_noalias_unchecked(pointer, len);
+        \\        return alias;
+        \\    }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_inferred_semantic_escape_local_type.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_inferred_semantic_escape_local_type.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%alias") != null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeKindForFunction(&missing, "inferred_noalias", .inferred_local);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_inferred_semantic_escape_local_type.mc", .{}, false, .riscv64, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactForFunction(&stale, "inferred_noalias", .inferred_local, "u64");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_semantic_escape_local_type.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM inferred local raw result calls require MIR types" {
     const source =
         \\fn inferred_raw_load(addr: PAddr) -> u32 {

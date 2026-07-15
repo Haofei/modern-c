@@ -253,8 +253,10 @@ pub fn emitBitcastLocalInit(ctx: TempContext, name: []const u8, decl_ty: ast.Typ
 pub fn emitBitcastInferredLocalInit(ctx: TempContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(initializer) orelse return false;
     const target_ty = bitcastTargetType(ctx, call) orelse return false;
-    try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, target_ty));
-    return try emitBitcastLocalInit(ctx, name, target_ty, initializer, locals);
+    const inferred_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .inferred_local, initializer.span, name, null) orelse return error.UnsupportedCEmission;
+    if (!std.meta.eql(inferred_ty, target_ty)) return error.UnsupportedCEmission;
+    try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, inferred_ty));
+    return try emitBitcastLocalInit(ctx, name, inferred_ty, initializer, locals);
 }
 
 fn bitcastTargetType(ctx: TempContext, call: anytype) ?ast.TypeExpr {

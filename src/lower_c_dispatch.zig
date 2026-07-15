@@ -21,6 +21,7 @@ pub const DynTypeNameFn = *const fn (ctx: *anyopaque, trait_name: []const u8) an
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const IsVoidTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) bool;
 pub const RequireDynDispatchArgumentFn = *const fn (ctx: *anyopaque, span: ast.Span, trait_name: []const u8, method_index: usize, argument_index: usize) anyerror!void;
+pub const RequireDynDispatchResultFn = *const fn (ctx: *anyopaque, span: ast.Span, trait_name: []const u8, method_index: usize) anyerror!void;
 
 const LocalInfo = lower_c_model.LocalInfo;
 
@@ -35,6 +36,7 @@ pub const Context = struct {
     emit_expr: EmitExprFn,
     is_void_type: IsVoidTypeFn,
     require_dyn_dispatch_argument: RequireDynDispatchArgumentFn,
+    require_dyn_dispatch_result: RequireDynDispatchResultFn,
 };
 
 pub const BindEmitPlan = struct {
@@ -108,6 +110,7 @@ pub fn emitPointerEnvBind(ctx: Context, node: anytype, locals: ?*std.StringHashM
 
 pub fn emitDynDispatch(ctx: Context, node: anytype, trait_name: []const u8, method_index: usize, locals: ?*std.StringHashMap(LocalInfo)) !void {
     const member = memberCallee(node.callee.*) orelse return error.UnsupportedCEmission;
+    try ctx.require_dyn_dispatch_result(ctx.emit_ctx, node.callee.*.span, trait_name, method_index);
     const temp_name = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
     try ctx.out.print(ctx.allocator, "({{ {s} {s} = ", .{ try ctx.dyn_type_name(ctx.emit_ctx, trait_name), temp_name });

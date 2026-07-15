@@ -924,7 +924,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.raw_many_offset_result": 2,
         "mirTargetTypeFactAt(.raw_address": 1,
         "mirTargetTypeFactAt(.raw_payload": 1,
-        "mirTargetTypeFactAt(.raw_result": 2,
+        "mirTargetTypeFactAt(.raw_result": 3,
         "emitSequencedCallArgTemp(call.args[1], locals, call.type_args[0])": 0,
         "floatCTypeName(node.type_args[0])": 0,
         "fn mirConstGetIndexAt(": 1,

@@ -2512,6 +2512,102 @@ test "MIR records typed call target facts for bitcast calls" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local types for bitcast results" {
+    const source =
+        \\fn inferred_bitcast(value: f32) -> u32 {
+        \\    let bits = bitcast<u32>(value);
+        \\    return bits;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_bitcast_local_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "inferred_bitcast").?;
+    const result_fact = targetTypeFactByKind(function, .bitcast_target) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("u32", result_fact.target_ty.kind.name.text);
+    const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("bits", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("u32", local_fact.target_ty.kind.name.text);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR owns inferred local types for byte-view results" {
+    const source =
+        \\fn inferred_byte_view(value: u32) -> u8 {
+        \\    var storage: u32 = value;
+        \\    let bytes = mem.as_bytes(&storage);
+        \\    return bytes[0];
+        \\}
+        \\
+        \\fn inferred_byte_equal(left: []const u8, right: []const u8) -> bool {
+        \\    let equal = mem.bytes_equal(left, right);
+        \\    return equal;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_byte_view_local_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const view_fact = targetTypeFactByKind(functionByName(typed_mir, "inferred_byte_view").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("bytes", view_fact.target_owner.?);
+    try std.testing.expectEqual(@as(std.meta.Tag(ast.TypeExpr.Kind), .slice), std.meta.activeTag(view_fact.target_ty.kind));
+    const equal_fact = targetTypeFactByKind(functionByName(typed_mir, "inferred_byte_equal").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("equal", equal_fact.target_owner.?);
+    try std.testing.expectEqualStrings("bool", equal_fact.target_ty.kind.name.text);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR owns inferred local types for semantic escape results" {
+    const source =
+        \\fn inferred_noalias(pointer: *mut u8, len: usize) -> *mut u8 {
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        let alias = compiler.assume_noalias_unchecked(pointer, len);
+        \\        return alias;
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_semantic_escape_local_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "inferred_noalias").?;
+    const result_fact = targetTypeFactByKind(function, .assume_noalias_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(.pointer, std.meta.activeTag(result_fact.target_ty.kind));
+    const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("alias", local_fact.target_owner.?);
+    try std.testing.expectEqual(.pointer, std.meta.activeTag(local_fact.target_ty.kind));
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR records typed call target facts for phys calls" {
     const source =
         \\fn make_phys(value: usize) -> PAddr {

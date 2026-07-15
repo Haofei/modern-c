@@ -3998,8 +3998,12 @@ const FunctionBuilder = struct {
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         self.local_pointer_array_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, patternText(node.pattern), .branch, span);
-        const subject_type_expr = self.ifLetSubjectTypeExpr(node.value) orelse return error.InvalidMirTargetTypeFacts;
-        try self.appendTargetTypeFact(.if_let_subject, subject_type_expr, valueTypeFromTypeAlias(subject_type_expr, self.enums, self.structs, self.packed_bits, self.aliases), node.value.span);
+        // Verification also walks ill-typed programs to report their source
+        // diagnostics. Only valid `if let` subjects have an owned type fact;
+        // leave the invalid form factless instead of aborting MIR construction.
+        if (self.ifLetSubjectTypeExpr(node.value)) |subject_type_expr| {
+            try self.appendTargetTypeFact(.if_let_subject, subject_type_expr, valueTypeFromTypeAlias(subject_type_expr, self.enums, self.structs, self.packed_bits, self.aliases), node.value.span);
+        }
         try self.buildExpr(node.value);
         try self.addIfLetPatternCheck(node);
 
@@ -4314,6 +4318,10 @@ const FunctionBuilder = struct {
             return null;
         }
         if (self.maybeUninitCallTargetKind(call.callee.*) == .maybe_uninit_assume_init) return self.maybeUninitCallPayloadTypeExpr(call);
+        if (self.bitcastCallValueType(call) != null) return call.type_args[0];
+        if (self.inferredLocalSemanticEscapeType(call)) |ty| return ty;
+        if (self.byteViewCallTarget(call)) |target| return target.result_type_expr;
+        if (self.constGetCallTarget(call)) |target| return target.result_type_expr;
         if (self.physCallValueType(call) != null) return ast_query.simpleNameType("PAddr", call.callee.*.span);
         if (self.rawCallTarget(call)) |target| return switch (target.kind) {
             .raw_load, .raw_ptr => target.result_type_expr,
@@ -4325,6 +4333,19 @@ const FunctionBuilder = struct {
         }
         const target = self.indirectCallTarget(call) orelse return null;
         return target.result_type_expr;
+    }
+
+    fn inferredLocalSemanticEscapeType(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
+        if (isDeclassifyCall(call)) {
+            if (call.type_args.len != 0 or call.args.len != 1) return null;
+            const source_ty = self.typeExprForExpr(call.args[0]) orelse return null;
+            return secretPayloadTypeAlias(source_ty, self.aliases, 0);
+        }
+        if (isAssumeNoaliasDirectCall(call)) {
+            if (call.type_args.len != 0 or call.args.len != 2) return null;
+            return self.typeExprForExpr(call.args[0]);
+        }
+        return null;
     }
 
     const DynDispatchCallTarget = struct {
@@ -4739,11 +4760,13 @@ const FunctionBuilder = struct {
                 try self.addConversionCheck(.bool, iterable, .condition, iterable.span);
             }
             if (node.kind == .@"for") {
-                const iterable_ty = self.typeExprForExpr(iterable) orelse return error.UnsupportedMirConstruction;
-                const element_ty = storageElementTypeAlias(iterable_ty, self.aliases) orelse return error.UnsupportedMirConstruction;
-                try self.appendTargetTypeFact(.for_iterable, iterable_ty, self.exprType(iterable), iterable.span);
-                try self.appendTargetTypeFact(.for_element, element_ty, valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases), iterable.span);
-                for_binding_ty_expr = element_ty;
+                if (self.typeExprForExpr(iterable)) |iterable_ty| {
+                    if (storageElementTypeAlias(iterable_ty, self.aliases)) |element_ty| {
+                        try self.appendTargetTypeFact(.for_iterable, iterable_ty, self.exprType(iterable), iterable.span);
+                        try self.appendTargetTypeFact(.for_element, element_ty, valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases), iterable.span);
+                        for_binding_ty_expr = element_ty;
+                    }
+                }
                 try self.addForIterableCheck(iterable, iterable.span);
             }
             try self.buildExpr(iterable);
@@ -5136,14 +5159,16 @@ const FunctionBuilder = struct {
                 }
                 if (dyn_dispatch_target) |target| {
                     if (target.result_type_expr) |result_type_expr| {
-                        try self.appendOwnedTargetTypeFact(
-                            .dyn_dispatch_result,
-                            result_type_expr,
-                            target.result_ty,
-                            node.callee.*.span,
-                            target.trait_name,
-                            target.method_index,
-                        );
+                        if (target.result_ty != .void) {
+                            try self.appendOwnedTargetTypeFact(
+                                .dyn_dispatch_result,
+                                result_type_expr,
+                                target.result_ty,
+                                node.callee.*.span,
+                                target.trait_name,
+                                target.method_index,
+                            );
+                        }
                     }
                     if (target.params.len == 0) return error.UnsupportedMirConstruction;
                     const fixed_arg_count = @min(node.args.len, target.params.len - 1);
