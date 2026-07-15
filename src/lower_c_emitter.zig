@@ -4860,8 +4860,9 @@ const CEmitter = struct {
 
     fn emitEnumCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const enum_ty = self.enumReturnTypeForExpr(initializer) orelse return false;
-        try locals.put(name, try self.localInfoFromType(enum_ty));
-        try self.emitInferredCallLocalInitValue(name, enum_ty, initializer, locals);
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, enum_ty)) orelse return error.UnsupportedCEmission;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+        try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 

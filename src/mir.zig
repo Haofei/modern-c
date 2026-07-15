@@ -4321,6 +4321,7 @@ const FunctionBuilder = struct {
         if (self.bitcastCallValueType(call) != null) return call.type_args[0];
         if (self.inferredLocalSemanticEscapeType(call)) |ty| return ty;
         if (self.byteViewCallTarget(call)) |target| return target.result_type_expr;
+        if (self.enumRawCallTarget(call)) |target| return target.result_type_expr;
         if (self.constGetCallTarget(call)) |target| return target.result_type_expr;
         if (self.physCallValueType(call) != null) return ast_query.simpleNameType("PAddr", call.callee.*.span);
         if (self.rawCallTarget(call)) |target| return switch (target.kind) {

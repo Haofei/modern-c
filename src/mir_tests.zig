@@ -1700,6 +1700,36 @@ test "MIR owns enum raw call identities and source result types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local types for enum raw results" {
+    const source =
+        \\enum Color: u32 { red = 1 }
+        \\fn inferred_enum_raw(value: Color) -> u32 {
+        \\    let raw = value.raw();
+        \\    return raw;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_enum_raw_local_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "inferred_enum_raw").?;
+    const result_fact = targetTypeFactByKind(function, .enum_raw_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("u32", result_fact.target_ty.kind.name.text);
+    const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("raw", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("u32", local_fact.target_ty.kind.name.text);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns arithmetic domain call identities and complete types" {
     const source =
         \\type Raw = u16;

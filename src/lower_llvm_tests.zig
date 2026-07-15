@@ -2266,6 +2266,39 @@ test "LLVM inferred local byte-view calls require MIR types" {
     }
 }
 
+test "LLVM inferred local enum raw calls require MIR types" {
+    const source =
+        \\enum Color: u32 { red = 1 }
+        \\fn inferred_enum_raw(value: Color) -> u32 {
+        \\    let raw = value.raw();
+        \\    return raw;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_inferred_enum_raw_local_type.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_inferred_enum_raw_local_type.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%raw") != null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeKindForFunction(&missing, "inferred_enum_raw", .inferred_local);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_inferred_enum_raw_local_type.mc", .{}, false, .riscv64, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactForFunction(&stale, "inferred_enum_raw", .inferred_local, "u64");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_enum_raw_local_type.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM inferred local semantic escape calls require MIR types" {
     const source =
         \\fn inferred_noalias(pointer: *mut u8, len: usize) -> *mut u8 {
