@@ -281,8 +281,7 @@ pub fn nullableInnerCTypeForExpr(ctx: Context, expr: ast.Expr, locals: *std.Stri
             break :blk info.nullable_inner_c_type;
         },
         .call => |node| blk: {
-            if (ast_query.isMmioMapCallName(node.callee.*)) {
-                if (ctx.mir_call_target_kind(ctx.emit_ctx, node.callee.*.span) != .mmio_map) break :blk null;
+            if (ctx.mir_call_target_kind(ctx.emit_ctx, node.callee.*.span) == .mmio_map) {
                 const ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_payload, node.callee.*.span) orelse break :blk null;
                 break :blk try cTypeFor(ctx, ty);
             }

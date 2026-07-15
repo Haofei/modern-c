@@ -310,9 +310,8 @@ fn emitPackedBitsMaskTestWithReplacements(ctx: ReplacementEmitContext, base: ast
 }
 
 pub fn emitMmioMapCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    if (!ast_query.isMmioMapCallName(call.callee.*)) return false;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .mmio_map) return false;
     if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
-    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .mmio_map) return error.UnsupportedCEmission;
     const source_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
     const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
     _ = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_result, call.callee.*.span) orelse return error.UnsupportedCEmission;

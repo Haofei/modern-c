@@ -6595,8 +6595,7 @@ const LlvmEmitter = struct {
             _ = self.physCallTargetType(call) orelse return error.UnsupportedLlvmEmission;
             return try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
         }
-        if (ast_query.isMmioMapCallName(call.callee.*)) {
-            const info = self.mmioMapCallInfo(call) orelse return error.UnsupportedLlvmEmission;
+        if (self.mmioMapCallInfo(call)) |info| {
             const addr = try self.emitExpr(call.args[0], info.source_ty);
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ result, addr });
@@ -8194,8 +8193,8 @@ const LlvmEmitter = struct {
     }
 
     fn mmioMapCallInfo(self: *LlvmEmitter, call: anytype) ?MmioMapInfo {
-        if (!ast_query.isMmioMapCallName(call.callee.*) or call.type_args.len != 1 or call.args.len != 1) return null;
         if (self.mirCallTargetKindAt(call.callee.*.span) != .mmio_map) return null;
+        if (call.type_args.len != 1 or call.args.len != 1) return null;
         return .{
             .source_ty = (self.mirTargetTypeFactAt(.mmio_map_source, call.callee.*.span) orelse return null).target_ty,
             .payload_ty = (self.mirTargetTypeFactAt(.mmio_map_payload, call.callee.*.span) orelse return null).target_ty,

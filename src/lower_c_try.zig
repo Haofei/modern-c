@@ -158,9 +158,8 @@ pub fn emitTryExprWithReplacements(
             try ctx.out.appendSlice(ctx.allocator, ")");
         },
         .call => |node| {
-            if (ast_query.isMmioMapCallName(node.callee.*)) {
+            if (ctx.mir_call_target_kind(ctx.emit_ctx, node.callee.*.span) == .mmio_map) {
                 if (node.type_args.len != 1 or node.args.len != 1) return error.UnsupportedCEmission;
-                if (ctx.mir_call_target_kind(ctx.emit_ctx, node.callee.*.span) != .mmio_map) return error.UnsupportedCEmission;
                 const source_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_source, node.callee.*.span) orelse return error.UnsupportedCEmission;
                 const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_payload, node.callee.*.span) orelse return error.UnsupportedCEmission;
                 _ = ctx.mir_target_type(ctx.emit_ctx, .mmio_map_result, node.callee.*.span) orelse return error.UnsupportedCEmission;
