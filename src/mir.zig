@@ -4323,6 +4323,7 @@ const FunctionBuilder = struct {
         if (self.reflectionCallTarget(call)) |target| return target.result_type_expr;
         if (self.byteViewCallTarget(call)) |target| return target.result_type_expr;
         if (self.enumRawCallTarget(call)) |target| return target.result_type_expr;
+        if (self.mmioCallTarget(call)) |target| return if (target.kind == .mmio_read) target.result_type_expr else null;
         if (self.rawManyOffsetCallTarget(call)) |target| return target.result_type_expr;
         if (self.constGetCallTarget(call)) |target| return target.result_type_expr;
         if (self.conversionCallFactInfo(call)) |target| return target.target_ty;

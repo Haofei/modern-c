@@ -2205,6 +2205,10 @@ test "MIR owns MMIO read write identities and complete types" {
         \\    flags: RegBits<u8, Status, .read>,
         \\}
         \\fn read_raw(dev: MmioPtr<Device>) -> u32 { return dev.raw.read(.relaxed); }
+        \\fn read_raw_inferred(dev: MmioPtr<Device>) -> u32 {
+        \\    let value = dev.raw.read(.relaxed);
+        \\    return value;
+        \\}
         \\fn write_raw(dev: MmioPtr<Device>, value: u32) -> void { dev.raw.write(value, .release); }
         \\fn read_flags(dev: MmioPtr<Device>) -> Status { return dev.flags.read(.acquire); }
     ;
@@ -2240,6 +2244,15 @@ test "MIR owns MMIO read write identities and complete types" {
         try std.testing.expectEqual(mir.TargetTypeKind.mmio_result, function.target_type_facts[3].kind);
         try std.testing.expectEqualStrings(case.result, function.target_type_facts[3].target_ty.kind.name.text);
     }
+    const inferred = functionByName(typed_mir, "read_raw_inferred").?;
+    try std.testing.expectEqual(@as(usize, 1), inferred.call_target_facts.len);
+    try std.testing.expectEqual(mir.CallTargetKind.mmio_read, inferred.call_target_facts[0].kind);
+    try std.testing.expectEqual(@as(usize, 5), inferred.target_type_facts.len);
+    const result_fact = targetTypeFactByKind(inferred, .mmio_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("u32", result_fact.target_ty.kind.name.text);
+    const local_fact = targetTypeFactByKind(inferred, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("value", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("u32", local_fact.target_ty.kind.name.text);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }

@@ -1283,6 +1283,22 @@ test "LLVM MMIO calls consume MIR identities and complete types" {
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_mmio_facts.mc", .{}, false, .riscv64, null));
     }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try removeTargetTypeKindForFunction(&module_mir, "mmio_fact_gate", .inferred_local);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_mmio_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try renameTargetTypeFactForFunction(&module_mir, "mmio_fact_gate", .inferred_local, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_mmio_facts.mc", .{}, false, .riscv64, null));
+    }
 }
 
 test "LLVM MMIO map consumes MIR identity and complete types" {

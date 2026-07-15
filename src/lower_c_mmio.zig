@@ -57,6 +57,7 @@ pub const ValueCTypeFn = *const fn (ctx: *anyopaque, value_type: []const u8) []c
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
+pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?ast.TypeExpr;
 pub const EmitBlockItemsFn = *const fn (ctx: *anyopaque, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void;
 
 pub const AccessContext = struct {
@@ -87,6 +88,7 @@ pub const EmitContext = struct {
     emit_sequenced_arg_temp: EmitSequencedArgTempFn,
     mir_call_target_kind: MirCallTargetKindFn,
     mir_target_type: MirTargetTypeFn,
+    mir_owned_target_type: MirOwnedTargetTypeFn,
 };
 
 pub const ReplacementEmitContext = struct {
@@ -401,20 +403,24 @@ pub fn emitDirectReadAssignment(ctx: EmitContext, replacement_ctx: ReplacementEm
     return true;
 }
 
-pub fn emitDirectReadInferredLocalInit(ctx: EmitContext, name: []const u8, call: anytype, locals: *std.StringHashMap(LocalInfo)) !?LocalInfo {
+pub fn emitDirectReadInferredLocalInit(ctx: EmitContext, name: []const u8, initializer_span: ast.Span, call: anytype, locals: *std.StringHashMap(LocalInfo)) !?LocalInfo {
     const read = (try directReadAccess(ctx, call, locals)) orelse return null;
+    const inferred_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .inferred_local, initializer_span, name, null) orelse return error.UnsupportedCEmission;
+    const inferred_c_type = try ctx.c_type(ctx.emit_ctx, inferred_ty);
+    if (!std.mem.eql(u8, inferred_c_type, read.value_c_type)) return error.UnsupportedCEmission;
+    const source_type_name = ast_query.typeName(inferred_ty) orelse return error.UnsupportedCEmission;
 
-    try emitReadDecl(ctx.context, read.value_c_type, name, read.access);
+    try emitReadDecl(ctx.context, inferred_c_type, name, read.access);
     try emitAcquireBarrierIfNeeded(ctx.context, read.access);
     return .{
-        .c_type = read.value_c_type,
-        .source_type_name = read.access.value_type,
+        .c_type = inferred_c_type,
+        .source_type_name = source_type_name,
     };
 }
 
 pub fn emitDirectReadInferredLocalInitExpr(ctx: EmitContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = ast_query.callExpr(initializer) orelse return false;
-    const info = (try emitDirectReadInferredLocalInit(ctx, name, call, locals)) orelse return false;
+    const info = (try emitDirectReadInferredLocalInit(ctx, name, initializer.span, call, locals)) orelse return false;
     try locals.put(name, info);
     return true;
 }

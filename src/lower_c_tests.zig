@@ -1179,6 +1179,7 @@ test "lower-c MMIO calls consume MIR identities and complete types" {
         try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u32(&dev->raw") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u32(&dev->raw") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u8(&dev->flags") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t raw = (uint32_t)mc_mmio_read_u32(&dev->raw);") != null);
     }
     {
         var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
@@ -1203,6 +1204,22 @@ test "lower-c MMIO calls consume MIR identities and complete types" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try removeTargetTypeKindForFunction(&module_mir, "mmio_fact_gate", .inferred_local);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try renameTargetTypeFactForFunction(&module_mir, "mmio_fact_gate", .inferred_local, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
     }
 }
 
