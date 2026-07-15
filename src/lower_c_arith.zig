@@ -115,6 +115,23 @@ pub fn uncheckedCallInfo(ctx: Context, call: anytype) ?UncheckedCallInfo {
     return .{ .op = op, .left_ty = left_ty, .right_ty = right_ty, .result_ty = result_ty };
 }
 
+const WrappingCallInfo = struct {
+    left_ty: ast.TypeExpr,
+    right_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
+};
+
+fn wrappingCallInfo(ctx: Context, call: anytype) ?WrappingCallInfo {
+    if (call.type_args.len != 0 or call.args.len != 2) return null;
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
+    _ = mir.wrappingCallFactInfo(kind) orelse return null;
+    return .{
+        .left_ty = ctx.mir_target_type(ctx.emit_ctx, .wrapping_left, call.args[0].span) orelse return null,
+        .right_ty = ctx.mir_target_type(ctx.emit_ctx, .wrapping_right, call.args[1].span) orelse return null,
+        .result_ty = ctx.mir_target_type(ctx.emit_ctx, .wrapping_result, call.callee.*.span) orelse return null,
+    };
+}
+
 pub fn exprNeedsDefaultSequencedBinary(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
     const node = switch (expr.kind) {
         .grouped => |inner| return exprNeedsDefaultSequencedBinary(ctx, inner.*, locals),
@@ -128,37 +145,30 @@ pub fn exprNeedsDefaultSequencedBinary(ctx: *anyopaque, expr: ast.Expr, locals: 
 // operands a plain C `+` already wraps; signed wrapping add is computed in the
 // unsigned domain of the same width to avoid signed-overflow UB.
 pub fn emitWrappingCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    const member = memberCallee(call.callee.*) orelse return false;
-    if (!isIdentNamed(member.base.*, "wrapping")) return false;
-    if (!std.mem.eql(u8, member.name.text, "add")) return error.UnsupportedCEmission;
-    if (call.args.len != 2) return error.UnsupportedCEmission;
+    const info = wrappingCallInfo(ctx, call) orelse return false;
 
-    if (locals) |ls| {
-        if (ctx.numeric_expr_type(ctx.emit_ctx, call.args[0], ls)) |ty| {
-            if (ctx.underlying_int_type_name(ctx.emit_ctx, ty)) |name| {
-                if (name.len > 0 and name[0] == 'i') {
-                    const s_cty = primitiveCTypeName(name) orelse return emitWrappingPlusAdd(ctx, call, locals);
-                    const u_name = try std.fmt.allocPrint(ctx.scratch, "u{s}", .{name[1..]});
-                    const u_cty = primitiveCTypeName(u_name) orelse return emitWrappingPlusAdd(ctx, call, locals);
-                    try ctx.out.print(ctx.allocator, "(({s})(({s})(", .{ s_cty, u_cty });
-                    try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
-                    try ctx.out.print(ctx.allocator, ") + ({s})(", .{u_cty});
-                    try ctx.emit_expr(ctx.emit_ctx, call.args[1], locals);
-                    try ctx.out.appendSlice(ctx.allocator, ")))");
-                    return true;
-                }
-            }
+    if (ctx.underlying_int_type_name(ctx.emit_ctx, info.result_ty)) |name| {
+        if (name.len > 0 and name[0] == 'i') {
+            const s_cty = primitiveCTypeName(name) orelse return emitWrappingPlusAdd(ctx, call, locals, info);
+            const u_name = try std.fmt.allocPrint(ctx.scratch, "u{s}", .{name[1..]});
+            const u_cty = primitiveCTypeName(u_name) orelse return emitWrappingPlusAdd(ctx, call, locals, info);
+            try ctx.out.print(ctx.allocator, "(({s})(({s})(", .{ s_cty, u_cty });
+            try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, info.left_ty);
+            try ctx.out.print(ctx.allocator, ") + ({s})(", .{u_cty});
+            try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[1], locals, info.right_ty);
+            try ctx.out.appendSlice(ctx.allocator, ")))");
+            return true;
         }
     }
-    return emitWrappingPlusAdd(ctx, call, locals);
+    return emitWrappingPlusAdd(ctx, call, locals, info);
 }
 
 // Unsigned / unknown operands: a plain `+` already wraps (well-defined).
-fn emitWrappingPlusAdd(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+fn emitWrappingPlusAdd(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo), info: WrappingCallInfo) !bool {
     try ctx.out.appendSlice(ctx.allocator, "(");
-    try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+    try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, info.left_ty);
     try ctx.out.appendSlice(ctx.allocator, " + ");
-    try ctx.emit_expr(ctx.emit_ctx, call.args[1], locals);
+    try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[1], locals, info.right_ty);
     try ctx.out.appendSlice(ctx.allocator, ")");
     return true;
 }

@@ -48,24 +48,6 @@ pub fn floatComparisonPredicate(op: ast.BinaryOp) ?[]const u8 {
     };
 }
 
-pub fn wrappingBuiltinOp(callee: ast.Expr) ?[]const u8 {
-    return switch (callee.kind) {
-        .member => |member| if (isIdentNamed(member.base.*, "wrapping"))
-            if (std.mem.eql(u8, member.name.text, "add"))
-                "add"
-            else if (std.mem.eql(u8, member.name.text, "sub"))
-                "sub"
-            else if (std.mem.eql(u8, member.name.text, "mul"))
-                "mul"
-            else
-                null
-        else
-            null,
-        .grouped => |inner| wrappingBuiltinOp(inner.*),
-        else => null,
-    };
-}
-
 pub fn normalizedIntLiteral(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
     var cleaned: std.ArrayList(u8) = .empty;
     for (literal) |ch| {

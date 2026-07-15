@@ -856,6 +856,39 @@ test "LLVM discard calls require MIR identity and argument type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_type, &type_output, "llvm_discard_call_facts.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM wrapping arithmetic requires MIR identity and operand/result type facts" {
+    const source =
+        \\fn wrapping_fact_gate(a: u32) -> u32 {
+        \\    return wrapping.add(a, 1);
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_wrapping_call_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_wrapping_call_facts.mc", .{}, false, .riscv64, null);
+    try expectContains(complete_output.items, " = add i32 %a, 1");
+
+    var missing_identity = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_identity.deinit();
+    try clearCallTargetFactsForFunction(&missing_identity, "wrapping_fact_gate");
+    var identity_output: std.ArrayList(u8) = .empty;
+    defer identity_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_identity, &identity_output, "llvm_wrapping_call_facts.mc", .{}, false, .riscv64, null));
+
+    inline for ([_]mir.TargetTypeKind{ .wrapping_left, .wrapping_right, .wrapping_result }) |kind| {
+        var missing_type = try mir.build(std.testing.allocator, parsed.module);
+        defer missing_type.deinit();
+        try removeTargetTypeKindForFunction(&missing_type, "wrapping_fact_gate", kind);
+        var type_output: std.ArrayList(u8) = .empty;
+        defer type_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_type, &type_output, "llvm_wrapping_call_facts.mc", .{}, false, .riscv64, null));
+    }
+}
+
 test "LLVM unchecked arithmetic requires MIR identity and operand/result type facts" {
     const source =
         \\fn unchecked_fact_gate(a: u32) -> u32 {

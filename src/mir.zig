@@ -96,6 +96,10 @@ pub fn uncheckedCallFactInfo(kind: CallTargetKind) ?[]const u8 {
     };
 }
 
+pub fn wrappingCallFactInfo(kind: CallTargetKind) ?[]const u8 {
+    return if (kind == .wrapping_add) "add" else null;
+}
+
 pub fn dmaCallFactInfo(kind: CallTargetKind) ?DmaCallFactInfo {
     return switch (kind) {
         .dma_cache_clean => .{ .op = "clean", .cache = true },
@@ -4907,6 +4911,7 @@ const FunctionBuilder = struct {
                 const atomic_init_target = self.atomicInitCallTarget(node);
                 const raw_target = self.rawCallTarget(node);
                 const va_target = try self.vaCallTarget(node);
+                const wrapping_target = self.wrappingCallTarget(node);
                 const unchecked_target = self.uncheckedCallTarget(node);
                 const discard_target = self.discardCallTargetKind(node);
                 const explicit_trap_target = explicitTrapCallTargetKind(node);
@@ -4931,6 +4936,8 @@ const FunctionBuilder = struct {
                 else if (reflection_target) |target|
                     target.result_ty
                 else if (byte_view_target) |target|
+                    target.result_ty
+                else if (wrapping_target) |target|
                     target.result_ty
                 else if (unchecked_target) |target|
                     target.result_ty
@@ -4984,6 +4991,13 @@ const FunctionBuilder = struct {
                     const source_ty = self.typeExprForExpr(node.args[0]) orelse return error.UnsupportedMirConstruction;
                     try self.appendTargetTypeFact(.reduce_source, source_ty, valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases), node.args[0].span);
                     try self.appendTargetTypeFact(.reduce_element, element_ty, valueTypeFromTypeAlias(element_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
+                }
+                if (wrapping_target) |target| {
+                    try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.appendTargetTypeFact(.wrapping_left, target.left_ty, target.left_value_ty, node.args[0].span);
+                    try self.appendTargetTypeFact(.wrapping_right, target.right_ty, target.right_value_ty, node.args[1].span);
+                    try self.appendTargetTypeFact(.wrapping_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (unchecked_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
@@ -5591,6 +5605,22 @@ const FunctionBuilder = struct {
         result_ty: ValueType,
     };
 
+    const WrappingCallTarget = UncheckedCallTarget;
+
+    fn wrappingCallTarget(self: *FunctionBuilder, call: anytype) ?WrappingCallTarget {
+        if (call.type_args.len != 0 or call.args.len != 2) return null;
+        const member = memberExpr(call.callee.*) orelse return null;
+        if (!ast_query.isIdentNamed(member.base.*, "wrapping") or !std.mem.eql(u8, member.name.text, "add")) return null;
+        const left_known_ty = self.binaryBuiltinOperandKnownType(call.args[0]);
+        const right_known_ty = self.binaryBuiltinOperandKnownType(call.args[1]);
+        const fallback_ty = left_known_ty orelse right_known_ty orelse self.conversionSourceTypeExpr(call.args[0]) orelse return null;
+        const left_ty = self.binaryBuiltinOperandTypeExpr(call.args[0], fallback_ty) orelse return null;
+        const right_ty = self.binaryBuiltinOperandTypeExpr(call.args[1], left_ty) orelse return null;
+        const left_value_ty = valueTypeFromTypeAlias(left_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        const right_value_ty = valueTypeFromTypeAlias(right_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        return .{ .kind = .wrapping_add, .left_ty = left_ty, .left_value_ty = left_value_ty, .right_ty = right_ty, .right_value_ty = right_value_ty, .result_type_expr = left_ty, .result_ty = left_value_ty };
+    }
+
     fn uncheckedCallTarget(self: *FunctionBuilder, call: anytype) ?UncheckedCallTarget {
         if (call.type_args.len != 0 or call.args.len != 2) return null;
         const op = noOverflowUncheckedOp(self.calleeName(call.callee.*)) orelse return null;
@@ -5602,11 +5632,11 @@ const FunctionBuilder = struct {
             .unchecked_mul
         else
             return null;
-        const left_known_ty = self.uncheckedOperandKnownType(call.args[0]);
-        const right_known_ty = self.uncheckedOperandKnownType(call.args[1]);
+        const left_known_ty = self.binaryBuiltinOperandKnownType(call.args[0]);
+        const right_known_ty = self.binaryBuiltinOperandKnownType(call.args[1]);
         const fallback_ty = left_known_ty orelse right_known_ty orelse self.conversionSourceTypeExpr(call.args[0]) orelse return null;
-        const left_ty = self.uncheckedOperandTypeExpr(call.args[0], fallback_ty) orelse return null;
-        const right_ty = self.uncheckedOperandTypeExpr(call.args[1], left_ty) orelse return null;
+        const left_ty = self.binaryBuiltinOperandTypeExpr(call.args[0], fallback_ty) orelse return null;
+        const right_ty = self.binaryBuiltinOperandTypeExpr(call.args[1], left_ty) orelse return null;
         const left_value_ty = valueTypeFromTypeAlias(left_ty, self.enums, self.structs, self.packed_bits, self.aliases);
         const right_value_ty = valueTypeFromTypeAlias(right_ty, self.enums, self.structs, self.packed_bits, self.aliases);
         return .{
@@ -5620,21 +5650,26 @@ const FunctionBuilder = struct {
         };
     }
 
-    fn uncheckedOperandTypeExpr(self: *FunctionBuilder, expr: ast.Expr, fallback_ty: ast.TypeExpr) ?ast.TypeExpr {
-        if (self.uncheckedOperandKnownType(expr)) |ty| return ty;
+    fn binaryBuiltinOperandTypeExpr(self: *FunctionBuilder, expr: ast.Expr, fallback_ty: ast.TypeExpr) ?ast.TypeExpr {
+        if (self.binaryBuiltinOperandKnownType(expr)) |ty| return ty;
         return switch (expr.kind) {
             .int_literal, .float_literal, .char_literal => fallback_ty,
-            .grouped => |inner| self.uncheckedOperandTypeExpr(inner.*, fallback_ty),
-            .unary => |node| if (node.op == .neg) self.uncheckedOperandTypeExpr(node.expr.*, fallback_ty) else null,
+            .grouped => |inner| self.binaryBuiltinOperandTypeExpr(inner.*, fallback_ty),
+            .unary => |node| if (node.op == .neg) self.binaryBuiltinOperandTypeExpr(node.expr.*, fallback_ty) else null,
             else => null,
         };
     }
 
-    fn uncheckedOperandKnownType(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
+    fn binaryBuiltinOperandKnownType(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
-            .call => |call| if (self.uncheckedCallTarget(call)) |target| target.result_type_expr else null,
-            .grouped => |inner| self.uncheckedOperandKnownType(inner.*),
+            .call => |call| if (self.uncheckedCallTarget(call)) |target|
+                target.result_type_expr
+            else if (self.wrappingCallTarget(call)) |target|
+                target.result_type_expr
+            else
+                null,
+            .grouped => |inner| self.binaryBuiltinOperandKnownType(inner.*),
             else => null,
         };
     }

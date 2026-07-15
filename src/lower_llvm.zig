@@ -58,7 +58,6 @@ const lower_llvm_op = @import("lower_llvm_op.zig");
 const binaryIsComparison = lower_llvm_op.binaryIsComparison;
 const comparisonPredicate = lower_llvm_op.comparisonPredicate;
 const floatComparisonPredicate = lower_llvm_op.floatComparisonPredicate;
-const wrappingBuiltinOp = lower_llvm_op.wrappingBuiltinOp;
 const normalizedIntLiteral = lower_llvm_op.normalizedIntLiteral;
 const normalizedFloatLiteral = lower_llvm_op.normalizedFloatLiteral;
 const charLiteralValue = lower_llvm_op.charLiteralValue;
@@ -155,6 +154,13 @@ const MaybeUninitCallInfo = lower_llvm_model.MaybeUninitCallInfo;
 const ResultTypeInfo = lower_llvm_model.ResultTypeInfo;
 
 const UncheckedCallInfo = struct {
+    op: []const u8,
+    left_ty: ast.TypeExpr,
+    right_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
+};
+
+const WrappingCallInfo = struct {
     op: []const u8,
     left_ty: ast.TypeExpr,
     right_ty: ast.TypeExpr,
@@ -6712,12 +6718,11 @@ const LlvmEmitter = struct {
             if (!std.mem.eql(u8, info.op, "from") and !std.mem.eql(u8, info.op, "wrap_from") and !std.mem.eql(u8, info.op, "from_mod")) return error.UnsupportedLlvmEmission;
             return try self.castValue(value, info.source_ty, info.target_ty);
         }
-        if (wrappingBuiltinOp(call.callee.*)) |op| {
-            if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
-            if (self.integerBitsOf(expected_ty) == null) return error.UnsupportedLlvmEmission;
-            const left = try self.emitExpr(call.args[0], expected_ty);
-            const right = try self.emitExpr(call.args[1], expected_ty);
-            return try self.emitPlainBinaryValues(op, try self.llvmType(expected_ty), left, right);
+        if (self.wrappingCallInfo(call)) |info| {
+            if (self.integerBitsOf(info.result_ty) == null) return error.UnsupportedLlvmEmission;
+            const left = try self.emitExpr(call.args[0], info.left_ty);
+            const right = try self.emitExpr(call.args[1], info.right_ty);
+            return try self.emitPlainBinaryValues(info.op, try self.llvmType(info.result_ty), left, right);
         }
         if (self.uncheckedCallInfo(call)) |info| {
             if (self.integerBitsOf(info.result_ty) == null) return error.UnsupportedLlvmEmission;
@@ -8705,6 +8710,7 @@ const LlvmEmitter = struct {
             }
             return info.target_ty;
         }
+        if (self.wrappingCallInfo(call)) |info| return info.result_ty;
         if (self.uncheckedCallInfo(call)) |info| return info.result_ty;
         if (self.atomicCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "load") or std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) return info.payload_ty;
@@ -8781,6 +8787,18 @@ const LlvmEmitter = struct {
         const right_ty = (self.mirTargetTypeFactAt(.unchecked_right, call.args[1].span) orelse return null).target_ty;
         const result_ty = (self.mirTargetTypeFactAt(.unchecked_result, call.callee.*.span) orelse return null).target_ty;
         return .{ .op = op, .left_ty = left_ty, .right_ty = right_ty, .result_ty = result_ty };
+    }
+
+    fn wrappingCallInfo(self: *LlvmEmitter, call: anytype) ?WrappingCallInfo {
+        if (call.type_args.len != 0 or call.args.len != 2) return null;
+        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+        const op = mir.wrappingCallFactInfo(kind) orelse return null;
+        return .{
+            .op = op,
+            .left_ty = (self.mirTargetTypeFactAt(.wrapping_left, call.args[0].span) orelse return null).target_ty,
+            .right_ty = (self.mirTargetTypeFactAt(.wrapping_right, call.args[1].span) orelse return null).target_ty,
+            .result_ty = (self.mirTargetTypeFactAt(.wrapping_result, call.callee.*.span) orelse return null).target_ty,
+        };
     }
 
     fn domainOpCallInfo(self: *LlvmEmitter, call: anytype) ?DomainOpCallInfo {

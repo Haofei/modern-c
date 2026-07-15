@@ -768,7 +768,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn rawManyOffsetCallTarget(": 1,
         "fn mmioCallTarget(": 1,
         "fn mmioMapCallTarget(": 1,
-        "try self.addCallTargetFact(target.kind": 10,
+        "try self.addCallTargetFact(target.kind": 11,
         "try self.addCallTargetFact(target, .never": 1,
         "appendTargetTypeFact(.domain_type": 1,
         "appendTargetTypeFact(.domain_payload": 1,
