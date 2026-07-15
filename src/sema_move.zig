@@ -1486,6 +1486,20 @@ test "move escaped borrows use typed roots rather than compatibility keys" {
     try std.testing.expect(state.get("compat:owner").?.escaped_borrow != null);
 }
 
+test "move borrowed subplaces use typed places rather than compatibility keys" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    const field = root.project(.{ .field = "resource" }).?;
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+
+    // A pointer-return alias retains this place. Its ownership must not depend
+    // on the temporary compatibility spelling used to store the subplace.
+    try state.put("compat:owner.resource", .{ .live = true, .span = span, .place = field });
+    try std.testing.expect(ownershipMoveSlotForPlace(field, &state) != null);
+    try std.testing.expect(ownershipMoveSlotForPlace(field, &state).?.live);
+}
+
 fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
     return .{
         .live = false,
@@ -1511,6 +1525,15 @@ fn ownershipMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(Move
     while (it.next()) |entry| {
         const slot = entry.value_ptr;
         if (isOwnershipMoveSubplace(slot.*, entry.key_ptr.*) and slot.place.?.eql(place)) return slot;
+    }
+    return null;
+}
+
+fn ownershipMoveSlotForPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (isOwnershipMoveSubplace(slot, entry.key_ptr.*) and slot.place.?.eql(place)) return slot;
     }
     return null;
 }
@@ -3500,10 +3523,16 @@ fn callLaunderedMoveAliasReferent(self: *Checker, init_expr: ast.Expr, state: *c
     if (!spine.isPointerLike(spine.classifyTypeCtx(ret_ty, ctx.*))) return null;
     for (call.args) |arg| {
         if (fullDerefMoveSubplace(self, arg, state, aliases)) |referent| {
-            if (state.get(referent.key)) |slot| {
+            if (ownershipMoveSlotForPlace(referent.place, state)) |slot| {
                 if (!slot.live) continue;
             }
             return .{ .key = referent.key, .place = referent.place, .full_deref = false };
+        }
+        if (borrowedMoveRootPlace(self, arg, state)) |place| {
+            if (rootMoveSlotForPlace(place, state)) |slot| {
+                if (slot.live and slot.alias_of == null) return .{ .key = place.root, .place = place, .full_deref = false };
+            }
+            continue;
         }
         const root = spine.borrowedMoveRoot(arg, state) orelse blk: {
             // an alias local `p` passed by value (→ its referent `t`)
