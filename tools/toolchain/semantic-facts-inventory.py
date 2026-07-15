@@ -55,8 +55,9 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .assume_noalias",
         ],
         "src/lower_c_reflect.zig": [
-            "mir.reflectionCallTargetKind(call)",
-            "ctx.mir_call_target_kind(ctx.type_ctx, call.callee.*.span) != expected_fact",
+            "pub fn emitReflectionCall",
+            ".reflection_size",
+            ".reflection_repr",
         ],
         "src/lower_c_memory.zig": [
             "pub fn emitByteViewCall",
@@ -959,8 +960,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn rawManyOffsetReturnTypeForCall(": 0,
     },
     "src/lower_c_reflect.zig": {
-        "mir.reflectionCallTargetKind(call)": 1,
-        "ctx.mir_call_target_kind(ctx.type_ctx, call.callee.*.span) != expected_fact": 1,
+        "mir.reflectionCallTargetKind(call)": 0,
+        "reflectionCallKind(call.callee.*)": 0,
         "mir_target_type(ctx.type_ctx, .reflection_target": 1,
         "mir_target_type(ctx.type_ctx, .reflection_result": 1,
         "const target_ty = call.type_args[0];": 0,
@@ -1271,7 +1272,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "const payload_ty = self.domainPayloadType(domain_ty)": 0,
         "const domain_ty = self.resolveAliasType(simpleType(ident.span, ident.text))": 0,
         "fn durationType(": 0,
-        "mir.reflectionCallTargetKind(call)": 2,
+        "mir.reflectionCallTargetKind(call)": 0,
+        "fn reflectionCallInfo(": 1,
         "mir.byteViewCallTargetKind(call)": 0,
         "byteViewCallKind(call.callee.*)": 0,
         "fn byteViewCallInfo(": 1,

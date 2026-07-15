@@ -6558,7 +6558,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitBuiltinValueCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr, span: ast.Span) !?[]const u8 {
-        if (mir.reflectionCallTargetKind(call) != null) return self.reflectionCallValue(call) orelse error.UnsupportedLlvmEmission;
+        if (self.reflectionCallInfo(call) != null) return self.reflectionCallValue(call) orelse error.UnsupportedLlvmEmission;
         // `declassify(x)` / `reveal(x)` strip the constant-time `Secret<T>` tag.
         // Secret shares T's representation, so this is a value-identity pass-through.
         if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) {
@@ -8236,8 +8236,13 @@ const LlvmEmitter = struct {
     }
 
     fn reflectionCallInfo(self: *LlvmEmitter, call: anytype) ?ReflectionCallInfo {
-        const kind = mir.reflectionCallTargetKind(call) orelse return null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) != kind) return null;
+        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+        const expected_args: usize = switch (kind) {
+            .reflection_size, .reflection_alignment, .reflection_repr => 0,
+            .reflection_field_offset, .reflection_bit_offset => 1,
+            else => return null,
+        };
+        if (call.type_args.len != 1 or call.args.len != expected_args) return null;
         return .{
             .kind = kind,
             .target_ty = (self.mirTargetTypeFactAt(.reflection_target, call.callee.*.span) orelse return null).target_ty,

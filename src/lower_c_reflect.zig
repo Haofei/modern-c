@@ -20,7 +20,6 @@ const comptimeArraySize = type_layout.comptimeArraySize;
 const comptimeBitOffsetFromBytes = type_layout.comptimeBitOffset;
 const isArithmeticLayoutGeneric = ast_query.isArithmeticLayoutGeneric;
 const isPointerLikeGeneric = ast_query.isPointerLikeGeneric;
-const reflectionCallKind = lower_c_builtin.reflectionCallKind;
 const reflectionFieldName = ast_query.reflectionFieldName;
 const scalarLayout = type_layout.scalarLayout;
 const simpleNameType = ast_query.simpleNameType;
@@ -61,24 +60,23 @@ pub fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
 }
 
 pub fn emitReflectionCall(ctx: EmitContext, call: anytype) !bool {
-    const kind = reflectionCallKind(call.callee.*) orelse return false;
-    const expected_fact = mir.reflectionCallTargetKind(call) orelse return error.UnsupportedCEmission;
-    if (ctx.mir_call_target_kind(ctx.type_ctx, call.callee.*.span) != expected_fact) return error.UnsupportedCEmission;
+    const kind = ctx.mir_call_target_kind(ctx.type_ctx, call.callee.*.span) orelse return false;
+    if (kind != .reflection_size and kind != .reflection_alignment and kind != .reflection_field_offset and kind != .reflection_bit_offset and kind != .reflection_repr) return false;
     const target_ty = ctx.mir_target_type(ctx.type_ctx, .reflection_target, call.callee.*.span) orelse return error.UnsupportedCEmission;
     _ = ctx.mir_target_type(ctx.type_ctx, .reflection_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
     if (call.type_args.len != 1) return error.UnsupportedCEmission;
     switch (kind) {
-        .size => {
+        .reflection_size => {
             if (call.args.len != 0) return error.UnsupportedCEmission;
             try ctx.out.print(ctx.allocator, "((uintptr_t)sizeof({s}))", .{try reflectionCTypeFor(ctx, target_ty)});
             return true;
         },
-        .alignment => {
+        .reflection_alignment => {
             if (call.args.len != 0) return error.UnsupportedCEmission;
             try ctx.out.print(ctx.allocator, "((uintptr_t)alignof({s}))", .{try reflectionCTypeFor(ctx, target_ty)});
             return true;
         },
-        .field_offset => {
+        .reflection_field_offset => {
             if (call.args.len != 1) return error.UnsupportedCEmission;
             const field_name = reflectionFieldName(call.args[0]) orelse return error.UnsupportedCEmission;
             if (typeName(target_ty)) |type_name| {
@@ -91,7 +89,7 @@ pub fn emitReflectionCall(ctx: EmitContext, call: anytype) !bool {
             try ctx.out.print(ctx.allocator, "((uintptr_t)offsetof({s}, {s}))", .{ try reflectionCTypeFor(ctx, target_ty), field_name });
             return true;
         },
-        .bit_offset => {
+        .reflection_bit_offset => {
             if (call.args.len != 1) return error.UnsupportedCEmission;
             const field_name = reflectionFieldName(call.args[0]) orelse return error.UnsupportedCEmission;
             const name = typeName(target_ty) orelse return error.UnsupportedCEmission;
@@ -103,7 +101,7 @@ pub fn emitReflectionCall(ctx: EmitContext, call: anytype) !bool {
             try ctx.out.print(ctx.allocator, "((uintptr_t)(offsetof({s}, {s}) * CHAR_BIT))", .{ try reflectionCTypeFor(ctx, target_ty), field_name });
             return true;
         },
-        .repr => {
+        .reflection_repr => {
             if (call.args.len != 0) return error.UnsupportedCEmission;
             if (typeName(target_ty)) |name| {
                 if (ctx.enums.get(name)) |enum_decl| {
@@ -123,6 +121,7 @@ pub fn emitReflectionCall(ctx: EmitContext, call: anytype) !bool {
             try ctx.out.print(ctx.allocator, "((uintptr_t)sizeof({s}))", .{try reflectionCTypeFor(ctx, target_ty)});
             return true;
         },
+        else => unreachable,
     }
 }
 
@@ -142,7 +141,7 @@ pub fn comptimeReflect(env: *const ReflectEnv, call: ast.Expr) ?i128 {
         .call => |n| n,
         else => return null,
     };
-    const kind = reflectionCallKind(node.callee.*) orelse return null;
+    const kind = lower_c_builtin.reflectionCallKind(node.callee.*) orelse return null;
     if (node.type_args.len != 1) return null;
     const ty = node.type_args[0];
     return switch (kind) {
