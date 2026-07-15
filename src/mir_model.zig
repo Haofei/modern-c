@@ -392,6 +392,7 @@ pub const TargetTypeKind = enum {
     indirect_call_callee,
     loop_condition,
     switch_subject,
+    if_let_subject,
 };
 
 pub const TargetTypeFact = struct {

@@ -499,6 +499,11 @@ pub fn resultSubjectForExpr(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo
 pub fn resultSubjectForValueExpr(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?ResultSwitchSubject {
     if (resultSubjectForExpr(expr, locals)) |subject| return subject;
     const result_ty = ctx.result_type_for_expr(ctx.emit_ctx, expr, locals) orelse return null;
+    return resultSubjectForValueExprWithType(ctx, expr, locals, result_ty);
+}
+
+pub fn resultSubjectForValueExprWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), result_ty: ast.TypeExpr) !?ResultSwitchSubject {
+    if (resultSubjectForExpr(expr, locals)) |subject| return subject;
     const temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, expr, locals, result_ty);
     try locals.put(temp.name, try ctx.local_info_from_type(ctx.emit_ctx, result_ty));
     return resultSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp.name, .span = expr.span } }, .span = expr.span }, locals);
@@ -569,6 +574,14 @@ pub fn nullableSubjectForExpr(ctx: EmitContext, expr: ast.Expr, locals: *std.Str
     return try materializeNullableSubject(ctx, expr, locals);
 }
 
+pub fn nullableSubjectForExprWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), nullable_ty: ast.TypeExpr) !?NullableSwitchSubject {
+    if (nullableSourceName(expr)) |name| {
+        if (nullableSubjectForLocalName(name, locals)) |subject| return subject;
+        if (locals.contains(name)) return null;
+    }
+    return try materializeNullableSubjectWithType(ctx, expr, locals, nullable_ty);
+}
+
 fn nullableSourceName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| ident.text,
@@ -609,6 +622,10 @@ fn payloadKindIsValue(child: ast.TypeExpr) bool {
 
 fn materializeNullableSubject(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?NullableSwitchSubject {
     const nullable_ty = ctx.nullable_type_for_expr(ctx.emit_ctx, expr, locals) orelse return null;
+    return materializeNullableSubjectWithType(ctx, expr, locals, nullable_ty);
+}
+
+fn materializeNullableSubjectWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), nullable_ty: ast.TypeExpr) !?NullableSwitchSubject {
     const inner_c_type = try ctx.nullable_inner_c_type_for_type(ctx.emit_ctx, nullable_ty) orelse return null;
     const temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, expr, locals, nullable_ty);
     const temp_info = try ctx.local_info_from_type(ctx.emit_ctx, nullable_ty);

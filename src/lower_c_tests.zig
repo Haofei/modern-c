@@ -1686,6 +1686,44 @@ test "lower-c switches require MIR subject types" {
     }
 }
 
+test "lower-c if-let statements require MIR subject types" {
+    const source =
+        \\extern fn make_result() -> Result<u32, u32>;
+        \\extern fn make_nullable() -> ?*const u8;
+        \\fn result_subject(value: Result<u32, u32>) -> u32 { if let ok(v) = value { return v; } else { return 0; } }
+        \\fn nullable_subject(value: ?*const u8) -> u32 { if let p = value { return 1; } else { return 0; } }
+        \\fn result_call_subject() -> u32 { if let ok(v) = make_result() { return v; } else { return 0; } }
+        \\fn nullable_call_subject() -> u32 { if let p = make_nullable() { return 1; } else { return 0; } }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_if_let_subject_type_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null);
+    for ([_][]const u8{ "result_subject", "nullable_subject", "result_call_subject", "nullable_call_subject" }) |name| {
+        try std.testing.expect(std.mem.indexOf(u8, complete_output.items, name) != null);
+    }
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeKindForFunction(&missing, "result_subject", .if_let_subject);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null));
+
+    for ([_][]const u8{ "result_subject", "nullable_subject" }) |name| {
+        var stale = try mir.build(std.testing.allocator, parsed.module);
+        defer stale.deinit();
+        try renameTargetTypeFactForFunction(&stale, name, .if_let_subject, "u32");
+        var stale_output: std.ArrayList(u8) = .empty;
+        defer stale_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null));
+    }
+}
+
 test "lower-c ordinary direct calls require MIR result and argument types" {
     const source =
         \\fn widen(value: u64) -> u64 { return value; }

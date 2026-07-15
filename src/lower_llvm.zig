@@ -1670,8 +1670,9 @@ const LlvmEmitter = struct {
                 return error.UnsupportedLlvmEmission;
             },
             .if_let => |node| {
-                if (try self.emitResultIfLet(node, ret_ty)) return true;
-                if (try self.emitNullableIfLet(node, ret_ty)) return true;
+                const subject_ty = try self.requireMirIfLetSubjectType(node.value);
+                if (try self.emitResultIfLet(node, ret_ty, subject_ty)) return true;
+                if (try self.emitNullableIfLet(node, ret_ty, subject_ty)) return true;
             },
             .@"break" => |target| {
                 const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
@@ -2208,12 +2209,11 @@ const LlvmEmitter = struct {
         try self.emitTrapBranch(is_null, trap, cont, trap, cont, "NullUnwrap");
     }
 
-    fn emitNullableIfLet(self: *LlvmEmitter, node: ast.IfLet, ret_ty: ast.TypeExpr) !bool {
+    fn emitNullableIfLet(self: *LlvmEmitter, node: ast.IfLet, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !bool {
         const binding = switch (node.pattern.kind) {
             .bind => |ident| ident,
             else => return false,
         };
-        const subject_ty = self.exprType(node.value) orelse return false;
         const inner_ty = self.nullableInnerType(subject_ty) orelse return false;
         const subject = try self.emitExpr(node.value, subject_ty);
         const is_value_opt = self.targetIsValueOptional(subject_ty);
@@ -2279,7 +2279,7 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn emitResultIfLet(self: *LlvmEmitter, node: ast.IfLet, ret_ty: ast.TypeExpr) !bool {
+    fn emitResultIfLet(self: *LlvmEmitter, node: ast.IfLet, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !bool {
         const tag_bind = switch (node.pattern.kind) {
             .tag_bind => |tag_bind| tag_bind,
             else => return false,
@@ -2290,7 +2290,6 @@ const LlvmEmitter = struct {
             false
         else
             return false;
-        const subject_ty = self.exprType(node.value) orelse return false;
         const info = self.resultInfo(subject_ty) orelse return false;
         const binding_ty = if (is_ok_pattern) info.ok_ty else info.err_ty;
         const payload_index: u8 = if (is_ok_pattern) 1 else 2;
@@ -2770,6 +2769,14 @@ const LlvmEmitter = struct {
     fn requireMirSwitchSubjectType(self: *LlvmEmitter, subject: ast.Expr) !ast.TypeExpr {
         const fact_ty = (self.mirTargetTypeFactAt(.switch_subject, subject.span) orelse return error.UnsupportedLlvmEmission).target_ty;
         if (self.exprType(subject)) |known_ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
+        }
+        return fact_ty;
+    }
+
+    fn requireMirIfLetSubjectType(self: *LlvmEmitter, value: ast.Expr) !ast.TypeExpr {
+        const fact_ty = (self.mirTargetTypeFactAt(.if_let_subject, value.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+        if (self.exprType(value)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
         }
         return fact_ty;

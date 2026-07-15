@@ -3977,6 +3977,8 @@ const FunctionBuilder = struct {
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         self.local_pointer_array_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, patternText(node.pattern), .branch, span);
+        const subject_type_expr = self.ifLetSubjectTypeExpr(node.value) orelse return error.InvalidMirTargetTypeFacts;
+        try self.appendTargetTypeFact(.if_let_subject, subject_type_expr, valueTypeFromTypeAlias(subject_type_expr, self.enums, self.structs, self.packed_bits, self.aliases), node.value.span);
         try self.buildExpr(node.value);
         try self.addIfLetPatternCheck(node);
 
@@ -4055,6 +4057,10 @@ const FunctionBuilder = struct {
         ty: ValueType,
         ty_expr: ?ast.TypeExpr = null,
     };
+
+    fn ifLetSubjectTypeExpr(self: *FunctionBuilder, value: ast.Expr) ?ast.TypeExpr {
+        return self.typeExprForExpr(value);
+    }
 
     fn ifLetNarrowedBinding(self: *FunctionBuilder, node: ast.IfLet) ?NarrowedBinding {
         return switch (node.pattern.kind) {

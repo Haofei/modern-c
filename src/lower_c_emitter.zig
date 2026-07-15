@@ -3447,8 +3447,15 @@ const CEmitter = struct {
 
     fn emitIfLet(self: *CEmitter, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         self.clearMirPointerProvenanceForPattern(node.pattern);
+        const subject_ty = try self.requireMirIfLetSubjectType(node.value, locals);
+        const resolved_subject_ty = self.resolveAliasType(subject_ty);
         if (node.pattern.kind == .tag_bind) {
-            const subject = (try lower_c_switch.resultSubjectForValueExpr(self.switchEmitContext(), node.value, locals)) orelse {
+            const is_result = switch (resolved_subject_ty.kind) {
+                .generic => |generic| std.mem.eql(u8, generic.base.text, "Result"),
+                else => false,
+            };
+            if (!is_result) return error.UnsupportedCEmission;
+            const subject = (try lower_c_switch.resultSubjectForValueExprWithType(self.switchEmitContext(), node.value, locals, subject_ty)) orelse {
                 self.reportUnsupported(node.value.span, "result if-let value");
                 try self.writeIndent();
                 try self.out.print(self.allocator, "/* unsupported result if-let value: {s} */\n", .{@tagName(node.value.kind)});
@@ -3457,13 +3464,23 @@ const CEmitter = struct {
             return lower_c_switch.emitResultIfLet(self.switchEmitContext(), node, locals, return_ty, subject);
         }
 
-        const subject = (try lower_c_switch.nullableSubjectForExpr(self.switchEmitContext(), node.value, locals)) orelse {
+        if (resolved_subject_ty.kind != .nullable) return error.UnsupportedCEmission;
+        const subject = (try lower_c_switch.nullableSubjectForExprWithType(self.switchEmitContext(), node.value, locals, subject_ty)) orelse {
             self.reportUnsupported(node.value.span, "if-let value");
             try self.writeIndent();
             try self.out.print(self.allocator, "/* unsupported if-let value: {s} */\n", .{@tagName(node.value.kind)});
             return error.UnsupportedCEmission;
         };
         try lower_c_switch.emitNullableIfLet(self.switchEmitContext(), node, locals, return_ty, subject);
+    }
+
+    fn requireMirIfLetSubjectType(self: *CEmitter, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !ast.TypeExpr {
+        const fact_ty = (self.mirTargetTypeFactAt(.if_let_subject, value.span) orelse return error.UnsupportedCEmission).target_ty;
+        const known_ty = self.operandEmitType(value, locals) orelse self.resultTypeForExpr(value, locals) orelse self.nullableTypeForExpr(value, locals);
+        if (known_ty) |ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
+        }
+        return fact_ty;
     }
 
     fn emitNeverExprStmt(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
