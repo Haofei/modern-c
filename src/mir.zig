@@ -5602,8 +5602,8 @@ const FunctionBuilder = struct {
             .unchecked_mul
         else
             return null;
-        const left_known_ty = self.typeExprForExpr(call.args[0]);
-        const right_known_ty = self.typeExprForExpr(call.args[1]);
+        const left_known_ty = self.uncheckedOperandKnownType(call.args[0]);
+        const right_known_ty = self.uncheckedOperandKnownType(call.args[1]);
         const fallback_ty = left_known_ty orelse right_known_ty orelse self.conversionSourceTypeExpr(call.args[0]) orelse return null;
         const left_ty = self.uncheckedOperandTypeExpr(call.args[0], fallback_ty) orelse return null;
         const right_ty = self.uncheckedOperandTypeExpr(call.args[1], left_ty) orelse return null;
@@ -5621,11 +5621,20 @@ const FunctionBuilder = struct {
     }
 
     fn uncheckedOperandTypeExpr(self: *FunctionBuilder, expr: ast.Expr, fallback_ty: ast.TypeExpr) ?ast.TypeExpr {
-        if (self.typeExprForExpr(expr)) |ty| return ty;
+        if (self.uncheckedOperandKnownType(expr)) |ty| return ty;
         return switch (expr.kind) {
             .int_literal, .float_literal, .char_literal => fallback_ty,
             .grouped => |inner| self.uncheckedOperandTypeExpr(inner.*, fallback_ty),
             .unary => |node| if (node.op == .neg) self.uncheckedOperandTypeExpr(node.expr.*, fallback_ty) else null,
+            else => null,
+        };
+    }
+
+    fn uncheckedOperandKnownType(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
+        if (self.typeExprForExpr(expr)) |ty| return ty;
+        return switch (expr.kind) {
+            .call => |call| if (self.uncheckedCallTarget(call)) |target| target.result_type_expr else null,
+            .grouped => |inner| self.uncheckedOperandKnownType(inner.*),
             else => null,
         };
     }
