@@ -7227,6 +7227,7 @@ const CEmitter = struct {
         if (self.mirTargetTypeFactAt(.reflection_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
+        if (self.mirTargetTypeFactAt(.conversion_target, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .enum_raw) return if (self.mirTargetTypeFactAt(.enum_raw_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .const_get) return if (self.mirTargetTypeFactAt(.const_get_result, call.callee.*.span)) |fact| fact.target_ty else null;
@@ -7363,6 +7364,7 @@ const CEmitter = struct {
         if (self.mirTargetTypeFactAt(.reflection_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
+        if (self.mirTargetTypeFactAt(.conversion_target, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .enum_raw) return if (self.mirTargetTypeFactAt(.enum_raw_result, call.callee.*.span)) |fact| fact.target_ty else null;
         if (self.mirCallTargetKindAt(call.callee.*.span) == .const_get) return if (self.mirTargetTypeFactAt(.const_get_result, call.callee.*.span)) |fact| fact.target_ty else null;

@@ -4323,6 +4323,7 @@ const FunctionBuilder = struct {
         if (self.byteViewCallTarget(call)) |target| return target.result_type_expr;
         if (self.enumRawCallTarget(call)) |target| return target.result_type_expr;
         if (self.constGetCallTarget(call)) |target| return target.result_type_expr;
+        if (self.conversionCallFactInfo(call)) |target| return target.target_ty;
         if (self.physCallValueType(call) != null) return ast_query.simpleNameType("PAddr", call.callee.*.span);
         if (self.rawCallTarget(call)) |target| return switch (target.kind) {
             .raw_load, .raw_ptr => target.result_type_expr,

@@ -206,6 +206,35 @@ test "MIR owns all scalar conversion builtin call targets" {
     try std.testing.expectEqualStrings("u64", valueTypeName(functionByName(typed_mir, "adapted_binary").?.target_type_facts[0].result_ty));
 }
 
+test "MIR owns inferred local types for conversion results" {
+    const source =
+        \\fn inferred_conversion(value: u64) -> u8 {
+        \\    let narrowed = u8.trap_from(value);
+        \\    return narrowed;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_conversion_local_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "inferred_conversion").?;
+    const result_fact = targetTypeFactByKind(function, .conversion_target) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("u8", result_fact.target_ty.kind.name.text);
+    const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("narrowed", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("u8", local_fact.target_ty.kind.name.text);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns target types for contextual constructors and literals" {
     const source =
         \\enum E { bad }
