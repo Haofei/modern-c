@@ -1756,6 +1756,7 @@ const CEmitter = struct {
             .array_len_text = arrayLenTextForAccess,
             .mir_call_target_kind = mirCallTargetKindForLowering,
             .mir_target_type = mirTargetTypeForLowering,
+            .mir_owned_target_type = mirOwnedTargetTypeForLowering,
             .mir_const_get_index = mirConstGetIndexForLowering,
         };
     }

@@ -2166,6 +2166,37 @@ test "MIR owns raw-many offset identity and complete types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local types for raw-many offset results" {
+    const source =
+        \\type Words = [*]mut u16;
+        \\fn inferred_raw_many(p: Words, index: usize) -> Words {
+        \\    unsafe {
+        \\        let shifted = p.offset(index);
+        \\        return shifted;
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_raw_many_local_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "inferred_raw_many").?;
+    const result_fact = targetTypeFactByKind(function, .raw_many_offset_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Words", result_fact.target_ty.kind.name.text);
+    const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("shifted", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("Words", local_fact.target_ty.kind.name.text);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns MMIO read write identities and complete types" {
     const source =
         \\packed bits Status: u8 { ready: bool }

@@ -44,6 +44,7 @@ pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, loc
 pub const EmitRaceLoadTempFn = *const fn (ctx: *anyopaque, ptr_name: []const u8, target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
+pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?ast.TypeExpr;
 pub const MirConstGetIndexFn = *const fn (ctx: *anyopaque, span: ast.Span) ?usize;
 
 pub const DirectCallIndexTemps = struct {
@@ -72,6 +73,7 @@ pub const EmitContext = struct {
     array_len_text: ArrayLenTextFn,
     mir_call_target_kind: MirCallTargetKindFn,
     mir_target_type: MirTargetTypeFn,
+    mir_owned_target_type: MirOwnedTargetTypeFn,
     mir_const_get_index: MirConstGetIndexFn,
 };
 
@@ -331,11 +333,13 @@ pub fn emitRawManyOffsetAssignmentStmt(ctx: EmitContext, assignment: anytype, lo
 
 pub fn emitRawManyOffsetInferredLocalInit(ctx: EmitContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const raw_ty = rawManyOffsetTypeForExpr(ctx, initializer, locals) orelse return false;
-    try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, raw_ty));
-    if (try emitRawManyOffsetLocalInit(ctx, name, raw_ty, initializer, locals)) return true;
+    const inferred_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .inferred_local, initializer.span, name, null) orelse return error.UnsupportedCEmission;
+    if (!std.meta.eql(inferred_ty, raw_ty)) return error.UnsupportedCEmission;
+    try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, inferred_ty));
+    if (try emitRawManyOffsetLocalInit(ctx, name, inferred_ty, initializer, locals)) return true;
 
     try writeIndent(ctx);
-    try ctx.emit_declarator(ctx.emit_ctx, raw_ty, name);
+    try ctx.emit_declarator(ctx.emit_ctx, inferred_ty, name);
     try ctx.out.appendSlice(ctx.allocator, " = ");
     try ctx.emit_expr(ctx.emit_ctx, initializer, locals);
     try ctx.out.appendSlice(ctx.allocator, ";\n");
