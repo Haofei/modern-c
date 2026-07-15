@@ -1165,6 +1165,46 @@ test "MIR owns inferred local binary types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local literal types" {
+    const source =
+        \\fn literals() -> u32 {
+        \\    let count = 7;
+        \\    let enabled = true;
+        \\    if enabled { return count; }
+        \\    return 0;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_literal_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "literals").?;
+    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .inferred_local));
+    var saw_count = false;
+    var saw_enabled = false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .inferred_local) continue;
+        if (std.mem.eql(u8, fact.target_owner.?, "count")) {
+            try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+            saw_count = true;
+        }
+        if (std.mem.eql(u8, fact.target_owner.?, "enabled")) {
+            try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
+            saw_enabled = true;
+        }
+    }
+    try std.testing.expect(saw_count);
+    try std.testing.expect(saw_enabled);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns ordinary direct call result and fixed argument types" {
     const source =
         \\trait Width { fn widen(self: *Self) -> u32; }

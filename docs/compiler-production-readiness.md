@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-15, based on the current compiler worktree**.
-Evidence register: **611 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **612 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -853,12 +853,13 @@ the legacy AST inference row; it does not grant nonzero or dynamic offsets a
 positive storage-provenance proof, so those accesses retain conservative race
 lowering.
 
-Unannotated local copies, direct casts, and typed binary expressions now have a
-narrow typed-fact path: when a one-name `let`/`var` is initialized from an
-existing local value, `value as T`, `a + b`, `a < b`, or `a && b`, MIR records
-an owned `inferred_local` type fact. C and LLVM consume that fact for the
-binding's type and use any local query only to reject stale prebuilt MIR. Missing
-facts fail generic MIR admission; this does not yet migrate literals, calls, or
+Unannotated local copies, direct casts, typed binary expressions, and the
+language-defined targetless `u32`/`bool` literals now have a narrow typed-fact
+path: when a one-name `let`/`var` is initialized from an existing local value,
+`value as T`, `a + b`, `a < b`, `a && b`, an integer literal, or a bool literal,
+MIR records an owned `inferred_local` type fact. C and LLVM consume that fact for
+the binding's type and use any local query only to reject stale prebuilt MIR.
+Missing facts fail generic MIR admission; this does not yet migrate calls or
 broader computed initializers.
 
 The `try_operand` fact now records the actual nullable result of

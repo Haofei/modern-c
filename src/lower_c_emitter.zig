@@ -2811,6 +2811,7 @@ const CEmitter = struct {
 
     fn emitSpecialInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
         if (try self.emitCastInferredLocalInit(name, initializer, locals)) return true;
+        if (try self.emitLiteralInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitArrayCallInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitSliceCallInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitEnumCallInferredLocalInit(name, initializer, locals)) return true;
@@ -2835,6 +2836,17 @@ const CEmitter = struct {
         if (!inferredLocalCastInitializer(initializer)) return false;
         const known_ty = self.operandEmitType(initializer, locals);
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse return error.UnsupportedCEmission;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), try self.cIdent(name) });
+        try self.emitExprWithTarget(initializer, locals, inferred_ty);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitLiteralInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const expected_ty = inferredLocalLiteralType(initializer) orelse return false;
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, expected_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), try self.cIdent(name) });
@@ -4920,6 +4932,15 @@ const CEmitter = struct {
             .cast => true,
             .grouped => |inner| inferredLocalCastInitializer(inner.*),
             else => false,
+        };
+    }
+
+    fn inferredLocalLiteralType(initializer: ast.Expr) ?ast.TypeExpr {
+        return switch (initializer.kind) {
+            .int_literal => ast_query.simpleNameType("u32", initializer.span),
+            .bool_literal => ast_query.simpleNameType("bool", initializer.span),
+            .grouped => |inner| inferredLocalLiteralType(inner.*),
+            else => null,
         };
     }
 

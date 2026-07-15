@@ -2478,10 +2478,19 @@ const LlvmEmitter = struct {
 
     fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast.Expr) !ast.TypeExpr {
         const fact_ty = (self.mirTargetTypeFactAtOwned(.inferred_local, initializer.span, name, null) orelse return error.UnsupportedLlvmEmission).target_ty;
-        if (self.exprType(initializer)) |known_ty| {
+        if (self.exprType(initializer) orelse inferredLocalLiteralType(initializer)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
         }
         return fact_ty;
+    }
+
+    fn inferredLocalLiteralType(initializer: ast.Expr) ?ast.TypeExpr {
+        return switch (initializer.kind) {
+            .int_literal => simpleType(initializer.span, "u32"),
+            .bool_literal => simpleType(initializer.span, "bool"),
+            .grouped => |inner| inferredLocalLiteralType(inner.*),
+            else => null,
+        };
     }
 
     fn emitAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr, span: ast.Span) !void {
