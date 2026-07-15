@@ -2542,6 +2542,35 @@ test "MIR records typed call target facts for phys calls" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local types for phys results" {
+    const source =
+        \\fn inferred_phys(value: usize) -> PAddr {
+        \\    let address = phys(value);
+        \\    return address;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_phys_local_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "inferred_phys").?;
+    const result_fact = targetTypeFactByKind(function, .phys_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("PAddr", result_fact.target_ty.kind.name.text);
+    const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("address", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("PAddr", local_fact.target_ty.kind.name.text);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR records typed call target facts for raw address calls" {
     const source =
         \\fn read(addr: PAddr) -> u32 {

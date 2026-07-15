@@ -4314,6 +4314,7 @@ const FunctionBuilder = struct {
             return null;
         }
         if (self.maybeUninitCallTargetKind(call.callee.*) == .maybe_uninit_assume_init) return self.maybeUninitCallPayloadTypeExpr(call);
+        if (self.physCallValueType(call) != null) return ast_query.simpleNameType("PAddr", call.callee.*.span);
         if (directCalleeName(call.callee.*)) |callee| {
             if (self.summaries.get(callee)) |summary| return summary.return_type_expr;
         }
