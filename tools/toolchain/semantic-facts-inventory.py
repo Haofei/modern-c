@@ -1248,8 +1248,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mir.byteViewCallTargetKind(call)": 2,
         "mirCallTargetKindAt(call.callee.*.span) != .declassify": 0,
         "mirCallTargetKindAt(call.callee.*.span) == .declassify": 2,
-        "mirCallTargetKindAt(call.callee.*.span) != .assume_noalias": 1,
-        "mirCallTargetKindAt(call.callee.*.span) == .assume_noalias": 1,
+        "mirCallTargetKindAt(call.callee.*.span) != .assume_noalias": 0,
+        "mirCallTargetKindAt(call.callee.*.span) == .assume_noalias": 2,
     },
     "src/lower_llvm_op.zig": {
         "trapHelperForCall(": 0,
