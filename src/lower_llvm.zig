@@ -18,8 +18,6 @@ const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
 const indexExpr = ast_query.indexExpr;
-const vaCallMember = ast_query.vaCallMember;
-const isVaStartCall = ast_query.isVaStartCall;
 const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
 const isStringLiteralTarget = ast_query.isStringLiteralTarget;
 const isMmioStructAbi = ast_query.isMmioStructAbi;
@@ -2008,9 +2006,14 @@ const LlvmEmitter = struct {
                 if (try self.emitBuiltinVoidCall(call)) return;
                 // A `va.*` intrinsic as a statement (`va.end(&ap);`): route through emitCall,
                 // which emits the call/instruction; any result (none for va.end) is discarded.
-                if (vaCallMember(call.callee.*) != null) {
-                    _ = try self.emitCall(call, simpleType(expr.span, "void"), expr.span);
-                    return;
+                if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| {
+                    switch (kind) {
+                        .va_start, .va_arg, .va_end => {
+                            _ = try self.emitCall(call, simpleType(expr.span, "void"), expr.span);
+                            return;
+                        },
+                        else => {},
+                    }
                 }
                 if (self.callReturnType(call)) |ret_ty| {
                     // A `void` or `-> never` call statement produces no value, so it is emitted
@@ -2388,11 +2391,15 @@ const LlvmEmitter = struct {
             try self.local_types.put(name, ty);
             try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr, .kind = .va_list_local });
             const dst = try self.vaListCursorPtrFromStorage(ptr);
-            if (init.kind == .call and isVaStartCall(init.kind.call.callee.*)) {
-                const info = self.vaCallInfo(init.kind.call) orelse return error.UnsupportedLlvmEmission;
-                if (info.kind != .va_start) return error.UnsupportedLlvmEmission;
-                try self.out.print(self.allocator, "  call void @llvm.va_start(ptr {s})\n", .{dst});
-                return;
+            if (init.kind == .call) {
+                if (self.mirCallTargetKindAt(init.kind.call.callee.*.span)) |kind| {
+                    if (kind == .va_start) {
+                        const info = self.vaCallInfo(init.kind.call) orelse return error.UnsupportedLlvmEmission;
+                        if (info.kind != .va_start) return error.UnsupportedLlvmEmission;
+                        try self.out.print(self.allocator, "  call void @llvm.va_start(ptr {s})\n", .{dst});
+                        return;
+                    }
+                }
             }
             const src = try self.emitVaListCursorForCopySource(init);
             try self.out.print(self.allocator, "  call void @llvm.va_copy(ptr {s}, ptr {s})\n", .{ dst, src });
@@ -2412,11 +2419,15 @@ const LlvmEmitter = struct {
         try self.emitDebugDeclare(name, ty, ptr, local.names[0].span, null);
         // `var ap: va_list = va.start();` — the slot IS the va_list cursor storage; initialize
         // it in place with llvm.va_start (it has no value to store).
-        if (init.kind == .call and isVaStartCall(init.kind.call.callee.*)) {
-            const info = self.vaCallInfo(init.kind.call) orelse return error.UnsupportedLlvmEmission;
-            if (info.kind != .va_start) return error.UnsupportedLlvmEmission;
-            try self.out.print(self.allocator, "  call void @llvm.va_start(ptr {s})\n", .{ptr});
-            return;
+        if (init.kind == .call) {
+            if (self.mirCallTargetKindAt(init.kind.call.callee.*.span)) |kind| {
+                if (kind == .va_start) {
+                    const info = self.vaCallInfo(init.kind.call) orelse return error.UnsupportedLlvmEmission;
+                    if (info.kind != .va_start) return error.UnsupportedLlvmEmission;
+                    try self.out.print(self.allocator, "  call void @llvm.va_start(ptr {s})\n", .{ptr});
+                    return;
+                }
+            }
         }
         if (isUninitExpr(init)) {
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, try self.zeroInitializer(ty), ptr, try self.debugCallSuffix() });
@@ -6630,23 +6641,25 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}{s}\n", .{ result, llvm_ty, ptr, try self.debugCallSuffix() });
             return result;
         }
-        if (vaCallMember(call.callee.*)) |va_name| {
-            // The cursor argument is either `&ap` for a local va_list or a `*mut va_list`
-            // parameter. Normalize both to the ABI cursor pointer that va_arg / va_end want.
-            const info = self.vaCallInfo(call) orelse return error.UnsupportedLlvmEmission;
-            const cursor_ty = info.cursor_ty orelse return error.UnsupportedLlvmEmission;
-            const ap_ptr = try self.emitVaListCursorArg(call.args[0], cursor_ty);
-            if (std.mem.eql(u8, va_name, "arg")) {
-                if (info.kind != .va_arg) return error.UnsupportedLlvmEmission;
-                return try self.emitVaArg(ap_ptr, info.payload_ty orelse return error.UnsupportedLlvmEmission);
-            }
-            if (std.mem.eql(u8, va_name, "end")) {
-                if (info.kind != .va_end) return error.UnsupportedLlvmEmission;
-                try self.out.print(self.allocator, "  call void @llvm.va_end(ptr {s})\n", .{ap_ptr});
-                return ""; // void
-            }
-            return error.UnsupportedLlvmEmission; // va.start only valid as a let initializer
-        }
+        if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| switch (kind) {
+            .va_start, .va_arg, .va_end => {
+                // The cursor argument is either `&ap` for a local va_list or a `*mut va_list`
+                // parameter. Normalize both to the ABI cursor pointer that va_arg / va_end want.
+                const info = self.vaCallInfo(call) orelse return error.UnsupportedLlvmEmission;
+                const cursor_ty = info.cursor_ty orelse return error.UnsupportedLlvmEmission;
+                const ap_ptr = try self.emitVaListCursorArg(call.args[0], cursor_ty);
+                switch (info.kind) {
+                    .va_arg => return try self.emitVaArg(ap_ptr, info.payload_ty orelse return error.UnsupportedLlvmEmission),
+                    .va_end => {
+                        try self.out.print(self.allocator, "  call void @llvm.va_end(ptr {s})\n", .{ap_ptr});
+                        return ""; // void
+                    },
+                    .va_start => return error.UnsupportedLlvmEmission, // va.start only valid as a let initializer
+                    else => unreachable,
+                }
+            },
+            else => {},
+        };
         if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_ptr) {
             const info = self.rawCallInfo(call) orelse return error.UnsupportedLlvmEmission;
             const addr = try self.emitExpr(call.args[0], info.address_ty);
@@ -8210,11 +8223,10 @@ const LlvmEmitter = struct {
 
     fn vaCallInfo(self: *LlvmEmitter, call: anytype) ?VaCallInfo {
         const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
-        const name = vaCallMember(call.callee.*) orelse return null;
         const valid_shape = switch (kind) {
-            .va_start => std.mem.eql(u8, name, "start") and call.type_args.len == 0 and call.args.len == 0,
-            .va_arg => std.mem.eql(u8, name, "arg") and call.type_args.len == 1 and call.args.len == 1,
-            .va_end => std.mem.eql(u8, name, "end") and call.type_args.len == 0 and call.args.len == 1,
+            .va_start => call.type_args.len == 0 and call.args.len == 0,
+            .va_arg => call.type_args.len == 1 and call.args.len == 1,
+            .va_end => call.type_args.len == 0 and call.args.len == 1,
             else => false,
         };
         if (!valid_shape) return null;
