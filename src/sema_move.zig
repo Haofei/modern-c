@@ -444,17 +444,18 @@ fn preserveOuterScopedMoveState(self: *Checker, state: *std.StringHashMap(MoveSl
     defer scoped.deinit();
     var it = before.iterator();
     while (it.next()) |entry| {
-        if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*) and !state.contains(entry.key_ptr.*)) {
+        const current = matchingMoveStateSlot(state, entry.key_ptr.*, entry.value_ptr.*);
+        if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*) and current == null) {
             continue;
         }
-        const slot = state.get(entry.key_ptr.*) orelse entry.value_ptr.*;
+        const slot = current orelse entry.value_ptr.*;
         scoped.put(entry.key_ptr.*, slot) catch {
             self.oom = true;
         };
     }
     var state_it = state.iterator();
     while (state_it.next()) |entry| {
-        if (before.contains(entry.key_ptr.*)) continue;
+        if (moveStateSlotMatches(before, entry.key_ptr.*, entry.value_ptr.*)) continue;
         if (!moveSubplaceRootInOuter(entry.value_ptr.*, entry.key_ptr.*, before)) continue;
         scoped.put(entry.key_ptr.*, entry.value_ptr.*) catch {
             self.oom = true;
@@ -499,7 +500,7 @@ pub fn checkMoveExit(self: *Checker, state: *const std.StringHashMap(MoveSlot)) 
 pub fn reportMoveLocalsLeavingScope(self: *Checker, inner: *const std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), message: []const u8) void {
     var it = inner.iterator();
     while (it.next()) |entry| {
-        if (outer.contains(entry.key_ptr.*)) continue;
+        if (moveStateSlotMatches(outer, entry.key_ptr.*, entry.value_ptr.*)) continue;
         if (entry.value_ptr.live and !entry.value_ptr.deferred) {
             self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", message);
         }
@@ -512,7 +513,7 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *std.StringHa
 
     var it = entry_state.iterator();
     while (it.next()) |entry| {
-        const after = iteration_state.get(entry.key_ptr.*) orelse {
+        const after = matchingMoveStateSlot(iteration_state, entry.key_ptr.*, entry.value_ptr.*) orelse {
             if (isPureIndexFactSlot(entry.value_ptr.*)) {
                 index_fact_removals.append(self.reporter.allocator, entry.key_ptr.*) catch {
                     self.oom = true;
@@ -539,7 +540,7 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *std.StringHa
 
     var iter_it = iteration_state.iterator();
     while (iter_it.next()) |entry| {
-        if (entry_state.contains(entry.key_ptr.*)) continue;
+        if (moveStateSlotMatches(entry_state, entry.key_ptr.*, entry.value_ptr.*)) continue;
         const root = trackedSubplaceRoot(entry.value_ptr.*, entry.key_ptr.*) orelse continue;
         if (entry_state.getPtr(root)) |root_slot| {
             self.errorCode(entry.value_ptr.span, "E_MOVE_LOOP_RESOURCE", "cannot move an outer linear `move` place inside a loop; the loop may run zero or multiple times");
@@ -1084,7 +1085,7 @@ pub fn finalizeBranchLocals(self: *Checker, branch: *std.StringHashMap(MoveSlot)
     defer removals.deinit(self.reporter.allocator);
     var it = branch.iterator();
     while (it.next()) |entry| {
-        if (outer.contains(entry.key_ptr.*)) continue;
+        if (moveStateSlotMatches(outer, entry.key_ptr.*, entry.value_ptr.*)) continue;
         if (moveSubplaceRootInOuter(entry.value_ptr.*, entry.key_ptr.*, outer)) continue;
         if (report and entry.value_ptr.live and !entry.value_ptr.deferred) {
             self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value declared in this branch is never consumed before the branch exits");
@@ -1354,6 +1355,54 @@ test "move branch joins match subplaces by typed place rather than compatibility
     try std.testing.expect(joined.get("owner.resource:left").?.deferred);
     try std.testing.expect(removeOwnershipMovePlace(place, &joined));
     try std.testing.expectEqual(@as(usize, 0), joined.count());
+}
+
+test "move CFG boundary state handlers match ownership subplaces by typed place" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-cfg-place.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+
+    const root: sema_model.MovePlace = .{ .root = "owner" };
+    const place = root.project(.{ .field = "resource" }).?;
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root_slot = MoveSlot{ .live = true, .span = span, .place = root };
+    const moved_slot = MoveSlot{ .live = false, .span = span, .place = place };
+
+    var loop_entry = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer loop_entry.deinit();
+    var loop_iteration = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer loop_iteration.deinit();
+    try loop_entry.put("owner", root_slot);
+    try loop_entry.put("owner.resource:entry", moved_slot);
+    try loop_iteration.put("owner", root_slot);
+    try loop_iteration.put("owner.resource:iteration", moved_slot);
+    reportLoopOuterResourceChanges(&checker, &loop_entry, &loop_iteration);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(loop_entry.get("owner").?.live);
+
+    var short_left = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer short_left.deinit();
+    var short_right = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer short_right.deinit();
+    try short_left.put("owner", root_slot);
+    try short_left.put("owner.resource:left", moved_slot);
+    try short_right.put("owner", root_slot);
+    try short_right.put("owner.resource:right", moved_slot);
+    mergeShortCircuitMoveStates(&checker, &short_left, &short_right, span, false);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(short_left.get("owner").?.live);
+
+    var before_scope = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer before_scope.deinit();
+    var after_scope = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer after_scope.deinit();
+    try before_scope.put("owner", root_slot);
+    try before_scope.put("owner.resource:before", moved_slot);
+    try after_scope.put("owner", root_slot);
+    try after_scope.put("owner.resource:after", moved_slot);
+    preserveOuterScopedMoveState(&checker, &after_scope, &before_scope);
+    try std.testing.expectEqual(@as(usize, 2), after_scope.count());
+    try std.testing.expect(after_scope.contains("owner.resource:before"));
 }
 
 fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
@@ -1892,7 +1941,7 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *std.StringHashMap(MoveSlo
 
     var it = state.iterator();
     while (it.next()) |entry| {
-        const after = rhs_state.get(entry.key_ptr.*) orelse {
+        const after = matchingMoveStateSlot(rhs_state, entry.key_ptr.*, entry.value_ptr.*) orelse {
             if (isPureIndexFactSlot(entry.value_ptr.*)) {
                 index_fact_removals.append(self.reporter.allocator, entry.key_ptr.*) catch {
                     self.oom = true;
@@ -1920,7 +1969,7 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *std.StringHashMap(MoveSlo
 
     var rhs_it = rhs_state.iterator();
     while (rhs_it.next()) |entry| {
-        if (state.contains(entry.key_ptr.*)) continue;
+        if (moveStateSlotMatches(state, entry.key_ptr.*, entry.value_ptr.*)) continue;
         const root = trackedSubplaceRoot(entry.value_ptr.*, entry.key_ptr.*) orelse continue;
         if (state.getPtr(root)) |root_slot| {
             self.errorCode(span, "E_MOVE_BRANCH_MISMATCH", if (deferred) "cannot defer-consume a linear `move` place only on one side of a short-circuit expression" else "cannot move a linear `move` place only on one side of a short-circuit expression");
