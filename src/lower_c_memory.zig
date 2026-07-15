@@ -9,7 +9,6 @@ const mir = @import("mir.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
-const byteViewCallKind = ast_query.byteViewCallKind;
 const isIdentNamed = ast_query.isIdentNamed;
 const memberCallee = ast_query.memberCallee;
 
@@ -36,14 +35,13 @@ pub const Context = struct {
 };
 
 pub fn emitByteViewCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-    const kind = byteViewCallKind(call.callee.*) orelse return false;
-    const expected_fact = mir.byteViewCallTargetKind(call) orelse return error.UnsupportedCEmission;
-    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_fact) return error.UnsupportedCEmission;
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return false;
+    if (kind != .byte_view_as_bytes and kind != .byte_view_equal) return false;
     const source_ty = ctx.mir_target_type(ctx.emit_ctx, .byte_view_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
     const result_ty = ctx.mir_target_type(ctx.emit_ctx, .byte_view_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
     if (call.type_args.len != 0) return error.UnsupportedCEmission;
     switch (kind) {
-        .as_bytes => {
+        .byte_view_as_bytes => {
             if (call.args.len != 1) return error.UnsupportedCEmission;
             _ = byteViewAddressTarget(call.args[0]) orelse return error.UnsupportedCEmission;
             try ctx.out.print(ctx.allocator, "(({s}){{ .ptr = (uint8_t const *)(void *)(", .{try ctx.c_type(ctx.emit_ctx, result_ty)});
@@ -51,7 +49,7 @@ pub fn emitByteViewCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap
             try ctx.out.print(ctx.allocator, "), .len = (uintptr_t)sizeof({s}) }})", .{try ctx.c_type(ctx.emit_ctx, source_ty)});
             return true;
         },
-        .bytes_equal => {
+        .byte_view_equal => {
             if (call.args.len != 2) return error.UnsupportedCEmission;
             const n = ctx.temp_index.*;
             ctx.temp_index.* += 1;
@@ -62,6 +60,7 @@ pub fn emitByteViewCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap
             try ctx.out.print(ctx.allocator, "); (mc_a{d}.len == mc_b{d}.len) && (__builtin_memcmp(mc_a{d}.ptr, mc_b{d}.ptr, mc_a{d}.len) == 0); }})", .{ n, n, n, n, n });
             return true;
         },
+        else => unreachable,
     }
 }
 

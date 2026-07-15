@@ -13,7 +13,6 @@ const sema_type = @import("sema_type.zig");
 // existing call sites read unchanged.
 const isIdentNamed = ast_query.isIdentNamed;
 const typeName = ast_query.typeName;
-const byteViewCallKind = ast_query.byteViewCallKind;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
 const memberExpr = ast_query.memberExpr;
@@ -6697,9 +6696,7 @@ const LlvmEmitter = struct {
             const value = try self.emitExpr(info.base, info.enum_ty);
             return try self.castValue(value, info.enum_ty, info.repr_ty);
         }
-        if (byteViewCallKind(call.callee.*) != null) {
-            return try self.emitByteViewCall(call, self.byteViewCallInfo(call) orelse return error.UnsupportedLlvmEmission);
-        }
+        if (self.byteViewCallInfo(call)) |info| return try self.emitByteViewCall(call, info);
         const result_constructor = if (self.mirCallTargetKindAt(span)) |kind| mir.resultConstructorFactInfo(kind) else null;
         if (result_constructor) |constructor| {
             const fact = self.mirTargetTypeFactAt(constructor.target_kind, span) orelse return error.UnsupportedLlvmEmission;
@@ -8224,8 +8221,13 @@ const LlvmEmitter = struct {
     }
 
     fn byteViewCallInfo(self: *LlvmEmitter, call: anytype) ?ByteViewCallInfo {
-        const kind = mir.byteViewCallTargetKind(call) orelse return null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) != kind) return null;
+        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+        const expected_args: usize = switch (kind) {
+            .byte_view_as_bytes => 1,
+            .byte_view_equal => 2,
+            else => return null,
+        };
+        if (call.type_args.len != 0 or call.args.len != expected_args) return null;
         return .{
             .kind = kind,
             .source_ty = (self.mirTargetTypeFactAt(.byte_view_source, call.callee.*.span) orelse return null).target_ty,
@@ -8702,10 +8704,7 @@ const LlvmEmitter = struct {
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
         if (self.domainOpCallInfo(call)) |info| return info.return_ty;
         if (self.reduceCallInfo(call)) |info| return info.return_ty;
-        if (mir.byteViewCallTargetKind(call)) |expected_fact| {
-            if (self.mirCallTargetKindAt(call.callee.*.span) != expected_fact) return null;
-            return if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| fact.target_ty else null;
-        }
+        if (self.byteViewCallInfo(call)) |info| return info.result_ty;
         if (self.mmioMapCallInfo(call)) |info| return info.result_ty;
         if (self.conversionCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "try_from")) {
