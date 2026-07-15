@@ -1079,6 +1079,45 @@ test "MIR owns inferred local copy types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local cast types" {
+    const source =
+        \\fn casts(value: u64, ptr: *const u64) -> u32 {
+        \\    let narrowed = value as u32;
+        \\    let view = ptr as *const u64;
+        \\    return narrowed;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_cast_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "casts").?;
+    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .inferred_local));
+    var saw_narrowed = false;
+    var saw_view = false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .inferred_local) continue;
+        if (std.mem.eql(u8, fact.target_owner.?, "narrowed")) {
+            try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+            saw_narrowed = true;
+        }
+        if (std.mem.eql(u8, fact.target_owner.?, "view")) {
+            try std.testing.expect(fact.target_ty.kind == .pointer);
+            saw_view = true;
+        }
+    }
+    try std.testing.expect(saw_narrowed);
+    try std.testing.expect(saw_view);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns ordinary direct call result and fixed argument types" {
     const source =
         \\trait Width { fn widen(self: *Self) -> u32; }

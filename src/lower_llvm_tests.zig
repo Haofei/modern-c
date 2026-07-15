@@ -1908,6 +1908,40 @@ test "LLVM inferred local copies require MIR types" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_local_copy_types.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM inferred local casts require MIR types" {
+    const source =
+        \\fn casts(value: u64, ptr: *const u64) -> u32 {
+        \\    let narrowed = value as u32;
+        \\    let view = ptr as *const u64;
+        \\    return narrowed;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_inferred_local_cast_types.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_inferred_local_cast_types.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%narrowed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%view") != null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeKindForFunction(&missing, "casts", .inferred_local);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_inferred_local_cast_types.mc", .{}, false, .riscv64, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactForFunction(&stale, "casts", .inferred_local, "u64");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_local_cast_types.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM ordinary direct calls require MIR result and argument types" {
     const source =
         \\fn widen(value: u64) -> u64 { return value; }

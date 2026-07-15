@@ -8867,6 +8867,7 @@ fn inferredLocalTypeFactEligible(maybe_initializer: ?ast.Expr) bool {
     const initializer = maybe_initializer orelse return false;
     return switch (initializer.kind) {
         .ident => true,
+        .cast => true,
         .grouped => |inner| inferredLocalTypeFactEligible(inner.*),
         else => false,
     };

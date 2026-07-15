@@ -2810,6 +2810,7 @@ const CEmitter = struct {
     }
 
     fn emitSpecialInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
+        if (try self.emitCastInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitArrayCallInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitSliceCallInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitEnumCallInferredLocalInit(name, initializer, locals)) return true;
@@ -2828,6 +2829,17 @@ const CEmitter = struct {
         if (try lower_c_mmio.emitDirectReadInferredLocalInitExpr(self.mmioEmitContext(), name, initializer, locals)) return true;
         if (try lower_c_mmio.emitReadExprInferredLocalInit(self.mmioCallEmitContext(), name, initializer, locals)) return true;
         return false;
+    }
+
+    fn emitCastInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        if (!inferredLocalCastInitializer(initializer)) return false;
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, locals)) orelse return error.UnsupportedCEmission;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), try self.cIdent(name) });
+        try self.emitExprWithTarget(initializer, locals, inferred_ty);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
     }
 
     fn emitDefaultLocalDecl(self: *CEmitter, name: []const u8, maybe_ty: ?ast.TypeExpr, maybe_init: ?ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
@@ -4876,6 +4888,14 @@ const CEmitter = struct {
         try self.emitExprWithTarget(initializer, locals, inferred_ty);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
+    }
+
+    fn inferredLocalCastInitializer(initializer: ast.Expr) bool {
+        return switch (initializer.kind) {
+            .cast => true,
+            .grouped => |inner| inferredLocalCastInitializer(inner.*),
+            else => false,
+        };
     }
 
     fn emitNumericInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
