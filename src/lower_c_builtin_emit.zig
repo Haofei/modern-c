@@ -77,7 +77,6 @@ fn emitMemoryBuiltinCallExpr(ctx: Context, node: anytype, locals: ?*std.StringHa
 fn emitArithmeticBuiltinCallExpr(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
     if (try lower_c_arith.emitWrappingCall(ctx.arith, node, locals)) return true;
     if (try lower_c_arith.emitReduceSumCheckedCall(ctx.arith, node, locals)) return true;
-    if (try lower_c_call.emitUncheckedCall(ctx.call, node, locals)) return true;
     if (lower_c_arith.uncheckedCallInfo(ctx.arith, node) != null) return error.UnsupportedCEmission;
     return false;
 }

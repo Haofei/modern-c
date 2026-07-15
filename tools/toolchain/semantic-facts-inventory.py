@@ -633,8 +633,8 @@ ANCHORS: dict[str, list[str]] = {
         "ctx.mir_target_type(ctx.emit_ctx, .domain_interval",
     ],
     "src/lower_c_builtin_emit.zig": [
-        "lower_c_call.emitUncheckedCall(ctx.call, node, locals)",
         "lower_c_arith.uncheckedCallInfo(ctx.arith, node)",
+        "return error.UnsupportedCEmission",
     ],
     "src/lower_c_emitter.zig": [
         "fn arithContext",
