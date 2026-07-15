@@ -4315,6 +4315,11 @@ const FunctionBuilder = struct {
         }
         if (self.maybeUninitCallTargetKind(call.callee.*) == .maybe_uninit_assume_init) return self.maybeUninitCallPayloadTypeExpr(call);
         if (self.physCallValueType(call) != null) return ast_query.simpleNameType("PAddr", call.callee.*.span);
+        if (self.rawCallTarget(call)) |target| return switch (target.kind) {
+            .raw_load, .raw_ptr => target.result_type_expr,
+            .raw_store => null,
+            else => unreachable,
+        };
         if (directCalleeName(call.callee.*)) |callee| {
             if (self.summaries.get(callee)) |summary| return summary.return_type_expr;
         }

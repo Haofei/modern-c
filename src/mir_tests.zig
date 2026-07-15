@@ -2571,6 +2571,47 @@ test "MIR owns inferred local types for phys results" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local types for raw result calls" {
+    const source =
+        \\fn inferred_raw_load(addr: PAddr) -> u32 {
+        \\    unsafe {
+        \\        let value = raw.load<u32>(addr);
+        \\        return value;
+        \\    }
+        \\}
+        \\
+        \\fn inferred_raw_ptr(addr: PAddr) -> *mut u32 {
+        \\    unsafe {
+        \\        let pointer = raw.ptr<u32>(addr);
+        \\        return pointer;
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_raw_local_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const load = functionByName(typed_mir, "inferred_raw_load").?;
+    const load_fact = targetTypeFactByKind(load, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("value", load_fact.target_owner.?);
+    try std.testing.expectEqualStrings("u32", load_fact.target_ty.kind.name.text);
+    const pointer = functionByName(typed_mir, "inferred_raw_ptr").?;
+    const pointer_fact = targetTypeFactByKind(pointer, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("pointer", pointer_fact.target_owner.?);
+    try std.testing.expect(pointer_fact.target_ty.kind == .pointer);
+    try std.testing.expectEqual(ast.Mutability.mut, pointer_fact.target_ty.kind.pointer.mutability);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR records typed call target facts for raw address calls" {
     const source =
         \\fn read(addr: PAddr) -> u32 {

@@ -2113,6 +2113,50 @@ test "lower-c inferred local phys calls require MIR types" {
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_phys_local_type.mc", .{}, false, null));
 }
 
+test "lower-c inferred local raw result calls require MIR types" {
+    const source =
+        \\fn inferred_raw_load(addr: PAddr) -> u32 {
+        \\    unsafe {
+        \\        let value = raw.load<u32>(addr);
+        \\        return value;
+        \\    }
+        \\}
+        \\
+        \\fn inferred_raw_ptr(addr: PAddr) -> *mut u32 {
+        \\    unsafe {
+        \\        let pointer = raw.ptr<u32>(addr);
+        \\        return pointer;
+        \\    }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_inferred_raw_local_types.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_inferred_raw_local_types.mc", .{}, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t value") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "pointer") != null);
+
+    for ([_][]const u8{ "inferred_raw_load", "inferred_raw_ptr" }) |name| {
+        var missing = try mir.build(std.testing.allocator, parsed.module);
+        defer missing.deinit();
+        try removeTargetTypeKindForFunction(&missing, name, .inferred_local);
+        var missing_output: std.ArrayList(u8) = .empty;
+        defer missing_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_inferred_raw_local_types.mc", .{}, false, null));
+
+        var stale = try mir.build(std.testing.allocator, parsed.module);
+        defer stale.deinit();
+        try renameTargetTypeFactForFunction(&stale, name, .inferred_local, "u64");
+        var stale_output: std.ArrayList(u8) = .empty;
+        defer stale_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_raw_local_types.mc", .{}, false, null));
+    }
+}
+
 test "lower-c inferred local dyn dispatch calls require MIR types" {
     const source =
         \\trait Shape { fn scale(self: *Self, amount: u32) -> u32; fn set(self: *mut Self, value: u32) -> void; }
