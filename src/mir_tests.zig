@@ -1271,6 +1271,38 @@ test "MIR owns inferred local direct call types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local indirect call types" {
+    const source =
+        \\fn invoke_pointer(callback: fn(u32) -> u32, value: u32) -> u32 {
+        \\    let result = callback(value);
+        \\    return result;
+        \\}
+        \\fn invoke_closure(callback: closure(u32) -> u32, value: u32) -> u32 {
+        \\    let result = callback(value);
+        \\    return result;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_indirect_call_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    for ([_][]const u8{ "invoke_pointer", "invoke_closure" }) |name| {
+        const function = functionByName(typed_mir, name).?;
+        const fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("result", fact.target_owner.?);
+        try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+        try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .indirect_call_callee));
+    }
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns ordinary direct call result and fixed argument types" {
     const source =
         \\trait Width { fn widen(self: *Self) -> u32; }

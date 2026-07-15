@@ -4275,7 +4275,7 @@ const FunctionBuilder = struct {
     fn inferredLocalTypeExpr(self: *FunctionBuilder, initializer: ast.Expr) ?ast.TypeExpr {
         if (self.typeExprForExpr(initializer)) |ty| return ty;
         return switch (initializer.kind) {
-            .call => |node| self.inferredLocalDirectCallType(node),
+            .call => |node| self.inferredLocalCallType(node),
             .int_literal => ast_query.simpleNameType("u32", initializer.span),
             .bool_literal => ast_query.simpleNameType("bool", initializer.span),
             .unary => |node| if (node.op == .logical_not)
@@ -4293,15 +4293,19 @@ const FunctionBuilder = struct {
         };
     }
 
-    // Direct calls already have an MIR-owned `direct_call_result` fact. Mirror the
-    // same summary result into the destination local so neither backend has to
-    // rediscover a declaration type merely to allocate an unannotated binding.
-    // Builtins and dynamic dispatch deliberately remain outside this narrow slice.
-    fn inferredLocalDirectCallType(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
+    // Direct calls already have an MIR-owned `direct_call_result` fact, while
+    // function-pointer and closure calls have an `indirect_call_callee`
+    // signature fact. Mirror either established return type into the destination
+    // local so neither backend has to rediscover a type merely to allocate an
+    // unannotated binding. Builtins and dynamic dispatch remain outside this
+    // narrow slice.
+    fn inferredLocalCallType(self: *FunctionBuilder, call: anytype) ?ast.TypeExpr {
         if (self.isDynDispatchMember(call.callee.*)) return null;
-        const callee = directCalleeName(call.callee.*) orelse return null;
-        const summary = self.summaries.get(callee) orelse return null;
-        return summary.return_type_expr;
+        if (directCalleeName(call.callee.*)) |callee| {
+            if (self.summaries.get(callee)) |summary| return summary.return_type_expr;
+        }
+        const target = self.indirectCallTarget(call) orelse return null;
+        return target.result_type_expr;
     }
 
     fn booleanSwitchSubjectType(node: ast.Switch) ?ast.TypeExpr {
@@ -8569,6 +8573,7 @@ const FunctionBuilder = struct {
     const IndirectCallTarget = struct {
         callee_type_expr: ast.TypeExpr,
         callee_ty: ValueType,
+        result_type_expr: ast.TypeExpr,
         result_ty: ValueType,
     };
 
@@ -8584,6 +8589,7 @@ const FunctionBuilder = struct {
         return .{
             .callee_type_expr = callee_type_expr,
             .callee_ty = valueTypeFromTypeAlias(callee_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .result_type_expr = result_type_expr,
             .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
         };
     }
@@ -8901,7 +8907,7 @@ fn inferredLocalTypeFactEligible(builder: *FunctionBuilder, maybe_initializer: ?
         .ident => true,
         .cast => true,
         .int_literal, .bool_literal => true,
-        .call => |node| builder.inferredLocalDirectCallType(node) != null,
+        .call => |node| builder.inferredLocalCallType(node) != null,
         .unary => |node| node.op == .logical_not or inferredLocalTypeFactEligible(builder, node.expr.*),
         .binary => |node| mirIsArithmeticBinary(node.op) or mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op),
         .grouped => |inner| inferredLocalTypeFactEligible(builder, inner.*),
