@@ -3,7 +3,6 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const lower_llvm = @import("lower_llvm.zig");
-const lower_llvm_query = @import("lower_llvm_query.zig");
 const mir = @import("mir.zig");
 const test_support = @import("test_support.zig");
 
@@ -12,40 +11,6 @@ fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.Arra
     defer parsed.deinit();
 
     try lower_llvm.appendLlvm(std.testing.allocator, parsed.module, output);
-}
-
-test "LLVM noalias query accepts only the real builtin call shape" {
-    const source =
-        \\fn probe(p: *mut u32, n: usize) -> *mut u32 {
-        \\    return (compiler.assume_noalias_unchecked(p, n))(p, n);
-        \\}
-        \\fn missing_size(p: *mut u32) -> *mut u32 {
-        \\    return compiler.assume_noalias_unchecked(p);
-        \\}
-        \\fn with_type_arg(p: *mut u32, n: usize) -> *mut u32 {
-        \\    return compiler.assume_noalias_unchecked<u32>(p, n);
-        \\}
-    ;
-
-    var parsed = try test_support.parseModule("llvm_noalias_grouped_call_callee.mc", source);
-    defer parsed.deinit();
-
-    const fn_decl = parsed.module.decls[0].kind.fn_decl;
-    const ret_expr = fn_decl.body.?.items[0].kind.@"return".?;
-    const outer_call = ret_expr.kind.call;
-    try std.testing.expect(!lower_llvm_query.isAssumeNoaliasCall(outer_call));
-
-    const grouped_callee = outer_call.callee.*.kind.grouped;
-    const inner_call = grouped_callee.kind.call;
-    try std.testing.expect(lower_llvm_query.isAssumeNoaliasCall(inner_call));
-
-    const missing_size_fn = parsed.module.decls[1].kind.fn_decl;
-    const missing_size_ret = missing_size_fn.body.?.items[0].kind.@"return".?;
-    try std.testing.expect(!lower_llvm_query.isAssumeNoaliasCall(missing_size_ret.kind.call));
-
-    const with_type_arg_fn = parsed.module.decls[2].kind.fn_decl;
-    const with_type_arg_ret = with_type_arg_fn.body.?.items[0].kind.@"return".?;
-    try std.testing.expect(!lower_llvm_query.isAssumeNoaliasCall(with_type_arg_ret.kind.call));
 }
 
 fn clearPointerProvenanceFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {

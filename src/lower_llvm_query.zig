@@ -94,20 +94,6 @@ pub fn packedBitsClearMask(info: PackedBitsInfo, bit_index: usize) ?u64 {
     return ((@as(u64, 1) << @intCast(bits)) - 1) & ~packedBitsMask(bit_index);
 }
 
-pub fn isAssumeNoaliasCall(call: anytype) bool {
-    if (call.type_args.len != 0 or call.args.len != 2) return false;
-    return isAssumeNoaliasCallee(call.callee.*);
-}
-
-fn isAssumeNoaliasCallee(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |member| std.mem.eql(u8, member.name.text, "assume_noalias_unchecked") and ast_query.isIdentNamed(member.base.*, "compiler"),
-        .ident => |ident| std.mem.eql(u8, ident.text, "compiler.assume_noalias_unchecked") or std.mem.eql(u8, ident.text, "assume_noalias_unchecked"),
-        .grouped => |inner| isAssumeNoaliasCallee(inner.*),
-        else => false,
-    };
-}
-
 pub fn isUninitExpr(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .uninit_literal => true,
