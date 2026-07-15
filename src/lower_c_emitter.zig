@@ -2823,7 +2823,7 @@ const CEmitter = struct {
         if (try lower_c_call.emitExternNonNullCallInferredLocalInit(self.sequencedArgContext(), &self.functions, name, initializer, locals)) return true;
         if (try lower_c_arith.emitUncheckedAddInferredLocalInit(self.arithContext(), name, initializer, locals)) return true;
         if (try self.emitLocalCopyInferredLocalInit(name, initializer, locals)) return true;
-        if (try lower_c_flow.emitBoolInferredLocalInit(self.flowEmitContext(), name, initializer, locals)) return true;
+        if (try self.emitComparisonInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitCallInferredLocalInit(name, initializer, locals)) return true;
         if (try self.emitNumericInferredLocalInit(name, initializer, locals)) return true;
         if (try lower_c_mmio.emitDirectReadInferredLocalInitExpr(self.mmioEmitContext(), name, initializer, locals)) return true;
@@ -2833,7 +2833,8 @@ const CEmitter = struct {
 
     fn emitCastInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         if (!inferredLocalCastInitializer(initializer)) return false;
-        const inferred_ty = (try self.mirInferredLocalType(name, initializer, locals)) orelse return error.UnsupportedCEmission;
+        const known_ty = self.operandEmitType(initializer, locals);
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), try self.cIdent(name) });
@@ -4878,13 +4879,27 @@ const CEmitter = struct {
 
     fn emitLocalCopyInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const known_ty = self.operandEmitType(initializer, locals) orelse return false;
-        const inferred_ty = (try self.mirInferredLocalType(name, initializer, locals)) orelse known_ty;
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse known_ty;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         if (try lower_c_access.emitDirectCallSliceIndexLocalInit(self.accessEmitContext(), name, inferred_ty, initializer, locals)) return true;
         if (try lower_c_access.emitDirectCallArrayIndexLocalInit(self.accessEmitContext(), name, inferred_ty, initializer, locals)) return true;
 
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), try self.cIdent(name) });
+        try self.emitExprWithTarget(initializer, locals, inferred_ty);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitComparisonInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        if (!lower_c_expr.comparisonExpr(initializer)) return false;
+        const bool_ty = ast_query.simpleNameType("bool", initializer.span);
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, bool_ty)) orelse return error.UnsupportedCEmission;
+        if (!isBoolType(self.resolveAliasType(inferred_ty))) return error.UnsupportedCEmission;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+        if (try lower_c_flow.emitSequencedComparisonLocalInit(self.flowEmitContext(), name, inferred_ty, initializer, locals)) return true;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "bool {s} = ", .{name});
         try self.emitExprWithTarget(initializer, locals, inferred_ty);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
@@ -4899,7 +4914,8 @@ const CEmitter = struct {
     }
 
     fn emitNumericInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const inferred_ty = self.numericExprTypeForEmission(initializer, locals) orelse return false;
+        const known_ty = self.numericExprTypeForEmission(initializer, locals) orelse return false;
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse known_ty;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
 
         if (try lower_c_arith.emitSequencedCheckedBinaryLocalInit(self.sequencedBinaryContext(), name, inferred_ty, initializer, locals)) return true;
@@ -4977,9 +4993,8 @@ const CEmitter = struct {
         return true;
     }
 
-    fn mirInferredLocalType(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?ast.TypeExpr {
+    fn mirInferredLocalType(self: *CEmitter, name: []const u8, initializer: ast.Expr, known_ty: ?ast.TypeExpr) !?ast.TypeExpr {
         const fact_ty = (self.mirTargetTypeFactAtOwned(.inferred_local, initializer.span, name, null) orelse return null).target_ty;
-        const known_ty = self.callReturnTypeForExpr(initializer, locals) orelse self.operandEmitType(initializer, locals);
         if (known_ty) |ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
         }

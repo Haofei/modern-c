@@ -3752,7 +3752,7 @@ const FunctionBuilder = struct {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| {
                 const ty = if (local.ty) |local_ty| valueTypeFromTypeAlias(local_ty, self.enums, self.structs, self.packed_bits, self.aliases) else if (local.init) |init_expr| self.exprType(init_expr) else .unknown;
-                const ty_expr = local.ty orelse if (local.init) |init_expr| self.typeExprForExpr(init_expr) else null;
+                const ty_expr = local.ty orelse if (local.init) |init_expr| self.inferredLocalTypeExpr(init_expr) else null;
                 const mutable = std.meta.activeTag(stmt.kind) == .var_decl;
                 if (local.ty == null and local.names.len == 1 and inferredLocalTypeFactEligible(local.init)) {
                     if (local.init) |init_expr| {
@@ -4268,6 +4268,20 @@ const FunctionBuilder = struct {
             .binary => |node| if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op)) ast_query.simpleNameType("bool", subject.span) else null,
             .unary => |node| if (node.op == .logical_not) ast_query.simpleNameType("bool", subject.span) else null,
             .grouped => |inner| self.switchSubjectTypeExpr(inner.*),
+            else => null,
+        };
+    }
+
+    fn inferredLocalTypeExpr(self: *FunctionBuilder, initializer: ast.Expr) ?ast.TypeExpr {
+        if (self.typeExprForExpr(initializer)) |ty| return ty;
+        return switch (initializer.kind) {
+            .binary => |node| if (mirIsComparisonBinary(node.op))
+                ast_query.simpleNameType("bool", initializer.span)
+            else if (mirIsArithmeticBinary(node.op))
+                self.typeExprForExpr(node.left.*) orelse self.typeExprForExpr(node.right.*)
+            else
+                null,
+            .grouped => |inner| self.inferredLocalTypeExpr(inner.*),
             else => null,
         };
     }
@@ -8868,6 +8882,7 @@ fn inferredLocalTypeFactEligible(maybe_initializer: ?ast.Expr) bool {
     return switch (initializer.kind) {
         .ident => true,
         .cast => true,
+        .binary => |node| mirIsArithmeticBinary(node.op) or mirIsComparisonBinary(node.op),
         .grouped => |inner| inferredLocalTypeFactEligible(inner.*),
         else => false,
     };
