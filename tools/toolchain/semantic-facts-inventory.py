@@ -846,6 +846,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/lower_c_expr.zig": {
         "pub fn isDeclassifyCall(": 0,
     },
+    "src/lower_c_builtin.zig": {
+        "pub fn isAssumeNoaliasCall(": 0,
+    },
     "src/lower_llvm_query.zig": {
         "pub fn builtinCallReturnType(": 0,
         "ast_query.rawLoadCallReturnType(call)": 0,
@@ -884,6 +887,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "exprSourceTypeForMemory": 0,
         "mirTargetTypeFactAt(.declassify_result": 2,
         "mirTargetTypeFactAt(.assume_noalias_result": 2,
+        "isAssumeNoaliasCall(": 0,
+        "fn isMirAssumeNoaliasCall(": 1,
+        "isMirAssumeNoaliasCall(": 9,
         "mirTargetTypeFactAt(.enum_raw_result": 2,
         "mirTargetTypeFactAt(.domain_result": 2,
         "mirTargetTypeFactAt(.const_get_result": 2,

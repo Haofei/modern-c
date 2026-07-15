@@ -7,8 +7,6 @@ const ast_query = @import("ast_query.zig");
 const lower_c_model = @import("lower_c_model.zig");
 
 const ReflectionCallKind = lower_c_model.ReflectionCallKind;
-const isIdentNamed = ast_query.isIdentNamed;
-const memberCallee = ast_query.memberCallee;
 
 pub fn knownContractCalleeName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
@@ -51,10 +49,4 @@ pub fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {
         .grouped => |inner| reflectionCallKind(inner.*),
         else => null,
     };
-}
-
-pub fn isAssumeNoaliasCall(call: anytype) bool {
-    if (call.type_args.len != 0 or call.args.len != 2) return false;
-    const member = memberCallee(call.callee.*) orelse return false;
-    return isIdentNamed(member.base.*, "compiler") and std.mem.eql(u8, member.name.text, "assume_noalias_unchecked");
 }

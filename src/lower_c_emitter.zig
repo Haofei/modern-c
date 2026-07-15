@@ -5688,7 +5688,7 @@ const CEmitter = struct {
             .grouped => |inner| self.directMirAddressProvenanceExpr(inner.*, locals),
             .cast => |node| self.directMirAddressProvenanceExpr(node.value.*, locals),
             .address_of => |inner| self.directMirAddressProvenanceTarget(inner.*, locals),
-            .call => |call| lower_c_builtin.isAssumeNoaliasCall(call) and
+            .call => |call| self.isMirAssumeNoaliasCall(call) and
                 self.directMirAddressProvenanceExpr(call.args[0], locals),
             else => false,
         };
@@ -5707,12 +5707,18 @@ const CEmitter = struct {
         };
     }
 
+    fn isMirAssumeNoaliasCall(self: *CEmitter, call: anytype) bool {
+        return call.type_args.len == 0 and
+            call.args.len == 2 and
+            self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias;
+    }
+
     fn directMirRawManyZeroOffsetExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirRawManyZeroOffsetExpr(inner.*, locals),
             .cast => |node| self.directMirRawManyZeroOffsetExpr(node.value.*, locals),
             .call => |call| blk: {
-                if (lower_c_builtin.isAssumeNoaliasCall(call)) {
+                if (self.isMirAssumeNoaliasCall(call)) {
                     break :blk self.directMirRawManyZeroOffsetExpr(call.args[0], locals);
                 }
                 if (call.type_args.len != 0 or call.args.len != 1) break :blk false;
@@ -5743,7 +5749,7 @@ const CEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirPointerLocalCopyExpr(inner.*, locals),
             .cast => |node| self.directMirPointerLocalCopyExpr(node.value.*, locals),
-            .call => |call| lower_c_builtin.isAssumeNoaliasCall(call) and
+            .call => |call| self.isMirAssumeNoaliasCall(call) and
                 self.directMirPointerLocalCopyExpr(call.args[0], locals),
             .ident => |ident| blk: {
                 const info = locals.get(ident.text) orelse break :blk false;
@@ -5758,7 +5764,7 @@ const CEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirFixedPointerArrayElementExpr(inner.*, locals),
             .cast => |node| self.directMirFixedPointerArrayElementExpr(node.value.*, locals),
-            .call => |call| lower_c_builtin.isAssumeNoaliasCall(call) and
+            .call => |call| self.isMirAssumeNoaliasCall(call) and
                 self.directMirFixedPointerArrayElementExpr(call.args[0], locals),
             else => self.directLocalArrayElementPath(expr, locals) != null,
         };
@@ -5768,7 +5774,7 @@ const CEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAggregatePointerFieldExpr(inner.*, locals),
             .cast => |node| self.directMirAggregatePointerFieldExpr(node.value.*, locals),
-            .call => |call| lower_c_builtin.isAssumeNoaliasCall(call) and
+            .call => |call| self.isMirAssumeNoaliasCall(call) and
                 self.directMirAggregatePointerFieldExpr(call.args[0], locals),
             else => self.directLocalAggregateMemberPath(expr, locals) != null,
         };
@@ -5778,7 +5784,7 @@ const CEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAggregatePointerArrayElementExpr(inner.*, locals),
             .cast => |node| self.directMirAggregatePointerArrayElementExpr(node.value.*, locals),
-            .call => |call| lower_c_builtin.isAssumeNoaliasCall(call) and
+            .call => |call| self.isMirAssumeNoaliasCall(call) and
                 self.directMirAggregatePointerArrayElementExpr(call.args[0], locals),
             else => self.directLocalAggregateArrayElementPath(expr, locals) != null,
         };
@@ -5787,7 +5793,7 @@ const CEmitter = struct {
     fn directMirPointerContainerValueExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         switch (expr.kind) {
             .call => |call| {
-                if (lower_c_builtin.isAssumeNoaliasCall(call)) {
+                if (self.isMirAssumeNoaliasCall(call)) {
                     return self.directMirPointerContainerValueExpr(call.args[0], locals);
                 }
             },
@@ -5912,7 +5918,7 @@ const CEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.directAggregateCopySourceExprForStruct(inner.*, target_struct_name, locals),
             .cast => |node| self.directAggregateCopySourceExprForStruct(node.value.*, target_struct_name, locals),
-            .call => |call| lower_c_builtin.isAssumeNoaliasCall(call) and self.directAggregateCopySourceExprForStruct(call.args[0], target_struct_name, locals),
+            .call => |call| self.isMirAssumeNoaliasCall(call) and self.directAggregateCopySourceExprForStruct(call.args[0], target_struct_name, locals),
             .ident => |ident| blk: {
                 const info = locals.get(ident.text) orelse break :blk false;
                 const source_ty = info.source_ty orelse break :blk false;
