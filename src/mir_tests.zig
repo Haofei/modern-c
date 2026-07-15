@@ -1049,6 +1049,36 @@ test "MIR owns for-loop iterable and element types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local copy types" {
+    const source =
+        \\fn copies(value: u64, ptr: *u8, values: [2]u32) -> u64 {
+        \\    let copied_value = value;
+        \\    let copied_ptr = ptr;
+        \\    let copied_values = values;
+        \\    return copied_value;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_copy_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "copies").?;
+    try std.testing.expectEqual(@as(usize, 3), countTargetTypeFactsByKind(function, .inferred_local));
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .inferred_local) continue;
+        try std.testing.expect(fact.target_owner != null);
+        try std.testing.expect(fact.target_index == null);
+    }
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns ordinary direct call result and fixed argument types" {
     const source =
         \\trait Width { fn widen(self: *Self) -> u32; }
@@ -1854,14 +1884,16 @@ test "MIR owns MMIO map identity and complete types" {
     const function = functionByName(typed_mir, "map_device").?;
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.mmio_map, function.call_target_facts[0].kind);
-    try std.testing.expectEqual(@as(usize, 3), function.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.mmio_map_source, function.target_type_facts[0].kind);
-    try std.testing.expectEqualStrings("PAddr", function.target_type_facts[0].target_ty.kind.name.text);
-    try std.testing.expectEqual(mir.TargetTypeKind.mmio_map_payload, function.target_type_facts[1].kind);
-    try std.testing.expectEqualStrings("MmioPtr", function.target_type_facts[1].target_ty.kind.generic.base.text);
-    try std.testing.expectEqualStrings("Device", function.target_type_facts[1].target_ty.kind.generic.args[0].kind.name.text);
-    try std.testing.expectEqual(mir.TargetTypeKind.mmio_map_result, function.target_type_facts[2].kind);
-    try std.testing.expectEqualStrings("MmioPtr", function.target_type_facts[2].target_ty.kind.nullable.kind.generic.base.text);
+    try std.testing.expectEqual(@as(usize, 4), function.target_type_facts.len);
+    try std.testing.expectEqual(mir.TargetTypeKind.try_operand, function.target_type_facts[0].kind);
+    try std.testing.expect(function.target_type_facts[0].target_ty.kind == .nullable);
+    try std.testing.expectEqual(mir.TargetTypeKind.mmio_map_source, function.target_type_facts[1].kind);
+    try std.testing.expectEqualStrings("PAddr", function.target_type_facts[1].target_ty.kind.name.text);
+    try std.testing.expectEqual(mir.TargetTypeKind.mmio_map_payload, function.target_type_facts[2].kind);
+    try std.testing.expectEqualStrings("MmioPtr", function.target_type_facts[2].target_ty.kind.generic.base.text);
+    try std.testing.expectEqualStrings("Device", function.target_type_facts[2].target_ty.kind.generic.args[0].kind.name.text);
+    try std.testing.expectEqual(mir.TargetTypeKind.mmio_map_result, function.target_type_facts[3].kind);
+    try std.testing.expectEqualStrings("MmioPtr", function.target_type_facts[3].target_ty.kind.nullable.kind.generic.base.text);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }

@@ -3338,8 +3338,12 @@ const CEmitter = struct {
     }
 
     fn requireMirSwitchSubjectType(self: *CEmitter, subject: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !ast.TypeExpr {
-        const fact_ty = (self.mirTargetTypeFactAt(.switch_subject, subject.span) orelse return error.UnsupportedCEmission).target_ty;
         const known_ty = self.operandEmitType(subject, locals) orelse self.resultTypeForExpr(subject, locals) orelse self.nullableTypeForExpr(subject, locals) orelse self.taggedUnionTypeForExpr(subject, locals);
+        const fact = if (known_ty) |ty|
+            self.mirTargetTypeFactMatchingType(.switch_subject, subject.span, ty)
+        else
+            self.mirTargetTypeFactAt(.switch_subject, subject.span);
+        const fact_ty = (fact orelse return error.UnsupportedCEmission).target_ty;
         if (known_ty) |ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
         }
@@ -4861,7 +4865,8 @@ const CEmitter = struct {
     }
 
     fn emitLocalCopyInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const inferred_ty = self.operandEmitType(initializer, locals) orelse return false;
+        const known_ty = self.operandEmitType(initializer, locals) orelse return false;
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, locals)) orelse known_ty;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         if (try lower_c_access.emitDirectCallSliceIndexLocalInit(self.accessEmitContext(), name, inferred_ty, initializer, locals)) return true;
         if (try lower_c_access.emitDirectCallArrayIndexLocalInit(self.accessEmitContext(), name, inferred_ty, initializer, locals)) return true;
@@ -4950,6 +4955,15 @@ const CEmitter = struct {
         try self.emitExpr(initializer, locals);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
+    }
+
+    fn mirInferredLocalType(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?ast.TypeExpr {
+        const fact_ty = (self.mirTargetTypeFactAtOwned(.inferred_local, initializer.span, name, null) orelse return null).target_ty;
+        const known_ty = self.callReturnTypeForExpr(initializer, locals) orelse self.operandEmitType(initializer, locals);
+        if (known_ty) |ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
+        }
+        return fact_ty;
     }
 
     fn emitSequencedCallArgTemps(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo) anyerror!std.ArrayList(SequencedArgTemp) {
@@ -5170,6 +5184,16 @@ const CEmitter = struct {
             }
         };
         return matched;
+    }
+
+    fn mirTargetTypeFactMatchingType(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, expected_ty: ast.TypeExpr) ?mir.TargetTypeFact {
+        const function = self.currentMirFunction() orelse return null;
+        for (function.target_type_facts) |fact| {
+            if (fact.kind != kind or fact.target_index != null or fact.target_owner != null) continue;
+            if (!mirSourceMatches(span, fact.source)) continue;
+            if (sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected_ty))) return fact;
+        }
+        return null;
     }
 
     fn mirTargetTypeFactAtOwned(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {

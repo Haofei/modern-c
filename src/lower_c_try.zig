@@ -524,6 +524,7 @@ fn nullableTryOperandCType(ctx: TryDirectEmitContext, operand: ast.Expr) !?[]con
     return switch (resolved_child.kind) {
         .pointer, .raw_many_pointer, .dyn_trait => try ctx.replacement.c_type(ctx.replacement.emit_ctx, child),
         .name => |name| if (std.mem.eql(u8, name.text, "c_void")) null else try ctx.replacement.c_type(ctx.replacement.emit_ctx, child),
+        .generic => |generic| if (std.mem.eql(u8, generic.base.text, "MmioPtr")) try ctx.replacement.c_type(ctx.replacement.emit_ctx, child) else null,
         else => null,
     };
 }

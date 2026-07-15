@@ -8,6 +8,7 @@ const eval = @import("eval.zig");
 const numeric = @import("numeric.zig");
 const parser = @import("parser.zig");
 const sema_builtin = @import("sema_builtin.zig");
+const sema_type = @import("sema_type.zig");
 
 // Pure AST-shape queries shared with `sema.zig`/`lower_c.zig` (see `ast_query.zig`).
 const MmioRegisterAccess = ast_query.MmioRegisterAccess;
@@ -1162,7 +1163,7 @@ fn matchingTargetTypeFactsAgree(function: Function, kind: TargetTypeKind, instru
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (fact.source.line != instruction.line or fact.source.column != instruction.column) continue;
         if (first) |expected| {
-            if (!std.meta.eql(expected, fact.target_ty)) return false;
+            if (!sema_type.sameTypeSyntax(expected, fact.target_ty)) return false;
         } else {
             first = fact.target_ty;
         }
@@ -3753,6 +3754,20 @@ const FunctionBuilder = struct {
                 const ty = if (local.ty) |local_ty| valueTypeFromTypeAlias(local_ty, self.enums, self.structs, self.packed_bits, self.aliases) else if (local.init) |init_expr| self.exprType(init_expr) else .unknown;
                 const ty_expr = local.ty orelse if (local.init) |init_expr| self.typeExprForExpr(init_expr) else null;
                 const mutable = std.meta.activeTag(stmt.kind) == .var_decl;
+                if (local.ty == null and local.names.len == 1 and inferredLocalTypeFactEligible(local.init)) {
+                    if (local.init) |init_expr| {
+                        if (ty_expr) |inferred_ty| {
+                            try self.appendOwnedTargetTypeFact(
+                                .inferred_local,
+                                inferred_ty,
+                                valueTypeFromTypeAlias(inferred_ty, self.enums, self.structs, self.packed_bits, self.aliases),
+                                init_expr.span,
+                                local.names[0].text,
+                                null,
+                            );
+                        }
+                    }
+                }
                 for (local.names) |name| {
                     try self.addInstr(.local, name.text, ty, stmt.span);
                     try self.local_types.put(name.text, ty);
@@ -4158,7 +4173,7 @@ const FunctionBuilder = struct {
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         self.local_pointer_array_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, "switch_subject", .branch, span);
-        const subject_type_expr = self.switchSubjectTypeExpr(node.subject);
+        const subject_type_expr = self.switchSubjectTypeExpr(node.subject) orelse booleanSwitchSubjectType(node);
         if (subject_type_expr) |ty| {
             try self.appendTargetTypeFact(.switch_subject, ty, valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases), node.subject.span);
         } else return error.InvalidMirTargetTypeFacts;
@@ -4255,6 +4270,26 @@ const FunctionBuilder = struct {
             .grouped => |inner| self.switchSubjectTypeExpr(inner.*),
             else => null,
         };
+    }
+
+    fn booleanSwitchSubjectType(node: ast.Switch) ?ast.TypeExpr {
+        // Generated async state-machine nodes use the synthetic 0:0 span. Backend
+        // fact lookup is source-span based, so a fallback fact there would alias
+        // unrelated generated switches. Source switches retain their own spans.
+        if (node.subject.span.line == 0 and node.subject.span.column == 0) return null;
+        if (node.arms.len != 2) return null;
+        var saw_true = false;
+        var saw_false = false;
+        for (node.arms) |arm| {
+            if (arm.patterns.len != 1) return null;
+            const literal = switch (arm.patterns[0].kind) {
+                .literal => |expr| switchBoolLiteralValue(expr) orelse return null,
+                else => return null,
+            };
+            if (literal) saw_true = true else saw_false = true;
+        }
+        if (!saw_true or !saw_false) return null;
+        return ast_query.simpleNameType("bool", node.subject.span);
     }
 
     fn addSwitchPatternChecks(self: *FunctionBuilder, node: ast.Switch) !void {
@@ -8468,7 +8503,7 @@ const FunctionBuilder = struct {
                 (if (self.enumRawCallTarget(node)) |target| target.result_type_expr else null) orelse
                 (if (self.dmaCallTarget(node)) |target| target.result_type_expr else null) orelse
                 (if (self.mmioCallTarget(node)) |target| target.result_type_expr else null) orelse
-                mmioMapCallPayloadType(node) orelse
+                (if (self.mmioMapCallTarget(node) catch null) |target| target.result_type_expr else null) orelse
                 reduceCallReturnTypeExpr(node) orelse
                 self.constGetCallTypeExpr(node) orelse
                 (if (self.rawManyOffsetCallTarget(node)) |target| target.result_type_expr else null) orelse
@@ -8826,6 +8861,15 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     allocator.free(function.pointer_provenance_facts);
     allocator.free(function.representation_facts);
     allocator.free(function.elided_bounds);
+}
+
+fn inferredLocalTypeFactEligible(maybe_initializer: ?ast.Expr) bool {
+    const initializer = maybe_initializer orelse return false;
+    return switch (initializer.kind) {
+        .ident => true,
+        .grouped => |inner| inferredLocalTypeFactEligible(inner.*),
+        else => false,
+    };
 }
 
 fn representationFactKind(kind: Instruction.Kind, ty: ValueType) bool {

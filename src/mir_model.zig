@@ -396,6 +396,7 @@ pub const TargetTypeKind = enum {
     try_operand,
     for_iterable,
     for_element,
+    inferred_local,
 };
 
 pub const TargetTypeFact = struct {

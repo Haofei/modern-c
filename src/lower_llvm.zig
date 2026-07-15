@@ -2393,7 +2393,12 @@ const LlvmEmitter = struct {
     fn emitLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl) !void {
         if (local.names.len != 1) return error.UnsupportedLlvmEmission;
         const init = local.init orelse return error.UnsupportedLlvmEmission;
-        const ty = local.ty orelse self.exprType(init) orelse return error.UnsupportedLlvmEmission;
+        const ty = if (local.ty) |decl_ty|
+            decl_ty
+        else if (self.mirTargetTypeFactAtOwned(.inferred_local, init.span, local.names[0].text, null) != null)
+            try self.requireMirInferredLocalType(local.names[0].text, init)
+        else
+            self.exprType(init) orelse return error.UnsupportedLlvmEmission;
         const resolved_ty = self.resolveAliasType(ty);
         const name = local.names[0].text;
         const ptr = try self.nextBindingPtr(name);
@@ -2469,6 +2474,14 @@ const LlvmEmitter = struct {
         }
         const value = try self.emitExprWithMirRangeTarget(init, ty, name);
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
+    }
+
+    fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast.Expr) !ast.TypeExpr {
+        const fact_ty = (self.mirTargetTypeFactAtOwned(.inferred_local, initializer.span, name, null) orelse return error.UnsupportedLlvmEmission).target_ty;
+        if (self.exprType(initializer)) |known_ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
+        }
+        return fact_ty;
     }
 
     fn emitAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr, span: ast.Span) !void {
