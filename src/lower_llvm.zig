@@ -2496,11 +2496,17 @@ const LlvmEmitter = struct {
     // form. The backend uses the source local only to reject a stale pointee.
     fn directAddressOfLocalPointeeType(self: *LlvmEmitter, initializer: ast.Expr) ?ast.TypeExpr {
         return switch (initializer.kind) {
-            .address_of => |inner| switch (inner.kind) {
-                .ident => |ident| self.local_types.get(ident.text),
-                else => null,
-            },
+            .address_of => |inner| self.directAddressOfLocalPlaceType(inner.*),
             .grouped => |inner| self.directAddressOfLocalPointeeType(inner.*),
+            else => null,
+        };
+    }
+
+    fn directAddressOfLocalPlaceType(self: *LlvmEmitter, operand: ast.Expr) ?ast.TypeExpr {
+        return switch (operand.kind) {
+            .ident => |ident| self.local_types.get(ident.text),
+            .member => |node| if (self.directAddressOfLocalPlaceType(node.base.*) != null) self.exprType(operand) else null,
+            .grouped => |inner| self.directAddressOfLocalPlaceType(inner.*),
             else => null,
         };
     }

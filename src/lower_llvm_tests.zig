@@ -1326,6 +1326,7 @@ test "LLVM inferred local try payloads require MIR types" {
 
 test "LLVM inferred local direct addresses require MIR types" {
     const source =
+        \\struct Holder { value: u32 }
         \\fn address_local() -> u32 {
         \\    var value: u32 = 4;
         \\    let pointer = &value;
@@ -1335,6 +1336,17 @@ test "LLVM inferred local direct addresses require MIR types" {
         \\fn address_const_local() -> u32 {
         \\    let value: u32 = 4;
         \\    let pointer = &value;
+        \\    return pointer.*;
+        \\}
+        \\fn address_field() -> u32 {
+        \\    var holder: Holder = .{ .value = 4 };
+        \\    let pointer = &holder.value;
+        \\    pointer.* = 9;
+        \\    return pointer.*;
+        \\}
+        \\fn address_const_field() -> u32 {
+        \\    let holder: Holder = .{ .value = 4 };
+        \\    let pointer = &holder.value;
         \\    return pointer.*;
         \\}
     ;
@@ -1348,17 +1360,19 @@ test "LLVM inferred local direct addresses require MIR types" {
     try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_inferred_local_address.mc", .{}, false, .riscv64, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%pointer") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "@address_const_local") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "@address_field") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "@address_const_field") != null);
 
     var missing = try mir.build(std.testing.allocator, parsed.module);
     defer missing.deinit();
-    try removeTargetTypeKindForFunction(&missing, "address_local", .inferred_local);
+    try removeTargetTypeKindForFunction(&missing, "address_field", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_inferred_local_address.mc", .{}, false, .riscv64, null));
 
     var stale = try mir.build(std.testing.allocator, parsed.module);
     defer stale.deinit();
-    try renameTargetTypeFactForFunction(&stale, "address_local", .inferred_local, "u64");
+    try renameTargetTypeFactForFunction(&stale, "address_field", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_local_address.mc", .{}, false, .riscv64, null));

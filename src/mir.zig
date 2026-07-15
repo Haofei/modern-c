@@ -4322,15 +4322,12 @@ const FunctionBuilder = struct {
     }
 
     // This narrow inferred-address slice is deliberately limited to a direct
-    // previously declared local. It gives the binding an owned type without
-    // broadening address-of inference to members, indices, globals, or calls.
+    // local place or a field path rooted in one. It gives the binding an owned
+    // type without broadening address-of inference to indices, dereferences,
+    // globals, or calls.
     fn inferredLocalAddressTypeExpr(self: *FunctionBuilder, span: ast.Span, operand: ast.Expr) !?ast.TypeExpr {
-        const name = switch (operand.kind) {
-            .ident => |ident| ident.text,
-            .grouped => |inner| return try self.inferredLocalAddressTypeExpr(span, inner.*),
-            else => return null,
-        };
-        const child_ty = self.local_type_exprs.get(name) orelse return null;
+        const root_name = inferredLocalAddressRootLocal(self, operand) orelse return null;
+        const child_ty = self.typeExprForExpr(operand) orelse return null;
         const child = try self.allocator.create(ast.TypeExpr);
         errdefer self.allocator.destroy(child);
         child.* = child_ty;
@@ -4338,7 +4335,7 @@ const FunctionBuilder = struct {
         return .{
             .span = span,
             .kind = .{ .pointer = .{
-                .mutability = if (self.local_mutability.get(name) orelse false) .mut else .@"const",
+                .mutability = if (self.local_mutability.get(root_name) orelse false) .mut else .@"const",
                 .child = child,
             } },
         };
@@ -9094,7 +9091,7 @@ fn inferredLocalTypeFactEligible(builder: *FunctionBuilder, maybe_initializer: ?
         // to make that result type authoritative while allocating the binding.
         .member, .index, .slice => builder.typeExprForExpr(initializer) != null,
         .deref => rawManyOffsetDerefType(builder, initializer) != null or builder.typeExprForExpr(initializer) != null,
-        .address_of => |inner| inferredLocalDirectAddressOfLocal(builder, inner.*),
+        .address_of => |inner| inferredLocalAddressRootLocal(builder, inner.*) != null,
         // The try operand has a MIR-owned type fact, and its payload type is
         // already resolved by typeExprForExpr.
         .try_expr => builder.typeExprForExpr(initializer) != null,
@@ -9105,11 +9102,12 @@ fn inferredLocalTypeFactEligible(builder: *FunctionBuilder, maybe_initializer: ?
     };
 }
 
-fn inferredLocalDirectAddressOfLocal(builder: *FunctionBuilder, operand: ast.Expr) bool {
+fn inferredLocalAddressRootLocal(builder: *FunctionBuilder, operand: ast.Expr) ?[]const u8 {
     return switch (operand.kind) {
-        .ident => |ident| builder.local_type_exprs.contains(ident.text),
-        .grouped => |inner| inferredLocalDirectAddressOfLocal(builder, inner.*),
-        else => false,
+        .ident => |ident| if (builder.local_type_exprs.contains(ident.text)) ident.text else null,
+        .member => |node| inferredLocalAddressRootLocal(builder, node.base.*),
+        .grouped => |inner| inferredLocalAddressRootLocal(builder, inner.*),
+        else => null,
     };
 }
 
