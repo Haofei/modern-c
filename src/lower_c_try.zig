@@ -98,8 +98,6 @@ pub const TryCallEmitContext = struct {
 pub const TryDirectEmitContext = struct {
     arith: lower_c_arith.Context,
     replacement: TryReplacementEmitContext,
-    result_type_for_expr: ResultTypeForExprFn,
-    nullable_inner_c_type_for_expr: NullableInnerCTypeForExprFn,
     emit_deferred_cleanups: EmitDeferredCleanupsFn,
 };
 
@@ -436,7 +434,7 @@ pub fn emitResultTryLocalInit(ctx: TryDirectEmitContext, name: []const u8, decl_
     };
     const enclosing_return_ty = return_ty orelse return false;
     if (resultPayloadTypeForTag(enclosing_return_ty, "err") == null) return false;
-    const operand_result_ty = ctx.result_type_for_expr(ctx.replacement.emit_ctx, operand.expr, locals) orelse return false;
+    const operand_result_ty = resultTryOperandType(ctx, operand.expr) orelse return false;
     _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return false;
     _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return false;
 
@@ -452,7 +450,7 @@ pub fn emitResultTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *s
         .grouped => |inner| return try emitResultTryReturn(ctx, inner.*, locals, return_ty),
         else => return false,
     };
-    const operand_result_ty = ctx.result_type_for_expr(ctx.replacement.emit_ctx, operand, locals) orelse return false;
+    const operand_result_ty = resultTryOperandType(ctx, operand) orelse return false;
     _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return false;
     _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return false;
     const temp_name = try emitResultTryLocalOperandTemp(ctx, operand, locals, operand_result_ty);
@@ -480,7 +478,7 @@ pub fn emitNullableTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: 
         try ctx.replacement.out.print(ctx.replacement.allocator, "return {s}.value;\n", .{temp_name});
         return true;
     }
-    const inner_c_type = try ctx.nullable_inner_c_type_for_expr(ctx.replacement.emit_ctx, operand, locals) orelse return false;
+    const inner_c_type = try nullableTryOperandCType(ctx, operand) orelse return false;
     const temp_name = try nextTempName(ctx.replacement);
 
     try writeIndent(ctx.replacement);
@@ -496,11 +494,38 @@ pub fn emitNullableTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: 
 
 // If `operand` has a value-optional `?T` type, returns its `mc_opt_<T>` C type name.
 fn valueOptionalCType(ctx: TryDirectEmitContext, operand: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?[]const u8 {
-    const ty = ctx.replacement.operand_emit_type(ctx.replacement.emit_ctx, operand, locals) orelse return null;
+    _ = locals;
+    const ty = tryOperandType(ctx, operand) orelse return null;
     const resolved = lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, ty);
     if (resolved.kind != .nullable) return null;
     if (!lower_c_type.nullablePayloadIsValueType(ctx.replacement.type_aliases, resolved.kind.nullable.*)) return null;
     return try ctx.replacement.c_type(ctx.replacement.emit_ctx, resolved);
+}
+
+fn tryOperandType(ctx: TryDirectEmitContext, operand: ast.Expr) ?ast.TypeExpr {
+    return ctx.replacement.mir_target_type(ctx.replacement.emit_ctx, .try_operand, operand.span);
+}
+
+fn resultTryOperandType(ctx: TryDirectEmitContext, operand: ast.Expr) ?ast.TypeExpr {
+    const ty = tryOperandType(ctx, operand) orelse return null;
+    _ = resultPayloadTypeForTag(ty, "ok") orelse return null;
+    _ = resultPayloadTypeForTag(ty, "err") orelse return null;
+    return ty;
+}
+
+fn nullableTryOperandCType(ctx: TryDirectEmitContext, operand: ast.Expr) !?[]const u8 {
+    const ty = tryOperandType(ctx, operand) orelse return null;
+    const resolved = lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, ty);
+    const child = switch (resolved.kind) {
+        .nullable => |inner| inner.*,
+        else => return null,
+    };
+    const resolved_child = lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, child);
+    return switch (resolved_child.kind) {
+        .pointer, .raw_many_pointer, .dyn_trait => try ctx.replacement.c_type(ctx.replacement.emit_ctx, child),
+        .name => |name| if (std.mem.eql(u8, name.text, "c_void")) null else try ctx.replacement.c_type(ctx.replacement.emit_ctx, child),
+        else => null,
+    };
 }
 
 pub fn collectResultTryHoistsForReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(lower_c_model.TryReplacement)) !bool {
@@ -688,12 +713,13 @@ fn emitNullableTrySequencedBinaryOperandTemp(ctx_ptr: *anyopaque, expr: ast.Expr
 
 fn directResultTryOperandIsResult(ctx_ptr: *anyopaque, operand: ast.Expr) bool {
     const ctx: *DirectTryScanContext = @ptrCast(@alignCast(ctx_ptr));
-    return ctx.ctx.result_type_for_expr(ctx.ctx.replacement.emit_ctx, operand, ctx.locals) != null;
+    return resultTryOperandType(ctx.ctx, operand) != null;
 }
 
 fn directNullableTryOperandIsNullable(ctx_ptr: *anyopaque, operand: ast.Expr) anyerror!bool {
     const ctx: *DirectTryScanContext = @ptrCast(@alignCast(ctx_ptr));
-    return (try ctx.ctx.nullable_inner_c_type_for_expr(ctx.ctx.replacement.emit_ctx, operand, ctx.locals)) != null;
+    _ = ctx.locals;
+    return (try nullableTryOperandCType(ctx.ctx, operand)) != null;
 }
 
 fn emitResultTryCallArgTemps(ctx: TryCallEmitContext, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!std.ArrayList(SequencedArgTemp) {
@@ -846,7 +872,7 @@ fn emitResultTryPropagateHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!boo
         else => return false,
     };
     const temp_name = (try emitResultTryHoistTemp(ctx, expr.span, inner.operand.*)) orelse return false;
-    const operand_result_ty = ctx.ctx.result_type_for_expr(ctx.ctx.replacement.emit_ctx, inner.operand.*, ctx.locals) orelse return false;
+    const operand_result_ty = resultTryOperandType(ctx.ctx, inner.operand.*) orelse return false;
 
     try writeIndent(ctx.ctx.replacement);
     try ctx.ctx.replacement.out.print(ctx.ctx.replacement.allocator, "if (!{s}.is_ok) {{\n", .{temp_name});
@@ -859,7 +885,7 @@ fn emitResultTryPropagateHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!boo
 }
 
 fn emitResultTryHoistTemp(ctx: *DirectTryHoistContext, span: ast.Span, operand: ast.Expr) anyerror!?[]const u8 {
-    const operand_result_ty = ctx.ctx.result_type_for_expr(ctx.ctx.replacement.emit_ctx, operand, ctx.locals) orelse return null;
+    const operand_result_ty = resultTryOperandType(ctx.ctx, operand) orelse return null;
     _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return null;
     _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return null;
     const temp_name = try nextTempName(ctx.ctx.replacement);
@@ -878,7 +904,7 @@ fn emitNullableTryTrapHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!bool {
         .try_expr => |node| node,
         else => return false,
     };
-    const inner_c_type = try ctx.ctx.nullable_inner_c_type_for_expr(ctx.ctx.replacement.emit_ctx, inner.operand.*, ctx.locals) orelse return false;
+    const inner_c_type = try nullableTryOperandCType(ctx.ctx, inner.operand.*) orelse return false;
     const temp_name = try nextTempName(ctx.ctx.replacement);
     try ctx.replacements.append(ctx.ctx.replacement.scratch, .{ .span = expr.span, .temp_name = temp_name });
 

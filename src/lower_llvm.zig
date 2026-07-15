@@ -2103,7 +2103,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitTryExpr(self: *LlvmEmitter, operand: ast.Expr, mapped: ?*ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
-        const operand_ty = self.exprType(operand) orelse return error.UnsupportedLlvmEmission;
+        const operand_ty = try self.requireMirTryOperandType(operand);
         _ = try self.llvmType(expected_ty);
         if (self.resultInfo(operand_ty)) |info| {
             _ = try self.resultPayloadLlvmType(info.ok_ty);
@@ -2777,6 +2777,14 @@ const LlvmEmitter = struct {
     fn requireMirIfLetSubjectType(self: *LlvmEmitter, value: ast.Expr) !ast.TypeExpr {
         const fact_ty = (self.mirTargetTypeFactAt(.if_let_subject, value.span) orelse return error.UnsupportedLlvmEmission).target_ty;
         if (self.exprType(value)) |known_ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
+        }
+        return fact_ty;
+    }
+
+    fn requireMirTryOperandType(self: *LlvmEmitter, operand: ast.Expr) !ast.TypeExpr {
+        const fact_ty = (self.mirTargetTypeFactAt(.try_operand, operand.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+        if (self.exprType(operand)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
         }
         return fact_ty;
@@ -8105,10 +8113,13 @@ const LlvmEmitter = struct {
                 break :blk null;
             } else null,
             .binary => |node| if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*),
-            .try_expr => |node| if (self.exprType(node.operand.*)) |ty|
-                if (self.resultInfo(ty)) |info| info.ok_ty else self.nullableInnerType(ty)
-            else
-                null,
+            .try_expr => |node| blk: {
+                const fact = self.mirTargetTypeFactAt(.try_operand, node.operand.*.span) orelse break :blk null;
+                if (self.exprType(node.operand.*)) |known_ty| {
+                    if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(known_ty))) break :blk null;
+                }
+                break :blk if (self.resultInfo(fact.target_ty)) |info| info.ok_ty else self.nullableInnerType(fact.target_ty);
+            },
             else => null,
         };
     }

@@ -1852,8 +1852,6 @@ const CEmitter = struct {
         return .{
             .arith = self.arithContext(),
             .replacement = self.tryReplacementEmitContext(),
-            .result_type_for_expr = resultTypeForTry,
-            .nullable_inner_c_type_for_expr = nullableInnerCTypeForTry,
             .emit_deferred_cleanups = emitDeferredCleanupsForTry,
         };
     }
@@ -2248,16 +2246,6 @@ const CEmitter = struct {
     fn collectNullableTryHoistsForReturnForTry(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(TryReplacement)) anyerror!bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return try lower_c_try.collectNullableTryHoistsForReturn(self.tryDirectEmitContext(), expr, locals, replacements);
-    }
-
-    fn resultTypeForTry(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.resultTypeForExpr(expr, locals);
-    }
-
-    fn nullableInnerCTypeForTry(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?[]const u8 {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return try self.nullableInnerCTypeForExpr(expr, locals);
     }
 
     fn emitDeferredCleanupsForTry(ctx: *anyopaque, locals: *std.StringHashMap(LocalInfo), return_ty: ast.TypeExpr) anyerror!void {
@@ -6975,12 +6963,16 @@ const CEmitter = struct {
 
     fn resultTryOperandIsResult(ctx_ptr: *anyopaque, operand: ast.Expr) bool {
         const ctx: *TryScanContext = @ptrCast(@alignCast(ctx_ptr));
-        return ctx.emitter.resultTypeForExpr(operand, ctx.locals) != null;
+        _ = ctx.locals;
+        const fact = ctx.emitter.mirTargetTypeFactAt(.try_operand, operand.span) orelse return false;
+        return lower_c_shape.resultPayloadTypeForTag(fact.target_ty, "ok") != null and lower_c_shape.resultPayloadTypeForTag(fact.target_ty, "err") != null;
     }
 
     fn nullableTryOperandIsNullable(ctx_ptr: *anyopaque, operand: ast.Expr) anyerror!bool {
         const ctx: *TryScanContext = @ptrCast(@alignCast(ctx_ptr));
-        return (try ctx.emitter.nullableInnerCTypeForExpr(operand, ctx.locals)) != null;
+        _ = ctx.locals;
+        const fact = ctx.emitter.mirTargetTypeFactAt(.try_operand, operand.span) orelse return false;
+        return ctx.emitter.resolveAliasType(fact.target_ty).kind == .nullable;
     }
 
     fn sliceReturnTypeForCall(self: *CEmitter, call: anytype) ?ast.TypeExpr {

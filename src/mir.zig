@@ -4806,6 +4806,8 @@ const FunctionBuilder = struct {
             },
             .try_expr => |inner| {
                 const inner_ty = self.exprType(inner.operand.*);
+                const operand_ty = self.typeExprForExpr(inner.operand.*) orelse return error.UnsupportedMirConstruction;
+                try self.appendTargetTypeFact(.try_operand, operand_ty, inner_ty, inner.operand.*.span);
                 if (isTryCapableType(inner_ty)) {
                     try self.addInstr(.result_check, "try_handled", inner_ty, expr.span);
                 } else {

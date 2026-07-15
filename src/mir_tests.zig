@@ -994,6 +994,31 @@ test "MIR owns if-let subject types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns try operand types" {
+    const source =
+        \\extern fn make_result() -> Result<u32, u32>;
+        \\extern fn make_nullable() -> ?*const u8;
+        \\fn result_try() -> u32 { return make_result()?; }
+        \\fn nullable_try() -> *const u8 { return make_nullable()?; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_try_operand_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const result_fact = targetTypeFactByKind(functionByName(typed_mir, "result_try").?, .try_operand) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Result", result_fact.target_ty.kind.generic.base.text);
+    const nullable_fact = targetTypeFactByKind(functionByName(typed_mir, "nullable_try").?, .try_operand) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(nullable_fact.target_ty.kind == .nullable);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns ordinary direct call result and fixed argument types" {
     const source =
         \\trait Width { fn widen(self: *Self) -> u32; }

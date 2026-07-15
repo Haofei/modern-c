@@ -393,6 +393,7 @@ pub const TargetTypeKind = enum {
     loop_condition,
     switch_subject,
     if_let_subject,
+    try_operand,
 };
 
 pub const TargetTypeFact = struct {

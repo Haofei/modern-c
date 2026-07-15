@@ -1804,6 +1804,41 @@ test "LLVM if-let statements require MIR subject types" {
     }
 }
 
+test "LLVM try expressions require MIR operand types" {
+    const source =
+        \\extern fn make_result() -> Result<u32, u32>;
+        \\extern fn make_nullable() -> ?*const u8;
+        \\fn result_try() -> u32 { return make_result()?; }
+        \\fn nullable_try() -> *const u8 { return make_nullable()?; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_try_operand_type_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_try_operand_type_facts.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "result_try") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "nullable_try") != null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeKindForFunction(&missing, "result_try", .try_operand);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_try_operand_type_facts.mc", .{}, false, .riscv64, null));
+
+    for ([_][]const u8{ "result_try", "nullable_try" }) |name| {
+        var stale = try mir.build(std.testing.allocator, parsed.module);
+        defer stale.deinit();
+        try renameTargetTypeFactForFunction(&stale, name, .try_operand, "u32");
+        var stale_output: std.ArrayList(u8) = .empty;
+        defer stale_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_try_operand_type_facts.mc", .{}, false, .riscv64, null));
+    }
+}
+
 test "LLVM ordinary direct calls require MIR result and argument types" {
     const source =
         \\fn widen(value: u64) -> u64 { return value; }
