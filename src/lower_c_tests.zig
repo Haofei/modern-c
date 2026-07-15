@@ -1175,6 +1175,44 @@ test "lower-c raw-many offset consumes MIR identity and complete types" {
     }
 }
 
+test "lower-c direct storage-read inferred locals require MIR facts" {
+    const source =
+        \\struct Packet { head: u32, values: [2]u32 }
+        \\fn storage_reads(packet: Packet, ptr: *mut u32) -> u32 {
+        \\    unsafe {
+        \\        let field = packet.head;
+        \\        let item = packet.values[0];
+        \\        let window = packet.values[0..1];
+        \\        let loaded = ptr.*;
+        \\        return field + item + window[0] + loaded;
+        \\    }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_inferred_storage_reads.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_inferred_storage_reads.mc", .{}, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "storage_reads") != null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeKindForFunction(&missing, "storage_reads", .inferred_local);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_inferred_storage_reads.mc", .{}, false, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactForFunction(&stale, "storage_reads", .inferred_local, "u64");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_storage_reads.mc", .{}, false, null));
+}
+
 test "lower-c compound expressions require complete MIR result facts" {
     const source =
         \\fn expression_facts(index: usize) -> u8 {

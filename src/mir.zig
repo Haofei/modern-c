@@ -9058,7 +9058,11 @@ fn inferredLocalTypeFactEligible(builder: *FunctionBuilder, maybe_initializer: ?
         .cast => true,
         .int_literal, .bool_literal => true,
         .call => |node| builder.inferredLocalCallType(node) != null,
-        .deref => |inner| rawManyOffsetDerefType(builder, inner.*) != null,
+        // These are direct storage reads whose complete type is already resolved by
+        // typeExprForExpr. Record the inferred-local type so neither backend needs
+        // to make that result type authoritative while allocating the binding.
+        .member, .index, .slice => builder.typeExprForExpr(initializer) != null,
+        .deref => rawManyOffsetDerefType(builder, initializer) != null or builder.typeExprForExpr(initializer) != null,
         .unary => |node| node.op == .logical_not or inferredLocalTypeFactEligible(builder, node.expr.*),
         .binary => |node| mirIsArithmeticBinary(node.op) or mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op),
         .grouped => |inner| inferredLocalTypeFactEligible(builder, inner.*),

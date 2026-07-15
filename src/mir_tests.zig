@@ -1137,6 +1137,63 @@ test "MIR owns inferred local copy types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns inferred local direct storage read types" {
+    const source =
+        \\struct Packet { head: u32, values: [2]u32 }
+        \\fn storage_reads(packet: Packet, ptr: *mut u32) -> u32 {
+        \\    unsafe {
+        \\        let field = packet.head;
+        \\        let item = packet.values[0];
+        \\        let window = packet.values[0..1];
+        \\        let loaded = ptr.*;
+        \\        return field + item + window[0] + loaded;
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_storage_read_types.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "storage_reads").?;
+    try std.testing.expectEqual(@as(usize, 4), countTargetTypeFactsByKind(function, .inferred_local));
+    var saw_field = false;
+    var saw_item = false;
+    var saw_window = false;
+    var saw_loaded = false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .inferred_local) continue;
+        if (std.mem.eql(u8, fact.target_owner.?, "field")) {
+            try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+            saw_field = true;
+        }
+        if (std.mem.eql(u8, fact.target_owner.?, "item")) {
+            try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+            saw_item = true;
+        }
+        if (std.mem.eql(u8, fact.target_owner.?, "window")) {
+            try std.testing.expect(fact.target_ty.kind == .slice);
+            saw_window = true;
+        }
+        if (std.mem.eql(u8, fact.target_owner.?, "loaded")) {
+            try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+            saw_loaded = true;
+        }
+    }
+    try std.testing.expect(saw_field);
+    try std.testing.expect(saw_item);
+    try std.testing.expect(saw_window);
+    try std.testing.expect(saw_loaded);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns inferred local cast types" {
     const source =
         \\fn casts(value: u64, ptr: *const u64) -> u32 {
