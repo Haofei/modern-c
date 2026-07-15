@@ -2622,10 +2622,13 @@ const CEmitter = struct {
         try lower_c_defs.emitDynTraitTypes(self.defsContext(), &self.trait_decls);
     }
 
-    // The closure type of a callee expression, if it is closure-typed (so its call
-    // dispatches through the {code, env} pair). Resolves through aliases.
+    // Checked MIR owns the complete indirect callee signature. The legacy
+    // parser-only C entry point still accepts modules that have no such fact.
     fn closureCalleeType(self: *CEmitter, callee: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const ty = self.operandEmitType(callee, locals) orelse return null;
+        const ty = if (self.mirTargetTypeFactAt(.indirect_call_callee, callee.span)) |fact|
+            fact.target_ty
+        else
+            self.operandEmitType(callee, locals) orelse return null;
         const resolved = self.resolveAliasType(ty);
         return switch (resolved.kind) {
             .closure_type => resolved,
@@ -4062,6 +4065,11 @@ const CEmitter = struct {
             try lower_c_dispatch.emitClosureCall(self.dispatchContext(), node, clos, locals);
             return true;
         }
+        if (self.indirectCallCalleeType(node.callee.*)) |callee_ty| switch (callee_ty.kind) {
+            .fn_pointer => {},
+            .closure_type => unreachable,
+            else => return error.UnsupportedCEmission,
+        };
         if (try lower_c_call.emitRawAddressCall(self.callContext(), node, locals)) return true;
         if (try lower_c_call.emitVaCall(self.callContext(), node, locals)) return true;
         if (try lower_c_builtin_emit.emitBuiltinCallExpr(self.builtinEmitContext(), node, locals)) return true;
@@ -7096,6 +7104,11 @@ const CEmitter = struct {
         if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.dynDispatchReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.closureCalleeType(call.callee.*, locals)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
+        if (self.indirectCallCalleeType(call.callee.*)) |callee_ty| return switch (callee_ty.kind) {
+            .fn_pointer => |signature| signature.ret.*,
+            .closure_type => |signature| signature.ret.*,
+            else => null,
+        };
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
         const fact_ty = if (self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null)) |fact| fact.target_ty else return null;
@@ -7103,6 +7116,11 @@ const CEmitter = struct {
             if (!std.meta.eql(fact_ty, declared_ty)) return null;
         } else if (!isVoidType(fact_ty)) return null;
         return fact_ty;
+    }
+
+    fn indirectCallCalleeType(self: *CEmitter, callee: ast.Expr) ?ast.TypeExpr {
+        const ty = (self.mirTargetTypeFactAt(.indirect_call_callee, callee.span) orelse return null).target_ty;
+        return self.resolveAliasType(ty);
     }
 
     fn dynDispatchReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {

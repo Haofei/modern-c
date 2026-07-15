@@ -894,13 +894,13 @@ backend admission. This closes assert condition typing only, not broader
 expression typing or the typed-HIR/MIR workstream.
 
 Ordinary declared direct-call typing is now MIR-owned for the result and every
-fixed argument. C and LLVM consume the same complete facts across value,
-void/never, sequenced, inferred-result, and extern-nonnull paths. Variadic tails
-remain targetless by design. Declaration tables are now ABI/stale-fact checks,
-not fallback type authorities: missing facts fail MIR admission and stale types
-fail backend admission. This advances ordinary call typing; exact callee
-identity, dynamic dispatch, closures, function pointers, and broader expression
-typing remain open.
+fixed argument. Function-pointer and closure calls carry one complete
+MIR-owned callee signature. Checked C uses it for closure dispatch and indirect
+result typing; LLVM also uses it for indirect-call parameter emission. Variadic
+tails remain targetless by design. Missing direct or indirect facts fail MIR
+admission, and stale direct complete types or malformed stale indirect
+signatures fail backend admission. Exact dynamic-dispatch typing and broader
+expression typing remain open.
 
 Next actionable slice: select the next bounded operation family from the
 registered C call-target or LLVM expression-type inference rows, migrate its

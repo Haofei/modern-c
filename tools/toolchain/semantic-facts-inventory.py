@@ -23,6 +23,10 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn operandEmitType(",
             "pub fn derefPointeeType(",
         ],
+        "src/lower_c_emitter.zig": [
+            "fn indirectCallCalleeType(",
+            "mirTargetTypeFactAt(.indirect_call_callee",
+        ],
     },
     "c-type-shape-classification": {
         "docs/typed-semantic-facts.md": ["| `c-type-shape-classification` |"],
@@ -152,6 +156,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "self.mirCallTargetKindAt(call.callee.*.span) != .phys",
             "mirTargetTypeFactAt(.const_get_base",
             "mirConstGetIndexAt(call.callee.*.span)",
+            "mirTargetTypeFactAt(.indirect_call_callee",
         ],
     },
     "llvm-bounds-range-consumption": {
@@ -723,6 +728,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "appendTargetTypeFact(.assert_condition": 1,
         "appendOwnedTargetTypeFact(.direct_call_result": 1,
         ".direct_call_argument,": 1,
+        "appendTargetTypeFact(.indirect_call_callee": 1,
+        "fn indirectCallTarget(": 1,
         "fn appendOwnedTargetTypeFact(": 1,
         "fn addSelfTypedExpressionFact(": 1,
         "qualified_union_result": 1,
@@ -877,6 +884,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "emitExprWithTarget(expr, locals, condition_ty)": 1,
         "mirTargetTypeFactAtOwned(.direct_call_result": 1,
         "mirTargetTypeFactAtOwned(.direct_call_argument": 1,
+        "mirTargetTypeFactAt(.indirect_call_callee": 2,
         "mirTargetTypeFactAt(.value_optional_coercion": 1,
         "mirTargetTypeFactAt(.dyn_coercion": 1,
         "mirTargetTypeFactAt(.explicit_cast_source": 2,
@@ -1114,6 +1122,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn mirTargetTypeFactAtOwned(": 1,
         "mirTargetTypeFactAtOwned(.direct_call_result": 3,
         "mirTargetTypeFactAtOwned(.direct_call_argument": 2,
+        "mirTargetTypeFactAt(.indirect_call_callee": 2,
         "fn expectedTyForCallArg(": 0,
         "return if (self.fn_sigs.get(callee)) |sig| sig.ret else null;": 0,
         "mirTargetTypeFactAt(.value_optional_coercion": 1,

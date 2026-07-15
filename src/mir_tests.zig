@@ -965,6 +965,62 @@ test "MIR owns ordinary direct call result and fixed argument types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns indirect function-pointer and closure callee signatures" {
+    const source =
+        \\fn increment(value: u32) -> u32 { return value + 1; }
+        \\fn invoke_pointer(callback: fn(u32) -> u32, value: u32) -> u32 { return callback(value); }
+        \\fn invoke_closure(callback: closure(u32) -> u32, value: u32) -> u32 { return callback(value); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_indirect_call_signature_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    for ([_][]const u8{ "invoke_pointer", "invoke_closure" }) |name| {
+        const function = functionByName(typed_mir, name).?;
+        const fact = targetTypeFactByKind(function, .indirect_call_callee) orelse return error.TestUnexpectedResult;
+        const resolved = switch (fact.target_ty.kind) {
+            .fn_pointer, .closure_type => true,
+            else => false,
+        };
+        try std.testing.expect(resolved);
+        try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .indirect_call_callee));
+    }
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR identifies indirect function-pointer struct fields before direct calls" {
+    const source =
+        \\fn increment(value: u32) -> u32 { return value + 1; }
+        \\struct Callback { run: fn(u32) -> u32 }
+        \\fn invoke(callback: *Callback, value: u32) -> u32 { return callback.run(value); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_indirect_member_call_signature_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "invoke").?;
+    const fact = targetTypeFactByKind(function, .indirect_call_callee) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(switch (fact.target_ty.kind) {
+        .fn_pointer => true,
+        else => false,
+    });
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR records complete checked binary trap edges for division remainder and shifts" {
     const source =
         \\fn unsigned_div(a: u32, b: u32) -> u32 {

@@ -8655,7 +8655,7 @@ const LlvmEmitter = struct {
     }
 
     fn fnPointerCalleeType(self: *LlvmEmitter, callee: ast.Expr) ?ast.TypeExpr {
-        const ty = self.exprType(callee) orelse return null;
+        const ty = (self.mirTargetTypeFactAt(.indirect_call_callee, callee.span) orelse return null).target_ty;
         const resolved_ty = self.resolveAliasType(ty);
         return switch (resolved_ty.kind) {
             .fn_pointer => resolved_ty,
@@ -8664,7 +8664,7 @@ const LlvmEmitter = struct {
     }
 
     fn closureCalleeType(self: *LlvmEmitter, callee: ast.Expr) ?ast.TypeExpr {
-        const ty = self.exprType(callee) orelse return null;
+        const ty = (self.mirTargetTypeFactAt(.indirect_call_callee, callee.span) orelse return null).target_ty;
         const resolved_ty = self.resolveAliasType(ty);
         return switch (resolved_ty.kind) {
             .closure_type => resolved_ty,

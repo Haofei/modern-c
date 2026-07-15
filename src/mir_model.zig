@@ -389,6 +389,7 @@ pub const TargetTypeKind = enum {
     byte_view_source,
     byte_view_result,
     discard_argument,
+    indirect_call_callee,
 };
 
 pub const TargetTypeFact = struct {

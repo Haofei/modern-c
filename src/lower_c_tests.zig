@@ -1655,6 +1655,39 @@ test "lower-c ordinary direct calls require MIR result and argument types" {
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_direct_call_type_facts.mc", .{}, false, null));
 }
 
+test "lower-c indirect calls require MIR callee signature facts" {
+    const source =
+        \\fn increment(value: u32) -> u32 { return value + 1; }
+        \\fn invoke_pointer(callback: fn(u32) -> u32, value: u32) -> u32 { return callback(value); }
+        \\fn invoke_closure(callback: closure(u32) -> u32, value: u32) -> u32 { return callback(value); }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_indirect_call_signature_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_indirect_call_signature_facts.mc", .{}, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "callback(") != null);
+
+    for ([_][]const u8{ "invoke_pointer", "invoke_closure" }) |name| {
+        var missing = try mir.build(std.testing.allocator, parsed.module);
+        defer missing.deinit();
+        try removeTargetTypeKindForFunction(&missing, name, .indirect_call_callee);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &output, .kernel, "c_indirect_call_signature_facts.mc", .{}, false, null));
+
+        var stale = try mir.build(std.testing.allocator, parsed.module);
+        defer stale.deinit();
+        try renameTargetTypeFactForFunction(&stale, name, .indirect_call_callee, "u32");
+        var stale_output: std.ArrayList(u8) = .empty;
+        defer stale_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_indirect_call_signature_facts.mc", .{}, false, null));
+    }
+}
+
 test "lower-c rejects prebuilt MIR with missing cpu pause call target facts" {
     const source =
         \\fn cpu_pause_call_target_fact_gate() -> void {

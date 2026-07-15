@@ -4899,6 +4899,7 @@ const FunctionBuilder = struct {
                     self.summaries.get(callee_name)
                 else
                     null;
+                const indirect_call_target = if (!direct_call and !is_dyn_dispatch) self.indirectCallTarget(node) else null;
                 const reflection_target = self.reflectionCallTarget(node);
                 const byte_view_target = self.byteViewCallTarget(node);
                 const semantic_escape_target = try self.semanticEscapeCallTarget(node);
@@ -4961,7 +4962,7 @@ const FunctionBuilder = struct {
                     target.result_ty
                 else if (self.cpuPauseCallValueType(node)) |ty|
                     ty
-                else if (self.fenceCallTargetKind(node.callee.*)) |_| .void else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
+                else if (self.fenceCallTargetKind(node.callee.*)) |_| .void else if (indirect_call_target) |target| target.result_ty else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
                 if (direct_decl_summary) |summary| {
                     const result_ty = summary.return_type_expr orelse ast_query.simpleNameType("void", node.callee.*.span);
@@ -4977,6 +4978,9 @@ const FunctionBuilder = struct {
                             index,
                         );
                     }
+                }
+                if (indirect_call_target) |target| {
+                    try self.appendTargetTypeFact(.indirect_call_callee, target.callee_type_expr, target.callee_ty, node.callee.*.span);
                 }
                 if (reduceCallKind(node.callee.*)) |kind| {
                     const fact_kind: CallTargetKind = switch (kind) {
@@ -5333,6 +5337,10 @@ const FunctionBuilder = struct {
 
     fn isKnownDirectCall(self: *FunctionBuilder, callee: ast.Expr, callee_name: []const u8) bool {
         if (isKnownDirectPrimitive(callee_name) or isTrapCall(callee) or isUnwrapCall(callee) or isUncheckedCall(callee)) return true;
+        if (self.typeExprForExpr(callee)) |callee_ty| switch (aggregateTargetTypeAlias(callee_ty, self.aliases).kind) {
+            .fn_pointer, .closure_type => return false,
+            else => {},
+        };
         if (directCalleeName(callee) == null) return false;
         if (self.summaries.contains(callee_name)) return true;
         return !self.calleeMayResolveToValue(callee);
@@ -8456,6 +8464,28 @@ const FunctionBuilder = struct {
             .cast => |node| node.ty.*,
             .try_expr => |inner| if (mmioMapPayloadTypeForExpr(inner.operand.*)) |ty| ty else if (self.typeExprForExpr(inner.operand.*)) |ty| tryPayloadTypeExprAlias(ty, self.aliases) else null,
             else => null,
+        };
+    }
+
+    const IndirectCallTarget = struct {
+        callee_type_expr: ast.TypeExpr,
+        callee_ty: ValueType,
+        result_ty: ValueType,
+    };
+
+    fn indirectCallTarget(self: *FunctionBuilder, call: anytype) ?IndirectCallTarget {
+        if (call.type_args.len != 0) return null;
+        const callee_type_expr = self.typeExprForExpr(call.callee.*) orelse return null;
+        const resolved = aggregateTargetTypeAlias(callee_type_expr, self.aliases);
+        const result_type_expr = switch (resolved.kind) {
+            .fn_pointer => |signature| signature.ret.*,
+            .closure_type => |signature| signature.ret.*,
+            else => return null,
+        };
+        return .{
+            .callee_type_expr = callee_type_expr,
+            .callee_ty = valueTypeFromTypeAlias(callee_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+            .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
         };
     }
 
