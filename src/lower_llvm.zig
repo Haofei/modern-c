@@ -1373,7 +1373,7 @@ const LlvmEmitter = struct {
             else
                 error.UnsupportedLlvmEmission,
             .binary => |node| try self.emitBinary(node, expected_ty),
-            .unary => |node| try self.emitUnary(node, expected_ty),
+            .unary => |node| try self.emitUnary(node, expr.span),
             .cast => |node| try self.emitCast(expr.span, node.value.*),
             .address_of => |inner| try self.emitAddressOf(inner.*),
             .deref => |inner| try self.emitDeref(inner.*, expr.span),
@@ -7054,7 +7054,9 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitUnary(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr) ![]const u8 {
+    fn emitUnary(self: *LlvmEmitter, node: anytype, unary_span: ast.Span) ![]const u8 {
+        const inferred_ty = if (node.op == .logical_not) simpleType(unary_span, "bool") else self.exprType(node.expr.*);
+        const ty = self.requireExpressionResultType(.{ .kind = .{ .unary = node }, .span = unary_span }, inferred_ty) orelse return error.UnsupportedLlvmEmission;
         return switch (node.op) {
             .logical_not => blk: {
                 const value = try self.emitExpr(node.expr.*, ty);
@@ -8249,7 +8251,7 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .ident => |ident| self.local_types.get(ident.text) orelse self.global_types.get(ident.text) orelse self.fnPointerTypeForName(ident.text),
             .bool_literal => simpleType(expr.span, "bool"),
-            .unary => |node| self.expressionResultType(expr, if (node.op == .logical_not) simpleType(expr.span, "bool") else self.exprType(node.expr.*)),
+            .unary => |node| self.requireExpressionResultType(expr, if (node.op == .logical_not) simpleType(expr.span, "bool") else self.exprType(node.expr.*)),
             .int_literal => null,
             .float_literal => null,
             .grouped => |inner| self.exprType(inner.*),

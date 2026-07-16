@@ -34,6 +34,7 @@ pub const EmitContext = struct {
     emit_checked_binary: EmitCheckedExprFn,
     count_mmio_reads: CountExprFn,
     numeric_expr_type: ExprTypeFn,
+    unary_result_type: ExprTypeFn,
     operand_emit_type: ExprTypeFn,
     expr_resolves_to_float: ExprPredicateFn,
     // True when `expr` statically has a value-optional `?T` type (tagged repr). Backed by
@@ -46,6 +47,7 @@ pub fn emitUnaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashM
         .unary => |node| node,
         else => unreachable,
     };
+    _ = ctx.unary_result_type(ctx.emit_ctx, expr, locals) orelse return error.UnsupportedCEmission;
     if (node.op == .neg and lower_c_const.negatedLiteralIsI64Min(node.expr.*)) {
         // The most-negative i64 (INT64_MIN). Emitting `-(9223372036854775808)` is
         // wrong in C: the magnitude 2^63 exceeds LLONG_MAX, so the bare decimal

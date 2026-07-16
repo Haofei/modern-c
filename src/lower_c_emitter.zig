@@ -1796,6 +1796,7 @@ const CEmitter = struct {
             .emit_checked_binary = emitCheckedBinaryExprForExpr,
             .count_mmio_reads = countMmioReadsForExpr,
             .numeric_expr_type = numericExprTypeForConvert,
+            .unary_result_type = unaryResultTypeForExpr,
             .operand_emit_type = operandEmitTypeForAtomic,
             .expr_resolves_to_float = exprResolvesToFloatForExpr,
             .is_value_optional = isValueOptionalForExpr,
@@ -1878,6 +1879,23 @@ const CEmitter = struct {
     fn numericExprTypeForConvert(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.numericExprTypeForEmission(expr, locals);
+    }
+
+    fn unaryResultTypeForExpr(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        const node = switch (expr.kind) {
+            .unary => |node| node,
+            else => return null,
+        };
+        const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
+        const inferred = if (node.op == .logical_not)
+            ast_query.simpleNameType("bool", expr.span)
+        else
+            self.numericExprTypeForEmission(node.expr.*, locals);
+        if (inferred) |ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(ty))) return null;
+        }
+        return fact.target_ty;
     }
 
     fn underlyingIntTypeNameForConvert(ctx: *anyopaque, ty: ast.TypeExpr) ?[]const u8 {
