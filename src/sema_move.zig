@@ -1699,6 +1699,19 @@ test "move root ownership lookup uses typed places rather than compatibility key
     try std.testing.expect(!state.get("compat:owner").?.live);
 }
 
+test "move alias tracking requires a typed referent place" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    try std.testing.expect(aliasReferentIsTracked(.{ .key = "compat:owner", .place = null, .full_deref = false }, &state));
+
+    try state.put("legacy", .{ .live = true, .span = span });
+    try std.testing.expect(!aliasReferentIsTracked(.{ .key = "legacy", .place = null, .full_deref = false }, &state));
+}
+
 test "move deferred aliases recover typed places from their state slots" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-defer-alias-place.mc", "");
     defer reporter.deinit();
@@ -1999,7 +2012,9 @@ const AliasReferent = struct {
 
 fn aliasReferentIsTracked(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot)) bool {
     if (referent.place) |place| return rootMoveSlotForPlace(place, state) != null;
-    return state.contains(referent.key);
+    const referent_slot = state.get(referent.key) orelse return false;
+    const place = referent_slot.place orelse return false;
+    return rootMoveSlotForPlace(place, state) != null;
 }
 
 fn aliasReferentRoot(referent: AliasReferent) []const u8 {
