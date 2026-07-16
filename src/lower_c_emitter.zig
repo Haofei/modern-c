@@ -3707,7 +3707,7 @@ const CEmitter = struct {
             .unary => try lower_c_expr.emitUnaryExpr(self.exprEmitContext(), expr, locals),
             .binary => try lower_c_expr.emitBinaryExpr(self.exprEmitContext(), expr, locals),
             .call => |node| try self.emitCallExpr(expr, node, locals),
-            .index => |node| try self.emitIndexExpr(node, locals),
+            .index => |node| try self.emitIndexExpr(node, expr.span, locals),
             .slice => |node| try self.emitSliceExpr(node, expr.span, locals),
             .address_of => |inner| try self.emitAddressOfExpr(inner.*, locals),
             .deref => |inner| try self.emitDerefExpr(inner.*, locals),
@@ -3843,7 +3843,15 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ")");
     }
 
-    fn emitIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitIndexExpr(self: *CEmitter, node: anytype, index_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        const base_ty = self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
+        const inferred_element_ty = switch (self.resolveAliasType(base_ty).kind) {
+            .array => |array| array.child.*,
+            .slice => |slice| slice.child.*,
+            else => return error.UnsupportedCEmission,
+        };
+        const element_ty = (self.mirTargetTypeFactAt(.expression_result, index_span) orelse return error.UnsupportedCEmission).target_ty;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(inferred_element_ty))) return error.UnsupportedCEmission;
         if (locals) |local_set| {
             if (try self.emitOverlayIndexReadExpr(node, local_set)) return;
         }
@@ -7427,8 +7435,13 @@ const CEmitter = struct {
             // A struct-field base (`sp.s` where `s: []T`) has no LocalInfo, so
             // recover its declared type from the struct decl via operandEmitType.
             .member => self.operandEmitType(expr, locals),
-            .index => |node| self.operandEmitType(expr, locals) orelse
-                (if (locals) |local_set| localIndexElementType(node.base.*, local_set) else null),
+            .index => |node| blk: {
+                const inferred = self.operandEmitType(expr, locals) orelse
+                    (if (locals) |local_set| localIndexElementType(node.base.*, local_set) else null) orelse break :blk null;
+                const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse break :blk null;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
+                break :blk fact.target_ty;
+            },
             .slice => |node| blk: {
                 const base_ty = self.exprSourceTypeForEmission(node.base.*, locals) orelse break :blk null;
                 const inferred = self.sliceTypeForBase(base_ty, node.base.*.span) orelse break :blk null;

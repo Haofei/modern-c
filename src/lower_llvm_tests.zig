@@ -141,11 +141,11 @@ fn renameTargetTypeFactForFunction(module_mir: *mir.Module, name: []const u8, ki
     return error.TestUnexpectedResult;
 }
 
-fn renameTargetTypeFactAtOffsetForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind, source_offset: usize, target_name: []const u8) !void {
+fn renameTargetTypeFactAtOffsetForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind, source_offset: usize, source_len: usize, target_name: []const u8) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
         for (function.target_type_facts) |*fact| {
-            if (fact.kind != kind or fact.source.offset != source_offset) continue;
+            if (fact.kind != kind or fact.source.offset != source_offset or fact.source.len != source_len) continue;
             fact.target_ty = .{ .span = fact.target_ty.span, .kind = .{ .name = .{ .text = target_name, .span = fact.target_ty.span } } };
             return;
         }
@@ -1479,7 +1479,16 @@ test "LLVM compound expressions require complete MIR result facts" {
         var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
         defer module_mir.deinit();
         const slice_offset = std.mem.indexOf(u8, source, "values[0..index]") orelse return error.TestUnexpectedResult;
-        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "expression_facts", .expression_result, slice_offset, "u64");
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "expression_facts", .expression_result, slice_offset, "values[0..index]".len, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_expression_result_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const index_offset = std.mem.indexOf(u8, source, "window[0] ==") orelse return error.TestUnexpectedResult;
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "expression_facts", .expression_result, index_offset, "window[0]".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_expression_result_facts.mc", .{}, false, .riscv64, null));

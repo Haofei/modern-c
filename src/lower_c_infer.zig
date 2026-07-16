@@ -281,7 +281,7 @@ pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Stri
                 .slice => resolved.kind.slice.child.*,
                 else => null,
             };
-            return if (inferred) |ty| expressionResultType(ctx, expr, ty) else null;
+            return if (inferred) |ty| requireExpressionResultType(ctx, expr, ty) else null;
         },
         .deref => return ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span),
         else => return null,
@@ -290,6 +290,12 @@ pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Stri
 
 fn expressionResultType(ctx: TypeQueryContext, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
     const fact = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return inferred;
+    if (!sameCStorageType(resolveAliasType(ctx, fact), resolveAliasType(ctx, inferred))) return null;
+    return fact;
+}
+
+fn requireExpressionResultType(ctx: TypeQueryContext, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
+    const fact = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return null;
     if (!sameCStorageType(resolveAliasType(ctx, fact), resolveAliasType(ctx, inferred))) return null;
     return fact;
 }

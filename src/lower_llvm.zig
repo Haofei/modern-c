@@ -1377,7 +1377,7 @@ const LlvmEmitter = struct {
             .cast => |node| try self.emitCast(expr.span, node.value.*),
             .address_of => |inner| try self.emitAddressOf(inner.*),
             .deref => |inner| try self.emitDeref(inner.*, expected_ty),
-            .index => |node| try self.emitIndexLoad(node),
+            .index => |node| try self.emitIndexLoad(node, expr.span),
             .slice => |node| try self.emitSlice(node, expr.span),
             .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact|
                 (if (self.enumDeclForType(fact.target_ty)) |enum_decl|
@@ -6066,7 +6066,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitIndexLoad(self: *LlvmEmitter, node: anytype) ![]const u8 {
+    fn emitIndexLoad(self: *LlvmEmitter, node: anytype, index_span: ast.Span) ![]const u8 {
         if (overlayMemberFromIndexBase(node.base.*)) |member| {
             if (self.overlayField(member.base.*, member.name.text)) |field| {
                 // Any array-view element (byte or non-byte): the byte offset is
@@ -6079,7 +6079,9 @@ const LlvmEmitter = struct {
                 return result;
             }
         }
-        const element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+        const inferred_element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+        const element_ty = (self.mirTargetTypeFactAt(.expression_result, index_span) orelse return error.UnsupportedLlvmEmission).target_ty;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(inferred_element_ty))) return error.UnsupportedLlvmEmission;
         const ptr = try self.emitIndexAddress(node);
         if (self.aggregateIndexUsesRaceTolerantLowering(node.base.*, element_ty)) {
             return try self.emitRaceTolerantAggregateDerefLoad(ptr, element_ty);
@@ -8261,7 +8263,7 @@ const LlvmEmitter = struct {
             else
                 null,
             .deref => |inner| self.expressionResultType(expr, self.derefPointeeType(inner.*)),
-            .index => |node| self.expressionResultType(expr, self.indexElementType(node.base.*)),
+            .index => |node| self.requireExpressionResultType(expr, self.indexElementType(node.base.*)),
             .slice => |node| self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null),
             .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else self.expressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| blk: {
                 const resolved_base_ty = self.resolveAliasType(base_ty);
