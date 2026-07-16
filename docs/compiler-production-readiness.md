@@ -1,7 +1,7 @@
 # Production readiness: the MC compiler (`mcc`)
 
 Status: **qualified subset, not generally production-ready**.
-Current assessment: **updated 2026-07-15, based on the current compiler worktree**.
+Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
 Evidence register: **626 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
@@ -752,6 +752,25 @@ systems toward a single owner:
 - move checking must become place- and CFG-based rather than a collection of
   string-keyed expression-shape checks.
 
+### Workstream Execution Rules
+
+Each workstream below is a multi-phase compiler change, not a single ticket.
+Its phase table uses the following terms consistently:
+
+- **Goal** is the observable compiler property the phase must establish.
+- **Deliverable** is the code or decision artifact that must land before the
+  phase can be called complete.
+- **Evidence** is the required producer/consumer, negative, and parity coverage.
+- **Exit condition** is the condition for advancing; it is not satisfied merely
+  by adding another fixture for an already covered source shape.
+
+The active implementation order is: typed semantic authority first, move
+place/CFG authority second, and pointer-provenance policy closure when it is
+needed by either of those two systems. Pointer work deliberately has no
+unbounded syntax-coverage queue: a new slice is valid only when it closes a
+named conservative boundary or records a project policy decision with matching
+C/LLVM evidence.
+
 #### Broader Pointer-Provenance Race Lowering
 
 Purpose: prevent C/LLVM data-race UB from leaking into MC semantics while keeping
@@ -766,12 +785,12 @@ not depend on backend-local guessing.
 
 **Phase plan.**
 
-| Phase | Status | Completed scope | Remaining scope / exit condition |
+| Phase | Status | Goal and deliverable | Evidence and exit condition |
 |---|---|---|---|
-| P1: conservative default | Complete for supported scalar leaves | Unknown scalar pointer accesses lower race-tolerantly or reject when no supported lowering exists. | Preserve this rule for every new access path. |
-| P2: direct MIR provenance | Complete for the documented bounded producers | Direct locals, copies, covered aggregate fields/elements, direct returns, and supported aggregate-return summaries have MIR facts and missing-fact tests. | Do not broaden a producer without C/LLVM evidence. |
-| P3: remaining pointer-flow policy | In progress | Callback/function-pointer returns and exported ambiguity already remain unknown and conservative. | Decide each escaped, higher-order, and aggregate-CFG flow: MIR fact, explicit conservative lowering, or diagnosed unsupported form. |
-| P4: closure | Pending | Named fallback entry points are inventory-gated. | Every row in the closure matrix is closed or explicitly accepted as a documented limitation. |
+| P1: conservative default | Complete for supported scalar leaves | **Goal:** an unproven scalar pointer access can never inherit C/LLVM race UB. **Deliverable:** central dereference lowering defaults to race-tolerant code or a diagnostic. | C/LLVM tests cover unknown and missing proof paths. This remains an invariant for every later access path. |
+| P2: direct MIR provenance | Complete for documented bounded producers | **Goal:** common proven-local/global paths retain efficient lowering without backend guessing. **Deliverable:** MIR facts for direct locals, copies, covered aggregate fields/elements, direct returns, and supported aggregate-return summaries. | Each producer has fact-dump, C/LLVM consumer, and missing/stale-fact tests. A new producer cannot enter this phase without all three. |
+| P3: remaining pointer-flow policy | In progress | **Goal:** every remaining escaped, higher-order, returned, or aggregate-CFG flow has one declared policy. **Deliverable:** a closure-matrix decision per boundary: MIR fact, conservative race lowering, or diagnosed unsupported form. | Add C/LLVM tests for the chosen policy, including absence of a positive proof. Callback/function-pointer returns and exported ambiguity are already conservative examples. |
+| P4: policy closure | Pending | **Goal:** no backend silently decides provenance outside the declared model. **Deliverable:** an inventory-gated fallback register and a final disposition for every matrix row. | The workstream closes only when every row is implemented or accepted as a documented limitation with a regression test. |
 
 Closure matrix:
 
@@ -821,9 +840,10 @@ fact from the AST. Unsupported nested/control, escaping, path-overflow, alias
 write, ambiguous dynamic-index, and aggregate-shape classes are now an explicit
 fail-closed matrix rather than an open-ended CFG action item.
 
-Next actionable slices: none in this workstream. New pointer-provenance work
-must either reduce a named conservative limitation or add a new design-risk row
-with MIR/C/LLVM evidence requirements.
+**Next phase action:** do not add a speculative pointer shape. When Typed MIR or
+the move checker reaches an unclassified pointer flow, add that flow to P3's
+closure matrix, choose its policy, then implement and test that decision in both
+backends. This prevents an open-ended provenance-coverage backlog.
 
 #### Typed Semantic Fact Table / Typed MIR
 
@@ -843,12 +863,12 @@ accepted conservative fallback with a missing-fact test.
 
 **Phase plan.**
 
-| Phase | Status | Completed scope | Remaining scope / exit condition |
+| Phase | Status | Goal and deliverable | Evidence and exit condition |
 |---|---|---|---|
-| T1: inventory and admission gates | Complete | Fact producers, artifact printers, validation, representation facts, bounds/range facts, and integer-default facts have documented ownership and missing/stale gates for the current subset. | Keep the inventory authoritative as new semantic families are added. |
-| T2: bounded fact migrations | In progress | Many direct calls, builtins, storage reads, inferred locals, address places, MMIO, varargs, and trap operations consume MIR-owned facts in C and LLVM. | Migrate a remaining registered inference family, or explicitly make its unsupported fallback fail closed. |
-| T3: legacy inference register | In progress | The register is finite and inventory-gated at eight backend inference families. | For each family, record a final decision: MIR-owned, accepted conservative policy, or diagnosed unsupported boundary. |
-| T4: semantic-authority closure | Pending | Backend-local global provenance fallback and several operation-specific AST classifiers are retired. | No lowering-affecting semantic decision may rely on unregistered backend AST inference. |
+| T1: inventory and admission gates | Complete | **Goal:** every known lowering-affecting semantic inference has an owner. **Deliverable:** fact producers, artifact printers, validation, and the finite inference register. | Inventory checks and missing/stale-fact admission tests protect the current subset; new families must be registered before backend consumption. |
+| T2: bounded fact migrations | In progress | **Goal:** retire one registered backend inference family at a time. **Deliverable:** MIR identity/type/payload facts plus C and LLVM consumers for the selected family. Direct calls, builtins, storage reads, inferred locals, address places, MMIO, varargs, and traps are completed examples. | A migration is complete only with producer tests, fact dumps, C/LLVM positive tests, and missing/stale-fact rejection. The next slice must name one remaining register row before implementation. |
+| T3: legacy inference dispositions | In progress | **Goal:** no registered family remains an indefinite cleanup item. **Deliverable:** for each of the eight registered families, a final classification: MIR-owned, conservative fallback, or diagnosed unsupported boundary. | The inventory records the classification and tests enforce the fallback/diagnostic where migration is not yet justified. |
+| T4: semantic-authority closure | Pending | **Goal:** lowering has one semantic authority. **Deliverable:** retire unregistered backend AST inference and leave only explicitly accepted mechanics-only AST use. | No lowering-affecting type, provenance, representation, call-target, or safety decision may rely on unregistered backend inference. |
 
 Closure matrix:
 
@@ -972,9 +992,10 @@ admission, and stale direct complete types or malformed stale indirect
 signatures fail backend admission. Exact dynamic-dispatch typing and broader
 expression typing remain open.
 
-Next actionable slice: select the next bounded operation family from the
-registered C call-target or LLVM expression-type inference rows, migrate its
-identity and complete types to MIR, and add C/LLVM missing/stale-fact gates.
+**Next phase action:** select exactly one remaining row from the registered C
+call-target or LLVM expression-type inference families; record its semantic
+inputs/outputs, migrate them to MIR, and add C/LLVM missing/stale-fact gates.
+Do not count a test-only expansion of an already migrated family as T2 progress.
 
 #### CFG/Place-Based Move Checker
 
@@ -995,12 +1016,12 @@ through statement-local expression identities.
 
 **Phase plan.**
 
-| Phase | Status | Completed scope | Remaining scope / exit condition |
+| Phase | Status | Goal and deliverable | Evidence and exit condition |
 |---|---|---|---|
-| M1: typed place foundations | In progress | `MovePlace` roots/projections cover important local, field, array-element, alias, and deferred-borrow paths. | Typed places, not formatted compatibility keys, become the correctness authority for every supported move path. |
-| M2: CFG/worklist routing | In progress | Real CFG state exists for selected `if let`, switch, short-circuit, and while forward paths. | Route joins, loop backedges, `defer`, and exits through one worklist/dataflow model. |
-| M3: unsupported boundary | In progress | Dynamic/non-local move-array and arbitrary pointer-to-array paths fail closed. | Retain explicit diagnostics until a typed-place/CFG rule proves each newly admitted case. |
-| M4: closure | Pending | Existing compatibility inventory and regression fixtures prevent silent reopening. | String-key compatibility maps are no longer the correctness authority for the supported subset. |
+| M1: typed place foundations | In progress | **Goal:** ownership identity is structural rather than formatted text. **Deliverable:** `MovePlace` roots/projections for every supported local, field, dereference, array-element, wildcard, and alias path. | Reads, moves, assignments, defer borrows, and alias invalidation compare typed places. Compatibility strings may index state but cannot decide correctness. |
+| M2: CFG/worklist routing | In progress | **Goal:** ownership state follows control flow, not statement shape. **Deliverable:** one transfer/join model for branches, short-circuit paths, loops, `defer`, and exits. | Unit and diagnostic tests cover joins, backedges, early exits, and invalidation; specialized executors retire only after equivalent worklist coverage exists. |
+| M3: admission boundary | In progress | **Goal:** unsupported move paths remain explicit rather than accidentally accepted. **Deliverable:** a typed-place/CFG rule for each admitted array/pointer case, or a retained diagnostic for it. | Dynamic/non-local move-array and arbitrary pointer-to-array paths stay fail-closed until the rule has positive and negative coverage. |
+| M4: checker closure | Pending | **Goal:** the supported `move` subset is controlled entirely by typed places and CFG dataflow. **Deliverable:** remove string-key correctness authority and obsolete specialized control-flow logic. | The workstream closes when every supported move path uses the common engine and every intentionally unsupported path has a stable diagnostic. |
 
 Closure matrix:
 
@@ -1041,16 +1062,12 @@ deferred-borrow, read-side alias, and unsupported-channel rows above are
 regression coverage; they do not close the remaining typed-place map migration
 or CFG rewrite.
 
-There is no active move-checker inventory slice. The remaining work is
-architectural: either reduce another named string-key compatibility path toward
-the typed place model, or route a statement subset through the CFG/worklist
-boundary. Additional symbolic-expression, stale-alias, typed-referent,
-deferred-borrow, read-side alias, pointer-boundary, or unsupported-channel
-fixtures alone are evidence-only.
-
-Next actionable slices: none in the compatibility-inventory track. The next
-implementation slice must be a typed-place migration slice or a CFG/worklist
-routing slice.
+**Next phase action:** choose one remaining string-key correctness path and
+migrate its identity and conflict checks to `MovePlace`, or choose one
+specialized control-flow path and route its transfers, joins, and exits through
+the CFG worklist. The slice must include positive ownership behavior and a
+diagnostic regression; symbolic-expression or stale-alias fixtures alone do not
+advance M1 or M2.
 
 ### Production-Ready Exit Rule
 
