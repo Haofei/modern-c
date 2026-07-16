@@ -361,7 +361,10 @@ pub fn exprIsPointer(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.String
 pub fn derefPointeeType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return switch (expr.kind) {
         .ident => |id| pointeeTypeFromPointerLike(ctx, sourceTypeForIdent(ctx, id.text, locals) orelse return null),
-        .address_of => |inner| operandEmitType(ctx, inner.*, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, inner.*, locals),
+        .address_of => |inner| if (expr.span.line != 0 and expr.span.column != 0)
+            pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null)
+        else
+            operandEmitType(ctx, inner.*, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, inner.*, locals),
         .call => |node| pointeeTypeFromPointerLike(ctx, ctx.mir_target_type(ctx.source_ctx, .raw_many_offset_result, node.callee.*.span) orelse callReturnType(ctx, node) orelse return null),
         .cast => |node| pointeeTypeFromPointerLike(ctx, node.ty.*),
         .member, .index => pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null),
