@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **668 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **669 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -797,6 +797,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Move deferred-borrow state has no compatibility-key identity | `MoveSlot.deferred_borrow` is now a boolean reservation marker; the structured `deferred_borrow_place` is the only stored borrow identity. Consume, scope cleanup, and CFG merge paths therefore cannot accidentally restore a formatted key as ownership authority. This is one M1.1 state-model retirement, not completion of deferred-borrow analysis. | `src/sema_model.zig` `MoveSlot`; `src/sema_move.zig` deferred-borrow transfer, cleanup, and comparison paths; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 | C race-helper shape policy has one target matrix | The supported `mc_race_load_<T>`/`mc_race_store_<T>` scalar set is now defined once as `race_scalar_helpers`. C runtime prelude emission and lowering eligibility both consume that matrix, so a helper cannot be emitted or selected by only one side. This is an explicitly bounded C target capability rather than a source-level MIR fact; unsupported scalar shapes such as `u128` and `i128` remain fail-closed under the existing race-lowering policy. Aggregate layout/ABI classification remains a separate open boundary. | `src/lower_c_shape.zig` `RaceScalarHelper`, `race_scalar_helpers`, and target-policy test; `src/lower_c_runtime.zig` `appendMemoryAccessHelpers`; `src/lower_c_tests.zig` `lower-c emits support helpers used by evidence`; `zig test src/lower_c_shape.zig`; `zig test src/lower_c_tests.zig --test-filter "support helpers"`; `zig build c-test`; full production gate; `git diff --check`. |
+
+| Move alias root consumption uses typed places | Consuming an alias that retains a typed root `MovePlace` no longer looks up the owner through the alias's compatibility key. It structurally finds the root slot from the place, so a rewritten or stale key cannot leave the owner live. Key-only aliases retain the existing conservative compatibility fallback because they have no semantic identity to consume. This is one M1.1 migration, not closure of the move checker. | `src/sema_move.zig` `consumeTrackedMoveReferent` / `consumeTrackedMoveRootPlace`; unit test `move alias root consumption uses typed place rather than compatibility key`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 

@@ -1869,6 +1869,22 @@ test "move borrowed subplaces use typed places rather than compatibility keys" {
     try std.testing.expect(ownershipMoveSlotForPlace(field, &state).?.live);
 }
 
+test "move alias root consumption uses typed place rather than compatibility key" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-alias-root-place.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    consumeTrackedMoveReferent(&checker, .{ .key = "stale:owner", .place = root, .full_deref = true }, span, &state);
+    try std.testing.expect(!state.get("compat:owner").?.live);
+    try std.testing.expect(!reporter.has_errors);
+}
+
 fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
     return .{
         .live = false,
@@ -2398,11 +2414,35 @@ fn consumeTrackedMoveReferent(self: *Checker, referent: AliasReferent, span: dia
         if (place.isSubplace()) {
             consumeTrackedMovePlace(self, referent.key, place, span, state);
         } else {
-            consumeTrackedMoveBinding(self, referent.key, span, state);
+            consumeTrackedMoveRootPlace(self, place, span, state);
         }
         return;
     }
     consumeTrackedMoveBinding(self, referent.key, span, state);
+}
+
+// An alias can retain a typed root place while its compatibility lookup key was
+// rewritten by an assignment or CFG merge. Root consumption must follow that
+// place, not the compatibility spelling, or the owner can be left live.
+fn consumeTrackedMoveRootPlace(self: *Checker, place: MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+    const slot = rootMoveSlotPtrForPlace(place, state) orelse return;
+    if (slot.type_only) return;
+    if (!slot.live) {
+        self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");
+    } else if (slot.escaped_borrow != null) {
+        self.errorCode(span, "E_USE_AFTER_MOVE", "cannot move this linear `move` value: a borrow of it (or of one of its fields) has been stored into memory and may still be read; the move would leave that borrow dangling");
+        slot.live = false;
+    } else if (slot.deferred) {
+        self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be moved");
+    } else if (slot.deferred_borrow) {
+        self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` value is borrowed by a deferred expression and cannot be moved before the defer runs");
+        slot.live = false;
+    } else if (hasMovedSubplace(place, state)) {
+        self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` value used as a whole after one of its fields was moved out");
+        slot.live = false;
+    } else {
+        slot.live = false;
+    }
 }
 
 fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
