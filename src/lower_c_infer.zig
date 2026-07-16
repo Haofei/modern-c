@@ -376,12 +376,12 @@ pub fn structTypeNameForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
             break :blk structNameFromType(ctx, ty);
         },
         .member => |m| blk: {
-            const sname = structTypeNameForExpr(ctx, m.base.*, locals) orelse break :blk null;
-            const sdecl = ctx.structs.get(sname) orelse break :blk null;
-            for (sdecl.fields) |f| {
-                if (std.mem.eql(u8, f.name.text, m.name.text)) break :blk structNameFromType(ctx, f.ty);
-            }
-            break :blk null;
+            _ = m;
+            // A source member result is already represented by a complete MIR
+            // expression_result row. Do not rediscover its struct type by
+            // walking the member declaration here.
+            const ty = operandEmitType(ctx, expr, locals) orelse break :blk null;
+            break :blk structNameFromType(ctx, ty);
         },
         .index => blk: {
             const ty = operandEmitType(ctx, expr, locals) orelse break :blk null;
@@ -416,18 +416,14 @@ fn numericExprTypeForEmissionInferred(ctx: TypeQueryContext, expr: ast.Expr, loc
             const return_ty = ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals) orelse return null;
             return if (isNumericStorageType(return_ty)) return_ty else null;
         },
-        // A numeric struct field (`s.len`) recovers its declared type, so
-        // `s.len + 1` and similar lower through the checked helper.
-        .member => |node| {
-            const struct_name = structTypeNameForExpr(ctx, node.base.*, locals) orelse return null;
-            const struct_decl = ctx.structs.get(struct_name) orelse return null;
-            for (struct_decl.fields) |field| {
-                if (std.mem.eql(u8, field.name.text, node.name.text)) {
-                    const resolved = resolveAliasType(ctx, field.ty);
-                    return if (isNumericStorageType(resolved)) numericExpressionResultType(ctx, expr, resolved) else null;
-                }
-            }
-            return null;
+        // A numeric member result is MIR-owned. The generic operand helper
+        // checks the row against the declaration where that stale-fact guard
+        // is still needed, so this numeric classifier does not repeat the
+        // declaration scan.
+        .member => {
+            const ty = operandEmitType(ctx, expr, locals) orelse return null;
+            const resolved = resolveAliasType(ctx, ty);
+            return if (isNumericStorageType(resolved)) numericExpressionResultType(ctx, expr, resolved) else null;
         },
         .index => |node| {
             const elem = arrayTypeForExpr(ctx, node.base.*, locals) orelse return null;
