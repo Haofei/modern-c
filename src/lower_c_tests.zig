@@ -3,6 +3,7 @@ const std = @import("std");
 const diagnostics = @import("diagnostics.zig");
 const lower_c = @import("lower_c.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
+const lower_c_shape = @import("lower_c_shape.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const parser = @import("parser.zig");
@@ -5167,6 +5168,11 @@ test "lower-c emits support helpers used by evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_RACE_SCALAR(u32, uint32_t)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_RACE_SCALAR(i32, int32_t)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_RACE_SCALAR(usize, uintptr_t)") != null);
+    for (lower_c_shape.race_scalar_helpers) |helper| {
+        const definition = try std.fmt.allocPrint(std.testing.allocator, "MC_DEFINE_RACE_SCALAR({s}, {s})", .{ helper.name, helper.c_type });
+        defer std.testing.allocator.free(definition);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, definition) != null);
+    }
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u8") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u16") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u32") != null);

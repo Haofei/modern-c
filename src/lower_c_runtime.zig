@@ -7,6 +7,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const lower_c_shape = @import("lower_c_shape.zig");
 
 // The sanitizer shadow-hook symbols (mirrors `sanitizer_hooks` in lower_llvm.zig). Each gets a
 // weak no-op `define` in the C preamble that a linked sanitizer runtime overrides — UNLESS the
@@ -307,22 +308,10 @@ pub fn appendMemoryAccessHelpers(
         .{ race_load_pre, race_store_pre, race_store_post },
     );
 
-    try out.appendSlice(allocator,
-        \\MC_DEFINE_RACE_SCALAR(bool, bool)
-        \\MC_DEFINE_RACE_SCALAR(u8, uint8_t)
-        \\MC_DEFINE_RACE_SCALAR(u16, uint16_t)
-        \\MC_DEFINE_RACE_SCALAR(u32, uint32_t)
-        \\MC_DEFINE_RACE_SCALAR(u64, uint64_t)
-        \\MC_DEFINE_RACE_SCALAR(usize, uintptr_t)
-        \\MC_DEFINE_RACE_SCALAR(i8, int8_t)
-        \\MC_DEFINE_RACE_SCALAR(i16, int16_t)
-        \\MC_DEFINE_RACE_SCALAR(i32, int32_t)
-        \\MC_DEFINE_RACE_SCALAR(i64, int64_t)
-        \\MC_DEFINE_RACE_SCALAR(isize, intptr_t)
-        \\MC_DEFINE_RACE_SCALAR(f32, float)
-        \\MC_DEFINE_RACE_SCALAR(f64, double)
-        \\
-    );
+    for (lower_c_shape.race_scalar_helpers) |helper| {
+        try out.print(allocator, "MC_DEFINE_RACE_SCALAR({s}, {s})\n", .{ helper.name, helper.c_type });
+    }
+    try out.appendSlice(allocator, "\n");
 
     // The raw scalar load/store macros (the pointer-deref / raw memory-access path).
     // The four profiles differ only in which shadow hook brackets the volatile access.

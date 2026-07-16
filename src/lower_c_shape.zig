@@ -111,19 +111,45 @@ pub fn isPointerLikeGlobalType(ty: ast.TypeExpr) bool {
     };
 }
 
-// The `mc_race_load_<T>`/`mc_race_store_<T>` helper family is emitted for exactly
-// these scalar spellings (the MC_DEFINE_RACE_SCALAR list in lower_c_runtime.zig).
-// Any other non-aggregate, non-pointer-shaped scalar (u128/i128) has no sound
-// race-tolerant C lowering, so callers must fail emission closed (spec §I.13)
-// instead of naming a helper that does not exist.
+// C target-policy matrix for the `mc_race_load_<T>`/`mc_race_store_<T>` family.
+// Both runtime emission and lowering eligibility consume this list. It is a
+// target capability, not a source-level semantic fact: types not listed here
+// (currently u128/i128) must fail C emission closed under spec §I.13.
+pub const RaceScalarHelper = struct {
+    name: []const u8,
+    c_type: []const u8,
+};
+
+pub const race_scalar_helpers = [_]RaceScalarHelper{
+    .{ .name = "bool", .c_type = "bool" },
+    .{ .name = "u8", .c_type = "uint8_t" },
+    .{ .name = "u16", .c_type = "uint16_t" },
+    .{ .name = "u32", .c_type = "uint32_t" },
+    .{ .name = "u64", .c_type = "uint64_t" },
+    .{ .name = "usize", .c_type = "uintptr_t" },
+    .{ .name = "i8", .c_type = "int8_t" },
+    .{ .name = "i16", .c_type = "int16_t" },
+    .{ .name = "i32", .c_type = "int32_t" },
+    .{ .name = "i64", .c_type = "int64_t" },
+    .{ .name = "isize", .c_type = "intptr_t" },
+    .{ .name = "f32", .c_type = "float" },
+    .{ .name = "f64", .c_type = "double" },
+};
+
 pub fn raceScalarHelperExists(race_type_name: []const u8) bool {
-    const helpers = [_][]const u8{
-        "bool", "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize", "f32", "f64",
-    };
-    for (helpers) |helper| {
-        if (std.mem.eql(u8, race_type_name, helper)) return true;
+    for (race_scalar_helpers) |helper| {
+        if (std.mem.eql(u8, race_type_name, helper.name)) return true;
     }
     return false;
+}
+
+test "race scalar helper target policy is finite and fail closed" {
+    for (race_scalar_helpers) |helper| {
+        try std.testing.expect(raceScalarHelperExists(helper.name));
+        try std.testing.expect(helper.c_type.len != 0);
+    }
+    try std.testing.expect(!raceScalarHelperExists("u128"));
+    try std.testing.expect(!raceScalarHelperExists("i128"));
 }
 
 pub fn mmioFieldFromType(ty: ast.TypeExpr) ?MmioField {

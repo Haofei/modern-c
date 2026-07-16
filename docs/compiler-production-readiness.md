@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **667 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **668 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -796,6 +796,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Move deferred-borrow state has no compatibility-key identity | `MoveSlot.deferred_borrow` is now a boolean reservation marker; the structured `deferred_borrow_place` is the only stored borrow identity. Consume, scope cleanup, and CFG merge paths therefore cannot accidentally restore a formatted key as ownership authority. This is one M1.1 state-model retirement, not completion of deferred-borrow analysis. | `src/sema_model.zig` `MoveSlot`; `src/sema_move.zig` deferred-borrow transfer, cleanup, and comparison paths; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
+| C race-helper shape policy has one target matrix | The supported `mc_race_load_<T>`/`mc_race_store_<T>` scalar set is now defined once as `race_scalar_helpers`. C runtime prelude emission and lowering eligibility both consume that matrix, so a helper cannot be emitted or selected by only one side. This is an explicitly bounded C target capability rather than a source-level MIR fact; unsupported scalar shapes such as `u128` and `i128` remain fail-closed under the existing race-lowering policy. Aggregate layout/ABI classification remains a separate open boundary. | `src/lower_c_shape.zig` `RaceScalarHelper`, `race_scalar_helpers`, and target-policy test; `src/lower_c_runtime.zig` `appendMemoryAccessHelpers`; `src/lower_c_tests.zig` `lower-c emits support helpers used by evidence`; `zig test src/lower_c_shape.zig`; `zig test src/lower_c_tests.zig --test-filter "support helpers"`; `zig build c-test`; full production gate; `git diff --check`. |
+
 ### Bounded Workstream Status
 
 This is the authoritative execution dashboard for the three open compiler
@@ -863,14 +865,15 @@ names its input boundary, expected semantic owner, affected C and LLVM
 consumers, and the tests that will prove missing/stale behavior. This prevents a
 large architectural item from looking active merely because it is unfinished.
 
-**Current selection state: no active slice.** The last bounded typed-fact and
-typed-place slices are complete and recorded above. The next implementation
-patch must select exactly one of the following units before code changes begin:
+**Current selection state: no active slice.** The last bounded C target-policy,
+typed-fact, and typed-place slices are complete and recorded above. The next
+implementation patch must select exactly one of the following units before code
+changes begin:
 
 | Order | Eligible unit | Phase | Concrete first deliverable | Slice closes only when |
 |---|---|---|---|---|
-| 1 | C type-shape/race-helper classification decision | T2.1 | Inventory one C aggregate/scalar shape decision that changes helper selection or ABI emission; choose a typed layout/memory fact or an explicitly bounded target policy. | The decision is registered with an implementation anchor and either has a MIR producer plus C/LLVM consumers and missing/stale tests, or has a tested conservative/diagnosed policy. |
-| 2 | Remaining typed-place authority migration | M1.1 | Inventory one supported move read/consume/assignment/defer/alias route where a compatibility key can still affect correctness, then replace that decision with `MovePlace` identity or overlap. | The same typed-place rule accepts its valid case and rejects its conflicting case; compatibility text is not consulted for correctness. |
+| 1 | Remaining typed-place authority migration | M1.1 | Inventory one supported move read/consume/assignment/defer/alias route where a compatibility key can still affect correctness, then replace that decision with `MovePlace` identity or overlap. | The same typed-place rule accepts its valid case and rejects its conflicting case; compatibility text is not consulted for correctness. |
+| 2 | C aggregate shape/ABI disposition | T2.1 | Inventory one C aggregate/scalar shape decision that changes ABI construction or helper routing; choose a typed layout/memory fact or an explicitly bounded target policy. The scalar race-helper matrix is already an accepted target-policy subcase. | The decision is registered with an implementation anchor and either has a MIR producer plus C/LLVM consumers and missing/stale tests, or has a tested conservative/diagnosed policy. |
 | 3 | Newly exposed pointer-flow boundary | P4.1, triggered only | Register the exact source-to-dereference flow exposed by a T2/M1 change and choose MIR proof, race-tolerant lowering, or a diagnostic. | C and LLVM both demonstrate the policy and the absent-proof path. |
 
 The first two rows are ordered work. The third is an interruption rule, not
@@ -1063,7 +1066,7 @@ the underlying language feature is generally complete.
 |---|---|---|---|
 | `c-expression-type-inference` | Partially MIR-owned: direct storage reads, calls, casts, unary/binary, `try` results, and named builtins have facts; broader computed expressions remain backend inference. | Migrate each remaining expression-result shape or reject it when no complete fact exists. | Name one computed expression shape whose result affects C lowering and add MIR producer/consumer/missing-fact gates. |
 | `llvm-expression-type-inference` | Partially MIR-owned on the same migrated expression/call families; broader expression typing remains backend inference. | Consume the same fact family in LLVM or reject missing facts before expression emission. | Pair the selected C expression family with LLVM result-type consumption and stale-fact rejection. |
-| `c-type-shape-classification` | Open: local/global aggregate-scalar and race-helper routing still derives shape from resolved types. | Move lowering-affecting shape/race eligibility to typed layout or memory facts, or retain a documented target matrix. | Inventory one shape decision that changes emitted helper/ABI behavior and decide fact versus accepted target policy. |
+| `c-type-shape-classification` | Partially classified: scalar race-helper eligibility is the single tested `race_scalar_helpers` C target matrix; aggregate layout and ABI-shaped construction remain open backend mechanics around resolved layout. | Move lowering-affecting aggregate shape/ABI eligibility to typed layout or memory facts, or retain a documented target matrix. | Select one aggregate shape decision that changes ABI construction or helper routing and decide fact versus accepted target policy. |
 | `c-abi-aggregate-lowering` | Open: C aggregate literals and ABI-shaped construction remain backend mechanics around sema layout. | Supply typed ABI/layout facts or keep unsupported ABI forms diagnosed. | Select one supported aggregate ABI boundary, define its fact payload, or retain its diagnostic as the final disposition. |
 | `c-call-target-classification` | Partially MIR-owned: named builtin and direct-call families are fact-gated; remaining syntax checks must be mechanics-only or migrated. | Migrate any remaining semantic callee classification to `CallTargetFact`; keep declaration/arity checks as ABI mechanics. | Audit one remaining C special-call classifier and either prove it consumes existing facts or add a new MIR identity. |
 | `c-direct-global-race-helpers` | Accepted bounded backend policy: direct named global leaves use the documented C helper matrix. | Replace with typed memory/race facts only if global routing expands beyond the current matrix. | Keep the helper-width/aggregate failure matrix tested; do not add AST-only global routes. |
