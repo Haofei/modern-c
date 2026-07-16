@@ -28,6 +28,7 @@ ANCHORS: dict[str, list[str]] = {
         "const AliasPlaceInfo = struct",
         "place: MovePlace",
         "fn markDeferredBorrowAliasReferent",
+        "fn markDeferredBorrowReferent(self: *Checker, borrowed_place: MovePlace",
     ],
     "docs/compiler-production-readiness.md": [
         "Move checker alias assignment updates use typed storage places",
@@ -62,6 +63,11 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
         ("pub fn moveDefer", "fn cleanupLocalAliasReferent"): [
             "markDeferredBorrowReferent(self, referent, deferredAliasBorrowPlace",
             "markDeferredBorrowReferent(self, referent.key",
+        ],
+        ("fn markDeferredBorrowReferent", "fn markDeferredBorrowAliasReferent"): [
+            "state.get(",
+            "referent: []const u8",
+            "place: ?MovePlace",
         ],
     },
 }

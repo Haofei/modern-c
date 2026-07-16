@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **676 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **677 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -813,6 +813,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Open-workstream goals and phase gates are normalized | The three remaining compiler workstreams now use one dashboard vocabulary: final goal, current phase, next eligible bounded slice, promotion rule, and closure rule. Pointer provenance is explicitly trigger-driven after its current boundary matrix; typed facts and move checking remain the only immediately eligible implementation tracks. This records planning state only and does not claim an implementation phase complete. | `docs/compiler-production-readiness.md` canonical execution dashboard and per-workstream phase plans; `python3 tools/toolchain/readiness-ledger-test.py`; `git diff --check`. |
 
 | Move while-condition joins route through the CFG worklist | The zero-iteration bypass and evaluated-condition RHS now enter the same worklist successor path. `MoveCfgJoinPolicy.loop_condition` retains `reportLoopOuterResourceChanges` as the join policy, preserving `E_MOVE_LOOP_RESOURCE` widening while centralizing state change detection and requeueing in `propagateSuccessor`. The while-condition caller no longer directly widens or manually queues its join. This is one M2.2 routing migration, not closure of non-deferred exit handling or the CFG/place checker. | `src/sema_move.zig` `MoveCfgJoinPolicy.loop_condition`, `MoveStateCfgWorklist.useLoopConditionJoinPolicy`, and `moveWhileConditionCfg`; `tools/toolchain/move-cfg-skeleton-inventory.py` `WORKLIST_ROUTING`; `zig test src/sema_move.zig`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `zig build move-cfg-skeleton-inventory-test`; full production gate; `git diff --check`. |
+
+| Move deferred-borrow reservation requires a typed place | Deferred-borrow reservation no longer recovers ownership identity from a referent key when `MovePlace` metadata is absent. All admitted direct and alias producers pass the structural place; a key-only legacy alias does not reserve a root borrow. The cleanup-local stale check retains the same typed place, so its compatibility field cannot control the result. This is one M1.1 migration, not closure of deferred-borrow or alias analysis. | `src/sema_move.zig` `markDeferredBorrowReferent` / `markDeferredBorrowAliasReferent`; unit tests `move deferred aliases recover typed places from their state slots` and `move deferred alias reservations reject key-only referents`; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 

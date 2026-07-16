@@ -1864,13 +1864,30 @@ test "move deferred aliases recover typed places from their state slots" {
     // spelling. The alias carries the structural place that identifies it.
     try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
     try state.put("alias", .{ .live = true, .span = span, .place = borrowed, .alias_of = "owner.resource" });
-    markDeferredBorrowReferent(&checker, "alias", null, span, &state);
+    markDeferredBorrowReferent(&checker, borrowed, span, &state);
 
     try std.testing.expect(!reporter.has_errors);
     const owner = state.get("compat:owner") orelse return error.TestUnexpectedResult;
     try std.testing.expect(owner.deferred_borrow);
     try std.testing.expect(owner.deferred_borrow_place.?.eql(borrowed));
     try std.testing.expect(!state.get("alias").?.deferred_borrow);
+}
+
+test "move deferred alias reservations reject key-only referents" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-defer-key-only.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    markDeferredBorrowAliasReferent(&checker, .{ .key = "compat:owner", .place = null, .full_deref = false }, span, &state);
+
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(!state.get("compat:owner").?.deferred_borrow);
 }
 
 test "move short-circuit joins use typed roots rather than compatibility keys" {
@@ -4593,14 +4610,10 @@ fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.Stri
     return pp;
 }
 
-fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    const borrowed_place = place orelse blk: {
-        const referent_slot = state.get(referent) orelse return;
-        break :blk referent_slot.place orelse return;
-    };
+fn markDeferredBorrowReferent(self: *Checker, borrowed_place: MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
     const root_slot = rootMoveSlotPtrForPlace(borrowed_place, state) orelse return;
     if (root_slot.cleanup_local) {
-        checkStaleAlias(self, "", .{ .live = false, .span = span, .alias_of = referent, .alias_place = borrowed_place }, span, state);
+        checkStaleAlias(self, "", .{ .live = false, .span = span, .alias_of = borrowed_place.root, .alias_place = borrowed_place }, span, state);
         return;
     }
     if (!root_slot.live) {
@@ -4633,7 +4646,8 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
 }
 
 fn markDeferredBorrowAliasReferent(self: *Checker, referent: AliasReferent, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    markDeferredBorrowReferent(self, referent.key, deferredAliasBorrowPlace(referent.place), span, state);
+    const borrowed_place = deferredAliasBorrowPlace(referent.place) orelse return;
+    markDeferredBorrowReferent(self, borrowed_place, span, state);
 }
 
 fn moveDeferSliceBase(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
@@ -4670,10 +4684,10 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
                     if (slot.cleanup_local) {
                         moveBorrow(self, inner.*, state, aliases);
                     } else {
-                        markDeferredBorrowReferent(self, pp.key, pp.place, expr.span, state);
+                        markDeferredBorrowReferent(self, pp.place, expr.span, state);
                     }
                 } else {
-                    markDeferredBorrowReferent(self, pp.key, pp.place, expr.span, state);
+                    markDeferredBorrowReferent(self, pp.place, expr.span, state);
                 }
             } else {
                 moveBorrow(self, inner.*, state, aliases);
