@@ -1699,6 +1699,30 @@ test "move root ownership lookup uses typed places rather than compatibility key
     try std.testing.expect(!state.get("compat:owner").?.live);
 }
 
+test "move deferred aliases recover typed places from their state slots" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-defer-alias-place.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    const borrowed = root.project(.{ .field = "resource" }).?;
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+
+    // The root's compatibility key cannot be reconstructed from the alias
+    // spelling. The alias carries the structural place that identifies it.
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    try state.put("alias", .{ .live = true, .span = span, .place = borrowed, .alias_of = "owner.resource" });
+    markDeferredBorrowReferent(&checker, "alias", null, span, &state);
+
+    try std.testing.expect(!reporter.has_errors);
+    const owner = state.get("compat:owner") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("alias", owner.deferred_borrow.?);
+    try std.testing.expect(owner.deferred_borrow_place.?.eql(borrowed));
+    try std.testing.expect(state.get("alias").?.deferred_borrow == null);
+}
+
 test "move short-circuit joins use typed roots rather than compatibility keys" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-short-root.mc", "");
     defer reporter.deinit();
@@ -4362,12 +4386,12 @@ fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.Stri
 }
 
 fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    const borrowed_place = place;
-    const root = referentRoot(referent, borrowed_place);
-    const root_slot = (if (borrowed_place) |typed|
-        rootMoveSlotPtrForPlace(typed, state)
-    else
-        state.getPtr(root)) orelse return;
+    const borrowed_place = place orelse blk: {
+        const referent_slot = state.get(referent) orelse return;
+        break :blk referent_slot.place orelse return;
+    };
+    const root = borrowed_place.root;
+    const root_slot = rootMoveSlotPtrForPlace(borrowed_place, state) orelse return;
     if (root_slot.cleanup_local) {
         checkStaleAlias(self, "", .{ .live = false, .span = span, .alias_of = referent, .alias_place = borrowed_place }, span, state);
         return;
@@ -4376,29 +4400,18 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
         self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after it was moved");
         return;
     }
-    if (borrowed_place) |borrowed| {
-        if (borrowed.isSubplace()) {
-            if (stateHasMovedPlaceChildOrConflict(borrowed, state)) {
-                self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` field or array element after it was moved out");
-                return;
-            }
-        } else if (hasMovedSubplace(borrowed, state)) {
-            self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after one of its fields or elements was moved out");
+    if (borrowed_place.isSubplace()) {
+        if (stateHasMovedPlaceChildOrConflict(borrowed_place, state)) {
+            self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` field or array element after it was moved out");
             return;
         }
-    } else if (state.get(referent)) |referent_slot| {
-        if (referent_slot.place != null and hasMovedSubplace(referent_slot.place.?, state)) {
-            self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after one of its fields or elements was moved out");
-            return;
-        }
+    } else if (hasMovedSubplace(borrowed_place, state)) {
+        self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after one of its fields or elements was moved out");
+        return;
     }
     if (root_slot.deferred_borrow) |existing| {
         if (std.mem.eql(u8, existing, referent)) {
-            if (borrowed_place) |new_place| {
-                if (root_slot.deferred_borrow_place == null or placeHasWildcardProjection(new_place)) {
-                    root_slot.deferred_borrow_place = new_place;
-                }
-            } else if (root_slot.deferred_borrow_place == null) {
+            if (root_slot.deferred_borrow_place == null or placeHasWildcardProjection(borrowed_place)) {
                 root_slot.deferred_borrow_place = borrowed_place;
             }
             return;
@@ -4408,8 +4421,7 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
         return;
     }
     root_slot.deferred_borrow = referent;
-    root_slot.deferred_borrow_place = borrowed_place orelse
-        root_slot.place;
+    root_slot.deferred_borrow_place = borrowed_place;
 }
 
 fn markDeferredBorrowAliasReferent(self: *Checker, referent: AliasReferent, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {

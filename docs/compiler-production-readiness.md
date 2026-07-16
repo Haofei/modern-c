@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **646 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **647 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -754,6 +754,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Packed-bits member result types are MIR-owned in both backends | A packed-bits field read now requires its MIR `expression_result` row in C and LLVM. Both specialized emitters verify that the result is `bool` before selecting mask-test emission; they cannot infer that type when the row is absent or stale. Exact full-span tests delete or retarget only `flags.set`, proving prebuilt MIR admission and direct emission both fail closed. Ordinary struct fields, packed-bit fields, and other specialized member paths are now tracked as separate evidence boundaries. | `src/mir.zig` `addExpressionResultFact`; `src/lower_c_emitter.zig` `emitPackedBitsMember`; `src/lower_llvm.zig` `emitMemberLoad`; `src/lower_c_tests.zig` and `src/lower_llvm_tests.zig` `compound expressions require complete MIR result facts`; focused C/LLVM tests; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `python3 tools/toolchain/readiness-ledger-test.py`; `git diff --check`. |
 
+| Move checker deferred-alias root reservation uses typed places | A deferred borrow whose alias producer did not pass a `MovePlace` no longer derives its owner from the formatted referent key. The checker recovers the stored typed alias place, finds the owning root structurally, and records the reservation with that place; aliases lacking typed place metadata establish no reservation rather than guessing. This is one M1.1 migration, not closure of legacy alias production or the CFG/place workstream. | `src/sema_move.zig` `markDeferredBorrowReferent`; unit test `move deferred aliases recover typed places from their state slots`; `zig test src/sema_move.zig`; `zig test src/sema_tests.zig`; full production gate listed below; `git diff --check`. |
+
 ### Bounded Workstream Status
 
 This is the authoritative execution dashboard for the three open compiler
@@ -768,19 +770,19 @@ or formatted-key inference and its listed evidence is gated.
 | Workstream | Goal | Complete phases | Current phase and exact next deliverable | Later phases | Workstream closes when |
 |---|---|---|---|---|---|
 | Typed semantic facts / typed MIR | Give lowering one semantic authority instead of backend AST rediscovery. | T1 inventory/admission; bounded T2 migrations in the evidence register, including direct dereference, unary, and packed-bits member results; T3's LLVM aggregate-alias write proof retired as mechanics-only. | **T2.1 select the next registered family:** audit the remaining expression-result and call-target rows, name one family with its semantic input/result, MIR producer, and C/LLVM consumers before editing lowering. | T2.2 migration; T2.3 fail-closed admission; T3 classification of every register row; T4 semantic-authority audit. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
-| CFG/place move checker | Make typed places and CFG dataflow, rather than formatted keys and statement shape, decide supported move behavior. | Foundation slices, including M2.3 cleanup-loop CFG routing: covered `MovePlace` paths and selected CFG/worklist transport. | **M1.1 formatted-key retirement:** select one supported read, consume, assignment, defer-borrow, or alias-invalidation decision still made through a compatibility key; replace it with `MovePlace` identity/overlap and add positive and diagnostic coverage. | M1.2/M3 projection admission; M4 compatibility retirement. | Typed places and CFG joins decide every supported move path; every unsupported path has a stable diagnostic. |
+| CFG/place move checker | Make typed places and CFG dataflow, rather than formatted keys and statement shape, decide supported move behavior. | Foundation slices, including M2.3 cleanup-loop CFG routing and deferred-alias root reservation: covered `MovePlace` paths and selected CFG/worklist transport. | **M1.1 formatted-key retirement:** audit the remaining supported read, consume, assignment, defer-borrow, and alias-invalidation fallbacks; select one correctness decision still made through a compatibility key, replace it with `MovePlace` identity/overlap, and add positive and diagnostic coverage. | M1.2/M3 projection admission; M4 compatibility retirement. | Typed places and CFG joins decide every supported move path; every unsupported path has a stable diagnostic. |
 | Pointer-provenance race lowering | Preserve MC's non-UB race contract without backend-local provenance guessing. | P1 conservative scalar default; P2 documented direct MIR provenance; P3 policy decisions for current direct escape, returned-pointer, callback/exported-ambiguity, and bounded aggregate-return domains. | **P4.1 fallback-register audit, trigger-driven:** when T2 or M1 exposes an unclassified flow, first record whether it is MIR-proven, race-tolerant by default, or diagnosed unsupported; then add matching C/LLVM missing-proof evidence. | P4.2 final C/LLVM policy audit. | Every pointer-flow boundary has a declared policy and no backend silently recreates provenance. |
 
 **Current implementation sequence.** Workstreams are not implemented in
-parallel by default. Select and complete the next T2.1/T2.2/T2.3 family first;
-then take M1.1. Start pointer work only when either slice exposes an unclassified flow.
+parallel by default. Select and complete a named T2.1/T2.2/T2.3 family, then
+take one named M1.1 migration. Start pointer work only when either slice exposes an unclassified flow.
 This prevents direct-shape test expansion from being mistaken for architectural
 progress.
 
 | Order | Workstream | Completed foundation | Remaining closure units | Next valid implementation slice | Close when |
 |---|---|---|---|---|---|
 | 1 | Typed semantic fact table / typed MIR | Fact inventory/admission gates and bounded migrations for provenance, ranges, representation, calls, MMIO, varargs, traps, selected inferred locals, slices, indexes, ordinary member reads, direct dereferences, unary results, and packed-bits member reads. | T2 remaining registered families; T3 final disposition for every registered backend inference; T4 removal of unregistered lowering-affecting AST inference. | Audit the registered expression-result/call-target rows and select one exact T2.1 family with a producer/consumer contract. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
-| 2 | CFG/place-based move checker | `MovePlace` exists for covered roots/projections; branch, short-circuit, ordinary-loop backedges/target exits, and supported deferred-loop condition/body/exit transport use production CFG/worklist paths. | M1 remaining string-key correctness paths; M3 explicit move-array/pointer-to-array admission; M4 compatibility removal. | Replace one remaining supported formatted-key correctness decision with typed `MovePlace` overlap/identity and add positive and diagnostic regression coverage. | Typed places and CFG joins decide all supported move behavior; unsupported paths retain stable diagnostics. |
+| 2 | CFG/place-based move checker | `MovePlace` exists for covered roots/projections; branch, short-circuit, ordinary-loop backedges/target exits, supported deferred-loop condition/body/exit transport, and deferred-alias root reservation use production typed-place paths. | M1 remaining string-key correctness paths; M3 explicit move-array/pointer-to-array admission; M4 compatibility removal. | Inventory remaining compatibility-key correctness fallbacks and replace one supported decision with typed `MovePlace` overlap/identity plus positive and diagnostic regression coverage. | Typed places and CFG joins decide all supported move behavior; unsupported paths retain stable diagnostics. |
 | 3 | Pointer-provenance race lowering | Conservative scalar-deref default, direct MIR provenance producers, named P3 boundary policies, and a gated current fallback register. | P4 final inventory and policy audit. | Only when T2 or M1 exposes an unclassified pointer flow: choose MIR fact, race-tolerant lowering, or diagnostic before adding support. | Every pointer-flow boundary has a declared policy and no backend silently recreates provenance. |
 
 **Phase dependencies and handoffs.** This table defines when a phase can start
@@ -790,7 +792,7 @@ the three large workstreams; it is not a second priority list.
 | Workstream | Phase order | Current handoff | A phase may advance only when |
 |---|---|---|---|
 | Typed semantic facts / typed MIR | T1 inventory -> T2.1 select -> T2.2 migrate -> T2.3 fail closed -> T3 classify -> T4 audit | Direct-dereference, unary, and packed-bits member result typing completed T2.1--T2.3: `addExpressionResultFact` produces the facts; C and LLVM direct emitters consume them; exact missing/stale tests gate each specialized path. The next T2.1 must name a different registered family before lowering changes begin. | The selected family has fact-dump coverage, C/LLVM positive coverage, and missing/stale-fact rejection or a tested conservative/diagnosed disposition. |
-| CFG/place move checker | M1 structural places + M2 routing + M3 admission -> M4 retirement | M1.1 must remove one remaining correctness decision from the formatted compatibility-key path without broadening unsupported projections. | The named control-flow or projection family uses typed places and common CFG joins, with positive and diagnostic coverage; unsupported variants retain a stable error. |
+| CFG/place move checker | M1 structural places + M2 routing + M3 admission -> M4 retirement | M1.1 retired formatted-key root selection for deferred aliases. Audit the next supported compatibility-key correctness fallback without broadening unsupported projections. | The named control-flow or projection family uses typed places and common CFG joins, with positive and diagnostic coverage; unsupported variants retain a stable error. |
 | Pointer-provenance race lowering | P1 default -> P2 direct proofs -> P3 boundary policies -> P4 audit | P3's current admitted boundaries have a documented policy. P4 starts from a concrete unclassified flow found by T2 or M2/M3 work and must choose exactly one policy before backend support is added. | Both backends demonstrate the selected policy, including an absent-proof path, and the fallback register records any remaining backend mechanics. |
 
 | Item | Current state | Next evidence needed |
@@ -1186,12 +1188,12 @@ deferred-borrow, read-side alias, and unsupported-channel rows above are
 regression coverage; they do not close the remaining typed-place map migration
 or CFG rewrite.
 
-**Next phase action:** M2.3 is complete. The next move slice is M1.1: choose
-one remaining supported read, consume, assignment, defer-borrow, or alias
-invalidation path whose correctness still depends on a formatted compatibility
-key, replace that decision with `MovePlace` identity/overlap, and add positive
-and diagnostic coverage. Do not broaden unsupported projections merely to add
-fixtures.
+**Next phase action:** M1.1 has retired formatted-key root selection for
+deferred aliases. Inventory the remaining supported read, consume, assignment,
+defer-borrow, and alias-invalidation fallbacks; select one whose correctness
+still depends on a formatted compatibility key, replace it with `MovePlace`
+identity/overlap, and add positive and diagnostic coverage. Do not broaden
+unsupported projections merely to add fixtures.
 
 ### Production-Ready Exit Rule
 
