@@ -768,21 +768,33 @@ evidence is gated. The terms below are intentionally distinct:
 
 | Workstream | Goal | Complete phases | Current closure unit | Later phases | Workstream closes when |
 |---|---|---|---|---|---|
-| Typed semantic facts / typed MIR | Give lowering one semantic authority instead of backend AST rediscovery. | T1 inventory/admission; bounded T2 migrations in the evidence register; T3's LLVM aggregate-alias write proof retired as mechanics-only. | **T2/T3:** select one registered expression, call-target, or type-shape row and give it a MIR-owned, conservative, or diagnosed disposition. | T4 semantic-authority audit. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
-| CFG/place move checker | Make typed places and CFG dataflow, rather than formatted keys and statement shape, decide supported move behavior. | Foundation slices only: covered `MovePlace` paths and selected CFG/worklist transport. | **M2.3 deferred-loop routing:** give cleanup loops explicit condition/head/body/exit control flow, target-aware `break`/`continue`, and cleanup-local scope preservation. | M1 remaining string-key correctness paths; M3 projection admission; M4 compatibility retirement. | Typed places and CFG joins decide every supported move path; every unsupported path has a stable diagnostic. |
-| Pointer-provenance race lowering | Preserve MC's non-UB race contract without backend-local provenance guessing. | P1 conservative scalar default; P2 documented direct MIR provenance producers. | **P3:** only when another workstream exposes an unclassified pointer flow, select its policy: MIR fact, conservative race lowering, or diagnostic. | P4 fallback-register and C/LLVM policy audit. | Every pointer-flow boundary has a declared policy and no backend silently recreates provenance. |
+| Typed semantic facts / typed MIR | Give lowering one semantic authority instead of backend AST rediscovery. | T1 inventory/admission; bounded T2 migrations in the evidence register; T3's LLVM aggregate-alias write proof retired as mechanics-only. | **T2.1:** choose exactly one open registered family, name its producer and C/LLVM consumers, then decide whether its closure is MIR fact, conservative fallback, or diagnostic. | T2.2 migration; T2.3 fail-closed admission; T3 classification of every register row; T4 semantic-authority audit. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
+| CFG/place move checker | Make typed places and CFG dataflow, rather than formatted keys and statement shape, decide supported move behavior. | Foundation slices only: covered `MovePlace` paths and selected CFG/worklist transport. | **M2.3:** give cleanup loops explicit condition/head/body/exit control flow, target-aware `break`/`continue`, and cleanup-local scope preservation. | M1.1 remaining string-key correctness paths; M1.2/M3 projection admission; M4 compatibility retirement. | Typed places and CFG joins decide every supported move path; every unsupported path has a stable diagnostic. |
+| Pointer-provenance race lowering | Preserve MC's non-UB race contract without backend-local provenance guessing. | P1 conservative scalar default; P2 documented direct MIR provenance producers. | **P3.1--P3.3, trigger-driven:** when another slice exposes an unclassified escaped, returned/higher-order, or aggregate-CFG pointer flow, select its policy: MIR fact, conservative race lowering, or diagnostic. | P4 fallback-register and C/LLVM policy audit. | Every pointer-flow boundary has a declared policy and no backend silently recreates provenance. |
 
-**Current implementation sequence.** The next code slice is M1/M2 in the move
-checker. Typed-fact work resumes when that slice exposes a registered semantic
-decision; pointer work resumes only when either workstream exposes an
-unclassified pointer boundary. This ordering prevents direct-shape test
-expansion from being mistaken for architectural progress.
+**Current implementation sequence.** `Current` is a planned eligible unit, not
+a claim that all three workstreams are being implemented concurrently. The next
+code slice is **M2.3** in the move checker. Once it is complete, select one
+**T2.1** registered fact family and complete its T2.2/T2.3 gates. Start a P3
+slice only when either of those changes exposes a previously unclassified
+pointer flow. This ordering prevents direct-shape test expansion from being
+mistaken for architectural progress.
 
 | Order | Workstream | Completed foundation | Remaining closure units | Next valid implementation slice | Close when |
 |---|---|---|---|---|---|
 | 1 | CFG/place-based move checker | `MovePlace` exists for covered roots/projections; branch, short-circuit, ordinary-loop backedges/target exits, and selected `defer` transport use production CFG/worklist paths. | **M2.3 deferred-loop routing:** cleanup-loop condition/head/body/exit flow, labeled target resolution, and cleanup-local finalization; M1 remaining string-key correctness paths; M3 explicit move-array/pointer-to-array admission; M4 compatibility removal. | Build one cleanup-loop CFG that transports a deferred condition, body, `break`, and `continue` through the shared worklist while preserving existing `E_MOVE_LOOP_RESOURCE` and cleanup-local leak behavior. | Typed places and CFG joins decide all supported move behavior; unsupported paths retain stable diagnostics. |
 | 2 | Typed semantic fact table / typed MIR | Fact inventory/admission gates and bounded migrations for provenance, ranges, representation, calls, MMIO, varargs, traps, and selected inferred local types. | T2 remaining registered fact families; T3 final disposition for every registered backend inference; T4 removal of unregistered lowering-affecting AST inference. | When the move slice exposes a registered semantic decision, move its exact inputs/results to MIR and add producer, C/LLVM consumer, and missing/stale-fact tests. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
 | 3 | Pointer-provenance race lowering | Conservative scalar-deref default, direct MIR provenance producers, and a gated current fallback register. | P3 disposition of unclassified escaped, higher-order, returned, and aggregate-CFG flows; P4 final inventory and policy audit. | Only when a move or typed-fact slice exposes an unclassified pointer flow: choose MIR fact, conservative lowering, or diagnostic before adding support. | Every pointer-flow boundary has a declared policy and no backend silently recreates provenance. |
+
+**Phase dependencies and handoffs.** This table defines when a phase can start
+and what it must hand to the next phase. It is the implementation contract for
+the three large workstreams; it is not a second priority list.
+
+| Workstream | Phase order | Current handoff | A phase may advance only when |
+|---|---|---|---|
+| Typed semantic facts / typed MIR | T1 inventory -> T2.1 select -> T2.2 migrate -> T2.3 fail closed -> T3 classify -> T4 audit | The next T2.1 selection must identify one open register row, its MIR producer, and both backend consumers before lowering changes begin. | The selected family has fact-dump coverage, C/LLVM positive coverage, and missing/stale-fact rejection or a tested conservative/diagnosed disposition. |
+| CFG/place move checker | M1 structural places + M2 routing + M3 admission -> M4 retirement | M2.3 must replace deferred-loop statement-walker fallthrough with one cleanup-loop CFG and preserve cleanup scope on every exit. | The named control-flow or projection family uses typed places and common CFG joins, with positive and diagnostic coverage; unsupported variants retain a stable error. |
+| Pointer-provenance race lowering | P1 default -> P2 direct proofs -> P3 boundary policies -> P4 audit | P3 starts only from a concrete unclassified flow found by T2 or M2/M3 work; it must choose exactly one policy before backend support is added. | Both backends demonstrate the selected policy, including an absent-proof path, and the fallback register records any remaining backend mechanics. |
 
 | Item | Current state | Next evidence needed |
 |---|---|---|
