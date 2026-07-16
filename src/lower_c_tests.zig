@@ -2134,6 +2134,11 @@ test "lower-c inferred local binary expressions require MIR types" {
         \\    if is_less && both { return sum; }
         \\    return base;
         \\}
+        \\fn bitwise(value: u32) -> u32 {
+        \\    let combined = value & 7;
+        \\    let shifted = combined << 1;
+        \\    return combined | shifted;
+        \\}
     ;
     var parsed = try test_support.parseCheckedModule("c_inferred_local_binary_types.mc", source);
     defer parsed.deinit();
@@ -2146,6 +2151,8 @@ test "lower-c inferred local binary expressions require MIR types" {
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint64_t sum") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "bool is_less") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "bool both") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t combined") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t shifted") != null);
 
     var missing = try mir.build(std.testing.allocator, parsed.module);
     defer missing.deinit();
@@ -2160,6 +2167,20 @@ test "lower-c inferred local binary expressions require MIR types" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null));
+
+    var missing_bitwise = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_bitwise.deinit();
+    try removeTargetTypeKindForFunction(&missing_bitwise, "bitwise", .inferred_local);
+    var missing_bitwise_output: std.ArrayList(u8) = .empty;
+    defer missing_bitwise_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_bitwise, &missing_bitwise_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null));
+
+    var stale_bitwise = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_bitwise.deinit();
+    try renameTargetTypeFactForFunction(&stale_bitwise, "bitwise", .inferred_local, "u64");
+    var stale_bitwise_output: std.ArrayList(u8) = .empty;
+    defer stale_bitwise_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_bitwise, &stale_bitwise_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local literals require MIR types" {

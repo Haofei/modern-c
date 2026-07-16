@@ -4955,7 +4955,7 @@ const CEmitter = struct {
 
     fn emitLocalCopyInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const known_ty = self.operandEmitType(initializer, locals) orelse return false;
-        const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse known_ty;
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         if (try lower_c_access.emitDirectCallSliceIndexLocalInit(self.accessEmitContext(), name, inferred_ty, initializer, locals)) return true;
         if (try lower_c_access.emitDirectCallArrayIndexLocalInit(self.accessEmitContext(), name, inferred_ty, initializer, locals)) return true;
@@ -5011,7 +5011,7 @@ const CEmitter = struct {
 
     fn emitNumericInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const known_ty = self.numericExprTypeForEmission(initializer, locals) orelse return false;
-        const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse known_ty;
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
 
         if (try lower_c_arith.emitSequencedCheckedBinaryLocalInit(self.sequencedBinaryContext(), name, inferred_ty, initializer, locals)) return true;

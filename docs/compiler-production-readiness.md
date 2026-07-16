@@ -897,7 +897,8 @@ pointer/raw-many-pointer local, direct member/index/slice/dereference reads with
 resolved storage type, direct
 Result/nullable `try` payload reads, ordinary
 direct function/extern calls, direct casts,
-typed unary/binary expressions, and the language-defined targetless `u32`/`bool`
+typed unary/binary expressions, including bitwise `&` / `|` / `^` / `<<` / `>>`,
+and the language-defined targetless `u32`/`bool`
 literals now have a narrow typed-fact path: when a one-name `let`/`var` is
 initialized from an existing local value, a direct `&local`, `&local.field`,
 fixed-array `&local[index]`, or `&pointer.*` where `pointer` is a declared

@@ -1366,6 +1366,11 @@ test "MIR owns inferred local binary types" {
         \\    if is_less && both { return sum; }
         \\    return base;
         \\}
+        \\fn bitwise(value: u32) -> u32 {
+        \\    let combined = value & 7;
+        \\    let shifted = combined << 1;
+        \\    return combined | shifted;
+        \\}
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_binary_types.mc", source);
     defer reporter.deinit();
@@ -1401,6 +1406,12 @@ test "MIR owns inferred local binary types" {
     try std.testing.expect(saw_sum);
     try std.testing.expect(saw_is_less);
     try std.testing.expect(saw_both);
+    const bitwise_function = functionByName(typed_mir, "bitwise").?;
+    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(bitwise_function, .inferred_local));
+    for (bitwise_function.target_type_facts) |fact| {
+        if (fact.kind != .inferred_local) continue;
+        try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+    }
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 

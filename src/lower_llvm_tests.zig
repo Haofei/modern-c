@@ -2194,6 +2194,11 @@ test "LLVM inferred local binary expressions require MIR types" {
         \\    if is_less && both { return sum; }
         \\    return base;
         \\}
+        \\fn bitwise(value: u32) -> u32 {
+        \\    let combined = value & 7;
+        \\    let shifted = combined << 1;
+        \\    return combined | shifted;
+        \\}
     ;
     var parsed = try test_support.parseCheckedModule("llvm_inferred_local_binary_types.mc", source);
     defer parsed.deinit();
@@ -2206,6 +2211,8 @@ test "LLVM inferred local binary expressions require MIR types" {
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%sum") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%is_less") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%both") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%combined") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%shifted") != null);
 
     var missing = try mir.build(std.testing.allocator, parsed.module);
     defer missing.deinit();
@@ -2220,6 +2227,20 @@ test "LLVM inferred local binary expressions require MIR types" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_local_binary_types.mc", .{}, false, .riscv64, null));
+
+    var missing_bitwise = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_bitwise.deinit();
+    try removeTargetTypeKindForFunction(&missing_bitwise, "bitwise", .inferred_local);
+    var missing_bitwise_output: std.ArrayList(u8) = .empty;
+    defer missing_bitwise_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_bitwise, &missing_bitwise_output, "llvm_inferred_local_binary_types.mc", .{}, false, .riscv64, null));
+
+    var stale_bitwise = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_bitwise.deinit();
+    try renameTargetTypeFactForFunction(&stale_bitwise, "bitwise", .inferred_local, "u64");
+    var stale_bitwise_output: std.ArrayList(u8) = .empty;
+    defer stale_bitwise_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_bitwise, &stale_bitwise_output, "llvm_inferred_local_binary_types.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM inferred local literals require MIR types" {
