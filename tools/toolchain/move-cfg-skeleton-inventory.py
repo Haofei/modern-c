@@ -30,6 +30,10 @@ CFG_CONSTRUCTION_HELPERS: dict[str, dict[str, int]] = {
         "cfg.addBlock(": 3,
         "cfg.addEdge(": 2,
     },
+    "loopBodyMoveCfg": {
+        "cfg.addBlock(": 4,
+        "cfg.addEdge(": 4,
+    },
 }
 
 ANCHORS: dict[str, list[str]] = {
@@ -58,6 +62,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn twoArmMoveCfg",
         "const MultiArmMoveCfg = struct",
         "fn multiArmMoveCfg",
+        "fn loopBodyMoveCfg",
         "fn moveFunctionBodyCfg",
         "fn moveExitEdgeCfg",
         "fn moveLoopExitEdgeCfg",

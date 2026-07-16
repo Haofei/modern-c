@@ -154,6 +154,63 @@ const ExitMoveCfg = struct {
     }
 };
 
+const LoopBodyMoveCfg = struct {
+    cfg: sema_model.MoveCfg,
+    entry: sema_model.MoveCfgBlockId,
+    loop_head: sema_model.MoveCfgBlockId,
+    body: sema_model.MoveCfgBlockId,
+    exit: sema_model.MoveCfgBlockId,
+
+    fn deinit(self: *LoopBodyMoveCfg) void {
+        self.cfg.deinit();
+    }
+};
+
+fn loopBodyMoveCfg(self: *Checker) ?LoopBodyMoveCfg {
+    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
+    const entry = cfg.addBlock(.entry) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const loop_head = cfg.addBlock(.loop_head) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const body = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const exit = cfg.addBlock(.exit) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(entry, loop_head, .normal) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(loop_head, body, .branch) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(loop_head, exit, .branch) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(body, loop_head, .backedge) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    return .{ .cfg = cfg, .entry = entry, .loop_head = loop_head, .body = body, .exit = exit };
+}
+
 fn exitMoveCfg(self: *Checker) ?ExitMoveCfg {
     var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
     const entry = cfg.addBlock(.entry) catch {
@@ -2180,24 +2237,42 @@ fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *std.String
     }
 }
 
-// This is the forward body transfer only. Backedges and early exits still use
-// the existing loop frame/widening path after the worklist returns, preserving
-// its diagnostic order and zero-or-many semantics.
+// The loop body now runs through an explicit loop-head CFG. The body is
+// evaluated once for diagnostics, then its outgoing state travels over the
+// backedge and joins the zero-iteration path at the head. The existing loop
+// widening below remains the authority for rejecting outer-resource changes.
 fn moveLoopBodyCfg(self: *Checker, body: ast.Block, entry_state: *const std.StringHashMap(MoveSlot), result_state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
-    var linear = linearMoveCfg(self, .branch_join) orelse return false;
-    defer linear.deinit();
+    var loop_cfg = loopBodyMoveCfg(self) orelse return false;
+    defer loop_cfg.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &linear.cfg, linear.entry, entry_state) orelse return false;
+    var worklist = MoveStateCfgWorklist.init(self, &loop_cfg.cfg, loop_cfg.entry, entry_state) orelse return false;
     defer worklist.deinit();
     var body_diverges = false;
+    var body_visited = false;
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == linear.entry) {
+        if (block == loop_cfg.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == linear.body) {
+        } else if (block == loop_cfg.loop_head) {
+            for (loop_cfg.cfg.edges.items) |edge| {
+                if (edge.from != block) continue;
+                if (edge.to == loop_cfg.body and body_visited) continue;
+                const changed = if (worklist.states[edge.to]) |*joined| blk: {
+                    var before = cloneMoveState(self, joined);
+                    defer before.deinit();
+                    mergeMoveBranches(self, joined, joined, block_state);
+                    break :blk !moveStatesEqual(joined, &before);
+                } else blk: {
+                    worklist.states[edge.to] = cloneMoveState(self, block_state);
+                    break :blk true;
+                };
+                if (changed) worklist.enqueue(self, edge.to);
+            }
+        } else if (block == loop_cfg.body) {
+            body_visited = true;
             body_diverges = moveBlock(self, body, block_state, aliases);
             if (!body_diverges) worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == linear.exit) {
+        } else if (block == loop_cfg.exit) {
             replaceMoveState(self, result_state, block_state);
         }
     }
