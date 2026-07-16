@@ -1741,6 +1741,17 @@ test "move root ownership lookup uses typed places rather than compatibility key
     try std.testing.expect(!state.get("compat:owner").?.live);
 }
 
+test "move subplace outer-scope classification uses typed roots rather than compatibility keys" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    const field = root.project(.{ .field = "resource" }).?;
+    var outer = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer outer.deinit();
+
+    try outer.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    try std.testing.expect(moveSubplaceRootInOuter(.{ .live = false, .span = span, .place = field }, "compat:owner.resource", &outer));
+}
+
 test "move alias tracking requires a typed referent place" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
@@ -2004,7 +2015,7 @@ fn removeOwnershipMovePlace(place: MovePlace, state: *std.StringHashMap(MoveSlot
 fn moveSubplaceRootInOuter(slot: MoveSlot, key: []const u8, outer: *const std.StringHashMap(MoveSlot)) bool {
     _ = key;
     const place = slot.place orelse return false;
-    return outer.contains(place.root);
+    return rootMoveSlotForPlace(place, outer) != null;
 }
 
 fn trackedSubplaceRoot(slot: MoveSlot, key: []const u8) ?[]const u8 {
