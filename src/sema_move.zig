@@ -2052,6 +2052,17 @@ fn markEscapedBorrowForReferentKey(key: []const u8, escape_span: diagnostics.Spa
     markEscapedBorrowForPlace(place, escape_span, state);
 }
 
+// A named alias reaches this escape path with the source place it carried at
+// registration. Keep that place through the recursive aggregate/call scan;
+// `alias_of` must not be used to reconstruct ownership identity here.
+fn markEscapedBorrowForCarriedAlias(value: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) bool {
+    const referent = carriedAliasReferentForExpr(value, state) orelse return false;
+    const place = typedAliasReferentPlace(referent) orelse return true;
+    const root = rootMoveSlotForPlace(place, state) orelse return true;
+    if (root.live and root.alias_of == null) markEscapedBorrowForPlace(place, escape_span, state);
+    return true;
+}
+
 // Map keys remain compatibility indexes, but ownership updates are addressed by
 // the structured place. A repeated producer for the same place updates its
 // existing slot rather than adding another formatted-key entry.
@@ -3928,6 +3939,7 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
         markEscapedBorrowForPlace(place, escape_span, state);
         return;
     }
+    if (markEscapedBorrowForCarriedAlias(value, escape_span, state)) return;
     const root = spine.borrowedMoveRoot(value, state) orelse return;
     markEscapedBorrowForReferentKey(root, escape_span, state);
 }
@@ -3997,6 +4009,7 @@ fn markBorrowEscapeCapturedCallArg(self: *Checker, arg: ast.Expr, escape_span: d
         }
         return;
     }
+    if (markEscapedBorrowForCarriedAlias(arg, escape_span, state)) return;
     const referent = spine.borrowedMoveRoot(arg, state) orelse
         spine.aliasReferentOf(arg, state) orelse
         return;

@@ -284,6 +284,16 @@ fn reject_call_arg_struct() -> u32 {
     return cn(t);
 }
 
+// 13a. The aggregate carries an already registered alias rather than a direct
+// address expression. The escape scan must use the alias's typed referent.
+fn reject_call_arg_alias_struct() -> u32 {
+    let t: T = mk();
+    let p: *T = &t;
+    sink(.{ .p = p });
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return cn(t);
+}
+
 // 14. borrow laundered into a NESTED aggregate CALL ARGUMENT (`sinkOuter(.{ .h = .{ .p = &t } })`).
 // The call-arg escape scan recurses through the nested struct literal — symmetric with the
 // nested-decl case but flowing into a callee.
