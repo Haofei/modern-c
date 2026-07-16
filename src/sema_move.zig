@@ -1992,6 +1992,12 @@ fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.String
         return .{ .key = pp.key, .place = pp.place, .full_deref = true };
     }
     if (callLaunderedMoveAliasReferent(self, expr, state, aliases)) |referent| return referent;
+    // A direct `&binding` is already a typed root place. Preserve that identity
+    // before the legacy name-only alias helper is consulted; field/index address
+    // expressions retain their conservative escape boundary below.
+    if (directAliasReferentPlace(self, expr, state)) |pp| {
+        return .{ .key = pp.key, .place = pp.place, .full_deref = true };
+    }
     const key = spine.aliasReferentOf(expr, state) orelse
         return null;
     var place: ?MovePlace = null;
@@ -2010,6 +2016,18 @@ fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.String
         .key = key,
         .place = place,
         .full_deref = isDirectIdentAddressOf(expr) or inheritedFullDerefAlias(expr, state),
+    };
+}
+
+fn directAliasReferentPlace(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?PlaceKeyTy {
+    const target = switch (expr.kind) {
+        .address_of => |inner| inner.*,
+        .grouped => |inner| return directAliasReferentPlace(self, inner.*, state),
+        else => return null,
+    };
+    return switch (target.kind) {
+        .ident, .grouped => placeKeyAndType(self, target, state),
+        else => null,
     };
 }
 
