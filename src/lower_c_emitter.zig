@@ -4898,7 +4898,7 @@ const CEmitter = struct {
 
     fn emitArrayCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const array_ty = self.arrayReturnTypeForExpr(initializer) orelse return false;
-        const inferred_ty = (try self.mirInferredLocalType(name, initializer, array_ty)) orelse array_ty;
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, array_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
@@ -4906,7 +4906,7 @@ const CEmitter = struct {
 
     fn emitSliceCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const slice_ty = self.sliceReturnTypeForExpr(initializer, locals) orelse return false;
-        const inferred_ty = (try self.mirInferredLocalType(name, initializer, slice_ty)) orelse slice_ty;
+        const inferred_ty = (try self.mirInferredLocalType(name, initializer, slice_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
