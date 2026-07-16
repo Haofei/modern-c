@@ -3796,16 +3796,12 @@ fn markBorrowEscapeCapturedCallArg(self: *Checker, arg: ast.Expr, escape_span: d
         }
         return;
     }
-    const root = spine.borrowedMoveRoot(arg, state) orelse blk: {
-        if (spine.aliasReferentOf(arg, state)) |referent| {
-            if (state.contains(referent)) break :blk referent;
-        }
+    const referent = spine.borrowedMoveRoot(arg, state) orelse
+        spine.aliasReferentOf(arg, state) orelse
         return;
-    };
-    if (state.getPtr(root)) |slot| {
-        if (slot.live and slot.alias_of == null and slot.escaped_borrow == null) {
-            slot.escaped_borrow = escape_span;
-        }
+    const place = trackedMoveReferentPlaceForKey(referent, state) orelse return;
+    if (rootMoveSlotPtrForPlace(place, state)) |slot| {
+        if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
     }
 }
 

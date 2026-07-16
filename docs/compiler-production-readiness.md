@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **652 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **653 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -765,6 +765,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Move checker stale-alias detection requires typed referent places | A stale alias without an embedded `alias_place` no longer treats its formatted `alias_of` key as ownership identity. The checker recovers the referenced slot's `MovePlace` and applies the common structural moved-place rule; legacy alias facts with no place metadata do not create a string-key stale-use finding. This is one M1.1 migration, not closure of alias facts or CFG/place analysis. | `src/sema_move.zig` `aliasSlotReferentMoved`; unit test `move stale aliases recover typed referent places from state slots`; `zig test src/sema_move.zig`; `zig test src/sema_tests.zig`; full production gate; `git diff --check`. |
 
 | Move checker pointer-return aliases require typed referent places | Pointer-return call laundering no longer treats a borrowed root or alias referent string as ownership identity. The legacy lookup may locate a state slot by key, but that slot must provide a typed place whose structural root is live before the result is registered as an alias; the registered alias retains that place. Legacy referents without place metadata are not admitted. This is one M1.1 migration, not completion of call-laundering or interprocedural ownership analysis. | `src/sema_move.zig` `callLaunderedMoveAliasReferent` / `trackedMoveReferentPlaceForKey`; unit test `move pointer-return aliases recover typed referent places from state slots`; `zig test src/sema_move.zig`; `zig test src/sema_tests.zig`; full production gate; `git diff --check`. |
+
+| Move checker aggregate call-result borrow escape requires typed referent places | Aggregate call-result escape tracking no longer authorizes a borrowed root or alias referent merely because a formatted key is in the state map. It resolves the state slot to a live structural `MovePlace` before marking the owning root escaped; legacy referents without typed metadata are not inferred. This is one M1.1 migration, not completion of aggregate interprocedural borrow analysis. | `src/sema_move.zig` `markBorrowEscapeCapturedCallArg` / `trackedMoveReferentPlaceForKey`; typed referent helper regression; `zig test src/sema_move.zig`; `zig test src/sema_tests.zig`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 
