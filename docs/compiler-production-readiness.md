@@ -739,6 +739,25 @@ uncommitted work, an unverified patch, or a claim that all source shapes are
 being implemented. A completed bounded slice is recorded in the evidence
 register; it advances a phase only when it closes one of the units below.
 
+**Phase map.** This is the authoritative answer to "what is left". A phase is
+not complete because it has tests: it is complete only when its stated compiler
+authority has moved out of backend-local or string-keyed inference and its exit
+evidence is gated. `Current` identifies the next closure phase, not an
+uncommitted patch; the header's `0 active slices` remains accurate until a
+verified implementation slice is underway.
+
+| Workstream | Completed phases | Current unclosed phase and objective | Later phase | Next shippable result |
+|---|---|---|---|---|
+| Typed semantic facts / typed MIR | T1 inventory/admission; bounded T2 migrations already listed in the evidence register | **T2/T3:** migrate one registered lowering decision or give it a final MIR-owned, conservative, or diagnosed disposition. The immediate audit is LLVM's registered local-only aggregate-alias proof. | T4 semantic-authority audit | A code-backed disposition for that proof, with C/LLVM missing-fact behavior and an inventory anchor; then one selected expression/call/type-shape register row. |
+| CFG/place move checker | No complete umbrella phase yet; covered `MovePlace` and CFG/worklist paths are foundation slices only | **M1/M2:** remove one remaining string-key correctness decision or route one specialized control-flow transfer/join through the common typed-place worklist. | M3 admission boundary, then M4 compatibility retirement | One named production path whose identity, transfer/join, positive behavior, and diagnostic all use `MovePlace` plus the CFG engine. |
+| Pointer-provenance race lowering | P1 conservative scalar default; P2 documented direct MIR provenance producers | **P3:** close only a newly exposed, unclassified pointer-flow boundary with one policy: MIR fact, conservative race lowering, or diagnostic. | P4 fallback-register and C/LLVM policy audit | A closure-matrix row with matching C/LLVM positive and missing-proof evidence. There is no standalone syntax-expansion queue. |
+
+The implementation order is therefore: finish the active typed-semantic
+authority disposition, continue the move authority migration, and perform
+pointer work only when either exposes an unclassified pointer boundary. This
+ordering prevents direct-shape test expansion from being mistaken for progress
+on an architectural phase.
+
 | Order | Workstream | Completed foundation | Remaining closure units | Next valid implementation slice | Close when |
 |---|---|---|---|---|---|
 | 1 | Typed semantic fact table / typed MIR | Fact inventory/admission gates and bounded migrations for provenance, ranges, representation, calls, MMIO, varargs, traps, and selected inferred local types. | T2 remaining registered fact families; T3 final disposition for every registered backend inference; T4 removal of unregistered lowering-affecting AST inference. | Select one named register row, move its exact inputs/results to MIR, and add producer, C/LLVM consumer, and missing/stale-fact tests. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
