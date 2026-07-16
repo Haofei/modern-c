@@ -16,6 +16,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn removeAliasSlotForStoragePlace",
         "fn aliasPlaceInfo",
         "fn aliasWildcardPlaceInfo",
+        "fn sameDeferredBorrowFact",
         "const pp = placeKeyAndType(self, expr, state) orelse return null;",
         "const base = placeKeyAndType(self, ix.base.*, state) orelse return null;",
         "const AliasPlaceInfo = struct",

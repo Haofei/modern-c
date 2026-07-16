@@ -522,7 +522,7 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *std.StringHa
             continue;
         };
         const before = entry.value_ptr.*;
-        if (before.live != after.live or before.deferred != after.deferred or !sameMaybeKey(before.deferred_borrow, after.deferred_borrow) or !sameMaybePlace(before.deferred_borrow_place, after.deferred_borrow_place)) {
+        if (before.live != after.live or before.deferred != after.deferred or !sameDeferredBorrowFact(before, after)) {
             self.errorCode(before.span, "E_MOVE_LOOP_RESOURCE", "cannot consume or reserve an outer linear `move` value inside a loop; the loop may run zero or multiple times");
             entry.value_ptr.live = false;
             entry.value_ptr.deferred = false;
@@ -1264,7 +1264,7 @@ pub fn mergeMoveBranches(
             continue;
         };
         var slot = entry.value_ptr.*;
-        if (slot.live != other.live or slot.deferred != other.deferred or !sameMaybeKey(slot.deferred_borrow, other.deferred_borrow) or !sameMaybePlace(slot.deferred_borrow_place, other.deferred_borrow_place)) {
+        if (slot.live != other.live or slot.deferred != other.deferred or !sameDeferredBorrowFact(slot, other)) {
             self.errorCode(slot.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` value has inconsistent ownership across control-flow branches");
             slot.live = false;
             slot.deferred = false;
@@ -1436,6 +1436,58 @@ test "move CFG alias facts match typed referent places" {
     mergeMoveBranches(&checker, &joined, &left, &right);
     try std.testing.expect(!reporter.has_errors);
     try std.testing.expectEqual(@as(usize, 1), joined.count());
+}
+
+test "move CFG deferred borrows use typed places rather than compatibility keys" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-cfg-defer-place.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+
+    const root: MovePlace = .{ .root = "owner" };
+    const borrowed = root.project(.{ .field = "resource" }).?;
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const left_slot = MoveSlot{
+        .live = true,
+        .span = span,
+        .place = root,
+        .deferred_borrow = "owner.resource:left",
+        .deferred_borrow_place = borrowed,
+    };
+    const right_slot = MoveSlot{
+        .live = true,
+        .span = span,
+        .place = root,
+        .deferred_borrow = "owner.resource:right",
+        .deferred_borrow_place = borrowed,
+    };
+
+    var left = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer left.deinit();
+    var right = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer right.deinit();
+    var joined = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer joined.deinit();
+    try left.put("owner", left_slot);
+    try right.put("owner", right_slot);
+
+    try std.testing.expect(moveStatesEqual(&left, &right));
+    mergeMoveBranches(&checker, &joined, &left, &right);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(joined.get("owner").?.live);
+
+    var loop_entry = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer loop_entry.deinit();
+    var loop_iteration = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer loop_iteration.deinit();
+    try loop_entry.put("owner", left_slot);
+    try loop_iteration.put("owner", right_slot);
+    reportLoopOuterResourceChanges(&checker, &loop_entry, &loop_iteration);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(loop_entry.get("owner").?.live);
+
+    mergeShortCircuitMoveStates(&checker, &left, &right, span, true);
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(left.get("owner").?.live);
 }
 
 test "move root ownership lookup uses typed places rather than compatibility keys" {
@@ -2102,7 +2154,7 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *std.StringHashMap(MoveSlo
             continue;
         };
         const before = entry.value_ptr.*;
-        if (before.live != after.live or before.deferred != after.deferred or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow) or !sameMaybeKey(before.deferred_borrow, after.deferred_borrow) or !sameMaybePlace(before.deferred_borrow_place, after.deferred_borrow_place)) {
+        if (before.live != after.live or before.deferred != after.deferred or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow) or !sameDeferredBorrowFact(before, after)) {
             self.errorCode(span, "E_MOVE_BRANCH_MISMATCH", if (deferred) "cannot consume, reserve, or defer-borrow an outer linear `move` value only on one side of a short-circuit expression" else "cannot consume, reserve, or escape an outer linear `move` value only on one side of a short-circuit expression");
             entry.value_ptr.live = false;
             entry.value_ptr.deferred = false;
@@ -2176,6 +2228,17 @@ fn sameMaybePlace(left: ?MovePlace, right: ?MovePlace) bool {
     return left.?.eql(right.?);
 }
 
+// Typed deferred-borrow places are the semantic identity. The compatibility
+// key remains only for legacy root-only facts that have no place metadata.
+fn sameDeferredBorrowFact(left: MoveSlot, right: MoveSlot) bool {
+    if (left.deferred_borrow_place) |left_place| {
+        if (right.deferred_borrow_place) |right_place| return left_place.eql(right_place);
+        return false;
+    }
+    if (right.deferred_borrow_place != null) return false;
+    return sameMaybeKey(left.deferred_borrow, right.deferred_borrow);
+}
+
 fn moveStatesEqual(left: *const std.StringHashMap(MoveSlot), right: *const std.StringHashMap(MoveSlot)) bool {
     if (left.count() != right.count()) return false;
     var it = left.iterator();
@@ -2190,8 +2253,7 @@ fn moveSlotStateEqual(left: MoveSlot, right: MoveSlot) bool {
     return left.live == right.live and
         sameMaybePlace(left.place, right.place) and
         left.deferred == right.deferred and
-        sameMaybeKey(left.deferred_borrow, right.deferred_borrow) and
-        sameMaybePlace(left.deferred_borrow_place, right.deferred_borrow_place) and
+        sameDeferredBorrowFact(left, right) and
         std.meta.eql(left.ty, right.ty) and
         left.type_only == right.type_only and
         left.const_index == right.const_index and
