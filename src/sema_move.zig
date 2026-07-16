@@ -86,20 +86,31 @@ const MoveStateCfgWorklist = struct {
         return null;
     }
 
-    fn propagateSuccessors(self: *MoveStateCfgWorklist, checker: *Checker, from: sema_model.MoveCfgBlockId, outgoing: *const std.StringHashMap(MoveSlot)) void {
+    // All real-state CFG joins enter here. Callers may omit a successor when an
+    // AST transfer has already run for that block, but cannot reimplement the
+    // ownership merge or worklist requeue policy themselves.
+    fn propagateSuccessor(self: *MoveStateCfgWorklist, checker: *Checker, to: sema_model.MoveCfgBlockId, outgoing: *const std.StringHashMap(MoveSlot)) void {
+        const changed = if (self.states[to]) |*joined| blk: {
+            var before = cloneMoveState(checker, joined);
+            defer before.deinit();
+            mergeMoveBranches(checker, joined, joined, outgoing);
+            break :blk !moveStatesEqual(joined, &before);
+        } else blk: {
+            self.states[to] = cloneMoveState(checker, outgoing);
+            break :blk true;
+        };
+        if (changed) self.enqueue(checker, to);
+    }
+
+    fn propagateSuccessorsExcept(self: *MoveStateCfgWorklist, checker: *Checker, from: sema_model.MoveCfgBlockId, outgoing: *const std.StringHashMap(MoveSlot), excluded: ?sema_model.MoveCfgBlockId) void {
         for (self.cfg.edges.items) |edge| {
-            if (edge.from != from) continue;
-            const changed = if (self.states[edge.to]) |*joined| blk: {
-                var before = cloneMoveState(checker, joined);
-                defer before.deinit();
-                mergeMoveBranches(checker, joined, joined, outgoing);
-                break :blk !moveStatesEqual(joined, &before);
-            } else blk: {
-                self.states[edge.to] = cloneMoveState(checker, outgoing);
-                break :blk true;
-            };
-            if (changed) self.enqueue(checker, edge.to);
+            if (edge.from != from or edge.to == excluded) continue;
+            self.propagateSuccessor(checker, edge.to, outgoing);
         }
+    }
+
+    fn propagateSuccessors(self: *MoveStateCfgWorklist, checker: *Checker, from: sema_model.MoveCfgBlockId, outgoing: *const std.StringHashMap(MoveSlot)) void {
+        self.propagateSuccessorsExcept(checker, from, outgoing, null);
     }
 };
 
@@ -2254,20 +2265,7 @@ fn moveLoopBodyCfg(self: *Checker, body: ast.Block, entry_state: *const std.Stri
         if (block == loop_cfg.entry) {
             worklist.propagateSuccessors(self, block, block_state);
         } else if (block == loop_cfg.loop_head) {
-            for (loop_cfg.cfg.edges.items) |edge| {
-                if (edge.from != block) continue;
-                if (edge.to == loop_cfg.body and body_visited) continue;
-                const changed = if (worklist.states[edge.to]) |*joined| blk: {
-                    var before = cloneMoveState(self, joined);
-                    defer before.deinit();
-                    mergeMoveBranches(self, joined, joined, block_state);
-                    break :blk !moveStatesEqual(joined, &before);
-                } else blk: {
-                    worklist.states[edge.to] = cloneMoveState(self, block_state);
-                    break :blk true;
-                };
-                if (changed) worklist.enqueue(self, edge.to);
-            }
+            worklist.propagateSuccessorsExcept(self, block, block_state, if (body_visited) loop_cfg.body else null);
         } else if (block == loop_cfg.body) {
             body_visited = true;
             body_diverges = moveBlock(self, body, block_state, aliases);

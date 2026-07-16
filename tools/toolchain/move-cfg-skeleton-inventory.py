@@ -52,6 +52,7 @@ ANCHORS: dict[str, list[str]] = {
     ],
     "src/sema_move.zig": [
         "const MoveStateCfgWorklist = struct",
+        "fn propagateSuccessorsExcept",
         "const LinearMoveCfg = struct",
         "fn linearMoveCfg",
         "const ExitMoveCfg = struct",
