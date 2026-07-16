@@ -1498,9 +1498,10 @@ fn sameAliasFact(left: MoveSlot, right: MoveSlot) bool {
             return left_place.eql(right_place) and left.full_deref_alias == right.full_deref_alias;
         }
     }
-    return std.mem.eql(u8, left.alias_of.?, right.alias_of.?) and
-        sameMaybePlace(left.alias_place, right.alias_place) and
-        left.full_deref_alias == right.full_deref_alias;
+    // A compatibility key can locate legacy metadata but cannot establish that
+    // two CFG aliases denote the same resource. Without both typed referents,
+    // retain the conservative divergent-join result.
+    return false;
 }
 
 test "move branch joins match subplaces by typed place rather than compatibility key" {
@@ -1595,6 +1596,10 @@ test "move CFG alias facts match typed referent places" {
     const right_slot = MoveSlot{ .live = false, .span = span, .place = storage, .alias_of = "owner.resource:right", .alias_place = referent };
 
     try std.testing.expect(sameAliasFact(left_slot, right_slot));
+    try std.testing.expect(!sameAliasFact(
+        .{ .live = false, .span = span, .alias_of = "owner.resource" },
+        .{ .live = false, .span = span, .alias_of = "owner.resource" },
+    ));
     var left = std.StringHashMap(MoveSlot).init(std.testing.allocator);
     defer left.deinit();
     var right = std.StringHashMap(MoveSlot).init(std.testing.allocator);

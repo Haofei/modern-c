@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **662 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **663 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -785,6 +785,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | C async generated members use resolved generated declarations only | Async lowering's zero-span state-machine member and unary expressions are not source nodes and therefore have no source-keyed MIR fact. C may use the already resolved generated struct declaration and operand type for those zero-span compiler-generated nodes only; all user-source member, index, slice, dereference, and unary expressions still require their exact MIR fact. This preserves the user-source fail-closed boundary while making the typed async state machine emit consistently. | `src/lower_c_infer.zig` `operandEmitType`; `src/lower_c_emitter.zig` `memberResultTypeOrGenerated` / `unaryResultTypeForEmission`; `tests/c_emit/fuzz_agent_async_api.mc`; full production gate; `git diff --check`. |
 
 | Move CFG propagates labeled exits and fails closed on divergent aliases | A loop body that queues a labeled exit to an enclosing loop now reports divergence to its caller, so the enclosing CFG routes the queued state through its target edge instead of adding a spurious normal backedge. Branch/loop joins whose alias target differs by path mark that alias divergent; later use is conservatively treated as stale. Deferred and ordinary loop worklists suppress duplicate generic join diagnostics only where their loop-specific diagnostics are authoritative. This is bounded M2/M1 transport and alias-state work, not completion of the CFG/place checker. | `src/sema_model.zig` `MoveSlot.divergent_alias`; `src/sema_move.zig` `moveLoopCfg`, `runLoopBodyCfgWorklist`, `MoveStateCfgWorklist.suppressJoinDiagnostics`, and `aliasSlotReferentMoved`; `tests/spec/move_place.mc` labeled outer break/continue acceptance and rejection fixtures; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
+
+| Move CFG alias joins require typed referent places | CFG state equality and merge no longer use matching `alias_of` compatibility strings as proof that two aliases designate the same move resource. Both aliases must carry matching `alias_place` values; otherwise the join remains conservative and may mark the alias divergent. This is one M1.1 compatibility-authority retirement, not completion of alias production or all CFG joins. | `src/sema_move.zig` `sameAliasFact`; unit test `move CFG alias facts match typed referent places`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 
