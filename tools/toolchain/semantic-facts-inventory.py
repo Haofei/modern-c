@@ -22,6 +22,8 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "//! C backend expression type inference helpers.",
             "pub fn operandEmitType(",
             "pub fn derefPointeeType(",
+            "pub fn arrayTypeForExpr(",
+            "MIR owns the result type of a member or index expression.",
         ],
         "src/lower_c_emitter.zig": [
             "fn indirectCallCalleeType(",

@@ -1708,6 +1708,43 @@ test "LLVM compound expressions require complete MIR result facts" {
     }
 }
 
+test "LLVM nested array member and index results require MIR expression facts" {
+    const source =
+        \\struct MatrixHolder { rows: [2][2]u32 }
+        \\fn read_matrix_member(holder: MatrixHolder) -> u32 {
+        \\    return holder.rows[0][1];
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_array_member_expression_result_facts.mc", source);
+    defer parsed.deinit();
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_array_member_expression_result_facts.mc", .{}, false, .riscv64, null);
+        try expectContains(output.items, "getelementptr");
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const member_offset = std.mem.indexOf(u8, source, "holder.rows") orelse return error.TestUnexpectedResult;
+        try removeTargetTypeFactAtOffsetForFunction(&module_mir, "read_matrix_member", .expression_result, member_offset, "holder.rows".len);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_array_member_expression_result_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const member_offset = std.mem.indexOf(u8, source, "holder.rows") orelse return error.TestUnexpectedResult;
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "read_matrix_member", .expression_result, member_offset, "holder.rows".len, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_array_member_expression_result_facts.mc", .{}, false, .riscv64, null));
+    }
+}
+
 test "LLVM MMIO calls consume MIR identities and complete types" {
     const source =
         \\packed bits Status: u8 { ready: bool }

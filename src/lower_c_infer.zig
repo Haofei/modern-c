@@ -313,21 +313,13 @@ pub fn arrayTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
             return if (resolved.kind == .array) resolved else null;
         },
         .grouped => |inner| return arrayTypeForExpr(ctx, inner.*, locals),
-        .index => |node| {
-            const base_arr = arrayTypeForExpr(ctx, node.base.*, locals) orelse return null;
-            const resolved_child = resolveAliasType(ctx, base_arr.kind.array.child.*);
-            return if (resolved_child.kind == .array) resolved_child else null;
-        },
-        .member => |node| {
-            const struct_name = structTypeNameForExpr(ctx, node.base.*, locals) orelse return null;
-            const struct_decl = ctx.structs.get(struct_name) orelse return null;
-            for (struct_decl.fields) |field| {
-                if (std.mem.eql(u8, field.name.text, node.name.text)) {
-                    const resolved = resolveAliasType(ctx, field.ty);
-                    return if (resolved.kind == .array) resolved else null;
-                }
-            }
-            return null;
+        // MIR owns the result type of a member or index expression. In
+        // particular, a nested array result must not be reconstructed by
+        // walking the struct declaration or the previous array expression.
+        .index, .member => {
+            const result_ty = operandEmitType(ctx, expr, locals) orelse return null;
+            const resolved = resolveAliasType(ctx, result_ty);
+            return if (resolved.kind == .array) resolved else null;
         },
         // `pa.*[i]` — deref of a pointer-to-array indexes the pointee array.
         .deref => |inner| {

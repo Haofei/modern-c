@@ -1723,6 +1723,43 @@ test "lower-c indexes direct fixed-array call results through MIR return types" 
     try std.testing.expect(std.mem.indexOf(u8, output.items, ".elems[") != null);
 }
 
+test "lower-c nested array member and index results require MIR expression facts" {
+    const source =
+        \\struct MatrixHolder { rows: [2][2]u32 }
+        \\fn read_matrix_member(holder: MatrixHolder) -> u32 {
+        \\    return holder.rows[0][1];
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_array_member_expression_result_facts.mc", source);
+    defer parsed.deinit();
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_array_member_expression_result_facts.mc", .{}, false, null);
+        try expectContains(output.items, "holder.rows.elems[");
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const member_offset = std.mem.indexOf(u8, source, "holder.rows") orelse return error.TestUnexpectedResult;
+        try removeTargetTypeFactAtOffsetForFunction(&module_mir, "read_matrix_member", .expression_result, member_offset, "holder.rows".len);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_array_member_expression_result_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const member_offset = std.mem.indexOf(u8, source, "holder.rows") orelse return error.TestUnexpectedResult;
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "read_matrix_member", .expression_result, member_offset, "holder.rows".len, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_array_member_expression_result_facts.mc", .{}, false, null));
+    }
+}
+
 test "lower-c MMIO calls consume MIR identities and complete types" {
     const source =
         \\packed bits Status: u8 { ready: bool }
