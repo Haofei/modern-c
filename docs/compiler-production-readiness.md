@@ -803,6 +803,23 @@ advance a phase unless it satisfies the listed phase exit condition.
 | CFG/place move checker | Typed places and CFG transfer/join state, not formatted compatibility keys or AST statement shape, decide all admitted `move` behavior. | **Current: M1.1 migration.** M1 and M2 have bounded completed paths; M3 is queued behind remaining M1.1 authority migration; M4 has not started. | Name one supported read, consume, assignment, defer-borrow, or alias-invalidation decision that still uses a compatibility key as correctness authority; replace it with `MovePlace` identity/overlap and add positive plus diagnostic coverage. | M1.2/M3 define and admit or reject each projection family; M2 routes remaining control flow through the common worklist; M4 removes compatibility authority. | Every supported move path reaches typed-place/CFG authority; every unsupported projection has a stable diagnostic. |
 | Pointer-provenance race lowering | No C or LLVM path silently turns an MC race into optimizer UB; positive provenance is used only when MIR proves it. | **Triggered: P4 audit.** P1-P3 cover the current documented boundary matrix. P4 is intentionally not a syntax-expansion queue. | When T2 or move work exposes an unclassified pointer flow, add exactly one register entry and choose one policy before implementation: MIR proof, race-tolerant default, or diagnosed unsupported. | P4.1 inventories every remaining fallback; P4.2 proves matching C/LLVM policy, including missing-proof behavior. | Every pointer-flow boundary has a declared, tested policy and no backend reintroduces provenance inference. |
 
+### Canonical Phase Route
+
+The table above is the source of truth for current state; this route makes the
+dependency order explicit. A later phase is not started merely because a nearby
+test passes.
+
+| Workstream | Ordered phases | Current boundary | What changes phase state |
+|---|---|---|---|
+| Typed semantic facts / typed MIR | T1 inventory -> T2.1 select one family -> T2.2 migrate producer and both consumers -> T2.3 reject missing/stale facts -> T3 classify the register -> T4 audit all remaining inference | **T2.1.** The next slice must first name one registered family and its complete fact contract. | T2 advances only after the same family has MIR producer evidence, C/LLVM consumption, and missing/stale-fact behavior. T3/T4 advance only after the registered-family and whole-authority audits respectively. |
+| CFG/place move checker | M1.1 retire one compatibility-key correctness decision -> M1.2 define projection overlap -> M2 route joins/backedges/exits -> M3 admit or reject move-array/pointer-array paths -> M4 remove compatibility authority | **M1.1.** The next slice must replace one named, supported string-key correctness decision with `MovePlace` identity/overlap. | M1/M2 advance only when the common typed-place/CFG rule decides both accepted and rejected cases. M3 advances only by an explicit admission rule or retained diagnostic, never by broadening syntax accidentally. |
+| Pointer-provenance race lowering | P1 conservative scalar default -> P2 direct MIR proofs -> P3 declared boundary policies -> P4.1 fallback register -> P4.2 C/LLVM policy audit | **P4, dormant until triggered.** P1-P3 are complete for the current admitted boundary matrix. | T2 or move work must expose a specific unclassified pointer flow. That flow must then be recorded and assigned exactly one policy before either backend adds support. |
+
+**Execution rule:** complete one T2 family end-to-end, then one M1.1
+compatibility-authority migration. Pointer work is interrupt-driven only when
+those slices expose an unclassified flow. This is why the three workstreams do
+not represent three simultaneous coding tasks or a percentage-based backlog.
+
 Phase-state vocabulary:
 
 - **Complete**: the phase exit condition is met for its declared scope.
