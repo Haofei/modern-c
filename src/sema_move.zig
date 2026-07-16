@@ -2145,12 +2145,13 @@ fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.String
     var place: ?MovePlace = null;
     switch (expr.kind) {
         .ident => |id| if (state.get(id.text)) |slot| {
-            if (slot.alias_of) |alias_of| {
-                if (std.mem.eql(u8, alias_of, key) and place == null) place = slot.alias_place;
-            }
+            // The alias slot's typed referent is authoritative. Its formatted
+            // compatibility key may differ from the syntax spine after a
+            // rewrite, and cannot decide whether the alias is tracked.
+            if (slot.alias_of != null and place == null) place = slot.alias_place;
         },
         .grouped => |inner| if (aliasReferentForExpr(self, inner.*, state, aliases)) |inner_ref| {
-            if (std.mem.eql(u8, inner_ref.key, key) and place == null) place = inner_ref.place;
+            if (place == null) place = inner_ref.place;
         },
         else => {},
     }
