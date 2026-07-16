@@ -1486,9 +1486,10 @@ fn mergeMoveBranchesImpl(
 }
 
 // Ownership places are structural facts, not source-level binding names. A join
-// must recognize the same root, field, or element even when a compatibility key
-// was formatted differently along the two incoming paths. Alias storage and
-// index facts retain their separate metadata rules.
+// must recognize the same root, field, element, or typed alias storage even
+// when a compatibility key was formatted differently along the two incoming
+// paths. Untyped legacy aliases and index facts retain their separate metadata
+// rules.
 fn matchingMoveStateSlot(state: *const std.StringHashMap(MoveSlot), key: []const u8, slot: MoveSlot) ?MoveSlot {
     if (isOwnershipMovePlace(slot, key)) {
         const place = slot.place.?;
@@ -1499,6 +1500,18 @@ fn matchingMoveStateSlot(state: *const std.StringHashMap(MoveSlot), key: []const
             if (candidate.place.?.eql(place)) return candidate;
         }
         return null;
+    }
+    if (slot.alias_of != null) {
+        if (slot.place) |storage_place| {
+            var it = state.iterator();
+            while (it.next()) |entry| {
+                const candidate = entry.value_ptr.*;
+                if (candidate.alias_of == null) continue;
+                const candidate_place = candidate.place orelse continue;
+                if (candidate_place.eql(storage_place)) return candidate;
+            }
+            return null;
+        }
     }
     return state.get(key);
 }
@@ -1638,8 +1651,10 @@ test "move CFG alias facts match typed referent places" {
     defer right.deinit();
     var joined = std.StringHashMap(MoveSlot).init(std.testing.allocator);
     defer joined.deinit();
-    try left.put("borrow", left_slot);
-    try right.put("borrow", right_slot);
+    // The compatibility storage spellings diverge across CFG predecessors, but
+    // both aliases occupy the same structural storage place.
+    try left.put("compat:borrow:left", left_slot);
+    try right.put("compat:borrow:right", right_slot);
 
     try std.testing.expect(moveStatesEqual(&left, &right));
     mergeMoveBranches(&checker, &joined, &left, &right);
