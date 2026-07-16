@@ -18,6 +18,8 @@ ANCHORS: dict[str, list[str]] = {
         "fn aliasWildcardPlaceInfo",
         "fn directAliasReferentPlace",
         "fn immediateFullDerefMoveReferent",
+        "fn typedAliasReferentPlace",
+        "fn aliasReferentTargetsOuter",
         "fn sameDeferredBorrowFact",
         "fn recordLoopEarlyExitInvalidations",
         "fn recordInvalidatedAliasPlace",
@@ -48,6 +50,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "state.remove(key)": 0,
         "state.getPtr(target_info.key)": 0,
         "state.remove(target_info.key)": 0,
+        "outer.contains(aliasReferentRoot(referent))": 0,
     },
 }
 

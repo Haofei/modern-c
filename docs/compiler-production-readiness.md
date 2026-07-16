@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **657 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **658 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -776,6 +776,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Move checker immediate full dereferences require typed referent places | The legacy immediate full-dereference fallback no longer returns a root-name-only alias referent. It recovers a live typed place from the state slot and carries that place into the common consumer; missing place metadata leaves the form untracked instead of granting string-key ownership authority. This is one M1.1 migration, not completion of direct dereference ownership analysis. | `src/sema_move.zig` `immediateFullDerefMoveReferent` / `trackedMoveReferentPlaceForKey`; immediate-full-deref move spec cases; `zig test src/sema_move.zig`; `zig test src/sema_tests.zig`; full production gate; `git diff --check`. |
 
+| Move checker deferred cleanup aliases match outer roots by typed place | Deferred cleanup-local alias classification no longer asks whether the outer state contains a formatted root key. It resolves the alias's embedded or state-slot `MovePlace` and structurally finds the outer root; aliases without typed place metadata are not guessed as cleanup borrows. A compatibility-key mismatch between an outer owner and an alias therefore cannot change ownership behavior. This is one M1.1 migration, not completion of cleanup-local or CFG ownership analysis. | `src/sema_move.zig` `typedAliasReferentPlace` / `aliasReferentTargetsOuter` / `cleanupLocalAliasReferent`; unit test `move cleanup aliases match outer roots by typed place`; `zig test src/sema_move.zig`; `zig test src/sema_tests.zig`; full production gate; `git diff --check`. |
+
 ### Bounded Workstream Status
 
 This is the authoritative execution dashboard for the three open compiler
@@ -1209,7 +1211,9 @@ compatibility key, alias-assignment updates/removals scan typed storage identity
 instead of formatted keys, and full-deref alias consumption requires the typed
 place carried by the alias producer. Pointer-return aliases similarly preserve
 their borrowed root or subplace identity instead of rehydrating it from a
-compatibility-map key. String map keys remain a compatibility index. A production
+compatibility-map key. Deferred cleanup-local aliases likewise identify outer
+owners through typed places rather than formatted root keys. String map keys
+remain a compatibility index. A production
 CFG/worklist path now carries real `MoveSlot` map state for `if let`,
 multi-arm `switch`, short-circuit RHS paths, and `while` condition/body forward
 evaluation: it builds explicit entry/transfer/join blocks, matches ownership

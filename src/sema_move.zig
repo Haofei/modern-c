@@ -1712,6 +1712,25 @@ test "move alias tracking requires a typed referent place" {
     try std.testing.expect(!aliasReferentIsTracked(.{ .key = "legacy", .place = null, .full_deref = false }, &state));
 }
 
+test "move cleanup aliases match outer roots by typed place" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    const field = root.project(.{ .field = "resource" }).?;
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+    var outer = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer outer.deinit();
+
+    // Neither compatibility key names the structural root. A cleanup alias of
+    // this field must still be recognized as referring to the outer owner.
+    try state.put("compat:cleanup-alias", .{ .live = false, .span = span, .place = field, .alias_of = "compat:source" });
+    try outer.put("compat:outer-owner", .{ .live = true, .span = span, .place = root });
+    try std.testing.expect(aliasReferentTargetsOuter(.{ .key = "compat:cleanup-alias", .place = null, .full_deref = false }, &state, &outer));
+
+    try state.put("legacy", .{ .live = false, .span = span, .alias_of = "compat:source" });
+    try std.testing.expect(!aliasReferentTargetsOuter(.{ .key = "legacy", .place = null, .full_deref = false }, &state, &outer));
+}
+
 test "move stale aliases recover typed referent places from state slots" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
@@ -2056,13 +2075,15 @@ fn trackedMoveReferentPlaceForKey(key: []const u8, state: *const std.StringHashM
     return place;
 }
 
-fn aliasReferentRoot(referent: AliasReferent) []const u8 {
-    return referentRoot(referent.key, referent.place);
+fn typedAliasReferentPlace(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
+    if (referent.place) |place| return place;
+    const slot = state.get(referent.key) orelse return null;
+    return slot.place;
 }
 
-fn referentRoot(key: []const u8, place: ?MovePlace) []const u8 {
-    if (place) |typed| return typed.root;
-    return key;
+fn aliasReferentTargetsOuter(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot)) bool {
+    const place = typedAliasReferentPlace(referent, state) orelse return false;
+    return rootMoveSlotForPlace(place, outer) != null;
 }
 
 fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
@@ -4620,9 +4641,10 @@ fn cleanupLocalAliasReferent(self: *Checker, init: ast.Expr, state: *const std.S
         else => {},
     }
     const referent = aliasReferentForExpr(self, init, state, aliases) orelse return null;
-    if (outer.contains(aliasReferentRoot(referent))) return null;
-    if (!aliasReferentIsTracked(referent, state)) return null;
-    return referent;
+    const place = typedAliasReferentPlace(referent, state) orelse return null;
+    if (aliasReferentTargetsOuter(referent, state, outer)) return null;
+    if (rootMoveSlotForPlace(place, state) == null) return null;
+    return .{ .key = referent.key, .place = place, .full_deref = referent.full_deref };
 }
 
 fn recordDeferredIdentAssignmentAlias(self: *Checker, name: ast.Ident, value: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
