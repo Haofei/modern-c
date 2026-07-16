@@ -1416,6 +1416,9 @@ test "lower-c compound expressions require complete MIR result facts" {
         \\fn unary_result(flag: bool) -> bool {
         \\    return !flag;
         \\}
+        \\fn negated_result(value: i32) -> i32 {
+        \\    return -value;
+        \\}
         \\fn packed_result(flags: Flags) -> bool {
         \\    return flags.set;
         \\}
@@ -1594,6 +1597,24 @@ test "lower-c compound expressions require complete MIR result facts" {
         defer module_mir.deinit();
         const deref_offset = std.mem.indexOf(u8, source, "pointer.*") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "deref_result", .expression_result, deref_offset, "pointer.*".len, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const negated_offset = std.mem.indexOf(u8, source, "-value") orelse return error.TestUnexpectedResult;
+        try removeTargetTypeFactAtOffsetForFunction(&module_mir, "negated_result", .expression_result, negated_offset, "-value".len);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const negated_offset = std.mem.indexOf(u8, source, "-value") orelse return error.TestUnexpectedResult;
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "negated_result", .expression_result, negated_offset, "-value".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));

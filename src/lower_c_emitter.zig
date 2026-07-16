@@ -1883,6 +1883,10 @@ const CEmitter = struct {
 
     fn unaryResultTypeForExpr(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        return self.unaryResultTypeForEmission(expr, locals);
+    }
+
+    fn unaryResultTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         const node = switch (expr.kind) {
             .unary => |node| node,
             else => return null,
@@ -4463,6 +4467,7 @@ const CEmitter = struct {
                 if (try lower_c_arith.emitCheckedBinaryWithTarget(self.arithContext(), node, locals, target_ty)) return;
             },
             .unary => |node| {
+                _ = self.unaryResultTypeForEmission(expr, locals) orelse return error.UnsupportedCEmission;
                 if (try lower_c_arith.emitCheckedUnaryWithTarget(self.arithContext(), node, locals, target_ty)) return;
             },
             else => unreachable,
@@ -7525,7 +7530,13 @@ const CEmitter = struct {
             },
             .grouped => |inner| self.exprSourceTypeForEmission(inner.*, locals),
             .binary => |node| self.binarySourceTypeForEmission(expr, node, locals),
-            .unary => |node| if (node.op == .neg) self.exprSourceTypeForEmission(node.expr.*, locals) else null,
+            .unary => |node| blk: {
+                if (node.op != .neg) break :blk null;
+                const inferred = self.exprSourceTypeForEmission(node.expr.*, locals) orelse break :blk null;
+                const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse break :blk null;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
+                break :blk fact.target_ty;
+            },
             else => null,
         };
     }
