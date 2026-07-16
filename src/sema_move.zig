@@ -1894,6 +1894,11 @@ fn markEscapedBorrowForPlace(place: MovePlace, escape_span: diagnostics.Span, st
     }
 }
 
+fn markEscapedBorrowForReferentKey(key: []const u8, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+    const place = trackedMoveReferentPlaceForKey(key, state) orelse return;
+    markEscapedBorrowForPlace(place, escape_span, state);
+}
+
 // Map keys remain compatibility indexes, but ownership updates are addressed by
 // the structured place. A repeated producer for the same place updates its
 // existing slot rather than adding another formatted-key entry.
@@ -3694,9 +3699,7 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
                         return;
                     }
                     if (spine.borrowedMoveRoot(c.value.*, state)) |root| {
-                        if (state.getPtr(root)) |slot| {
-                            if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
-                        }
+                        markEscapedBorrowForReferentKey(root, escape_span, state);
                         return;
                     }
                 }
@@ -3712,9 +3715,7 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
             // Only THIS shape is handled here; any other `&…` (e.g. a sub-place borrow
             // `&t.v`) falls through to the default `borrowedMoveRoot` escape below.
             if (spine.castToIntegerMoveRoot(self, inner.*, state)) |root| {
-                if (state.getPtr(root)) |slot| {
-                    if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
-                }
+                markEscapedBorrowForReferentKey(root, escape_span, state);
                 return;
             }
         },
@@ -3726,9 +3727,7 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
         return;
     }
     const root = spine.borrowedMoveRoot(value, state) orelse return;
-    if (state.getPtr(root)) |slot| {
-        if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
-    }
+    markEscapedBorrowForReferentKey(root, escape_span, state);
 }
 
 // T1.3 (borrow-escape through a CALL argument). Scan a call argument for a borrow of a live
