@@ -19,6 +19,7 @@ const spine = sema;
 const Checker = sema.Checker;
 const MoveSlot = sema.MoveSlot;
 const LoopMoveFrame = sema.LoopMoveFrame;
+const LoopMoveExitKind = sema_model.LoopMoveExitKind;
 const Context = sema.Context;
 const parseArrayLen = array_len.parseArrayLen;
 const resolveAliasType = sema_type.resolveAliasType;
@@ -171,6 +172,9 @@ const LoopBodyMoveCfg = struct {
     loop_head: sema_model.MoveCfgBlockId,
     body: sema_model.MoveCfgBlockId,
     exit: sema_model.MoveCfgBlockId,
+    break_source: sema_model.MoveCfgBlockId,
+    break_exit: sema_model.MoveCfgBlockId,
+    continue_source: sema_model.MoveCfgBlockId,
 
     fn deinit(self: *LoopBodyMoveCfg) void {
         self.cfg.deinit();
@@ -199,6 +203,21 @@ fn loopBodyMoveCfg(self: *Checker) ?LoopBodyMoveCfg {
         cfg.deinit();
         return null;
     };
+    const break_source = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const break_exit = cfg.addBlock(.exit) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const continue_source = cfg.addBlock(.statement) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
     cfg.addEdge(entry, loop_head, .normal) catch {
         self.oom = true;
         cfg.deinit();
@@ -219,7 +238,26 @@ fn loopBodyMoveCfg(self: *Checker) ?LoopBodyMoveCfg {
         cfg.deinit();
         return null;
     };
-    return .{ .cfg = cfg, .entry = entry, .loop_head = loop_head, .body = body, .exit = exit };
+    cfg.addEdge(break_source, break_exit, .early_exit) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(continue_source, loop_head, .early_exit) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    return .{
+        .cfg = cfg,
+        .entry = entry,
+        .loop_head = loop_head,
+        .body = body,
+        .exit = exit,
+        .break_source = break_source,
+        .break_exit = break_exit,
+        .continue_source = continue_source,
+    };
 }
 
 fn exitMoveCfg(self: *Checker) ?ExitMoveCfg {
@@ -958,11 +996,11 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
             return moveSwitchCfg(self, sw, state, aliases);
         },
         .@"break" => |target| {
-            moveLoopExitEdgeCfg(self, state, target);
+            moveLoopExitEdgeCfg(self, state, target, .break_exit);
             return true; // the rest of the loop body is unreachable
         },
         .@"continue" => |target| {
-            moveLoopExitEdgeCfg(self, state, target);
+            moveLoopExitEdgeCfg(self, state, target, .continue_exit);
             return true; // the rest of the loop body is unreachable
         },
         .asm_stmt => return false,
@@ -984,6 +1022,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(MoveSlo
         .invalidated_const_indexes = std.StringHashMap(void).init(self.reporter.allocator),
         .invalidated_alias_places = .empty,
         .invalidated_aliases = std.StringHashMap(void).init(self.reporter.allocator),
+        .pending_exits = .empty,
     };
     var snap_it = state.iterator();
     while (snap_it.next()) |entry| {
@@ -1212,20 +1251,16 @@ pub fn checkLoopExitLeaks(self: *Checker, state: *std.StringHashMap(MoveSlot), t
     recordLoopEarlyExitInvalidations(self, frame, state);
 }
 
-fn moveLoopExitEdgeCfg(self: *Checker, state: *const std.StringHashMap(MoveSlot), target: ?ast.Ident) void {
-    var exit_cfg = exitMoveCfg(self) orelse return;
-    defer exit_cfg.deinit();
-
-    var worklist = MoveStateCfgWorklist.init(self, &exit_cfg.cfg, exit_cfg.entry, state) orelse return;
-    defer worklist.deinit();
-    while (worklist.pop()) |block| {
-        const block_state = worklist.statePtr(block) orelse continue;
-        if (block == exit_cfg.entry) {
-            worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == exit_cfg.exit) {
-            checkLoopExitLeaks(self, block_state, target);
-        }
-    }
+fn moveLoopExitEdgeCfg(self: *Checker, state: *const std.StringHashMap(MoveSlot), target: ?ast.Ident, kind: LoopMoveExitKind) void {
+    const frame = moveLoopTargetFrame(self, target) orelse return;
+    var exit_state = cloneMoveState(self, state);
+    frame.pending_exits.append(self.reporter.allocator, .{
+        .kind = kind,
+        .state = exit_state,
+    }) catch {
+        exit_state.deinit();
+        self.oom = true;
+    };
 }
 
 // Semantic checking already rejects a missing loop label. The move pass resolves
@@ -1564,6 +1599,7 @@ test "loop early-exit alias invalidation uses typed storage places" {
         .invalidated_const_indexes = std.StringHashMap(void).init(std.testing.allocator),
         .invalidated_alias_places = .empty,
         .invalidated_aliases = std.StringHashMap(void).init(std.testing.allocator),
+        .pending_exits = .empty,
     };
     defer frame.deinit();
 
@@ -2252,6 +2288,41 @@ fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *std.String
 // evaluated once for diagnostics, then its outgoing state travels over the
 // backedge and joins the zero-iteration path at the head. The existing loop
 // widening below remains the authority for rejecting outer-resource changes.
+fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist, body: ast.Block, result_state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr), body_diverges: *bool, body_visited: *bool) void {
+    while (worklist.pop()) |block| {
+        const block_state = worklist.statePtr(block) orelse continue;
+        if (block == loop_cfg.entry) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == loop_cfg.loop_head) {
+            worklist.propagateSuccessorsExcept(self, block, block_state, if (body_visited.*) loop_cfg.body else null);
+        } else if (block == loop_cfg.body) {
+            body_visited.* = true;
+            body_diverges.* = moveBlock(self, body, block_state, aliases);
+            if (!body_diverges.*) worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == loop_cfg.break_source or block == loop_cfg.continue_source) {
+            // The queued state belongs to this loop frame, so the active frame
+            // is the same target that a labeled exit resolved during AST walk.
+            checkLoopExitLeaks(self, block_state, null);
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == loop_cfg.exit) {
+            replaceMoveState(self, result_state, block_state);
+        }
+    }
+}
+
+fn enqueuePendingLoopExitStates(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist) void {
+    const frame = moveLoopTargetFrame(self, null) orelse return;
+    while (frame.pending_exits.items.len > 0) {
+        var pending = frame.pending_exits.pop().?;
+        defer pending.state.deinit();
+        const source = switch (pending.kind) {
+            .break_exit => loop_cfg.break_source,
+            .continue_exit => loop_cfg.continue_source,
+        };
+        worklist.propagateSuccessor(self, source, &pending.state);
+    }
+}
+
 fn moveLoopBodyCfg(self: *Checker, body: ast.Block, entry_state: *const std.StringHashMap(MoveSlot), result_state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var loop_cfg = loopBodyMoveCfg(self) orelse return false;
     defer loop_cfg.deinit();
@@ -2260,20 +2331,9 @@ fn moveLoopBodyCfg(self: *Checker, body: ast.Block, entry_state: *const std.Stri
     defer worklist.deinit();
     var body_diverges = false;
     var body_visited = false;
-    while (worklist.pop()) |block| {
-        const block_state = worklist.statePtr(block) orelse continue;
-        if (block == loop_cfg.entry) {
-            worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == loop_cfg.loop_head) {
-            worklist.propagateSuccessorsExcept(self, block, block_state, if (body_visited) loop_cfg.body else null);
-        } else if (block == loop_cfg.body) {
-            body_visited = true;
-            body_diverges = moveBlock(self, body, block_state, aliases);
-            if (!body_diverges) worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == loop_cfg.exit) {
-            replaceMoveState(self, result_state, block_state);
-        }
-    }
+    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, result_state, aliases, &body_diverges, &body_visited);
+    enqueuePendingLoopExitStates(self, &loop_cfg, &worklist);
+    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, result_state, aliases, &body_diverges, &body_visited);
     return body_diverges;
 }
 

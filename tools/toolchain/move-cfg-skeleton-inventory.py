@@ -31,8 +31,8 @@ CFG_CONSTRUCTION_HELPERS: dict[str, dict[str, int]] = {
         "cfg.addEdge(": 2,
     },
     "loopBodyMoveCfg": {
-        "cfg.addBlock(": 4,
-        "cfg.addEdge(": 4,
+        "cfg.addBlock(": 7,
+        "cfg.addEdge(": 6,
     },
 }
 
@@ -86,7 +86,7 @@ ANCHORS: dict[str, list[str]] = {
         '.@"switch" => |sw| moveDeferSwitchCfg(self, sw, state, aliases)',
         ".loop => |l| moveDeferLoopCfg(self, l, state, aliases)",
         "checkMoveExitEdge(self, block_state, message)",
-        "checkLoopExitLeaks(self, block_state, target)",
+        "checkLoopExitLeaks(self, block_state, null)",
         "worklist.propagateSuccessors(self, block_id, block_state)",
     ],
     "docs/compiler-production-readiness.md": [
@@ -98,7 +98,8 @@ ANCHORS: dict[str, list[str]] = {
         "Move checker multi-arm branch CFG construction is centralized",
         "Move checker CFG construction inventory is exact",
         "Move checker return and try exits use CFG worklist state",
-        "Move checker loop early exits use CFG worklist state",
+        "Move checker loop early exits first gained CFG worklist transport",
+        "Move checker routes loop early exits through target CFG worklists",
         "Move checker function fallthrough exits use CFG worklist state",
         "Move checker loop statement orchestration is centralized",
         "Move checker scoped blocks use CFG worklist state",

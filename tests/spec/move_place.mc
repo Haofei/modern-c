@@ -4505,6 +4505,33 @@ fn reject_labeled_continue_outer_move_local_leak(cond: bool) -> u32 {
     return 0;
 }
 
+// Accepted: the target loop's body-local resource has already been consumed
+// before the labeled break leaves the nested loop.
+fn accept_labeled_break_outer_consumed(cond: bool) -> u32 {
+    outer: while cond {
+        let r: Res = mkres(1);
+        while cond {
+            let v: u32 = consume(r);
+            break :outer;
+            return v;
+        }
+    }
+    return 0;
+}
+
+// Accepted: the same owner-loop transfer applies to a labeled continue.
+fn accept_labeled_continue_outer_consumed(cond: bool) -> u32 {
+    outer: while cond {
+        let r: Res = mkres(1);
+        while cond {
+            let v: u32 = consume(r);
+            continue :outer;
+            return v;
+        }
+    }
+    return 0;
+}
+
 // Rejected: array element place state must also agree across branch joins.
 fn reject_branch_array_element_move(cond: bool) -> u32 {
     let arr: [2]Res = .{ mkres(1), mkres(2) };

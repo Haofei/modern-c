@@ -268,6 +268,19 @@ pub const MoveSlot = struct {
     full_deref_alias: bool = false,
 };
 
+pub const LoopMoveExitKind = enum {
+    break_exit,
+    continue_exit,
+};
+
+// A control-flow edge can target an outer labeled loop while an inner loop is
+// still being analyzed. The target frame owns these snapshots until its CFG is
+// ready to transport them through that loop's exit or head blocks.
+pub const LoopMoveExitState = struct {
+    kind: LoopMoveExitKind,
+    state: std.StringHashMap(MoveSlot),
+};
+
 pub const LoopMoveFrame = struct {
     allocator: std.mem.Allocator,
     // Source loop label (`outer:`), when present. The move pass uses this to
@@ -279,6 +292,7 @@ pub const LoopMoveFrame = struct {
     invalidated_const_indexes: std.StringHashMap(void),
     invalidated_alias_places: std.ArrayListUnmanaged(MovePlace) = .empty,
     invalidated_aliases: std.StringHashMap(void),
+    pending_exits: std.ArrayListUnmanaged(LoopMoveExitState) = .empty,
 
     pub fn deinit(self: *LoopMoveFrame) void {
         self.entry_names.deinit();
@@ -286,6 +300,8 @@ pub const LoopMoveFrame = struct {
         self.invalidated_const_indexes.deinit();
         self.invalidated_alias_places.deinit(self.allocator);
         self.invalidated_aliases.deinit();
+        for (self.pending_exits.items) |*exit_state| exit_state.state.deinit();
+        self.pending_exits.deinit(self.allocator);
     }
 };
 
