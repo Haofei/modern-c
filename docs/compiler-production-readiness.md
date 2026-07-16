@@ -884,6 +884,13 @@ Phase-state vocabulary:
 - **Triggered**: work starts only when a named flow crosses the documented
   boundary; it is not a speculative syntax-expansion queue.
 
+Reading rule: a phase is a named compiler property, not a percentage bucket.
+`Complete` means that property's stated boundary is closed; `Partial` means the
+listed routes exist but the shared authority has not replaced every named legacy
+route; and `Current` identifies work that may be selected, not work already in
+progress. The **Current selection** table is the only source of the next patch
+order when more than one phase is eligible.
+
 | Workstream | Final objective | Completed phase boundary | Current phase and next bounded action | Later phases | Workstream closes when |
 |---|---|---|---|---|---|
 | Typed semantic facts / typed MIR | One MIR-owned semantic authority for every lowering-affecting type, call target, provenance, representation, ABI, and safety decision. Backends may use syntax only for already-admitted emission mechanics. | **T1 complete:** inference inventory and admission gates exist. Several T2 families are complete, including direct calls, builtins, storage reads, integer/default facts, bounds/range, representation, varargs, traps, C aggregate-global policy, direct C source member/index result consumption, and generic stale target-type admission. | **T2, eligible after the selected M1 slice.** Select one remaining registered expression-result or call-target family. Before code changes, record its source identity, fact payload, MIR producer, C consumer, LLVM consumer, and missing/stale behavior. | **T3:** classify each remaining register row as MIR-owned, conservative, or diagnosed. **T4:** audit and retire every remaining lowering-affecting backend inference. | Every lowering-affecting decision is fact-owned, or appears in the registered fallback matrix with a tested conservative or diagnostic policy. |
@@ -900,22 +907,22 @@ language shapes.
 | Workstream | Phase state | Meaning now | Required transition |
 |---|---|---|---|
 | Typed facts | T1 complete | The inference inventory and fact-admission gates exist. | No transition; new lowering families must enter the register. |
-| Typed facts | T2 selected next | C aggregate-global representation, nested array/pointer/struct member result consumption, and generic stale target-type admission are completed bounded decisions; the next task is one different expression-result or call-target family. | Advance the selected family only after artifact, positive-backend, and missing/stale-fact evidence all pass. |
+| Typed facts | T2 eligible after M1.1 | C aggregate-global representation, nested array/pointer/struct member result consumption, and generic stale target-type admission are completed bounded decisions; after the selected M1.1 migration, choose one different expression-result or call-target family. | Advance the selected family only after artifact, positive-backend, and missing/stale-fact evidence all pass. |
 | Typed facts | T3 queued | The remaining registered fallbacks need a final MIR-owned, conservative, or diagnostic disposition. | Start only after the current T2 family is closed end to end. |
 | Typed facts | T4 pending | Remove or explicitly register all remaining lowering-affecting backend inference. | Start only after every register row has a T3 disposition. |
-| Move checker | M1.1 eligible after selected T2 | Replace one remaining formatted-key correctness decision with structural `MovePlace` identity/overlap. | Advance only when the same rule accepts the valid case and diagnoses the conflicting case. |
+| Move checker | M1.1 selected next | Replace one remaining formatted-key correctness decision with structural `MovePlace` identity/overlap. | Advance only when the same rule accepts the valid case and diagnoses the conflicting case. |
 | Move checker | M1.2/M3 queued | Give each projection family an overlap rule, or keep it explicitly rejected. | Do not admit dynamic/non-local array and arbitrary pointer-array moves without positive and negative coverage. |
-| Move checker | M2 partial, not selected | `if let`, switch, short-circuit, while-condition, ordinary loop backedges, labeled `break`/`continue`, and deferred loops have bounded worklist routing. Remaining non-deferred exit transfers must use the common worklist. | Advance a routing family only after its specialized executor is no longer correctness authority. |
+| Move checker | M2 partial, not selected | `if let`, switch, short-circuit, while-condition, ordinary loop backedges, labeled `break`/`continue`, and deferred loops have bounded worklist routing. `return` and `?` already use the shared exit-CFG constructor, but their state transfer is still a dedicated exit check rather than common worklist propagation. | Advance a routing family only after its specialized executor is no longer correctness authority. |
 | Move checker | M4 pending | Remove formatted-key correctness authority from supported paths. | Start only after M1 projection and M2 routing boundaries have been closed. |
 | Provenance | P1-P3 complete for the named matrix | Unknown scalar leaves are conservative; documented direct proofs and current boundary policies are fact-owned or fail closed. | A new pointer-flow class reopens only its affected P3 boundary. |
 | Provenance | P4.1 triggered | There is no active syntax-expansion task. A patch starts only after T2/M1 identifies an unclassified flow. | Register the flow and select MIR proof, conservative lowering, or a diagnostic before either backend supports it. |
 | Provenance | P4.2 queued | Audit that each registered boundary has the same C and LLVM policy. | Close only with positive and absent-proof evidence for every fallback-register row. |
 
-**Implementation order:** complete one selected T2.1/T2.2/T2.3 family end-to-end,
-then return to the next M1.1 migration. Pointer work interrupts that sequence
-only for a newly observed unclassified flow. The three rows are therefore not
-three simultaneous tasks and must not be represented as a percentage-based
-backlog.
+**Implementation order:** complete one selected M1.1 migration end-to-end, then
+complete one selected T2.1/T2.2/T2.3 family. Repeat that pair while both have
+registered units. Pointer work interrupts the sequence only for a newly observed
+unclassified flow. These are ordered closure units, not three simultaneous tasks
+or percentage-based backlogs.
 
 #### Execution Rules And Current Selection
 
@@ -1295,7 +1302,7 @@ enough if the string remains the deciding identity.
 | M1.1: place identity | M1 | Every supported read, consume, assignment, defer borrow, and alias invalidation compares `MovePlace`, not a formatted compatibility key. | Positive ownership cases and conflicting-place diagnostics use the same typed overlap rule. |
 | M1.2: projection admission | M1/M3 | Local, field, deref, fixed element, stable dynamic index, wildcard, and alias projections each have an exact overlap rule or a stable rejection. | Dynamic/non-local move-array and arbitrary pointer-to-array cases remain fail-closed until admitted. |
 | M2.1: branch and short-circuit joins | M2, partial | `if let`, multi-arm `switch`, and short-circuit RHS paths have bounded common-worklist routing. Finish only after every remaining named branch/short-circuit transfer has no direct merge or manual join enqueue. | Join diagnostics and accepted paths no longer depend on statement-specific state merging. |
-| M2.2: loop/backedge/exit routing | M2, partial | Ordinary loop backedges, labeled `break`/`continue`, and while-condition widening queue through loop worklists. Route return, `?`, and other non-deferred exit transfers through that same authority. | Specialized executors are removed only after equivalent worklist regressions exist. |
+| M2.2: loop/backedge/exit routing | M2, partial | Ordinary loop backedges, labeled `break`/`continue`, and while-condition widening queue through loop worklists. `return` and `?` already construct the shared exit CFG; migrate their state transfer, and any other non-deferred exit transfer, from dedicated exit checks to the common worklist authority. | Specialized executors are removed only after equivalent worklist regressions exist. |
 | M2.3: deferred-loop routing (complete) | M2 | A supported cleanup loop has explicit condition/head/body/exit blocks, a worklist backedge, and cleanup-local finalization. `break`/`continue` inside `defer` remain the existing `E_DEFER_CONTROL_FLOW` boundary rather than admitted exits. | Positive zero-or-many cleanup-local coverage, `E_MOVE_LOOP_RESOURCE` diagnostics for outer consume/borrow, retained deferred-control-flow diagnostics, and the CFG inventory prove no statement-walker fallthrough. |
 | M4.1: compatibility retirement | M4 | String keys are indexing/debug compatibility only; they cannot decide move correctness. | Inventory and tests show every supported path reaches the typed-place/CFG engine. |
 
