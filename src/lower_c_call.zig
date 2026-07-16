@@ -324,9 +324,11 @@ pub fn emitExternNonNullCallLocalInit(ctx: TempContext, functions: *const std.St
 
 pub fn emitExternNonNullCallInferredLocalInit(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const temp = (try emitExternNonNullCallValueTemp(ctx, functions, initializer, locals)) orelse return false;
-    try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, temp.ty));
+    const inferred_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .inferred_local, initializer.span, name, null) orelse return error.UnsupportedCEmission;
+    if (!std.meta.eql(inferred_ty, temp.ty)) return error.UnsupportedCEmission;
+    try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, inferred_ty));
     try writeIndent(ctx);
-    try ctx.out.print(ctx.allocator, "{s} {s} = {s};\n", .{ try ctx.c_type(ctx.emit_ctx, temp.ty), try ctx.c_ident(ctx.emit_ctx, name), temp.name });
+    try ctx.out.print(ctx.allocator, "{s} {s} = {s};\n", .{ try ctx.c_type(ctx.emit_ctx, inferred_ty), try ctx.c_ident(ctx.emit_ctx, name), temp.name });
     return true;
 }
 
