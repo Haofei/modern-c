@@ -3566,6 +3566,9 @@ const LlvmEmitter = struct {
     fn emitMemberLoad(self: *LlvmEmitter, node: anytype, member_span: ast.Span) ![]const u8 {
         const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         if (base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) {
+            const usize_ty = simpleType(member_span, "usize");
+            const field_ty = self.requireExpressionResultType(.{ .kind = .{ .member = node }, .span = member_span }, usize_ty) orelse return error.UnsupportedLlvmEmission;
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(usize_ty))) return error.UnsupportedLlvmEmission;
             const base = try self.emitExpr(node.base.*, base_ty);
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ result, try self.llvmType(base_ty), base });
