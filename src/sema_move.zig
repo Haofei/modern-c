@@ -28,6 +28,7 @@ const ArrayMoveShape = struct { len: usize, embeds: bool };
 
 const MoveCfgJoinPolicy = union(enum) {
     generic,
+    loop_condition,
     short_circuit: struct {
         span: diagnostics.Span,
         deferred: bool,
@@ -109,6 +110,10 @@ const MoveStateCfgWorklist = struct {
         self.join_policy = .{ .short_circuit = .{ .span = span, .deferred = deferred } };
     }
 
+    fn useLoopConditionJoinPolicy(self: *MoveStateCfgWorklist) void {
+        self.join_policy = .loop_condition;
+    }
+
     // All real-state CFG joins enter here. Callers may omit a successor when an
     // AST transfer has already run for that block, but cannot reimplement the
     // ownership merge or worklist requeue policy themselves.
@@ -118,6 +123,7 @@ const MoveStateCfgWorklist = struct {
             defer before.deinit();
             switch (self.join_policy) {
                 .generic => mergeMoveBranchesImpl(checker, joined, joined, outgoing, self.report_join_diagnostics),
+                .loop_condition => reportLoopOuterResourceChanges(checker, joined, outgoing),
                 .short_circuit => |policy| mergeShortCircuitMoveStates(checker, joined, outgoing, policy.span, policy.deferred),
             }
             break :blk !moveStatesEqual(joined, &before);
@@ -2526,18 +2532,14 @@ fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *std.String
 
     var worklist = MoveStateCfgWorklist.init(self, &short.cfg, short.entry, state) orelse return;
     defer worklist.deinit();
+    worklist.useLoopConditionJoinPolicy();
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
         if (block == short.entry) {
             worklist.propagateSuccessors(self, block, block_state);
         } else if (block == short.rhs) {
             moveConsume(self, condition, block_state, aliases);
-            const exit_state = worklist.statePtr(short.join) orelse {
-                self.oom = true;
-                return;
-            };
-            reportLoopOuterResourceChanges(self, exit_state, block_state);
-            worklist.enqueue(self, short.join);
+            worklist.propagateSuccessors(self, block, block_state);
         } else if (block == short.join) {
             replaceMoveState(self, state, block_state);
         }

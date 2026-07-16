@@ -36,7 +36,7 @@ CFG_CONSTRUCTION_HELPERS: dict[str, dict[str, int]] = {
     },
 }
 
-SHORT_CIRCUIT_WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
+WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
     "moveConsumeShortCircuitRhs": {
         "required": [
             "worklist.useShortCircuitJoinPolicy(rhs.span, false);",
@@ -50,6 +50,16 @@ SHORT_CIRCUIT_WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
             "worklist.propagateSuccessors(self, block, block_state);",
         ],
         "forbidden": ["mergeShortCircuitMoveStates(self, joined, block_state"],
+    },
+    "moveWhileConditionCfg": {
+        "required": [
+            "worklist.useLoopConditionJoinPolicy();",
+            "worklist.propagateSuccessors(self, block, block_state);",
+        ],
+        "forbidden": [
+            "reportLoopOuterResourceChanges(self, exit_state, block_state);",
+            "worklist.enqueue(self, short.join);",
+        ],
     },
 }
 
@@ -71,6 +81,7 @@ ANCHORS: dict[str, list[str]] = {
         "const MoveStateCfgWorklist = struct",
         "const MoveCfgJoinPolicy = union(enum)",
         "fn useShortCircuitJoinPolicy",
+        "fn useLoopConditionJoinPolicy",
         "fn propagateSuccessorsExcept",
         "const LinearMoveCfg = struct",
         "fn linearMoveCfg",
@@ -183,9 +194,9 @@ def cfg_construction_errors(text: str) -> list[str]:
     return errors
 
 
-def short_circuit_routing_errors(text: str) -> list[str]:
+def worklist_routing_errors(text: str) -> list[str]:
     errors: list[str] = []
-    for helper, policy in sorted(SHORT_CIRCUIT_WORKLIST_ROUTING.items()):
+    for helper, policy in sorted(WORKLIST_ROUTING.items()):
         body = function_body(text, helper)
         if body is None:
             errors.append(f"src/sema_move.zig: missing function body for {helper}")
@@ -220,8 +231,8 @@ def main() -> int:
             cfg_errors = cfg_construction_errors(text)
             checked += len(CFG_CONSTRUCTION_HELPERS) * 2 + 2
             missing.extend(cfg_errors)
-            routing_errors = short_circuit_routing_errors(text)
-            checked += sum(len(policy["required"]) + len(policy["forbidden"]) for policy in SHORT_CIRCUIT_WORKLIST_ROUTING.values())
+            routing_errors = worklist_routing_errors(text)
+            checked += sum(len(policy["required"]) + len(policy["forbidden"]) for policy in WORKLIST_ROUTING.values())
             missing.extend(routing_errors)
 
     if missing:
