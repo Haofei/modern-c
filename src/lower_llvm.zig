@@ -1385,7 +1385,7 @@ const LlvmEmitter = struct {
                 else
                     error.UnsupportedLlvmEmission)
             else
-                try self.emitMemberLoad(node),
+                try self.emitMemberLoad(node, expr.span),
             .try_expr => |node| try self.emitTryExpr(node.operand.*, node.mapped, expected_ty),
             else => self.unsupportedExprValue(expr),
         };
@@ -3560,7 +3560,7 @@ const LlvmEmitter = struct {
         return try self.emitOrdinaryLoad(pointee_ty, ptr, use_atomic);
     }
 
-    fn emitMemberLoad(self: *LlvmEmitter, node: anytype) ![]const u8 {
+    fn emitMemberLoad(self: *LlvmEmitter, node: anytype, member_span: ast.Span) ![]const u8 {
         const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         if (base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) {
             const base = try self.emitExpr(node.base.*, base_ty);
@@ -3585,7 +3585,10 @@ const LlvmEmitter = struct {
             try self.emitOrdinaryShadowHook(ptr, field.ty, .load_pre);
             return try self.emitOrdinaryLoad(field.ty, ptr, self.memberBaseIsGlobal(node));
         }
-        const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
+        const inferred_field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
+        const field_ty = (self.mirTargetTypeFactAt(.expression_result, member_span) orelse return error.UnsupportedLlvmEmission).target_ty;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field.ty))) return error.UnsupportedLlvmEmission;
+        const field = inferred_field;
         const ptr = try self.emitMemberAddress(node);
         if (self.isAggregateType(field.ty) and self.pointerMemberBaseUsesRaceTolerantLowering(node.base.*)) {
             return try self.emitRaceTolerantAggregateDerefLoad(ptr, field.ty);

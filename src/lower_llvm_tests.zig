@@ -1438,6 +1438,11 @@ test "LLVM inferred local direct addresses require MIR types" {
 
 test "LLVM compound expressions require complete MIR result facts" {
     const source =
+        \\struct Pair { value: u8 }
+        \\fn member_result() -> u8 {
+        \\    let pair: Pair = .{ .value = 7 };
+        \\    return pair.value;
+        \\}
         \\fn expression_facts(index: usize) -> u8 {
         \\    let values: [4]u8 = .{ 7, 0, 0, 0 };
         \\    let window: []const u8 = values[0..index];
@@ -1489,6 +1494,15 @@ test "LLVM compound expressions require complete MIR result facts" {
         defer module_mir.deinit();
         const index_offset = std.mem.indexOf(u8, source, "window[0] ==") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "expression_facts", .expression_result, index_offset, "window[0]".len, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_expression_result_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const member_offset = std.mem.indexOf(u8, source, "pair.value") orelse return error.TestUnexpectedResult;
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "member_result", .expression_result, member_offset, "pair.value".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_expression_result_facts.mc", .{}, false, .riscv64, null));

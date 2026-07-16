@@ -3711,7 +3711,7 @@ const CEmitter = struct {
             .slice => |node| try self.emitSliceExpr(node, expr.span, locals),
             .address_of => |inner| try self.emitAddressOfExpr(inner.*, locals),
             .deref => |inner| try self.emitDerefExpr(inner.*, locals),
-            .member => |node| try self.emitMemberExprOrFallback(node, locals),
+            .member => |node| try self.emitMemberExprOrFallback(node, expr.span, locals),
             .cast => |node| try self.emitCastExpr(expr.span, node, locals),
             else => try self.emitUnsupportedExpr(expr),
         }
@@ -3729,8 +3729,8 @@ const CEmitter = struct {
         try self.emitDefaultCallExpr(node, locals);
     }
 
-    fn emitMemberExprOrFallback(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
-        if (try self.emitMemberExpr(node, locals)) return;
+    fn emitMemberExprOrFallback(self: *CEmitter, node: anytype, member_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        if (try self.emitMemberExpr(node, member_span, locals)) return;
     }
 
     fn emitUnsupportedExpr(self: *CEmitter, expr: ast.Expr) !void {
@@ -3910,7 +3910,7 @@ const CEmitter = struct {
         try self.emitExpr(base, locals);
     }
 
-    fn emitMemberExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
+    fn emitMemberExpr(self: *CEmitter, node: anytype, member_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
         if (try self.emitEnumVariantPath(node, locals)) return true;
         if (try self.emitPackedBitsMember(node, locals)) return true;
         if (locals) |local_set| {
@@ -3926,6 +3926,9 @@ const CEmitter = struct {
         if (try self.emitRaceTolerantPointerMemberLoadExpr(node, locals)) return true;
         if (!self.suppress_load_hook and try self.emitRaceTolerantNestedPointerMemberLoadExpr(node, locals)) return true;
         if (self.memberChainHasRaceTolerantIndexedBase(node.base.*, locals)) return error.UnsupportedCEmission;
+        const inferred_field_ty = self.memberFieldType(node.base.*, node.name.text, locals) orelse return error.UnsupportedCEmission;
+        const field_ty = (self.mirTargetTypeFactAt(.expression_result, member_span) orelse return error.UnsupportedCEmission).target_ty;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
         try self.emitOrdinaryMemberLoadExpr(node, locals);
         return true;
     }
