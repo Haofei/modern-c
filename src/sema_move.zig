@@ -772,11 +772,11 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                     // laundered through the callee's result.
                     // Register it as a derived alias so a USE of `q` after `t` is moved is a
                     // stale-alias use-after-move (and nothing fires if `q` is dead first).
-                    if (aliasReferentIsTracked(referent, state)) {
+                    if (trackedAliasReferent(referent, state)) |tracked_referent| {
                         // `live = false`: the alias is a borrow, not a linear resource, so
                         // leak/exit checks (which only fire on `live` slots) must skip it.
                         // Its referent's moved-out state is what the stale check consults.
-                        state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .alias_of = referent.key, .alias_place = referent.place, .full_deref_alias = referent.full_deref }) catch {
+                        state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .alias_of = tracked_referent.key, .alias_place = tracked_referent.place, .full_deref_alias = tracked_referent.full_deref }) catch {
                             self.oom = true;
                         };
                     }
@@ -861,14 +861,14 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                         // (it is no longer a meaningful borrow); leaving it live would be the
                         // phantom-leak false positive this fixes.
                         if (aliasReferentForExpr(self, a.value, state, aliases)) |referent| {
-                            if (aliasReferentIsTracked(referent, state)) {
+                            if (trackedAliasReferent(referent, state)) |tracked_referent| {
                                 if (state.getPtr(id.text)) |slot| {
-                                    slot.alias_of = referent.key;
-                                    slot.alias_place = referent.place;
+                                    slot.alias_of = tracked_referent.key;
+                                    slot.alias_place = tracked_referent.place;
                                     slot.live = false;
-                                    slot.full_deref_alias = referent.full_deref;
+                                    slot.full_deref_alias = tracked_referent.full_deref;
                                 } else {
-                                    state.put(id.text, .{ .live = false, .span = a.target.span, .place = .{ .root = id.text }, .alias_of = referent.key, .alias_place = referent.place, .full_deref_alias = referent.full_deref }) catch {
+                                    state.put(id.text, .{ .live = false, .span = a.target.span, .place = .{ .root = id.text }, .alias_of = tracked_referent.key, .alias_place = tracked_referent.place, .full_deref_alias = tracked_referent.full_deref }) catch {
                                         self.oom = true;
                                     };
                                 }
@@ -1767,13 +1767,15 @@ test "move subplace outer-scope classification uses typed roots rather than comp
     try std.testing.expect(moveSubplaceRootInOuter(.{ .live = false, .span = span, .place = field }, "compat:owner.resource", &outer));
 }
 
-test "move alias tracking requires a typed referent place" {
+test "move alias producers recover typed referent places from compatibility indexes" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
     var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
     defer state.deinit();
 
     try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    const tracked = trackedAliasReferent(.{ .key = "compat:owner", .place = null, .full_deref = false }, &state) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(tracked.place.?.eql(root));
     try std.testing.expect(aliasReferentIsTracked(.{ .key = "compat:owner", .place = null, .full_deref = false }, &state));
 
     try state.put("legacy", .{ .live = true, .span = span });
@@ -2151,10 +2153,16 @@ const AliasReferent = struct {
 };
 
 fn aliasReferentIsTracked(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot)) bool {
-    if (referent.place) |place| return rootMoveSlotForPlace(place, state) != null;
-    const referent_slot = state.get(referent.key) orelse return false;
-    const place = referent_slot.place orelse return false;
-    return rootMoveSlotForPlace(place, state) != null;
+    return trackedAliasReferent(referent, state) != null;
+}
+
+// A compatibility key may find legacy state, but every newly registered alias
+// must retain the recovered typed referent. That prevents a key-only alias from
+// becoming correctness authority in later CFG, defer, or stale-alias paths.
+fn trackedAliasReferent(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot)) ?AliasReferent {
+    const place = typedAliasReferentPlace(referent, state) orelse return null;
+    if (rootMoveSlotForPlace(place, state) == null) return null;
+    return .{ .key = referent.key, .place = place, .full_deref = referent.full_deref };
 }
 
 fn trackedMoveReferentPlaceForKey(key: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
@@ -4133,7 +4141,7 @@ pub fn registerAggregateFieldAliases(
             markBorrowEscape(self, field.value, escape_span, state);
             continue;
         };
-        if (!aliasReferentIsTracked(referent, state)) continue;
+        const tracked_referent = trackedAliasReferent(referent, state) orelse continue;
         const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base, field.name.text }) catch {
             self.oom = true;
             continue;
@@ -4143,7 +4151,7 @@ pub fn registerAggregateFieldAliases(
             self.reporter.allocator.free(key);
             continue;
         };
-        state.put(key, .{ .live = false, .span = field.value.span, .place = field_place, .alias_of = referent.key, .alias_place = referent.place }) catch {
+        state.put(key, .{ .live = false, .span = field.value.span, .place = field_place, .alias_of = tracked_referent.key, .alias_place = tracked_referent.place }) catch {
             self.oom = true;
         };
     }
@@ -4191,14 +4199,14 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    if (!aliasReferentIsTracked(referent, state)) {
+    const tracked_referent = trackedAliasReferent(referent, state) orelse {
         _ = removeAliasSlotForStoragePlace(target_info.place, state);
         self.reporter.allocator.free(target_info.key);
         return;
-    }
+    };
 
     if (aliasSlotPtrForStoragePlace(target_info.place, state)) |slot| {
-        slot.* = .{ .live = false, .span = value.span, .place = target_info.place, .alias_of = referent.key, .alias_place = referent.place };
+        slot.* = .{ .live = false, .span = value.span, .place = target_info.place, .alias_of = tracked_referent.key, .alias_place = tracked_referent.place };
         self.reporter.allocator.free(target_info.key);
         return;
     }
@@ -4208,7 +4216,7 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
         self.reporter.allocator.free(target_info.key);
         return;
     };
-    state.put(target_info.key, .{ .live = false, .span = value.span, .place = target_info.place, .alias_of = referent.key, .alias_place = referent.place }) catch {
+    state.put(target_info.key, .{ .live = false, .span = value.span, .place = target_info.place, .alias_of = tracked_referent.key, .alias_place = tracked_referent.place }) catch {
         self.oom = true;
     };
 }
@@ -4295,14 +4303,14 @@ fn recordAliasPlaceOrEscapeWithKey(
         markBorrowEscape(self, value, escape_span, state);
         return;
     };
-    if (!aliasReferentIsTracked(referent, state)) {
+    const tracked_referent = trackedAliasReferent(referent, state) orelse {
         _ = removeAliasSlotForStoragePlace(key_place, state);
         self.reporter.allocator.free(key);
         return;
-    }
+    };
 
     if (aliasSlotPtrForStoragePlace(key_place, state)) |slot| {
-        slot.* = .{ .live = false, .span = value.span, .place = key_place, .alias_of = referent.key, .alias_place = referent.place };
+        slot.* = .{ .live = false, .span = value.span, .place = key_place, .alias_of = tracked_referent.key, .alias_place = tracked_referent.place };
         self.reporter.allocator.free(key);
         return;
     }
@@ -4312,7 +4320,7 @@ fn recordAliasPlaceOrEscapeWithKey(
         self.reporter.allocator.free(key);
         return;
     };
-    state.put(key, .{ .live = false, .span = value.span, .place = key_place, .alias_of = referent.key, .alias_place = referent.place }) catch {
+    state.put(key, .{ .live = false, .span = value.span, .place = key_place, .alias_of = tracked_referent.key, .alias_place = tracked_referent.place }) catch {
         self.oom = true;
     };
 }
@@ -4775,14 +4783,14 @@ fn cleanupLocalAliasReferent(self: *Checker, init: ast.Expr, state: *const std.S
 
 fn recordDeferredIdentAssignmentAlias(self: *Checker, name: ast.Ident, value: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     if (aliasReferentForExpr(self, value, state, aliases)) |referent| {
-        if (aliasReferentIsTracked(referent, state)) {
+        if (trackedAliasReferent(referent, state)) |tracked_referent| {
             if (state.getPtr(name.text)) |slot| {
-                slot.alias_of = referent.key;
-                slot.alias_place = referent.place;
+                slot.alias_of = tracked_referent.key;
+                slot.alias_place = tracked_referent.place;
                 slot.live = false;
-                slot.full_deref_alias = referent.full_deref;
+                slot.full_deref_alias = tracked_referent.full_deref;
             } else {
-                state.put(name.text, .{ .live = false, .span = name.span, .place = .{ .root = name.text }, .alias_of = referent.key, .alias_place = referent.place, .cleanup_local = true, .full_deref_alias = referent.full_deref }) catch {
+                state.put(name.text, .{ .live = false, .span = name.span, .place = .{ .root = name.text }, .alias_of = tracked_referent.key, .alias_place = tracked_referent.place, .cleanup_local = true, .full_deref_alias = tracked_referent.full_deref }) catch {
                     self.oom = true;
                 };
             }
@@ -4954,8 +4962,8 @@ fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *std.St
     }
     if (decl.init) |init| {
         if (aliasReferentForExpr(self, init, state, aliases)) |referent| {
-            if (aliasReferentIsTracked(referent, state)) {
-                state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .alias_of = referent.key, .alias_place = referent.place, .cleanup_local = true, .full_deref_alias = referent.full_deref }) catch {
+            if (trackedAliasReferent(referent, state)) |tracked_referent| {
+                state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .alias_of = tracked_referent.key, .alias_place = tracked_referent.place, .cleanup_local = true, .full_deref_alias = tracked_referent.full_deref }) catch {
                     self.oom = true;
                 };
             }
