@@ -8291,11 +8291,11 @@ const LlvmEmitter = struct {
             else
                 self.callReturnType(call),
             .cast => if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else null,
-            // Direct function addresses and bounded data-address places have
-            // exact MIR expression-result facts. Other address expressions
-            // retain the existing storage-driven path.
-            .address_of => |inner| if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact|
-                fact.target_ty
+            // Source addresses have exact MIR expression-result facts. Only
+            // compiler-generated zero-span nodes retain the declaration-based
+            // fallback because they cannot be keyed to a source fact.
+            .address_of => |inner| if (expr.span.line != 0 and expr.span.column != 0)
+                if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else if (self.exprType(inner.*)) |ty|
                 (if (self.resolveAliasType(ty).kind == .fn_pointer) ty else self.pointerTypeFor(ty) catch null)
             else
