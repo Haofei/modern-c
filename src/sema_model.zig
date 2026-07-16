@@ -214,7 +214,7 @@ pub const MoveSlot = struct {
     // A place borrowed by a deferred expression. Unlike `deferred`, this does not
     // consume the resource or suppress leak checks; it only prevents moving the
     // borrowed root/subplace before deferred cleanup runs.
-    deferred_borrow: ?[]const u8 = null,
+    deferred_borrow: bool = false,
     deferred_borrow_place: ?MovePlace = null,
     // The binding's declared/inferred type, when known - used to look up a `move` field's
     // type for place-sensitive field-move tracking. Null for synthetic field place keys.

@@ -641,7 +641,7 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *std.StringHa
             self.errorCode(before.span, "E_MOVE_LOOP_RESOURCE", "cannot consume or reserve an outer linear `move` value inside a loop; the loop may run zero or multiple times");
             entry.value_ptr.live = false;
             entry.value_ptr.deferred = false;
-            entry.value_ptr.deferred_borrow = null;
+            entry.value_ptr.deferred_borrow = false;
             entry.value_ptr.deferred_borrow_place = null;
         } else if (!sameAliasFact(before, after)) {
             entry.value_ptr.* = divergentAliasSlot(entry.key_ptr.*, before);
@@ -1440,7 +1440,7 @@ fn mergeMoveBranchesImpl(
             if (report_diagnostics) self.errorCode(slot.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` value has inconsistent ownership across control-flow branches");
             slot.live = false;
             slot.deferred = false;
-            slot.deferred_borrow = null;
+            slot.deferred_borrow = false;
             slot.deferred_borrow_place = null;
         } else if (!sameAliasFact(slot, other)) {
             slot = divergentAliasSlot(entry.key_ptr.*, slot);
@@ -1685,14 +1685,14 @@ test "move CFG deferred borrows use typed places rather than compatibility keys"
         .live = true,
         .span = span,
         .place = root,
-        .deferred_borrow = "owner.resource:left",
+        .deferred_borrow = true,
         .deferred_borrow_place = borrowed,
     };
     const right_slot = MoveSlot{
         .live = true,
         .span = span,
         .place = root,
-        .deferred_borrow = "owner.resource:right",
+        .deferred_borrow = true,
         .deferred_borrow_place = borrowed,
     };
 
@@ -1818,9 +1818,9 @@ test "move deferred aliases recover typed places from their state slots" {
 
     try std.testing.expect(!reporter.has_errors);
     const owner = state.get("compat:owner") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("alias", owner.deferred_borrow.?);
+    try std.testing.expect(owner.deferred_borrow);
     try std.testing.expect(owner.deferred_borrow_place.?.eql(borrowed));
-    try std.testing.expect(state.get("alias").?.deferred_borrow == null);
+    try std.testing.expect(!state.get("alias").?.deferred_borrow);
 }
 
 test "move short-circuit joins use typed roots rather than compatibility keys" {
@@ -2378,7 +2378,7 @@ fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics
             slot.live = false;
         } else if (slot.deferred) {
             self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be moved");
-        } else if (slot.deferred_borrow != null) {
+        } else if (slot.deferred_borrow) {
             self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` value is borrowed by a deferred expression and cannot be moved before the defer runs");
             slot.live = false;
         } else if (slot.place != null and hasMovedSubplace(slot.place.?, state)) {
@@ -2556,7 +2556,7 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *std.StringHashMap(MoveSlo
             entry.value_ptr.live = false;
             entry.value_ptr.deferred = false;
             entry.value_ptr.escaped_borrow = null;
-            entry.value_ptr.deferred_borrow = null;
+            entry.value_ptr.deferred_borrow = false;
             entry.value_ptr.deferred_borrow_place = null;
         } else if (!sameAliasFact(before, after)) {
             entry.value_ptr.* = divergentAliasSlot(entry.key_ptr.*, before);
@@ -2633,7 +2633,7 @@ fn sameDeferredBorrowFact(left: MoveSlot, right: MoveSlot) bool {
         return false;
     }
     if (right.deferred_borrow_place != null) return false;
-    return left.deferred_borrow == null and right.deferred_borrow == null;
+    return !left.deferred_borrow and !right.deferred_borrow;
 }
 
 fn moveStatesEqual(left: *const std.StringHashMap(MoveSlot), right: *const std.StringHashMap(MoveSlot)) bool {
@@ -2678,7 +2678,7 @@ fn placeHasWildcardProjection(place: MovePlace) bool {
 fn isPureIndexFactSlot(slot: MoveSlot) bool {
     return !slot.live and
         !slot.deferred and
-        slot.deferred_borrow == null and
+        !slot.deferred_borrow and
         slot.ty == null and
         (slot.const_index != null or slot.symbolic_index != null) and
         slot.alias_of == null and
@@ -3656,7 +3656,7 @@ pub fn moveForget(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Move
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");
                 } else if (slot.deferred) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be moved");
-                } else if (slot.deferred_borrow != null) {
+                } else if (slot.deferred_borrow) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` value is borrowed by a deferred expression and cannot be forgotten before the defer runs");
                     slot.live = false;
                 } else {
@@ -4509,7 +4509,6 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
         const referent_slot = state.get(referent) orelse return;
         break :blk referent_slot.place orelse return;
     };
-    const root = borrowed_place.root;
     const root_slot = rootMoveSlotPtrForPlace(borrowed_place, state) orelse return;
     if (root_slot.cleanup_local) {
         checkStaleAlias(self, "", .{ .live = false, .span = span, .alias_of = referent, .alias_place = borrowed_place }, span, state);
@@ -4528,8 +4527,7 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
         self.errorCode(span, "E_USE_AFTER_MOVE", "defer borrows a linear `move` value after one of its fields or elements was moved out");
         return;
     }
-    if (root_slot.deferred_borrow) |existing| {
-        _ = existing;
+    if (root_slot.deferred_borrow) {
         if (root_slot.deferred_borrow_place) |existing_place| {
             if (existing_place.eql(borrowed_place)) return;
         }
@@ -4537,11 +4535,11 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
             root_slot.deferred_borrow_place = borrowed_place;
             return;
         }
-        root_slot.deferred_borrow = root;
+        root_slot.deferred_borrow = true;
         root_slot.deferred_borrow_place = root_slot.place;
         return;
     }
-    root_slot.deferred_borrow = referent;
+    root_slot.deferred_borrow = true;
     root_slot.deferred_borrow_place = borrowed_place;
 }
 

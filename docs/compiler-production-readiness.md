@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **666 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **667 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -793,6 +793,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Move deferred-borrow joins use typed places | Repeated deferred-borrow reservation now compares `deferred_borrow_place` with the incoming `MovePlace`; it no longer compares the formatted deferred-borrow key. Equal places share one reservation; distinct or legacy untyped reservations widen conservatively to the root borrow. This is one M1.1 compatibility-authority retirement, not completion of deferred-borrow analysis. | `src/sema_move.zig` `markDeferredBorrowReferent`; unit test `move CFG deferred borrows use typed places rather than compatibility keys`; full production gate; `git diff --check`. |
 
 | Move deferred-borrow CFG joins reject key-only equality | CFG state comparison now treats a deferred-borrow reservation as equal only when both states carry the same `deferred_borrow_place`, or when neither state has a reservation. Matching legacy key strings cannot prove the same borrow and therefore remain conservative at the join. This is one M1.1 compatibility-authority retirement, not closure of defer analysis. | `src/sema_move.zig` `sameDeferredBorrowFact`; unit test `move CFG deferred borrows use typed places rather than compatibility keys`; full production gate; `git diff --check`. |
+
+| Move deferred-borrow state has no compatibility-key identity | `MoveSlot.deferred_borrow` is now a boolean reservation marker; the structured `deferred_borrow_place` is the only stored borrow identity. Consume, scope cleanup, and CFG merge paths therefore cannot accidentally restore a formatted key as ownership authority. This is one M1.1 state-model retirement, not completion of deferred-borrow analysis. | `src/sema_model.zig` `MoveSlot`; `src/sema_move.zig` deferred-borrow transfer, cleanup, and comparison paths; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 
