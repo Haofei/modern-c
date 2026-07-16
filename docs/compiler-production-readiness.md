@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **665 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **666 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -791,6 +791,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Move alias producers recover typed referents without key equality | When a candidate alias is already represented by a state slot, alias registration now consumes that slot's `alias_place` directly. It no longer requires the slot's formatted `alias_of` key to equal the syntax-spine key before treating the typed referent as tracked. Slots without typed place metadata remain untracked rather than regaining string-key authority. This is one M1.1 migration, not completion of all alias producers. | `src/sema_move.zig` `aliasReferentForExpr` / `aliasReferentIsTracked`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 | Move deferred-borrow joins use typed places | Repeated deferred-borrow reservation now compares `deferred_borrow_place` with the incoming `MovePlace`; it no longer compares the formatted deferred-borrow key. Equal places share one reservation; distinct or legacy untyped reservations widen conservatively to the root borrow. This is one M1.1 compatibility-authority retirement, not completion of deferred-borrow analysis. | `src/sema_move.zig` `markDeferredBorrowReferent`; unit test `move CFG deferred borrows use typed places rather than compatibility keys`; full production gate; `git diff --check`. |
+
+| Move deferred-borrow CFG joins reject key-only equality | CFG state comparison now treats a deferred-borrow reservation as equal only when both states carry the same `deferred_borrow_place`, or when neither state has a reservation. Matching legacy key strings cannot prove the same borrow and therefore remain conservative at the join. This is one M1.1 compatibility-authority retirement, not closure of defer analysis. | `src/sema_move.zig` `sameDeferredBorrowFact`; unit test `move CFG deferred borrows use typed places rather than compatibility keys`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 

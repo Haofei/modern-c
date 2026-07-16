@@ -2625,15 +2625,15 @@ fn sameMaybePlace(left: ?MovePlace, right: ?MovePlace) bool {
     return left.?.eql(right.?);
 }
 
-// Typed deferred-borrow places are the semantic identity. The compatibility
-// key remains only for legacy root-only facts that have no place metadata.
+// Typed deferred-borrow places are the semantic identity. A legacy key-only
+// reservation cannot prove that two CFG states borrowed the same resource.
 fn sameDeferredBorrowFact(left: MoveSlot, right: MoveSlot) bool {
     if (left.deferred_borrow_place) |left_place| {
         if (right.deferred_borrow_place) |right_place| return left_place.eql(right_place);
         return false;
     }
     if (right.deferred_borrow_place != null) return false;
-    return sameMaybeKey(left.deferred_borrow, right.deferred_borrow);
+    return left.deferred_borrow == null and right.deferred_borrow == null;
 }
 
 fn moveStatesEqual(left: *const std.StringHashMap(MoveSlot), right: *const std.StringHashMap(MoveSlot)) bool {
