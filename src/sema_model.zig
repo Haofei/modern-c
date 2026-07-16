@@ -269,6 +269,7 @@ pub const MoveSlot = struct {
 };
 
 pub const LoopMoveFrame = struct {
+    allocator: std.mem.Allocator,
     // Source loop label (`outer:`), when present. The move pass uses this to
     // route a labeled break/continue to the same loop edge as semantic checking
     // and backend lowering.
@@ -276,12 +277,14 @@ pub const LoopMoveFrame = struct {
     entry_names: std.StringHashMap(void),
     entry_state: std.StringHashMap(MoveSlot),
     invalidated_const_indexes: std.StringHashMap(void),
+    invalidated_alias_places: std.ArrayListUnmanaged(MovePlace) = .empty,
     invalidated_aliases: std.StringHashMap(void),
 
     pub fn deinit(self: *LoopMoveFrame) void {
         self.entry_names.deinit();
         self.entry_state.deinit();
         self.invalidated_const_indexes.deinit();
+        self.invalidated_alias_places.deinit(self.allocator);
         self.invalidated_aliases.deinit();
     }
 };

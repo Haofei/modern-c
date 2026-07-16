@@ -909,10 +909,12 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(MoveSlo
         }
     }
     var frame = LoopMoveFrame{
+        .allocator = self.reporter.allocator,
         .label = if (loop.loop_label) |label| label.text else null,
         .entry_names = std.StringHashMap(void).init(self.reporter.allocator),
         .entry_state = cloneMoveState(self, state),
         .invalidated_const_indexes = std.StringHashMap(void).init(self.reporter.allocator),
+        .invalidated_alias_places = .empty,
         .invalidated_aliases = std.StringHashMap(void).init(self.reporter.allocator),
     };
     var snap_it = state.iterator();
@@ -1139,7 +1141,7 @@ pub fn checkLoopExitLeaks(self: *Checker, state: *std.StringHashMap(MoveSlot), t
     var entry_state = cloneMoveState(self, &frame.entry_state);
     defer entry_state.deinit();
     reportLoopOuterResourceChanges(self, &entry_state, state);
-    recordLoopEarlyExitConstIndexInvalidations(self, frame, state);
+    recordLoopEarlyExitInvalidations(self, frame, state);
 }
 
 fn moveLoopExitEdgeCfg(self: *Checker, state: *const std.StringHashMap(MoveSlot), target: ?ast.Ident) void {
@@ -1177,33 +1179,54 @@ fn moveLoopTargetFrame(self: *Checker, target: ?ast.Ident) ?*LoopMoveFrame {
     return &self.move_loop_stack.items[self.move_loop_stack.items.len - 1];
 }
 
-fn recordLoopEarlyExitConstIndexInvalidations(self: *Checker, frame: *LoopMoveFrame, state: *const std.StringHashMap(MoveSlot)) void {
+fn recordLoopEarlyExitInvalidations(self: *Checker, frame: *LoopMoveFrame, state: *const std.StringHashMap(MoveSlot)) void {
     var it = frame.entry_state.iterator();
     while (it.next()) |entry| {
         const before = entry.value_ptr.*;
         if (!isPureIndexFactSlot(before) and before.alias_of == null) continue;
-        const after = state.get(entry.key_ptr.*) orelse {
-            if (isPureIndexFactSlot(before)) {
+        if (isPureIndexFactSlot(before)) {
+            const after = state.get(entry.key_ptr.*) orelse {
                 frame.invalidated_const_indexes.put(entry.key_ptr.*, {}) catch {
                     self.oom = true;
                 };
-            } else {
-                frame.invalidated_aliases.put(entry.key_ptr.*, {}) catch {
+                continue;
+            };
+            if (!isPureIndexFactSlot(after) or !sameIndexFact(before, after)) {
+                frame.invalidated_const_indexes.put(entry.key_ptr.*, {}) catch {
                     self.oom = true;
                 };
             }
             continue;
-        };
-        if (isPureIndexFactSlot(before) and (!isPureIndexFactSlot(after) or !sameIndexFact(before, after))) {
-            frame.invalidated_const_indexes.put(entry.key_ptr.*, {}) catch {
-                self.oom = true;
+        }
+
+        if (before.place) |storage_place| {
+            const after = aliasSlotForStoragePlace(storage_place, state);
+            if (after == null or !sameAliasFact(before, after.?)) {
+                recordInvalidatedAliasPlace(self, frame, storage_place);
+            }
+        } else {
+            const after = state.get(entry.key_ptr.*) orelse {
+                frame.invalidated_aliases.put(entry.key_ptr.*, {}) catch {
+                    self.oom = true;
+                };
+                continue;
             };
-        } else if (before.alias_of != null and !sameAliasFact(before, after)) {
-            frame.invalidated_aliases.put(entry.key_ptr.*, {}) catch {
-                self.oom = true;
-            };
+            if (!sameAliasFact(before, after)) {
+                frame.invalidated_aliases.put(entry.key_ptr.*, {}) catch {
+                    self.oom = true;
+                };
+            }
         }
     }
+}
+
+fn recordInvalidatedAliasPlace(self: *Checker, frame: *LoopMoveFrame, place: MovePlace) void {
+    for (frame.invalidated_alias_places.items) |existing| {
+        if (existing.eql(place)) return;
+    }
+    frame.invalidated_alias_places.append(self.reporter.allocator, place) catch {
+        self.oom = true;
+    };
 }
 
 fn applyLoopEarlyExitConstIndexInvalidations(state: *std.StringHashMap(MoveSlot), frame: *const LoopMoveFrame) void {
@@ -1212,6 +1235,15 @@ fn applyLoopEarlyExitConstIndexInvalidations(state: *std.StringHashMap(MoveSlot)
 }
 
 fn applyLoopEarlyExitAliasInvalidations(state: *std.StringHashMap(MoveSlot), frame: *const LoopMoveFrame) void {
+    for (frame.invalidated_alias_places.items) |place| {
+        var state_it = state.iterator();
+        while (state_it.next()) |entry| {
+            const slot = entry.value_ptr;
+            if (slot.alias_of == null) continue;
+            const storage_place = slot.place orelse continue;
+            if (storage_place.eql(place)) slot.* = divergentAliasSlot(entry.key_ptr.*, slot.*);
+        }
+    }
     var it = frame.invalidated_aliases.keyIterator();
     while (it.next()) |name| {
         if (state.getPtr(name.*)) |slot| {
@@ -1436,6 +1468,63 @@ test "move CFG alias facts match typed referent places" {
     mergeMoveBranches(&checker, &joined, &left, &right);
     try std.testing.expect(!reporter.has_errors);
     try std.testing.expectEqual(@as(usize, 1), joined.count());
+}
+
+test "loop early-exit alias invalidation uses typed storage places" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-loop-alias-place.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const owner: MovePlace = .{ .root = "owner" };
+    const resource = owner.project(.{ .field = "resource" }).?;
+    const replacement = owner.project(.{ .field = "replacement" }).?;
+    const storage: MovePlace = .{ .root = "borrow" };
+
+    var entry_state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    try entry_state.put("compat:borrow:entry", .{
+        .live = false,
+        .span = span,
+        .place = storage,
+        .alias_of = "owner.resource",
+        .alias_place = resource,
+    });
+    var frame = LoopMoveFrame{
+        .allocator = std.testing.allocator,
+        .entry_names = std.StringHashMap(void).init(std.testing.allocator),
+        .entry_state = entry_state,
+        .invalidated_const_indexes = std.StringHashMap(void).init(std.testing.allocator),
+        .invalidated_alias_places = .empty,
+        .invalidated_aliases = std.StringHashMap(void).init(std.testing.allocator),
+    };
+    defer frame.deinit();
+
+    var early_exit = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer early_exit.deinit();
+    try early_exit.put("compat:borrow:exit", .{
+        .live = false,
+        .span = span,
+        .place = storage,
+        .alias_of = "owner.replacement",
+        .alias_place = replacement,
+    });
+    recordLoopEarlyExitInvalidations(&checker, &frame, &early_exit);
+    try std.testing.expectEqual(@as(usize, 1), frame.invalidated_alias_places.items.len);
+    try std.testing.expectEqual(@as(usize, 0), frame.invalidated_aliases.count());
+
+    var post_loop = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer post_loop.deinit();
+    try post_loop.put("compat:borrow:post", .{
+        .live = false,
+        .span = span,
+        .place = storage,
+        .alias_of = "owner.resource",
+        .alias_place = resource,
+    });
+    applyLoopEarlyExitAliasInvalidations(&post_loop, &frame);
+    const invalidated = post_loop.get("compat:borrow:post") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("compat:borrow:post", invalidated.alias_of.?);
+    try std.testing.expect(invalidated.alias_place == null);
 }
 
 test "move CFG deferred borrows use typed places rather than compatibility keys" {
