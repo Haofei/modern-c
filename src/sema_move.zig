@@ -1789,16 +1789,17 @@ test "move subplace outer-scope classification uses typed roots rather than comp
     try std.testing.expect(moveSubplaceRootInOuter(.{ .live = false, .span = span, .place = field }, "compat:owner.resource", &outer));
 }
 
-test "move alias producers recover typed referent places from compatibility indexes" {
+test "move alias producers require carried typed referent places" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
     var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
     defer state.deinit();
 
     try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
-    const tracked = trackedAliasReferent(.{ .key = "compat:owner", .place = null, .full_deref = false }, &state) orelse return error.TestUnexpectedResult;
+    const tracked = trackedAliasReferent(.{ .key = "compat:owner", .place = root, .full_deref = false }, &state) orelse return error.TestUnexpectedResult;
     try std.testing.expect(tracked.place.?.eql(root));
-    try std.testing.expect(aliasReferentIsTracked(.{ .key = "compat:owner", .place = null, .full_deref = false }, &state));
+    try std.testing.expect(aliasReferentIsTracked(.{ .key = "compat:owner", .place = root, .full_deref = false }, &state));
+    try std.testing.expect(!aliasReferentIsTracked(.{ .key = "compat:owner", .place = null, .full_deref = false }, &state));
 
     try state.put("legacy", .{ .live = true, .span = span });
     try std.testing.expect(!aliasReferentIsTracked(.{ .key = "legacy", .place = null, .full_deref = false }, &state));
@@ -1817,10 +1818,10 @@ test "move cleanup aliases match outer roots by typed place" {
     // this field must still be recognized as referring to the outer owner.
     try state.put("compat:cleanup-alias", .{ .live = false, .span = span, .place = field, .alias_of = "compat:source" });
     try outer.put("compat:outer-owner", .{ .live = true, .span = span, .place = root });
-    try std.testing.expect(aliasReferentTargetsOuter(.{ .key = "compat:cleanup-alias", .place = null, .full_deref = false }, &state, &outer));
+    try std.testing.expect(aliasReferentTargetsOuter(.{ .key = "compat:cleanup-alias", .place = field, .full_deref = false }, &outer));
 
     try state.put("legacy", .{ .live = false, .span = span, .alias_of = "compat:source" });
-    try std.testing.expect(!aliasReferentTargetsOuter(.{ .key = "legacy", .place = null, .full_deref = false }, &state, &outer));
+    try std.testing.expect(!aliasReferentTargetsOuter(.{ .key = "legacy", .place = null, .full_deref = false }, &outer));
 }
 
 test "move stale aliases require carried typed referent places" {
@@ -2194,11 +2195,10 @@ fn aliasReferentIsTracked(referent: AliasReferent, state: *const std.StringHashM
     return trackedAliasReferent(referent, state) != null;
 }
 
-// A compatibility key may find legacy state, but every newly registered alias
-// must retain the recovered typed referent. That prevents a key-only alias from
-// becoming correctness authority in later CFG, defer, or stale-alias paths.
+// Every newly registered alias must carry its typed referent. A compatibility
+// key indexes alias storage only; it cannot recover ownership identity.
 fn trackedAliasReferent(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot)) ?AliasReferent {
-    const place = typedAliasReferentPlace(referent, state) orelse return null;
+    const place = typedAliasReferentPlace(referent) orelse return null;
     if (rootMoveSlotForPlace(place, state) == null) return null;
     return .{ .key = referent.key, .place = place, .full_deref = referent.full_deref };
 }
@@ -2211,14 +2211,12 @@ fn trackedMoveReferentPlaceForKey(key: []const u8, state: *const std.StringHashM
     return place;
 }
 
-fn typedAliasReferentPlace(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
-    if (referent.place) |place| return place;
-    const slot = state.get(referent.key) orelse return null;
-    return slot.place;
+fn typedAliasReferentPlace(referent: AliasReferent) ?MovePlace {
+    return referent.place;
 }
 
-fn aliasReferentTargetsOuter(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot)) bool {
-    const place = typedAliasReferentPlace(referent, state) orelse return false;
+fn aliasReferentTargetsOuter(referent: AliasReferent, outer: *const std.StringHashMap(MoveSlot)) bool {
+    const place = typedAliasReferentPlace(referent) orelse return false;
     return rootMoveSlotForPlace(place, outer) != null;
 }
 
@@ -4796,8 +4794,8 @@ fn cleanupLocalAliasReferent(self: *Checker, init: ast.Expr, state: *const std.S
         else => {},
     }
     const referent = aliasReferentForExpr(self, init, state, aliases) orelse return null;
-    const place = typedAliasReferentPlace(referent, state) orelse return null;
-    if (aliasReferentTargetsOuter(referent, state, outer)) return null;
+    const place = typedAliasReferentPlace(referent) orelse return null;
+    if (aliasReferentTargetsOuter(referent, outer)) return null;
     if (rootMoveSlotForPlace(place, state) == null) return null;
     return .{ .key = referent.key, .place = place, .full_deref = referent.full_deref };
 }

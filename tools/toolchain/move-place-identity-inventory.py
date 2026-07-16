@@ -19,6 +19,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn directAliasReferentPlace",
         "fn immediateFullDerefMoveReferent",
         "fn typedAliasReferentPlace",
+        "fn typedAliasReferentPlace(referent: AliasReferent) ?MovePlace",
         "fn aliasReferentTargetsOuter",
         "fn sameDeferredBorrowFact",
         "fn recordLoopEarlyExitInvalidations",
@@ -72,6 +73,10 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
         ("fn aliasSlotReferentMoved", "fn referentPlaceMoved"): [
             "state.get(",
             "referent_slot",
+        ],
+        ("fn typedAliasReferentPlace", "fn aliasReferentTargetsOuter"): [
+            "state.get(",
+            "referent.key",
         ],
     },
 }
