@@ -855,6 +855,29 @@ one M1.1 migration. Pointer work interrupts that sequence only for a newly
 observed unclassified flow. The three rows are therefore not three simultaneous
 tasks and must not be represented as a percentage-based backlog.
 
+#### Execution Rules And Current Selection
+
+`Current` describes the next eligible **phase**, not an indefinitely active
+implementation branch. A phase has an active slice only after this document
+names its input boundary, expected semantic owner, affected C and LLVM
+consumers, and the tests that will prove missing/stale behavior. This prevents a
+large architectural item from looking active merely because it is unfinished.
+
+**Current selection state: no active slice.** The last bounded typed-fact and
+typed-place slices are complete and recorded above. The next implementation
+patch must select exactly one of the following units before code changes begin:
+
+| Order | Eligible unit | Phase | Concrete first deliverable | Slice closes only when |
+|---|---|---|---|---|
+| 1 | C type-shape/race-helper classification decision | T2.1 | Inventory one C aggregate/scalar shape decision that changes helper selection or ABI emission; choose a typed layout/memory fact or an explicitly bounded target policy. | The decision is registered with an implementation anchor and either has a MIR producer plus C/LLVM consumers and missing/stale tests, or has a tested conservative/diagnosed policy. |
+| 2 | Remaining typed-place authority migration | M1.1 | Inventory one supported move read/consume/assignment/defer/alias route where a compatibility key can still affect correctness, then replace that decision with `MovePlace` identity or overlap. | The same typed-place rule accepts its valid case and rejects its conflicting case; compatibility text is not consulted for correctness. |
+| 3 | Newly exposed pointer-flow boundary | P4.1, triggered only | Register the exact source-to-dereference flow exposed by a T2/M1 change and choose MIR proof, race-tolerant lowering, or a diagnostic. | C and LLVM both demonstrate the policy and the absent-proof path. |
+
+The first two rows are ordered work. The third is an interruption rule, not
+planned feature expansion. After row 1 closes, choose row 2; after row 2 closes,
+return to the next registered T2 family. Do not mark any umbrella workstream
+complete, blocked, or percentage-complete from a single bounded slice.
+
 | Historical bounded slice | Current disposition | Reopen condition |
 |---|---|---|
 | MIR aggregate-return pointer-field facts | **Completed bounded policy.** MIR owns the documented direct and bounded-CFG aggregate-return cases; unsupported aggregate shapes, ambiguous writes, escaping returns, non-transparent joins, and path overflow remain conservative rather than creating backend-local provenance. This row is P3 history, not active implementation. | Reopen only when T2 or M1 exposes a new aggregate-return pointer flow. Register it under P3/P4 first, then choose MIR proof, race-tolerant lowering, or a stable diagnostic before extending either backend. |
