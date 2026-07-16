@@ -4529,10 +4529,12 @@ fn markDeferredBorrowReferent(self: *Checker, referent: []const u8, place: ?Move
         return;
     }
     if (root_slot.deferred_borrow) |existing| {
-        if (std.mem.eql(u8, existing, referent)) {
-            if (root_slot.deferred_borrow_place == null or placeHasWildcardProjection(borrowed_place)) {
-                root_slot.deferred_borrow_place = borrowed_place;
-            }
+        _ = existing;
+        if (root_slot.deferred_borrow_place) |existing_place| {
+            if (existing_place.eql(borrowed_place)) return;
+        }
+        if (root_slot.deferred_borrow_place == null) {
+            root_slot.deferred_borrow_place = borrowed_place;
             return;
         }
         root_slot.deferred_borrow = root;
