@@ -47,7 +47,7 @@ pub fn emitUnaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashM
         .unary => |node| node,
         else => unreachable,
     };
-    _ = ctx.unary_result_type(ctx.emit_ctx, expr, locals) orelse return error.UnsupportedCEmission;
+    const result_ty = ctx.unary_result_type(ctx.emit_ctx, expr, locals) orelse return error.UnsupportedCEmission;
     if (node.op == .neg and lower_c_const.negatedLiteralIsI64Min(node.expr.*)) {
         // The most-negative i64 (INT64_MIN). Emitting `-(9223372036854775808)` is
         // wrong in C: the magnitude 2^63 exceeds LLONG_MAX, so the bare decimal
@@ -56,11 +56,9 @@ pub fn emitUnaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashM
         return;
     }
     if (node.op == .neg and !ctx.expr_resolves_to_float(ctx.emit_ctx, node.expr.*, locals)) {
-        if (ctx.numeric_expr_type(ctx.emit_ctx, node.expr.*, locals)) |inferred| {
-            const resolved = lower_c_alias.resolveAliasType(ctx.type_aliases, inferred);
-            if (!ast_query.isWrapType(resolved) and !ast_query.isSatType(resolved)) {
-                if (try ctx.emit_checked_unary(ctx.emit_ctx, expr, locals, inferred)) return;
-            }
+        const resolved = lower_c_alias.resolveAliasType(ctx.type_aliases, result_ty);
+        if (!ast_query.isWrapType(resolved) and !ast_query.isSatType(resolved)) {
+            if (try ctx.emit_checked_unary(ctx.emit_ctx, expr, locals, result_ty)) return;
         }
     }
     try ctx.out.appendSlice(ctx.allocator, unaryCOp(node.op));

@@ -1891,15 +1891,22 @@ const CEmitter = struct {
             .unary => |node| node,
             else => return null,
         };
-        const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
         const inferred = if (node.op == .logical_not)
             ast_query.simpleNameType("bool", expr.span)
         else
             self.numericExprTypeForEmission(node.expr.*, locals);
+        const fact_ty = if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact|
+            fact.target_ty
+        else if (expr.span.line == 0 and expr.span.column == 0)
+            // Generated async state-machine expressions are absent from the
+            // source-keyed MIR map; preserve their resolved operand type.
+            inferred orelse return null
+        else
+            return null;
         if (inferred) |ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(ty))) return null;
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return null;
         }
-        return fact.target_ty;
+        return fact_ty;
     }
 
     fn underlyingIntTypeNameForConvert(ctx: *anyopaque, ty: ast.TypeExpr) ?[]const u8 {
@@ -3877,7 +3884,7 @@ const CEmitter = struct {
                 return error.UnsupportedCEmission;
             }
         }
-        const base_ty = self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
+        const base_ty = self.operandEmitType(node.base.*, locals) orelse self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
         const inferred_element_ty = switch (self.resolveAliasType(base_ty).kind) {
             .array => |array| array.child.*,
             .slice => |slice| slice.child.*,
@@ -3891,7 +3898,7 @@ const CEmitter = struct {
         if (globalArrayElementAccess(node, locals, &self.globals)) |access| {
             try lower_c_global.emitGlobalArrayElementLoadExpr(self.globalArrayAccessEmitContext(), access, locals);
         } else if (self.sliceAccessForBase(node.base.*, locals)) |slice| {
-            if (!try self.emitRaceTolerantSliceIndexExpr(node, locals, slice)) {
+            if (!try self.emitRaceTolerantSliceIndexExpr(node, locals, slice, element_ty)) {
                 try self.emitSliceIndexExpr(node, locals, slice);
             }
         } else if (self.arrayTypeForExpr(node.base.*, locals)) |base_arr| {
@@ -3945,10 +3952,21 @@ const CEmitter = struct {
 
     fn emitMemberExpr(self: *CEmitter, node: anytype, member_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
         if (try self.emitEnumVariantPath(node, locals)) return true;
+        if (self.sliceAccessForBase(node.base.*, locals)) |slice| {
+            const base_ty = self.operandEmitType(node.base.*, locals) orelse self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
+            if (self.resolveAliasType(base_ty).kind == .slice and std.mem.eql(u8, node.name.text, "len")) {
+                const usize_ty = simpleNameType("usize", member_span);
+                const field_ty = self.memberResultTypeOrGenerated(member_span, usize_ty) orelse return error.UnsupportedCEmission;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(usize_ty))) return error.UnsupportedCEmission;
+                try self.emitExpr(node.base.*, locals);
+                try self.out.print(self.allocator, ".{s}", .{slice.len_field});
+                return true;
+            }
+        }
         if (try self.emitPackedBitsMember(node, member_span, locals)) return true;
         if (locals) |local_set| {
             if (self.overlayMemberResultType(node, local_set)) |inferred_field_ty| {
-                const field_ty = (self.mirTargetTypeFactAt(.expression_result, member_span) orelse return error.UnsupportedCEmission).target_ty;
+                const field_ty = self.memberResultTypeOrGenerated(member_span, inferred_field_ty) orelse return error.UnsupportedCEmission;
                 if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
             }
             if (try self.emitOverlayMemberReadExpr(node, local_set)) return true;
@@ -3964,10 +3982,19 @@ const CEmitter = struct {
         if (!self.suppress_load_hook and try self.emitRaceTolerantNestedPointerMemberLoadExpr(node, locals)) return true;
         if (self.memberChainHasRaceTolerantIndexedBase(node.base.*, locals)) return error.UnsupportedCEmission;
         const inferred_field_ty = self.memberFieldType(node.base.*, node.name.text, locals) orelse return error.UnsupportedCEmission;
-        const field_ty = (self.mirTargetTypeFactAt(.expression_result, member_span) orelse return error.UnsupportedCEmission).target_ty;
+        // Async lowering synthesizes state-machine member expressions after source
+        // parsing. They deliberately carry the zero span and have no source-keyed
+        // MIR fact; the generated struct declaration remains the typed authority.
+        // User-source members still require the exact expression-result fact.
+        const field_ty = self.memberResultTypeOrGenerated(member_span, inferred_field_ty) orelse return error.UnsupportedCEmission;
         if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
         try self.emitOrdinaryMemberLoadExpr(node, locals);
         return true;
+    }
+
+    fn memberResultTypeOrGenerated(self: *CEmitter, member_span: ast.Span, inferred: ast.TypeExpr) ?ast.TypeExpr {
+        if (self.mirTargetTypeFactAt(.expression_result, member_span)) |fact| return fact.target_ty;
+        return if (member_span.line == 0 and member_span.column == 0) inferred else null;
     }
 
     fn overlayMemberResultType(self: *CEmitter, node: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -6872,8 +6899,7 @@ const CEmitter = struct {
         return info.aggregate;
     }
 
-    fn emitRaceTolerantSliceIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), slice: SliceAccess) anyerror!bool {
-        const element_ty = self.operandEmitType(.{ .span = node.index.*.span, .kind = .{ .index = node } }, locals) orelse return false;
+    fn emitRaceTolerantSliceIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), slice: SliceAccess, element_ty: ast.TypeExpr) anyerror!bool {
         const info = self.globalInfoFromType(element_ty) catch return false;
         if (info.aggregate) {
             const usize_ty = simpleNameType("usize", node.index.*.span);

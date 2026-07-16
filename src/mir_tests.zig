@@ -1508,6 +1508,36 @@ test "MIR owns inferred local unary types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns contextual negative integer unary result types" {
+    const source =
+        \\fn compares(value: i32) -> bool {
+        \\    return value == -6;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_contextual_negative_unary.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "compares").?;
+    var saw_negative_i32 = false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .expression_result) continue;
+        const end = fact.source.offset + fact.source.len;
+        if (!std.mem.eql(u8, source[fact.source.offset..end], "-6")) continue;
+        try std.testing.expectEqualStrings("i32", fact.target_ty.kind.name.text);
+        saw_negative_i32 = true;
+    }
+    try std.testing.expect(saw_negative_i32);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns inferred local direct call types" {
     const source =
         \\fn make_count() -> u64 { return 7; }
@@ -2467,6 +2497,31 @@ test "MIR owns span-identified result types for compound expressions" {
         if (last_source) |previous| try std.testing.expect(previous.offset != fact.source.offset or previous.len != fact.source.len);
         last_source = fact.source;
     }
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR owns direct address dereference result types" {
+    const source =
+        \\fn read_local() -> u32 {
+        \\    var local: u32 = 1;
+        \\    return (&local).*;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_address_deref_result.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "read_local").?;
+    const fact = targetTypeFactByKind(function, .expression_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 

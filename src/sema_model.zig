@@ -244,6 +244,11 @@ pub const MoveSlot = struct {
     // alias slots, `place` is the storage place containing the alias and
     // `alias_place` is the move place the alias points at.
     alias_place: ?MovePlace = null,
+    // Branch/loop joins can leave a pointer alias referring to different move
+    // places on different paths. The current alias model has no disjunction,
+    // so reads through this slot must fail closed rather than treating a
+    // synthetic compatibility key as a valid referent.
+    divergent_alias: bool = false,
     // T1.2 (conservative rejection): a borrow of this move binding (or of one of its
     // subfields/elements) has been stored into MEMORY - an aggregate field, an array
     // element, or aliased through a subfield place - somewhere we cannot prove dead. Unlike

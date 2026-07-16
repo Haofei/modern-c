@@ -269,7 +269,13 @@ pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Stri
             const struct_name = structNameFromType(ctx, base_ty) orelse return null;
             const struct_decl = ctx.structs.get(struct_name) orelse return null;
             for (struct_decl.fields) |field| {
-                if (std.mem.eql(u8, field.name.text, node.name.text)) return requireExpressionResultType(ctx, expr, field.ty);
+                if (std.mem.eql(u8, field.name.text, node.name.text)) {
+                    // Async lowering creates typed state-machine members after MIR
+                    // facts are keyed from source spans. Zero-span nodes are only
+                    // compiler-generated; their resolved declaration is authority.
+                    if (expr.span.line == 0 and expr.span.column == 0) return field.ty;
+                    return requireExpressionResultType(ctx, expr, field.ty);
+                }
             }
             return null;
         },
@@ -359,6 +365,7 @@ pub fn exprIsPointer(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.String
 pub fn derefPointeeType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return switch (expr.kind) {
         .ident => |id| pointeeTypeFromPointerLike(ctx, sourceTypeForIdent(ctx, id.text, locals) orelse return null),
+        .address_of => |inner| operandEmitType(ctx, inner.*, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, inner.*, locals),
         .call => |node| pointeeTypeFromPointerLike(ctx, ctx.mir_target_type(ctx.source_ctx, .raw_many_offset_result, node.callee.*.span) orelse callReturnType(ctx, node) orelse return null),
         .cast => |node| pointeeTypeFromPointerLike(ctx, node.ty.*),
         .member, .index => pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null),

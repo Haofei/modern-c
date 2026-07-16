@@ -36,6 +36,11 @@ const MoveStateCfgWorklist = struct {
     cfg: *const sema_model.MoveCfg,
     states: []?std.StringHashMap(MoveSlot),
     queued: []bool,
+    // A deferred cleanup loop widens its zero-iteration/backedge states and
+    // reports the resulting outer-resource change as E_MOVE_LOOP_RESOURCE.
+    // Its internal CFG joins must still merge conservatively, but must not also
+    // produce ordinary branch diagnostics for that same widening.
+    report_join_diagnostics: bool = true,
     queue: std.ArrayListUnmanaged(sema_model.MoveCfgBlockId) = .empty,
 
     fn init(self: *Checker, cfg: *const sema_model.MoveCfg, entry: sema_model.MoveCfgBlockId, state: *const std.StringHashMap(MoveSlot)) ?MoveStateCfgWorklist {
@@ -87,6 +92,10 @@ const MoveStateCfgWorklist = struct {
         return null;
     }
 
+    fn suppressJoinDiagnostics(self: *MoveStateCfgWorklist) void {
+        self.report_join_diagnostics = false;
+    }
+
     // All real-state CFG joins enter here. Callers may omit a successor when an
     // AST transfer has already run for that block, but cannot reimplement the
     // ownership merge or worklist requeue policy themselves.
@@ -94,7 +103,7 @@ const MoveStateCfgWorklist = struct {
         const changed = if (self.states[to]) |*joined| blk: {
             var before = cloneMoveState(checker, joined);
             defer before.deinit();
-            mergeMoveBranches(checker, joined, joined, outgoing);
+            mergeMoveBranchesImpl(checker, joined, joined, outgoing, self.report_join_diagnostics);
             break :blk !moveStatesEqual(joined, &before);
         } else blk: {
             self.states[to] = cloneMoveState(checker, outgoing);
@@ -986,8 +995,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
         .block, .unsafe_block, .comptime_block => |b| return moveScopedBlock(self, b, state, aliases),
         .contract_block => |c| return moveScopedBlock(self, c.block, state, aliases),
         .loop => |l| {
-            moveLoopCfg(self, l, state, aliases);
-            return false;
+            return moveLoopCfg(self, l, state, aliases);
         },
         .if_let => |n| {
             return moveIfLetCfg(self, n, state, aliases);
@@ -1007,7 +1015,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
     }
 }
 
-fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     if (loop.iterable) |iter| {
         switch (loop.kind) {
             .@"for" => moveBorrow(self, iter, state, aliases),
@@ -1034,9 +1042,23 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(MoveSlo
         self.oom = true;
         frame.deinit();
     };
+    var pending_outer_exits_before: usize = 0;
+    if (self.move_loop_stack.items.len > 1) {
+        for (self.move_loop_stack.items[0 .. self.move_loop_stack.items.len - 1]) |outer| {
+            pending_outer_exits_before += outer.pending_exits.items.len;
+        }
+    }
     var body_state = cloneMoveState(self, state);
     defer body_state.deinit();
     const body_diverges = moveLoopBodyCfg(self, loop.body, state, &body_state, aliases);
+    var body_exits_outer_loop = false;
+    if (self.move_loop_stack.items.len > 1) {
+        var pending_outer_exits_after: usize = 0;
+        for (self.move_loop_stack.items[0 .. self.move_loop_stack.items.len - 1]) |outer| {
+            pending_outer_exits_after += outer.pending_exits.items.len;
+        }
+        body_exits_outer_loop = pending_outer_exits_after > pending_outer_exits_before;
+    }
     if (self.move_loop_stack.pop()) |popped| {
         var loop_frame = popped;
         applyLoopEarlyExitConstIndexInvalidations(state, &loop_frame);
@@ -1047,6 +1069,11 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(MoveSlo
         reportMoveLocalsLeavingScope(self, &body_state, state, "linear `move` value declared in a loop body is never consumed (must be moved, returned, or freed before the iteration ends)");
         reportLoopOuterResourceChanges(self, state, &body_state);
     }
+    // A body that queued a labeled exit to an enclosing loop has no local
+    // fallthrough edge. Propagate that fact so the enclosing CFG routes the
+    // queued state through its target break/continue edge instead of joining it
+    // with a spurious loop backedge.
+    return body_diverges and body_exits_outer_loop;
 }
 
 // Route `if let` through explicit entry/then/else/join CFG blocks.  The scrutinee
@@ -1382,6 +1409,16 @@ pub fn mergeMoveBranches(
     left: *const std.StringHashMap(MoveSlot),
     right: *const std.StringHashMap(MoveSlot),
 ) void {
+    mergeMoveBranchesImpl(self, dest, left, right, true);
+}
+
+fn mergeMoveBranchesImpl(
+    self: *Checker,
+    dest: *std.StringHashMap(MoveSlot),
+    left: *const std.StringHashMap(MoveSlot),
+    right: *const std.StringHashMap(MoveSlot),
+    report_diagnostics: bool,
+) void {
     var merged = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
     defer merged.deinit();
 
@@ -1389,9 +1426,9 @@ pub fn mergeMoveBranches(
     while (it.next()) |entry| {
         const other = matchingMoveStateSlot(right, entry.key_ptr.*, entry.value_ptr.*) orelse {
             if (entry.value_ptr.live and !entry.value_ptr.deferred) {
-                self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value created in only one branch is never consumed before the branch exits");
+                if (report_diagnostics) self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value created in only one branch is never consumed before the branch exits");
             } else if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*)) {
-                self.errorCode(entry.value_ptr.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` field has inconsistent ownership across control-flow branches");
+                if (report_diagnostics) self.errorCode(entry.value_ptr.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` field has inconsistent ownership across control-flow branches");
                 merged.put(entry.key_ptr.*, entry.value_ptr.*) catch {
                     self.oom = true;
                 };
@@ -1400,7 +1437,7 @@ pub fn mergeMoveBranches(
         };
         var slot = entry.value_ptr.*;
         if (slot.live != other.live or slot.deferred != other.deferred or !sameDeferredBorrowFact(slot, other)) {
-            self.errorCode(slot.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` value has inconsistent ownership across control-flow branches");
+            if (report_diagnostics) self.errorCode(slot.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` value has inconsistent ownership across control-flow branches");
             slot.live = false;
             slot.deferred = false;
             slot.deferred_borrow = null;
@@ -1419,9 +1456,9 @@ pub fn mergeMoveBranches(
     while (right_it.next()) |entry| {
         if (moveStateSlotMatches(left, entry.key_ptr.*, entry.value_ptr.*)) continue;
         if (entry.value_ptr.live and !entry.value_ptr.deferred) {
-            self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value created in only one branch is never consumed before the branch exits");
+            if (report_diagnostics) self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value created in only one branch is never consumed before the branch exits");
         } else if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*)) {
-            self.errorCode(entry.value_ptr.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` field has inconsistent ownership across control-flow branches");
+            if (report_diagnostics) self.errorCode(entry.value_ptr.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` field has inconsistent ownership across control-flow branches");
             merged.put(entry.key_ptr.*, entry.value_ptr.*) catch {
                 self.oom = true;
             };
@@ -1833,6 +1870,7 @@ fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
         .span = source.span,
         .place = source.place,
         .alias_of = key,
+        .divergent_alias = true,
         .cleanup_local = source.cleanup_local,
     };
 }
@@ -2425,6 +2463,11 @@ fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, work
             // is the same target that a labeled exit resolved during AST walk.
             checkLoopExitLeaks(self, block_state, null);
             worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == loop_cfg.break_exit) {
+            // A queued labeled break targets this loop's terminal CFG block.
+            // Preserve that edge's ownership state for the enclosing loop's
+            // scope and exit checks instead of dropping it after validation.
+            replaceMoveState(self, result_state, block_state);
         } else if (block == loop_cfg.exit) {
             replaceMoveState(self, result_state, block_state);
         }
@@ -2450,6 +2493,11 @@ fn moveLoopBodyCfg(self: *Checker, body: ast.Block, entry_state: *const std.Stri
 
     var worklist = MoveStateCfgWorklist.init(self, &loop_cfg.cfg, loop_cfg.entry, entry_state) orelse return false;
     defer worklist.deinit();
+    // Loop-head widening has its own E_MOVE_LOOP_RESOURCE policy. Merge the
+    // zero-iteration and backedge states conservatively here, then let that
+    // policy report outer ownership changes once rather than also issuing the
+    // generic branch-join diagnostic.
+    worklist.suppressJoinDiagnostics();
     var body_diverges = false;
     var body_visited = false;
     runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, result_state, aliases, &body_diverges, &body_visited);
@@ -4292,6 +4340,7 @@ fn aliasIndexExprType(self: *Checker, expr: ast.Expr, state: *const std.StringHa
 }
 
 fn aliasSlotReferentMoved(slot: MoveSlot, state: *const std.StringHashMap(MoveSlot)) bool {
+    if (slot.divergent_alias) return true;
     const referent = slot.alias_of orelse return false;
     if (slot.alias_place) |typed| return referentPlaceMoved(typed, state);
     const referent_slot = state.get(referent) orelse return false;
@@ -4717,6 +4766,7 @@ fn moveDeferLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(Mo
 
     var worklist = MoveStateCfgWorklist.init(self, &loop_cfg.cfg, loop_cfg.entry, state) orelse return;
     defer worklist.deinit();
+    worklist.suppressJoinDiagnostics();
     var condition_visited = false;
     var body_visited = false;
     while (worklist.pop()) |block| {
@@ -4739,6 +4789,11 @@ fn moveDeferLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(Mo
         var entry_state = cloneMoveState(self, state);
         defer entry_state.deinit();
         reportLoopOuterResourceChanges(self, &entry_state, exit_state);
+        // The loop widener is the authority for outer resources changed by a
+        // deferred cleanup loop. Keep its conservative result for later source
+        // statements; otherwise a borrow reserved on a zero-or-many iteration
+        // path is forgotten as soon as this helper returns.
+        replaceMoveState(self, state, &entry_state);
     }
 }
 

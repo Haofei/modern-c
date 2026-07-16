@@ -6202,16 +6202,27 @@ const FunctionBuilder = struct {
     fn expressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
+            // `&place` has no standalone type fact: the dereference result is
+            // the already resolved storage type of that place.
+            .deref => |inner| self.directAddressDerefTypeExpr(inner.*),
             .unary => |node| if (node.op == .logical_not)
                 ast_query.simpleNameType("bool", expr.span)
             else
-                self.typeExprForExpr(node.expr.*),
+                self.typeExprForExpr(node.expr.*) orelse self.assignment_target_type_expr,
             .binary => |node| if (mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op))
                 ast_query.simpleNameType("bool", expr.span)
             else if (mirIsArithmeticBinary(node.op) or mirIsBitwiseBinary(node.op))
                 self.typeExprForExpr(node.left.*) orelse self.typeExprForExpr(node.right.*)
             else
                 null,
+            else => null,
+        };
+    }
+
+    fn directAddressDerefTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .grouped => |inner| self.directAddressDerefTypeExpr(inner.*),
+            .address_of => |target| self.typeExprForExpr(target.*),
             else => null,
         };
     }
@@ -9452,8 +9463,12 @@ fn unionCasePayloadType(info: UnionSummary, case_name: []const u8) ?ast.TypeExpr
 
 fn exprContainsTargetTypedLiteral(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .enum_literal, .string_literal, .float_literal, .null_literal => true,
+        // Integer literals, including `-N`, acquire their storage type from a
+        // typed binary sibling. This lets MIR own the unary result rather than
+        // leaving C/LLVM to choose the literal's C default type.
+        .int_literal, .enum_literal, .string_literal, .float_literal, .null_literal => true,
         .grouped => |inner| exprContainsTargetTypedLiteral(inner.*),
+        .unary => |node| exprContainsTargetTypedLiteral(node.expr.*),
         else => false,
     };
 }
