@@ -764,6 +764,15 @@ local/raw/MMIO proof. The remaining work is not more syntax coverage for its own
 sake; it is closing the provenance decision model so supported source shapes do
 not depend on backend-local guessing.
 
+**Phase plan.**
+
+| Phase | Status | Completed scope | Remaining scope / exit condition |
+|---|---|---|---|
+| P1: conservative default | Complete for supported scalar leaves | Unknown scalar pointer accesses lower race-tolerantly or reject when no supported lowering exists. | Preserve this rule for every new access path. |
+| P2: direct MIR provenance | Complete for the documented bounded producers | Direct locals, copies, covered aggregate fields/elements, direct returns, and supported aggregate-return summaries have MIR facts and missing-fact tests. | Do not broaden a producer without C/LLVM evidence. |
+| P3: remaining pointer-flow policy | In progress | Callback/function-pointer returns and exported ambiguity already remain unknown and conservative. | Decide each escaped, higher-order, and aggregate-CFG flow: MIR fact, explicit conservative lowering, or diagnosed unsupported form. |
+| P4: closure | Pending | Named fallback entry points are inventory-gated. | Every row in the closure matrix is closed or explicitly accepted as a documented limitation. |
+
 Closure matrix:
 
 | Remaining boundary | Close condition |
@@ -831,6 +840,15 @@ The immediate implementation target is not necessarily a full typed HIR rewrite.
 The near-term target is stricter: every semantic decision that affects lowering
 must either be represented as a typed fact / MIR-owned value, or be listed as an
 accepted conservative fallback with a missing-fact test.
+
+**Phase plan.**
+
+| Phase | Status | Completed scope | Remaining scope / exit condition |
+|---|---|---|---|
+| T1: inventory and admission gates | Complete | Fact producers, artifact printers, validation, representation facts, bounds/range facts, and integer-default facts have documented ownership and missing/stale gates for the current subset. | Keep the inventory authoritative as new semantic families are added. |
+| T2: bounded fact migrations | In progress | Many direct calls, builtins, storage reads, inferred locals, address places, MMIO, varargs, and trap operations consume MIR-owned facts in C and LLVM. | Migrate a remaining registered inference family, or explicitly make its unsupported fallback fail closed. |
+| T3: legacy inference register | In progress | The register is finite and inventory-gated at eight backend inference families. | For each family, record a final decision: MIR-owned, accepted conservative policy, or diagnosed unsupported boundary. |
+| T4: semantic-authority closure | Pending | Backend-local global provenance fallback and several operation-specific AST classifiers are retired. | No lowering-affecting semantic decision may rely on unregistered backend AST inference. |
 
 Closure matrix:
 
@@ -971,6 +989,15 @@ The remaining work is therefore twofold: first, complete the typed place model
 for locals, fields, dereferences, array elements, wildcard/dynamic projections,
 and non-nameable storage; second, run move state through CFG joins rather than
 through statement-local expression identities.
+
+**Phase plan.**
+
+| Phase | Status | Completed scope | Remaining scope / exit condition |
+|---|---|---|---|
+| M1: typed place foundations | In progress | `MovePlace` roots/projections cover important local, field, array-element, alias, and deferred-borrow paths. | Typed places, not formatted compatibility keys, become the correctness authority for every supported move path. |
+| M2: CFG/worklist routing | In progress | Real CFG state exists for selected `if let`, switch, short-circuit, and while forward paths. | Route joins, loop backedges, `defer`, and exits through one worklist/dataflow model. |
+| M3: unsupported boundary | In progress | Dynamic/non-local move-array and arbitrary pointer-to-array paths fail closed. | Retain explicit diagnostics until a typed-place/CFG rule proves each newly admitted case. |
+| M4: closure | Pending | Existing compatibility inventory and regression fixtures prevent silent reopening. | String-key compatibility maps are no longer the correctness authority for the supported subset. |
 
 Closure matrix:
 
