@@ -15,6 +15,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn aliasSlotPtrForStoragePlace",
         "fn removeAliasSlotForStoragePlace",
         "fn bindingMoveSlotForIdent",
+        "fn aliasBindingMoveSlotForIdent",
         "fn aliasPlaceInfo",
         "fn aliasWildcardPlaceInfo",
         "fn directAliasReferentPlace",
@@ -93,10 +94,12 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
             "trackedMoveReferentPlaceForKey",
         ],
         ("fn carriedAliasReferentForExpr", "fn typedAliasReferentPlace"): [
+            "state.get(",
             "trackedMoveReferentPlaceForKey",
             "spine.",
         ],
         ("fn borrowedMoveRootPlace", "fn integerCastBorrowedMoveRootPlace"): [
+            "state.get(",
             "spine.",
             "alias_of orelse",
         ],

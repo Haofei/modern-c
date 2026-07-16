@@ -2012,15 +2012,21 @@ test "move escaped borrows use typed roots rather than compatibility keys" {
     markEscapedBorrowForPlace(field, span, &state);
     try std.testing.expect(state.get("compat:owner").?.escaped_borrow != null);
 
-    var alias_target = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "compat:alias", .span = span } } };
+    var alias_target = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "alias", .span = span } } };
     const alias_borrow = ast.Expr{ .span = span, .kind = .{ .address_of = &alias_target } };
-    try state.put("compat:alias", .{ .live = false, .span = span, .place = .{ .root = "compat:alias" }, .alias_of = "stale:owner", .alias_place = field });
+    // Source spelling and the compatibility key intentionally differ. Typed
+    // alias consumers must resolve `alias` through its storage place.
+    try state.put("compat:alias", .{ .live = false, .span = span, .place = .{ .root = "alias" }, .alias_of = "stale:owner", .alias_place = field });
     const recovered = borrowedMoveRootPlace(&checker, alias_borrow, &state) orelse return error.TestUnexpectedResult;
     try std.testing.expect(recovered.eql(field));
 
-    state.getPtr("compat:alias").?.alias_place = null;
-    try std.testing.expect(borrowedMoveRootPlace(&checker, alias_borrow, &state) == null);
-    try std.testing.expect(hasUntypedBorrowAlias(alias_borrow, &state));
+    // A key-only legacy alias is still rejected explicitly, but it cannot be
+    // mistaken for the typed alias above.
+    var legacy_target = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "legacy", .span = span } } };
+    const legacy_borrow = ast.Expr{ .span = span, .kind = .{ .address_of = &legacy_target } };
+    try state.put("legacy", .{ .live = false, .span = span, .alias_of = "stale:owner" });
+    try std.testing.expect(borrowedMoveRootPlace(&checker, legacy_borrow, &state) == null);
+    try std.testing.expect(hasUntypedBorrowAlias(legacy_borrow, &state));
 }
 
 test "move borrowed subplaces use typed places rather than compatibility keys" {
@@ -2102,6 +2108,21 @@ fn ownershipBindingMoveSlotForIdent(name: []const u8, state: *const std.StringHa
     return null;
 }
 
+// Named aliases are also structural bindings. Their map keys may be rewritten
+// by CFG joins, so a typed alias consumer must locate the alias's own storage
+// root instead of treating source spelling as a compatibility-map key.
+fn aliasBindingMoveSlotForIdent(name: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+    const expected: MovePlace = .{ .root = name };
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (slot.alias_of == null) continue;
+        const place = slot.place orelse continue;
+        if (place.eql(expected)) return slot;
+    }
+    return null;
+}
+
 fn ownershipMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) ?*MoveSlot {
     var it = state.iterator();
     while (it.next()) |entry| {
@@ -2158,15 +2179,13 @@ fn borrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *const std.Strin
         .grouped => |inner| return borrowedMoveRootPlace(self, inner.*, state),
         else => return null,
     };
-    switch (target.kind) {
-        .ident => |id| if (state.get(id.text)) |slot| {
-            if (slot.alias_of != null) {
-                const place = slot.alias_place orelse return null;
-                if (rootMoveSlotForPlace(place, state) == null) return null;
-                return place;
-            }
-        },
-        else => {},
+    if (target.kind == .ident) {
+        const id = target.kind.ident;
+        if (aliasBindingMoveSlotForIdent(id.text, state)) |slot| {
+            const place = slot.alias_place orelse return null;
+            if (rootMoveSlotForPlace(place, state) == null) return null;
+            return place;
+        }
     }
     const place = (placeKeyAndType(self, target, state) orelse return null).place;
     if (rootMoveSlotForPlace(place, state) == null) return null;
@@ -2370,7 +2389,7 @@ fn carriedAliasReferent(slot: MoveSlot) ?AliasReferent {
 fn carriedAliasReferentForExpr(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?AliasReferent {
     return switch (expr.kind) {
         .ident => |id| blk: {
-            const slot = state.get(id.text) orelse break :blk null;
+            const slot = aliasBindingMoveSlotForIdent(id.text, state) orelse break :blk null;
             break :blk carriedAliasReferent(slot);
         },
         .grouped => |inner| carriedAliasReferentForExpr(inner.*, state),
@@ -2484,13 +2503,14 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
             // non-move pointee (`p.* + 1` on a `*mut u32`) stays an ordinary borrow.
             const direct_subplace = fullDerefMoveSubplace(self, inner.*, state, aliases);
             var full_alias_referent: ?AliasReferent = if (direct_subplace) |pp| .{ .key = pp.key, .place = pp.place, .full_deref = true } else immediateFullDerefMoveReferent(self, inner.*, state, aliases);
-            switch (inner.*.kind) {
-                .ident => |id| if (state.get(id.text)) |s| {
-                    if (s.full_deref_alias) {
-                        full_alias_referent = if (s.alias_of) |referent| .{ .key = referent, .place = s.alias_place, .full_deref = true } else null;
+            if (inner.*.kind == .ident) {
+                const id = inner.*.kind.ident;
+                if (aliasBindingMoveSlotForIdent(id.text, state)) |slot| {
+                    if (slot.full_deref_alias) {
+                        const referent = slot.alias_of orelse unreachable;
+                        full_alias_referent = .{ .key = referent, .place = slot.alias_place, .full_deref = true };
                     }
-                },
-                else => {},
+                }
             }
             if (full_alias_referent) |referent| {
                 consumeTrackedMoveReferent(self, referent, expr.span, state);
