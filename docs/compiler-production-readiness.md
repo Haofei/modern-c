@@ -1407,13 +1407,17 @@ keeps the name-keyed analyses sound).
   new names forever — hang/OOM on 3 lines of source, and a DoS on shared CI. Fix:
   instantiation-depth + total-instance ceilings with a diagnostic naming the chain.
   Effort S. **[inspected, retired]**
-- **[P1] Definite-init tracks only scalar `uninit` vars.** Aggregates are excluded
-  (`diIsScalarType`, `src/sema.zig:5844-5851`; design comment :1300-1317), and any
-  address-of clears pending (`:1596-1605`) — `var s: Header = uninit;` + field reads
-  compiles clean and reads garbage in the C backend. The docs present definite
-  initialization as a check; today it is best-effort. Fix: track aggregate `uninit`
-  whole-object; document the `&x` out-param accept explicitly in the spec. Effort M.
-  **[inspected]**
+- **[P1] Aggregate `uninit` definite initialization was incomplete.** **Retired in
+  the current ledger.** `diPendingKindForType` now tracks scalar and aggregate
+  storage. A whole-variable assignment initializes the aggregate; a partial member
+  write or address-taking operation does not claim that the whole object is ready.
+  Fixed arrays additionally retain element facts, allowing a read only when that
+  exact element is proven written (or all constant elements have been written).
+  This prevents a member/index/value read of `var x: T = uninit` from reaching C
+  lowering without proof. Evidence: `src/sema.zig` definite-init pass;
+  `tests/spec/initialization.mc` aggregate, partial-write, branch, dynamic-index,
+  and whole-assignment cases; `tests/c_emit/bad/use_before_init_aggregate.mc`; and
+  the C/LLVM diagnostic-golden entries for `E_USE_BEFORE_INIT`.
 - **[P1] Unguarded 128-bit arithmetic in comptime folding.**
   **Retired in the current ledger.** `foldComptimeBitcast` routes 128-bit results
   through `comptimeIntFromBits`, reflection uses the shared checked
