@@ -13,6 +13,39 @@ fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.Arra
     try lower_llvm.appendLlvm(std.testing.allocator, parsed.module, output);
 }
 
+test "LLVM target-typed char literals require MIR facts" {
+    const source =
+        \\fn char_value() -> u16 { return 'A'; }
+    ;
+    var parsed = try test_support.parseModule("llvm_char_literal_facts.mc", source);
+    defer parsed.deinit();
+
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_char_literal_facts.mc", .{}, false, .riscv64, null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i16 65") != null);
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try removeTargetTypeKindForFunction(&module_mir, "char_value", .char_literal);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_char_literal_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        try renameTargetTypeFactForFunction(&module_mir, "char_value", .char_literal, "u8");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_char_literal_facts.mc", .{}, false, .riscv64, null));
+    }
+}
+
 fn clearPointerProvenanceFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;

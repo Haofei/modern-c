@@ -845,7 +845,7 @@ const LlvmEmitter = struct {
         }
         return switch (expr.kind) {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
-            .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
+            .char_literal => |literal| try self.emitCharLiteralWithTarget(literal, expr.span, semantic_ty),
             .string_literal => |literal| blk: {
                 const fact = self.mirTargetTypeFactAt(.string_literal, expr.span) orelse break :blk error.UnsupportedLlvmEmission;
                 if (!isStringLiteralTarget(self.resolveAliasType(fact.target_ty))) break :blk error.UnsupportedLlvmEmission;
@@ -1351,7 +1351,7 @@ const LlvmEmitter = struct {
         const value = try switch (expr.kind) {
             .ident => |ident| try self.emitIdent(ident),
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
-            .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
+            .char_literal => |literal| try self.emitCharLiteralWithTarget(literal, expr.span, semantic_expected_ty),
             .string_literal => |literal| try self.emitStringLiteral(literal, expr.span),
             .float_literal => |literal| if (self.mirTargetTypeFactAt(.float_literal, expr.span)) |fact|
                 try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(fact.target_ty))
@@ -8324,6 +8324,12 @@ const LlvmEmitter = struct {
         const expected = inferred orelse return fact.target_ty;
         if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected))) return null;
         return fact.target_ty;
+    }
+
+    fn emitCharLiteralWithTarget(self: *LlvmEmitter, literal: []const u8, span: ast.Span, expected_ty: ast.TypeExpr) ![]const u8 {
+        const fact = self.mirTargetTypeFactAt(.char_literal, span) orelse return error.UnsupportedLlvmEmission;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
+        return charLiteralValue(self.scratch.allocator(), literal);
     }
 
     fn derefPointeeType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {

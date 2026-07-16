@@ -6294,6 +6294,10 @@ const FunctionBuilder = struct {
                 .float => .float_literal,
                 else => return,
             },
+            .char_literal => switch (result_ty) {
+                .integer => .char_literal,
+                else => return,
+            },
             .null_literal => switch (result_ty) {
                 .pointer, .nullable_pointer, .nullable_value, .nullable_dyn_trait => .null_literal,
                 else => return,

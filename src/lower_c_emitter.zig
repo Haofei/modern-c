@@ -10,6 +10,7 @@ const sema_type = @import("sema_type.zig");
 const switch_lower = @import("switch_lower.zig");
 
 const lower_c_type = @import("lower_c_type.zig");
+const numeric = @import("numeric.zig");
 const rawScalarSuffix = lower_c_type.rawScalarSuffix;
 const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
 const intTypeRange = lower_c_type.intTypeRange;
@@ -4491,6 +4492,7 @@ const CEmitter = struct {
             .enum_literal => |literal| try self.emitEnumLiteralWithTarget(literal, expr.span),
             .string_literal => |literal| try self.emitStringLiteralWithTarget(literal, expr.span),
             .float_literal => |literal| try self.emitFloatLiteralWithTarget(literal, expr.span),
+            .char_literal => |literal| try self.emitCharLiteralWithTarget(literal, expr.span, semantic_target_ty),
             .grouped => |inner| try self.emitGroupedExprWithTarget(inner.*, locals, semantic_target_ty),
             .address_of => try self.emitAddressOfExprWithTarget(expr, locals, semantic_target_ty),
             else => try self.emitExpr(expr, locals),
@@ -4681,6 +4683,14 @@ const CEmitter = struct {
         const name = typeName(self.resolveAliasType(fact.target_ty)) orelse return error.UnsupportedCEmission;
         if (!std.mem.eql(u8, name, "f32") and !std.mem.eql(u8, name, "f64")) return error.UnsupportedCEmission;
         try appendCFloatLiteral(self.allocator, self.out, literal, std.mem.eql(u8, name, "f32"));
+    }
+
+    fn emitCharLiteralWithTarget(self: *CEmitter, literal: []const u8, span: ast.Span, expected_ty: ?ast.TypeExpr) !void {
+        const fact = self.mirTargetTypeFactAt(.char_literal, span) orelse return error.UnsupportedCEmission;
+        const expected = expected_ty orelse return error.UnsupportedCEmission;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected))) return error.UnsupportedCEmission;
+        const value = numeric.parseCharLiteral(literal) orelse return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "(({s}){d})", .{ try self.cTypeFor(fact.target_ty, .typedef_name), value });
     }
 
     fn emitStringLiteralWithTarget(self: *CEmitter, literal: []const u8, span: ast.Span) anyerror!void {
