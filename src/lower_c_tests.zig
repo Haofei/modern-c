@@ -1388,6 +1388,7 @@ test "lower-c inferred local direct addresses require MIR types" {
 test "lower-c compound expressions require complete MIR result facts" {
     const source =
         \\struct Pair { value: u8 }
+        \\packed bits Flags: u8 { set: bool }
         \\fn member_result() -> u8 {
         \\    let pair: Pair = .{ .value = 7 };
         \\    return pair.value;
@@ -1399,6 +1400,9 @@ test "lower-c compound expressions require complete MIR result facts" {
         \\}
         \\fn unary_result(flag: bool) -> bool {
         \\    return !flag;
+        \\}
+        \\fn packed_result(flags: Flags) -> bool {
+        \\    return flags.set;
         \\}
         \\fn expression_facts(index: usize) -> u8 {
         \\    let values: [4]u8 = .{ 7, 0, 0, 0 };
@@ -1496,6 +1500,24 @@ test "lower-c compound expressions require complete MIR result facts" {
         defer module_mir.deinit();
         const unary_offset = std.mem.indexOf(u8, source, "!flag") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "unary_result", .expression_result, unary_offset, "!flag".len, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const packed_offset = std.mem.indexOf(u8, source, "flags.set") orelse return error.TestUnexpectedResult;
+        try removeTargetTypeFactAtOffsetForFunction(&module_mir, "packed_result", .expression_result, packed_offset, "flags.set".len);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const packed_offset = std.mem.indexOf(u8, source, "flags.set") orelse return error.TestUnexpectedResult;
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "packed_result", .expression_result, packed_offset, "flags.set".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));

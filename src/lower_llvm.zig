@@ -3573,6 +3573,8 @@ const LlvmEmitter = struct {
         }
         if (self.packedBitsInfoForType(base_ty)) |info| {
             const bit_index = self.packedBitsFieldIndex(info, node.name.text) orelse return error.UnsupportedLlvmEmission;
+            const field_ty = self.requireExpressionResultType(.{ .kind = .{ .member = node }, .span = member_span }, simpleType(member_span, "bool")) orelse return error.UnsupportedLlvmEmission;
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(simpleType(member_span, "bool")))) return error.UnsupportedLlvmEmission;
             const base = try self.emitExpr(node.base.*, base_ty);
             const masked = try self.nextTemp();
             const result = try self.nextTemp();

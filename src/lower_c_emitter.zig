@@ -3933,7 +3933,7 @@ const CEmitter = struct {
 
     fn emitMemberExpr(self: *CEmitter, node: anytype, member_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
         if (try self.emitEnumVariantPath(node, locals)) return true;
-        if (try self.emitPackedBitsMember(node, locals)) return true;
+        if (try self.emitPackedBitsMember(node, member_span, locals)) return true;
         if (locals) |local_set| {
             if (try self.emitOverlayMemberReadExpr(node, local_set)) return true;
         }
@@ -4739,10 +4739,12 @@ const CEmitter = struct {
         return lower_c_infer.enumNameForType(self.inferTypeContext(), ty);
     }
 
-    fn emitPackedBitsMember(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    fn emitPackedBitsMember(self: *CEmitter, node: anytype, member_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         const base_ty = packedBitsNameForExpr(node.base.*, locals, &self.globals) orelse return false;
         const info = self.packed_bits.get(base_ty) orelse return false;
         const field = info.fields.get(node.name.text) orelse return false;
+        const field_ty = (self.mirTargetTypeFactAt(.expression_result, member_span) orelse return error.UnsupportedCEmission).target_ty;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(ast_query.simpleNameType("bool", member_span)))) return error.UnsupportedCEmission;
         try self.emitPackedBitsMaskTest(node.base.*, locals, info, field.bit_index);
         return true;
     }
