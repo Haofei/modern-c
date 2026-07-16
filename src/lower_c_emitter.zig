@@ -4883,7 +4883,19 @@ const CEmitter = struct {
     }
 
     fn emitOverlayFieldReadReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        try self.requireOverlayReturnExpressionResult(expr, locals);
         return lower_c_overlay.emitOverlayFieldReadReturn(self.overlayEmitContext(), expr, locals, return_ty);
+    }
+
+    fn requireOverlayReturnExpressionResult(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+        switch (expr.kind) {
+            .grouped => |inner| return self.requireOverlayReturnExpressionResult(inner.*, locals),
+            .member => |node| if (self.overlayMemberResultType(node, locals)) |inferred_field_ty| {
+                const field_ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return error.UnsupportedCEmission).target_ty;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
+            },
+            else => {},
+        }
     }
 
     fn emitOverlayFieldWriteStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {

@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **654 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **655 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -769,6 +769,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Move checker aggregate call-result borrow escape requires typed referent places | Aggregate call-result escape tracking no longer authorizes a borrowed root or alias referent merely because a formatted key is in the state map. It resolves the state slot to a live structural `MovePlace` before marking the owning root escaped; legacy referents without typed metadata are not inferred. This is one M1.1 migration, not completion of aggregate interprocedural borrow analysis. | `src/sema_move.zig` `markBorrowEscapeCapturedCallArg` / `trackedMoveReferentPlaceForKey`; typed referent helper regression; `zig test src/sema_move.zig`; `zig test src/sema_tests.zig`; full production gate; `git diff --check`. |
 
 | Move checker ordinary borrow escape requires typed referent places | Ordinary borrow-escape handling, including integer round-trip and address-of-cast forms, no longer directly updates a root selected by a formatted key. The shared helper requires the keyed slot to carry a live typed place and marks the structural owning root escaped; keys without typed metadata are not inferred. This is one M1.1 migration, not completion of borrow-escape analysis. | `src/sema_move.zig` `markBorrowEscape` / `markEscapedBorrowForReferentKey` / `trackedMoveReferentPlaceForKey`; typed referent helper regression; `zig test src/sema_move.zig`; `zig test src/sema_tests.zig`; full production gate; `git diff --check`. |
+
+| C overlay return-hoisting result types are MIR-owned | The C overlay scalar-member return specialization now requires the member's full-span MIR `expression_result` fact before it chooses the overlay field representation. The resolved field type is used only to reject a stale fact; missing facts cannot authorize the hoisted return. LLVM's direct member emission already consumes the same fact, while overlay view returns remain a separate boundary. | `src/mir.zig` `addExpressionResultFact`; `src/lower_c_emitter.zig` `emitOverlayFieldReadReturn` / `requireOverlayReturnExpressionResult`; `src/lower_c_tests.zig` `compound expressions require complete MIR result facts`; focused C test; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 

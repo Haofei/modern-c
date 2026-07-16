@@ -1398,6 +1398,9 @@ test "lower-c compound expressions require complete MIR result facts" {
         \\    let value: u32 = word.value;
         \\    return value;
         \\}
+        \\fn overlay_return_result(word: Word) -> u32 {
+        \\    return word.value;
+        \\}
         \\fn overlay_index_result(word: Word) -> u8 {
         \\    let value: u8 = word.bytes[0];
         \\    return value;
@@ -1446,6 +1449,26 @@ test "lower-c compound expressions require complete MIR result facts" {
         var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
         defer module_mir.deinit();
         try renameTargetTypeFactForFunction(&module_mir, "binary_result", .expression_result, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const overlay_return_offset = std.mem.indexOf(u8, source, "return word.value") orelse return error.TestUnexpectedResult;
+        const member_offset = overlay_return_offset + "return ".len;
+        try removeTargetTypeFactAtOffsetForFunction(&module_mir, "overlay_return_result", .expression_result, member_offset, "word.value".len);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const overlay_return_offset = std.mem.indexOf(u8, source, "return word.value") orelse return error.TestUnexpectedResult;
+        const member_offset = overlay_return_offset + "return ".len;
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "overlay_return_result", .expression_result, member_offset, "word.value".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
