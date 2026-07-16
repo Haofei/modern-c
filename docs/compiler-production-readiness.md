@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **679 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **680 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -819,6 +819,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Move stale-alias checks fail closed without a typed referent | `aliasSlotReferentMoved` no longer follows `alias_of` through the state map when `alias_place` is missing. Admitted aliases retain a typed referent and use the common structural moved-place query; a legacy key-only alias is conservatively stale, so an omitted fact cannot silently allow a use after its owner moves. The identity inventory forbids reintroducing that state-key recovery inside the stale-alias helper. This is one M1.1 migration, not closure of alias or CFG analysis. | `src/sema_move.zig` `aliasSlotReferentMoved`; unit test `move stale aliases require carried typed referent places`; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 | Move alias registration requires carried referent places | `typedAliasReferentPlace` is now a direct projection of `AliasReferent.place`; it no longer looks up `referent.key` in the state map. Alias registration and deferred cleanup therefore fail closed when a producer omits the typed referent, while normal local, aggregate, assignment, and cleanup producers preserve their place through the existing typed flow. The identity inventory forbids reintroducing the key lookup. This is one M1.1 migration, not closure of alias or CFG analysis. | `src/sema_move.zig` `typedAliasReferentPlace`, `trackedAliasReferent`, and `cleanupLocalAliasReferent`; unit test `move alias producers require carried typed referent places`; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
+
+| C aggregate-global representation is an explicit target policy | `AggregateGlobalCShape` makes the C backend's internal aggregate-global matrix explicit: fixed arrays, slices, closures, dyn traits, `Result`, aggregate `MaybeUninit`, and declared aggregates use C aggregate initialization/access mechanics; scalar globals remain scalar. The matrix controls `{0}` versus `0` materialization and scalar race-helper bypass only. It does not infer source semantics, select external ABI, or weaken the existing `E_EXTERN_STRUCT_BY_VALUE` boundary. This is a T2.1 disposition for one C shape decision, not typed-MIR closure. | `src/lower_c_info.zig` `AggregateGlobalCShape` / `aggregateGlobalCShape`; `src/lower_c_tests.zig` `lower-c materialized aggregate globals use the C aggregate representation policy`; `tools/toolchain/semantic-facts-inventory.py` `C_AGGREGATE_GLOBAL_REPRESENTATION_POLICY_AUDIT`; focused C test; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 

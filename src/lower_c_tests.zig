@@ -23,6 +23,31 @@ fn appendCheckedCTest(source_name: []const u8, source: []const u8, output: *std.
     try lower_c.appendC(std.testing.allocator, parsed.module, output);
 }
 
+test "lower-c materialized aggregate globals use the C aggregate representation policy" {
+    const source =
+        \\struct Holder { value: u32 }
+        \\enum InitError { failed }
+        \\global scalar: u32;
+        \\global fixed: [2]u32;
+        \\global view: []const u8;
+        \\global result: Result<u32, InitError>;
+        \\global holder: Holder;
+        \\global uninit_holder: MaybeUninit<Holder>;
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_aggregate_global_representation_policy.mc", source, &output);
+
+    try expectContains(output.items, "scalar = 0;");
+    for ([_][]const u8{
+        "fixed = {0};",
+        "view = {0};",
+        "result = {0};",
+        "holder = {0};",
+        "uninit_holder = {0};",
+    }) |needle| try expectContains(output.items, needle);
+}
+
 fn clearRangeFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;

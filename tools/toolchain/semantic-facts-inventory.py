@@ -388,6 +388,24 @@ EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT: dict[str, list[str]] = {
     "tests/c_emit/bad/export_generic_struct_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
 }
 
+C_AGGREGATE_GLOBAL_REPRESENTATION_POLICY_AUDIT: dict[str, list[str]] = {
+    "docs/compiler-production-readiness.md": [
+        "| C aggregate-global representation is an explicit target policy |",
+        "`AggregateGlobalCShape`",
+    ],
+    "docs/typed-semantic-facts.md": [
+        "C aggregate-global representation is an accepted internal target policy",
+    ],
+    "src/lower_c_info.zig": [
+        "pub const AggregateGlobalCShape = enum",
+        "pub fn aggregateGlobalCShape(",
+        "pub fn isAggregateGlobalType(",
+    ],
+    "src/lower_c_tests.zig": [
+        'test "lower-c materialized aggregate globals use the C aggregate representation policy"',
+    ],
+}
+
 BOUNDS_RANGE_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "| MIR no-overflow range facts |",
@@ -1599,6 +1617,19 @@ def main() -> int:
             checked += 1
             if anchor not in text:
                 missing.append(f"extern aggregate ABI boundary audit: {relative}: missing anchor {anchor!r}")
+
+    for relative, anchors in sorted(C_AGGREGATE_GLOBAL_REPRESENTATION_POLICY_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"C aggregate-global representation policy audit: {relative}: file missing")
+            continue
+
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"C aggregate-global representation policy audit: {relative}: missing anchor {anchor!r}")
 
     for relative, anchors in sorted(BOUNDS_RANGE_FACT_FAMILY_AUDIT.items()):
         path = REPO_ROOT / relative

@@ -53,6 +53,19 @@ pub const Context = struct {
     mir_target_type: MirTargetTypeFn,
 };
 
+// C-only representation policy for globals. This chooses aggregate syntax
+// (`{0}`) and plain aggregate access rather than a scalar race helper; it does
+// not classify a source-level ABI or authorize an extern/export aggregate ABI.
+pub const AggregateGlobalCShape = enum {
+    array,
+    slice,
+    closure,
+    dyn_trait,
+    result,
+    maybe_uninit,
+    declared_aggregate,
+};
+
 pub fn localInfoFromType(ctx: Context, ty: ast.TypeExpr) anyerror!LocalInfo {
     const resolved_ty = resolveAliasType(ctx, ty);
     const source_type_name = typeName(resolved_ty);
@@ -305,19 +318,26 @@ pub fn nullableInnerCTypeForType(ctx: Context, ty: ast.TypeExpr) anyerror!?[]con
 }
 
 pub fn isAggregateGlobalType(ctx: Context, ty: ast.TypeExpr) bool {
+    return aggregateGlobalCShape(ctx, ty) != null;
+}
+
+pub fn aggregateGlobalCShape(ctx: Context, ty: ast.TypeExpr) ?AggregateGlobalCShape {
     const resolved_ty = resolveAliasType(ctx, ty);
     return switch (resolved_ty.kind) {
-        .array, .slice, .closure_type, .dyn_trait => true,
+        .array => .array,
+        .slice => .slice,
+        .closure_type => .closure,
+        .dyn_trait => .dyn_trait,
         .generic => |node| {
             if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1) {
-                return isAggregateGlobalType(ctx, node.args[0]);
+                return if (aggregateGlobalCShape(ctx, node.args[0]) != null) .maybe_uninit else null;
             }
-            return std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2;
+            return if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) .result else null;
         },
-        .name => |name| ctx.structs.contains(name.text) or
+        .name => |name| if (ctx.structs.contains(name.text) or
             ctx.overlay_unions.contains(name.text) or
-            ctx.tagged_unions.contains(name.text),
-        else => false,
+            ctx.tagged_unions.contains(name.text)) .declared_aggregate else null,
+        else => null,
     };
 }
 
