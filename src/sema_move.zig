@@ -1468,16 +1468,16 @@ fn mergeMoveBranchesImpl(
     replaceMoveState(self, dest, &merged);
 }
 
-// Child places are ownership facts, not source-level binding names. A join must
-// therefore recognize the same field/element even when a compatibility key was
-// formatted differently along the two incoming paths. Roots, aliases, and index
-// facts still use their binding key because they carry lexical metadata.
+// Ownership places are structural facts, not source-level binding names. A join
+// must recognize the same root, field, or element even when a compatibility key
+// was formatted differently along the two incoming paths. Alias storage and
+// index facts retain their separate metadata rules.
 fn matchingMoveStateSlot(state: *const std.StringHashMap(MoveSlot), key: []const u8, slot: MoveSlot) ?MoveSlot {
-    if (isOwnershipMoveSubplace(slot, key)) {
+    if (isOwnershipMovePlace(slot, key)) {
         const place = slot.place.?;
         var it = state.iterator();
         while (it.next()) |entry| {
-            if (!isOwnershipMoveSubplace(entry.value_ptr.*, entry.key_ptr.*)) continue;
+            if (!isOwnershipMovePlace(entry.value_ptr.*, entry.key_ptr.*)) continue;
             const candidate = entry.value_ptr.*;
             if (candidate.place.?.eql(place)) return candidate;
         }
@@ -1533,6 +1533,21 @@ test "move branch joins match subplaces by typed place rather than compatibility
     try std.testing.expect(joined.get("owner.resource:left").?.deferred);
     try std.testing.expect(removeOwnershipMovePlace(place, &joined));
     try std.testing.expectEqual(@as(usize, 0), joined.count());
+}
+
+test "move branch joins match roots by typed place rather than compatibility key" {
+    var left = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer left.deinit();
+    var right = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer right.deinit();
+
+    const root: MovePlace = .{ .root = "owner" };
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    try left.put("compat:left", .{ .live = true, .span = span, .place = root });
+    try right.put("compat:right", .{ .live = true, .span = span, .place = root });
+
+    try std.testing.expect(moveStatesEqual(&left, &right));
+    try std.testing.expect(matchingMoveStateSlot(&right, "compat:left", left.get("compat:left").?) != null);
 }
 
 test "move CFG boundary state handlers match ownership subplaces by typed place" {
@@ -1914,7 +1929,12 @@ fn isTrackedMoveSubplace(slot: MoveSlot, key: []const u8) bool {
 }
 
 fn isOwnershipMoveSubplace(slot: MoveSlot, key: []const u8) bool {
-    return slot.alias_of == null and !slot.type_only and !isPureIndexFactSlot(slot) and isTrackedMoveSubplace(slot, key);
+    return isOwnershipMovePlace(slot, key) and isTrackedMoveSubplace(slot, key);
+}
+
+fn isOwnershipMovePlace(slot: MoveSlot, key: []const u8) bool {
+    _ = key;
+    return slot.alias_of == null and !slot.type_only and !isPureIndexFactSlot(slot) and slot.place != null;
 }
 
 fn ownershipMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) ?*MoveSlot {

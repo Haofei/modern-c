@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **671 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **672 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -803,6 +803,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Move subplace scope classification uses typed roots | Scope preservation, branch-local cleanup, and loop outer-resource diagnostics no longer decide that a subplace belongs to an outer resource by checking whether the outer state map contains `place.root`. They use structural root-place lookup, so an outer binding stored under a compatibility key is still recognized as its subplace's owner. This is one M1.1 migration, not closure of the move checker. | `src/sema_move.zig` `moveSubplaceRootInOuter`; unit test `move subplace outer-scope classification uses typed roots rather than compatibility keys`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 | Extern/export aggregate ABI rejection is inventory-gated | Struct-by-value calls across `extern` or `export` boundaries remain an accepted fail-closed diagnostic policy, not an unclassified C/LLVM ABI path. Sema rejects plain/extern structs, aliases, and generic instantiations with `E_EXTERN_STRUCT_BY_VALUE` before either backend emits a target calling convention. The semantic-facts inventory now pins the sema boundary, unit test, and five C-emission diagnostic fixtures. Internal MC aggregate construction remains a separate C lowering mechanics boundary. | `src/sema.zig` `checkExternExportStructAbi` / `isByValueStructAbiType`; `src/sema_tests.zig` `rejects by-value struct signatures at extern and export ABI boundaries`; `tests/c_emit/bad/*struct*_by_value.mc`; `tools/toolchain/semantic-facts-inventory.py` `EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT`; `python3 tools/toolchain/semantic-facts-inventory.py`; full production gate; `git diff --check`. |
+
+| Move CFG joins match typed root places | CFG state matching now treats every non-alias, non-type-only ownership slot with a `MovePlace` as structural state, including roots as well as fields/elements. Branch, loop, short-circuit, and scope helpers therefore cannot report a mismatch solely because the two predecessor maps used different compatibility keys for the same root place. Alias storage and index facts retain their dedicated conservative rules. This is one M1.1 migration, not closure of the move checker. | `src/sema_move.zig` `matchingMoveStateSlot` / `isOwnershipMovePlace`; unit test `move branch joins match roots by typed place rather than compatibility key`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 
