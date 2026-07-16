@@ -1085,12 +1085,15 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
     }
 }
 
-pub fn validateTargetTypeFactsForLowering(module: Module) error{InvalidMirTargetTypeFacts}!void {
+pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTargetTypeFacts, StaleMirTargetTypeFacts }!void {
     for (module.functions) |function| {
         for (function.blocks) |block| for (block.instructions) |instruction| {
             const kind = targetTypeKindForInstruction(instruction) orelse continue;
             const fact_count = countMatchingTargetTypeFacts(function, kind, instruction);
-            if (fact_count == 0 or fact_count != countMatchingTargetTypeInstructionsForInstruction(function, kind, instruction)) return error.InvalidMirTargetTypeFacts;
+            if (fact_count == 0 or fact_count != countMatchingTargetTypeInstructionsForInstruction(function, kind, instruction)) {
+                if (hasStaleTargetTypeFact(function, kind, instruction)) return error.StaleMirTargetTypeFacts;
+                return error.InvalidMirTargetTypeFacts;
+            }
             if (!matchingTargetTypeFactsAgree(function, kind, instruction)) return error.InvalidMirTargetTypeFacts;
         };
         for (function.target_type_facts) |fact| {
@@ -1120,6 +1123,29 @@ fn targetTypeInstructionSourceMatches(kind: TargetTypeKind, left: Instruction, r
     return kind != .expression_result or (left.source_offset == right.source_offset and left.source_len == right.source_len);
 }
 
+fn targetTypeSyntaxMatches(fact: TargetTypeFact, instruction: Instruction) bool {
+    const expected = instruction.target_ty orelse return false;
+    return sema_type.sameTypeSyntax(expected, fact.target_ty);
+}
+
+fn hasStaleTargetTypeFact(function: Function, kind: TargetTypeKind, instruction: Instruction) bool {
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != kind) continue;
+        if (fact.target_index != instruction.target_index) continue;
+        if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
+        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
+        if (!targetTypeSourceMatches(kind, fact, instruction)) continue;
+        if (!targetTypeSyntaxMatches(fact, instruction)) return true;
+    }
+    return false;
+}
+
+fn targetTypeInstructionsSyntaxMatch(left: Instruction, right: Instruction) bool {
+    const left_ty = left.target_ty orelse return false;
+    const right_ty = right.target_ty orelse return false;
+    return sema_type.sameTypeSyntax(left_ty, right_ty);
+}
+
 fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instruction: Instruction) usize {
     var count: usize = 0;
     for (function.target_type_facts) |fact| {
@@ -1127,6 +1153,7 @@ fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instru
         if (fact.target_index != instruction.target_index) continue;
         if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
+        if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (targetTypeSourceMatches(kind, fact, instruction)) count += 1;
     }
     return count;
@@ -1140,6 +1167,7 @@ fn countMatchingTargetTypeInstructions(function: Function, fact: TargetTypeFact)
         if (instruction.target_index != fact.target_index) continue;
         if (!optionalTextEql(instruction.target_owner, fact.target_owner)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
+        if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (targetTypeSourceMatches(kind, fact, instruction)) count += 1;
     };
     return count;
@@ -1153,6 +1181,7 @@ fn countMatchingTargetTypeInstructionsForInstruction(function: Function, kind: T
         if (instruction.target_index != target.target_index) continue;
         if (!optionalTextEql(instruction.target_owner, target.target_owner)) continue;
         if (!sameRepresentationValueType(instruction.result_ty, target.result_ty)) continue;
+        if (!targetTypeInstructionsSyntaxMatch(target, instruction)) continue;
         if (targetTypeInstructionSourceMatches(kind, target, instruction)) count += 1;
     };
     return count;
@@ -1177,6 +1206,7 @@ fn matchingTargetTypeFactsAgree(function: Function, kind: TargetTypeKind, instru
         if (fact.target_index != instruction.target_index) continue;
         if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
+        if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (!targetTypeSourceMatches(kind, fact, instruction)) continue;
         if (first) |expected| {
             if (!sema_type.sameTypeSyntax(expected, fact.target_ty)) return false;
@@ -6274,6 +6304,8 @@ const FunctionBuilder = struct {
 
     fn appendTargetTypeFact(self: *FunctionBuilder, kind: TargetTypeKind, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span) !void {
         try self.addInstr(.target_type, @tagName(kind), result_ty, span);
+        const instructions = &self.blocks.items[self.current].instructions;
+        instructions.items[instructions.items.len - 1].target_ty = target_ty;
         try self.target_type_facts.append(self.allocator, .{
             .kind = kind,
             .target_ty = target_ty,
@@ -6285,6 +6317,7 @@ const FunctionBuilder = struct {
     fn appendOwnedTargetTypeFact(self: *FunctionBuilder, kind: TargetTypeKind, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span, target_owner: []const u8, target_index: ?usize) !void {
         try self.addInstr(.target_type, @tagName(kind), result_ty, span);
         const instructions = &self.blocks.items[self.current].instructions;
+        instructions.items[instructions.items.len - 1].target_ty = target_ty;
         instructions.items[instructions.items.len - 1].target_index = target_index;
         instructions.items[instructions.items.len - 1].target_owner = target_owner;
         try self.target_type_facts.append(self.allocator, .{

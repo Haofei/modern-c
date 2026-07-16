@@ -251,7 +251,10 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
     try mir.validateIntegerFactsForLowering(module_mir.*);
     try mir.validateConstGetFactsForLowering(module_mir.*);
     try mir.validateCallTargetFactsForLowering(module_mir.*);
-    try mir.validateTargetTypeFactsForLowering(module_mir.*);
+    mir.validateTargetTypeFactsForLowering(module_mir.*) catch |err| switch (err) {
+        error.StaleMirTargetTypeFacts => return error.UnsupportedLlvmEmission,
+        else => return err,
+    };
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;

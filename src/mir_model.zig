@@ -115,6 +115,9 @@ pub const Instruction = struct {
     kind: Kind,
     result_ty: ValueType,
     detail: []const u8,
+    // Target-type instructions retain the complete semantic type separately
+    // from their runtime representation.
+    target_ty: ?ast.TypeExpr = null,
     const_index: ?usize = null,
     target_index: ?usize = null,
     target_owner: ?[]const u8 = null,

@@ -231,6 +231,13 @@ spelling-based initialization classifiers are retired. Atomic member operations
 remain covered by their separate receiver-derived payload facts; broader
 expression typing and typed-HIR/MIR remain open.
 
+Every MIR `target_type` instruction now also carries the complete source-level
+type syntax. Generic target-type admission compares that syntax with each
+prebuilt fact, in addition to source location, owner/index, and runtime
+representation. A stale complete fact is therefore classified before C or LLVM
+lowering; the backends preserve their existing unsupported-emission error
+surface while no longer decide whether the fact is stale.
+
 ### Semantic inference family register
 
 This register is the Phase 1 gate for backend semantic inference. Each row names

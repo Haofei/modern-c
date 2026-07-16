@@ -393,6 +393,33 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 }
 
+test "MIR target-type admission rejects stale complete syntax" {
+    const source =
+        \\fn read(pointer: *const u32) -> u32 {
+        \\    return pointer.*;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_stale_target_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const function = functionByNameMut(&typed_mir, "read") orelse return error.TestUnexpectedResult;
+    for (function.target_type_facts) |*fact| {
+        if (fact.kind != .expression_result) continue;
+        fact.target_ty = .{ .span = fact.target_ty.span, .kind = .{ .name = .{ .text = "u64", .span = fact.target_ty.span } } };
+        break;
+    } else return error.TestUnexpectedResult;
+
+    try std.testing.expectError(error.StaleMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
+}
+
 test "MIR owns implicit view const narrowing source and target types" {
     const source =
         \\fn consume(xs: []const u8) -> usize { return xs.len; }

@@ -881,7 +881,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/lower_c.zig": {
         "try mir.validateIntegerFactsForLowering(typed_mir.*);": 1,
         "try mir.validateConstGetFactsForLowering(typed_mir.*);": 1,
-        "try mir.validateTargetTypeFactsForLowering(typed_mir.*);": 1,
+        "mir.validateTargetTypeFactsForLowering(typed_mir.*) catch |err| switch (err)": 1,
     },
     "src/sema.zig": {
         "fn checkIntegerLiteralInitializer": 1,
@@ -1193,7 +1193,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         'ast_query.isIdentNamed(call.callee.*, "trap")': 0,
         "try mir.validateIntegerFactsForLowering(module_mir.*);": 1,
         "try mir.validateConstGetFactsForLowering(module_mir.*);": 1,
-        "try mir.validateTargetTypeFactsForLowering(module_mir.*);": 1,
+        "mir.validateTargetTypeFactsForLowering(module_mir.*) catch |err| switch (err)": 1,
         "fn mirTargetTypeFactAt(": 1,
         "fn mirTargetTypeFactAtOwned(": 1,
         "mirTargetTypeFactAtOwned(.direct_call_result": 3,
