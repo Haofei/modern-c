@@ -295,6 +295,9 @@ pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Stri
             };
             return inferred;
         },
+        // MIR records an exact result only for direct function addresses. Other
+        // address expressions retain their existing storage-driven paths.
+        .address_of => return ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span),
         .deref => return ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span),
         else => return null,
     }

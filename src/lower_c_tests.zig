@@ -1462,6 +1462,11 @@ test "lower-c compound expressions require complete MIR result facts" {
         \\    let value = left + 1;
         \\    return value;
         \\}
+        \\fn address_target(value: u32) -> u32 { return value + 1; }
+        \\fn function_address_result() -> u32 {
+        \\    let callback: fn(u32) -> u32 = &address_target;
+        \\    return callback(7);
+        \\}
     ;
     var parsed = try test_support.parseCheckedModule("c_expression_result_facts.mc", source);
     defer parsed.deinit();
@@ -1471,6 +1476,24 @@ test "lower-c compound expressions require complete MIR result facts" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null);
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const address_offset = std.mem.indexOf(u8, source, "&address_target") orelse return error.TestUnexpectedResult;
+        try removeTargetTypeFactAtOffsetForFunction(&module_mir, "function_address_result", .expression_result, address_offset, "&address_target".len);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const address_offset = std.mem.indexOf(u8, source, "&address_target") orelse return error.TestUnexpectedResult;
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "function_address_result", .expression_result, address_offset, "&address_target".len, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
         var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});

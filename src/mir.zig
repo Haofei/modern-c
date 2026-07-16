@@ -6217,10 +6217,10 @@ const FunctionBuilder = struct {
 
     fn addExpressionResultFact(self: *FunctionBuilder, expr: ast.Expr) !void {
         switch (expr.kind) {
-            .member, .index, .slice, .deref, .try_expr, .unary, .binary => {},
+            .member, .index, .slice, .deref, .try_expr, .unary, .binary, .address_of => {},
             else => return,
         }
-        const ty = self.expressionResultTypeExpr(expr) orelse return;
+        const ty = (try self.expressionResultTypeExpr(expr)) orelse return;
         try self.appendTargetTypeFact(
             .expression_result,
             ty,
@@ -6229,9 +6229,13 @@ const FunctionBuilder = struct {
         );
     }
 
-    fn expressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
+    fn expressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) !?ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
+            // A direct function address is a code pointer, not a pointer to a
+            // value. Its full signature belongs to MIR so backends cannot
+            // rebuild it from their separate function-signature maps.
+            .address_of => |inner| try self.functionAddressTypeExpr(expr.span, inner.*),
             // `&place` has no standalone type fact: the dereference result is
             // the already resolved storage type of that place.
             .deref => |inner| self.directAddressDerefTypeExpr(inner.*),
@@ -6247,6 +6251,21 @@ const FunctionBuilder = struct {
                 null,
             else => null,
         };
+    }
+
+    fn functionAddressTypeExpr(self: *FunctionBuilder, span: ast.Span, target: ast.Expr) !?ast.TypeExpr {
+        const name = directIdentName(target) orelse return null;
+        const summary = self.summaries.get(name) orelse return null;
+        const params = try self.allocator.alloc(ast.TypeExpr, summary.params.len);
+        errdefer self.allocator.free(params);
+        for (summary.params, 0..) |param, index| params[index] = param.ty;
+        try self.generated_type_expr_args.append(self.allocator, params);
+
+        const ret = try self.allocator.create(ast.TypeExpr);
+        errdefer self.allocator.destroy(ret);
+        ret.* = summary.return_type_expr orelse ast_query.simpleNameType("void", span);
+        try self.generated_type_expr_nodes.append(self.allocator, ret);
+        return .{ .span = span, .kind = .{ .fn_pointer = .{ .params = params, .ret = ret } } };
     }
 
     fn directAddressDerefTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {

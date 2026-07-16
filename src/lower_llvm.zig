@@ -8276,9 +8276,11 @@ const LlvmEmitter = struct {
             else
                 self.callReturnType(call),
             .cast => if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else null,
-            // `&f` where f is a function is already a code pointer (the fn_pointer type);
-            // do NOT wrap it in another pointer. `&x` for a value x is `*x`'s type.
-            .address_of => |inner| if (self.exprType(inner.*)) |ty|
+            // Direct function addresses have an exact MIR expression-result
+            // fact. Other addresses retain the existing storage-driven path.
+            .address_of => |inner| if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact|
+                fact.target_ty
+            else if (self.exprType(inner.*)) |ty|
                 (if (self.resolveAliasType(ty).kind == .fn_pointer) ty else self.pointerTypeFor(ty) catch null)
             else
                 null,
