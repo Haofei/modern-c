@@ -2189,30 +2189,6 @@ fn trackedSubplaceRoot(slot: MoveSlot, key: []const u8) ?[]const u8 {
     return if (place.isSubplace()) place.root else null;
 }
 
-// `&<ident>` (peeling `grouped`): the address of a binding ITSELF, so `*result` is that
-// binding. `&t.field`, `&t[i]`, and call results are NOT direct ident address-of.
-fn isDirectIdentAddressOf(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .grouped => |inner| isDirectIdentAddressOf(inner.*),
-        .address_of => |inner| switch (inner.*.kind) {
-            .ident => true,
-            .grouped => |g| g.*.kind == .ident,
-            else => false,
-        },
-        else => false,
-    };
-}
-
-// `let q = p` copying an existing full-deref alias `p`: `q` is also one (`*q` == `*p`).
-fn inheritedFullDerefAlias(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) bool {
-    switch (expr.kind) {
-        .ident => |id| if (state.get(id.text)) |s| return s.full_deref_alias,
-        .grouped => |inner| return inheritedFullDerefAlias(inner.*, state),
-        else => {},
-    }
-    return false;
-}
-
 fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) void {
     const place = aliasStoragePlaceForExpr(self, expr, state);
     var it = state.iterator();
@@ -2347,26 +2323,10 @@ fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.String
     if (directAliasReferentPlace(self, expr, state)) |pp| {
         return .{ .key = pp.key, .place = pp.place, .full_deref = true };
     }
-    const key = spine.aliasReferentOf(expr, state) orelse
-        return null;
-    var place: ?MovePlace = null;
-    switch (expr.kind) {
-        .ident => |id| if (state.get(id.text)) |slot| {
-            // The alias slot's typed referent is authoritative. Its formatted
-            // compatibility key may differ from the syntax spine after a
-            // rewrite, and cannot decide whether the alias is tracked.
-            if (slot.alias_of != null and place == null) place = slot.alias_place;
-        },
-        .grouped => |inner| if (aliasReferentForExpr(self, inner.*, state, aliases)) |inner_ref| {
-            if (place == null) place = inner_ref.place;
-        },
-        else => {},
-    }
-    return .{
-        .key = key,
-        .place = place,
-        .full_deref = isDirectIdentAddressOf(expr) or inheritedFullDerefAlias(expr, state),
-    };
+    // A stored alias already carries both its compatibility metadata and its
+    // semantic referent place. Do not re-parse a root key from the expression:
+    // key-only aliases are intentionally not registered as tracked aliases.
+    return carriedAliasReferentForExpr(expr, state);
 }
 
 fn directAliasReferentPlace(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?PlaceKeyTy {
@@ -2438,10 +2398,10 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
             // move out of the alias; the owner must be moved directly. A non-move deref
             // (`f(*p)` for a scalar) is an ordinary borrow and still flows through.
             // Detect a move-out THROUGH an alias of a tracked move binding (`*p` where
-            // `p = &o`): `aliasReferentOf` resolves `p` back to `o`, and only move
-            // bindings/aliases live in `state`, so a scalar `*u32` deref never matches
-            // (it stays a borrow). The type-based check is a fallback for derefs whose
-            // result type the move Context can resolve (it cannot for local pointer vars).
+            // `p = &o`) from the alias's carried typed referent. Scalar `*u32` derefs
+            // carry no move alias fact and remain ordinary borrows. The type-based check
+            // is a fallback for derefs whose result type the move Context can resolve
+            // (it cannot for local pointer vars).
             // A `full_deref_alias` (`p = &o`) makes `*p` the move binding itself, so consuming
             // it moves the resource out THROUGH the alias — reject (the type-based check below
             // cannot see this: the move Context does not carry local pointer-var types). A

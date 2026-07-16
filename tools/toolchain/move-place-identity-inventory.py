@@ -53,6 +53,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "aliasPlaceKey": 0,
         "aliasPlaceIndex": 0,
         "callLaunderedMoveReferent": 0,
+        "spine.aliasReferentOf": 0,
         "invalidated_aliases": 0,
         "trackedMoveReferentPlaceForKey": 0,
         "markEscapedBorrowForReferentKey": 0,
