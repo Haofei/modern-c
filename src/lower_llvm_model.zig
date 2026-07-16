@@ -5,6 +5,7 @@ pub const LocalSlot = struct {
     ty: ast.TypeExpr,
     ptr: []const u8,
     kind: LocalSlotKind = .normal,
+    is_mutable: bool = false,
 };
 
 pub const LocalSlotKind = enum {

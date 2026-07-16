@@ -13,6 +13,7 @@ const CheckedHelperParts = lower_c_op.CheckedHelperParts;
 
 pub const LocalInfo = struct {
     source_ty: ?ast.TypeExpr = null,
+    is_mutable: bool = false,
     c_type: ?[]const u8 = null,
     source_type_name: ?[]const u8 = null,
     // Value-range propagation: compile-time-constant value of an immutable (`let`)
@@ -289,6 +290,7 @@ pub const GlobalInfo = struct {
     // An aggregate (struct) global: there is no scalar atomic race helper for it, so
     // load/store lower to a plain C struct copy rather than mc_race_load/store_<T>.
     aggregate: bool = false,
+    is_const: bool = false,
     source_ty: ?ast.TypeExpr = null,
     array_element_info: ?GlobalElementInfo = null,
     array_len: ?[]const u8 = null,

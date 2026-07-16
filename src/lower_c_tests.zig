@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const lower_c = @import("lower_c.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -169,6 +170,23 @@ fn renameTargetTypeFactAtOffsetForFunction(module_mir: *mir.Module, name: []cons
         for (function.target_type_facts) |*fact| {
             if (fact.kind != kind or fact.source.offset != source_offset or fact.source.len != source_len) continue;
             fact.target_ty = .{ .span = fact.target_ty.span, .kind = .{ .name = .{ .text = target_name, .span = fact.target_ty.span } } };
+            return;
+        }
+        return error.TestUnexpectedResult;
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn retargetPointerMutabilityFactAtOffsetForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind, source_offset: usize, source_len: usize, mutability: ast.Mutability) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        for (function.target_type_facts) |*fact| {
+            if (fact.kind != kind or fact.source.offset != source_offset or fact.source.len != source_len) continue;
+            const pointer = switch (fact.target_ty.kind) {
+                .pointer => |node| node,
+                else => return error.TestUnexpectedResult,
+            };
+            fact.target_ty.kind = .{ .pointer = .{ .mutability = mutability, .child = pointer.child } };
             return;
         }
         return error.TestUnexpectedResult;
@@ -1472,6 +1490,17 @@ test "lower-c compound expressions require complete MIR result facts" {
         \\    let pointer: *const u32 = &value;
         \\    return pointer.*;
         \\}
+        \\fn inferred_data_address_result() -> u32 {
+        \\    let value: u32 = 7;
+        \\    let pointer = &value;
+        \\    return pointer.*;
+        \\}
+        \\fn mutable_inferred_data_address_result() -> u32 {
+        \\    var value: u32 = 7;
+        \\    let pointer = &value;
+        \\    pointer.* = 8;
+        \\    return value;
+        \\}
     ;
     var parsed = try test_support.parseCheckedModule("c_expression_result_facts.mc", source);
     defer parsed.deinit();
@@ -1496,6 +1525,16 @@ test "lower-c compound expressions require complete MIR result facts" {
         defer module_mir.deinit();
         const address_offset = std.mem.indexOf(u8, source, "&address_target") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "function_address_result", .expression_result, address_offset, "&address_target".len, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const function_offset = std.mem.indexOf(u8, source, "fn inferred_data_address_result") orelse return error.TestUnexpectedResult;
+        const address_offset = std.mem.indexOfPos(u8, source, function_offset, "&value") orelse return error.TestUnexpectedResult;
+        try retargetPointerMutabilityFactAtOffsetForFunction(&module_mir, "inferred_data_address_result", .inferred_local, address_offset, "&value".len, .mut);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));

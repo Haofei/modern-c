@@ -294,6 +294,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
+        .global_is_const = std.StringHashMap(bool).init(allocator),
         .global_initializers = std.StringHashMap(ast.Expr).init(allocator),
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
@@ -444,6 +445,7 @@ const LlvmEmitter = struct {
     // achieves the same via an asm label).
     backend_names: std.StringHashMap([]const u8) = undefined,
     global_types: std.StringHashMap(ast.TypeExpr) = undefined,
+    global_is_const: std.StringHashMap(bool) = undefined,
     global_initializers: std.StringHashMap(ast.Expr) = undefined,
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
@@ -531,6 +533,7 @@ const LlvmEmitter = struct {
         self.bind_thunks.deinit();
         self.backend_names.deinit();
         self.global_types.deinit();
+        self.global_is_const.deinit();
         self.global_initializers.deinit();
         self.local_types.deinit();
         self.local_slots.deinit();
@@ -667,6 +670,7 @@ const LlvmEmitter = struct {
         const ty = global.ty orelse return error.UnsupportedLlvmEmission;
         _ = try self.llvmType(ty);
         try self.global_types.put(global.name.text, ty);
+        try self.global_is_const.put(global.name.text, global.is_const);
         if (global.init) |expr| try self.global_initializers.put(global.name.text, expr);
     }
 
@@ -1611,8 +1615,8 @@ const LlvmEmitter = struct {
 
     fn emitStmt(self: *LlvmEmitter, stmt: ast.Stmt, ret_ty: ast.TypeExpr) anyerror!bool {
         switch (stmt.kind) {
-            .let_decl => |local| try self.emitLocalDecl(local),
-            .var_decl => |local| try self.emitLocalDecl(local),
+            .let_decl => |local| try self.emitLocalDecl(local, false),
+            .var_decl => |local| try self.emitLocalDecl(local, true),
             .assignment => |node| try self.emitAssignment(node.target, node.value, stmt.span),
             .@"defer" => |expr| try self.defer_stack.append(self.allocator, expr),
             .loop => |node| {
@@ -2393,7 +2397,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl) !void {
+    fn emitLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl, is_mutable: bool) !void {
         if (local.names.len != 1) return error.UnsupportedLlvmEmission;
         const init = local.init orelse return error.UnsupportedLlvmEmission;
         const ty = if (local.ty) |decl_ty|
@@ -2413,7 +2417,7 @@ const LlvmEmitter = struct {
         if (self.isVaListType(ty)) {
             try self.emitAlloca(ptr, try self.vaListStorageType());
             try self.local_types.put(name, ty);
-            try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr, .kind = .va_list_local });
+            try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr, .kind = .va_list_local, .is_mutable = is_mutable });
             const dst = try self.vaListCursorPtrFromStorage(ptr);
             if (init.kind == .call) {
                 if (self.mirCallTargetKindAt(init.kind.call.callee.*.span)) |kind| {
@@ -2432,7 +2436,7 @@ const LlvmEmitter = struct {
         const llvm_ty = try self.llvmType(ty);
         try self.emitAlloca(ptr, llvm_ty);
         try self.local_types.put(name, ty);
-        try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
+        try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr, .is_mutable = is_mutable });
         try self.updatePointerProvenanceFromMirOrLocalProof(name, ty, init, .emit_comment);
         try self.updateAggregatePointerAliasProvenance(name, ty, init);
         try self.updateLocalPointerArrayAliasProvenanceFromInit(name, ty, init);
@@ -2481,12 +2485,13 @@ const LlvmEmitter = struct {
 
     fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast.Expr) !ast.TypeExpr {
         const fact_ty = (self.mirTargetTypeFactAtOwned(.inferred_local, initializer.span, name, null) orelse return error.UnsupportedLlvmEmission).target_ty;
-        if (self.directAddressOfLocalPointeeType(initializer)) |pointee_ty| {
+        if (self.directAddressOfLocalPlace(initializer)) |place| {
             const pointer = switch (self.resolveAliasType(fact_ty).kind) {
                 .pointer => |node| node,
                 else => return error.UnsupportedLlvmEmission,
             };
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(pointee_ty))) return error.UnsupportedLlvmEmission;
+            if (pointer.mutability != place.mutability) return error.UnsupportedLlvmEmission;
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(place.ty))) return error.UnsupportedLlvmEmission;
             return fact_ty;
         }
         if (try self.requireMirTryExpressionResultType(initializer)) |known_ty| {
@@ -2536,24 +2541,34 @@ const LlvmEmitter = struct {
         };
     }
 
-    // The MIR fact owns the pointer qualification for this bounded `&local`
-    // form. The backend uses the source local only to reject a stale pointee.
-    fn directAddressOfLocalPointeeType(self: *LlvmEmitter, initializer: ast.Expr) ?ast.TypeExpr {
+    const DirectAddressPlace = struct {
+        ty: ast.TypeExpr,
+        mutability: ast.Mutability,
+    };
+
+    // The MIR fact owns the address result. The backend checks the direct source
+    // place only to reject stale pointee or pointer-qualification facts.
+    fn directAddressOfLocalPlace(self: *LlvmEmitter, initializer: ast.Expr) ?DirectAddressPlace {
         return switch (initializer.kind) {
-            .address_of => |inner| self.directAddressOfLocalPlaceType(inner.*),
-            .grouped => |inner| self.directAddressOfLocalPointeeType(inner.*),
+            .address_of => |inner| self.directAddressOfLocalPlaceInfo(inner.*),
+            .grouped => |inner| self.directAddressOfLocalPlace(inner.*),
             else => null,
         };
     }
 
-    fn directAddressOfLocalPlaceType(self: *LlvmEmitter, operand: ast.Expr) ?ast.TypeExpr {
+    fn directAddressOfLocalPlaceInfo(self: *LlvmEmitter, operand: ast.Expr) ?DirectAddressPlace {
         return switch (operand.kind) {
-            .ident => |ident| self.local_types.get(ident.text),
-            .member => |node| if (self.directAddressOfLocalPlaceType(node.base.*) != null) self.exprType(operand) else null,
+            .ident => |ident| blk: {
+                if (self.local_slots.get(ident.text)) |slot| break :blk .{ .ty = slot.ty, .mutability = if (slot.is_mutable) .mut else .@"const" };
+                if (self.local_types.get(ident.text)) |ty| break :blk .{ .ty = ty, .mutability = .@"const" };
+                if (self.global_types.get(ident.text)) |ty| break :blk .{ .ty = ty, .mutability = if (self.global_is_const.get(ident.text) orelse true) .@"const" else .mut };
+                break :blk null;
+            },
+            .member => |node| if (self.directAddressOfLocalPlaceInfo(node.base.*)) |base| .{ .ty = self.exprType(operand) orelse return null, .mutability = base.mutability } else null,
             .index => |node| blk: {
-                const base_ty = self.directAddressOfLocalPlaceType(node.base.*) orelse break :blk null;
-                if (self.resolveAliasType(base_ty).kind != .array) break :blk null;
-                break :blk self.exprType(operand);
+                const base = self.directAddressOfLocalPlaceInfo(node.base.*) orelse break :blk null;
+                if (self.resolveAliasType(base.ty).kind != .array) break :blk null;
+                break :blk .{ .ty = self.exprType(operand) orelse break :blk null, .mutability = base.mutability };
             },
             .deref => |inner| blk: {
                 const pointer_ty = self.directAddressOfLocalPointerType(inner.*) orelse break :blk null;
@@ -2562,9 +2577,9 @@ const LlvmEmitter = struct {
                     .pointer, .raw_many_pointer => {},
                     .slice => break :blk null,
                 }
-                break :blk self.exprType(operand);
+                break :blk .{ .ty = self.exprType(operand) orelse break :blk null, .mutability = view.mutability };
             },
-            .grouped => |inner| self.directAddressOfLocalPlaceType(inner.*),
+            .grouped => |inner| self.directAddressOfLocalPlaceInfo(inner.*),
             else => null,
         };
     }

@@ -505,7 +505,11 @@ const CEmitter = struct {
     }
 
     fn collectGlobalDeclArtifact(self: *CEmitter, global: ast.GlobalDecl) !void {
-        if (global.ty) |ty| try self.globals.put(global.name.text, try self.globalInfoFromType(ty));
+        if (global.ty) |ty| {
+            var info = try self.globalInfoFromType(ty);
+            info.is_const = global.is_const;
+            try self.globals.put(global.name.text, info);
+        }
         if (global.ty) |ty| try self.collectTypeArtifacts(ty);
     }
 
@@ -2782,6 +2786,7 @@ const CEmitter = struct {
 
     fn localDeclInfo(self: *CEmitter, local: ast.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo)) !LocalInfo {
         var info = if (local.ty) |decl_ty| try self.localInfoFromType(decl_ty) else LocalInfo{};
+        info.is_mutable = !is_let;
         if (is_let and local.names.len == 1) {
             if (local.ty) |decl_ty| {
                 if (local.init) |initializer| {
@@ -2884,19 +2889,68 @@ const CEmitter = struct {
             .grouped => |inner| return try self.emitAddressOfInferredLocalInit(name, inner.*, locals),
             else => return false,
         };
-        const pointee_ty = self.operandEmitType(operand, locals) orelse return false;
+        const place = self.directAddressPlaceInfo(operand, locals) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, null)) orelse return error.UnsupportedCEmission;
         const pointer = switch (self.resolveAliasType(inferred_ty).kind) {
             .pointer => |node| node,
             else => return error.UnsupportedCEmission,
         };
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(pointee_ty))) return error.UnsupportedCEmission;
-        try locals.put(name, try self.localInfoFromType(inferred_ty));
+        if (pointer.mutability != place.mutability) return error.UnsupportedCEmission;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(place.ty))) return error.UnsupportedCEmission;
+        var info = try self.localInfoFromType(inferred_ty);
+        if (locals.get(name)) |existing| info.is_mutable = existing.is_mutable;
+        try locals.put(name, info);
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExprWithTarget(initializer, locals, inferred_ty);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
+    }
+
+    const DirectAddressPlace = struct {
+        ty: ast.TypeExpr,
+        mutability: ast.Mutability,
+    };
+
+    fn directAddressPlaceInfo(self: *CEmitter, operand: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?DirectAddressPlace {
+        return switch (operand.kind) {
+            .ident => |ident| blk: {
+                if (locals.get(ident.text)) |info| {
+                    const ty = info.source_ty orelse break :blk null;
+                    break :blk .{ .ty = ty, .mutability = if (info.is_mutable) .mut else .@"const" };
+                }
+                if (self.globals.get(ident.text)) |info| {
+                    const ty = info.source_ty orelse break :blk null;
+                    break :blk .{ .ty = ty, .mutability = if (info.is_const) .@"const" else .mut };
+                }
+                break :blk null;
+            },
+            .member => |node| if (self.directAddressPlaceInfo(node.base.*, locals)) |base| .{ .ty = self.operandEmitType(operand, locals) orelse return null, .mutability = base.mutability } else null,
+            .index => |node| blk: {
+                const base = self.directAddressPlaceInfo(node.base.*, locals) orelse break :blk null;
+                if (self.resolveAliasType(base.ty).kind != .array) break :blk null;
+                break :blk .{ .ty = self.operandEmitType(operand, locals) orelse break :blk null, .mutability = base.mutability };
+            },
+            .deref => |inner| blk: {
+                const pointer_ty = self.directAddressOfLocalPointerType(inner.*, locals) orelse break :blk null;
+                const view = sema_type.viewType(self.resolveAliasType(pointer_ty)) orelse break :blk null;
+                const mutability = switch (view.kind) {
+                    .pointer, .raw_many_pointer => view.mutability,
+                    else => break :blk null,
+                };
+                break :blk .{ .ty = self.operandEmitType(operand, locals) orelse break :blk null, .mutability = mutability };
+            },
+            .grouped => |inner| self.directAddressPlaceInfo(inner.*, locals),
+            else => null,
+        };
+    }
+
+    fn directAddressOfLocalPointerType(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .ident => |ident| if (locals.get(ident.text)) |info| info.source_ty else null,
+            .grouped => |inner| self.directAddressOfLocalPointerType(inner.*, locals),
+            else => null,
+        };
     }
 
     // A direct `source?` initializer is already typed by the MIR-owned operand
