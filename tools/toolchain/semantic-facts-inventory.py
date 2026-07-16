@@ -974,6 +974,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "numeric_expr_type:": 0,
     },
     "src/lower_c_infer.zig": {
+        "pub fn numericExprTypeForEmission(": 1,
         "mir_owned_target_type(ctx.source_ctx, .direct_call_result": 1,
         "mir_target_type(ctx.source_ctx, .qualified_union_result": 1,
         "mir_target_type(ctx.source_ctx, .enum_variant_path_result": 1,
@@ -1253,6 +1254,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn requireMirBoundsFact": 1,
         "try self.requireMirBoundsFact(": 5,
         "fn requireMirNoOverflowRangeFact": 1,
+        "fn requireMirBinaryExpressionResultType": 1,
         "try self.requireMirNoOverflowRangeFact(": 1,
         "current_mir_range_target": 5,
         "mir range_fact consumed": 1,

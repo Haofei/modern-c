@@ -2490,6 +2490,10 @@ const LlvmEmitter = struct {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
             return fact_ty;
         }
+        if (try self.requireMirBinaryExpressionResultType(initializer)) |known_ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
+            return fact_ty;
+        }
         if (self.exprType(initializer) orelse inferredLocalLiteralType(initializer) orelse self.inferredLocalCallReturnType(initializer)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
         }
@@ -2506,6 +2510,22 @@ const LlvmEmitter = struct {
                     info.ok_ty
                 else
                     self.nullableInnerType(operand_ty) orelse return error.UnsupportedLlvmEmission;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
+                break :blk result_ty;
+            },
+            else => null,
+        };
+    }
+
+    fn requireMirBinaryExpressionResultType(self: *LlvmEmitter, initializer: ast.Expr) !?ast.TypeExpr {
+        return switch (initializer.kind) {
+            .grouped => |inner| try self.requireMirBinaryExpressionResultType(inner.*),
+            .binary => |node| blk: {
+                const result_ty = (self.mirTargetTypeFactAt(.expression_result, initializer.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+                const expected_ty = if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or)
+                    simpleType(initializer.span, "bool")
+                else
+                    self.exprType(node.left.*) orelse return error.UnsupportedLlvmEmission;
                 if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
                 break :blk result_ty;
             },
@@ -8251,7 +8271,7 @@ const LlvmEmitter = struct {
                 if (self.memberField(node.base.*, node.name.text)) |field| break :blk field.ty;
                 break :blk null;
             } else null),
-            .binary => |node| self.expressionResultType(expr, if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*)),
+            .binary => |node| self.requireExpressionResultType(expr, if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*)),
             .try_expr => |node| self.tryExpressionResultType(expr, node.operand.*),
             else => null,
         };
@@ -8259,6 +8279,13 @@ const LlvmEmitter = struct {
 
     fn expressionResultType(self: *LlvmEmitter, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {
         const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return inferred;
+        const expected = inferred orelse return fact.target_ty;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected))) return null;
+        return fact.target_ty;
+    }
+
+    fn requireExpressionResultType(self: *LlvmEmitter, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {
+        const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
         const expected = inferred orelse return fact.target_ty;
         if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected))) return null;
         return fact.target_ty;

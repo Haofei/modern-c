@@ -400,6 +400,16 @@ pub fn structTypeNameForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
 }
 
 pub fn numericExprTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    if (expr.kind == .binary) {
+        const fact = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return null;
+        const resolved_fact = resolveAliasType(ctx, fact);
+        if (!isNumericStorageType(resolved_fact)) return null;
+        const inferred = numericExprTypeForEmissionInferred(ctx, expr, locals);
+        if (inferred) |ty| {
+            if (!sameCStorageType(resolved_fact, resolveAliasType(ctx, ty))) return null;
+        }
+        return fact;
+    }
     return expressionResultTypeOptional(ctx, expr, numericExprTypeForEmissionInferred(ctx, expr, locals));
 }
 
