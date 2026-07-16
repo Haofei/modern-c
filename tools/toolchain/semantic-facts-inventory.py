@@ -960,7 +960,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "global_pointer_return_fns": 0,
         "fn collectGlobalPointerProvenanceSummaries": 0,
         "fn derefAccessLowering(": 1,
-        "try self.derefAccessLowering(": 2,
+        "try self.derefAccessLowering(": 1,
         "fn derefPointerHasProvenLocalStorage(": 1,
     },
     "src/lower_c_convert.zig": {

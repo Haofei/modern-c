@@ -7524,7 +7524,7 @@ const CEmitter = struct {
                 break :blk fact.target_ty;
             },
             .grouped => |inner| self.exprSourceTypeForEmission(inner.*, locals),
-            .binary => |node| self.binarySourceTypeForEmission(node, locals),
+            .binary => |node| self.binarySourceTypeForEmission(expr, node, locals),
             .unary => |node| if (node.op == .neg) self.exprSourceTypeForEmission(node.expr.*, locals) else null,
             else => null,
         };
@@ -7550,12 +7550,17 @@ const CEmitter = struct {
         return info.return_type;
     }
 
-    fn binarySourceTypeForEmission(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        return switch (node.op) {
+    fn binarySourceTypeForEmission(self: *CEmitter, expr: ast.Expr, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
+        const inferred = switch (node.op) {
+            .eq, .ne, .lt, .le, .gt, .ge, .logical_and, .logical_or => ast_query.simpleNameType("bool", expr.span),
             .shl, .shr => self.exprSourceTypeForEmission(node.left.*, locals),
-            .eq, .ne, .lt, .le, .gt, .ge, .logical_and, .logical_or => null,
             else => self.exprSourceTypeForEmission(node.left.*, locals) orelse self.exprSourceTypeForEmission(node.right.*, locals),
         };
+        if (inferred) |ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(ty))) return null;
+        }
+        return fact.target_ty;
     }
 
     fn nullableInnerCTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?[]const u8 {
