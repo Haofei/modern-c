@@ -4968,12 +4968,25 @@ const LlvmEmitter = struct {
         const target_path = direct_target_path orelse
             (try self.aggregatePointerAliasAssignmentPath(base, field_name)) orelse return;
         if (self.isPointerLikeType(field_ty)) {
-            if (direct_target_path != null and try self.applyMirAggregatePointerFieldFactsAtSource(target_path.local_name, target_path.field_path, null, value_expr.span)) return;
-            if (direct_target_path != null and self.directMirPointerContainerValueExpr(value_expr)) {
+            if (direct_target_path != null) {
+                if (try self.applyMirAggregatePointerFieldFactsAtSource(target_path.local_name, target_path.field_path, null, value_expr.span)) return;
+                if (self.directMirPointerContainerValueExpr(value_expr)) {
+                    try self.setAggregatePointerFieldProvenance(target_path.local_name, target_path.field_path, .unknown);
+                    return;
+                }
+                try self.setAggregatePointerFieldProvenance(target_path.local_name, target_path.field_path, self.pointerExprStorageProvenance(value_expr));
+                return;
+            }
+
+            // MIR records an alias write under the alias subject and explicitly
+            // invalidates the backing aggregate field. Do not turn the alias's
+            // syntactic RHS into a backing-local proof here.
+            if (try self.applyMirAggregatePointerFieldFactsAtSource(target_path.local_name, target_path.field_path, null, value_expr.span)) return;
+            if (self.directMirPointerContainerValueExpr(value_expr)) {
                 try self.setAggregatePointerFieldProvenance(target_path.local_name, target_path.field_path, .unknown);
                 return;
             }
-            try self.setAggregatePointerFieldProvenance(target_path.local_name, target_path.field_path, self.pointerExprStorageProvenance(value_expr));
+            try self.setAggregatePointerFieldProvenance(target_path.local_name, target_path.field_path, .unknown);
             return;
         }
 

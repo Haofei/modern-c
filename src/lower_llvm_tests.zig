@@ -9086,6 +9086,31 @@ test "LLVM local aggregate pointer aliases require MIR destination facts" {
     try expectNotContains(missing_element, "load i32, ptr %");
 }
 
+test "LLVM aggregate alias writes do not prove backing aggregate fields" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\struct Holder { ptr: *mut u32 }
+        \\
+        \\fn aggregate_alias_write_backing_read_stays_conservative() -> u32 {
+        \\    var local: u32 = 0;
+        \\    var holder: Holder = .{ .ptr = &shared_counter };
+        \\    let hp: *mut Holder = &holder;
+        \\    hp.ptr = &local;
+        \\    return holder.ptr.*;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_aggregate_alias_write_backing_read.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @aggregate_alias_write_backing_read_stays_conservative");
+    try expectContains(body, "load atomic i32, ptr %");
+    try expectContains(body, " unordered, align 4");
+    try expectNotContains(body, "load i32, ptr %");
+}
+
 test "LLVM local pointer-array aliases require MIR destination facts" {
     const source =
         \\fn local_pointer_array_alias_requires_mir_fact() -> u32 {
