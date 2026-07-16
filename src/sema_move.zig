@@ -2286,7 +2286,8 @@ fn immediateFullDerefMoveReferent(self: *Checker, expr: ast.Expr, state: *const 
         return .{ .key = referent.key, .place = referent.place, .full_deref = true };
     }
     const root = spine.borrowedMoveRoot(expr, state) orelse return null;
-    return .{ .key = root, .place = null, .full_deref = true };
+    const place = trackedMoveReferentPlaceForKey(root, state) orelse return null;
+    return .{ .key = place.root, .place = place, .full_deref = true };
 }
 
 fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {

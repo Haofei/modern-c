@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **656 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **657 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -773,6 +773,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | C overlay return-hoisting result types are MIR-owned | The C overlay scalar-member return specialization now requires the member's full-span MIR `expression_result` fact before it chooses the overlay field representation. The resolved field type is used only to reject a stale fact; missing facts cannot authorize the hoisted return. LLVM's direct member emission already consumes the same fact, while overlay view returns remain a separate boundary. | `src/mir.zig` `addExpressionResultFact`; `src/lower_c_emitter.zig` `emitOverlayFieldReadReturn` / `requireOverlayReturnExpressionResult`; `src/lower_c_tests.zig` `compound expressions require complete MIR result facts`; focused C test; full production gate; `git diff --check`. |
 
 | C overlay view return-hoisting result types are MIR-owned | The C overlay byte-view return specialization now requires the indexed expression's full-span MIR `expression_result` fact before it emits the storage element read. The overlay element type only rejects stale facts; missing facts cannot authorize the hoisted return. LLVM already requires the same fact for overlay index loads; non-byte view return lowering remains separate. | `src/mir.zig` `addExpressionResultFact`; `src/lower_c_emitter.zig` `requireOverlayReturnExpressionResult`; `src/lower_c_tests.zig` `compound expressions require complete MIR result facts`; focused C test; full production gate; `git diff --check`. |
+
+| Move checker immediate full dereferences require typed referent places | The legacy immediate full-dereference fallback no longer returns a root-name-only alias referent. It recovers a live typed place from the state slot and carries that place into the common consumer; missing place metadata leaves the form untracked instead of granting string-key ownership authority. This is one M1.1 migration, not completion of direct dereference ownership analysis. | `src/sema_move.zig` `immediateFullDerefMoveReferent` / `trackedMoveReferentPlaceForKey`; immediate-full-deref move spec cases; `zig test src/sema_move.zig`; `zig test src/sema_tests.zig`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 
