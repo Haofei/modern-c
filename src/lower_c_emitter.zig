@@ -4894,6 +4894,10 @@ const CEmitter = struct {
                 const field_ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return error.UnsupportedCEmission).target_ty;
                 if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
             },
+            .index => |node| if (self.overlayIndexResultType(node, locals)) |inferred_element_ty| {
+                const element_ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return error.UnsupportedCEmission).target_ty;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(inferred_element_ty))) return error.UnsupportedCEmission;
+            },
             else => {},
         }
     }
