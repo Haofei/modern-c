@@ -1725,6 +1725,19 @@ test "move stale aliases recover typed referent places from state slots" {
     try std.testing.expect(!aliasSlotReferentMoved(.{ .live = false, .span = span, .alias_of = "legacy" }, &state));
 }
 
+test "move pointer-return aliases recover typed referent places from state slots" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    try std.testing.expect(trackedMoveReferentPlaceForKey("compat:owner", &state).?.eql(root));
+
+    try state.put("legacy", .{ .live = true, .span = span });
+    try std.testing.expect(trackedMoveReferentPlaceForKey("legacy", &state) == null);
+}
+
 test "move deferred aliases recover typed places from their state slots" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-defer-alias-place.mc", "");
     defer reporter.deinit();
@@ -2028,6 +2041,14 @@ fn aliasReferentIsTracked(referent: AliasReferent, state: *const std.StringHashM
     const referent_slot = state.get(referent.key) orelse return false;
     const place = referent_slot.place orelse return false;
     return rootMoveSlotForPlace(place, state) != null;
+}
+
+fn trackedMoveReferentPlaceForKey(key: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
+    const slot = state.get(key) orelse return null;
+    const place = slot.place orelse return null;
+    const root = rootMoveSlotForPlace(place, state) orelse return null;
+    if (!root.live or root.alias_of != null) return null;
+    return place;
 }
 
 fn aliasReferentRoot(referent: AliasReferent) []const u8 {
@@ -3892,18 +3913,17 @@ fn callLaunderedMoveAliasReferent(self: *Checker, init_expr: ast.Expr, state: *c
             continue;
         }
         const root = spine.borrowedMoveRoot(arg, state) orelse blk: {
-            // an alias local `p` passed by value (→ its referent `t`)
-            if (spine.aliasReferentOf(arg, state)) |referent| {
-                if (state.contains(referent)) break :blk referent;
-            }
+            // An alias local `p` passed by value refers to its typed source
+            // place; its compatibility spelling is only a state-map index.
+            if (spine.aliasReferentOf(arg, state)) |referent| break :blk referent;
             continue;
         };
         // Only register the laundered alias while the root is still LIVE. If it was already
         // moved, the borrow of it (the `&t` arg) is itself the use-after-move and is reported
         // by moveBorrow at the call — registering an alias here would double-report on the
         // later `q.*` use.
-        if (state.getPtr(root)) |slot| {
-            if (slot.live and slot.alias_of == null) return .{ .key = root, .place = slot.place, .full_deref = false };
+        if (trackedMoveReferentPlaceForKey(root, state)) |place| {
+            return .{ .key = place.root, .place = place, .full_deref = false };
         }
     }
     return null;
