@@ -332,22 +332,16 @@ pub fn arrayTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
 }
 
 pub fn exprIsPointer(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
-    const set = locals orelse return false;
     return switch (expr.kind) {
         .ident => |id| blk: {
+            const set = locals orelse break :blk false;
             const info = set.get(id.text) orelse break :blk false;
             const ty = info.source_ty orelse break :blk false;
             break :blk resolveAliasType(ctx, ty).kind == .pointer;
         },
-        .member => |m| blk: {
-            const sname = structTypeNameForExpr(ctx, m.base.*, locals) orelse break :blk false;
-            const sdecl = ctx.structs.get(sname) orelse break :blk false;
-            for (sdecl.fields) |f| {
-                if (std.mem.eql(u8, f.name.text, m.name.text)) {
-                    break :blk resolveAliasType(ctx, f.ty).kind == .pointer;
-                }
-            }
-            break :blk false;
+        .member => blk: {
+            const result_ty = operandEmitType(ctx, expr, locals) orelse break :blk false;
+            break :blk resolveAliasType(ctx, result_ty).kind == .pointer;
         },
         .grouped => |inner| exprIsPointer(ctx, inner.*, locals),
         else => false,

@@ -1760,6 +1760,44 @@ test "lower-c nested array member and index results require MIR expression facts
     }
 }
 
+test "lower-c nested pointer members require MIR expression facts" {
+    const source =
+        \\struct Leaf { value: u32 }
+        \\struct Holder { child: *Leaf }
+        \\fn read_nested_member(holder: Holder) -> u32 {
+        \\    return holder.child.value;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_pointer_member_expression_result_facts.mc", source);
+    defer parsed.deinit();
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_pointer_member_expression_result_facts.mc", .{}, false, null);
+        try expectContains(output.items, "holder.child->value");
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const member_offset = std.mem.indexOf(u8, source, "holder.child") orelse return error.TestUnexpectedResult;
+        try removeTargetTypeFactAtOffsetForFunction(&module_mir, "read_nested_member", .expression_result, member_offset, "holder.child".len);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_pointer_member_expression_result_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const member_offset = std.mem.indexOf(u8, source, "holder.child") orelse return error.TestUnexpectedResult;
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "read_nested_member", .expression_result, member_offset, "holder.child".len, "u32");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_pointer_member_expression_result_facts.mc", .{}, false, null));
+    }
+}
+
 test "lower-c MMIO calls consume MIR identities and complete types" {
     const source =
         \\packed bits Status: u8 { ready: bool }
