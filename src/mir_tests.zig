@@ -1256,6 +1256,28 @@ test "MIR owns inferred local direct address types" {
         \\    let pointer = &values[0];
         \\    return pointer.*;
         \\}
+        \\fn address_pointee() -> u32 {
+        \\    var value: u32 = 4;
+        \\    let source: *mut u32 = &value;
+        \\    let pointer = &source.*;
+        \\    pointer.* = 9;
+        \\    return pointer.*;
+        \\}
+        \\fn address_const_pointee() -> u32 {
+        \\    let value: u32 = 4;
+        \\    let source: *const u32 = &value;
+        \\    let pointer = &source.*;
+        \\    return pointer.*;
+        \\}
+        \\fn address_raw_many_pointee() -> u32 {
+        \\    var value: u32 = 4;
+        \\    let source: [*]mut u32 = (&value) as [*]mut u32;
+        \\    unsafe {
+        \\        let pointer = &source.*;
+        \\        pointer.* = 9;
+        \\        return pointer.*;
+        \\    }
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_local_address_types.mc", source);
@@ -1285,6 +1307,14 @@ test "MIR owns inferred local direct address types" {
     try std.testing.expectEqualStrings("u32", element_fact.target_ty.kind.pointer.child.kind.name.text);
     const const_element_fact = targetTypeFactByKind(functionByName(typed_mir, "address_const_element").?, .inferred_local) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(ast.Mutability.@"const", const_element_fact.target_ty.kind.pointer.mutability);
+    const pointee_fact = targetTypeFactByKind(functionByName(typed_mir, "address_pointee").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ast.Mutability.mut, pointee_fact.target_ty.kind.pointer.mutability);
+    try std.testing.expectEqualStrings("u32", pointee_fact.target_ty.kind.pointer.child.kind.name.text);
+    const const_pointee_fact = targetTypeFactByKind(functionByName(typed_mir, "address_const_pointee").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ast.Mutability.@"const", const_pointee_fact.target_ty.kind.pointer.mutability);
+    const raw_many_pointee_fact = targetTypeFactByKind(functionByName(typed_mir, "address_raw_many_pointee").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ast.Mutability.mut, raw_many_pointee_fact.target_ty.kind.pointer.mutability);
+    try std.testing.expectEqualStrings("u32", raw_many_pointee_fact.target_ty.kind.pointer.child.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 

@@ -4322,12 +4322,13 @@ const FunctionBuilder = struct {
     }
 
     // This narrow inferred-address slice is deliberately limited to a direct
-    // local place or a field path rooted in one. It gives the binding an owned
-    // type without broadening address-of inference to slices, dereferences,
+    // local place or a field path rooted in one, plus the direct pointee of a
+    // local pointer/raw-many pointer. It gives the binding an owned type
+    // without broadening address-of inference to slices, pointer chains,
     // globals, or calls. Fixed-array indexes are included because their
     // element mutability is determined by the root local binding.
     fn inferredLocalAddressTypeExpr(self: *FunctionBuilder, span: ast.Span, operand: ast.Expr) !?ast.TypeExpr {
-        const root_name = inferredLocalAddressRootLocal(self, operand) orelse return null;
+        const mutability = inferredLocalAddressMutability(self, operand) orelse return null;
         const child_ty = self.typeExprForExpr(operand) orelse return null;
         const child = try self.allocator.create(ast.TypeExpr);
         errdefer self.allocator.destroy(child);
@@ -4336,7 +4337,7 @@ const FunctionBuilder = struct {
         return .{
             .span = span,
             .kind = .{ .pointer = .{
-                .mutability = if (self.local_mutability.get(root_name) orelse false) .mut else .@"const",
+                .mutability = mutability,
                 .child = child,
             } },
         };
@@ -9113,6 +9114,34 @@ fn inferredLocalAddressRootLocal(builder: *FunctionBuilder, operand: ast.Expr) ?
             break :blk inferredLocalAddressRootLocal(builder, node.base.*);
         },
         .grouped => |inner| inferredLocalAddressRootLocal(builder, inner.*),
+        else => null,
+    };
+}
+
+fn inferredLocalAddressMutability(builder: *FunctionBuilder, operand: ast.Expr) ?ast.Mutability {
+    if (inferredLocalAddressDerefMutability(builder, operand)) |mutability| return mutability;
+    const root_name = inferredLocalAddressRootLocal(builder, operand) orelse return null;
+    return if (builder.local_mutability.get(root_name) orelse false) .mut else .@"const";
+}
+
+fn inferredLocalAddressDerefMutability(builder: *FunctionBuilder, operand: ast.Expr) ?ast.Mutability {
+    const pointer_expr = switch (operand.kind) {
+        .deref => |inner| inner.*,
+        else => return null,
+    };
+    const local_name = inferredLocalAddressDirectLocal(builder, pointer_expr) orelse return null;
+    const pointer_ty = builder.local_type_exprs.get(local_name) orelse return null;
+    const view = sema_type.viewType(aggregateTargetTypeAlias(pointer_ty, builder.aliases)) orelse return null;
+    return switch (view.kind) {
+        .pointer, .raw_many_pointer => view.mutability,
+        .slice => null,
+    };
+}
+
+fn inferredLocalAddressDirectLocal(builder: *FunctionBuilder, expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .ident => |ident| if (builder.local_type_exprs.contains(ident.text)) ident.text else null,
+        .grouped => |inner| inferredLocalAddressDirectLocal(builder, inner.*),
         else => null,
     };
 }

@@ -891,15 +891,17 @@ the legacy AST inference row; it does not grant nonzero or dynamic offsets a
 positive storage-provenance proof, so those accesses retain conservative race
 lowering.
 
-Unannotated local copies, direct addresses of previously declared local places
-or their field paths/fixed-array elements, direct member/index/slice/dereference reads with a
+Unannotated local copies, direct addresses of previously declared local places,
+their field paths/fixed-array elements, or the direct pointee of a declared
+pointer/raw-many-pointer local, direct member/index/slice/dereference reads with a
 resolved storage type, direct
 Result/nullable `try` payload reads, ordinary
 direct function/extern calls, direct casts,
 typed unary/binary expressions, and the language-defined targetless `u32`/`bool`
 literals now have a narrow typed-fact path: when a one-name `let`/`var` is
-initialized from an existing local value, a direct `&local`, `&local.field`, or
-fixed-array `&local[index]`,
+initialized from an existing local value, a direct `&local`, `&local.field`,
+fixed-array `&local[index]`, or `&pointer.*` where `pointer` is a declared
+`*T` or `[*]T` local,
 a direct Result/nullable `try` payload, an ordinary direct call, a function-pointer
 or closure call, a direct typed storage read, `value as T`,
 `-x`, `!x`, `a + b`, `a < b`, `a && b`, an integer literal, or a bool literal,

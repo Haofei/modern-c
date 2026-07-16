@@ -2511,7 +2511,24 @@ const LlvmEmitter = struct {
                 if (self.resolveAliasType(base_ty).kind != .array) break :blk null;
                 break :blk self.exprType(operand);
             },
+            .deref => |inner| blk: {
+                const pointer_ty = self.directAddressOfLocalPointerType(inner.*) orelse break :blk null;
+                const view = sema_type.viewType(self.resolveAliasType(pointer_ty)) orelse break :blk null;
+                switch (view.kind) {
+                    .pointer, .raw_many_pointer => {},
+                    .slice => break :blk null,
+                }
+                break :blk self.exprType(operand);
+            },
             .grouped => |inner| self.directAddressOfLocalPlaceType(inner.*),
+            else => null,
+        };
+    }
+
+    fn directAddressOfLocalPointerType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .ident => |ident| self.local_types.get(ident.text),
+            .grouped => |inner| self.directAddressOfLocalPointerType(inner.*),
             else => null,
         };
     }
