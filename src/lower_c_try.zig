@@ -18,6 +18,7 @@ const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
+const sema_type = @import("sema_type.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const FnInfo = lower_c_model.FnInfo;
@@ -432,6 +433,7 @@ pub fn emitResultTryLocalInit(ctx: TryDirectEmitContext, name: []const u8, decl_
         .grouped => |inner| return try emitResultTryLocalInit(ctx, name, decl_ty, inner.*, locals, return_ty),
         else => return false,
     };
+    _ = try tryExpressionResultType(ctx, initializer) orelse return false;
     const enclosing_return_ty = return_ty orelse return false;
     if (resultPayloadTypeForTag(enclosing_return_ty, "err") == null) return false;
     const operand_result_ty = resultTryOperandType(ctx, operand.expr) orelse return false;
@@ -450,6 +452,7 @@ pub fn emitResultTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *s
         .grouped => |inner| return try emitResultTryReturn(ctx, inner.*, locals, return_ty),
         else => return false,
     };
+    _ = try tryExpressionResultType(ctx, expr) orelse return false;
     const operand_result_ty = resultTryOperandType(ctx, operand) orelse return false;
     _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return false;
     _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return false;
@@ -465,6 +468,7 @@ pub fn emitNullableTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: 
         .grouped => |inner| return try emitNullableTryReturn(ctx, inner.*, locals),
         else => return false,
     };
+    _ = try tryExpressionResultType(ctx, expr) orelse return false;
     // Value optional `?T` (tagged repr): unwrap traps on absent, then yields `.value`.
     if (try valueOptionalCType(ctx, operand, locals)) |opt_c_type| {
         const temp_name = try nextTempName(ctx.replacement);
@@ -504,6 +508,26 @@ fn valueOptionalCType(ctx: TryDirectEmitContext, operand: ast.Expr, locals: *std
 
 fn tryOperandType(ctx: TryDirectEmitContext, operand: ast.Expr) ?ast.TypeExpr {
     return ctx.replacement.mir_target_type(ctx.replacement.emit_ctx, .try_operand, operand.span);
+}
+
+fn tryExpressionResultType(ctx: TryDirectEmitContext, expr: ast.Expr) !?ast.TypeExpr {
+    return switch (expr.kind) {
+        .grouped => |inner| try tryExpressionResultType(ctx, inner.*),
+        .try_expr => |node| blk: {
+            const operand_ty = tryOperandType(ctx, node.operand.*) orelse return error.UnsupportedCEmission;
+            const expected_ty = resultPayloadTypeForTag(operand_ty, "ok") orelse switch (lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, operand_ty).kind) {
+                .nullable => |child| child.*,
+                else => return error.UnsupportedCEmission,
+            };
+            const fact_ty = ctx.replacement.mir_target_type(ctx.replacement.emit_ctx, .expression_result, expr.span) orelse return error.UnsupportedCEmission;
+            if (!sema_type.sameTypeSyntax(
+                lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, fact_ty),
+                lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, expected_ty),
+            )) return error.UnsupportedCEmission;
+            break :blk fact_ty;
+        },
+        else => null,
+    };
 }
 
 fn resultTryOperandType(ctx: TryDirectEmitContext, operand: ast.Expr) ?ast.TypeExpr {
@@ -859,6 +883,7 @@ fn emitResultTryTrapHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!bool {
         .try_expr => |node| node,
         else => return false,
     };
+    _ = try tryExpressionResultType(ctx.ctx, expr) orelse return false;
     const temp_name = (try emitResultTryHoistTemp(ctx, expr.span, inner.operand.*)) orelse return false;
 
     try emitResultTryTrapGuard(ctx.ctx, temp_name);
@@ -872,6 +897,7 @@ fn emitResultTryPropagateHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!boo
         .try_expr => |node| node,
         else => return false,
     };
+    _ = try tryExpressionResultType(ctx.ctx, expr) orelse return false;
     const temp_name = (try emitResultTryHoistTemp(ctx, expr.span, inner.operand.*)) orelse return false;
     const operand_result_ty = resultTryOperandType(ctx.ctx, inner.operand.*) orelse return false;
 
@@ -905,6 +931,7 @@ fn emitNullableTryTrapHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!bool {
         .try_expr => |node| node,
         else => return false,
     };
+    _ = try tryExpressionResultType(ctx.ctx, expr) orelse return false;
     const inner_c_type = try nullableTryOperandCType(ctx.ctx, inner.operand.*) orelse return false;
     const temp_name = try nextTempName(ctx.ctx.replacement);
     try ctx.replacements.append(ctx.ctx.replacement.scratch, .{ .span = expr.span, .temp_name = temp_name });

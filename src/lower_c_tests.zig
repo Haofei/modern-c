@@ -2001,6 +2001,8 @@ test "lower-c try expressions require MIR operand and result types" {
         \\extern fn make_nullable() -> ?*const u8;
         \\fn result_try() -> Result<u32, u32> { let value = make_result()?; return ok(value); }
         \\fn nullable_try() -> *const u8 { let value = make_nullable()?; return value; }
+        \\fn result_direct_return() -> u32 { return make_result()?; }
+        \\fn nullable_direct_return() -> *const u8 { return make_nullable()?; }
     ;
     var parsed = try test_support.parseCheckedModule("c_try_operand_type_facts.mc", source);
     defer parsed.deinit();
@@ -2012,6 +2014,8 @@ test "lower-c try expressions require MIR operand and result types" {
     try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "result_try") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "nullable_try") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "result_direct_return") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "nullable_direct_return") != null);
 
     var missing = try mir.build(std.testing.allocator, parsed.module);
     defer missing.deinit();
@@ -2027,7 +2031,7 @@ test "lower-c try expressions require MIR operand and result types" {
     defer missing_result_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_result, &missing_result_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null));
 
-    for ([_][]const u8{ "result_try", "nullable_try" }) |name| {
+    for ([_][]const u8{ "result_try", "nullable_try", "result_direct_return", "nullable_direct_return" }) |name| {
         var stale = try mir.build(std.testing.allocator, parsed.module);
         defer stale.deinit();
         try renameTargetTypeFactForFunction(&stale, name, .try_operand, "u32");
