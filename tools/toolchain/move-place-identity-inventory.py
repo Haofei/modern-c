@@ -17,6 +17,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn aliasPlaceInfo",
         "fn aliasWildcardPlaceInfo",
         "fn directAliasReferentPlace",
+        "fn immediateFullDerefMoveReferent",
         "fn sameDeferredBorrowFact",
         "fn recordLoopEarlyExitInvalidations",
         "fn recordInvalidatedAliasPlace",

@@ -2204,6 +2204,9 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
 
 fn immediateFullDerefMoveReferent(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
     if (fullDerefMoveSubplace(self, expr, state, aliases)) |referent| return .{ .key = referent.key, .place = referent.place, .full_deref = true };
+    if (directAliasReferentPlace(self, expr, state)) |referent| {
+        return .{ .key = referent.key, .place = referent.place, .full_deref = true };
+    }
     const root = spine.borrowedMoveRoot(expr, state) orelse return null;
     return .{ .key = root, .place = null, .full_deref = true };
 }
