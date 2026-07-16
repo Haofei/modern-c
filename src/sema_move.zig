@@ -26,6 +26,14 @@ const resolveAliasType = sema_type.resolveAliasType;
 
 const ArrayMoveShape = struct { len: usize, embeds: bool };
 
+const MoveCfgJoinPolicy = union(enum) {
+    generic,
+    short_circuit: struct {
+        span: diagnostics.Span,
+        deferred: bool,
+    },
+};
+
 // The first production consumer of the move CFG.  Unlike the small model-level
 // worklist tests, this carries the real ownership state used by the checker.
 // Transfer functions still retain a block-local MoveSlot map for bindings and
@@ -41,6 +49,7 @@ const MoveStateCfgWorklist = struct {
     // Its internal CFG joins must still merge conservatively, but must not also
     // produce ordinary branch diagnostics for that same widening.
     report_join_diagnostics: bool = true,
+    join_policy: MoveCfgJoinPolicy = .generic,
     queue: std.ArrayListUnmanaged(sema_model.MoveCfgBlockId) = .empty,
 
     fn init(self: *Checker, cfg: *const sema_model.MoveCfg, entry: sema_model.MoveCfgBlockId, state: *const std.StringHashMap(MoveSlot)) ?MoveStateCfgWorklist {
@@ -96,6 +105,10 @@ const MoveStateCfgWorklist = struct {
         self.report_join_diagnostics = false;
     }
 
+    fn useShortCircuitJoinPolicy(self: *MoveStateCfgWorklist, span: diagnostics.Span, deferred: bool) void {
+        self.join_policy = .{ .short_circuit = .{ .span = span, .deferred = deferred } };
+    }
+
     // All real-state CFG joins enter here. Callers may omit a successor when an
     // AST transfer has already run for that block, but cannot reimplement the
     // ownership merge or worklist requeue policy themselves.
@@ -103,7 +116,10 @@ const MoveStateCfgWorklist = struct {
         const changed = if (self.states[to]) |*joined| blk: {
             var before = cloneMoveState(checker, joined);
             defer before.deinit();
-            mergeMoveBranchesImpl(checker, joined, joined, outgoing, self.report_join_diagnostics);
+            switch (self.join_policy) {
+                .generic => mergeMoveBranchesImpl(checker, joined, joined, outgoing, self.report_join_diagnostics),
+                .short_circuit => |policy| mergeShortCircuitMoveStates(checker, joined, outgoing, policy.span, policy.deferred),
+            }
             break :blk !moveStatesEqual(joined, &before);
         } else blk: {
             self.states[to] = cloneMoveState(checker, outgoing);
@@ -2597,18 +2613,14 @@ fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringH
 
     var worklist = MoveStateCfgWorklist.init(self, &short.cfg, short.entry, state) orelse return;
     defer worklist.deinit();
+    worklist.useShortCircuitJoinPolicy(rhs.span, false);
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
         if (block == short.entry) {
             worklist.propagateSuccessors(self, block, block_state);
         } else if (block == short.rhs) {
             moveConsume(self, rhs, block_state, aliases);
-            const joined = worklist.statePtr(short.join) orelse {
-                self.oom = true;
-                return;
-            };
-            mergeShortCircuitMoveStates(self, joined, block_state, rhs.span, false);
-            worklist.enqueue(self, short.join);
+            worklist.propagateSuccessors(self, block, block_state);
         } else if (block == short.join) {
             replaceMoveState(self, state, block_state);
         }
@@ -2666,18 +2678,14 @@ fn moveDeferShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHas
 
     var worklist = MoveStateCfgWorklist.init(self, &short.cfg, short.entry, state) orelse return;
     defer worklist.deinit();
+    worklist.useShortCircuitJoinPolicy(rhs.span, true);
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
         if (block == short.entry) {
             worklist.propagateSuccessors(self, block, block_state);
         } else if (block == short.rhs) {
             moveDefer(self, rhs, block_state, aliases);
-            const joined = worklist.statePtr(short.join) orelse {
-                self.oom = true;
-                return;
-            };
-            mergeShortCircuitMoveStates(self, joined, block_state, rhs.span, true);
-            worklist.enqueue(self, short.join);
+            worklist.propagateSuccessors(self, block, block_state);
         } else if (block == short.join) {
             replaceMoveState(self, state, block_state);
         }

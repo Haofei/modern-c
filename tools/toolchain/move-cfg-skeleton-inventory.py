@@ -36,6 +36,23 @@ CFG_CONSTRUCTION_HELPERS: dict[str, dict[str, int]] = {
     },
 }
 
+SHORT_CIRCUIT_WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
+    "moveConsumeShortCircuitRhs": {
+        "required": [
+            "worklist.useShortCircuitJoinPolicy(rhs.span, false);",
+            "worklist.propagateSuccessors(self, block, block_state);",
+        ],
+        "forbidden": ["mergeShortCircuitMoveStates(self, joined, block_state"],
+    },
+    "moveDeferShortCircuitRhs": {
+        "required": [
+            "worklist.useShortCircuitJoinPolicy(rhs.span, true);",
+            "worklist.propagateSuccessors(self, block, block_state);",
+        ],
+        "forbidden": ["mergeShortCircuitMoveStates(self, joined, block_state"],
+    },
+}
+
 ANCHORS: dict[str, list[str]] = {
     "src/sema_model.zig": [
         "pub const MoveCfgBlockKind = enum",
@@ -52,6 +69,8 @@ ANCHORS: dict[str, list[str]] = {
     ],
     "src/sema_move.zig": [
         "const MoveStateCfgWorklist = struct",
+        "const MoveCfgJoinPolicy = union(enum)",
+        "fn useShortCircuitJoinPolicy",
         "fn propagateSuccessorsExcept",
         "const LinearMoveCfg = struct",
         "fn linearMoveCfg",
@@ -164,6 +183,22 @@ def cfg_construction_errors(text: str) -> list[str]:
     return errors
 
 
+def short_circuit_routing_errors(text: str) -> list[str]:
+    errors: list[str] = []
+    for helper, policy in sorted(SHORT_CIRCUIT_WORKLIST_ROUTING.items()):
+        body = function_body(text, helper)
+        if body is None:
+            errors.append(f"src/sema_move.zig: missing function body for {helper}")
+            continue
+        for required in policy["required"]:
+            if required not in body:
+                errors.append(f"src/sema_move.zig: {helper} missing worklist routing anchor {required!r}")
+        for forbidden in policy["forbidden"]:
+            if forbidden in body:
+                errors.append(f"src/sema_move.zig: {helper} retains caller-side join {forbidden!r}")
+    return errors
+
+
 def main() -> int:
     missing: list[str] = []
     checked = 0
@@ -185,6 +220,9 @@ def main() -> int:
             cfg_errors = cfg_construction_errors(text)
             checked += len(CFG_CONSTRUCTION_HELPERS) * 2 + 2
             missing.extend(cfg_errors)
+            routing_errors = short_circuit_routing_errors(text)
+            checked += sum(len(policy["required"]) + len(policy["forbidden"]) for policy in SHORT_CIRCUIT_WORKLIST_ROUTING.values())
+            missing.extend(routing_errors)
 
     if missing:
         print("FAIL: move CFG skeleton inventory drift", file=sys.stderr)

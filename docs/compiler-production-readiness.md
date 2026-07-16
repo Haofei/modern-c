@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **673 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **674 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -807,6 +807,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Move CFG joins match typed root places | CFG state matching now treats every non-alias, non-type-only ownership slot with a `MovePlace` as structural state, including roots as well as fields/elements. Branch, loop, short-circuit, and scope helpers therefore cannot report a mismatch solely because the two predecessor maps used different compatibility keys for the same root place. Alias storage and index facts retain their dedicated conservative rules. This is one M1.1 migration, not closure of the move checker. | `src/sema_move.zig` `matchingMoveStateSlot` / `isOwnershipMovePlace`; unit test `move branch joins match roots by typed place rather than compatibility key`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 | Move alias producers normalize typed referents | Every current alias registration path now normalizes an otherwise key-only legacy referent through `trackedAliasReferent` before it stores alias state. The compatibility key may locate old state, but each newly registered local, aggregate field/element, assigned alias, or deferred-cleanup alias carries the recovered `alias_place`; untyped legacy state is not admitted as a tracked referent. This is one M1.1 migration, not closure of the move checker. | `src/sema_move.zig` `trackedAliasReferent`, local/assignment/aggregate/deferred alias producers; unit test `move alias producers recover typed referent places from compatibility indexes`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
+
+| Move short-circuit joins route through the CFG worklist | Short-circuit RHS transfer no longer directly calls `mergeShortCircuitMoveStates` or manually queues the join block. `MoveStateCfgWorklist` owns successor propagation, state change detection, and requeueing; a short-circuit join policy preserves the existing distinct ordinary/deferred diagnostics while keeping that policy inside the common join entry point. While-condition loop widening retains its separate loop policy. This is one M2 routing migration, not closure of the CFG/place checker. | `src/sema_move.zig` `MoveCfgJoinPolicy`, `MoveStateCfgWorklist.useShortCircuitJoinPolicy`, `moveConsumeShortCircuitRhs`, and `moveDeferShortCircuitRhs`; `tools/toolchain/move-cfg-skeleton-inventory.py` `SHORT_CIRCUIT_WORKLIST_ROUTING`; `zig test src/sema_move.zig`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `zig build move-cfg-skeleton-inventory-test`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 
