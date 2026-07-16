@@ -265,21 +265,27 @@ pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Stri
         .ident => |ident| return sourceTypeForIdent(ctx, ident.text, locals),
         .grouped => |inner| return operandEmitType(ctx, inner.*, locals),
         .member => |node| {
+            // Source members have an exact, validated MIR result fact. Do not
+            // reconstruct their type by walking the base declaration in C.
+            if (expr.span.line != 0 or expr.span.column != 0) {
+                return ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span);
+            }
+            // Async lowering creates zero-span state-machine members after
+            // source facts are built; their resolved declaration is authority.
             const base_ty = operandEmitType(ctx, node.base.*, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, node.base.*, locals) orelse return null;
             const struct_name = structNameFromType(ctx, base_ty) orelse return null;
             const struct_decl = ctx.structs.get(struct_name) orelse return null;
             for (struct_decl.fields) |field| {
                 if (std.mem.eql(u8, field.name.text, node.name.text)) {
-                    // Async lowering creates typed state-machine members after MIR
-                    // facts are keyed from source spans. Zero-span nodes are only
-                    // compiler-generated; their resolved declaration is authority.
-                    if (expr.span.line == 0 and expr.span.column == 0) return field.ty;
-                    return requireExpressionResultType(ctx, expr, field.ty);
+                    return field.ty;
                 }
             }
             return null;
         },
         .index => |node| {
+            if (expr.span.line != 0 or expr.span.column != 0) {
+                return ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span);
+            }
             const base_ty = operandEmitType(ctx, node.base.*, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, node.base.*, locals) orelse return null;
             const resolved = resolveAliasType(ctx, base_ty);
             const inferred = switch (resolved.kind) {
@@ -287,7 +293,7 @@ pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Stri
                 .slice => resolved.kind.slice.child.*,
                 else => null,
             };
-            return if (inferred) |ty| requireExpressionResultType(ctx, expr, ty) else null;
+            return inferred;
         },
         .deref => return ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span),
         else => return null,
