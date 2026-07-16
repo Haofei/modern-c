@@ -1052,7 +1052,7 @@ test "MIR owns if-let subject types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
-test "MIR owns try operand types" {
+test "MIR owns try operand and result types" {
     const source =
         \\extern fn make_result() -> Result<u32, u32>;
         \\extern fn make_nullable() -> ?*const u8;
@@ -1072,8 +1072,12 @@ test "MIR owns try operand types" {
     defer typed_mir.deinit();
     const result_fact = targetTypeFactByKind(functionByName(typed_mir, "result_try").?, .try_operand) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("Result", result_fact.target_ty.kind.generic.base.text);
+    const result_payload_fact = targetTypeFactByKind(functionByName(typed_mir, "result_try").?, .expression_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("u32", result_payload_fact.target_ty.kind.name.text);
     const nullable_fact = targetTypeFactByKind(functionByName(typed_mir, "nullable_try").?, .try_operand) orelse return error.TestUnexpectedResult;
     try std.testing.expect(nullable_fact.target_ty.kind == .nullable);
+    const nullable_payload_fact = targetTypeFactByKind(functionByName(typed_mir, "nullable_try").?, .expression_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(nullable_payload_fact.target_ty.kind == .pointer);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
@@ -2550,16 +2554,19 @@ test "MIR owns MMIO map identity and complete types" {
     const function = functionByName(typed_mir, "map_device").?;
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.mmio_map, function.call_target_facts[0].kind);
-    try std.testing.expectEqual(@as(usize, 4), function.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.try_operand, function.target_type_facts[0].kind);
-    try std.testing.expect(function.target_type_facts[0].target_ty.kind == .nullable);
-    try std.testing.expectEqual(mir.TargetTypeKind.mmio_map_source, function.target_type_facts[1].kind);
-    try std.testing.expectEqualStrings("PAddr", function.target_type_facts[1].target_ty.kind.name.text);
-    try std.testing.expectEqual(mir.TargetTypeKind.mmio_map_payload, function.target_type_facts[2].kind);
-    try std.testing.expectEqualStrings("MmioPtr", function.target_type_facts[2].target_ty.kind.generic.base.text);
-    try std.testing.expectEqualStrings("Device", function.target_type_facts[2].target_ty.kind.generic.args[0].kind.name.text);
-    try std.testing.expectEqual(mir.TargetTypeKind.mmio_map_result, function.target_type_facts[3].kind);
-    try std.testing.expectEqualStrings("MmioPtr", function.target_type_facts[3].target_ty.kind.nullable.kind.generic.base.text);
+    try std.testing.expectEqual(@as(usize, 5), function.target_type_facts.len);
+    const try_result = targetTypeFactByKind(function, .expression_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("MmioPtr", try_result.target_ty.kind.generic.base.text);
+    try std.testing.expectEqualStrings("Device", try_result.target_ty.kind.generic.args[0].kind.name.text);
+    const try_operand = targetTypeFactByKind(function, .try_operand) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(try_operand.target_ty.kind == .nullable);
+    const map_source = targetTypeFactByKind(function, .mmio_map_source) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("PAddr", map_source.target_ty.kind.name.text);
+    const map_payload = targetTypeFactByKind(function, .mmio_map_payload) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("MmioPtr", map_payload.target_ty.kind.generic.base.text);
+    try std.testing.expectEqualStrings("Device", map_payload.target_ty.kind.generic.args[0].kind.name.text);
+    const map_result = targetTypeFactByKind(function, .mmio_map_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("MmioPtr", map_result.target_ty.kind.nullable.kind.generic.base.text);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }

@@ -1195,7 +1195,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn taggedUnionSwitchSubjectType(": 0,
         "mirTargetTypeFactAt(.if_let_subject": 1,
         "fn requireMirIfLetSubjectType(": 1,
-        "mirTargetTypeFactAt(.try_operand": 2,
+        "mirTargetTypeFactAt(.try_operand": 3,
         "fn requireMirTryOperandType(": 1,
         "mirTargetTypeFactAt(.for_iterable": 1,
         "mirTargetTypeFactAt(.for_element": 1,

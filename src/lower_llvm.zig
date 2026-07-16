@@ -2486,10 +2486,31 @@ const LlvmEmitter = struct {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(pointee_ty))) return error.UnsupportedLlvmEmission;
             return fact_ty;
         }
+        if (try self.requireMirTryExpressionResultType(initializer)) |known_ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
+            return fact_ty;
+        }
         if (self.exprType(initializer) orelse inferredLocalLiteralType(initializer) orelse self.inferredLocalCallReturnType(initializer)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
         }
         return fact_ty;
+    }
+
+    fn requireMirTryExpressionResultType(self: *LlvmEmitter, initializer: ast.Expr) !?ast.TypeExpr {
+        return switch (initializer.kind) {
+            .grouped => |inner| try self.requireMirTryExpressionResultType(inner.*),
+            .try_expr => |node| blk: {
+                const result_ty = (self.mirTargetTypeFactAt(.expression_result, initializer.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+                const operand_ty = (self.mirTargetTypeFactAt(.try_operand, node.operand.*.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+                const expected_ty = if (self.resultInfo(operand_ty)) |info|
+                    info.ok_ty
+                else
+                    self.nullableInnerType(operand_ty) orelse return error.UnsupportedLlvmEmission;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
+                break :blk result_ty;
+            },
+            else => null,
+        };
     }
 
     // The MIR fact owns the pointer qualification for this bounded `&local`
@@ -8218,13 +8239,7 @@ const LlvmEmitter = struct {
                 break :blk null;
             } else null),
             .binary => |node| self.expressionResultType(expr, if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*)),
-            .try_expr => |node| blk: {
-                const fact = self.mirTargetTypeFactAt(.try_operand, node.operand.*.span) orelse break :blk null;
-                if (self.exprType(node.operand.*)) |known_ty| {
-                    if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(known_ty))) break :blk null;
-                }
-                break :blk if (self.resultInfo(fact.target_ty)) |info| info.ok_ty else self.nullableInnerType(fact.target_ty);
-            },
+            .try_expr => |node| self.tryExpressionResultType(expr, node.operand.*),
             else => null,
         };
     }
@@ -8243,6 +8258,17 @@ const LlvmEmitter = struct {
             .raw_many_pointer => |node| node.child.*,
             else => null,
         };
+    }
+
+    fn tryExpressionResultType(self: *LlvmEmitter, expr: ast.Expr, operand: ast.Expr) ?ast.TypeExpr {
+        const result_ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null).target_ty;
+        const operand_ty = (self.mirTargetTypeFactAt(.try_operand, operand.span) orelse return null).target_ty;
+        const expected_ty = if (self.resultInfo(operand_ty)) |info|
+            info.ok_ty
+        else
+            self.nullableInnerType(operand_ty) orelse return null;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(expected_ty))) return null;
+        return result_ty;
     }
 
     fn pointerTypeFor(self: *LlvmEmitter, child: ast.TypeExpr) !ast.TypeExpr {

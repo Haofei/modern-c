@@ -2054,12 +2054,12 @@ test "LLVM if-let statements require MIR subject types" {
     }
 }
 
-test "LLVM try expressions require MIR operand types" {
+test "LLVM try expressions require MIR operand and result types" {
     const source =
         \\extern fn make_result() -> Result<u32, u32>;
         \\extern fn make_nullable() -> ?*const u8;
-        \\fn result_try() -> u32 { return make_result()?; }
-        \\fn nullable_try() -> *const u8 { return make_nullable()?; }
+        \\fn result_try() -> Result<u32, u32> { let value = make_result()?; return ok(value); }
+        \\fn nullable_try() -> *const u8 { let value = make_nullable()?; return value; }
     ;
     var parsed = try test_support.parseCheckedModule("llvm_try_operand_type_facts.mc", source);
     defer parsed.deinit();
@@ -2079,6 +2079,13 @@ test "LLVM try expressions require MIR operand types" {
     defer missing_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_try_operand_type_facts.mc", .{}, false, .riscv64, null));
 
+    var missing_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_result.deinit();
+    try removeTargetTypeKindForFunction(&missing_result, "result_try", .expression_result);
+    var missing_result_output: std.ArrayList(u8) = .empty;
+    defer missing_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_result, &missing_result_output, "llvm_try_operand_type_facts.mc", .{}, false, .riscv64, null));
+
     for ([_][]const u8{ "result_try", "nullable_try" }) |name| {
         var stale = try mir.build(std.testing.allocator, parsed.module);
         defer stale.deinit();
@@ -2086,6 +2093,15 @@ test "LLVM try expressions require MIR operand types" {
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
         try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_try_operand_type_facts.mc", .{}, false, .riscv64, null));
+    }
+
+    for ([_][]const u8{ "result_try", "nullable_try" }) |name| {
+        var stale_result = try mir.build(std.testing.allocator, parsed.module);
+        defer stale_result.deinit();
+        try renameTargetTypeFactForFunction(&stale_result, name, .expression_result, "u64");
+        var stale_result_output: std.ArrayList(u8) = .empty;
+        defer stale_result_output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_result, &stale_result_output, "llvm_try_operand_type_facts.mc", .{}, false, .riscv64, null));
     }
 }
 

@@ -2819,7 +2819,7 @@ const CEmitter = struct {
 
     fn emitSpecialInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
         if (try self.emitAddressOfInferredLocalInit(name, initializer, locals)) return true;
-        if (self.tryPayloadTypeForInferredLocal(initializer)) |known_ty| {
+        if (try self.tryPayloadTypeForInferredLocal(initializer)) |known_ty| {
             const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse return error.UnsupportedCEmission;
             try locals.put(name, try self.localInfoFromType(inferred_ty));
             return try self.emitSpecialTypedLocalInit(name, inferred_ty, initializer, locals, return_ty);
@@ -2873,17 +2873,23 @@ const CEmitter = struct {
     // A direct `source?` initializer is already typed by the MIR-owned operand
     // fact. Use that payload only to validate the owned inferred-local fact;
     // the typed try emitter still owns control-flow lowering.
-    fn tryPayloadTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) ?ast.TypeExpr {
+    fn tryPayloadTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) !?ast.TypeExpr {
         return switch (initializer.kind) {
-            .grouped => |inner| self.tryPayloadTypeForInferredLocal(inner.*),
+            .grouped => |inner| try self.tryPayloadTypeForInferredLocal(inner.*),
             .try_expr => |node| blk: {
                 const operand_ty = (self.mirTargetTypeFactAt(.try_operand, node.operand.*.span) orelse break :blk null).target_ty;
                 const resolved = self.resolveAliasType(operand_ty);
-                if (resultPayloadTypeForTag(resolved, "ok")) |payload_ty| break :blk payload_ty;
-                break :blk switch (resolved.kind) {
+                const expected_ty = if (resultPayloadTypeForTag(resolved, "ok")) |payload_ty|
+                    payload_ty
+                else switch (resolved.kind) {
                     .nullable => |child| child.*,
                     else => null,
                 };
+                const fact_ty = (self.mirTargetTypeFactAt(.expression_result, initializer.span) orelse break :blk null).target_ty;
+                if (expected_ty) |expected| {
+                    if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(expected))) return error.UnsupportedCEmission;
+                }
+                break :blk fact_ty;
             },
             else => null,
         };
