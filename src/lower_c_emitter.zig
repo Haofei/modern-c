@@ -3565,7 +3565,8 @@ const CEmitter = struct {
                 return true;
             },
             .call => |node| {
-                if (ast_query.isIdentNamed(node.callee.*, "trap")) {
+                const target = self.mirCallTargetKindAt(node.callee.*.span) orelse return false;
+                if (mir.explicitTrapHelperForTarget(target) != null) {
                     try self.writeIndent();
                     if (!try lower_c_call.emitTrapCall(self.callContext(), node)) return error.UnsupportedCEmission;
                     try self.out.appendSlice(self.allocator, ";\n");

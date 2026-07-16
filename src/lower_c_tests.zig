@@ -12254,6 +12254,7 @@ test "lower-c emits explicit traps and unreachable" {
         \\fn trap_as_value() -> u32 { return trap(.Bounds); }
         \\fn unreachable_as_value() -> u32 { return unreachable; }
         \\fn never_returns_by_trap() -> never { return trap(.Assert); }
+        \\fn trap_statement() { trap(.InvalidShift); }
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -12263,6 +12264,8 @@ test "lower-c emits explicit traps and unreachable" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Unreachable();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void never_returns_by_trap(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Assert();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void trap_statement(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidShift();") != null);
 }
 
 test "lower-c rejects non-static global initializers instead of zeroing" {

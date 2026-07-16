@@ -884,6 +884,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "ast_query.isPhysCall(call.callee.*)": 0,
     },
     "src/lower_c_emitter.zig": {
+        'ast_query.isIdentNamed(node.callee.*, "trap")': 0,
         "fn mirTargetTypeFactAt(": 1,
         "fn mirTargetTypeFactAtOwned(": 1,
         "fn atomicInitPayloadTypeAt(": 1,
