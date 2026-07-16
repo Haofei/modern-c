@@ -6262,7 +6262,9 @@ const LlvmEmitter = struct {
 
     fn emitSlice(self: *LlvmEmitter, node: anytype, slice_span: ast.Span) ![]const u8 {
         const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
-        const slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedLlvmEmission;
+        const inferred_slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedLlvmEmission;
+        const slice_ty = (self.mirTargetTypeFactAt(.expression_result, slice_span) orelse return error.UnsupportedLlvmEmission).target_ty;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(slice_ty), self.resolveAliasType(inferred_slice_ty))) return error.UnsupportedLlvmEmission;
         const slice = switch (slice_ty.kind) {
             .slice => |slice| slice,
             else => return error.UnsupportedLlvmEmission,
@@ -8260,7 +8262,7 @@ const LlvmEmitter = struct {
                 null,
             .deref => |inner| self.expressionResultType(expr, self.derefPointeeType(inner.*)),
             .index => |node| self.expressionResultType(expr, self.indexElementType(node.base.*)),
-            .slice => |node| self.expressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null),
+            .slice => |node| self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null),
             .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else self.expressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| blk: {
                 const resolved_base_ty = self.resolveAliasType(base_ty);
                 if (resolved_base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");

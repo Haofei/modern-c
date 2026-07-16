@@ -4842,7 +4842,9 @@ const CEmitter = struct {
 
     fn emitSliceExpr(self: *CEmitter, node: anytype, slice_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !void {
         const base_ty = self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
-        const slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedCEmission;
+        const inferred_slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedCEmission;
+        const slice_ty = (self.mirTargetTypeFactAt(.expression_result, slice_span) orelse return error.UnsupportedCEmission).target_ty;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(slice_ty), self.resolveAliasType(inferred_slice_ty))) return error.UnsupportedCEmission;
         const slice_name = try self.sliceTypeName(slice_ty.kind.slice.child.*, slice_ty.kind.slice.mutability);
         const resolved = self.resolveAliasType(base_ty);
         const n = self.temp_index;
@@ -7427,7 +7429,13 @@ const CEmitter = struct {
             .member => self.operandEmitType(expr, locals),
             .index => |node| self.operandEmitType(expr, locals) orelse
                 (if (locals) |local_set| localIndexElementType(node.base.*, local_set) else null),
-            .slice => |node| if (self.exprSourceTypeForEmission(node.base.*, locals)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
+            .slice => |node| blk: {
+                const base_ty = self.exprSourceTypeForEmission(node.base.*, locals) orelse break :blk null;
+                const inferred = self.sliceTypeForBase(base_ty, node.base.*.span) orelse break :blk null;
+                const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse break :blk null;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
+                break :blk fact.target_ty;
+            },
             .grouped => |inner| self.exprSourceTypeForEmission(inner.*, locals),
             .binary => |node| self.binarySourceTypeForEmission(node, locals),
             .unary => |node| if (node.op == .neg) self.exprSourceTypeForEmission(node.expr.*, locals) else null,
