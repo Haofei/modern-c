@@ -69,6 +69,10 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
             "referent: []const u8",
             "place: ?MovePlace",
         ],
+        ("fn aliasSlotReferentMoved", "fn referentPlaceMoved"): [
+            "state.get(",
+            "referent_slot",
+        ],
     },
 }
 
