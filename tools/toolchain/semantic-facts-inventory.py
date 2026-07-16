@@ -362,6 +362,32 @@ AGGREGATE_RETURN_CFG_DECISION_AUDIT: dict[str, list[str]] = {
     ],
 }
 
+EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT: dict[str, list[str]] = {
+    "docs/compiler-production-readiness.md": [
+        "| Extern/export struct-by-value ABI hazards fail closed |",
+        "| `c-abi-aggregate-lowering` | Accepted fail-closed external ABI boundary:",
+        "Struct-by-value C ABI at `extern`/`export`",
+    ],
+    "docs/typed-semantic-facts.md": [
+        "| `c-abi-aggregate-lowering` |",
+        "Extern/export struct-by-value boundaries are an accepted fail-closed diagnostic policy",
+    ],
+    "src/sema.zig": [
+        "fn checkExternExportStructAbi(",
+        "E_EXTERN_STRUCT_BY_VALUE",
+        "fn isByValueStructAbiType(",
+    ],
+    "src/sema_tests.zig": [
+        "test \"rejects by-value struct signatures at extern and export ABI boundaries\"",
+        "countDiagnosticCode(&reporter, \"E_EXTERN_STRUCT_BY_VALUE\")",
+    ],
+    "tests/c_emit/bad/extern_struct_param_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
+    "tests/c_emit/bad/extern_struct_return_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
+    "tests/c_emit/bad/export_struct_param_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
+    "tests/c_emit/bad/export_struct_return_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
+    "tests/c_emit/bad/export_generic_struct_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
+}
+
 BOUNDS_RANGE_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "| MIR no-overflow range facts |",
@@ -1560,6 +1586,19 @@ def main() -> int:
             checked += 1
             if anchor not in text:
                 missing.append(f"aggregate-return CFG decision audit: {relative}: missing anchor {anchor!r}")
+
+    for relative, anchors in sorted(EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"extern aggregate ABI boundary audit: {relative}: file missing")
+            continue
+
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"extern aggregate ABI boundary audit: {relative}: missing anchor {anchor!r}")
 
     for relative, anchors in sorted(BOUNDS_RANGE_FACT_FAMILY_AUDIT.items()):
         path = REPO_ROOT / relative
