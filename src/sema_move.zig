@@ -2066,10 +2066,27 @@ fn rootMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)
 fn borrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
     const target = switch (expr.kind) {
         .address_of => |inner| inner.*,
+        .cast => |node| return borrowedMoveRootPlace(self, node.value.*, state),
         .grouped => |inner| return borrowedMoveRootPlace(self, inner.*, state),
         else => return null,
     };
     const place = (placeKeyAndType(self, target, state) orelse return null).place;
+    if (rootMoveSlotForPlace(place, state) == null) return null;
+    return .{ .root = place.root };
+}
+
+// `&t as usize` parses as `&(t as usize)`. Preserve `t`'s structural place
+// before the integer cast drops pointer provenance, rather than recovering the
+// root from the cast syntax's compatibility key.
+fn integerCastBorrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
+    const cast = switch (expr.kind) {
+        .cast => |node| node,
+        .grouped => |inner| return integerCastBorrowedMoveRootPlace(self, inner.*, state),
+        else => return null,
+    };
+    const ctx = self.move_ctx orelse return null;
+    if (!spine.isIntegerLike(spine.classifyTypeCtx(cast.ty.*, ctx.*))) return null;
+    const place = (placeKeyAndType(self, cast.value.*, state) orelse return null).place;
     if (rootMoveSlotForPlace(place, state) == null) return null;
     return .{ .root = place.root };
 }
@@ -3960,6 +3977,10 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
             // provenance was already stripped by the integer cast, so the move root escapes.
             // Only THIS shape is handled here; any other `&…` (e.g. a sub-place borrow
             // `&t.v`) falls through to the default `borrowedMoveRoot` escape below.
+            if (integerCastBorrowedMoveRootPlace(self, inner.*, state)) |place| {
+                markEscapedBorrowForPlace(place, escape_span, state);
+                return;
+            }
             if (spine.castToIntegerMoveRoot(self, inner.*, state)) |root| {
                 markEscapedBorrowForReferentKey(root, escape_span, state);
                 return;

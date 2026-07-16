@@ -20,6 +20,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn carriedAliasReferent",
         "fn carriedAliasReferentForExpr",
         "fn markEscapedBorrowForCarriedAlias",
+        "fn integerCastBorrowedMoveRootPlace",
         "fn immediateFullDerefMoveReferent",
         "fn typedAliasReferentPlace",
         "fn typedAliasReferentPlace(referent: AliasReferent) ?MovePlace",
@@ -93,6 +94,10 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
         ("fn markEscapedBorrowForCarriedAlias", "// Map keys remain compatibility indexes"): [
             "trackedMoveReferentPlaceForKey",
             "spine.",
+            "markEscapedBorrowForReferentKey",
+        ],
+        ("fn integerCastBorrowedMoveRootPlace", "fn markEscapedBorrowForPlace"): [
+            "castToIntegerMoveRoot",
             "markEscapedBorrowForReferentKey",
         ],
         ("fn immediateFullDerefMoveReferent", "fn consumeTrackedMoveBinding"): [
