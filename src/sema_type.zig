@@ -892,6 +892,18 @@ fn sameExprSyntax(left: ast.Expr, right: ast.Expr) bool {
             .int_literal => |right_text| right_text,
             else => unreachable,
         }),
+        .float_literal => |left_text| std.mem.eql(u8, left_text, switch (right.kind) {
+            .float_literal => |right_text| right_text,
+            else => unreachable,
+        }),
+        .string_literal => |left_text| std.mem.eql(u8, left_text, switch (right.kind) {
+            .string_literal => |right_text| right_text,
+            else => unreachable,
+        }),
+        .char_literal => |left_text| std.mem.eql(u8, left_text, switch (right.kind) {
+            .char_literal => |right_text| right_text,
+            else => unreachable,
+        }),
         .bool_literal => |left_value| left_value == switch (right.kind) {
             .bool_literal => |right_value| right_value,
             else => unreachable,
@@ -905,6 +917,66 @@ fn sameExprSyntax(left: ast.Expr, right: ast.Expr) bool {
             .grouped => |right_inner| right_inner.*,
             else => unreachable,
         }),
+        .unary => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .unary => |node| node,
+                else => unreachable,
+            };
+            break :blk left_node.op == right_node.op and sameExprSyntax(left_node.expr.*, right_node.expr.*);
+        },
+        .binary => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .binary => |node| node,
+                else => unreachable,
+            };
+            break :blk left_node.op == right_node.op and sameExprSyntax(left_node.left.*, right_node.left.*) and sameExprSyntax(left_node.right.*, right_node.right.*);
+        },
+        .cast => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .cast => |node| node,
+                else => unreachable,
+            };
+            break :blk sameExprSyntax(left_node.value.*, right_node.value.*) and sameTypeSyntax(left_node.ty.*, right_node.ty.*);
+        },
+        .address_of => |left_inner| sameExprSyntax(left_inner.*, switch (right.kind) {
+            .address_of => |right_inner| right_inner.*,
+            else => unreachable,
+        }),
+        .deref => |left_inner| sameExprSyntax(left_inner.*, switch (right.kind) {
+            .deref => |right_inner| right_inner.*,
+            else => unreachable,
+        }),
+        .member => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .member => |node| node,
+                else => unreachable,
+            };
+            break :blk std.mem.eql(u8, left_node.name.text, right_node.name.text) and sameExprSyntax(left_node.base.*, right_node.base.*);
+        },
+        .index => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .index => |node| node,
+                else => unreachable,
+            };
+            break :blk sameExprSyntax(left_node.base.*, right_node.base.*) and sameExprSyntax(left_node.index.*, right_node.index.*);
+        },
+        .slice => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .slice => |node| node,
+                else => unreachable,
+            };
+            break :blk sameExprSyntax(left_node.base.*, right_node.base.*) and sameExprSyntax(left_node.start.*, right_node.start.*) and sameExprSyntax(left_node.end.*, right_node.end.*);
+        },
+        .call => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .call => |node| node,
+                else => unreachable,
+            };
+            if (!sameExprSyntax(left_node.callee.*, right_node.callee.*) or left_node.type_args.len != right_node.type_args.len or left_node.args.len != right_node.args.len) break :blk false;
+            for (left_node.type_args, right_node.type_args) |left_arg, right_arg| if (!sameTypeSyntax(left_arg, right_arg)) break :blk false;
+            for (left_node.args, right_node.args) |left_arg, right_arg| if (!sameExprSyntax(left_arg, right_arg)) break :blk false;
+            break :blk true;
+        },
         else => false,
     };
 }

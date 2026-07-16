@@ -427,6 +427,29 @@ test "MIR target-type admission rejects stale complete syntax" {
     try std.testing.expectError(error.StaleMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 }
 
+test "MIR target-type admission accepts computed array lengths" {
+    const source =
+        \\fn read() -> u32 {
+        \\    let xs: [1 + 2]u32 = .{10, 20, 30};
+        \\    return xs[2];
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_computed_array_length.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const function = functionByName(typed_mir, "read") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .array_literal));
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns implicit view const narrowing source and target types" {
     const source =
         \\fn consume(xs: []const u8) -> usize { return xs.len; }

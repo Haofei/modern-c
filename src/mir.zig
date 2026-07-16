@@ -1089,6 +1089,7 @@ pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTarge
     for (module.functions) |function| {
         for (function.blocks) |block| for (block.instructions) |instruction| {
             const kind = targetTypeKindForInstruction(instruction) orelse continue;
+            if (!targetTypeHasSourcePoint(instruction.line, instruction.column)) continue;
             const fact_count = countMatchingTargetTypeFacts(function, kind, instruction);
             if (fact_count == 0 or fact_count != countMatchingTargetTypeInstructionsForInstruction(function, kind, instruction)) {
                 if (hasStaleTargetTypeFact(function, kind, instruction)) return error.StaleMirTargetTypeFacts;
@@ -1097,10 +1098,15 @@ pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTarge
             if (!matchingTargetTypeFactsAgree(function, kind, instruction)) return error.InvalidMirTargetTypeFacts;
         };
         for (function.target_type_facts) |fact| {
+            if (!targetTypeHasSourcePoint(fact.source.line, fact.source.column)) continue;
             const instruction_count = countMatchingTargetTypeInstructions(function, fact);
             if (instruction_count == 0 or instruction_count != countMatchingTargetTypeFactsForFact(function, fact)) return error.InvalidMirTargetTypeFacts;
         }
     }
+}
+
+fn targetTypeHasSourcePoint(line: usize, column: usize) bool {
+    return line != 0 and column != 0;
 }
 
 fn targetTypeKindForInstruction(instruction: Instruction) ?TargetTypeKind {
@@ -9527,7 +9533,7 @@ fn exprContainsTargetTypedLiteral(expr: ast.Expr) bool {
         // Integer literals, including `-N`, acquire their storage type from a
         // typed binary sibling. This lets MIR own the unary result rather than
         // leaving C/LLVM to choose the literal's C default type.
-        .int_literal, .enum_literal, .string_literal, .float_literal, .null_literal => true,
+        .int_literal, .char_literal, .enum_literal, .string_literal, .float_literal, .null_literal => true,
         .grouped => |inner| exprContainsTargetTypedLiteral(inner.*),
         .unary => |node| exprContainsTargetTypedLiteral(node.expr.*),
         else => false,
