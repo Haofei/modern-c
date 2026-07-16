@@ -129,6 +129,9 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
             "spine.borrowedMoveRoot",
             "spine.aliasReferentOf",
         ],
+        ("pub fn exprIsMoveTyped", "pub fn exprIsTrivialDrop"): [
+            "state.contains(id.text)",
+        ],
     },
 }
 

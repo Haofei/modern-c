@@ -1837,6 +1837,32 @@ test "move place construction resolves typed roots before compatibility keys" {
     try std.testing.expect(sema_type.sameTypeSyntax(resolved.ty, ty));
 }
 
+test "move expression typing uses structural ownership roots rather than map keys" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-expression-root.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    const owner = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "owner", .span = span } } };
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+    var aliases = std.StringHashMap(ast.TypeExpr).init(std.testing.allocator);
+    defer aliases.deinit();
+
+    // CFG state can retain a compatibility key unrelated to source spelling.
+    // The typed root still makes `owner` a linear resource for `drop` and
+    // pointer-dereference diagnostics.
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    try std.testing.expect(exprIsMoveTyped(&checker, owner, &state, &aliases));
+
+    state.clearRetainingCapacity();
+    // Conversely, an alias stored under the source spelling must not make the
+    // spelling itself a move owner merely because the compatibility key matches.
+    try state.put("owner", .{ .live = false, .span = span, .place = root, .alias_of = "compat:source", .alias_place = root });
+    try std.testing.expect(!exprIsMoveTyped(&checker, owner, &state, &aliases));
+}
+
 test "move subplace outer-scope classification uses typed roots rather than compatibility keys" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
@@ -2059,6 +2085,21 @@ fn isOwnershipMoveSubplace(slot: MoveSlot, key: []const u8) bool {
 fn isOwnershipMovePlace(slot: MoveSlot, key: []const u8) bool {
     _ = key;
     return slot.alias_of == null and !slot.type_only and !isPureIndexFactSlot(slot) and slot.place != null;
+}
+
+// `exprIsMoveTyped` is a correctness decision for `drop` and dereference
+// diagnostics. Source spelling may find a compatibility-map entry, but only a
+// structural, non-alias ownership root may establish that the expression owns a
+// linear resource.
+fn ownershipBindingMoveSlotForIdent(name: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+    const expected: MovePlace = .{ .root = name };
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (!isOwnershipMovePlace(slot, entry.key_ptr.*)) continue;
+        if (slot.place.?.eql(expected)) return slot;
+    }
+    return null;
 }
 
 fn ownershipMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) ?*MoveSlot {
@@ -3908,7 +3949,7 @@ pub fn moveForget(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Move
 // resource.
 pub fn exprIsMoveTyped(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     switch (expr.kind) {
-        .ident => |id| if (state.contains(id.text)) return true,
+        .ident => |id| if (ownershipBindingMoveSlotForIdent(id.text, state) != null) return true,
         .grouped => |inner| return exprIsMoveTyped(self, inner.*, state, aliases),
         else => {},
     }
