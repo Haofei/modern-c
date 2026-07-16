@@ -9212,20 +9212,22 @@ fn inferredLocalAddressMutability(builder: *FunctionBuilder, operand: ast.Expr) 
     if (inferredLocalAddressRootLocal(builder, operand)) |root_name| {
         return if (builder.local_mutability.get(root_name) orelse false) .mut else .@"const";
     }
-    if (inferredLocalAddressRootMutableGlobal(builder, operand) != null) return .mut;
+    if (inferredLocalAddressRootGlobal(builder, operand)) |root_name| {
+        return if (builder.mutable_globals.contains(root_name)) .mut else .@"const";
+    }
     return null;
 }
 
-fn inferredLocalAddressRootMutableGlobal(builder: *FunctionBuilder, operand: ast.Expr) ?[]const u8 {
+fn inferredLocalAddressRootGlobal(builder: *FunctionBuilder, operand: ast.Expr) ?[]const u8 {
     return switch (operand.kind) {
-        .ident => |ident| if (builder.mutable_globals.contains(ident.text)) ident.text else null,
-        .member => |node| inferredLocalAddressRootMutableGlobal(builder, node.base.*),
+        .ident => |ident| if (builder.global_type_exprs.contains(ident.text)) ident.text else null,
+        .member => |node| inferredLocalAddressRootGlobal(builder, node.base.*),
         .index => |node| blk: {
             const base_ty = builder.typeExprForExpr(node.base.*) orelse break :blk null;
             if (aggregateTargetTypeAlias(base_ty, builder.aliases).kind != .array) break :blk null;
-            break :blk inferredLocalAddressRootMutableGlobal(builder, node.base.*);
+            break :blk inferredLocalAddressRootGlobal(builder, node.base.*);
         },
-        .grouped => |inner| inferredLocalAddressRootMutableGlobal(builder, inner.*),
+        .grouped => |inner| inferredLocalAddressRootGlobal(builder, inner.*),
         else => null,
     };
 }

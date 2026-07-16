@@ -1261,10 +1261,15 @@ test "MIR owns inferred local try payload types" {
 test "MIR owns inferred local direct address types" {
     const source =
         \\global shared_value: u32 = 4;
+        \\const readonly_value: u32 = 6;
         \\struct Holder { value: u32 }
         \\fn address_global() -> u32 {
         \\    let pointer = &shared_value;
         \\    pointer.* = 9;
+        \\    return pointer.*;
+        \\}
+        \\fn address_const_global() -> u32 {
+        \\    let pointer = &readonly_value;
         \\    return pointer.*;
         \\}
         \\fn address_local() -> u32 {
@@ -1338,6 +1343,9 @@ test "MIR owns inferred local direct address types" {
     const global_fact = targetTypeFactByKind(functionByName(typed_mir, "address_global").?, .inferred_local) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(ast.Mutability.mut, global_fact.target_ty.kind.pointer.mutability);
     try std.testing.expectEqualStrings("u32", global_fact.target_ty.kind.pointer.child.kind.name.text);
+    const const_global_fact = targetTypeFactByKind(functionByName(typed_mir, "address_const_global").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ast.Mutability.@"const", const_global_fact.target_ty.kind.pointer.mutability);
+    try std.testing.expectEqualStrings("u32", const_global_fact.target_ty.kind.pointer.child.kind.name.text);
     const fact = targetTypeFactByKind(functionByName(typed_mir, "address_local").?, .inferred_local) orelse return error.TestUnexpectedResult;
     const pointer = fact.target_ty.kind.pointer;
     try std.testing.expectEqual(ast.Mutability.mut, pointer.mutability);
