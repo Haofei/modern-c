@@ -8279,7 +8279,7 @@ const LlvmEmitter = struct {
             .deref => |inner| self.requireExpressionResultType(expr, self.derefPointeeType(inner.*)),
             .index => |node| self.requireExpressionResultType(expr, self.indexElementType(node.base.*)),
             .slice => |node| self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null),
-            .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else self.expressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| blk: {
+            .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| blk: {
                 const resolved_base_ty = self.resolveAliasType(base_ty);
                 if (resolved_base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");
                 if (self.packedBitsInfoForType(base_ty)) |info| {
@@ -8293,13 +8293,6 @@ const LlvmEmitter = struct {
             .try_expr => |node| self.tryExpressionResultType(expr, node.operand.*),
             else => null,
         };
-    }
-
-    fn expressionResultType(self: *LlvmEmitter, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {
-        const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return inferred;
-        const expected = inferred orelse return fact.target_ty;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected))) return null;
-        return fact.target_ty;
     }
 
     fn requireExpressionResultType(self: *LlvmEmitter, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {

@@ -57,7 +57,7 @@ pub fn sliceReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
         .slice => |node| blk: {
             const base_ty = ctx.source_type_for_expr(ctx.source_ctx, node.base.*, locals) orelse break :blk null;
             const inferred = sliceTypeForBase(ctx, base_ty, node.base.*.span) orelse break :blk null;
-            break :blk expressionResultType(ctx, expr, inferred);
+            break :blk requireExpressionResultType(ctx, expr, inferred);
         },
         .grouped => |inner| sliceReturnTypeForExpr(ctx, inner.*, locals),
         else => null,
@@ -269,7 +269,7 @@ pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Stri
             const struct_name = structNameFromType(ctx, base_ty) orelse return null;
             const struct_decl = ctx.structs.get(struct_name) orelse return null;
             for (struct_decl.fields) |field| {
-                if (std.mem.eql(u8, field.name.text, node.name.text)) return expressionResultType(ctx, expr, field.ty);
+                if (std.mem.eql(u8, field.name.text, node.name.text)) return requireExpressionResultType(ctx, expr, field.ty);
             }
             return null;
         },
@@ -286,12 +286,6 @@ pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Stri
         .deref => return ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span),
         else => return null,
     }
-}
-
-fn expressionResultType(ctx: TypeQueryContext, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
-    const fact = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return inferred;
-    if (!sameCStorageType(resolveAliasType(ctx, fact), resolveAliasType(ctx, inferred))) return null;
-    return fact;
 }
 
 fn requireExpressionResultType(ctx: TypeQueryContext, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
