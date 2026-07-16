@@ -98,6 +98,10 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
             "trackedMoveReferentPlaceForKey",
             "spine.borrowedMoveRoot",
         ],
+        ("fn consumeTrackedMoveReferent", "// An alias can retain a typed root place"): [
+            "consumeTrackedMoveBinding",
+            "referent.place",
+        ],
         ("fn callLaunderedMoveAliasReferent", "// (bug #3 / T1.3)"): [
             "trackedMoveReferentPlaceForKey",
             "spine.borrowedMoveRoot",

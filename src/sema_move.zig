@@ -1953,6 +1953,14 @@ test "move alias root consumption uses typed place rather than compatibility key
     consumeTrackedMoveReferent(&checker, .{ .key = "stale:owner", .place = root, .full_deref = true }, span, &state);
     try std.testing.expect(!state.get("compat:owner").?.live);
     try std.testing.expect(!reporter.has_errors);
+
+    // A legacy alias key may happen to name a live owner, but it cannot
+    // establish ownership identity. Refuse the move rather than consuming the
+    // binding selected by that text.
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    consumeTrackedMoveReferent(&checker, .{ .key = "compat:owner", .place = null, .full_deref = true }, span, &state);
+    try std.testing.expect(state.get("compat:owner").?.live);
+    try std.testing.expect(reporter.has_errors);
 }
 
 fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
@@ -2519,15 +2527,15 @@ fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics
 }
 
 fn consumeTrackedMoveReferent(self: *Checker, referent: AliasReferent, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    if (referent.place) |place| {
-        if (place.isSubplace()) {
-            consumeTrackedMovePlace(self, referent.key, place, span, state);
-        } else {
-            consumeTrackedMoveRootPlace(self, place, span, state);
-        }
+    const place = typedAliasReferentPlace(referent) orelse {
+        self.errorCode(span, "E_USE_AFTER_MOVE", "cannot move a linear `move` value through an alias without a typed referent place");
         return;
+    };
+    if (place.isSubplace()) {
+        consumeTrackedMovePlace(self, referent.key, place, span, state);
+    } else {
+        consumeTrackedMoveRootPlace(self, place, span, state);
     }
-    consumeTrackedMoveBinding(self, referent.key, span, state);
 }
 
 // An alias can retain a typed root place while its compatibility lookup key was
