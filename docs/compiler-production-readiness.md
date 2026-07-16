@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **650 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **651 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -762,6 +762,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Move checker alias registration requires typed referent places | Alias registration no longer treats the existence of a formatted referent key as proof that the referent is a tracked `move` resource. When the expression does not already carry a `MovePlace`, the checker recovers the stored place from the referenced state slot and finds ownership structurally; legacy slots without place metadata are not authorized as tracked aliases. This is one M1.1 migration, not completion of alias production or CFG/place analysis. | `src/sema_move.zig` `aliasReferentIsTracked`; unit test `move alias tracking requires a typed referent place`; `zig test src/sema_move.zig`; `zig test src/sema_tests.zig`; full production gate; `git diff --check`. |
 
+| Move checker stale-alias detection requires typed referent places | A stale alias without an embedded `alias_place` no longer treats its formatted `alias_of` key as ownership identity. The checker recovers the referenced slot's `MovePlace` and applies the common structural moved-place rule; legacy alias facts with no place metadata do not create a string-key stale-use finding. This is one M1.1 migration, not closure of alias facts or CFG/place analysis. | `src/sema_move.zig` `aliasSlotReferentMoved`; unit test `move stale aliases recover typed referent places from state slots`; `zig test src/sema_move.zig`; `zig test src/sema_tests.zig`; full production gate; `git diff --check`. |
+
 ### Bounded Workstream Status
 
 This is the authoritative execution dashboard for the three open compiler
@@ -798,7 +800,7 @@ the three large workstreams; it is not a second priority list.
 | Workstream | Phase order | Current handoff | A phase may advance only when |
 |---|---|---|---|
 | Typed semantic facts / typed MIR | T1 inventory -> T2.1 select -> T2.2 migrate -> T2.3 fail closed -> T3 classify -> T4 audit | Direct-dereference, unary, packed-bits member, scalar overlay-member, and overlay view-index result typing completed T2.1--T2.3: `addExpressionResultFact` produces the facts; C and LLVM common emitters consume them; exact missing/stale tests gate each specialized path. The next T2.1 must name a different registered family before lowering changes begin. | The selected family has fact-dump coverage, C/LLVM positive coverage, and missing/stale-fact rejection or a tested conservative/diagnosed disposition. |
-| CFG/place move checker | M1 structural places + M2 routing + M3 admission -> M4 retirement | M1.1 retired formatted-key root selection for deferred aliases and string-key-only alias tracking. Audit the next supported compatibility-key correctness fallback without broadening unsupported projections. | The named control-flow or projection family uses typed places and common CFG joins, with positive and diagnostic coverage; unsupported variants retain a stable error. |
+| CFG/place move checker | M1 structural places + M2 routing + M3 admission -> M4 retirement | M1.1 retired formatted-key root selection for deferred aliases, string-key-only alias tracking, and string-key stale-alias detection. Audit the next supported compatibility-key correctness fallback without broadening unsupported projections. | The named control-flow or projection family uses typed places and common CFG joins, with positive and diagnostic coverage; unsupported variants retain a stable error. |
 | Pointer-provenance race lowering | P1 default -> P2 direct proofs -> P3 boundary policies -> P4 audit | P3's current admitted boundaries have a documented policy. P4 starts from a concrete unclassified flow found by T2 or M2/M3 work and must choose exactly one policy before backend support is added. | Both backends demonstrate the selected policy, including an absent-proof path, and the fallback register records any remaining backend mechanics. |
 
 | Item | Current state | Next evidence needed |

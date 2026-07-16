@@ -1712,6 +1712,19 @@ test "move alias tracking requires a typed referent place" {
     try std.testing.expect(!aliasReferentIsTracked(.{ .key = "legacy", .place = null, .full_deref = false }, &state));
 }
 
+test "move stale aliases recover typed referent places from state slots" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+
+    try state.put("compat:owner", .{ .live = false, .span = span, .place = root });
+    try std.testing.expect(aliasSlotReferentMoved(.{ .live = false, .span = span, .alias_of = "compat:owner" }, &state));
+
+    try state.put("legacy", .{ .live = false, .span = span });
+    try std.testing.expect(!aliasSlotReferentMoved(.{ .live = false, .span = span, .alias_of = "legacy" }, &state));
+}
+
 test "move deferred aliases recover typed places from their state slots" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-defer-alias-place.mc", "");
     defer reporter.deinit();
@@ -4244,10 +4257,9 @@ fn aliasIndexExprType(self: *Checker, expr: ast.Expr, state: *const std.StringHa
 fn aliasSlotReferentMoved(slot: MoveSlot, state: *const std.StringHashMap(MoveSlot)) bool {
     const referent = slot.alias_of orelse return false;
     if (slot.alias_place) |typed| return referentPlaceMoved(typed, state);
-    if (state.get(referent)) |r| {
-        if (!r.live) return true;
-    }
-    return false;
+    const referent_slot = state.get(referent) orelse return false;
+    const place = referent_slot.place orelse return false;
+    return referentPlaceMoved(place, state);
 }
 
 fn referentPlaceMoved(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
