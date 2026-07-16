@@ -2373,11 +2373,14 @@ test "MIR owns byte-view call target facts" {
     try std.testing.expectEqual(@as(usize, 1), view.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.byte_view_as_bytes, view.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("[]const", view.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 2), view.target_type_facts.len);
+    try std.testing.expectEqual(@as(usize, 3), view.target_type_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.byte_view_source, view.target_type_facts[0].kind);
     try std.testing.expectEqualStrings("u32", view.target_type_facts[0].target_ty.kind.name.text);
     try std.testing.expectEqual(mir.TargetTypeKind.byte_view_result, view.target_type_facts[1].kind);
     try std.testing.expectEqual(ast.Mutability.@"const", view.target_type_facts[1].target_ty.kind.slice.mutability);
+    try std.testing.expectEqual(mir.TargetTypeKind.expression_result, view.target_type_facts[2].kind);
+    try std.testing.expectEqual(ast.Mutability.@"const", view.target_type_facts[2].target_ty.kind.pointer.mutability);
+    try std.testing.expectEqualStrings("u32", view.target_type_facts[2].target_ty.kind.pointer.child.kind.name.text);
 
     const equal = functionByName(typed_mir, "byte_equal").?;
     try std.testing.expectEqual(@as(usize, 1), equal.call_target_facts.len);
@@ -2706,10 +2709,13 @@ test "MIR owns semantic escape call target facts" {
     try std.testing.expectEqual(@as(usize, 1), address_fn.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.assume_noalias, address_fn.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("*mut", address_fn.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 2), address_fn.target_type_facts.len);
+    try std.testing.expectEqual(@as(usize, 3), address_fn.target_type_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.assume_noalias_source, address_fn.target_type_facts[0].kind);
     try std.testing.expectEqualStrings("*mut", address_fn.target_type_facts[0].result_ty.name());
     try std.testing.expectEqual(mir.TargetTypeKind.assume_noalias_result, address_fn.target_type_facts[1].kind);
+    try std.testing.expectEqual(mir.TargetTypeKind.expression_result, address_fn.target_type_facts[2].kind);
+    try std.testing.expectEqual(ast.Mutability.mut, address_fn.target_type_facts[2].target_ty.kind.pointer.mutability);
+    try std.testing.expectEqualStrings("u8", address_fn.target_type_facts[2].target_ty.kind.pointer.child.kind.name.text);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }

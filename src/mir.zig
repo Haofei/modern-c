@@ -6235,9 +6235,12 @@ const FunctionBuilder = struct {
             // A direct function address is a code pointer, not a pointer to a
             // value. Its full signature belongs to MIR so backends cannot
             // rebuild it from their separate function-signature maps.
-            .address_of => |inner| try self.functionAddressTypeExpr(expr.span, inner.*),
-            // `&place` has no standalone type fact: the dereference result is
-            // the already resolved storage type of that place.
+            .address_of => |inner| (try self.functionAddressTypeExpr(expr.span, inner.*)) orelse
+                // Data addresses use the same deliberately bounded place and
+                // mutability rule as inferred local address bindings. This gives
+                // lowering the complete pointer type without extending address
+                // inference to calls, pointer chains, or immutable globals.
+                try self.inferredLocalAddressTypeExpr(expr.span, inner.*),
             .deref => |inner| self.directAddressDerefTypeExpr(inner.*),
             .unary => |node| if (node.op == .logical_not)
                 ast_query.simpleNameType("bool", expr.span)
