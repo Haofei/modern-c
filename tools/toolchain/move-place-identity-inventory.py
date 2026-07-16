@@ -14,6 +14,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn recordAliasPlaceOrEscapeWithKey",
         "fn aliasSlotPtrForStoragePlace",
         "fn removeAliasSlotForStoragePlace",
+        "fn bindingMoveSlotForIdent",
         "fn aliasPlaceInfo",
         "fn aliasWildcardPlaceInfo",
         "fn directAliasReferentPlace",

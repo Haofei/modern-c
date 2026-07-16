@@ -1818,6 +1818,25 @@ test "move root ownership lookup uses typed places rather than compatibility key
     try std.testing.expect(!state.get("compat:owner").?.live);
 }
 
+test "move place construction resolves typed roots before compatibility keys" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-place-root.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+    const ty = ast_query.simpleNameType("Resource", span);
+    const owner = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "owner", .span = span } } };
+
+    // A predecessor may retain an arbitrary compatibility key, but source
+    // `owner` must still resolve the structural root recorded in the slot.
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = root, .ty = ty });
+    const resolved = placeKeyAndType(&checker, owner, &state) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(resolved.place.eql(root));
+    try std.testing.expect(sema_type.sameTypeSyntax(resolved.ty, ty));
+}
+
 test "move subplace outer-scope classification uses typed roots rather than compatibility keys" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
@@ -2922,9 +2941,10 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const std.StringH
     switch (expr.kind) {
         .grouped => |inner| return placeKeyAndType(self, inner.*, state),
         .ident => |id| {
-            const slot = state.get(id.text) orelse return null;
+            const slot = bindingMoveSlotForIdent(id.text, state) orelse return null;
             const ty = slot.ty orelse return null;
-            return .{ .key = id.text, .place = .{ .root = id.text }, .ty = ty };
+            const place: MovePlace = slot.place orelse .{ .root = id.text };
+            return .{ .key = id.text, .place = place, .ty = ty };
         },
         .member => |m| {
             const base = placeKeyAndType(self, m.base.*, state) orelse return null;
@@ -2980,6 +3000,25 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const std.StringH
         },
         else => return null,
     }
+}
+
+// Source identifier spelling is a map index only. A typed root slot can retain
+// a different compatibility key after CFG joins, so resolve the exact root
+// place before falling back to key-only metadata such as index facts.
+fn bindingMoveSlotForIdent(name: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+    const expected: MovePlace = .{ .root = name };
+    if (state.get(name)) |slot| {
+        if (slot.place) |place| {
+            if (place.eql(expected)) return slot;
+        } else return slot;
+    }
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        const place = slot.place orelse continue;
+        if (place.eql(expected)) return slot;
+    }
+    return null;
 }
 
 fn constIndexValue(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), ctx: Context) ?usize {
