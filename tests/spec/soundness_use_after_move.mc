@@ -100,6 +100,17 @@ fn reject_call_launder_used() -> u32 {
     return a + pk(q);
 }
 
+// 8a. The call argument is itself a named alias. Its typed referent must survive
+// call laundering even when the alias storage key is not the owner identity.
+fn reject_call_laundered_alias_used() -> u32 {
+    let t: T = mk();
+    let p: *T = &t;
+    let q: *T = id(p);
+    let a: u32 = cn(t);
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(q);
+}
+
 // ---------------------------------------------------------------------------
 // REJECTED channels — conservative move-refusal (fire on the MOVE line, because the
 // borrow escaped into memory we cannot prove dead). The later read is omitted so each
@@ -343,6 +354,16 @@ fn accept_call_launder_dead_before_move() -> u32 {
     let t: T = mk();
     let q: *T = id(&t);
     let b: u32 = pk(q);           // used BEFORE the move
+    return cn(t) + b;
+}
+
+// A named alias remains valid for the duration of the call result use. The
+// subsequent owner move is valid because the laundered alias is already dead.
+fn accept_call_laundered_alias_dead_before_move() -> u32 {
+    let t: T = mk();
+    let p: *T = &t;
+    let q: *T = id(p);
+    let b: u32 = pk(q);
     return cn(t) + b;
 }
 

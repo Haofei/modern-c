@@ -1836,17 +1836,20 @@ test "move stale aliases require carried typed referent places" {
     try std.testing.expect(aliasSlotReferentMoved(.{ .live = false, .span = span, .alias_of = "compat:owner" }, &state));
 }
 
-test "move pointer-return aliases recover typed referent places from state slots" {
+test "move pointer-return aliases require carried typed referent places" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
-    defer state.deinit();
 
-    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
-    try std.testing.expect(trackedMoveReferentPlaceForKey("compat:owner", &state).?.eql(root));
+    const carried = carriedAliasReferent(.{
+        .live = false,
+        .span = span,
+        .alias_of = "compat:owner",
+        .alias_place = root,
+    }) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("compat:owner", carried.key);
+    try std.testing.expect(carried.place.?.eql(root));
 
-    try state.put("legacy", .{ .live = true, .span = span });
-    try std.testing.expect(trackedMoveReferentPlaceForKey("legacy", &state) == null);
+    try std.testing.expect(carriedAliasReferent(.{ .live = false, .span = span, .alias_of = "compat:owner" }) == null);
 }
 
 test "move deferred aliases recover typed places from their state slots" {
@@ -2203,6 +2206,26 @@ fn trackedAliasReferent(referent: AliasReferent, state: *const std.StringHashMap
     return .{ .key = referent.key, .place = place, .full_deref = referent.full_deref };
 }
 
+// A stored pointer alias carries its source place at registration time. Consumers
+// must preserve that identity rather than recover it through `alias_of`, whose
+// text is only a compatibility index and can differ after CFG joins or rewrites.
+fn carriedAliasReferent(slot: MoveSlot) ?AliasReferent {
+    const key = slot.alias_of orelse return null;
+    const place = slot.alias_place orelse return null;
+    return .{ .key = key, .place = place, .full_deref = slot.full_deref_alias };
+}
+
+fn carriedAliasReferentForExpr(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?AliasReferent {
+    return switch (expr.kind) {
+        .ident => |id| blk: {
+            const slot = state.get(id.text) orelse break :blk null;
+            break :blk carriedAliasReferent(slot);
+        },
+        .grouped => |inner| carriedAliasReferentForExpr(inner.*, state),
+        else => null,
+    };
+}
+
 fn trackedMoveReferentPlaceForKey(key: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
     const slot = state.get(key) orelse return null;
     const place = slot.place orelse return null;
@@ -2441,9 +2464,9 @@ fn immediateFullDerefMoveReferent(self: *Checker, expr: ast.Expr, state: *const 
     if (directAliasReferentPlace(self, expr, state)) |referent| {
         return .{ .key = referent.key, .place = referent.place, .full_deref = true };
     }
-    const root = spine.borrowedMoveRoot(expr, state) orelse return null;
-    const place = trackedMoveReferentPlaceForKey(root, state) orelse return null;
-    return .{ .key = place.root, .place = place, .full_deref = true };
+    var referent = carriedAliasReferentForExpr(expr, state) orelse return null;
+    referent.full_deref = true;
+    return referent;
 }
 
 fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
@@ -4086,18 +4109,16 @@ fn callLaunderedMoveAliasReferent(self: *Checker, init_expr: ast.Expr, state: *c
             }
             continue;
         }
-        const root = spine.borrowedMoveRoot(arg, state) orelse blk: {
-            // An alias local `p` passed by value refers to its typed source
-            // place; its compatibility spelling is only a state-map index.
-            if (spine.aliasReferentOf(arg, state)) |referent| break :blk referent;
-            continue;
-        };
+        const carried = carriedAliasReferentForExpr(arg, state) orelse continue;
+        const place = typedAliasReferentPlace(carried) orelse continue;
         // Only register the laundered alias while the root is still LIVE. If it was already
         // moved, the borrow of it (the `&t` arg) is itself the use-after-move and is reported
         // by moveBorrow at the call — registering an alias here would double-report on the
         // later `q.*` use.
-        if (trackedMoveReferentPlaceForKey(root, state)) |place| {
-            return .{ .key = place.root, .place = place, .full_deref = false };
+        if (rootMoveSlotForPlace(place, state)) |root| {
+            if (root.live and root.alias_of == null) {
+                return .{ .key = carried.key, .place = place, .full_deref = false };
+            }
         }
     }
     return null;

@@ -17,6 +17,8 @@ ANCHORS: dict[str, list[str]] = {
         "fn aliasPlaceInfo",
         "fn aliasWildcardPlaceInfo",
         "fn directAliasReferentPlace",
+        "fn carriedAliasReferent",
+        "fn carriedAliasReferentForExpr",
         "fn immediateFullDerefMoveReferent",
         "fn typedAliasReferentPlace",
         "fn typedAliasReferentPlace(referent: AliasReferent) ?MovePlace",
@@ -77,6 +79,23 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
         ("fn typedAliasReferentPlace", "fn aliasReferentTargetsOuter"): [
             "state.get(",
             "referent.key",
+        ],
+        ("fn carriedAliasReferent", "fn carriedAliasReferentForExpr"): [
+            "state.get(",
+            "trackedMoveReferentPlaceForKey",
+        ],
+        ("fn carriedAliasReferentForExpr", "fn trackedMoveReferentPlaceForKey"): [
+            "trackedMoveReferentPlaceForKey",
+            "spine.",
+        ],
+        ("fn immediateFullDerefMoveReferent", "fn consumeTrackedMoveBinding"): [
+            "trackedMoveReferentPlaceForKey",
+            "spine.borrowedMoveRoot",
+        ],
+        ("fn callLaunderedMoveAliasReferent", "// (bug #3 / T1.3)"): [
+            "trackedMoveReferentPlaceForKey",
+            "spine.borrowedMoveRoot",
+            "spine.aliasReferentOf",
         ],
     },
 }

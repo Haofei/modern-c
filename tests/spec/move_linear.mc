@@ -383,6 +383,26 @@ fn reject_owner_after_copied_full_alias_move() -> u32 {
     return a + b;
 }
 
+// accepted: a grouped full alias still carries the typed source place, so
+// consuming through its dereference poisons the owner rather than its key slot.
+fn accept_move_through_grouped_full_alias() -> u32 {
+    let t: Token = make();
+    let p: *Token = &t;
+    let moved: Token = (p).*;
+    return consume(moved);
+}
+
+// rejected: the grouped full-alias route consumes the owner through its carried
+// `MovePlace`; the owner cannot be consumed again afterwards.
+fn reject_owner_after_grouped_full_alias_move() -> u32 {
+    let t: Token = make();
+    let p: *Token = &t;
+    let moved: Token = (p).*;
+    let a: u32 = consume(moved);
+    let b: u32 = consume(t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + b;
+}
+
 // rejected: copying an alias into a new binding must NOT launder the staleness.
 // `let q = p;` inherits p's alias-of(t), so reading through q after t is moved is
 // still a stale use-after-move. (Bug #1: previously a false negative — the copy
