@@ -3935,6 +3935,10 @@ const CEmitter = struct {
         if (try self.emitEnumVariantPath(node, locals)) return true;
         if (try self.emitPackedBitsMember(node, member_span, locals)) return true;
         if (locals) |local_set| {
+            if (self.overlayMemberResultType(node, local_set)) |inferred_field_ty| {
+                const field_ty = (self.mirTargetTypeFactAt(.expression_result, member_span) orelse return error.UnsupportedCEmission).target_ty;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
+            }
             if (try self.emitOverlayMemberReadExpr(node, local_set)) return true;
         }
         if (try self.emitGlobalArrayElementMemberLoadExpr(node, locals)) return true;
@@ -3952,6 +3956,14 @@ const CEmitter = struct {
         if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
         try self.emitOrdinaryMemberLoadExpr(node, locals);
         return true;
+    }
+
+    fn overlayMemberResultType(self: *CEmitter, node: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const overlay_name = lower_c_access.overlayUnionNameForExpr(node.base.*, locals) orelse return null;
+        const info = self.overlay_unions.get(overlay_name) orelse return null;
+        const field = info.fields.get(node.name.text) orelse return null;
+        if (field.byte_array_len != null or ast_query.overlayArrayElementType(field.ty) != null) return null;
+        return field.ty;
     }
 
     // A variant-path literal `Enum.variant` used as a value emits the enum's case

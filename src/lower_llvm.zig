@@ -3586,6 +3586,8 @@ const LlvmEmitter = struct {
             // Array views (byte or non-byte) are read element-wise via the index path;
             // a bare member load only applies to scalar members.
             if (overlayArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
+            const field_ty = (self.mirTargetTypeFactAt(.expression_result, member_span) orelse return error.UnsupportedLlvmEmission).target_ty;
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(field.ty))) return error.UnsupportedLlvmEmission;
             const ptr = try self.emitOverlayFieldAddress(node.base.*, field);
             try self.emitOrdinaryShadowHook(ptr, field.ty, .load_pre);
             return try self.emitOrdinaryLoad(field.ty, ptr, self.memberBaseIsGlobal(node));
@@ -8281,7 +8283,7 @@ const LlvmEmitter = struct {
                 if (self.packedBitsInfoForType(base_ty)) |info| {
                     if (self.packedBitsFieldIndex(info, node.name.text) != null) break :blk simpleType(expr.span, "bool");
                 }
-                if (self.overlayField(node.base.*, node.name.text)) |field| break :blk field.ty;
+                if (self.overlayField(node.base.*, node.name.text)) |field| break :blk self.requireExpressionResultType(expr, field.ty);
                 if (self.memberField(node.base.*, node.name.text)) |field| break :blk field.ty;
                 break :blk null;
             } else null),

@@ -1466,10 +1466,15 @@ test "LLVM inferred local direct addresses require MIR types" {
 test "LLVM compound expressions require complete MIR result facts" {
     const source =
         \\struct Pair { value: u8 }
+        \\overlay union Word { value: u32 }
         \\packed bits Flags: u8 { set: bool }
         \\fn member_result() -> u8 {
         \\    let pair: Pair = .{ .value = 7 };
         \\    return pair.value;
+        \\}
+        \\fn overlay_result(word: Word) -> u32 {
+        \\    let value: u32 = word.value;
+        \\    return value;
         \\}
         \\fn deref_result() -> u32 {
         \\    var value: u32 = 7;
@@ -1542,6 +1547,24 @@ test "LLVM compound expressions require complete MIR result facts" {
         defer module_mir.deinit();
         const member_offset = std.mem.indexOf(u8, source, "pair.value") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "member_result", .expression_result, member_offset, "pair.value".len, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_expression_result_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const overlay_offset = std.mem.indexOf(u8, source, "word.value") orelse return error.TestUnexpectedResult;
+        try removeTargetTypeFactAtOffsetForFunction(&module_mir, "overlay_result", .expression_result, overlay_offset, "word.value".len);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_expression_result_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const overlay_offset = std.mem.indexOf(u8, source, "word.value") orelse return error.TestUnexpectedResult;
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "overlay_result", .expression_result, overlay_offset, "word.value".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_expression_result_facts.mc", .{}, false, .riscv64, null));
