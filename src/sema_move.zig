@@ -4630,45 +4630,38 @@ fn moveDeferStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveS
 }
 
 fn moveDeferLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    if (loop.iterable) |iter| moveDeferLoopConditionCfg(self, iter, state, aliases);
-    moveDeferLoopBodyCfg(self, loop.body, state, aliases);
-}
+    // Deferred cleanup loops still have zero-or-many iteration semantics. Analyze
+    // their source condition/body once, then let the same loop-head worklist used
+    // by ordinary loops merge the zero-iteration and backedge states. `break` and
+    // `continue` in a defer remain a semantic E_DEFER_CONTROL_FLOW boundary, so
+    // this CFG deliberately models only supported cleanup-loop fallthrough.
+    var loop_cfg = loopBodyMoveCfg(self) orelse return;
+    defer loop_cfg.deinit();
 
-fn moveDeferLoopConditionCfg(self: *Checker, condition: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    var linear = linearMoveCfg(self, .branch_join) orelse return;
-    defer linear.deinit();
-
-    var worklist = MoveStateCfgWorklist.init(self, &linear.cfg, linear.entry, state) orelse return;
+    var worklist = MoveStateCfgWorklist.init(self, &loop_cfg.cfg, loop_cfg.entry, state) orelse return;
     defer worklist.deinit();
+    var condition_visited = false;
+    var body_visited = false;
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == linear.entry) {
+        if (block == loop_cfg.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == linear.body) {
-            moveDefer(self, condition, block_state, aliases);
+        } else if (block == loop_cfg.loop_head) {
+            if (!condition_visited) {
+                condition_visited = true;
+                if (loop.iterable) |iter| moveDefer(self, iter, block_state, aliases);
+            }
+            worklist.propagateSuccessorsExcept(self, block, block_state, if (body_visited) loop_cfg.body else null);
+        } else if (block == loop_cfg.body) {
+            body_visited = true;
+            moveDeferBlock(self, loop.body, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == linear.exit) {
-            reportLoopOuterResourceChanges(self, state, block_state);
         }
     }
-}
-
-fn moveDeferLoopBodyCfg(self: *Checker, body: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    var linear = linearMoveCfg(self, .branch_join) orelse return;
-    defer linear.deinit();
-
-    var worklist = MoveStateCfgWorklist.init(self, &linear.cfg, linear.entry, state) orelse return;
-    defer worklist.deinit();
-    while (worklist.pop()) |block| {
-        const block_state = worklist.statePtr(block) orelse continue;
-        if (block == linear.entry) {
-            worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == linear.body) {
-            moveDeferBlock(self, body, block_state, aliases);
-            worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == linear.exit) {
-            reportLoopOuterResourceChanges(self, state, block_state);
-        }
+    if (worklist.statePtr(loop_cfg.exit)) |exit_state| {
+        var entry_state = cloneMoveState(self, state);
+        defer entry_state.deinit();
+        reportLoopOuterResourceChanges(self, &entry_state, exit_state);
     }
 }
 

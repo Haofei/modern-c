@@ -433,6 +433,18 @@ fn reject_defer_block_loop_borrow(flag: bool) -> u32 {
     return 0;
 }
 
+// Accepted: cleanup-loop locals are scoped to each iteration and may be
+// consumed before the iteration ends. The loop itself remains zero-or-many.
+fn accept_defer_block_loop_consumed_cleanup_local(flag: bool) -> u32 {
+    defer {
+        while flag {
+            let r: Res = mkres(1);
+            consume(r);
+        }
+    };
+    return 0;
+}
+
 // Rejected: deferred borrows protect subplaces too; moving the whole aggregate
 // would invalidate the field borrow before cleanup.
 fn reject_whole_after_deferred_field_borrow() -> u32 {

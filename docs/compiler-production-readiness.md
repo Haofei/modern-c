@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **639 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **640 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -740,6 +740,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Move checker immediate root dereferences carry typed referents | Immediate full dereference of a direct root address, such as `(&resource).*`, now retains the same root `MovePlace` as a named direct alias before the legacy `borrowedMoveRoot` fallback. Root dereference consumption therefore reaches the typed referent branch of the common consumer; unsupported immediate forms retain the fallback boundary. | `src/sema_move.zig` `immediateFullDerefMoveReferent` and `directAliasReferentPlace`; `tests/spec/move_linear.mc` immediate-full-deref cases; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `python3 tools/toolchain/readiness-ledger-test.py`; `zig build move-place-identity-inventory-test move-cfg-skeleton-inventory-test move-unsupported-inventory-test`; `git diff --check`. |
 
+| Deferred cleanup loops use the common loop-head CFG | A supported `defer { while/for ... }` cleanup loop now uses one explicit entry/head/body/exit CFG. The deferred condition and body are source-analyzed once, while the shared worklist joins the zero-iteration exit with the body backedge and reports outer-resource changes once from the final exit state. Cleanup-block scope finalization remains active for body locals. `break` and `continue` inside a defer remain an intentional `E_DEFER_CONTROL_FLOW` semantic boundary; they are not treated as accepted loop exits. | `src/sema_move.zig` `moveDeferLoopCfg` and `loopBodyMoveCfg`; `tests/spec/move_place.mc` `accept_defer_block_loop_consumed_cleanup_local`, `reject_defer_block_loop_consume`, and `reject_defer_block_loop_borrow`; `tests/spec/defer_cleanup.mc` deferred control-flow diagnostics; `tools/toolchain/move-cfg-skeleton-inventory.py`; `zig test src/sema_move.zig`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `python3 tools/toolchain/readiness-ledger-test.py`; `zig build move-place-identity-inventory-test move-cfg-skeleton-inventory-test move-unsupported-inventory-test`; `git diff --check`. |
+
 ### Bounded Workstream Status
 
 This is the execution dashboard for the three open compiler workstreams. It is
@@ -769,21 +771,21 @@ evidence is gated. The terms below are intentionally distinct:
 | Workstream | Goal | Complete phases | Current closure unit | Later phases | Workstream closes when |
 |---|---|---|---|---|---|
 | Typed semantic facts / typed MIR | Give lowering one semantic authority instead of backend AST rediscovery. | T1 inventory/admission; bounded T2 migrations in the evidence register; T3's LLVM aggregate-alias write proof retired as mechanics-only. | **T2.1:** choose exactly one open registered family, name its producer and C/LLVM consumers, then decide whether its closure is MIR fact, conservative fallback, or diagnostic. | T2.2 migration; T2.3 fail-closed admission; T3 classification of every register row; T4 semantic-authority audit. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
-| CFG/place move checker | Make typed places and CFG dataflow, rather than formatted keys and statement shape, decide supported move behavior. | Foundation slices only: covered `MovePlace` paths and selected CFG/worklist transport. | **M2.3:** give cleanup loops explicit condition/head/body/exit control flow, target-aware `break`/`continue`, and cleanup-local scope preservation. | M1.1 remaining string-key correctness paths; M1.2/M3 projection admission; M4 compatibility retirement. | Typed places and CFG joins decide every supported move path; every unsupported path has a stable diagnostic. |
+| CFG/place move checker | Make typed places and CFG dataflow, rather than formatted keys and statement shape, decide supported move behavior. | Foundation slices, including M2.3 cleanup-loop CFG routing: covered `MovePlace` paths and selected CFG/worklist transport. | **M1.1:** remove remaining formatted-key correctness decisions from supported read, consume, assignment, defer-borrow, and alias-invalidation paths. | M1.2/M3 projection admission; M4 compatibility retirement. | Typed places and CFG joins decide every supported move path; every unsupported path has a stable diagnostic. |
 | Pointer-provenance race lowering | Preserve MC's non-UB race contract without backend-local provenance guessing. | P1 conservative scalar default; P2 documented direct MIR provenance producers. | **P3.1--P3.3, trigger-driven:** when another slice exposes an unclassified escaped, returned/higher-order, or aggregate-CFG pointer flow, select its policy: MIR fact, conservative race lowering, or diagnostic. | P4 fallback-register and C/LLVM policy audit. | Every pointer-flow boundary has a declared policy and no backend silently recreates provenance. |
 
 **Current implementation sequence.** `Current` is a planned eligible unit, not
-a claim that all three workstreams are being implemented concurrently. The next
-code slice is **M2.3** in the move checker. Once it is complete, select one
-**T2.1** registered fact family and complete its T2.2/T2.3 gates. Start a P3
-slice only when either of those changes exposes a previously unclassified
-pointer flow. This ordering prevents direct-shape test expansion from being
-mistaken for architectural progress.
+a claim that all three workstreams are being implemented concurrently. M2.3 is
+complete. The next code slice is **T2.1**: select one registered fact family,
+then complete its T2.2/T2.3 gates. The next move slice is M1.1. Start a P3
+slice only when either change exposes a previously unclassified pointer flow.
+This ordering prevents direct-shape test expansion from being mistaken for
+architectural progress.
 
 | Order | Workstream | Completed foundation | Remaining closure units | Next valid implementation slice | Close when |
 |---|---|---|---|---|---|
-| 1 | CFG/place-based move checker | `MovePlace` exists for covered roots/projections; branch, short-circuit, ordinary-loop backedges/target exits, and selected `defer` transport use production CFG/worklist paths. | **M2.3 deferred-loop routing:** cleanup-loop condition/head/body/exit flow, labeled target resolution, and cleanup-local finalization; M1 remaining string-key correctness paths; M3 explicit move-array/pointer-to-array admission; M4 compatibility removal. | Build one cleanup-loop CFG that transports a deferred condition, body, `break`, and `continue` through the shared worklist while preserving existing `E_MOVE_LOOP_RESOURCE` and cleanup-local leak behavior. | Typed places and CFG joins decide all supported move behavior; unsupported paths retain stable diagnostics. |
-| 2 | Typed semantic fact table / typed MIR | Fact inventory/admission gates and bounded migrations for provenance, ranges, representation, calls, MMIO, varargs, traps, and selected inferred local types. | T2 remaining registered fact families; T3 final disposition for every registered backend inference; T4 removal of unregistered lowering-affecting AST inference. | When the move slice exposes a registered semantic decision, move its exact inputs/results to MIR and add producer, C/LLVM consumer, and missing/stale-fact tests. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
+| 1 | Typed semantic fact table / typed MIR | Fact inventory/admission gates and bounded migrations for provenance, ranges, representation, calls, MMIO, varargs, traps, and selected inferred local types. | T2 remaining registered fact families; T3 final disposition for every registered backend inference; T4 removal of unregistered lowering-affecting AST inference. | Select one open registered family, record its semantic inputs/results and producer/consumer points, then add MIR producer, C/LLVM consumers, and missing/stale-fact tests. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
+| 2 | CFG/place-based move checker | `MovePlace` exists for covered roots/projections; branch, short-circuit, ordinary-loop backedges/target exits, and supported deferred-loop condition/body/exit transport use production CFG/worklist paths. | M1 remaining string-key correctness paths; M3 explicit move-array/pointer-to-array admission; M4 compatibility removal. | Replace one remaining supported formatted-key correctness decision with typed `MovePlace` overlap/identity and add positive and diagnostic regression coverage. | Typed places and CFG joins decide all supported move behavior; unsupported paths retain stable diagnostics. |
 | 3 | Pointer-provenance race lowering | Conservative scalar-deref default, direct MIR provenance producers, and a gated current fallback register. | P3 disposition of unclassified escaped, higher-order, returned, and aggregate-CFG flows; P4 final inventory and policy audit. | Only when a move or typed-fact slice exposes an unclassified pointer flow: choose MIR fact, conservative lowering, or diagnostic before adding support. | Every pointer-flow boundary has a declared policy and no backend silently recreates provenance. |
 
 **Phase dependencies and handoffs.** This table defines when a phase can start
@@ -793,7 +795,7 @@ the three large workstreams; it is not a second priority list.
 | Workstream | Phase order | Current handoff | A phase may advance only when |
 |---|---|---|---|
 | Typed semantic facts / typed MIR | T1 inventory -> T2.1 select -> T2.2 migrate -> T2.3 fail closed -> T3 classify -> T4 audit | The next T2.1 selection must identify one open register row, its MIR producer, and both backend consumers before lowering changes begin. | The selected family has fact-dump coverage, C/LLVM positive coverage, and missing/stale-fact rejection or a tested conservative/diagnosed disposition. |
-| CFG/place move checker | M1 structural places + M2 routing + M3 admission -> M4 retirement | M2.3 must replace deferred-loop statement-walker fallthrough with one cleanup-loop CFG and preserve cleanup scope on every exit. | The named control-flow or projection family uses typed places and common CFG joins, with positive and diagnostic coverage; unsupported variants retain a stable error. |
+| CFG/place move checker | M1 structural places + M2 routing + M3 admission -> M4 retirement | M1.1 must remove one remaining correctness decision from the formatted compatibility-key path without broadening unsupported projections. | The named control-flow or projection family uses typed places and common CFG joins, with positive and diagnostic coverage; unsupported variants retain a stable error. |
 | Pointer-provenance race lowering | P1 default -> P2 direct proofs -> P3 boundary policies -> P4 audit | P3 starts only from a concrete unclassified flow found by T2 or M2/M3 work; it must choose exactly one policy before backend support is added. | Both backends demonstrate the selected policy, including an absent-proof path, and the fallback register records any remaining backend mechanics. |
 
 | Item | Current state | Next evidence needed |
@@ -1146,7 +1148,7 @@ enough if the string remains the deciding identity.
 | M1.2: projection admission | M1/M3 | Local, field, deref, fixed element, stable dynamic index, wildcard, and alias projections each have an exact overlap rule or a stable rejection. | Dynamic/non-local move-array and arbitrary pointer-to-array cases remain fail-closed until admitted. |
 | M2.1: branch and short-circuit joins | M2 | Branch, `if let`, switch, and short-circuit state are transported and joined by the common worklist. | Join diagnostics and accepted paths no longer depend on statement-specific state merging. |
 | M2.2: loop/backedge/exit routing | M2 | Loop backedges, `break`, `continue`, return, `?`, and defer exits use the same CFG transfer/join authority. | Specialized executors are removed only after equivalent worklist regressions exist. |
-| M2.3: deferred-loop routing | M2 | A cleanup loop has explicit condition/head/body/exit blocks, backedge and target-aware `break`/`continue` transport, and cleanup-local finalization on each terminating edge. | Positive deferred-loop cleanup and reject diagnostics prove zero-or-many iteration, nested/labeled exits, and cleanup-local scope behavior without statement-walker fallthrough. |
+| M2.3: deferred-loop routing (complete) | M2 | A supported cleanup loop has explicit condition/head/body/exit blocks, a worklist backedge, and cleanup-local finalization. `break`/`continue` inside `defer` remain the existing `E_DEFER_CONTROL_FLOW` boundary rather than admitted exits. | Positive zero-or-many cleanup-local coverage, `E_MOVE_LOOP_RESOURCE` diagnostics for outer consume/borrow, retained deferred-control-flow diagnostics, and the CFG inventory prove no statement-walker fallthrough. |
 | M4.1: compatibility retirement | M4 | String keys are indexing/debug compatibility only; they cannot decide move correctness. | Inventory and tests show every supported path reaches the typed-place/CFG engine. |
 
 Current status: the checker is still primarily AST/state-map based, but direct ownership
@@ -1173,6 +1175,9 @@ uses loop-specific widening where needed. Ordinary loop-body backedges now flow
 through an explicit loop-head worklist block and join the zero-iteration exit
 state; `break`/`continue` now queue their state on the labeled target loop and
 drain through that loop's CFG worklist.
+Supported deferred cleanup loops now use the same entry/head/body/exit topology;
+their condition/body state joins at the loop head, while deferred control-flow
+statements remain rejected before move routing.
 Stable dynamic indexes now have an
 explicit exact/may-overlap/disjoint projection policy, and unknown dynamic
 indexes remain wildcard projections. Pointer-mediated moves now have an explicit
@@ -1182,12 +1187,12 @@ deferred-borrow, read-side alias, and unsupported-channel rows above are
 regression coverage; they do not close the remaining typed-place map migration
 or CFG rewrite.
 
-**Next phase action:** implement M2.3 deferred-loop routing. The slice must add
-an explicit cleanup-loop CFG with condition/head/body/exit transfer, target-aware
-`break`/`continue`, and cleanup-local finalization. It must retain the existing
-zero-or-many `E_MOVE_LOOP_RESOURCE` behavior and add positive and diagnostic
-coverage for nested/labeled exits. Symbolic-expression or stale-alias fixtures
-alone do not advance M1 or M2.
+**Next phase action:** M2.3 is complete. The next move slice is M1.1: choose
+one remaining supported read, consume, assignment, defer-borrow, or alias
+invalidation path whose correctness still depends on a formatted compatibility
+key, replace that decision with `MovePlace` identity/overlap, and add positive
+and diagnostic coverage. Do not broaden unsupported projections merely to add
+fixtures.
 
 ### Production-Ready Exit Rule
 
