@@ -917,6 +917,23 @@ slice; it is not “add facts wherever a test happens to fail.”
 | T3.1: classify every register row | T3 | Mark each remaining family MIR-owned, conservative fallback, or diagnosed unsupported. | Inventory gate verifies the classification and named implementation anchor. |
 | T4.1: semantic-authority audit | T4 | Remove or explicitly register every lowering-affecting AST inference. | No unregistered type, provenance, representation, call-target, ABI, or safety inference remains. |
 
+**Registered-family disposition.** This is the canonical T3 work queue. The
+eight-row budget is not a completion percentage: a row remains open until its
+listed closure path is actually implemented and inventory-gated. “Accepted
+boundary” means a deliberately conservative/diagnosed current policy, not that
+the underlying language feature is generally complete.
+
+| Register family | Current disposition | Closure path | Next valid action |
+|---|---|---|---|
+| `c-expression-type-inference` | Partially MIR-owned: direct storage reads, calls, casts, unary/binary, `try` results, and named builtins have facts; broader computed expressions remain backend inference. | Migrate each remaining expression-result shape or reject it when no complete fact exists. | Name one computed expression shape whose result affects C lowering and add MIR producer/consumer/missing-fact gates. |
+| `llvm-expression-type-inference` | Partially MIR-owned on the same migrated expression/call families; broader expression typing remains backend inference. | Consume the same fact family in LLVM or reject missing facts before expression emission. | Pair the selected C expression family with LLVM result-type consumption and stale-fact rejection. |
+| `c-type-shape-classification` | Open: local/global aggregate-scalar and race-helper routing still derives shape from resolved types. | Move lowering-affecting shape/race eligibility to typed layout or memory facts, or retain a documented target matrix. | Inventory one shape decision that changes emitted helper/ABI behavior and decide fact versus accepted target policy. |
+| `c-abi-aggregate-lowering` | Open: C aggregate literals and ABI-shaped construction remain backend mechanics around sema layout. | Supply typed ABI/layout facts or keep unsupported ABI forms diagnosed. | Select one supported aggregate ABI boundary, define its fact payload, or retain its diagnostic as the final disposition. |
+| `c-call-target-classification` | Partially MIR-owned: named builtin and direct-call families are fact-gated; remaining syntax checks must be mechanics-only or migrated. | Migrate any remaining semantic callee classification to `CallTargetFact`; keep declaration/arity checks as ABI mechanics. | Audit one remaining C special-call classifier and either prove it consumes existing facts or add a new MIR identity. |
+| `c-direct-global-race-helpers` | Accepted bounded backend policy: direct named global leaves use the documented C helper matrix. | Replace with typed memory/race facts only if global routing expands beyond the current matrix. | Keep the helper-width/aggregate failure matrix tested; do not add AST-only global routes. |
+| `c-pointer-provenance-consumption` | Accepted conservative fallback for scalar leaves outside documented MIR provenance producers. | Close with P3/P4 provenance policy, not by adding C-only inference. | When a new pointer flow is admitted, choose MIR proof, race-tolerant default, or diagnostic before lowering. |
+| `llvm-pointer-provenance-consumption` | Direct facts are MIR-owned; one local-only aggregate-alias proof remains explicitly registered. | Migrate that proof to MIR or accept it as mechanics-only after proving it cannot establish global/shared provenance. | Audit the local-only proof against aggregate alias mutation and either add MIR fact production or document the final local-emission boundary. |
+
 Current status: the narrow foundation is complete: pointer provenance for covered
 direct shapes, no-overflow `RangeFact` consumption, `elided_bounds`, value IDs,
 owned `RepresentationFact` rows, and C/LLVM representation-fact admission gates.
