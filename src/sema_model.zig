@@ -296,7 +296,10 @@ pub const LoopMoveFrame = struct {
     entry_state: std.StringHashMap(MoveSlot),
     invalidated_const_indexes: std.StringHashMap(void),
     invalidated_alias_places: std.ArrayListUnmanaged(MovePlace) = .empty,
-    invalidated_aliases: std.StringHashMap(void),
+    // An alias without a typed storage place cannot be matched across an
+    // early-exit edge. Keep it conservative rather than using its map key as
+    // ownership identity.
+    invalidated_untyped_aliases: bool = false,
     pending_exits: std.ArrayListUnmanaged(LoopMoveExitState) = .empty,
 
     pub fn deinit(self: *LoopMoveFrame) void {
@@ -304,7 +307,6 @@ pub const LoopMoveFrame = struct {
         self.entry_state.deinit();
         self.invalidated_const_indexes.deinit();
         self.invalidated_alias_places.deinit(self.allocator);
-        self.invalidated_aliases.deinit();
         for (self.pending_exits.items) |*exit_state| exit_state.state.deinit();
         self.pending_exits.deinit(self.allocator);
     }

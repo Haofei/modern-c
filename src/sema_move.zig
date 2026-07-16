@@ -1051,7 +1051,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(MoveSlo
         .entry_state = cloneMoveState(self, state),
         .invalidated_const_indexes = std.StringHashMap(void).init(self.reporter.allocator),
         .invalidated_alias_places = .empty,
-        .invalidated_aliases = std.StringHashMap(void).init(self.reporter.allocator),
+        .invalidated_untyped_aliases = false,
         .pending_exits = .empty,
     };
     var snap_it = state.iterator();
@@ -1357,17 +1357,10 @@ fn recordLoopEarlyExitInvalidations(self: *Checker, frame: *LoopMoveFrame, state
                 recordInvalidatedAliasPlace(self, frame, storage_place);
             }
         } else {
-            const after = state.get(entry.key_ptr.*) orelse {
-                frame.invalidated_aliases.put(entry.key_ptr.*, {}) catch {
-                    self.oom = true;
-                };
-                continue;
-            };
-            if (!sameAliasFact(before, after)) {
-                frame.invalidated_aliases.put(entry.key_ptr.*, {}) catch {
-                    self.oom = true;
-                };
-            }
+            // Legacy aliases have no structural storage identity. An early
+            // exit cannot safely decide whether a later same-spelled slot is
+            // the same alias, so invalidate all such aliases conservatively.
+            frame.invalidated_untyped_aliases = true;
         }
     }
 }
@@ -1396,10 +1389,12 @@ fn applyLoopEarlyExitAliasInvalidations(state: *std.StringHashMap(MoveSlot), fra
             if (storage_place.eql(place)) slot.* = divergentAliasSlot(entry.key_ptr.*, slot.*);
         }
     }
-    var it = frame.invalidated_aliases.keyIterator();
-    while (it.next()) |name| {
-        if (state.getPtr(name.*)) |slot| {
-            slot.* = divergentAliasSlot(name.*, slot.*);
+    if (frame.invalidated_untyped_aliases) {
+        var state_it = state.iterator();
+        while (state_it.next()) |entry| {
+            const slot = entry.value_ptr;
+            if (slot.alias_of == null or slot.place != null) continue;
+            slot.* = divergentAliasSlot(entry.key_ptr.*, slot.*);
         }
     }
 }
@@ -1677,7 +1672,7 @@ test "loop early-exit alias invalidation uses typed storage places" {
         .entry_state = entry_state,
         .invalidated_const_indexes = std.StringHashMap(void).init(std.testing.allocator),
         .invalidated_alias_places = .empty,
-        .invalidated_aliases = std.StringHashMap(void).init(std.testing.allocator),
+        .invalidated_untyped_aliases = false,
         .pending_exits = .empty,
     };
     defer frame.deinit();
@@ -1693,7 +1688,7 @@ test "loop early-exit alias invalidation uses typed storage places" {
     });
     recordLoopEarlyExitInvalidations(&checker, &frame, &early_exit);
     try std.testing.expectEqual(@as(usize, 1), frame.invalidated_alias_places.items.len);
-    try std.testing.expectEqual(@as(usize, 0), frame.invalidated_aliases.count());
+    try std.testing.expect(!frame.invalidated_untyped_aliases);
 
     var post_loop = std.StringHashMap(MoveSlot).init(std.testing.allocator);
     defer post_loop.deinit();
@@ -1708,6 +1703,36 @@ test "loop early-exit alias invalidation uses typed storage places" {
     const invalidated = post_loop.get("compat:borrow:post") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("compat:borrow:post", invalidated.alias_of.?);
     try std.testing.expect(invalidated.alias_place == null);
+
+    // A legacy alias cannot be matched across the early-exit edge by its map
+    // key. It is therefore conservatively divergent, and a later use reports
+    // the same stale-alias diagnostic as any other divergent alias.
+    var legacy_entry = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    try legacy_entry.put("legacy:entry", .{ .live = false, .span = span, .alias_of = "owner.resource" });
+    var legacy_frame = LoopMoveFrame{
+        .allocator = std.testing.allocator,
+        .entry_names = std.StringHashMap(void).init(std.testing.allocator),
+        .entry_state = legacy_entry,
+        .invalidated_const_indexes = std.StringHashMap(void).init(std.testing.allocator),
+        .invalidated_alias_places = .empty,
+        .invalidated_untyped_aliases = false,
+        .pending_exits = .empty,
+    };
+    defer legacy_frame.deinit();
+
+    var legacy_exit = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer legacy_exit.deinit();
+    recordLoopEarlyExitInvalidations(&checker, &legacy_frame, &legacy_exit);
+    try std.testing.expect(legacy_frame.invalidated_untyped_aliases);
+
+    var legacy_post = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer legacy_post.deinit();
+    try legacy_post.put("different:legacy:key", .{ .live = false, .span = span, .alias_of = "owner.resource" });
+    applyLoopEarlyExitAliasInvalidations(&legacy_post, &legacy_frame);
+    const legacy_invalidated = legacy_post.get("different:legacy:key") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(legacy_invalidated.divergent_alias);
+    checkStaleAlias(&checker, "different:legacy:key", legacy_invalidated, span, &legacy_post);
+    try std.testing.expect(reporter.has_errors);
 }
 
 test "move CFG deferred borrows use typed places rather than compatibility keys" {

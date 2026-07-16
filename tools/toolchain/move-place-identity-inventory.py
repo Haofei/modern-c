@@ -51,6 +51,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "aliasPlaceKey": 0,
         "aliasPlaceIndex": 0,
         "callLaunderedMoveReferent": 0,
+        "invalidated_aliases": 0,
         "state.getPtr(key)": 0,
         "state.remove(key)": 0,
         "state.getPtr(target_info.key)": 0,
@@ -101,6 +102,13 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
         ("fn consumeTrackedMoveReferent", "// An alias can retain a typed root place"): [
             "consumeTrackedMoveBinding",
             "referent.place",
+        ],
+        ("fn recordLoopEarlyExitInvalidations", "fn recordInvalidatedAliasPlace"): [
+            "invalidated_aliases",
+        ],
+        ("fn applyLoopEarlyExitAliasInvalidations", "pub fn cloneMoveState"): [
+            "invalidated_aliases",
+            "state.getPtr(name.*)",
         ],
         ("fn callLaunderedMoveAliasReferent", "// (bug #3 / T1.3)"): [
             "trackedMoveReferentPlaceForKey",
