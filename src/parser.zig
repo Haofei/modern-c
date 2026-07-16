@@ -1143,13 +1143,17 @@ pub const Parser = struct {
         const tmp_ident = ast.Ident{ .text = tmp_name, .span = span };
 
         for (names.items, 0..) |nm, i| {
-            const base = try ast.makePtr(self.allocator, ast.Expr{ .span = span, .kind = .{ .ident = tmp_ident } });
+            // Each synthesized projection needs its own source point. Typed MIR
+            // keys expression-result facts by span, so using the whole
+            // destructuring statement for every `_N` projection lets fields
+            // cross-match during backend admission.
+            const base = try ast.makePtr(self.allocator, ast.Expr{ .span = nm.span, .kind = .{ .ident = tmp_ident } });
             const fname = try std.fmt.allocPrint(self.allocator, "_{d}", .{i});
-            const member = ast.Expr{ .span = span, .kind = .{ .member = .{ .base = base, .name = .{ .text = fname, .span = span } } } };
+            const member = ast.Expr{ .span = nm.span, .kind = .{ .member = .{ .base = base, .name = .{ .text = fname, .span = nm.span } } } };
             const name_slice = try self.allocator.alloc(ast.Ident, 1);
             name_slice[0] = nm;
             const local = ast.LocalDecl{ .names = name_slice, .ty = null, .init = member };
-            try self.pending_stmts.append(self.allocator, .{ .span = span, .kind = if (is_let) .{ .let_decl = local } else .{ .var_decl = local } });
+            try self.pending_stmts.append(self.allocator, .{ .span = nm.span, .kind = if (is_let) .{ .let_decl = local } else .{ .var_decl = local } });
         }
         names.deinit(self.allocator);
 

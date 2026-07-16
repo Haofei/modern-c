@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **626 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **628 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -721,13 +721,28 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Raw-many pointer offset semantics are MIR-owned | Every accepted `[*]T.offset(index)` operation now carries a typed MIR call identity plus complete receiver, element, and result type facts. Alias resolution and operation classification happen once in MIR; C and LLVM retain only admitted syntax shape and emission mechanics. Removing call/type facts or retargeting the identity rejects prebuilt MIR, while nonzero and dynamic offsets continue to use the documented conservative provenance policy. | `src/mir.zig` `rawManyOffsetCallTarget`; `src/mir_model.zig` `raw_many_offset*`; `src/lower_c_access.zig` / `src/lower_llvm.zig` MIR consumers; MIR/C/LLVM positive and missing/stale-fact tests; `python3 tools/toolchain/semantic-facts-inventory.py`; `zig build test c-test llvm-test`; `git diff --check`. |
 | Direct storage-read inferred local types are MIR-owned | One-name unannotated locals initialized by a resolved member, index, slice, or ordinary dereference now carry an owned `inferred_local` fact. C and LLVM consume it when allocating the binding, and both reject missing or retargeted prebuilt facts rather than treating backend-local storage-read inference as authoritative. This is a bounded direct-read migration; non-direct pointer reads, member calls, and broader computed initializers remain in the registered expression-inference boundary. | `src/mir.zig` `inferredLocalTypeFactEligible`; `src/mir_tests.zig` `MIR owns inferred local direct storage read types`; `src/lower_c_tests.zig` `lower-c direct storage-read inferred locals require MIR facts`; `src/lower_llvm_tests.zig` `LLVM direct storage-read inferred locals require MIR facts`; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
 | Direct `try` payload inferred local types are MIR-owned | One-name unannotated locals initialized by a direct Result or nullable `source?` now carry an owned `inferred_local` fact. C derives the expected payload only from the MIR-owned `try_operand` fact before dispatching to its existing typed-`try` lowering; LLVM uses the same binding fact before storage allocation. Missing or retargeted prebuilt facts reject before either backend can treat a backend-local payload query as authoritative. This is limited to direct `try` payload initializers; broader computed initializers remain in the registered expression-inference boundary. | `src/mir.zig` `inferredLocalTypeFactEligible`; `src/lower_c_emitter.zig` `tryPayloadTypeForInferredLocal`; `src/mir_tests.zig` `MIR owns inferred local try payload types`; `src/lower_c_tests.zig` `lower-c inferred local try payloads require MIR types`; `src/lower_llvm_tests.zig` `LLVM inferred local try payloads require MIR types`; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
-| Direct address-of inferred local types are MIR-owned | One-name unannotated locals initialized by a direct address of a previously declared local place, a field path rooted in one, a fixed-array element rooted in one, or the direct pointee of a declared `*T` / `[*]T` local now carry an owned `inferred_local` fact. MIR owns the generated pointer type and preserves root-local mutability for local places: a mutable root yields `*mut T`, while an immutable root yields `*const T`; for `&pointer.*`, the declared pointer/raw-many-pointer type supplies the qualifier. C and LLVM validate the fact's pointee against the resolved admitted place before emission; neither backend re-infers pointer qualification. Missing or retargeted prebuilt facts reject rather than defaulting to backend-local type inference. Slice indexes, non-direct pointer dereferences, globals, calls, and function address expressions remain outside this bounded migration. | `src/mir.zig` `inferredLocalAddressTypeExpr`; `src/lower_c_emitter.zig` `emitAddressOfInferredLocalInit`; `src/lower_llvm.zig` `directAddressOfLocalPointeeType`; `src/mir_tests.zig` `MIR owns inferred local direct address types`; `src/lower_c_tests.zig` `lower-c inferred local direct addresses require MIR types`; `src/lower_llvm_tests.zig` `LLVM inferred local direct addresses require MIR types`; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
+| Direct address-of inferred local types are MIR-owned | One-name unannotated locals initialized by a direct address of a previously declared local place, a mutable global place, a field path rooted in either, a fixed-array element rooted in either, or the direct pointee of a declared `*T` / `[*]T` local now carry an owned `inferred_local` fact. MIR owns the generated pointer type and preserves root-local mutability for local places: a mutable root yields `*mut T`, while an immutable root yields `*const T`; a mutable global yields `*mut T`; and for `&pointer.*`, the declared pointer/raw-many-pointer type supplies the qualifier. C and LLVM validate the fact's pointee against the resolved admitted place before emission; neither backend re-infers pointer qualification. Missing or retargeted prebuilt facts reject rather than defaulting to backend-local type inference. Const globals, slice indexes, non-direct pointer dereferences, calls, and function address expressions remain outside this bounded migration. | `src/mir.zig` `inferredLocalAddressTypeExpr`; `src/lower_c_emitter.zig` `emitAddressOfInferredLocalInit`; `src/lower_llvm.zig` `directAddressOfLocalPointeeType`; `src/mir_tests.zig` `MIR owns inferred local direct address types`; `src/lower_c_tests.zig` `lower-c inferred local direct addresses require MIR types`; `src/lower_llvm_tests.zig` `LLVM inferred local direct addresses require MIR types`; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
+| Aggregate pointer-provenance copy snapshots are allocation-safe | Whole-aggregate and nested aggregate-member provenance copies now collect source live-pointer rows before appending destination rows. The append operation may grow the same backing list, so iterating a live slice during the copy could invalidate its storage and crash LLVM lowering. The snapshot preserves the bounded MIR copy policy while making source enumeration independent of destination fact growth. | `src/mir.zig` `copyLiveAggregatePointerProvenance` / `copyLiveAggregatePointerProvenancePath`; aggregate copy MIR/C/LLVM regression coverage in `src/mir_tests.zig`, `src/lower_c_tests.zig`, and `src/lower_llvm_tests.zig`; `zig build test c-test llvm-test diff-backend`; `git diff --check`. |
+| Tuple-destructuring projections have distinct typed fact source points | Parser-generated `let (a, b) = value` projection declarations now retain the individual binding span rather than sharing the enclosing destructuring-statement span. MIR expression-result facts therefore identify each generated projection independently and cannot be matched to a sibling binding by the same source point. | `src/parser.zig` `parseTupleDestructure`; MIR type-fact admission coverage in `src/mir_tests.zig`, `src/lower_c_tests.zig`, and `src/lower_llvm_tests.zig`; `zig build test`; `git diff --check`. |
 
 ### Bounded Workstream Status
 
-This section records the latest bounded aggregate-return implementation state.
-It is not an active slice; `In progress` means the architectural workstream
-remains open, not that code is currently unverified or waiting to be committed.
+This is the execution dashboard for the three open compiler workstreams. It is
+not a fourth workstream and it does not turn an open architecture item into an
+unbounded test queue. Each workstream closes only after every named closure unit
+is either implemented or deliberately accepted as a supported-subset limitation
+with a regression test.
+
+`In progress` means that a named closure unit remains. It does not mean there is
+uncommitted work, an unverified patch, or a claim that all source shapes are
+being implemented. A completed bounded slice is recorded in the evidence
+register; it advances a phase only when it closes one of the units below.
+
+| Order | Workstream | Completed foundation | Remaining closure units | Next valid implementation slice | Close when |
+|---|---|---|---|---|---|
+| 1 | Typed semantic fact table / typed MIR | Fact inventory/admission gates and bounded migrations for provenance, ranges, representation, calls, MMIO, varargs, traps, and selected inferred local types. | T2 remaining registered fact families; T3 final disposition for every registered backend inference; T4 removal of unregistered lowering-affecting AST inference. | Select one named register row, move its exact inputs/results to MIR, and add producer, C/LLVM consumer, and missing/stale-fact tests. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
+| 2 | CFG/place-based move checker | `MovePlace` exists for covered roots/projections; branch, short-circuit, selected loop, and exit transport use production CFG/worklist paths. | M1 replacement of remaining string-key correctness paths; M2 routing of specialized backedge/exit paths; M3 explicit admission rules for move arrays/pointer-to-array paths; M4 deletion of compatibility authority. | Migrate one state transition or control-flow family end-to-end, including typed place identity, transfer/join behavior, and a positive plus diagnostic regression. | Typed places and CFG joins decide all supported move behavior; unsupported paths retain stable diagnostics. |
+| 3 | Pointer-provenance race lowering | Conservative scalar-deref default, direct MIR provenance producers, and a gated current fallback register. | P3 disposition of escaped, higher-order, returned, and arbitrary aggregate-CFG flows; P4 final inventory and policy audit. | Only when another workstream exposes an unclassified pointer flow: choose MIR fact, conservative lowering, or a diagnostic before adding support. | Every pointer-flow boundary has a declared policy and no backend silently recreates provenance. |
 
 | Item | Current state | Next evidence needed |
 |---|---|---|
@@ -800,6 +815,17 @@ Closure matrix:
 | Higher-order and returned pointer flow | Classify direct returns, callback/function-pointer returns, and exported ambiguity from MIR facts or lower their scalar leaves conservatively. |
 | Aggregate return flow across arbitrary CFG | Replace the current shape summaries with a CFG join, or fail closed for every aggregate-return form outside the summary domain. |
 | Legacy provenance fallback register | Every remaining backend-local provenance ladder is listed here or migrated to the typed-facts matrix; no unnamed fallback is allowed. |
+
+**Remaining closure units.** These are policy decisions, not a requirement to
+make every pointer expression provenance-positive.
+
+| Unit | Phase | Required result | Not a valid substitute |
+|---|---|---|---|
+| P3.1: escaped/external pointers | P3 | State and test the conservative default or a positive fact rule for each admitted escape boundary. | Adding another direct-address producer. |
+| P3.2: higher-order/return boundaries | P3 | Give direct return, callback/function-pointer return, and exported ambiguity a MIR fact, conservative lowering, or diagnostic. | Backend-local callee or pointer-path inference. |
+| P3.3: aggregate CFG boundary | P3 | Either introduce a general CFG join with a stated bound or retain fail-closed summaries for all out-of-domain paths. | Extending an aggregate-return syntax recognizer without a boundary decision. |
+| P4.1: fallback register closure | P4 | Inventory every remaining lowering provenance decision and classify it as MIR-owned, conservative, or diagnosed unsupported. | An undocumented backend fallback. |
+| P4.2: final C/LLVM policy audit | P4 | Demonstrate matching policy for every registered boundary, including missing-proof paths. | Positive-only backend tests. |
 
 Current status: the finished rows cover direct scalar/member/index/aggregate
 accesses, many direct provenance paths, and the union-like aggregate value-copy
@@ -878,6 +904,17 @@ Closure matrix:
 | Bounds and range facts | Bounds/range safety decisions use typed MIR facts with producer, consumer, and stale/missing-fact gates on both backends. |
 | Integer/default facts | Integer representation/defaulting decisions used by lowering have typed producers, consumers, and parity gates. |
 | Legacy AST inference register | Each remaining semantic backend inference is named, owned, and either migrated or designated an accepted unsupported fallback. |
+
+**Remaining closure units.** T2 is deliberately one registered family per
+slice; it is not “add facts wherever a test happens to fail.”
+
+| Unit | Phase | Required result | Exit evidence |
+|---|---|---|---|
+| T2.1: choose a registered family | T2 | Name its semantic inputs, result/payload, producer point, and backend consumers before editing lowering. | The inference register and the slice design identify the exact row. |
+| T2.2: migrate the family | T2 | Emit an identity/type/payload fact in MIR and make both backends consume it. | MIR artifact test plus C and LLVM positive tests. |
+| T2.3: fail-closed admission | T2 | Missing, stale, or retargeted prebuilt facts cannot cause backend rediscovery. | C and LLVM missing/stale-fact rejection or conservative fallback tests. |
+| T3.1: classify every register row | T3 | Mark each remaining family MIR-owned, conservative fallback, or diagnosed unsupported. | Inventory gate verifies the classification and named implementation anchor. |
+| T4.1: semantic-authority audit | T4 | Remove or explicitly register every lowering-affecting AST inference. | No unregistered type, provenance, representation, call-target, ABI, or safety inference remains. |
 
 Current status: the narrow foundation is complete: pointer provenance for covered
 direct shapes, no-overflow `RangeFact` consumption, `elided_bounds`, value IDs,
@@ -1029,6 +1066,18 @@ Closure matrix:
 |---|---|
 | Explicit place representation | Replace string-key place identity with a typed place model for locals, fields, derefs, and array elements. |
 | CFG dataflow engine | Build CFG blocks and a worklist join over move state; route `if`, `switch`, loops, short-circuit, `defer`, and exits through it. |
+
+**Remaining closure units.** The move checker is complete only when the common
+engine decides correctness. Keeping a typed value beside a string key is not
+enough if the string remains the deciding identity.
+
+| Unit | Phase | Required result | Exit evidence |
+|---|---|---|---|
+| M1.1: place identity | M1 | Every supported read, consume, assignment, defer borrow, and alias invalidation compares `MovePlace`, not a formatted compatibility key. | Positive ownership cases and conflicting-place diagnostics use the same typed overlap rule. |
+| M1.2: projection admission | M1/M3 | Local, field, deref, fixed element, stable dynamic index, wildcard, and alias projections each have an exact overlap rule or a stable rejection. | Dynamic/non-local move-array and arbitrary pointer-to-array cases remain fail-closed until admitted. |
+| M2.1: branch and short-circuit joins | M2 | Branch, `if let`, switch, and short-circuit state are transported and joined by the common worklist. | Join diagnostics and accepted paths no longer depend on statement-specific state merging. |
+| M2.2: loop/backedge/exit routing | M2 | Loop backedges, `break`, `continue`, return, `?`, and defer exits use the same CFG transfer/join authority. | Specialized executors are removed only after equivalent worklist regressions exist. |
+| M4.1: compatibility retirement | M4 | String keys are indexing/debug compatibility only; they cannot decide move correctness. | Inventory and tests show every supported path reaches the typed-place/CFG engine. |
 
 Current status: the checker is still primarily AST/state-map based, but direct ownership
 paths and tracked aliases now carry and compare typed `MovePlace`

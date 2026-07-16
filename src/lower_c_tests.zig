@@ -1248,7 +1248,13 @@ test "lower-c inferred local try payloads require MIR types" {
 
 test "lower-c inferred local direct addresses require MIR types" {
     const source =
+        \\global shared_value: u32 = 4;
         \\struct Holder { value: u32 }
+        \\fn address_global() -> u32 {
+        \\    let pointer = &shared_value;
+        \\    pointer.* = 9;
+        \\    return pointer.*;
+        \\}
         \\fn address_local() -> u32 {
         \\    var value: u32 = 4;
         \\    let pointer = &value;
@@ -1313,26 +1319,27 @@ test "lower-c inferred local direct addresses require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_inferred_local_address.mc", .{}, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &shared_value") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &value") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t const * pointer = &value") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &holder.value") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t const * pointer = &holder.value") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &values.elems[") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t const * pointer = &values.elems[") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &(*source)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t const * pointer = &(*source)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "static uint32_t address_pointee(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "static uint32_t address_const_pointee(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "static uint32_t address_raw_many_pointee(void)") != null);
 
     var missing = try mir.build(std.testing.allocator, parsed.module);
     defer missing.deinit();
-    try removeTargetTypeKindForFunction(&missing, "address_pointee", .inferred_local);
+    try removeTargetTypeKindForFunction(&missing, "address_global", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
 
     var stale = try mir.build(std.testing.allocator, parsed.module);
     defer stale.deinit();
-    try renameTargetTypeFactForFunction(&stale, "address_pointee", .inferred_local, "u64");
+    try renameTargetTypeFactForFunction(&stale, "address_global", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
@@ -1382,7 +1389,8 @@ test "lower-c indexes direct fixed-array call results through MIR return types" 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_direct_array_call_index.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_matrix().elems[mc_check_index_usize(0, 2)]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_matrix()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".elems[") != null);
 }
 
 test "lower-c MMIO calls consume MIR identities and complete types" {

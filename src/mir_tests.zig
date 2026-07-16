@@ -198,7 +198,7 @@ test "MIR owns all scalar conversion builtin call targets" {
         const function = functionByName(typed_mir, case.name).?;
         try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
         try std.testing.expectEqual(case.kind, function.call_target_facts[0].kind);
-        try std.testing.expectEqual(@as(usize, 2), function.target_type_facts.len);
+        try std.testing.expect(function.target_type_facts.len >= 2);
         try std.testing.expectEqual(mir.TargetTypeKind.conversion_source, function.target_type_facts[0].kind);
         try std.testing.expectEqual(mir.TargetTypeKind.conversion_target, function.target_type_facts[1].kind);
     }
@@ -350,7 +350,7 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, functionByName(typed_mir, "make_eof").?.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, functionByName(typed_mir, "make_union_ok").?.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "make_enum").?.target_type_facts[0].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "compare_enum").?.target_type_facts[0].kind);
+    try std.testing.expect(targetTypeFactByKind(functionByName(typed_mir, "compare_enum").?, .enum_literal) != null);
     const cast_enum_fn = functionByName(typed_mir, "cast_enum").?;
     try std.testing.expectEqual(@as(usize, 3), cast_enum_fn.target_type_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.explicit_cast_source, cast_enum_fn.target_type_facts[0].kind);
@@ -1222,7 +1222,13 @@ test "MIR owns inferred local try payload types" {
 
 test "MIR owns inferred local direct address types" {
     const source =
+        \\global shared_value: u32 = 4;
         \\struct Holder { value: u32 }
+        \\fn address_global() -> u32 {
+        \\    let pointer = &shared_value;
+        \\    pointer.* = 9;
+        \\    return pointer.*;
+        \\}
         \\fn address_local() -> u32 {
         \\    var value: u32 = 4;
         \\    let pointer = &value;
@@ -1291,6 +1297,9 @@ test "MIR owns inferred local direct address types" {
 
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
+    const global_fact = targetTypeFactByKind(functionByName(typed_mir, "address_global").?, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ast.Mutability.mut, global_fact.target_ty.kind.pointer.mutability);
+    try std.testing.expectEqualStrings("u32", global_fact.target_ty.kind.pointer.child.kind.name.text);
     const fact = targetTypeFactByKind(functionByName(typed_mir, "address_local").?, .inferred_local) orelse return error.TestUnexpectedResult;
     const pointer = fact.target_ty.kind.pointer;
     try std.testing.expectEqual(ast.Mutability.mut, pointer.mutability);

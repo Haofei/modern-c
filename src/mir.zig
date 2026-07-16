@@ -306,6 +306,8 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
     defer globals.deinit();
     var global_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator);
     defer global_type_exprs.deinit();
+    var mutable_globals = std.StringHashMap(void).init(allocator);
+    defer mutable_globals.deinit();
 
     for (module.decls) |decl| {
         switch (decl.kind) {
@@ -323,6 +325,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
                 if (global.ty) |ty| {
                     try globals.put(global.name.text, valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases));
                     try global_type_exprs.put(global.name.text, ty);
+                    if (!global.is_const) try mutable_globals.put(global.name.text, {});
                 }
             },
             else => {},
@@ -361,7 +364,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
             .global_decl => |global| {
                 if (global.ty) |ty| {
                     if (global.init) |initializer| {
-                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &pointer_return_summaries);
+                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries);
                         builder.optimize = options.optimize;
                         errdefer builder.deinit();
                         try builder.buildGlobalInitializer(ty, initializer);
@@ -371,7 +374,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
             },
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
-                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &pointer_return_summaries);
+                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries);
                     builder.optimize = options.optimize;
                     errdefer builder.deinit();
                     try builder.buildBody(body);
@@ -3273,6 +3276,7 @@ const FunctionBuilder = struct {
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
     globals: *const std.StringHashMap(ValueType),
     global_type_exprs: *const std.StringHashMap(ast.TypeExpr),
+    mutable_globals: *const std.StringHashMap(void),
     pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary),
     blocks: std.ArrayList(MutableBlock),
     trap_edges: std.ArrayList(TrapEdge),
@@ -3339,7 +3343,7 @@ const FunctionBuilder = struct {
     next_contract_region_id: usize = 1,
     next_target_fact_group_id: usize = 1,
 
-    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
+    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "entry" });
@@ -3365,6 +3369,7 @@ const FunctionBuilder = struct {
             .const_globals = const_globals,
             .globals = globals,
             .global_type_exprs = global_type_exprs,
+            .mutable_globals = mutable_globals,
             .pointer_return_summaries = pointer_return_summaries,
             .blocks = blocks,
             .trap_edges = .empty,
@@ -3409,7 +3414,7 @@ const FunctionBuilder = struct {
         return builder;
     }
 
-    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
+    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "global_init" });
@@ -3432,6 +3437,7 @@ const FunctionBuilder = struct {
             .const_globals = const_globals,
             .globals = globals,
             .global_type_exprs = global_type_exprs,
+            .mutable_globals = mutable_globals,
             .pointer_return_summaries = pointer_return_summaries,
             .blocks = blocks,
             .trap_edges = .empty,
@@ -4322,11 +4328,11 @@ const FunctionBuilder = struct {
     }
 
     // This narrow inferred-address slice is deliberately limited to a direct
-    // local place or a field path rooted in one, plus the direct pointee of a
-    // local pointer/raw-many pointer. It gives the binding an owned type
-    // without broadening address-of inference to slices, pointer chains,
-    // globals, or calls. Fixed-array indexes are included because their
-    // element mutability is determined by the root local binding.
+    // local or mutable global place (and field/fixed-array paths rooted in one),
+    // plus the direct pointee of a local pointer/raw-many pointer. It gives the
+    // binding an owned type without broadening address-of inference to const
+    // globals, slices, pointer chains, or calls. Fixed-array indexes are included
+    // because their element mutability is determined by the root storage binding.
     fn inferredLocalAddressTypeExpr(self: *FunctionBuilder, span: ast.Span, operand: ast.Expr) !?ast.TypeExpr {
         const mutability = inferredLocalAddressMutability(self, operand) orelse return null;
         const child_ty = self.typeExprForExpr(operand) orelse return null;
@@ -7451,25 +7457,38 @@ const FunctionBuilder = struct {
     }
 
     fn copyLiveAggregatePointerProvenance(self: *FunctionBuilder, target_subject: []const u8, source_subject: []const u8, reason: PointerProvenanceInvalidationReason, span: ast.Span) !void {
-        const existing_len = self.live_pointer_provenance.items.len;
-        for (self.live_pointer_provenance.items[0..existing_len]) |live| {
-            const field_path = live.field_path orelse continue;
+        var sources: std.ArrayListUnmanaged(LivePointerProvenance) = .empty;
+        defer sources.deinit(self.allocator);
+        for (self.live_pointer_provenance.items) |live| {
+            if (live.field_path == null) continue;
             if (!std.mem.eql(u8, live.subject, source_subject)) continue;
             if (live.provenance != .local_storage and live.provenance != .global_storage) continue;
-            const storage = live.storage orelse continue;
+            _ = live.storage orelse continue;
+            try sources.append(self.allocator, live);
+        }
+        for (sources.items) |live| {
+            const field_path = live.field_path.?;
+            const storage = live.storage.?;
             const provenance: DirectPointerProvenance = .{ .kind = live.provenance, .storage = storage };
             try self.appendPointerFieldProvenanceFact(target_subject, field_path, live.element_index, provenance, live.pointer_shape, reason, span);
         }
     }
 
     fn copyLiveAggregatePointerProvenancePath(self: *FunctionBuilder, target_subject: []const u8, target_field_path: []const u8, source: AggregateCopySource, reason: PointerProvenanceInvalidationReason, span: ast.Span) !void {
-        const existing_len = self.live_pointer_provenance.items.len;
-        for (self.live_pointer_provenance.items[0..existing_len]) |live| {
+        var sources: std.ArrayListUnmanaged(LivePointerProvenance) = .empty;
+        defer sources.deinit(self.allocator);
+        for (self.live_pointer_provenance.items) |live| {
             const source_live_field = live.field_path orelse continue;
             if (!std.mem.eql(u8, live.subject, source.local_name)) continue;
-            const suffix = aggregateCopyFieldSuffix(source_live_field, source.field_path) orelse continue;
+            if (aggregateCopyFieldSuffix(source_live_field, source.field_path) == null) continue;
             if (live.provenance != .local_storage and live.provenance != .global_storage) continue;
-            const storage = live.storage orelse continue;
+            _ = live.storage orelse continue;
+            try sources.append(self.allocator, live);
+        }
+        for (sources.items) |live| {
+            const source_live_field = live.field_path.?;
+            const suffix = aggregateCopyFieldSuffix(source_live_field, source.field_path).?;
+            const storage = live.storage.?;
             const target_live_field = try self.joinAggregateCopyTargetPath(target_field_path, suffix);
             const provenance: DirectPointerProvenance = .{ .kind = live.provenance, .storage = storage };
             try self.appendPointerFieldProvenanceFact(target_subject, target_live_field, live.element_index, provenance, live.pointer_shape, reason, span);
@@ -9093,7 +9112,7 @@ fn inferredLocalTypeFactEligible(builder: *FunctionBuilder, maybe_initializer: ?
         // to make that result type authoritative while allocating the binding.
         .member, .index, .slice => builder.typeExprForExpr(initializer) != null,
         .deref => rawManyOffsetDerefType(builder, initializer) != null or builder.typeExprForExpr(initializer) != null,
-        .address_of => |inner| inferredLocalAddressRootLocal(builder, inner.*) != null,
+        .address_of => |inner| inferredLocalAddressMutability(builder, inner.*) != null,
         // The try operand has a MIR-owned type fact, and its payload type is
         // already resolved by typeExprForExpr.
         .try_expr => builder.typeExprForExpr(initializer) != null,
@@ -9120,8 +9139,25 @@ fn inferredLocalAddressRootLocal(builder: *FunctionBuilder, operand: ast.Expr) ?
 
 fn inferredLocalAddressMutability(builder: *FunctionBuilder, operand: ast.Expr) ?ast.Mutability {
     if (inferredLocalAddressDerefMutability(builder, operand)) |mutability| return mutability;
-    const root_name = inferredLocalAddressRootLocal(builder, operand) orelse return null;
-    return if (builder.local_mutability.get(root_name) orelse false) .mut else .@"const";
+    if (inferredLocalAddressRootLocal(builder, operand)) |root_name| {
+        return if (builder.local_mutability.get(root_name) orelse false) .mut else .@"const";
+    }
+    if (inferredLocalAddressRootMutableGlobal(builder, operand) != null) return .mut;
+    return null;
+}
+
+fn inferredLocalAddressRootMutableGlobal(builder: *FunctionBuilder, operand: ast.Expr) ?[]const u8 {
+    return switch (operand.kind) {
+        .ident => |ident| if (builder.mutable_globals.contains(ident.text)) ident.text else null,
+        .member => |node| inferredLocalAddressRootMutableGlobal(builder, node.base.*),
+        .index => |node| blk: {
+            const base_ty = builder.typeExprForExpr(node.base.*) orelse break :blk null;
+            if (aggregateTargetTypeAlias(base_ty, builder.aliases).kind != .array) break :blk null;
+            break :blk inferredLocalAddressRootMutableGlobal(builder, node.base.*);
+        },
+        .grouped => |inner| inferredLocalAddressRootMutableGlobal(builder, inner.*),
+        else => null,
+    };
 }
 
 fn inferredLocalAddressDerefMutability(builder: *FunctionBuilder, operand: ast.Expr) ?ast.Mutability {
