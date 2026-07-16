@@ -150,6 +150,33 @@ fn renameTargetTypeFactAtOffsetForFunction(module_mir: *mir.Module, name: []cons
     return error.TestUnexpectedResult;
 }
 
+fn removeTargetTypeFactAtOffsetForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind, source_offset: usize, source_len: usize) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        var retained_count: usize = 0;
+        var removed = false;
+        for (function.target_type_facts) |fact| {
+            if (fact.kind == kind and fact.source.offset == source_offset and fact.source.len == source_len) {
+                removed = true;
+            } else {
+                retained_count += 1;
+            }
+        }
+        if (!removed) return error.TestUnexpectedResult;
+        const retained = try module_mir.allocator.alloc(mir.TargetTypeFact, retained_count);
+        var index: usize = 0;
+        for (function.target_type_facts) |fact| {
+            if (fact.kind == kind and fact.source.offset == source_offset and fact.source.len == source_len) continue;
+            retained[index] = fact;
+            index += 1;
+        }
+        if (function.target_type_facts.len != 0) module_mir.allocator.free(function.target_type_facts);
+        function.target_type_facts = retained;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 test "lower-c rejects prebuilt MIR with missing target type facts" {
     const source =
         \\enum E { bad }
@@ -1365,6 +1392,11 @@ test "lower-c compound expressions require complete MIR result facts" {
         \\    let pair: Pair = .{ .value = 7 };
         \\    return pair.value;
         \\}
+        \\fn deref_result() -> u32 {
+        \\    var value: u32 = 7;
+        \\    let pointer: *mut u32 = &value;
+        \\    return pointer.*;
+        \\}
         \\fn expression_facts(index: usize) -> u8 {
         \\    let values: [4]u8 = .{ 7, 0, 0, 0 };
         \\    let window: []const u8 = values[0..index];
@@ -1425,6 +1457,24 @@ test "lower-c compound expressions require complete MIR result facts" {
         defer module_mir.deinit();
         const member_offset = std.mem.indexOf(u8, source, "pair.value") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "member_result", .expression_result, member_offset, "pair.value".len, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const deref_offset = std.mem.indexOf(u8, source, "pointer.*") orelse return error.TestUnexpectedResult;
+        try removeTargetTypeFactAtOffsetForFunction(&module_mir, "deref_result", .expression_result, deref_offset, "pointer.*".len);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const deref_offset = std.mem.indexOf(u8, source, "pointer.*") orelse return error.TestUnexpectedResult;
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "deref_result", .expression_result, deref_offset, "pointer.*".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));

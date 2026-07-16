@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **643 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **644 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -748,6 +748,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Ordinary struct-member result types are MIR-owned in both backends | Ordinary struct-field member reads now require the MIR `expression_result` fact in C and LLVM. Each backend uses resolved field layout only as a stale-fact comparison; it cannot derive a missing member result type at the ordinary emission point. Enum variant paths, packed bits, overlay fields, global/pointer race-specialized members, and other specialized paths retain their explicit boundaries. | `src/mir.zig` `addExpressionResultFact`; `src/lower_c_emitter.zig` `emitMemberExpr`; `src/lower_llvm.zig` `emitMemberLoad`; `src/lower_c_tests.zig` and `src/lower_llvm_tests.zig` `compound expressions require complete MIR result facts`; focused C/LLVM tests; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `python3 tools/toolchain/readiness-ledger-test.py`; `git diff --check`. |
 
+| Direct dereference expression result types are MIR-owned in both backends | Direct pointer/raw-many dereference reads now require the MIR `expression_result` fact in C and LLVM. Each backend derives the pointer pointee only to reject a stale fact; C's race-tolerant helper selection consumes the fact's type after provenance chooses the access policy. Exact full-span tests delete or retarget only `pointer.*`, proving missing prebuilt MIR is rejected at admission and stale MIR cannot restore backend-local result inference. Dereference assignment targets and aggregate/provenance policy remain separate boundaries. | `src/mir.zig` `addExpressionResultFact`; `src/lower_c_emitter.zig` `emitDerefExpr` / `derefAccessLoweringForPointee`; `src/lower_llvm.zig` `emitDeref` / `exprType`; `src/lower_c_tests.zig` and `src/lower_llvm_tests.zig` `compound expressions require complete MIR result facts`; focused C/LLVM tests; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `python3 tools/toolchain/readiness-ledger-test.py`; `git diff --check`. |
+
 ### Bounded Workstream Status
 
 This is the authoritative execution dashboard for the three open compiler
@@ -761,19 +763,19 @@ or formatted-key inference and its listed evidence is gated.
 
 | Workstream | Goal | Complete phases | Current phase and exact next deliverable | Later phases | Workstream closes when |
 |---|---|---|---|---|---|
-| Typed semantic facts / typed MIR | Give lowering one semantic authority instead of backend AST rediscovery. | T1 inventory/admission; bounded T2 migrations in the evidence register; T3's LLVM aggregate-alias write proof retired as mechanics-only. | **T2.2 direct-dereference result type:** require the existing MIR `expression_result` fact at C and LLVM direct-dereference emission; use pointer-pointee derivation only to reject a stale fact; add positive plus missing/retargeted-fact tests. | T2.3 fail-closed admission for each selected family; T3 classification of every register row; T4 semantic-authority audit. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
+| Typed semantic facts / typed MIR | Give lowering one semantic authority instead of backend AST rediscovery. | T1 inventory/admission; bounded T2 migrations in the evidence register, including direct dereference results; T3's LLVM aggregate-alias write proof retired as mechanics-only. | **T2.1 select the next registered family:** audit the remaining expression-result and call-target rows, name one family with its semantic input/result, MIR producer, and C/LLVM consumers before editing lowering. | T2.2 migration; T2.3 fail-closed admission; T3 classification of every register row; T4 semantic-authority audit. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
 | CFG/place move checker | Make typed places and CFG dataflow, rather than formatted keys and statement shape, decide supported move behavior. | Foundation slices, including M2.3 cleanup-loop CFG routing: covered `MovePlace` paths and selected CFG/worklist transport. | **M1.1 formatted-key retirement:** select one supported read, consume, assignment, defer-borrow, or alias-invalidation decision still made through a compatibility key; replace it with `MovePlace` identity/overlap and add positive and diagnostic coverage. | M1.2/M3 projection admission; M4 compatibility retirement. | Typed places and CFG joins decide every supported move path; every unsupported path has a stable diagnostic. |
 | Pointer-provenance race lowering | Preserve MC's non-UB race contract without backend-local provenance guessing. | P1 conservative scalar default; P2 documented direct MIR provenance; P3 policy decisions for current direct escape, returned-pointer, callback/exported-ambiguity, and bounded aggregate-return domains. | **P4.1 fallback-register audit, trigger-driven:** when T2 or M1 exposes an unclassified flow, first record whether it is MIR-proven, race-tolerant by default, or diagnosed unsupported; then add matching C/LLVM missing-proof evidence. | P4.2 final C/LLVM policy audit. | Every pointer-flow boundary has a declared policy and no backend silently recreates provenance. |
 
 **Current implementation sequence.** Workstreams are not implemented in
-parallel by default. Complete T2.2 and its T2.3 admission gate first; then take
-M1.1. Start pointer work only when either slice exposes an unclassified flow.
+parallel by default. Select and complete the next T2.1/T2.2/T2.3 family first;
+then take M1.1. Start pointer work only when either slice exposes an unclassified flow.
 This prevents direct-shape test expansion from being mistaken for architectural
 progress.
 
 | Order | Workstream | Completed foundation | Remaining closure units | Next valid implementation slice | Close when |
 |---|---|---|---|---|---|
-| 1 | Typed semantic fact table / typed MIR | Fact inventory/admission gates and bounded migrations for provenance, ranges, representation, calls, MMIO, varargs, traps, selected inferred locals, slices, indexes, and ordinary member reads. | T2 expression-result families; T3 final disposition for every registered backend inference; T4 removal of unregistered lowering-affecting AST inference. | Complete direct dereference as the named T2.2 slice, then its missing/stale-fact gate. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
+| 1 | Typed semantic fact table / typed MIR | Fact inventory/admission gates and bounded migrations for provenance, ranges, representation, calls, MMIO, varargs, traps, selected inferred locals, slices, indexes, ordinary member reads, and direct dereferences. | T2 remaining registered families; T3 final disposition for every registered backend inference; T4 removal of unregistered lowering-affecting AST inference. | Audit the registered expression-result/call-target rows and select one exact T2.1 family with a producer/consumer contract. | Every lowering-affecting decision is MIR-owned or an explicitly registered, conservative/diagnosed boundary. |
 | 2 | CFG/place-based move checker | `MovePlace` exists for covered roots/projections; branch, short-circuit, ordinary-loop backedges/target exits, and supported deferred-loop condition/body/exit transport use production CFG/worklist paths. | M1 remaining string-key correctness paths; M3 explicit move-array/pointer-to-array admission; M4 compatibility removal. | Replace one remaining supported formatted-key correctness decision with typed `MovePlace` overlap/identity and add positive and diagnostic regression coverage. | Typed places and CFG joins decide all supported move behavior; unsupported paths retain stable diagnostics. |
 | 3 | Pointer-provenance race lowering | Conservative scalar-deref default, direct MIR provenance producers, named P3 boundary policies, and a gated current fallback register. | P4 final inventory and policy audit. | Only when T2 or M1 exposes an unclassified pointer flow: choose MIR fact, race-tolerant lowering, or diagnostic before adding support. | Every pointer-flow boundary has a declared policy and no backend silently recreates provenance. |
 
@@ -783,7 +785,7 @@ the three large workstreams; it is not a second priority list.
 
 | Workstream | Phase order | Current handoff | A phase may advance only when |
 |---|---|---|---|
-| Typed semantic facts / typed MIR | T1 inventory -> T2.1 select -> T2.2 migrate -> T2.3 fail closed -> T3 classify -> T4 audit | T2.1 selected direct-dereference result typing: its producer is `addExpressionResultFact`, and the named consumers are C `emitDerefExpr` and LLVM `emitDeref`/`exprType`. T2.2 must move those consumers before any broader dereference shape is considered. | The selected family has fact-dump coverage, C/LLVM positive coverage, and missing/stale-fact rejection or a tested conservative/diagnosed disposition. |
+| Typed semantic facts / typed MIR | T1 inventory -> T2.1 select -> T2.2 migrate -> T2.3 fail closed -> T3 classify -> T4 audit | Direct-dereference result typing completed T2.1--T2.3: `addExpressionResultFact` produces the fact; C `emitDerefExpr` and LLVM `emitDeref`/`exprType` consume it; exact missing/stale tests gate it. The next T2.1 must name a different registered family before lowering changes begin. | The selected family has fact-dump coverage, C/LLVM positive coverage, and missing/stale-fact rejection or a tested conservative/diagnosed disposition. |
 | CFG/place move checker | M1 structural places + M2 routing + M3 admission -> M4 retirement | M1.1 must remove one remaining correctness decision from the formatted compatibility-key path without broadening unsupported projections. | The named control-flow or projection family uses typed places and common CFG joins, with positive and diagnostic coverage; unsupported variants retain a stable error. |
 | Pointer-provenance race lowering | P1 default -> P2 direct proofs -> P3 boundary policies -> P4 audit | P3's current admitted boundaries have a documented policy. P4 starts from a concrete unclassified flow found by T2 or M2/M3 work and must choose exactly one policy before backend support is added. | Both backends demonstrate the selected policy, including an absent-proof path, and the fallback register records any remaining backend mechanics. |
 
@@ -956,7 +958,7 @@ slice; it is not “add facts wherever a test happens to fail.”
 
 | Unit | Phase | Required result | Exit evidence |
 |---|---|---|---|
-| T2.1: choose a registered family | T2 | **Complete for the current slice:** direct-dereference result typing is selected. Its semantic input is the pointer/raw-many pointee; its result is `expression_result`; `addExpressionResultFact` is the producer; C `emitDerefExpr` and LLVM `emitDeref`/`exprType` are the consumers. | The inference register and the slice design identify the exact row before lowering changes begin. |
+| T2.1: choose a registered family | T2 | **Complete for direct dereference:** its semantic input is the pointer/raw-many pointee; its result is `expression_result`; `addExpressionResultFact` is the producer; C `emitDerefExpr` and LLVM `emitDeref`/`exprType` are the consumers. The next T2.1 must select a different registered family. | The inference register and the slice design identify the exact row before lowering changes begin. |
 | T2.2: migrate the family | T2 | Emit an identity/type/payload fact in MIR and make both backends consume it. | MIR artifact test plus C and LLVM positive tests. |
 | T2.3: fail-closed admission | T2 | Missing, stale, or retargeted prebuilt facts cannot cause backend rediscovery. | C and LLVM missing/stale-fact rejection or conservative fallback tests. |
 | T3.1: classify every register row | T3 | Mark each remaining family MIR-owned, conservative fallback, or diagnosed unsupported. | Inventory gate verifies the classification and named implementation anchor. |
@@ -1092,11 +1094,11 @@ admission, and stale direct complete types or malformed stale indirect
 signatures fail backend admission. Exact dynamic-dispatch typing and broader
 expression typing remain open.
 
-**Next phase action:** T2.1 selected direct-dereference result typing. Complete
-T2.2 by requiring its existing `expression_result` row in C and LLVM direct
-dereference emission, using the pointee only to reject stale MIR; then complete
-T2.3 with C/LLVM positive and missing/retargeted-fact gates. Do not broaden
-aggregate or provenance policy merely to add a direct-dereference fixture.
+**Next phase action:** direct-dereference result typing completed T2.1--T2.3.
+Audit the registered expression-result and call-target families, select one
+different exact family with its producer and both consumers, then complete its
+T2.2/T2.3 gates. Do not broaden aggregate or provenance policy merely to add a
+fixture.
 
 #### CFG/Place-Based Move Checker
 

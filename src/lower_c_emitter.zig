@@ -3710,7 +3710,7 @@ const CEmitter = struct {
             .index => |node| try self.emitIndexExpr(node, expr.span, locals),
             .slice => |node| try self.emitSliceExpr(node, expr.span, locals),
             .address_of => |inner| try self.emitAddressOfExpr(inner.*, locals),
-            .deref => |inner| try self.emitDerefExpr(inner.*, locals),
+            .deref => |inner| try self.emitDerefExpr(inner.*, expr.span, locals),
             .member => |node| try self.emitMemberExprOrFallback(node, expr.span, locals),
             .cast => |node| try self.emitCastExpr(expr.span, node, locals),
             else => try self.emitUnsupportedExpr(expr),
@@ -3782,8 +3782,11 @@ const CEmitter = struct {
         try self.emitAddressOperand(inner, locals);
     }
 
-    fn emitDerefExpr(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
-        switch (try self.derefAccessLowering(inner, locals)) {
+    fn emitDerefExpr(self: *CEmitter, inner: ast.Expr, deref_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        const inferred_pointee_ty = self.derefPointeeType(inner, locals) orelse return error.UnsupportedCEmission;
+        const pointee_ty = (self.mirTargetTypeFactAt(.expression_result, deref_span) orelse return error.UnsupportedCEmission).target_ty;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointee_ty), self.resolveAliasType(inferred_pointee_ty))) return error.UnsupportedCEmission;
+        switch (try self.derefAccessLoweringForPointee(inner, pointee_ty, locals)) {
             .plain => {
                 try self.out.appendSlice(self.allocator, "*");
                 try self.emitExpr(inner, locals);
@@ -6317,8 +6320,12 @@ const CEmitter = struct {
     // closed before they reach plain C aggregate copying. Scalars with no sound
     // race-tolerant lowering (u128/i128) fail emission closed.
     fn derefAccessLowering(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !DerefAccessLowering {
-        if (self.derefPointerHasProvenLocalStorage(inner, locals)) return .plain;
         const pointee_ty = self.derefPointeeType(inner, locals) orelse return .plain;
+        return self.derefAccessLoweringForPointee(inner, pointee_ty, locals);
+    }
+
+    fn derefAccessLoweringForPointee(self: *CEmitter, inner: ast.Expr, pointee_ty: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !DerefAccessLowering {
+        if (self.derefPointerHasProvenLocalStorage(inner, locals)) return .plain;
         const info = self.globalInfoFromType(pointee_ty) catch return .plain;
         if (info.aggregate) return .plain;
         if (info.pointer_like) return .{ .race_pointer = info };

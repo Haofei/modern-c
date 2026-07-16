@@ -1376,7 +1376,7 @@ const LlvmEmitter = struct {
             .unary => |node| try self.emitUnary(node, expected_ty),
             .cast => |node| try self.emitCast(expr.span, node.value.*),
             .address_of => |inner| try self.emitAddressOf(inner.*),
-            .deref => |inner| try self.emitDeref(inner.*, expected_ty),
+            .deref => |inner| try self.emitDeref(inner.*, expr.span),
             .index => |node| try self.emitIndexLoad(node, expr.span),
             .slice => |node| try self.emitSlice(node, expr.span),
             .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact|
@@ -3550,7 +3550,10 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitDeref(self: *LlvmEmitter, ptr_expr: ast.Expr, pointee_ty: ast.TypeExpr) ![]const u8 {
+    fn emitDeref(self: *LlvmEmitter, ptr_expr: ast.Expr, deref_span: ast.Span) ![]const u8 {
+        const inferred_pointee_ty = self.derefPointeeType(ptr_expr) orelse return error.UnsupportedLlvmEmission;
+        const pointee_ty = (self.mirTargetTypeFactAt(.expression_result, deref_span) orelse return error.UnsupportedLlvmEmission).target_ty;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointee_ty), self.resolveAliasType(inferred_pointee_ty))) return error.UnsupportedLlvmEmission;
         const ptr = try self.emitExpr(ptr_expr, try self.pointerTypeFor(pointee_ty));
         if (self.isAggregateType(pointee_ty) and !self.pointerExprHasProvenLocalStorage(ptr_expr)) {
             return try self.emitRaceTolerantAggregateDerefLoad(ptr, pointee_ty);
@@ -8265,7 +8268,7 @@ const LlvmEmitter = struct {
                 (if (self.resolveAliasType(ty).kind == .fn_pointer) ty else self.pointerTypeFor(ty) catch null)
             else
                 null,
-            .deref => |inner| self.expressionResultType(expr, self.derefPointeeType(inner.*)),
+            .deref => |inner| self.requireExpressionResultType(expr, self.derefPointeeType(inner.*)),
             .index => |node| self.requireExpressionResultType(expr, self.indexElementType(node.base.*)),
             .slice => |node| self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null),
             .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else self.expressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| blk: {
