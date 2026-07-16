@@ -20,6 +20,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn carriedAliasReferent",
         "fn carriedAliasReferentForExpr",
         "fn markEscapedBorrowForCarriedAlias",
+        "fn hasUntypedBorrowAlias",
         "fn integerCastBorrowedMoveRootPlace",
         "fn immediateFullDerefMoveReferent",
         "fn typedAliasReferentPlace",
@@ -53,6 +54,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "aliasPlaceIndex": 0,
         "callLaunderedMoveReferent": 0,
         "invalidated_aliases": 0,
+        "trackedMoveReferentPlaceForKey": 0,
+        "markEscapedBorrowForReferentKey": 0,
         "state.getPtr(key)": 0,
         "state.remove(key)": 0,
         "state.getPtr(target_info.key)": 0,
@@ -87,9 +90,13 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
             "state.get(",
             "trackedMoveReferentPlaceForKey",
         ],
-        ("fn carriedAliasReferentForExpr", "fn trackedMoveReferentPlaceForKey"): [
+        ("fn carriedAliasReferentForExpr", "fn typedAliasReferentPlace"): [
             "trackedMoveReferentPlaceForKey",
             "spine.",
+        ],
+        ("fn borrowedMoveRootPlace", "fn integerCastBorrowedMoveRootPlace"): [
+            "spine.",
+            "alias_of orelse",
         ],
         ("fn markEscapedBorrowForCarriedAlias", "// Map keys remain compatibility indexes"): [
             "trackedMoveReferentPlaceForKey",

@@ -1939,6 +1939,9 @@ test "move short-circuit joins use typed roots rather than compatibility keys" {
 }
 
 test "move escaped borrows use typed roots rather than compatibility keys" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-escaped-borrow-place.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
     const field = root.project(.{ .field = "resource" }).?;
@@ -1948,6 +1951,16 @@ test "move escaped borrows use typed roots rather than compatibility keys" {
     try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
     markEscapedBorrowForPlace(field, span, &state);
     try std.testing.expect(state.get("compat:owner").?.escaped_borrow != null);
+
+    var alias_target = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "compat:alias", .span = span } } };
+    const alias_borrow = ast.Expr{ .span = span, .kind = .{ .address_of = &alias_target } };
+    try state.put("compat:alias", .{ .live = false, .span = span, .place = .{ .root = "compat:alias" }, .alias_of = "stale:owner", .alias_place = field });
+    const recovered = borrowedMoveRootPlace(&checker, alias_borrow, &state) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(recovered.eql(field));
+
+    state.getPtr("compat:alias").?.alias_place = null;
+    try std.testing.expect(borrowedMoveRootPlace(&checker, alias_borrow, &state) == null);
+    try std.testing.expect(hasUntypedBorrowAlias(alias_borrow, &state));
 }
 
 test "move borrowed subplaces use typed places rather than compatibility keys" {
@@ -2070,6 +2083,16 @@ fn borrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *const std.Strin
         .grouped => |inner| return borrowedMoveRootPlace(self, inner.*, state),
         else => return null,
     };
+    switch (target.kind) {
+        .ident => |id| if (state.get(id.text)) |slot| {
+            if (slot.alias_of != null) {
+                const place = slot.alias_place orelse return null;
+                if (rootMoveSlotForPlace(place, state) == null) return null;
+                return place;
+            }
+        },
+        else => {},
+    }
     const place = (placeKeyAndType(self, target, state) orelse return null).place;
     if (rootMoveSlotForPlace(place, state) == null) return null;
     return .{ .root = place.root };
@@ -2097,9 +2120,26 @@ fn markEscapedBorrowForPlace(place: MovePlace, escape_span: diagnostics.Span, st
     }
 }
 
-fn markEscapedBorrowForReferentKey(key: []const u8, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    const place = trackedMoveReferentPlaceForKey(key, state) orelse return;
-    markEscapedBorrowForPlace(place, escape_span, state);
+// A key-only escape candidate must never recover its owner by formatted text.
+// Its producer lost the typed place required for ownership tracking, so reject
+// the store/call boundary instead of accepting a potentially dangling borrow.
+fn rejectUntypedBorrowEscape(self: *Checker, escape_span: diagnostics.Span) void {
+    self.errorCode(escape_span, "E_USE_AFTER_MOVE", "cannot store or return a borrow of a linear `move` value without typed place metadata");
+}
+
+fn hasUntypedBorrowAlias(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) bool {
+    const target = switch (expr.kind) {
+        .address_of => |inner| inner.*,
+        .cast => |node| return hasUntypedBorrowAlias(node.value.*, state),
+        .grouped => |inner| return hasUntypedBorrowAlias(inner.*, state),
+        else => return false,
+    };
+    const id = switch (target.kind) {
+        .ident => |value| value,
+        else => return false,
+    };
+    const slot = state.get(id.text) orelse return false;
+    return slot.alias_of != null and slot.alias_place == null;
 }
 
 // A named alias reaches this escape path with the source place it carried at
@@ -2285,14 +2325,6 @@ fn carriedAliasReferentForExpr(expr: ast.Expr, state: *const std.StringHashMap(M
         .grouped => |inner| carriedAliasReferentForExpr(inner.*, state),
         else => null,
     };
-}
-
-fn trackedMoveReferentPlaceForKey(key: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
-    const slot = state.get(key) orelse return null;
-    const place = slot.place orelse return null;
-    const root = rootMoveSlotForPlace(place, state) orelse return null;
-    if (!root.live or root.alias_of != null) return null;
-    return place;
 }
 
 fn typedAliasReferentPlace(referent: AliasReferent) ?MovePlace {
@@ -3961,8 +3993,8 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
                         markEscapedBorrowForPlace(place, escape_span, state);
                         return;
                     }
-                    if (spine.borrowedMoveRoot(c.value.*, state)) |root| {
-                        markEscapedBorrowForReferentKey(root, escape_span, state);
+                    if (hasUntypedBorrowAlias(c.value.*, state)) {
+                        rejectUntypedBorrowEscape(self, escape_span);
                         return;
                     }
                 }
@@ -3981,8 +4013,8 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
                 markEscapedBorrowForPlace(place, escape_span, state);
                 return;
             }
-            if (spine.castToIntegerMoveRoot(self, inner.*, state)) |root| {
-                markEscapedBorrowForReferentKey(root, escape_span, state);
+            if (hasUntypedBorrowAlias(inner.*, state)) {
+                rejectUntypedBorrowEscape(self, escape_span);
                 return;
             }
         },
@@ -3994,8 +4026,7 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
         return;
     }
     if (markEscapedBorrowForCarriedAlias(value, escape_span, state)) return;
-    const root = spine.borrowedMoveRoot(value, state) orelse return;
-    markEscapedBorrowForReferentKey(root, escape_span, state);
+    if (hasUntypedBorrowAlias(value, state)) rejectUntypedBorrowEscape(self, escape_span);
 }
 
 // T1.3 (borrow-escape through a CALL argument). Scan a call argument for a borrow of a live
@@ -4064,12 +4095,8 @@ fn markBorrowEscapeCapturedCallArg(self: *Checker, arg: ast.Expr, escape_span: d
         return;
     }
     if (markEscapedBorrowForCarriedAlias(arg, escape_span, state)) return;
-    const referent = spine.borrowedMoveRoot(arg, state) orelse
-        spine.aliasReferentOf(arg, state) orelse
-        return;
-    const place = trackedMoveReferentPlaceForKey(referent, state) orelse return;
-    if (rootMoveSlotPtrForPlace(place, state)) |slot| {
-        if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
+    if (hasUntypedBorrowAlias(arg, state)) {
+        rejectUntypedBorrowEscape(self, escape_span);
     }
 }
 
