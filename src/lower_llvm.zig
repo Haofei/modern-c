@@ -6083,6 +6083,8 @@ const LlvmEmitter = struct {
                 // `index * sizeof(elem)`, computed by `emitIndexAddress` via a typed GEP
                 // over the storage base, so the load just uses the element type.
                 const element_ty = overlayArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
+                const result_ty = (self.mirTargetTypeFactAt(.expression_result, index_span) orelse return error.UnsupportedLlvmEmission).target_ty;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(element_ty))) return error.UnsupportedLlvmEmission;
                 const ptr = try self.emitIndexAddress(node);
                 const result = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(element_ty), ptr, try self.debugCallSuffix() });

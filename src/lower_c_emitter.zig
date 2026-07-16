@@ -3865,6 +3865,14 @@ const CEmitter = struct {
     }
 
     fn emitIndexExpr(self: *CEmitter, node: anytype, index_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        if (locals) |local_set| {
+            if (self.overlayIndexResultType(node, local_set)) |inferred_element_ty| {
+                const element_ty = (self.mirTargetTypeFactAt(.expression_result, index_span) orelse return error.UnsupportedCEmission).target_ty;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(inferred_element_ty))) return error.UnsupportedCEmission;
+                if (try self.emitOverlayIndexReadExpr(node, local_set)) return;
+                return error.UnsupportedCEmission;
+            }
+        }
         const base_ty = self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
         const inferred_element_ty = switch (self.resolveAliasType(base_ty).kind) {
             .array => |array| array.child.*,
@@ -3964,6 +3972,14 @@ const CEmitter = struct {
         const field = info.fields.get(node.name.text) orelse return null;
         if (field.byte_array_len != null or ast_query.overlayArrayElementType(field.ty) != null) return null;
         return field.ty;
+    }
+
+    fn overlayIndexResultType(self: *CEmitter, node: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const member = ast_query.overlayMemberFromIndexBase(node.base.*) orelse return null;
+        const overlay_name = lower_c_access.overlayUnionNameForExpr(member.base.*, locals) orelse return null;
+        const info = self.overlay_unions.get(overlay_name) orelse return null;
+        const field = info.fields.get(member.name.text) orelse return null;
+        return ast_query.overlayArrayElementType(field.ty);
     }
 
     // A variant-path literal `Enum.variant` used as a value emits the enum's case
