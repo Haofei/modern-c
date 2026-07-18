@@ -8,6 +8,7 @@ const layout = @import("layout.zig");
 const sema_type = @import("sema_type.zig");
 
 const max_parse_depth: usize = 256;
+const max_generic_lookahead_tokens: usize = 1024;
 
 pub const Parser = struct {
     lx: lexer.Lexer,
@@ -1843,7 +1844,7 @@ pub const Parser = struct {
         var expr = input;
         var wrapper_depth: usize = 1;
         while (true) {
-            if (self.current.kind == .less and self.lessStartsGenericCall()) {
+            if (self.current.kind == .less and try self.lessStartsGenericCall()) {
                 self.advance();
                 const type_args = try self.finishTypeArgsAfterLess();
                 try self.expect(.l_paren, "expected '(' after generic call type arguments");
@@ -1914,13 +1915,19 @@ pub const Parser = struct {
         return expr;
     }
 
-    fn lessStartsGenericCall(self: *Parser) bool {
+    fn lessStartsGenericCall(self: *Parser) anyerror!bool {
         if (self.current.kind != .less) return false;
         var lx = self.lx;
         var depth: usize = 0;
         var saw_type_token = false;
+        var scanned: usize = 0;
 
         while (true) {
+            if (scanned >= max_generic_lookahead_tokens) {
+                self.reporter.err(self.current.span, "E_GENERIC_LOOKAHEAD_LIMIT: generic-call lookahead exceeds {d} tokens", .{max_generic_lookahead_tokens});
+                return error.ParseFailed;
+            }
+            scanned += 1;
             const tok = lx.next();
             switch (tok.kind) {
                 .eof, .semicolon, .l_brace, .r_brace, .fat_arrow, .equal => return false,

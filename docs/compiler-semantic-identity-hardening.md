@@ -28,7 +28,7 @@ optimizations.
 | P0 | Tuple interning merges different structural types | **Fixed** | Parser interning compares complete `TypeExpr[]` structure; generated names are output identities only and receive a unique suffix when a readable candidate collides. |
 | P1 | `monomorphize` drops `Module.qualified_owners` | **Fixed** | `Module.withDecls` preserves metadata; monomorphize and the non-extending async path use it, while the extending async path is explicit. |
 | P1 | Qualified resolution depends on declaration/import order | **Fixed for the current flattened-module model** | Qualified references remain structured through parsing and a complete post-parse symbol pass resolves them after all imported declarations have been collected. |
-| P2 pending measurement | Generic-call lookahead may approach quadratic time | Plausible, not yet measured | `lessStartsGenericCall` clones the lexer and scans forward for each candidate `<`. |
+| P2 | Generic-call lookahead may approach quadratic time | **Bounded** | `lessStartsGenericCall` still uses speculative lexing, but each candidate is capped at 1024 tokens and fails with `E_GENERIC_LOOKAHEAD_LIMIT`; an adversarial repeated-`<` regression gates the bound. |
 | P2 | Import expansion has no graph-wide resource budget | Inspected, high confidence | A visited set and per-file size limit exist; total files, bytes, depth, and expanded tokens are not bounded. |
 | P2 design decision | One `pub` declaration changes the whole file's visibility mode | Confirmed intentional behavior | `ast.Decl.is_pub` documents the compatibility rule; this is a non-local API rule rather than an implementation accident. |
 
@@ -199,10 +199,13 @@ post-parse pass rather than reintroduce source-order lookup.
 
 Goal: adversarial source and dependency graphs have explicit, tested limits.
 
-- [ ] Add an adversarial benchmark for repeated ambiguous `<` tokens and record
-  runtime/allocation growth over increasing input sizes.
-- [ ] If growth is superlinear at relevant sizes, tokenize once and memoize
-  generic-call lookahead by token offset, or use bounded speculative parsing.
+- [x] Confirm the repeated ambiguous-`<` worst case from control flow: each
+  candidate cloned the lexer and could scan the remaining statement.
+- [x] Bound speculative generic-call parsing to 1024 tokens per candidate and
+  emit stable `E_GENERIC_LOOKAHEAD_LIMIT` instead of scanning without limit.
+- [x] Add an adversarial repeated-`<` regression that exceeds the bound.
+- [ ] Tokenize once and memoize generic-call lookahead if parser throughput
+  measurements show the bounded repeated lexing is still material in practice.
 - [ ] Add configurable import limits for file count, cumulative input bytes,
   import depth, and expanded token/source size.
 - [ ] Replace recursive import traversal with an explicit stack before claiming

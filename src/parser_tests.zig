@@ -219,6 +219,27 @@ test "parser distinguishes relational operators from generic calls" {
     try std.testing.expectEqual(@as(usize, 1), call.type_args.len);
 }
 
+test "parser bounds adversarial generic-call lookahead" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+    try source.appendSlice(std.testing.allocator, "fn adversarial(a: u32) -> bool { return a");
+    for (0..1100) |_| try source.appendSlice(std.testing.allocator, " < a");
+    try source.appendSlice(std.testing.allocator, "; }\n");
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "generic_lookahead_limit.mc", source.items);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = Parser.init(source.items, &reporter);
+    try std.testing.expectError(error.ParseFailed, p.parseModule(arena.allocator()));
+
+    var saw_limit = false;
+    for (reporter.diagnostics.items) |diagnostic| {
+        if (std.mem.indexOf(u8, diagnostic.message, "E_GENERIC_LOOKAHEAD_LIMIT") != null) saw_limit = true;
+    }
+    try std.testing.expect(saw_limit);
+}
+
 test "parser keeps delimiter and function-signature tuple types distinct" {
     const source =
         \\struct A_B { value: u32 }
