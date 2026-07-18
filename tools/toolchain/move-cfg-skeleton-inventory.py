@@ -79,6 +79,12 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
         ],
         "forbidden": [],
     },
+    "moveLoopBodyCfg": {
+        "required": [
+            "finalizeLoopBodyCfgExit(self, &loop_cfg, &worklist, outer_state, body_diverges);",
+        ],
+        "forbidden": [],
+    },
 }
 
 ANCHORS: dict[str, list[str]] = {

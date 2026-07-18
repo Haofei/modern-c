@@ -1054,9 +1054,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
             pending_outer_exits_before += outer.pending_exits.items.len;
         }
     }
-    var body_state = cloneMoveState(self, state);
-    defer body_state.deinit();
-    const body_diverges = moveLoopBodyCfg(self, loop.body, state, &body_state, aliases);
+    const body_diverges = moveLoopBodyCfg(self, loop.body, state, aliases);
     var body_exits_outer_loop = false;
     if (self.move_loop_stack.items.len > 1) {
         var pending_outer_exits_after: usize = 0;
@@ -1070,10 +1068,6 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
         applyLoopEarlyExitIndexFactInvalidations(state, &loop_frame);
         applyLoopEarlyExitAliasInvalidations(state, &loop_frame);
         loop_frame.deinit();
-    }
-    if (!body_diverges) {
-        reportMoveLocalsLeavingScope(self, &body_state, state, "linear `move` value declared in a loop body is never consumed (must be moved, returned, or freed before the iteration ends)");
-        reportLoopOuterResourceChanges(self, state, &body_state);
     }
     // A body that queued a labeled exit to an enclosing loop has no local
     // fallthrough edge. Propagate that fact so the enclosing CFG routes the
@@ -2850,7 +2844,7 @@ fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *MoveState,
 // evaluated once for diagnostics, then its outgoing state travels over the
 // backedge and joins the zero-iteration path at the head. The existing loop
 // widening below remains the authority for rejecting outer-resource changes.
-fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist, body: ast.Block, result_state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), body_diverges: *bool, body_visited: *bool) void {
+fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist, body: ast.Block, aliases: *const std.StringHashMap(ast.TypeExpr), body_diverges: *bool, body_visited: *bool) void {
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
         if (block == loop_cfg.entry) {
@@ -2866,13 +2860,6 @@ fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, work
             // is the same target that a labeled exit resolved during AST walk.
             checkLoopExitLeaks(self, block_state, null);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == loop_cfg.break_exit) {
-            // A queued labeled break targets this loop's terminal CFG block.
-            // Preserve that edge's ownership state for the enclosing loop's
-            // scope and exit checks instead of dropping it after validation.
-            replaceMoveState(self, result_state, block_state);
-        } else if (block == loop_cfg.exit) {
-            replaceMoveState(self, result_state, block_state);
         }
     }
 }
@@ -2890,11 +2877,21 @@ fn enqueuePendingLoopExitStates(self: *Checker, loop_cfg: *const LoopBodyMoveCfg
     }
 }
 
-fn moveLoopBodyCfg(self: *Checker, body: ast.Block, entry_state: *const MoveState, result_state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn finalizeLoopBodyCfgExit(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist, outer_state: *MoveState, body_diverges: bool) void {
+    if (body_diverges) return;
+    const exit_state = worklist.statePtr(loop_cfg.exit) orelse {
+        self.oom = true;
+        return;
+    };
+    reportMoveLocalsLeavingScope(self, exit_state, outer_state, "linear `move` value declared in a loop body is never consumed (must be moved, returned, or freed before the iteration ends)");
+    reportLoopOuterResourceChanges(self, outer_state, exit_state);
+}
+
+fn moveLoopBodyCfg(self: *Checker, body: ast.Block, outer_state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var loop_cfg = loopBodyMoveCfg(self) orelse return false;
     defer loop_cfg.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &loop_cfg.cfg, loop_cfg.entry, entry_state) orelse return false;
+    var worklist = MoveStateCfgWorklist.init(self, &loop_cfg.cfg, loop_cfg.entry, outer_state) orelse return false;
     defer worklist.deinit();
     // Loop-head widening has its own E_MOVE_LOOP_RESOURCE policy. Merge the
     // zero-iteration and backedge states conservatively here, then let that
@@ -2903,9 +2900,10 @@ fn moveLoopBodyCfg(self: *Checker, body: ast.Block, entry_state: *const MoveStat
     worklist.suppressJoinDiagnostics();
     var body_diverges = false;
     var body_visited = false;
-    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, result_state, aliases, &body_diverges, &body_visited);
+    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, aliases, &body_diverges, &body_visited);
     enqueuePendingLoopExitStates(self, &loop_cfg, &worklist);
-    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, result_state, aliases, &body_diverges, &body_visited);
+    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, aliases, &body_diverges, &body_visited);
+    finalizeLoopBodyCfgExit(self, &loop_cfg, &worklist, outer_state, body_diverges);
     return body_diverges;
 }
 
