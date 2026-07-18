@@ -171,7 +171,6 @@ or the presence of unrelated generics.
 
 - [x] Represent unresolved `Owner.member` as the existing structured `.member`
   AST node throughout parsing.
-- [ ] Build the import/module graph before semantic binding.
 - [x] Collect all module and impl qualified symbols before resolving qualified
   expressions in the combined source.
 - [x] Remove parse-postfix binding and run one dedicated post-parse resolution
@@ -191,10 +190,13 @@ its recursive AST walk; parser tests covering module functions, module
 constants, inherent methods, both declaration orders, an unrelated generic,
 and the loader's importer-before-imported-file order. `zig build test` passes.
 
-The unchecked module-graph item is deliberately not required to close this
-specific correctness defect. It remains necessary for separate compilation and
+The module-graph migration is deliberately not required to close this specific
+correctness defect. It remains necessary for separate compilation and
 for moving all name binding into typed HIR/sema; it must replace this bounded
 post-parse pass rather than reintroduce source-order lookup.
+
+Non-blocking architectural follow-up: build the import/module graph before
+semantic binding as part of the separate-compilation/typed-HIR migration.
 
 ### S5 - Bound parser and import resources
 
@@ -207,8 +209,6 @@ Goal: adversarial source and dependency graphs have explicit, tested limits.
 - [x] Bound speculative generic-call parsing to 1024 tokens per candidate and
   emit stable `E_GENERIC_LOOKAHEAD_LIMIT` instead of scanning without limit.
 - [x] Add an adversarial repeated-`<` regression that exceeds the bound.
-- [ ] Tokenize once and memoize generic-call lookahead if parser throughput
-  measurements show the bounded repeated lexing is still material in practice.
 - [x] Add configurable import limits for file count, cumulative input bytes,
   import depth, and expanded source size.
 - [x] Replace recursive import traversal with an explicit stack before claiming
@@ -226,8 +226,12 @@ Implementation evidence: `max_generic_lookahead_tokens` and
 and deep-chain fixtures under `tests/spec_support`; focused parser tests and
 `zig build test`.
 
-The unchecked token-buffer item is a conditional throughput optimization, not
-an unbounded-resource gap: speculative work is already capped per candidate.
+The token-buffer migration is a conditional throughput optimization, not an
+unbounded-resource gap: speculative work is already capped per candidate.
+
+Conditional performance follow-up: tokenize once and memoize generic-call
+lookahead only if parser throughput measurements show the bounded repeated
+lexing remains material in practice.
 
 ## Separate visibility decision
 
