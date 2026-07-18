@@ -564,12 +564,12 @@ pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *MoveState, alia
         } else if (block_id == linear.body) {
             diverges = moveBlock(self, block, block_state, aliases);
             if (!diverges) {
-                reportMoveLocalsLeavingScope(self, block_state, &before, "linear `move` value declared in this block is never consumed (must be moved, returned, or freed before the block ends)");
                 worklist.propagateSuccessors(self, block_id, block_state);
             } else {
                 replaceMoveState(self, state, block_state);
             }
         } else if (block_id == linear.exit) {
+            reportMoveLocalsLeavingScope(self, block_state, &before, "linear `move` value declared in this block is never consumed (must be moved, returned, or freed before the block ends)");
             replaceMoveState(self, state, block_state);
         }
     }
@@ -5082,9 +5082,9 @@ fn moveDeferBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: 
             worklist.propagateSuccessors(self, block_id, block_state);
         } else if (block_id == linear.body) {
             for (block.items) |stmt| moveDeferStmt(self, stmt, block_state, &before, aliases);
-            reportMoveLocalsLeavingScope(self, block_state, &before, "linear `move` value declared in this deferred cleanup block is never consumed before cleanup ends");
             worklist.propagateSuccessors(self, block_id, block_state);
         } else if (block_id == linear.exit) {
+            reportMoveLocalsLeavingScope(self, block_state, &before, "linear `move` value declared in this deferred cleanup block is never consumed before cleanup ends");
             replaceMoveState(self, state, block_state);
         }
     }

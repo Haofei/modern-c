@@ -67,6 +67,18 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
         ],
         "forbidden": ["var it = state.iterator();"],
     },
+    "moveScopedBlock": {
+        "required": [
+            "} else if (block_id == linear.exit) {\n            reportMoveLocalsLeavingScope",
+        ],
+        "forbidden": [],
+    },
+    "moveDeferBlock": {
+        "required": [
+            "} else if (block_id == linear.exit) {\n            reportMoveLocalsLeavingScope",
+        ],
+        "forbidden": [],
+    },
 }
 
 ANCHORS: dict[str, list[str]] = {
