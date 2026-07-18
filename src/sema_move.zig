@@ -1818,6 +1818,27 @@ test "move root ownership lookup uses typed places rather than compatibility key
     try std.testing.expect(!state.get("compat:owner").?.live);
 }
 
+test "move forget consumes typed roots rather than compatibility keys" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    const field = root.project(.{ .field = "resource" }).?;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-forget-root.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    defer state.deinit();
+    var aliases = std.StringHashMap(ast.TypeExpr).init(std.testing.allocator);
+    defer aliases.deinit();
+    const owner = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "owner", .span = span } } };
+
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
+    try state.put("compat:owner.resource", .{ .live = false, .span = span, .place = field });
+    moveForget(&checker, owner, &state, &aliases);
+    try std.testing.expect(!state.get("compat:owner").?.live);
+    try std.testing.expect(!state.contains("compat:owner.resource"));
+    try std.testing.expect(!reporter.has_errors);
+}
+
 test "move place construction resolves typed roots before compatibility keys" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
@@ -3947,7 +3968,7 @@ pub fn moveForget(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Move
     switch (expr.kind) {
         .ident => |id| {
             var root_place = MovePlace{ .root = id.text };
-            if (state.getPtr(id.text)) |slot| {
+            if (rootMoveSlotPtrForPlace(root_place, state)) |slot| {
                 if (slot.place) |place| root_place = place;
                 if (!slot.live) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");

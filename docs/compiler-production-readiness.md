@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-18, based on the current compiler worktree**.
-Evidence register: **709 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **710 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -869,6 +869,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Derived pointer aliases do not consume their borrowed move owner | A pointer returned from a call that borrows a `move` owner retains its carried `MovePlace` for stale-alias diagnostics, but dereferencing that pointer is an ordinary borrow unless the alias was a direct full `&owner` alias. `immediateFullDerefMoveReferent` now preserves that distinction instead of relabeling every carried alias as a full dereference. The lock-guard specification fixture accepts repeated scalar reads through `Guard.get(&g)` and still reports the independent unreleased-guard leak. `zig build test` now executes `src/spec_tests.zig` explicitly, so this fixture cannot be skipped by lazy test import analysis. This repairs an existing M1 alias-consumer boundary; it does not close M1 or expand general pointer move support. | `src/sema_move.zig` `immediateFullDerefMoveReferent`; `tests/spec/lock_guards_data.mc` `accept_access_through_guard` / `reject_forget_release`; `build/compiler.zig` explicit spec-test artifact; `zig test src/spec_tests.zig`; `zig test src/sema_move.zig`; `zig build test`; `git diff --check`. |
 
 | C generic source call results use the MIR-owned call path | `callSourceTypeForEmission` no longer re-derives ordinary direct-call result types from C's function declaration map. It now delegates to `callReturnTypeForCall`, which consumes the existing direct-call result facts, indirect-call signatures, dynamic-dispatch result facts, and builtin result facts, using declarations only to reject stale facts. LLVM already consumes the same fact families in its call-result path. This is a T2 migration within the registered expression-type family, not closure of all call or expression typing. | `src/lower_c_emitter.zig` `callSourceTypeForEmission` / `callReturnTypeForCall`; `src/lower_c_tests.zig` `ordinary direct calls require MIR result and argument types` / `indirect calls require MIR callee signature facts`; `src/lower_llvm_tests.zig` matching direct/indirect call fact tests; `zig test src/lower_c_tests.zig`; `zig test src/lower_llvm_tests.zig`; full production gate; `git diff --check`. |
+
+| Move forget consumes structural roots | `forget_unchecked(owner)` no longer treats the source identifier as a `MoveState` compatibility key. The move checker resolves the ownership root with `MovePlace`, marks that root consumed, and clears its child places. A regression stores the root under `compat:owner` while the source still says `owner`, proving the key cannot control forget semantics. This is one M1.1 consumer migration, not closure of move-place identity or CFG analysis. | `src/sema_move.zig` `moveForget` / `rootMoveSlotPtrForPlace`; unit test `move forget consumes typed roots rather than compatibility keys`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 
