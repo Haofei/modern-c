@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-18, based on the current compiler worktree**.
-Evidence register: **718 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **719 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -886,6 +886,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Move checker index facts no longer occupy slots | `MoveSlot` no longer stores constant or symbolic index metadata. Index reads use only `MoveState.index_facts`; loop and short-circuit joins, early-exit invalidation, assignment handling, and ownership scans no longer classify or inspect a pure index slot. `move-place-identity-inventory.py` rejects reintroduction of the old fields, readers, or helper authority. | `src/sema_model.zig` `MoveSlot` / `MoveIndexFact`; `src/sema_move.zig` `constIndexValue`, `symbolicIndexValue`, loop and join helpers; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 | Move checker projection inventory is explicit | The M3.1 inventory names root/field, constant element, stable symbolic element, unknown wildcard element, full alias/dereference, and arbitrary-pointee/non-nameable dynamic-element boundaries. Each row is tied to its structural owner and positive/conflicting or `E_MOVE_ARRAY_UNSUPPORTED` fixture. The focused gate and dev-gate routing reject an unowned projection category. | `docs/compiler-production-readiness.md` M3.1 table; `tools/toolchain/move-projection-inventory.py`; `build/qemu.zig` `move-projection-inventory-test`; `build/tiers.zig`; `tools/dev-gates.py`; `tools/toolchain/dev-gates-test.py`; `zig build move-projection-inventory-test dev-gates-test`; `git diff --check`. |
+
+| Move checker rejects only untracked dynamic array places | The `E_MOVE_ARRAY_UNSUPPORTED` move, assignment, and defer diagnostics now state the actual M3 boundary: rejection occurs when an untracked dynamic index has no nameable owner place to update or reserve. Named array wildcard places remain the separate admitted conservative path. The generated diagnostic reference records the same contract. | `src/sema_move.zig` indexed move/assignment/defer paths; `tests/spec/move_place.mc` arbitrary-pointee, returned-array, and array-literal rejects; `docs/diagnostics.md`; `tools/toolchain/move-unsupported-inventory.py`; `zig build move-unsupported-inventory-test move-pointer-pointee-boundary-inventory-test diagnostics-reference-test`; `git diff --check`. |
 
 ### Bounded Workstream Status
 

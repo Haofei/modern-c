@@ -42,7 +42,7 @@ ROWS: dict[str, dict[str, list[str]]] = {
         "docs/compiler-production-readiness.md": ["Full alias / dereference"],
     },
     "arbitrary pointee and non-nameable boundaries": {
-        "src/sema_move.zig": ["arrayIndexEmbedsMove", "cannot move a linear `move` array element through a non-constant index"],
+        "src/sema_move.zig": ["arrayIndexEmbedsMove", "cannot move a linear `move` array element through an untracked dynamic index"],
         "tests/spec/move_place.mc": ["reject_dynamic_pointer_to_move_array_element", "reject_dynamic_returned_move_array_element", "reject_dynamic_array_literal_move_element"],
         "docs/compiler-production-readiness.md": ["Arbitrary pointee or non-nameable dynamic element"],
     },

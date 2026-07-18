@@ -44,9 +44,9 @@ CHANNELS: dict[str, dict[str, list[str]]] = {
     "arbitrary pointer-to-array dynamic pointees reject": {
         "src/sema_move.zig": [
             "arrayIndexEmbedsMove",
-            "cannot move a linear `move` array element through a non-constant index",
-            "cannot assign a linear `move` array element through a non-constant index",
-            "cannot defer a linear `move` array element through a non-constant index",
+            "cannot move a linear `move` array element through an untracked dynamic index",
+            "cannot assign a linear `move` array element through an untracked dynamic index",
+            "cannot defer a linear `move` array element through an untracked dynamic index",
         ],
         "tests/spec/move_place.mc": [
             "reject_dynamic_pointer_to_move_array_element",
@@ -111,9 +111,9 @@ ANCHORS: dict[str, list[str]] = {
         "extern/export ABI returns cannot carry arrays of linear `move` values by value",
     ],
     "src/sema_move.zig": [
-        "cannot assign a linear `move` array element through a non-constant index",
-        "cannot move a linear `move` array element through a non-constant index",
-        "cannot defer a linear `move` array element through a non-constant index",
+        "cannot assign a linear `move` array element through an untracked dynamic index",
+        "cannot move a linear `move` array element through an untracked dynamic index",
+        "cannot defer a linear `move` array element through an untracked dynamic index",
         "arrayIndexEmbedsMove",
         "nonNameableSingletonMoveIndex",
     ],

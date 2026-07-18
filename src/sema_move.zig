@@ -969,7 +969,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                         markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
                         moveConsume(self, a.value, state, aliases);
                     } else if (arrayIndexEmbedsMove(self, a.target, state, aliases)) {
-                        self.errorCode(a.target.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot assign a linear `move` array element through a non-constant index; element ownership is only tracked for constant indexes");
+                        self.errorCode(a.target.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot assign a linear `move` array element through an untracked dynamic index; the checker has no nameable owner place to update");
                         markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
                         moveConsume(self, a.value, state, aliases);
                     } else {
@@ -2631,7 +2631,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
             if (full_alias_referent) |referent| {
                 consumeTrackedMoveReferent(self, referent, expr.span, state);
             } else if (arrayIndexEmbedsMove(self, inner.*, state, aliases)) {
-                self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot move a linear `move` array element through a non-constant index; element ownership is only tracked for constant indexes");
+                self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot move a linear `move` array element through an untracked dynamic index; the checker has no nameable owner place to update");
             } else if (exprIsMoveTyped(self, expr, state, aliases)) {
                 self.errorCode(expr.span, "E_USE_AFTER_MOVE", "cannot move a linear `move` value out through a pointer deref; move the owning binding directly (the pointee would be left moved-from, which the checker cannot track through the alias)");
             } else {
@@ -2663,7 +2663,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
             } else if (nonNameableSingletonMoveIndex(self, expr, state, aliases)) {
                 moveConsume(self, ix.base.*, state, aliases);
             } else if (arrayIndexEmbedsMove(self, expr, state, aliases)) {
-                self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot move a linear `move` array element through a non-constant index; element ownership is only tracked for constant indexes");
+                self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot move a linear `move` array element through an untracked dynamic index; the checker has no nameable owner place to update");
             }
         },
         .slice => |s| {
@@ -5048,7 +5048,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *co
             } else if (nonNameableSingletonMoveIndex(self, expr, state, aliases)) {
                 moveDefer(self, ix.base.*, state, aliases);
             } else if (arrayIndexEmbedsMove(self, expr, state, aliases)) {
-                self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot defer a linear `move` array element through a non-constant index; element ownership is only tracked for constant indexes");
+                self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot defer a linear `move` array element through an untracked dynamic index; the checker has no nameable owner place to reserve");
             }
         },
         .slice => |s| {

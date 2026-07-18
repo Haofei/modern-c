@@ -20,7 +20,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn consumeTrackedMoveReferent",
         "fn arrayIndexEmbedsMove",
         "cannot move a linear `move` value out through a pointer deref",
-        "cannot move a linear `move` array element through a non-constant index",
+        "cannot move a linear `move` array element through an untracked dynamic index",
     ],
     "tests/spec/move_place.mc": [
         "accept_move_field_through_full_alias",
