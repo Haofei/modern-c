@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-18, based on the current compiler worktree**.
-Evidence register: **712 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **713 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -875,6 +875,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Move borrows and defers find structural binding roots | The identifier entries for `moveBorrow` and `moveDefer` now locate their own `MoveSlot` through `MovePlace.root`, so source spelling cannot choose a different compatibility-map entry after CFG rewriting. Alias slots remain distinct from their carried referent, preserving stale-alias and deferred-borrow behavior. This is one M1.1 consumer migration, not completion of alias analysis or CFG routing. | `src/sema_move.zig` `bindingMoveSlotPtrForIdent` / `moveBorrow` / `moveDefer`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 | Move consume finds structural binding roots | The primary by-value consume path now locates its `MoveSlot` with the same `MovePlace.root` rule used by borrow, defer, and forget. A compatibility key can no longer decide whether a source binding is live, deferred, escaped, or already consumed. Alias slots remain handled as aliases after structural binding lookup. This is one M1.1 consumer migration, not checker closure. | `src/sema_move.zig` `bindingMoveSlotPtrForIdent` / `consumeTrackedMoveBinding`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
+
+| Assignment overwrite checks use structural binding roots | Assignment retains its compatibility-key presence check for const/symbolic index metadata and legacy-slot cleanup, while its resource-overwrite, deferred-reservation, and alias-category decisions now use the structural binding root. This preserves the dynamic-index fail-closed branch while preventing a compatibility key from selecting the ownership state used for diagnostics. This is one M1.2/M3 binding-slot separation step, not full assignment migration. | `src/sema_move.zig` assignment identifier branch / `bindingMoveSlotPtrForIdent`; `zig build test`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 

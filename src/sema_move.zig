@@ -861,12 +861,13 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                     // only concern linear resources, not aliases (an alias is never `live`
                     // or `deferred`), and re-binding an alias must NOT flip it live.
                     const had_slot = state.contains(id.text);
-                    const was_alias = if (state.getPtr(id.text)) |slot| slot.alias_of != null else false;
+                    const binding_slot = bindingMoveSlotPtrForIdent(id.text, state);
+                    const was_alias = if (binding_slot) |slot| slot.alias_of != null else false;
                     const target_can_store_alias = if (self.move_ctx) |mctx|
                         exprCanStoreBorrowAlias(a.target, mctx.*)
                     else
                         false;
-                    if (state.getPtr(id.text)) |slot| {
+                    if (binding_slot) |slot| {
                         if (slot.live and !slot.deferred) {
                             self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot overwrite a live linear `move` value; consume it first");
                         } else if (slot.deferred) {
