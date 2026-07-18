@@ -2144,6 +2144,20 @@ fn aliasBindingMoveSlotForIdent(name: []const u8, state: *const std.StringHashMa
     return null;
 }
 
+fn bindingMoveSlotPtrForIdent(name: []const u8, state: *std.StringHashMap(MoveSlot)) ?*MoveSlot {
+    const expected: MovePlace = .{ .root = name };
+    if (state.getPtr(name)) |slot| {
+        if (slot.place) |place| if (place.eql(expected)) return slot;
+    }
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr;
+        const place = slot.place orelse continue;
+        if (place.eql(expected)) return slot;
+    }
+    return null;
+}
+
 fn ownershipMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) ?*MoveSlot {
     var it = state.iterator();
     while (it.next()) |entry| {
@@ -4740,7 +4754,7 @@ fn aliasPlaceBaseType(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot))
 pub fn moveBorrow(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     switch (expr.kind) {
         .ident => |id| {
-            if (state.getPtr(id.text)) |slot| {
+            if (bindingMoveSlotPtrForIdent(id.text, state)) |slot| {
                 if (slot.type_only) {
                     return;
                 } else if (slot.alias_of != null) {
@@ -4872,7 +4886,7 @@ fn moveDeferSliceBase(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(
 pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     switch (expr.kind) {
         .ident => |id| {
-            if (state.getPtr(id.text)) |slot| {
+            if (bindingMoveSlotPtrForIdent(id.text, state)) |slot| {
                 if (slot.alias_of) |referent| {
                     markDeferredBorrowAliasReferent(self, .{ .key = referent, .place = slot.alias_place, .full_deref = slot.full_deref_alias }, expr.span, state);
                 } else if (slot.cleanup_local) {
