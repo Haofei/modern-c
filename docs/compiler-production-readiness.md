@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-18, based on the current compiler worktree**.
-Evidence register: **720 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **721 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -891,6 +891,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Move checker projection admission requires fixture semantics | The M3 projection gate now reads each selected fixture body. Accepted constant, symbolic, wildcard, and full-alias cases may not declare an error; conflicting cases must declare `E_USE_AFTER_MOVE`; arbitrary-pointee, returned-array, and array-literal cases must declare `E_MOVE_ARRAY_UNSUPPORTED`. This prevents an admission row from being satisfied by a stale function name alone. | `tools/toolchain/move-projection-inventory.py` `FIXTURE_EXPECTATIONS`; `tests/spec/move_place.mc`; `zig build move-projection-inventory-test dev-gates-test`; full production gate; `git diff --check`. |
 
+| Move checker projection admission has full row coverage | M3.2 now checks the root/field row as well as constant, symbolic, wildcard, full-alias, and fail-closed rows. Every admitted row has a no-error fixture and an `E_USE_AFTER_MOVE` conflict fixture; each non-admitted dynamic-place class has `E_MOVE_ARRAY_UNSUPPORTED` coverage. | `tools/toolchain/move-projection-inventory.py` root/field `accept_move_each_field` / `reject_duplicate_field_move` and remaining `FIXTURE_EXPECTATIONS`; `tests/spec/move_place.mc`; `zig build move-projection-inventory-test`; full production gate; `git diff --check`. |
+
 ### Bounded Workstream Status
 
 This is the authoritative execution dashboard for the three open compiler
@@ -935,8 +937,8 @@ they must not introduce a conflicting next action.
 
 | Workstream | Final compiler property | Completed boundary | Current phase | Next bounded action | Whole-workstream exit |
 |---|---|---|---|---|---|
-| Typed semantic facts / typed MIR | C and LLVM consume the same MIR-owned type, call-target, provenance, representation, ABI, and safety decisions. AST is used only for admitted emission mechanics. | T1 inventory/admission is complete. T2 has migrated the listed direct call, builtin, storage, integer/default, target-typed char, bounds/range, representation, varargs, trap, member/index, function-address, bounded data-address, and source-member result slices, including top-level const globals. | **Queued: T2.1 select the next family.** | After M3 closes, select one different registered expression-result or call-target family and record its producer, C/LLVM consumers, and missing/stale behavior before code changes. | T3 gives every registered legacy family a MIR-owned, conservative, or diagnostic disposition; T4 then proves no lowering-affecting backend inference is unregistered. |
-| CFG/place move checker | Every supported move decision is made by structural `MovePlace` identity plus CFG transfer/join state; compatibility strings are indexes/debug data only. | M1 has migrated typed aliases, borrow escapes, alias consumption, early-exit invalidation, typed alias storage matching, source-identifier root lookup, expression resource checks, named-alias consumers, ordinary consume/borrow/defer/forget binding entries, assignment overwrite ownership lookup, and all parameter/local index producer/read paths. M2 has bounded branch, loop, and deferred-loop routing. M3.1 now inventories projection families. | **Current: M3.2 projection admission.** | Validate each inventory row's exact overlap behavior and retain a diagnostic for every non-admitted boundary. | M1/M3 define or reject every projection; M2 routes every supported control-flow transfer through the common worklist; M4 removes compatibility-key correctness authority. |
+| Typed semantic facts / typed MIR | C and LLVM consume the same MIR-owned type, call-target, provenance, representation, ABI, and safety decisions. AST is used only for admitted emission mechanics. | T1 inventory/admission is complete. T2 has migrated the listed direct call, builtin, storage, integer/default, target-typed char, bounds/range, representation, varargs, trap, member/index, function-address, bounded data-address, and source-member result slices, including top-level const globals. | **Current: T2.1 select the next family.** | Name one different registered expression-result or call-target family and record its producer, C/LLVM consumers, and missing/stale behavior before code changes. | T3 gives every registered legacy family a MIR-owned, conservative, or diagnostic disposition; T4 then proves no lowering-affecting backend inference is unregistered. |
+| CFG/place move checker | Every supported move decision is made by structural `MovePlace` identity plus CFG transfer/join state; compatibility strings are indexes/debug data only. | M1 has migrated typed aliases, borrow escapes, alias consumption, early-exit invalidation, typed alias storage matching, source-identifier root lookup, expression resource checks, named-alias consumers, ordinary consume/borrow/defer/forget binding entries, assignment overwrite ownership lookup, and all parameter/local index producer/read paths. M2 has bounded branch, loop, and deferred-loop routing. M3 inventories and validates all current projection families. | **M3 complete; M2/M4 remain queued.** | Select the next T2 typed-fact family; return to M2 only when that ordered phase becomes selected. | M1/M3 define or reject every projection; M2 routes every supported control-flow transfer through the common worklist; M4 removes compatibility-key correctness authority. |
 | Pointer-provenance race lowering | No C or LLVM lowering path turns an MC race into optimizer UB; positive local/global provenance comes only from MIR facts. | P1 conservative scalar default, P2 direct MIR proofs, and P3 policy for the currently admitted pointer-flow matrix are complete. | **P4.1: trigger-driven fallback register closure.** | Do not add speculative pointer shapes. When T2 or M1 exposes one unclassified source-to-dereference flow, register it and choose exactly one policy: MIR proof, race-tolerant default, or diagnosed unsupported. | P4.2 verifies C/LLVM policy parity, including absent-proof paths, for every registered flow. |
 
 ### Locked Phase Sequences
@@ -1449,7 +1451,7 @@ enough if the string remains the deciding identity.
 | M1.2b: index-fact state flow | M1 | Migrate declaration/assignment producers, index readers, state clone/join, loop invalidation, and cleanup to independent index facts. | Focused tests prove constant and symbolic facts survive ordinary and CFG flow, and stale facts are invalidated. |
 | M1.2c: pure-index-slot retirement (complete) | M1 | `MoveSlot` has no index metadata or pure-index classification; all index reads use `MoveState.index_facts`. | Inventory confirms index reads never use move slots and ownership checks never classify index facts. |
 | M3.1: projection inventory (complete) | M3 | The six projection families are listed with their typed owner and positive/conflicting or diagnostic fixture. | `move-projection-inventory.py` anchors every row; no unsupported family lacks a named boundary. |
-| M3.2: projection admission (current) | M3 | Validate or retain exact overlap behavior for each inventory row. | Positive and conflicting-place tests cover admitted rows; dynamic/non-local move-array and arbitrary pointer-to-array cases remain fail-closed until admitted. |
+| M3.2: projection admission (complete) | M3 | Every inventory row has exact overlap behavior or an explicit diagnostic boundary. | Positive and conflicting-place tests cover admitted rows; dynamic/non-local move-array and arbitrary pointer-to-array cases remain fail-closed. |
 | M2.1: branch and short-circuit joins | M2, partial | `if let`, multi-arm `switch`, and short-circuit RHS paths have bounded common-worklist routing. Finish only after every remaining named branch/short-circuit transfer has no direct merge or manual join enqueue. | Join diagnostics and accepted paths no longer depend on statement-specific state merging. |
 | M2.2: loop/backedge/exit routing | M2, partial | Ordinary loop backedges, labeled `break`/`continue`, and while-condition widening queue through loop worklists. `return` and `?` already construct the shared exit CFG; migrate their state transfer, and any other non-deferred exit transfer, from dedicated exit checks to the common worklist authority. | Specialized executors are removed only after equivalent worklist regressions exist. |
 | M2.3: deferred-loop routing (complete) | M2 | A supported cleanup loop has explicit condition/head/body/exit blocks, a worklist backedge, and cleanup-local finalization. `break`/`continue` inside `defer` remain the existing `E_DEFER_CONTROL_FLOW` boundary rather than admitted exits. | Positive zero-or-many cleanup-local coverage, `E_MOVE_LOOP_RESOURCE` diagnostics for outer consume/borrow, retained deferred-control-flow diagnostics, and the CFG inventory prove no statement-walker fallthrough. |
@@ -1493,10 +1495,10 @@ deferred-borrow, read-side alias, and unsupported-channel rows above are
 regression coverage; they do not close the remaining typed-place map migration
 or CFG rewrite.
 
-**Next move action:** implement M3. Build the projection inventory for fields,
-dereferences, fixed/dynamic elements, wildcards, and aliases. Each row must name
-the structural overlap rule and positive/conflicting coverage, or retain a stable
-diagnostic. Do not broaden unsupported projections merely to add fixtures.
+**Next move action:** M3 is complete for the current projection inventory. Do
+not broaden unsupported projections merely to add fixtures; any new projection
+must first enter the inventory with a structural rule or stable diagnostic. The
+next global slice is T2.1 selection; M2 remains the later move-routing phase.
 
 ### Production-Ready Exit Rule
 

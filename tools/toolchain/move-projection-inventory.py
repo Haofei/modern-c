@@ -49,6 +49,10 @@ ROWS: dict[str, dict[str, list[str]]] = {
 }
 
 FIXTURE_EXPECTATIONS: dict[str, dict[str, str | None]] = {
+    "root and field projections": {
+        "accept_move_each_field": None,
+        "reject_duplicate_field_move": "E_USE_AFTER_MOVE",
+    },
     "constant element projections": {
         "accept_move_array_alias_elements": None,
         "reject_duplicate_array_element_move": "E_USE_AFTER_MOVE",
