@@ -48,6 +48,48 @@ ROWS: dict[str, dict[str, list[str]]] = {
     },
 }
 
+FIXTURE_EXPECTATIONS: dict[str, dict[str, str | None]] = {
+    "constant element projections": {
+        "accept_move_array_alias_elements": None,
+        "reject_duplicate_array_element_move": "E_USE_AFTER_MOVE",
+    },
+    "symbolic element projections": {
+        "accept_branch_preserves_matching_symbolic_index": None,
+        "reject_different_symbolic_dynamic_array_field_element_move": "E_USE_AFTER_MOVE",
+    },
+    "unknown wildcard projections": {
+        "accept_dynamic_multi_array_element_move": None,
+        "reject_constant_after_dynamic_multi_array_element_move": "E_USE_AFTER_MOVE",
+    },
+    "full alias and dereference projections": {
+        "accept_move_array_element_through_full_alias": None,
+        "reject_constant_after_dynamic_array_element_full_alias_move": "E_USE_AFTER_MOVE",
+    },
+    "arbitrary pointee and non-nameable boundaries": {
+        "reject_dynamic_pointer_to_move_array_element": "E_MOVE_ARRAY_UNSUPPORTED",
+        "reject_dynamic_returned_move_array_element": "E_MOVE_ARRAY_UNSUPPORTED",
+        "reject_dynamic_array_literal_move_element": "E_MOVE_ARRAY_UNSUPPORTED",
+    },
+}
+
+
+def function_body(text: str, name: str) -> str | None:
+    start = text.find(f"fn {name}(")
+    if start < 0:
+        return None
+    brace = text.find("{", start)
+    if brace < 0:
+        return None
+    depth = 0
+    for index in range(brace, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[brace + 1 : index]
+    return None
+
 
 def main() -> int:
     missing: list[str] = []
@@ -63,6 +105,19 @@ def main() -> int:
                 checked += 1
                 if anchor not in text:
                     missing.append(f"{row}: {relative}: missing anchor {anchor!r}")
+
+    fixture_text = (REPO_ROOT / "tests/spec/move_place.mc").read_text(encoding="utf-8")
+    for row, cases in sorted(FIXTURE_EXPECTATIONS.items()):
+        for name, expected in sorted(cases.items()):
+            checked += 1
+            body = function_body(fixture_text, name)
+            if body is None:
+                missing.append(f"{row}: missing fixture function {name!r}")
+            elif expected is None:
+                if "EXPECT_ERROR:" in body:
+                    missing.append(f"{row}: accepted fixture {name!r} declares an error")
+            elif f"EXPECT_ERROR: {expected}" not in body:
+                missing.append(f"{row}: fixture {name!r} lacks EXPECT_ERROR: {expected}")
     if missing:
         print("FAIL: move projection inventory drift", file=sys.stderr)
         for item in missing:
