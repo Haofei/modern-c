@@ -273,6 +273,129 @@ pub const MoveSlot = struct {
     full_deref_alias: bool = false,
 };
 
+// Array-index facts are semantic metadata, not ownership state. M1.2 moves
+// these out of MoveSlot in three steps: establish this transportable model,
+// migrate every producer/consumer and CFG transfer, then remove the legacy
+// fields above. Keeping the model independent makes clone/join/invalidation
+// rules explicit instead of encoding them as a non-live ownership slot.
+pub const MoveIndexFact = union(enum) {
+    constant: usize,
+    symbolic: []const u8,
+
+    pub fn eql(self: MoveIndexFact, other: MoveIndexFact) bool {
+        return switch (self) {
+            .constant => |left| switch (other) {
+                .constant => |right| left == right,
+                .symbolic => false,
+            },
+            .symbolic => |left| switch (other) {
+                .constant => false,
+                .symbolic => |right| std.mem.eql(u8, left, right),
+            },
+        };
+    }
+};
+
+pub const MoveIndexFacts = struct {
+    facts: std.StringHashMap(MoveIndexFact),
+
+    pub fn init(allocator: std.mem.Allocator) MoveIndexFacts {
+        return .{ .facts = std.StringHashMap(MoveIndexFact).init(allocator) };
+    }
+
+    pub fn deinit(self: *MoveIndexFacts) void {
+        self.facts.deinit();
+    }
+
+    pub fn get(self: *const MoveIndexFacts, binding: []const u8) ?MoveIndexFact {
+        return self.facts.get(binding);
+    }
+
+    pub fn put(self: *MoveIndexFacts, binding: []const u8, fact: MoveIndexFact) !void {
+        try self.facts.put(binding, fact);
+    }
+
+    pub fn remove(self: *MoveIndexFacts, binding: []const u8) bool {
+        return self.facts.remove(binding);
+    }
+
+    pub fn clone(self: *const MoveIndexFacts, allocator: std.mem.Allocator) !MoveIndexFacts {
+        var result = MoveIndexFacts.init(allocator);
+        errdefer result.deinit();
+        var it = self.facts.iterator();
+        while (it.next()) |entry| try result.put(entry.key_ptr.*, entry.value_ptr.*);
+        return result;
+    }
+
+    // An index fact is usable only when every incoming path proves the exact
+    // same value. Removing a fact is deliberately conservative: callers fall
+    // back to the existing wildcard/rejection boundary instead of selecting an
+    // element place from a path-specific index.
+    pub fn intersectInto(self: *MoveIndexFacts, incoming: *const MoveIndexFacts) !bool {
+        var removals: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer removals.deinit(self.facts.allocator);
+
+        var it = self.facts.iterator();
+        while (it.next()) |entry| {
+            const other = incoming.get(entry.key_ptr.*) orelse {
+                try removals.append(self.facts.allocator, entry.key_ptr.*);
+                continue;
+            };
+            if (!entry.value_ptr.eql(other)) {
+                try removals.append(self.facts.allocator, entry.key_ptr.*);
+            }
+        }
+        for (removals.items) |binding| _ = self.remove(binding);
+        return removals.items.len != 0;
+    }
+
+    pub fn eql(self: *const MoveIndexFacts, other: *const MoveIndexFacts) bool {
+        if (self.facts.count() != other.facts.count()) return false;
+        var it = self.facts.iterator();
+        while (it.next()) |entry| {
+            const other_fact = other.get(entry.key_ptr.*) orelse return false;
+            if (!entry.value_ptr.eql(other_fact)) return false;
+        }
+        return true;
+    }
+};
+
+test "move index facts are independent, clonable metadata" {
+    var facts = MoveIndexFacts.init(std.testing.allocator);
+    defer facts.deinit();
+    try facts.put("constant", .{ .constant = 3 });
+    try facts.put("symbolic", .{ .symbolic = "index" });
+
+    try std.testing.expect((facts.get("constant") orelse unreachable).eql(.{ .constant = 3 }));
+    try std.testing.expect((facts.get("symbolic") orelse unreachable).eql(.{ .symbolic = "index" }));
+
+    var cloned = try facts.clone(std.testing.allocator);
+    defer cloned.deinit();
+    try std.testing.expect(facts.eql(&cloned));
+
+    try std.testing.expect(cloned.remove("constant"));
+    try std.testing.expect(!facts.eql(&cloned));
+    try std.testing.expect((facts.get("constant") orelse unreachable).eql(.{ .constant = 3 }));
+}
+
+test "move index facts retain only equal CFG join facts" {
+    var left = MoveIndexFacts.init(std.testing.allocator);
+    defer left.deinit();
+    try left.put("same", .{ .constant = 1 });
+    try left.put("different", .{ .constant = 2 });
+    try left.put("left_only", .{ .symbolic = "i" });
+
+    var right = MoveIndexFacts.init(std.testing.allocator);
+    defer right.deinit();
+    try right.put("same", .{ .constant = 1 });
+    try right.put("different", .{ .symbolic = "i" });
+    try right.put("right_only", .{ .constant = 3 });
+
+    try std.testing.expect(try left.intersectInto(&right));
+    try std.testing.expectEqual(@as(usize, 1), left.facts.count());
+    try std.testing.expect((left.get("same") orelse unreachable).eql(.{ .constant = 1 }));
+}
+
 pub const LoopMoveExitKind = enum {
     break_exit,
     continue_exit,
