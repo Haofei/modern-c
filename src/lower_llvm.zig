@@ -8300,7 +8300,13 @@ const LlvmEmitter = struct {
                 (if (self.resolveAliasType(ty).kind == .fn_pointer) ty else self.pointerTypeFor(ty) catch null)
             else
                 null,
-            .deref => |inner| self.requireExpressionResultType(expr, self.derefPointeeType(inner.*)),
+            // Real source dereferences have an exact MIR result type. Only
+            // generated zero-span nodes need the legacy operand-derived
+            // fallback because no source-keyed fact can identify them.
+            .deref => |inner| if (expr.span.line != 0 and expr.span.column != 0)
+                if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
+            else
+                self.requireExpressionResultType(expr, self.derefPointeeType(inner.*)),
             .index => |node| self.requireExpressionResultType(expr, self.indexElementType(node.base.*)),
             .slice => |node| self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null),
             .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else if (expr.span.line != 0 and expr.span.column != 0)
