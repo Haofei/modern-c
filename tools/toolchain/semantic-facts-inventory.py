@@ -218,11 +218,10 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
 
 BACKEND_AST_INFERENCE_BUDGET: dict[str, object] = {
     "docs/typed-semantic-facts.md": [
-        "Current backend AST-inference budget: **8 registered families**.",
+        "Current backend AST-inference budget: **7 registered families**.",
         "| `c-expression-type-inference` | Backend AST inference budget |",
         "| `c-type-shape-classification` | Backend AST inference budget |",
         "| `c-abi-aggregate-lowering` | Backend AST inference budget |",
-        "| `c-call-target-classification` | Backend AST inference budget |",
         "| `c-direct-global-race-helpers` | Backend AST inference budget |",
         "| `c-pointer-provenance-consumption` | Backend AST inference budget |",
         "| `llvm-pointer-provenance-consumption` | Backend AST inference budget |",
@@ -232,7 +231,6 @@ BACKEND_AST_INFERENCE_BUDGET: dict[str, object] = {
         "c-expression-type-inference",
         "c-type-shape-classification",
         "c-abi-aggregate-lowering",
-        "c-call-target-classification",
         "c-direct-global-race-helpers",
         "c-pointer-provenance-consumption",
         "llvm-pointer-provenance-consumption",
@@ -1535,8 +1533,8 @@ def main() -> int:
     budget_families = BACKEND_AST_INFERENCE_BUDGET["families"]
     assert isinstance(budget_families, list)
     checked += 1
-    if len(budget_families) != 8:
-        missing.append(f"backend AST-inference budget: expected 8 registered families, found {len(budget_families)}")
+    if len(budget_families) != 7:
+        missing.append(f"backend AST-inference budget: expected 7 registered families, found {len(budget_families)}")
     for family in budget_families:
         checked += 1
         if family not in SEMANTIC_INFERENCE_FAMILIES:
