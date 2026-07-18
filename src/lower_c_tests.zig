@@ -2821,12 +2821,26 @@ test "lower-c inferred local literals require MIR types" {
     defer missing_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
 
+    var missing_literal_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_literal_result.deinit();
+    try removeTargetTypeKindForFunction(&missing_literal_result, "literals", .expression_result);
+    var missing_literal_result_output: std.ArrayList(u8) = .empty;
+    defer missing_literal_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_literal_result, &missing_literal_result_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
+
     var stale = try mir.build(std.testing.allocator, parsed.module);
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "literals", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
+
+    var stale_literal_result = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_literal_result.deinit();
+    try renameTargetTypeFactForFunction(&stale_literal_result, "literals", .expression_result, "u64");
+    var stale_literal_result_output: std.ArrayList(u8) = .empty;
+    defer stale_literal_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_literal_result, &stale_literal_result_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local unary expressions require MIR types" {

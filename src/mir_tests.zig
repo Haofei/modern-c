@@ -1515,8 +1515,10 @@ test "MIR owns inferred local literal types" {
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "literals").?;
     try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .inferred_local));
+    try std.testing.expectEqual(@as(usize, 3), countTargetTypeFactsByKind(function, .expression_result));
     var saw_count = false;
     var saw_enabled = false;
+    var saw_literal_results: usize = 0;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .inferred_local) continue;
         if (std.mem.eql(u8, fact.target_owner.?, "count")) {
@@ -1528,8 +1530,13 @@ test "MIR owns inferred local literal types" {
             saw_enabled = true;
         }
     }
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .expression_result) continue;
+        if (std.mem.eql(u8, fact.target_ty.kind.name.text, "u32") or std.mem.eql(u8, fact.target_ty.kind.name.text, "bool")) saw_literal_results += 1;
+    }
     try std.testing.expect(saw_count);
     try std.testing.expect(saw_enabled);
+    try std.testing.expectEqual(@as(usize, 3), saw_literal_results);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 

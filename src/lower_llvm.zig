@@ -2502,7 +2502,7 @@ const LlvmEmitter = struct {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
             return fact_ty;
         }
-        if (self.exprType(initializer) orelse inferredLocalLiteralType(initializer) orelse self.inferredLocalCallReturnType(initializer)) |known_ty| {
+        if (self.exprType(initializer) orelse self.inferredLocalCallReturnType(initializer)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
         }
         return fact_ty;
@@ -2596,15 +2596,6 @@ const LlvmEmitter = struct {
         return switch (initializer.kind) {
             .call => |call| self.callReturnType(call),
             .grouped => |inner| self.inferredLocalCallReturnType(inner.*),
-            else => null,
-        };
-    }
-
-    fn inferredLocalLiteralType(initializer: ast.Expr) ?ast.TypeExpr {
-        return switch (initializer.kind) {
-            .int_literal => simpleType(initializer.span, "u32"),
-            .bool_literal => simpleType(initializer.span, "bool"),
-            .grouped => |inner| inferredLocalLiteralType(inner.*),
             else => null,
         };
     }
@@ -8277,9 +8268,15 @@ const LlvmEmitter = struct {
     fn exprType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
             .ident => |ident| self.local_types.get(ident.text) orelse self.global_types.get(ident.text) orelse self.fnPointerTypeForName(ident.text),
-            .bool_literal => simpleType(expr.span, "bool"),
+            .bool_literal => if (expr.span.line != 0 and expr.span.column != 0)
+                if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
+            else
+                simpleType(expr.span, "bool"),
             .unary => |node| self.requireExpressionResultType(expr, if (node.op == .logical_not) simpleType(expr.span, "bool") else self.exprType(node.expr.*)),
-            .int_literal => null,
+            .int_literal => if (expr.span.line != 0 and expr.span.column != 0)
+                if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
+            else
+                null,
             .float_literal => null,
             .grouped => |inner| self.exprType(inner.*),
             .call => |call| if (self.mirTargetTypeFactAt(.qualified_union_result, expr.span)) |fact|

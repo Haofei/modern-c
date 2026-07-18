@@ -6223,7 +6223,7 @@ const FunctionBuilder = struct {
 
     fn addExpressionResultFact(self: *FunctionBuilder, expr: ast.Expr) !void {
         switch (expr.kind) {
-            .member, .index, .slice, .deref, .try_expr, .unary, .binary, .address_of => {},
+            .int_literal, .bool_literal, .member, .index, .slice, .deref, .try_expr, .unary, .binary, .address_of => {},
             else => return,
         }
         const ty = (try self.expressionResultTypeExpr(expr)) orelse return;
@@ -6238,6 +6238,8 @@ const FunctionBuilder = struct {
     fn expressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) !?ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
+            .int_literal => ast_query.simpleNameType("u32", expr.span),
+            .bool_literal => ast_query.simpleNameType("bool", expr.span),
             // A direct function address is a code pointer, not a pointer to a
             // value. Its full signature belongs to MIR so backends cannot
             // rebuild it from their separate function-signature maps.

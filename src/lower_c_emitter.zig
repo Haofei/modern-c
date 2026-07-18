@@ -2992,7 +2992,7 @@ const CEmitter = struct {
     }
 
     fn emitLiteralInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const expected_ty = inferredLocalLiteralType(initializer) orelse return false;
+        const expected_ty = (try self.literalExpressionResultType(initializer)) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, expected_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.writeIndent();
@@ -5183,11 +5183,10 @@ const CEmitter = struct {
         };
     }
 
-    fn inferredLocalLiteralType(initializer: ast.Expr) ?ast.TypeExpr {
+    fn literalExpressionResultType(self: *CEmitter, initializer: ast.Expr) !?ast.TypeExpr {
         return switch (initializer.kind) {
-            .int_literal => ast_query.simpleNameType("u32", initializer.span),
-            .bool_literal => ast_query.simpleNameType("bool", initializer.span),
-            .grouped => |inner| inferredLocalLiteralType(inner.*),
+            .int_literal, .bool_literal => (self.mirTargetTypeFactAt(.expression_result, initializer.span) orelse return error.UnsupportedCEmission).target_ty,
+            .grouped => |inner| try self.literalExpressionResultType(inner.*),
             else => null,
         };
     }
