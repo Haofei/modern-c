@@ -102,6 +102,11 @@ RULES: tuple[Rule, ...] = (
         "move checker pointer-pointee changes need the focused accept/reject boundary gate",
     ),
     Rule(
+        ("src/sema_model.zig", "src/sema_move.zig", "tests/spec/move_place.mc", "tools/toolchain/move-projection-inventory.py"),
+        ("move-projection-inventory-test",),
+        "move checker projection changes need the explicit admission-map gate",
+    ),
+    Rule(
         ("tools/ci/pass-gates.py",),
         ("ci-pass-gates-test",),
         "CI PASS assertion helper changes need the focused CI anti-vacuity contract gate",
@@ -650,6 +655,9 @@ def host_manifest_gates(path: str) -> tuple[list[str], list[str]]:
 def spec_fixture_gates(path: str) -> tuple[list[str], list[str]]:
     gates = ["test"]
     reasons = ["spec fixture metadata and inline EXPECT contracts are checked by compiler unit/spec tests"]
+    if path == "tests/spec/move_place.mc":
+        gates.append("move-projection-inventory-test")
+        reasons.append("move-place fixtures are the projection admission inventory evidence")
     try:
         with (ROOT / path).open("r", encoding="utf-8") as source:
             for _, line in zip(range(20), source):
