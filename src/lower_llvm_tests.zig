@@ -1723,6 +1723,15 @@ test "LLVM compound expressions require complete MIR result facts" {
         var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
         defer module_mir.deinit();
         const slice_offset = std.mem.indexOf(u8, source, "values[0..index]") orelse return error.TestUnexpectedResult;
+        try removeTargetTypeFactAtOffsetForFunction(&module_mir, "expression_facts", .expression_result, slice_offset, "values[0..index]".len);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_expression_result_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const slice_offset = std.mem.indexOf(u8, source, "values[0..index]") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "expression_facts", .expression_result, slice_offset, "values[0..index]".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);

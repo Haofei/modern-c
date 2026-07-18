@@ -7614,13 +7614,13 @@ const CEmitter = struct {
                 if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
                 break :blk fact.target_ty;
             },
-            .slice => |node| blk: {
-                const base_ty = self.exprSourceTypeForEmission(node.base.*, locals) orelse break :blk null;
-                const inferred = self.sliceTypeForBase(base_ty, node.base.*.span) orelse break :blk null;
-                const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse break :blk null;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
-                break :blk fact.target_ty;
-            },
+            // A real source slice has a complete MIR-owned result type. The
+            // slice emitter still queries its base for address/length mechanics,
+            // but that query must not select the result type used by callers.
+            .slice => |node| if (expr.span.line != 0 and expr.span.column != 0)
+                if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
+            else
+                self.sliceTypeForBase(self.exprSourceTypeForEmission(node.base.*, locals) orelse return null, node.base.*.span),
             .grouped => |inner| self.exprSourceTypeForEmission(inner.*, locals),
             .binary => |node| self.binarySourceTypeForEmission(expr, node, locals),
             .unary => |node| blk: {
