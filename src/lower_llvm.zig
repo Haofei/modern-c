@@ -8307,7 +8307,13 @@ const LlvmEmitter = struct {
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
                 self.requireExpressionResultType(expr, self.derefPointeeType(inner.*)),
-            .index => |node| self.requireExpressionResultType(expr, self.indexElementType(node.base.*)),
+            // Real source indexes have an exact MIR result type. The fallback
+            // remains only for generated zero-span nodes; index-address
+            // emission still derives storage mechanics from the base.
+            .index => |node| if (expr.span.line != 0 and expr.span.column != 0)
+                if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
+            else
+                self.requireExpressionResultType(expr, self.indexElementType(node.base.*)),
             .slice => |node| self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null),
             .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else if (expr.span.line != 0 and expr.span.column != 0)
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
