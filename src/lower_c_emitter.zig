@@ -7636,23 +7636,10 @@ const CEmitter = struct {
     }
 
     fn callSourceTypeForEmission(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        if (self.mirTargetTypeFactAt(.reflection_result, call.callee.*.span)) |fact| return fact.target_ty;
-        if (self.mirTargetTypeFactAt(.byte_view_result, call.callee.*.span)) |fact| return fact.target_ty;
-        if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| return fact.target_ty;
-        if (self.mirTargetTypeFactAt(.conversion_target, call.callee.*.span)) |fact| return fact.target_ty;
-        if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| return fact.target_ty;
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .enum_raw) return if (self.mirTargetTypeFactAt(.enum_raw_result, call.callee.*.span)) |fact| fact.target_ty else null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .const_get) return if (self.mirTargetTypeFactAt(.const_get_result, call.callee.*.span)) |fact| fact.target_ty else null;
-        if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| if (mir.domainCallFactInfo(kind) != null) return if (self.mirTargetTypeFactAt(.domain_result, call.callee.*.span)) |fact| fact.target_ty else null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) return if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) return if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_many_offset) return if (self.mirTargetTypeFactAt(.raw_many_offset_result, call.callee.*.span)) |fact| fact.target_ty else null;
-        if (self.rawResultReturnTypeForCall(call)) |ty| return ty;
-        if (self.atomicResultReturnTypeForCall(call, locals)) |ty| return ty;
-        if (self.maybeUninitResultReturnTypeForCall(call)) |ty| return ty;
-        const fn_name = calleeIdentName(call.callee.*) orelse return null;
-        const info = self.functions.get(fn_name) orelse return null;
-        return info.return_type;
+        // All admitted source call results already have one MIR-owned type
+        // path. Reuse it here instead of falling back to the C function map
+        // for ordinary direct calls.
+        return self.callReturnTypeForCall(call, locals);
     }
 
     fn binarySourceTypeForEmission(self: *CEmitter, expr: ast.Expr, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
