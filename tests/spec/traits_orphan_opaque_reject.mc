@@ -7,9 +7,9 @@
 // TRAIT ORPHAN-RULE REGRESSION LOCK (docs/traits-design.md review #1).
 //
 // Traits must NOT become a side door around the opaque-struct orphan rule. An
-// `impl Trait for <OpaqueType>` desugars its methods to the same name-keyed
-// `Owner__member` symbols an inherent impl does, so a PEER `impl Trait for Rights`
-// in a foreign file would mint `Rights__steal` and reach the unforgeable private
+// `impl Trait for <OpaqueType>` records the same associated-owner identity used by
+// inherent impls, so a PEER `impl Trait for Rights` in a foreign file could otherwise
+// attach `Rights__steal` and reach the unforgeable private
 // `bits` field with no `unsafe`. The orphan rule (checkOrphanImpls) covers trait
 // conformance impls exactly as it covers inherent impls: this peer impl, in a
 // file other than `std/rights.mc` where `Rights` is defined, is E_ORPHAN_IMPL.

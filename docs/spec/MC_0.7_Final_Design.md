@@ -3152,12 +3152,12 @@ handle leaves in the use-after-free / use-after-reset protection those handles a
 (§18.1 gives compile-time single-ownership for `move`; generational handles give run-time
 fail-closed reuse detection; opacity makes the handle itself trustworthy).
 
-Membership is purely lexical and decided on the **owner segment** — the symbol text before
-the first `__`. Associated functions are mangled `Owner__member`, and monomorphization
-appends a `__<args>` specialization suffix to both the struct and its functions, so a
-specialized accessor `GenRef__resolve__u8` and the specialized struct `GenRef__u8` still
-share the owner `GenRef`. The rule therefore survives both generic specialization and the
-loader's textual-inclusion flattening of imported modules. `opaque` is orthogonal to `move`
+Membership is lexical but represented explicitly: an associated function records the exact
+source declaration named by its `impl Owner`, and a generic specialization retains that
+owner identity even when its emitted symbol name changes. Mangled names such as
+`GenRef__resolve__u8` are linkage artifacts and are never used to authorize access. The rule
+therefore survives generic specialization and textual-inclusion flattening without allowing
+a user-controlled `__` prefix collision to forge membership. `opaque` is orthogonal to `move`
 (`opaque move struct` is allowed) and is a compile-time contract only — it lowers to the
 ordinary struct representation with no runtime cost.
 

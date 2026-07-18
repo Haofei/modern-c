@@ -193,6 +193,7 @@ pub const MmioFieldInfo = struct {
 pub const StructInfo = struct {
     fields: std.StringHashMap(ast.TypeExpr),
     ordered: []const ast.Field,
+    semantic_identity: []const u8,
     abi: ?[]const u8 = null,
     type_param_count: usize = 0,
     // `opaque struct` - fields are private to the struct's associated functions.

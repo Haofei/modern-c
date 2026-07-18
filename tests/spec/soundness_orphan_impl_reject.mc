@@ -4,13 +4,11 @@
 // SPEC: expect=compile_error
 // SPEC: check=E_ORPHAN_IMPL
 
-// SOUNDNESS REGRESSION LOCK — the systemic name-keyed opacity bypass.
+// SOUNDNESS REGRESSION LOCK — cross-file attachment to an opaque owner.
 //
-// MC field privacy for an `opaque struct` is decided purely on the (mangled) symbol name:
-// a function named `Owner__member` may read `Owner`'s private fields. Because the module
-// loader flattens all files into ONE unit with no module visibility, any file could write a
-// PEER `impl <OpaqueType>` and mint the same `Owner__member` symbol — reaching the private
-// field with NO `unsafe`, defeating Cap/Rights/Tainted/Guarded/Guard opacity wholesale.
+// MC field privacy uses explicit associated-owner metadata. Because the module loader
+// flattens all files into one unit, a peer file must still be forbidden from attaching an
+// implementation to that same owner and reaching its private fields.
 //
 // The orphan rule closes this: an `impl` of an `opaque struct` must live in the SAME file as
 // the type's definition. `std/rights.mc` defines the opaque `Rights` (its `bits` field is the

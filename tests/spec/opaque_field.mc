@@ -26,6 +26,23 @@ impl Slot {
     fn stale(comptime T: type, s: Slot<T>, current: u32) -> bool { return s.gen != current; }
 }
 
+// A user identifier may contain `__`. Sharing the first mangled-name segment
+// must not make `impl Vault` an associated implementation of `Vault__Inner`.
+opaque struct Vault__Inner { secret: u64 }
+struct Vault { marker: u8 }
+
+impl Vault {
+    fn reject_owner_prefix_read(v: Vault__Inner) -> u64 {
+        // EXPECT_ERROR: E_PRIVATE_FIELD
+        return v.secret;
+    }
+
+    fn reject_owner_prefix_construct() -> Vault__Inner {
+        // EXPECT_ERROR: E_PRIVATE_FIELD
+        return .{ .secret = 7 };
+    }
+}
+
 // --- accepted: outside code holds, passes, and returns opaque values (no field use) ---
 fn accept_hold_plain(h: Handle) -> Handle { return h; }
 fn accept_hold_generic(s: Slot<u32>) -> Slot<u32> { return s; }

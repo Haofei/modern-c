@@ -156,6 +156,10 @@ pub const TraitBound = struct {
 
 pub const FnDecl = struct {
     name: Ident,
+    // Exact source owner for a function declared in `impl Owner`. This semantic
+    // relationship survives mangling and monomorphization; access checks must not
+    // reconstruct it from `name`.
+    associated_owner: ?Ident = null,
     abi: ?[]const u8,
     params: []Param,
     return_type: ?TypeExpr,
@@ -191,6 +195,9 @@ pub const TypeAlias = struct {
 
 pub const StructDecl = struct {
     name: Ident,
+    // Stable source identity retained when a generic struct is specialized and
+    // its emitted name changes. Null on legacy/generated nodes means `name`.
+    semantic_identity: ?Ident = null,
     abi: ?[]const u8,
     fields: []Field,
     // Type parameters for a generic struct `struct Name<T, …>` (section 22);

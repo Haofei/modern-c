@@ -198,6 +198,7 @@ pub const Parser = struct {
                 .return_type = fn_decl.return_type,
             });
         }
+        fn_decl.associated_owner = type_name;
         fn_decl.name = .{ .text = mangled, .span = fn_decl.name.span };
         try decls.append(allocator, .{ .span = joinSpan(start, fn_decl.name.span), .attrs = m_attrs, .kind = .{ .fn_decl = fn_decl } });
     }
@@ -673,7 +674,7 @@ pub const Parser = struct {
         const name = try self.expectName("expected struct name");
         const type_params = try self.parseTypeParamList();
         const fields = try self.finishFieldList("expected '{' after struct name", "expected '}' after struct fields");
-        return .{ .name = name, .abi = abi, .fields = fields, .type_params = type_params };
+        return .{ .name = name, .semantic_identity = name, .abi = abi, .fields = fields, .type_params = type_params };
     }
 
     // Parse an optional `@offset(N)` annotation after a (MMIO) field's type.

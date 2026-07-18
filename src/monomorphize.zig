@@ -630,6 +630,7 @@ fn cloneFnDeclSignatureCtx(ctx: *const CloneCtx, fn_decl: ast.FnDecl) !ast.FnDec
     }
     return .{
         .name = fn_decl.name,
+        .associated_owner = fn_decl.associated_owner,
         .abi = fn_decl.abi,
         .params = params,
         .return_type = if (fn_decl.return_type) |ty| try cloneType(ctx, ty) else null,
@@ -1160,7 +1161,7 @@ fn cloneStructDeclCtx(ctx: *const CloneCtx, sd: ast.StructDecl) anyerror!ast.Str
     for (sd.fields, 0..) |field, i| {
         fields[i] = .{ .name = field.name, .ty = try cloneType(ctx, field.ty), .offset = field.offset };
     }
-    return .{ .name = sd.name, .abi = sd.abi, .fields = fields, .type_params = sd.type_params, .is_move = sd.is_move, .is_opaque = sd.is_opaque, .is_c_union = sd.is_c_union };
+    return .{ .name = sd.name, .semantic_identity = sd.semantic_identity orelse sd.name, .abi = sd.abi, .fields = fields, .type_params = sd.type_params, .is_move = sd.is_move, .is_opaque = sd.is_opaque, .is_c_union = sd.is_c_union };
 }
 
 fn cloneUnionDeclCtx(ctx: *const CloneCtx, ud: ast.UnionDecl) anyerror!ast.UnionDecl {

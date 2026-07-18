@@ -320,11 +320,9 @@ pub const Checker = struct {
     // one, or `Owner.member` access would silently bind to the qualified symbol instead of the
     // local. Set for the duration of checkModule.
     qualified_owners: [][]const u8 = &.{},
-    // The (possibly mangled) name of the function currently being checked, used to
-    // decide whether code may name an `opaque struct`'s private fields: only the
-    // struct's own associated functions (`Struct__member`, from `impl Struct`) may.
-    // Null at module scope (globals/initializers), where no private field is in reach.
-    current_fn_name: ?[]const u8 = null,
+    // Exact associated owner of the function currently being checked. Null for free
+    // functions and at module scope, where no opaque private field is in reach.
+    current_fn_owner: ?[]const u8 = null,
     // Fact-gated MIR optimizer toggle (annex E), set by the caller for `verify --optimize`.
     // When on, a provably-in-range constant index is treated as non-trapping so it is
     // allowed inside `#[no_lang_trap]` (mirrors the MIR-level bounds-check elision). Off by
@@ -481,8 +479,8 @@ pub const Checker = struct {
         self.collectGlobals(module, &globals);
 
         // Orphan rule: an `impl` of an `opaque struct` must live in the type's defining file,
-        // so the name-keyed private-field gate (`opaqueAccessAllowed`) cannot be forged by a
-        // peer `impl <OpaqueType>` written in another file. Trait impls follow the spec's
+        // so a peer `impl <OpaqueType>` written in another file cannot become an authorized
+        // associated implementation. Trait impls follow the spec's
         // wider coherence boundary: `impl Trait for Type` must be in `Type`'s declaring file.
         // No-op without file boundaries.
         if (!self.generic_template_precheck) self.checkOrphanImpls(module);
@@ -798,7 +796,7 @@ pub const Checker = struct {
                 self.oom = true;
             };
         }
-        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields, .abi = struct_decl.abi, .type_param_count = struct_decl.type_params.len, .is_opaque = struct_decl.is_opaque, .is_c_union = struct_decl.is_c_union }) catch {
+        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields, .semantic_identity = (struct_decl.semantic_identity orelse struct_decl.name).text, .abi = struct_decl.abi, .type_param_count = struct_decl.type_params.len, .is_opaque = struct_decl.is_opaque, .is_c_union = struct_decl.is_c_union }) catch {
             fields.deinit();
         };
     }
@@ -1362,8 +1360,8 @@ pub const Checker = struct {
     }
 
     fn checkFn(self: *Checker, fn_decl: ast.FnDecl, abi_boundary: bool, no_lang_trap: bool, irq_context: bool, bounded: bool, is_naked: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-        self.current_fn_name = fn_decl.name.text;
-        defer self.current_fn_name = null;
+        self.current_fn_owner = if (fn_decl.associated_owner) |owner| owner.text else null;
+        defer self.current_fn_owner = null;
         var scope = Scope.init(self.reporter.allocator);
         defer scope.deinit();
         // G20 block-scoping: params + the fn-body's top-level locals live in the base scope for
@@ -5058,7 +5056,7 @@ pub const Checker = struct {
         if (opacityStructName(resolved_target_ty)) |sname| {
             if (ctx.structs) |structs| {
                 if (structs.get(sname)) |info| {
-                    if (info.is_opaque and !self.opaqueAccessAllowed(sname)) {
+                    if (info.is_opaque and !self.opaqueAccessAllowed(info)) {
                         self.errorCode(expr.span, "E_PRIVATE_FIELD", "cannot construct an `opaque struct` outside its associated functions (`impl` block); its fields are private");
                     }
                 }
@@ -5679,7 +5677,7 @@ pub const Checker = struct {
         // The opaque type's own associated functions read their fields by `.field`
         // access, not by `as`; but if some `impl` code does `self as inner`, treat it
         // as allowed (it already has full access to the private representation).
-        if (self.opaqueAccessAllowed(src_name)) return;
+        if (self.opaqueAccessAllowed(info)) return;
         // Identity / no-op cast to the SAME opaque type extracts nothing.
         if (opacityStructNameOf(resolveAliasType(target_ty, ctx))) |tgt_name| {
             if (std.mem.eql(u8, tgt_name, src_name)) return;
@@ -5968,7 +5966,7 @@ pub const Checker = struct {
         if (opacityStructName(base_ty)) |sname| {
             if (ctx.structs) |structs| {
                 if (structs.get(sname)) |info| {
-                    if (info.is_opaque and !self.opaqueAccessAllowed(sname)) {
+                    if (info.is_opaque and !self.opaqueAccessAllowed(info)) {
                         self.errorCode(span, "E_PRIVATE_FIELD", "field of an `opaque struct` is private to its associated functions (`impl` block)");
                     }
                 }
@@ -6017,18 +6015,13 @@ pub const Checker = struct {
         return hi <= n; // end <= len
     }
 
-    // An `opaque struct`'s private fields may be named only by the struct's own associated
-    // functions — those declared in `impl Name { … }`, which the parser mangles to the free
-    // symbol `Name__member`. Membership is decided on the leading owner segment (the text
-    // before the first `__`): an associated function `GenRef__resolve` and the struct
-    // `GenRef` share owner `GenRef`. This also survives monomorphization, which appends a
-    // `__<args>` specialization suffix to both — the specialized struct `GenRef__u32` and the
-    // specialized accessor `GenRef__resolve__u32` still share the owner `GenRef`. The check
-    // is purely on (mangled) names, so it also survives the loader's textual-inclusion
-    // flattening of imported modules.
-    fn opaqueAccessAllowed(self: *Checker, struct_name: []const u8) bool {
-        const fname = self.current_fn_name orelse return false;
-        return std.mem.eql(u8, ownerSegment(fname), ownerSegment(struct_name));
+    // An `opaque struct`'s private fields may be named only by functions declared in its
+    // exact `impl Owner`. Parser metadata carries that relationship through mangling, and a
+    // struct's semantic identity survives generic specialization. User-controlled symbol
+    // spellings therefore cannot forge ownership through a shared `__` prefix.
+    fn opaqueAccessAllowed(self: *Checker, info: StructInfo) bool {
+        const owner = self.current_fn_owner orelse return false;
+        return std.mem.eql(u8, owner, info.semantic_identity);
     }
 
     // The declared struct name a (possibly generic / pointer / qualified) type names, for
@@ -6077,13 +6070,9 @@ pub const Checker = struct {
         }
     }
 
-    // Orphan rule (closes the name-keyed opacity bypass and enforces trait coherence ownership).
-    // MC's field-privacy for an `opaque struct` is decided purely on the symbol name
-    // (`opaqueAccessAllowed`): a function named `Owner__member` may read `Owner`'s private
-    // fields. Because the loader flattens all files into one unit with no module visibility,
-    // ANY file could write a peer `impl <OpaqueType> { fn member(...) { ...&t.private... } }` —
-    // the parser mangles it to the SAME `Owner__member` symbol and the name-match grants access,
-    // defeating Cap/Rights/Tainted/Guarded/Guard opacity with no `unsafe`. This pass requires
+    // Orphan rule for opacity and trait coherence ownership. Exact associated-owner metadata
+    // decides field access, while this independent file check prevents another flattened input
+    // file from attaching a peer `impl <OpaqueType>` to that owner. This pass requires
     // that every inherent `impl` accessor of an `opaque struct` live in the SAME file as the
     // type's definition. Trait conformance impls are stricter per §32.2: `impl Trait for Type`
     // belongs in the file declaring `Type`, even when `Type` is non-opaque. Co-located
@@ -6091,12 +6080,8 @@ pub const Checker = struct {
     // (single-file/standalone check — nothing cross-file to forge).
     fn checkOrphanImpls(self: *Checker, module: ast.Module) void {
         if (self.file_boundaries == null) return;
-        // Map each opaque struct's OWNER segment -> its defining file. Keying on the owner
-        // segment (the text before the first `__`) makes this robust to monomorphization, which
-        // renames a generic `Box` to a specialized `Box__u32` (owner still `Box`) and an
-        // accessor `Box__steal` to `Box__steal__u32` (owner still `Box`). The owner is what the
-        // name-keyed private-field gate (`opaqueAccessAllowed`/`ownerSegment`) matches on, so the
-        // orphan rule must compare files on the SAME granularity.
+        // Map each opaque struct's stable semantic identity to its defining file. Generic
+        // specializations retain the source identity, so this does not parse emitted names.
         var opaque_files = std.StringHashMap([]const u8).init(self.reporter.allocator);
         defer opaque_files.deinit();
         var type_files = std.StringHashMap([]const u8).init(self.reporter.allocator);
@@ -6107,10 +6092,8 @@ pub const Checker = struct {
                     const file = self.originFile(sd.name.span.offset) orelse continue;
                     self.recordTypeFile(&type_files, sd.name, file);
                     if (sd.is_opaque) {
-                        const owner = ownerSegment(sd.name.text);
-                        // First definition of an owner wins; later monomorphization
-                        // specializations of the same opaque template share the owner and the
-                        // same defining file, so ignore dups.
+                        const owner = (sd.semantic_identity orelse sd.name).text;
+                        // Later specializations of one template share this identity and file.
                         if (!opaque_files.contains(owner)) opaque_files.put(owner, file) catch {
                             self.oom = true;
                         };
@@ -6125,17 +6108,14 @@ pub const Checker = struct {
                 .fn_decl, .extern_fn, .global_decl, .trait_decl, .impl_trait => {},
             }
         }
-        // Any function whose owner segment names an opaque struct is one of its `impl` accessors
-        // (the parser mangles `impl Owner { fn m }` to `Owner__m`). It must originate in the SAME
-        // file as the type's definition. A plain free function with no `__` owns itself, skipped.
+        // An explicitly associated function for an opaque owner must originate in the same file.
         if (opaque_files.count() > 0) {
             for (module.decls) |decl| {
                 const fd = switch (decl.kind) {
                     .fn_decl, .extern_fn => |f| f,
                     else => continue,
                 };
-                const owner = ownerSegment(fd.name.text);
-                if (std.mem.eql(u8, owner, fd.name.text)) continue; // not an impl/qualified member
+                const owner = if (fd.associated_owner) |associated| associated.text else continue;
                 const type_file = opaque_files.get(owner) orelse continue; // owner isn't an opaque type
                 const member_file = self.originFile(fd.name.span.offset) orelse continue;
                 if (!std.mem.eql(u8, member_file, type_file)) {
