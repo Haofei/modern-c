@@ -408,17 +408,24 @@ test "move index facts retain only equal CFG join facts" {
 pub const MoveState = struct {
     slots: std.StringHashMap(MoveSlot),
     index_facts: MoveIndexFacts,
+    // Tracks the lexical bindings eligible to carry index facts even when a
+    // particular path currently has no stable fact for them. This separates
+    // scope identity from fact availability, so assignment can re-establish a
+    // fact without allowing block-local metadata to escape.
+    index_bindings: std.StringHashMap(void),
 
     pub fn init(allocator: std.mem.Allocator) MoveState {
         return .{
             .slots = std.StringHashMap(MoveSlot).init(allocator),
             .index_facts = MoveIndexFacts.init(allocator),
+            .index_bindings = std.StringHashMap(void).init(allocator),
         };
     }
 
     pub fn deinit(self: *MoveState) void {
         self.slots.deinit();
         self.index_facts.deinit();
+        self.index_bindings.deinit();
     }
 
     pub fn get(self: *const MoveState, key: []const u8) ?MoveSlot {
@@ -456,6 +463,7 @@ pub const MoveState = struct {
     pub fn clearRetainingCapacity(self: *MoveState) void {
         self.slots.clearRetainingCapacity();
         self.index_facts.facts.clearRetainingCapacity();
+        self.index_bindings.clearRetainingCapacity();
     }
 };
 

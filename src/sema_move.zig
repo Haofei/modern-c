@@ -487,6 +487,9 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
             state.index_facts.put(param.name.text, .{ .symbolic = param.name.text }) catch {
                 self.oom = true;
             };
+            state.index_bindings.put(param.name.text, {}) catch {
+                self.oom = true;
+            };
         } else if (self.move_ctx) |ctx| {
             if (typeCanStoreBorrowAlias(param.ty, ctx.*)) {
                 state.put(param.name.text, .{ .live = false, .span = param.name.span, .place = .{ .root = param.name.text }, .ty = param.ty, .type_only = true }) catch {
@@ -602,10 +605,13 @@ fn preserveOuterScopedMoveState(self: *Checker, state: *MoveState, before: *cons
     // Index facts have no ownership slot after M1.2a. Preserve only bindings
     // that existed before this lexical block, so index locals do not escape
     // while reassigned outer facts retain their current value.
-    var facts_it = before.index_facts.facts.iterator();
-    while (facts_it.next()) |entry| {
-        const current = state.index_facts.get(entry.key_ptr.*) orelse continue;
-        scoped.index_facts.put(entry.key_ptr.*, current) catch {
+    var bindings_it = before.index_bindings.keyIterator();
+    while (bindings_it.next()) |binding| {
+        scoped.index_bindings.put(binding.*, {}) catch {
+            self.oom = true;
+        };
+        const current = state.index_facts.get(binding.*) orelse continue;
+        scoped.index_facts.put(binding.*, current) catch {
             self.oom = true;
         };
     }
@@ -775,18 +781,23 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                 }
             }
             var bound_as_index_fact = false;
-            if (!bound_as_move and decl.names.len > 0 and decl.init != null and isUsizeType(binding_ty)) {
-                if (self.move_ctx) |mctx| {
-                    if (constIndexValue(self, decl.init.?, state, mctx.*)) |index| {
-                        state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .const_index = index }) catch {
-                            self.oom = true;
-                        };
-                        bound_as_index_fact = true;
-                    } else if (symbolicIndexValue(self, decl.init.?, state, mctx.*)) |symbol| {
-                        state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .symbolic_index = symbol }) catch {
-                            self.oom = true;
-                        };
-                        bound_as_index_fact = true;
+            if (!bound_as_move and decl.names.len > 0 and isUsizeType(binding_ty)) {
+                state.index_bindings.put(decl.names[0].text, {}) catch {
+                    self.oom = true;
+                };
+                if (decl.init) |init| {
+                    if (self.move_ctx) |mctx| {
+                        if (constIndexValue(self, init, state, mctx.*)) |index| {
+                            state.index_facts.put(decl.names[0].text, .{ .constant = index }) catch {
+                                self.oom = true;
+                            };
+                            bound_as_index_fact = true;
+                        } else if (symbolicIndexValue(self, init, state, mctx.*)) |symbol| {
+                            state.index_facts.put(decl.names[0].text, .{ .symbolic = symbol }) catch {
+                                self.oom = true;
+                            };
+                            bound_as_index_fact = true;
+                        }
                     }
                 }
             }
@@ -878,6 +889,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                     // only concern linear resources, not aliases (an alias is never `live`
                     // or `deferred`), and re-binding an alias must NOT flip it live.
                     const had_slot = state.contains(id.text);
+                    const has_index_binding = state.index_bindings.contains(id.text);
                     const binding_slot = bindingMoveSlotPtrForIdent(id.text, state);
                     const was_alias = if (binding_slot) |slot| slot.alias_of != null else false;
                     const target_can_store_alias = if (self.move_ctx) |mctx|
@@ -893,6 +905,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                     }
                     moveConsume(self, a.value, state, aliases);
                     markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
+                    if (has_index_binding) updateIndependentIndexFact(self, id.text, a.value, state);
                     if (was_alias or target_can_store_alias or !had_slot) {
                         // Re-derive the alias from the RHS: `p = &t2` keeps `p` a borrow
                         // (live=false) now aliasing `t2`, so it does not leak at exit and
@@ -1271,6 +1284,20 @@ pub fn finalizeBranchLocals(self: *Checker, branch: *MoveState, outer: *const Mo
         };
     }
     for (removals.items) |k| _ = branch.remove(k);
+
+    var index_removals: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer index_removals.deinit(self.reporter.allocator);
+    var index_it = branch.index_bindings.keyIterator();
+    while (index_it.next()) |binding| {
+        if (outer.index_bindings.contains(binding.*)) continue;
+        index_removals.append(self.reporter.allocator, binding.*) catch {
+            self.oom = true;
+        };
+    }
+    for (index_removals.items) |binding| {
+        _ = branch.index_bindings.remove(binding);
+        _ = branch.index_facts.remove(binding);
+    }
 }
 
 // Join two control-flow arms into `dest`. A diverging arm does not reach the join, so
@@ -1447,6 +1474,13 @@ pub fn cloneMoveState(self: *Checker, state: *const MoveState) MoveState {
         self.oom = true;
         return clone;
     };
+    var bindings_it = state.index_bindings.iterator();
+    while (bindings_it.next()) |entry| {
+        clone.index_bindings.put(entry.key_ptr.*, {}) catch {
+            self.oom = true;
+            return clone;
+        };
+    }
     return clone;
 }
 
@@ -1462,6 +1496,13 @@ pub fn replaceMoveState(self: *Checker, dest: *MoveState, src: *const MoveState)
         self.oom = true;
         return;
     };
+    var bindings_it = src.index_bindings.iterator();
+    while (bindings_it.next()) |entry| {
+        dest.index_bindings.put(entry.key_ptr.*, {}) catch {
+            self.oom = true;
+            return;
+        };
+    }
 }
 
 pub fn mergeMoveBranches(
@@ -1534,6 +1575,14 @@ fn mergeMoveBranchesImpl(
         self.oom = true;
         return;
     };
+    var bindings_it = left.index_bindings.iterator();
+    while (bindings_it.next()) |entry| {
+        if (!right.index_bindings.contains(entry.key_ptr.*)) continue;
+        merged.index_bindings.put(entry.key_ptr.*, {}) catch {
+            self.oom = true;
+            return;
+        };
+    }
 
     replaceMoveState(self, dest, &merged);
 }
@@ -1625,6 +1674,7 @@ test "move state transports independent index facts through clone and join" {
 
     var left = MoveState.init(std.testing.allocator);
     defer left.deinit();
+    try left.index_bindings.put("index", {});
     try left.index_facts.put("index", .{ .constant = 1 });
 
     var cloned = cloneMoveState(&checker, &left);
@@ -1633,16 +1683,19 @@ test "move state transports independent index facts through clone and join" {
 
     var same = MoveState.init(std.testing.allocator);
     defer same.deinit();
+    try same.index_bindings.put("index", {});
     try same.index_facts.put("index", .{ .constant = 1 });
 
     var joined = MoveState.init(std.testing.allocator);
     defer joined.deinit();
     mergeMoveBranches(&checker, &joined, &left, &same);
     try std.testing.expect((joined.index_facts.get("index") orelse unreachable).eql(.{ .constant = 1 }));
+    try std.testing.expect(joined.index_bindings.contains("index"));
 
     try same.index_facts.put("index", .{ .symbolic = "runtime_index" });
     mergeMoveBranches(&checker, &joined, &left, &same);
     try std.testing.expect(joined.index_facts.get("index") == null);
+    try std.testing.expect(joined.index_bindings.contains("index"));
 }
 
 test "move branch joins match roots by typed place rather than compatibility key" {
@@ -1701,11 +1754,20 @@ test "move CFG boundary state handlers match ownership subplaces by typed place"
     defer after_scope.deinit();
     try before_scope.put("owner", root_slot);
     try before_scope.put("owner.resource:before", moved_slot);
+    try before_scope.index_bindings.put("outer_index", {});
+    try before_scope.index_facts.put("outer_index", .{ .constant = 0 });
     try after_scope.put("owner", root_slot);
     try after_scope.put("owner.resource:after", moved_slot);
+    try after_scope.index_bindings.put("outer_index", {});
+    try after_scope.index_facts.put("outer_index", .{ .constant = 1 });
+    try after_scope.index_bindings.put("inner_index", {});
+    try after_scope.index_facts.put("inner_index", .{ .constant = 0 });
     preserveOuterScopedMoveState(&checker, &after_scope, &before_scope);
     try std.testing.expectEqual(@as(usize, 2), after_scope.count());
     try std.testing.expect(after_scope.contains("owner.resource:before"));
+    try std.testing.expect((after_scope.index_facts.get("outer_index") orelse unreachable).eql(.{ .constant = 1 }));
+    try std.testing.expect(after_scope.index_facts.get("inner_index") == null);
+    try std.testing.expect(!after_scope.index_bindings.contains("inner_index"));
 }
 
 test "move CFG alias facts match typed referent places" {
@@ -3030,6 +3092,11 @@ fn sameDeferredBorrowFact(left: MoveSlot, right: MoveSlot) bool {
 
 fn moveStatesEqual(left: *const MoveState, right: *const MoveState) bool {
     if (!left.index_facts.eql(&right.index_facts)) return false;
+    if (left.index_bindings.count() != right.index_bindings.count()) return false;
+    var bindings_it = left.index_bindings.keyIterator();
+    while (bindings_it.next()) |binding| {
+        if (!right.index_bindings.contains(binding.*)) return false;
+    }
     if (left.count() != right.count()) return false;
     var it = left.iterator();
     while (it.next()) |entry| {
@@ -3293,6 +3360,24 @@ fn symbolicIndexValue(self: *Checker, expr: ast.Expr, state: *const MoveState, c
         .binary => |node| symbolicIndexBinaryValue(self, node, state, ctx),
         else => null,
     };
+}
+
+fn updateIndependentIndexFact(self: *Checker, binding: []const u8, value: ast.Expr, state: *MoveState) void {
+    const ctx = self.move_ctx orelse {
+        _ = state.index_facts.remove(binding);
+        return;
+    };
+    if (constIndexValue(self, value, state, ctx.*)) |index| {
+        state.index_facts.put(binding, .{ .constant = index }) catch {
+            self.oom = true;
+        };
+    } else if (symbolicIndexValue(self, value, state, ctx.*)) |symbol| {
+        state.index_facts.put(binding, .{ .symbolic = symbol }) catch {
+            self.oom = true;
+        };
+    } else {
+        _ = state.index_facts.remove(binding);
+    }
 }
 
 fn symbolicIndexBinaryValue(self: *Checker, node: anytype, state: *const MoveState, ctx: Context) ?[]const u8 {
