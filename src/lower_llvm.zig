@@ -8303,16 +8303,19 @@ const LlvmEmitter = struct {
             .deref => |inner| self.requireExpressionResultType(expr, self.derefPointeeType(inner.*)),
             .index => |node| self.requireExpressionResultType(expr, self.indexElementType(node.base.*)),
             .slice => |node| self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null),
-            .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| blk: {
-                const resolved_base_ty = self.resolveAliasType(base_ty);
-                if (resolved_base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");
-                if (self.packedBitsInfoForType(base_ty)) |info| {
-                    if (self.packedBitsFieldIndex(info, node.name.text) != null) break :blk simpleType(expr.span, "bool");
-                }
-                if (self.overlayField(node.base.*, node.name.text)) |field| break :blk self.requireExpressionResultType(expr, field.ty);
-                if (self.memberField(node.base.*, node.name.text)) |field| break :blk field.ty;
-                break :blk null;
-            } else null),
+            .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else if (expr.span.line != 0 and expr.span.column != 0)
+                if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
+            else
+                self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| blk: {
+                    const resolved_base_ty = self.resolveAliasType(base_ty);
+                    if (resolved_base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");
+                    if (self.packedBitsInfoForType(base_ty)) |info| {
+                        if (self.packedBitsFieldIndex(info, node.name.text) != null) break :blk simpleType(expr.span, "bool");
+                    }
+                    if (self.overlayField(node.base.*, node.name.text)) |field| break :blk self.requireExpressionResultType(expr, field.ty);
+                    if (self.memberField(node.base.*, node.name.text)) |field| break :blk field.ty;
+                    break :blk null;
+                } else null),
             .binary => |node| self.requireExpressionResultType(expr, if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*)),
             .try_expr => |node| self.tryExpressionResultType(expr, node.operand.*),
             else => null,

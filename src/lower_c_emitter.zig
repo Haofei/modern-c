@@ -7601,9 +7601,13 @@ const CEmitter = struct {
             },
             .call => |node| self.callSourceTypeForEmission(node, locals),
             .cast => if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else null,
-            // A struct-field base (`sp.s` where `s: []T`) has no LocalInfo, so
-            // recover its declared type from the struct decl via operandEmitType.
-            .member => self.operandEmitType(expr, locals),
+            // Real source members are typed by MIR. Only compiler-generated
+            // zero-span nodes may use the layout-derived fallback because no
+            // source-keyed fact can exist for them.
+            .member => if (expr.span.line != 0 and expr.span.column != 0)
+                if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
+            else
+                self.operandEmitType(expr, locals),
             .index => |node| blk: {
                 const inferred = self.operandEmitType(expr, locals) orelse
                     (if (locals) |local_set| localIndexElementType(node.base.*, local_set) else null) orelse break :blk null;
