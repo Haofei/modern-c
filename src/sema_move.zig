@@ -465,9 +465,11 @@ const MultiArmMoveCfg = struct {
     entry: sema_model.MoveCfgBlockId,
     join: sema_model.MoveCfgBlockId,
     arms: []sema_model.MoveCfgBlockId,
+    arm_exits: []sema_model.MoveCfgBlockId,
 
     fn deinit(self: *MultiArmMoveCfg) void {
         self.allocator.free(self.arms);
+        self.allocator.free(self.arm_exits);
         self.cfg.deinit();
     }
 };
@@ -489,27 +491,50 @@ fn multiArmMoveCfg(self: *Checker, arm_count: usize) ?MultiArmMoveCfg {
         cfg.deinit();
         return null;
     };
-    for (arms) |*block| {
+    const arm_exits = self.reporter.allocator.alloc(sema_model.MoveCfgBlockId, arm_count) catch {
+        self.oom = true;
+        self.reporter.allocator.free(arms);
+        cfg.deinit();
+        return null;
+    };
+    for (arms, arm_exits) |*block, *exit| {
         block.* = cfg.addBlock(.statement) catch {
             self.oom = true;
             self.reporter.allocator.free(arms);
+            self.reporter.allocator.free(arm_exits);
             cfg.deinit();
             return null;
         };
         cfg.addEdge(entry, block.*, .branch) catch {
             self.oom = true;
             self.reporter.allocator.free(arms);
+            self.reporter.allocator.free(arm_exits);
             cfg.deinit();
             return null;
         };
-        cfg.addEdge(block.*, join, .normal) catch {
+        exit.* = cfg.addBlock(.exit) catch {
             self.oom = true;
             self.reporter.allocator.free(arms);
+            self.reporter.allocator.free(arm_exits);
+            cfg.deinit();
+            return null;
+        };
+        cfg.addEdge(block.*, exit.*, .normal) catch {
+            self.oom = true;
+            self.reporter.allocator.free(arms);
+            self.reporter.allocator.free(arm_exits);
+            cfg.deinit();
+            return null;
+        };
+        cfg.addEdge(exit.*, join, .normal) catch {
+            self.oom = true;
+            self.reporter.allocator.free(arms);
+            self.reporter.allocator.free(arm_exits);
             cfg.deinit();
             return null;
         };
     }
-    return .{ .allocator = self.reporter.allocator, .cfg = cfg, .entry = entry, .join = join, .arms = arms };
+    return .{ .allocator = self.reporter.allocator, .cfg = cfg, .entry = entry, .join = join, .arms = arms, .arm_exits = arm_exits };
 }
 
 pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
@@ -1186,6 +1211,9 @@ fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *
     defer worklist.deinit();
     const subject_ty: ?ast.TypeExpr = if (self.move_ctx) |ctx| spine.exprResultType(node.subject, ctx.*) else null;
     var all_diverge = true;
+    const bound_names = self.reporter.allocator.alloc(?[]const u8, node.arms.len) catch return false;
+    defer self.reporter.allocator.free(bound_names);
+    @memset(bound_names, null);
     var joined = false;
 
     while (worklist.pop()) |block| {
@@ -1204,10 +1232,27 @@ fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *
                     break;
                 }
             }
-            const index = arm_index orelse continue;
-            const diverges = moveSwitchArm(self, node.arms[index], subject_ty, block_state, state, aliases);
-            if (!diverges) {
-                all_diverge = false;
+            if (arm_index) |index| {
+                const result = moveSwitchArm(self, node.arms[index], subject_ty, block_state, aliases);
+                bound_names[index] = result.bound_name;
+                if (!result.diverges) {
+                    all_diverge = false;
+                    worklist.propagateSuccessors(self, block, block_state);
+                }
+            } else {
+                var exit_index: ?usize = null;
+                for (branch.arm_exits, 0..) |exit_block, i| if (exit_block == block) {
+                    exit_index = i;
+                    break;
+                };
+                const index = exit_index orelse continue;
+                if (bound_names[index]) |name| {
+                    if (block_state.getPtr(name)) |slot| if (slot.live and !slot.deferred) {
+                        self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in a switch arm is never consumed (must be moved, returned, or freed)");
+                    };
+                    _ = block_state.remove(name);
+                }
+                finalizeBranchLocals(self, block_state, state, true);
                 worklist.propagateSuccessors(self, block, block_state);
             }
         }
@@ -1216,7 +1261,9 @@ fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *
     return all_diverge;
 }
 
-fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, state: *MoveState, outer: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+const SwitchArmMoveResult = struct { diverges: bool, bound_name: ?[]const u8 };
+
+fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) SwitchArmMoveResult {
     var bound_name: ?[]const u8 = null;
     for (arm.patterns) |pattern| {
         const payload_ty: ?ast.TypeExpr = switch (pattern.kind) {
@@ -1244,16 +1291,7 @@ fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, 
             break :blk false;
         },
     };
-    if (bound_name) |name| {
-        if (!diverges) {
-            if (state.getPtr(name)) |slot| if (slot.live and !slot.deferred) {
-                self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in a switch arm is never consumed (must be moved, returned, or freed)");
-            };
-        }
-        _ = state.remove(name);
-    }
-    finalizeBranchLocals(self, state, outer, !diverges);
-    return diverges;
+    return .{ .diverges = diverges, .bound_name = bound_name };
 }
 
 // Drop branch-local `move` bindings (names not present in `outer`) from `branch` on
@@ -5274,10 +5312,15 @@ fn moveDeferSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, alias
                     break;
                 }
             }
-            const index = arm_index orelse continue;
-            switch (node.arms[index].body) {
+            if (arm_index) |index| switch (node.arms[index].body) {
                 .block => |b| moveDeferBlock(self, b, block_state, aliases),
                 .expr => |expr| moveDefer(self, expr, block_state, aliases),
+            } else {
+                var exit_found = false;
+                for (branch.arm_exits) |exit_block| {
+                    if (exit_block == block) exit_found = true;
+                }
+                if (!exit_found) continue;
             }
             worklist.propagateSuccessors(self, block, block_state);
         }

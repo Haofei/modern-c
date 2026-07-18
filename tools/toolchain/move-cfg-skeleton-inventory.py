@@ -27,8 +27,8 @@ CFG_CONSTRUCTION_HELPERS: dict[str, dict[str, int]] = {
         "cfg.addEdge(": 6,
     },
     "multiArmMoveCfg": {
-        "cfg.addBlock(": 3,
-        "cfg.addEdge(": 2,
+        "cfg.addBlock(": 4,
+        "cfg.addEdge(": 3,
     },
     "loopBodyMoveCfg": {
         "cfg.addBlock(": 8,
@@ -95,6 +95,17 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
             "} else if (block == branch.then_exit or block == branch.else_exit) {",
             "worklist.propagateSuccessors(self, block, block_state);",
         ],
+        "forbidden": [],
+    },
+    "moveSwitchCfg": {
+        "required": [
+            "for (branch.arm_exits, 0..) |exit_block, i|",
+            "finalizeBranchLocals(self, block_state, state, true);",
+        ],
+        "forbidden": ["finalizeBranchLocals(self, state, outer, !diverges);"],
+    },
+    "moveDeferSwitchCfg": {
+        "required": ["for (branch.arm_exits) |exit_block|"],
         "forbidden": [],
     },
     "moveLoopBodyCfg": {
