@@ -120,6 +120,7 @@ pub const Parser = struct {
         }
 
         if (self.had_parse_error) return error.ParseFailed;
+        try self.resolveCollectedQualifiedDecls(decls.items);
 
         // Prepend synthesized tuple structs so they precede any use.
         const owners = try self.collectOwnerNames(allocator);
@@ -133,8 +134,8 @@ pub const Parser = struct {
     }
 
     // `impl Type { fn m(…) {…} … }` — associated functions desugared to free functions named
-    // `Type__m`, appended to the module. `Type.m(args)` calls are rewritten to `Type__m(args)`
-    // at the call site (see resolveImplCallee); the impl block must precede such calls.
+    // `Type__m`, appended to the module. Qualified references remain structured `.member`
+    // expressions until all declarations have been collected.
     fn parseImplBlock(self: *Parser, decls: *std.ArrayList(ast.Decl), allocator: std.mem.Allocator) anyerror!void {
         const start = self.previous.span;
         const first_name = try self.expectName("expected type or trait name after 'impl'");
@@ -362,6 +363,167 @@ pub const Parser = struct {
         var it = self.qualified_owners.keyIterator();
         while (it.next()) |k| try list.append(allocator, k.*);
         return list.toOwnedSlice(allocator);
+    }
+
+    // Resolve qualified references only after the complete flattened source has been parsed.
+    // During parsing, `.member` is the structured unresolved Owner/member form. Deferring this
+    // rewrite makes binding independent of declaration/import order and unrelated generics.
+    fn resolveCollectedQualifiedDecls(self: *Parser, decls: []ast.Decl) anyerror!void {
+        for (decls) |*decl| switch (decl.kind) {
+            .fn_decl, .extern_fn => |*fn_decl| {
+                for (fn_decl.params) |*param| try self.resolveCollectedQualifiedType(&param.ty);
+                if (fn_decl.return_type) |*return_type| try self.resolveCollectedQualifiedType(return_type);
+                if (fn_decl.body) |*body| try self.resolveCollectedQualifiedBlock(body);
+            },
+            .type_alias => |*alias| try self.resolveCollectedQualifiedType(&alias.ty),
+            .struct_decl => |*struct_decl| for (struct_decl.fields) |*field| try self.resolveCollectedQualifiedType(&field.ty),
+            .packed_bits_decl => |*packed_decl| {
+                try self.resolveCollectedQualifiedType(&packed_decl.repr);
+                for (packed_decl.fields) |*field| try self.resolveCollectedQualifiedType(&field.ty);
+            },
+            .overlay_union_decl => |*overlay| for (overlay.fields) |*field| try self.resolveCollectedQualifiedType(&field.ty),
+            .global_decl => |*global| {
+                if (global.ty) |*ty| try self.resolveCollectedQualifiedType(ty);
+                if (global.init) |*initializer| try self.resolveCollectedQualifiedExpr(initializer);
+            },
+            .enum_decl => |*enum_decl| {
+                if (enum_decl.repr) |*repr| try self.resolveCollectedQualifiedType(repr);
+                for (enum_decl.cases) |*case| if (case.value) |*value| try self.resolveCollectedQualifiedExpr(value);
+            },
+            .union_decl => |*union_decl| for (union_decl.cases) |*case| if (case.ty) |*ty| try self.resolveCollectedQualifiedType(ty),
+            .trait_decl => |*trait| for (trait.methods) |*method| {
+                for (method.params) |*param| try self.resolveCollectedQualifiedType(&param.ty);
+                if (method.return_type) |*return_type| try self.resolveCollectedQualifiedType(return_type);
+            },
+            .impl_trait => |*impl_trait| for (impl_trait.methods) |*method| {
+                for (method.params) |*param| try self.resolveCollectedQualifiedType(&param.ty);
+                if (method.return_type) |*return_type| try self.resolveCollectedQualifiedType(return_type);
+            },
+            .opaque_decl => {},
+        };
+    }
+
+    fn resolveCollectedQualifiedBlock(self: *Parser, block: *ast.Block) anyerror!void {
+        for (block.items) |*stmt| try self.resolveCollectedQualifiedStmt(stmt);
+    }
+
+    fn resolveCollectedQualifiedStmt(self: *Parser, stmt: *ast.Stmt) anyerror!void {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |*local| {
+                if (local.ty) |*ty| try self.resolveCollectedQualifiedType(ty);
+                if (local.init) |*initializer| try self.resolveCollectedQualifiedExpr(initializer);
+            },
+            .loop => |*loop| {
+                if (loop.iterable) |*iterable| try self.resolveCollectedQualifiedExpr(iterable);
+                try self.resolveCollectedQualifiedBlock(&loop.body);
+            },
+            .if_let => |*if_let| {
+                try self.resolveCollectedQualifiedExpr(&if_let.value);
+                try self.resolveCollectedQualifiedPattern(&if_let.pattern);
+                try self.resolveCollectedQualifiedBlock(&if_let.then_block);
+                if (if_let.else_block) |*else_block| try self.resolveCollectedQualifiedBlock(else_block);
+            },
+            .@"switch" => |*switch_node| {
+                try self.resolveCollectedQualifiedExpr(&switch_node.subject);
+                for (switch_node.arms) |*arm| {
+                    for (arm.patterns) |*pattern| try self.resolveCollectedQualifiedPattern(pattern);
+                    switch (arm.body) {
+                        .block => |*body| try self.resolveCollectedQualifiedBlock(body),
+                        .expr => |*expr| try self.resolveCollectedQualifiedExpr(expr),
+                    }
+                }
+            },
+            .unsafe_block, .comptime_block, .block => |*block| try self.resolveCollectedQualifiedBlock(block),
+            .contract_block => |*contract| try self.resolveCollectedQualifiedBlock(&contract.block),
+            .@"return" => |*value| if (value.*) |*expr| try self.resolveCollectedQualifiedExpr(expr),
+            .@"defer", .assert, .expr => |*expr| try self.resolveCollectedQualifiedExpr(expr),
+            .assignment => |*assignment| {
+                try self.resolveCollectedQualifiedExpr(&assignment.target);
+                try self.resolveCollectedQualifiedExpr(&assignment.value);
+            },
+            .asm_stmt, .@"break", .@"continue" => {},
+        }
+    }
+
+    fn resolveCollectedQualifiedPattern(self: *Parser, pattern: *ast.Pattern) anyerror!void {
+        if (pattern.kind == .literal) try self.resolveCollectedQualifiedExpr(&pattern.kind.literal);
+    }
+
+    fn resolveCollectedQualifiedExpr(self: *Parser, expr: *ast.Expr) anyerror!void {
+        switch (expr.kind) {
+            .array_literal => |items| for (items) |*item| try self.resolveCollectedQualifiedExpr(item),
+            .struct_literal => |fields| for (fields) |*field| try self.resolveCollectedQualifiedExpr(&field.value),
+            .grouped, .address_of, .deref, .await_expr => |inner| try self.resolveCollectedQualifiedExpr(inner),
+            .block => |*block| try self.resolveCollectedQualifiedBlock(block),
+            .unary => |*unary_node| try self.resolveCollectedQualifiedExpr(unary_node.expr),
+            .binary => |*binary| {
+                try self.resolveCollectedQualifiedExpr(binary.left);
+                try self.resolveCollectedQualifiedExpr(binary.right);
+            },
+            .cast => |*cast| {
+                try self.resolveCollectedQualifiedExpr(cast.value);
+                try self.resolveCollectedQualifiedType(cast.ty);
+            },
+            .call => |*call| {
+                try self.resolveCollectedQualifiedExpr(call.callee);
+                for (call.type_args) |*type_arg| try self.resolveCollectedQualifiedType(type_arg);
+                for (call.args) |*arg| try self.resolveCollectedQualifiedExpr(arg);
+            },
+            .index => |*index| {
+                try self.resolveCollectedQualifiedExpr(index.base);
+                try self.resolveCollectedQualifiedExpr(index.index);
+            },
+            .slice => |*slice| {
+                try self.resolveCollectedQualifiedExpr(slice.base);
+                try self.resolveCollectedQualifiedExpr(slice.start);
+                try self.resolveCollectedQualifiedExpr(slice.end);
+            },
+            .member => |*member| {
+                try self.resolveCollectedQualifiedExpr(member.base);
+                if (try self.resolveQualified(member.base.*, member.name)) |resolved| expr.* = resolved;
+            },
+            .try_expr => |*try_expr| {
+                try self.resolveCollectedQualifiedExpr(try_expr.operand);
+                if (try_expr.mapped) |mapped| try self.resolveCollectedQualifiedExpr(mapped);
+            },
+            .ident,
+            .int_literal,
+            .float_literal,
+            .string_literal,
+            .char_literal,
+            .bool_literal,
+            .null_literal,
+            .uninit_literal,
+            .unreachable_expr,
+            .void_literal,
+            .enum_literal,
+            => {},
+        }
+    }
+
+    fn resolveCollectedQualifiedType(self: *Parser, ty: *ast.TypeExpr) anyerror!void {
+        switch (ty.kind) {
+            .array => |*array| {
+                try self.resolveCollectedQualifiedExpr(&array.len);
+                try self.resolveCollectedQualifiedType(array.child);
+            },
+            .pointer => |*pointer| try self.resolveCollectedQualifiedType(pointer.child),
+            .raw_many_pointer => |*pointer| try self.resolveCollectedQualifiedType(pointer.child),
+            .slice => |*slice| try self.resolveCollectedQualifiedType(slice.child),
+            .qualified => |*qualified| try self.resolveCollectedQualifiedType(qualified.child),
+            .nullable => |child| try self.resolveCollectedQualifiedType(child),
+            .member => |*member| try self.resolveCollectedQualifiedType(member.base),
+            .generic => |*generic| for (generic.args) |*arg| try self.resolveCollectedQualifiedType(arg),
+            .fn_pointer => |*function| {
+                for (function.params) |*param| try self.resolveCollectedQualifiedType(param);
+                try self.resolveCollectedQualifiedType(function.ret);
+            },
+            .closure_type => |*closure| {
+                for (closure.params) |*param| try self.resolveCollectedQualifiedType(param);
+                try self.resolveCollectedQualifiedType(closure.ret);
+            },
+            .name, .enum_literal, .dyn_trait => {},
+        }
     }
 
     // ---- tuple desugaring (tuples -> synthesized nominal structs) ----
@@ -1730,12 +1892,6 @@ pub const Parser = struct {
                     continue;
                 }
                 const name = try self.expectSymbol("expected member name");
-                // Qualified symbol access `Owner.name` (impl associated function / module
-                // function / module constant) -> the mangled free symbol `Owner__name`.
-                if (try self.resolveQualified(expr, name)) |resolved| {
-                    expr = resolved;
-                    continue;
-                }
                 try self.reserveParseWrapperDepth(&wrapper_depth);
                 const base = try ast.makePtr(self.allocator, expr);
                 expr = .{ .span = joinSpan(base.span, name.span), .kind = .{ .member = .{ .base = base, .name = name } } };

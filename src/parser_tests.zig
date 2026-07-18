@@ -2,9 +2,39 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
+const loader = @import("loader.zig");
 const parser = @import("parser.zig");
 
 const Parser = parser.Parser;
+
+fn expectForwardQualifiedBindings(source: []const u8) !void {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "qualified_forward.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_call: ?[]const u8 = null;
+    var module_const: ?[]const u8 = null;
+    var impl_call: ?[]const u8 = null;
+    for (module.decls) |decl| {
+        if (decl.kind != .fn_decl or decl.kind.fn_decl.body == null) continue;
+        const fn_decl = decl.kind.fn_decl;
+        const return_expr = fn_decl.body.?.items[0].kind.@"return".?;
+        if (std.mem.eql(u8, fn_decl.name.text, "call_module")) module_call = return_expr.kind.call.callee.kind.ident.text;
+        if (std.mem.eql(u8, fn_decl.name.text, "read_module_const")) module_const = return_expr.kind.ident.text;
+        if (std.mem.eql(u8, fn_decl.name.text, "call_impl")) impl_call = return_expr.kind.call.callee.kind.ident.text;
+    }
+
+    try std.testing.expectEqualStrings("Util__answer", module_call orelse return error.TestExpectedEqual);
+    try std.testing.expectEqualStrings("Util__LIMIT", module_const orelse return error.TestExpectedEqual);
+    try std.testing.expectEqualStrings("Widget__make", impl_call orelse return error.TestExpectedEqual);
+}
 
 test "parser covers MC declaration and statement examples" {
     const source =
@@ -108,6 +138,45 @@ test "qualified expression resolution OOM does not fall back to member access" {
         }
     }
     try std.testing.expect(saw_oom);
+}
+
+test "qualified resolution is independent of declaration order and unrelated generics" {
+    const uses =
+        \\fn call_module() -> u32 { return Util.answer(); }
+        \\fn read_module_const() -> u32 { return Util.LIMIT; }
+        \\fn call_impl() -> u32 { return Widget.make(); }
+    ;
+    const declarations =
+        \\struct Widget { value: u32 }
+        \\module Util {
+        \\    const LIMIT: u32 = 7;
+        \\    fn answer() -> u32 { return 42; }
+        \\}
+        \\impl Widget {
+        \\    fn make() -> u32 { return 9; }
+        \\}
+    ;
+    const unrelated_generic =
+        \\fn unused_generic(comptime T: type, value: T) -> T { return value; }
+    ;
+
+    try expectForwardQualifiedBindings(uses ++ declarations);
+    try expectForwardQualifiedBindings(uses ++ unrelated_generic ++ declarations);
+    try expectForwardQualifiedBindings(declarations ++ uses);
+    try expectForwardQualifiedBindings(declarations ++ unrelated_generic ++ uses);
+}
+
+test "imported qualified references resolve after loader flattening" {
+    const root_path = "tests/spec_support/qualified_forward_root.mc";
+    const root_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, root_path, std.testing.allocator, .limited(1 << 20));
+    defer std.testing.allocator.free(root_source);
+    const combined = try loader.loadCombinedSource(std.testing.allocator, std.testing.io, root_path, root_source);
+    defer std.testing.allocator.free(combined);
+
+    try std.testing.expect(std.mem.indexOf(u8, combined, "fn call_module") != null);
+    try std.testing.expect(std.mem.indexOf(u8, combined, "module Util") != null);
+    try std.testing.expect(std.mem.indexOf(u8, combined, "fn call_module").? < std.mem.indexOf(u8, combined, "module Util").?);
+    try expectForwardQualifiedBindings(combined);
 }
 
 test "parser distinguishes relational operators from generic calls" {

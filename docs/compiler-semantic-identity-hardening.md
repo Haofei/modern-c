@@ -27,7 +27,7 @@ optimizations.
 | P0 | Generic instance keys collide after delimiter joining | **Fixed for the admitted generic-argument model** | Function, struct, and union maps use `GenericInstanceKey`; dangerous linkage components use a reserved hex encoding and an inverse-map collision guard. |
 | P0 | Tuple interning merges different structural types | **Fixed** | Parser interning compares complete `TypeExpr[]` structure; generated names are output identities only and receive a unique suffix when a readable candidate collides. |
 | P1 | `monomorphize` drops `Module.qualified_owners` | **Fixed** | `Module.withDecls` preserves metadata; monomorphize and the non-extending async path use it, while the extending async path is explicit. |
-| P1 | Qualified resolution depends on declaration/import order | Inspected, high confidence | Parser resolution uses symbols registered so far; loader emits the importer before imported files; monomorphization adds a conditional late call-only resolution path. |
+| P1 | Qualified resolution depends on declaration/import order | **Fixed for the current flattened-module model** | Qualified references remain structured through parsing and a complete post-parse symbol pass resolves them after all imported declarations have been collected. |
 | P2 pending measurement | Generic-call lookahead may approach quadratic time | Plausible, not yet measured | `lessStartsGenericCall` clones the lexer and scans forward for each candidate `<`. |
 | P2 | Import expansion has no graph-wide resource budget | Inspected, high confidence | A visited set and per-file size limit exist; total files, bytes, depth, and expanded tokens are not bounded. |
 | P2 design decision | One `pub` declaration changes the whole file's visibility mode | Confirmed intentional behavior | `ast.Decl.is_pub` documents the compatibility rule; this is a non-local API rule rather than an implementation accident. |
@@ -162,23 +162,38 @@ covering top-level, parameter, and local diagnostics; focused monomorphize tests
 
 ### S4 - Remove source-order-dependent qualified resolution
 
+Status: **correctness fix complete for the current flattened-module model;
+standalone module-graph migration remains architectural follow-up**.
+
 Goal: the same module graph resolves identically regardless of declaration order
 or the presence of unrelated generics.
 
-- [ ] Represent `Owner.member` as a structured qualified-reference AST/HIR node.
+- [x] Represent unresolved `Owner.member` as the existing structured `.member`
+  AST node throughout parsing.
 - [ ] Build the import/module graph before semantic binding.
-- [ ] Collect module, impl, declaration, visibility, and export identities before
-  resolving any qualified reference.
-- [ ] Move qualified binding from parser-time `impl_methods` lookup to sema or a
-  dedicated name-resolution pass.
-- [ ] Resolve calls, constants, globals, types, and trait/inherent methods through
-  the same complete symbol table.
-- [ ] Add `imported_qualified_forward_reference`.
-- [ ] Add `qualified_import_behavior_independent_of_generics`.
-- [ ] Add declaration-order permutation tests for module and impl members.
+- [x] Collect all module and impl qualified symbols before resolving qualified
+  expressions in the combined source.
+- [x] Remove parse-postfix binding and run one dedicated post-parse resolution
+  pass over declarations, statements, expressions, patterns, and embedded types.
+- [x] Resolve calls, constants, globals, and trait/inherent methods through the
+  same complete qualified-symbol table admitted by the current module syntax.
+- [x] Add `imported_qualified_forward_reference` through the real loader
+  flattening path.
+- [x] Add `qualified_import_behavior_independent_of_generics`.
+- [x] Add declaration-order permutation tests for module and impl members.
 
 Exit condition: declaration/import order and unrelated generic declarations do
 not change whether a qualified program is accepted or which symbol it binds.
+
+Current implementation evidence: `Parser.resolveCollectedQualifiedDecls` and
+its recursive AST walk; parser tests covering module functions, module
+constants, inherent methods, both declaration orders, an unrelated generic,
+and the loader's importer-before-imported-file order. `zig build test` passes.
+
+The unchecked module-graph item is deliberately not required to close this
+specific correctness defect. It remains necessary for separate compilation and
+for moving all name binding into typed HIR/sema; it must replace this bounded
+post-parse pass rather than reintroduce source-order lookup.
 
 ### S5 - Bound parser and import resources
 
