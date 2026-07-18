@@ -2612,8 +2612,11 @@ fn immediateFullDerefMoveReferent(self: *Checker, expr: ast.Expr, state: *const 
     if (directAliasReferentPlace(self, expr, state)) |referent| {
         return .{ .key = referent.key, .place = referent.place, .full_deref = true };
     }
-    var referent = carriedAliasReferentForExpr(expr, state) orelse return null;
-    referent.full_deref = true;
+    const referent = carriedAliasReferentForExpr(expr, state) orelse return null;
+    // A pointer returned from a call that borrowed a move value carries the
+    // owner's place for stale-alias checking, but it is not `&owner` itself.
+    // Only a direct full alias may move the tracked referent through `*p`.
+    if (!referent.full_deref) return null;
     return referent;
 }
 

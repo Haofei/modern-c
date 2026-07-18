@@ -47,6 +47,24 @@ pub fn build(b: *std.Build) h.Ctx {
         .root_module = root_module,
     });
     const test_cmd = b.addRunArtifact(unit_tests);
+
+    // Keep the specification fixture suite as an explicit build dependency.
+    // Importing it through main is not sufficient for Zig's lazy test analysis.
+    const spec_test_module = b.createModule(.{
+        .root_source_file = b.path("src/spec_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    spec_test_module.addOptions("build_options", options);
+    spec_test_module.addAnonymousImport("diagnostics_reference_md", .{
+        .root_source_file = b.path("docs/diagnostics.md"),
+    });
+    const spec_tests = b.addTest(.{
+        .root_module = spec_test_module,
+    });
+    const spec_test_cmd = b.addRunArtifact(spec_tests);
+    test_cmd.step.dependOn(&spec_test_cmd.step);
+
     // `test` has no install dep (in-process unit tests). Registered into ctx so
     // the tier aggregations can depend on its command step like the others.
     ctx.cmds.put("test", &test_cmd.step) catch @panic("OOM");

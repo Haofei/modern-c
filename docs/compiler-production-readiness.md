@@ -1,8 +1,8 @@
 # Production readiness: the MC compiler (`mcc`)
 
 Status: **qualified subset, not generally production-ready**.
-Current assessment: **updated 2026-07-16, based on the current compiler worktree**.
-Evidence register: **707 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Current assessment: **updated 2026-07-18, based on the current compiler worktree**.
+Evidence register: **708 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -865,6 +865,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Ptr-to-int move-borrow escape preserves a typed root place | Both parser shapes of a move borrow converted to an integer now recover the structural root before provenance is dropped: `(&t) as usize` peels the cast wrapper, while `&t as usize` resolves the inner integer cast. The supported typed path marks the root escaped through `MovePlace`; only a legacy form that cannot produce a place reaches the pre-existing conservative key fallback. The identity inventory forbids key recovery in the integer-cast helper, and the ptr-to-int soundness fixture remains rejected at the later move. This is one M1.1 escape migration, not general lifetime analysis. | `src/sema_move.zig` `borrowedMoveRootPlace` / `integerCastBorrowedMoveRootPlace` / `markBorrowEscape`; `tests/spec/soundness_use_after_move.mc` `reject_ptr_to_int_roundtrip`; `tools/toolchain/move-place-identity-inventory.py`; `zig build test`; full production gate; `git diff --check`. |
 
 | C source member/index result types are directly MIR-owned | C `operandEmitType` now reads the complete `expression_result` fact directly for every source-span member or index. It no longer walks struct declarations or array/slice element types to select lowering semantics; generic MIR admission now rejects a stale complete fact before C emission. Only compiler-generated zero-span async state-machine nodes retain declaration-based type recovery because they have no source-keyed fact. C and LLVM nested array, pointer, and by-value struct member regressions cover positive lowering plus missing/stale facts. This is a T2 migration within `c-expression-type-inference`, not closure of the family. | `src/lower_c_infer.zig` `operandEmitType`; `src/lower_c_tests.zig` / `src/lower_llvm_tests.zig` nested expression-fact tests; `src/mir.zig` `validateTargetTypeFactsForLowering`; focused C/LLVM tests; full production gate; `git diff --check`. |
+
+| Derived pointer aliases do not consume their borrowed move owner | A pointer returned from a call that borrows a `move` owner retains its carried `MovePlace` for stale-alias diagnostics, but dereferencing that pointer is an ordinary borrow unless the alias was a direct full `&owner` alias. `immediateFullDerefMoveReferent` now preserves that distinction instead of relabeling every carried alias as a full dereference. The lock-guard specification fixture accepts repeated scalar reads through `Guard.get(&g)` and still reports the independent unreleased-guard leak. `zig build test` now executes `src/spec_tests.zig` explicitly, so this fixture cannot be skipped by lazy test import analysis. This repairs an existing M1 alias-consumer boundary; it does not close M1 or expand general pointer move support. | `src/sema_move.zig` `immediateFullDerefMoveReferent`; `tests/spec/lock_guards_data.mc` `accept_access_through_guard` / `reject_forget_release`; `build/compiler.zig` explicit spec-test artifact; `zig test src/spec_tests.zig`; `zig test src/sema_move.zig`; `zig build test`; `git diff --check`. |
 
 ### Bounded Workstream Status
 
