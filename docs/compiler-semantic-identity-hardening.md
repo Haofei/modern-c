@@ -26,7 +26,7 @@ optimizations.
 | P0 | Opaque-owner prefix collision can authorize private field access | **Fixed** | `FnDecl.associated_owner` and `StructDecl.semantic_identity` preserve exact ownership through mangling and specialization; `opaqueAccessAllowed` and the orphan check consume those identities. |
 | P0 | Generic instance keys collide after delimiter joining | **Fixed for the admitted generic-argument model** | Function, struct, and union maps use `GenericInstanceKey`; dangerous linkage components use a reserved hex encoding and an inverse-map collision guard. |
 | P0 | Tuple interning merges different structural types | **Fixed** | Parser interning compares complete `TypeExpr[]` structure; generated names are output identities only and receive a unique suffix when a readable candidate collides. |
-| P1 | `monomorphize` drops `Module.qualified_owners` | Confirmed code defect; main-pipeline impact bounded | The generic rewrite returns only `.decls`; the normal driver runs generic precheck before this loss, so the originally claimed main-path bypass is not yet demonstrated. |
+| P1 | `monomorphize` drops `Module.qualified_owners` | **Fixed** | `Module.withDecls` preserves metadata; monomorphize and the non-extending async path use it, while the extending async path is explicit. |
 | P1 | Qualified resolution depends on declaration/import order | Inspected, high confidence | Parser resolution uses symbols registered so far; loader emits the importer before imported files; monomorphization adds a conditional late call-only resolution path. |
 | P2 pending measurement | Generic-call lookahead may approach quadratic time | Plausible, not yet measured | `lessStartsGenericCall` clones the lexer and scans forward for each candidate `<`. |
 | P2 | Import expansion has no graph-wide resource budget | Inspected, high confidence | A visited set and per-file size limit exist; total files, bytes, depth, and expanded tokens are not bounded. |
@@ -128,8 +128,7 @@ Goal: specialization and type interning cannot merge unequal semantic inputs.
   syntax key with canonical `TypeId[]` without changing the authority boundary.
 - [x] Include complete function-pointer and closure signatures in tuple element
   identity, including parameters, return type, effects, and relevant qualifiers.
-- [x] Keep synthesized tuple names diagnostic/linkage
-  artifacts only.
+- [x] Keep synthesized tuple names as diagnostic/linkage artifacts only.
 - [x] Reject one synthesized linkage name mapping to unequal structural keys;
   normal sema duplicate-declaration checks continue to cover user declarations.
 
@@ -139,20 +138,27 @@ candidate linkage names collide.
 
 ### S3 - Preserve pass metadata
 
+Status: **complete**.
+
 Goal: every AST/HIR transformation declares and preserves module-level metadata.
 
-- [ ] Immediately preserve `module.qualified_owners` in `monomorphize` output.
-- [ ] Add `Module.withDecls` or an equivalent constructor so passes do not rebuild
-  `Module` with implicit metadata defaults.
-- [ ] Inventory every pass that returns `ast.Module` and state whether each
-  metadata field is preserved, extended, or deliberately replaced.
-- [ ] Add `monomorphize_preserves_qualified_owners` covering top-level values,
+- [x] Preserve `module.qualified_owners` in `monomorphize` output.
+- [x] Add `Module.withDecls` so passes do not rebuild `Module` with implicit
+  metadata defaults.
+- [x] Inventory every pass that returns `ast.Module`: monomorphize preserves,
+  async lowering either preserves or explicitly extends, and mangle-private
+  mutates the existing Module without replacing metadata.
+- [x] Add `monomorphize_preserves_qualified_owners` covering top-level values,
   parameters, and locals.
-- [ ] Add a pass-pipeline test proving unrelated generic declarations cannot
+- [x] Add a pass-pipeline test proving unrelated generic declarations cannot
   alter reserved-qualified-name diagnostics.
 
 Exit condition: adding a no-op transformation or unrelated generic declaration
 cannot remove or change module semantic metadata.
+
+Implementation evidence: `ast.Module.withDecls`; monomorphize and async-lowering
+return paths; `monomorphize preserves qualified-owner metadata and diagnostics`
+covering top-level, parameter, and local diagnostics; focused monomorphize tests.
 
 ### S4 - Remove source-order-dependent qualified resolution
 

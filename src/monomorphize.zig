@@ -442,7 +442,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
     }
     if (rewriter.oom) return error.OutOfMemory;
 
-    return .{ .decls = try out.toOwnedSlice(arena) };
+    return module.withDecls(try out.toOwnedSlice(arena));
 }
 
 // A `{ return unreachable; }` body for a bound-failed specialization. `unreachable`

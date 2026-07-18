@@ -4,6 +4,7 @@ const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const monomorphize = @import("monomorphize.zig");
 const parser = @import("parser.zig");
+const sema = @import("sema.zig");
 
 const testing = std.testing;
 const zero_span = ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
@@ -164,6 +165,45 @@ test "monomorphize keeps delimiter-colliding generic instances distinct" {
     try testing.expect(!std.mem.eql(u8, pair_left_types[0], pair_left_types[1]));
     try testing.expect(!std.mem.eql(u8, choice_left_types[0], choice_left_types[1]));
     try testing.expect(!std.mem.eql(u8, pick_param_types[0], pick_param_types[1]));
+}
+
+test "monomorphize preserves qualified-owner metadata and diagnostics" {
+    const source =
+        \\module Reserved {
+        \\    fn value() -> u32 { return 1; }
+        \\}
+        \\fn identity(comptime T: type, value: T) -> T { return value; }
+        \\global Reserved: u32 = 0;
+        \\fn bad_param(Reserved: u32) -> u32 { return Reserved; }
+        \\fn bad_local() -> u32 { let Reserved: u32 = 1; return Reserved; }
+        \\fn trigger(value: u32) -> u32 { return identity(u32, value); }
+    ;
+
+    var reporter = diagnostics.Reporter.init(testing.allocator, "qualified_owner_metadata.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    try testing.expect(!reporter.has_errors);
+    try testing.expectEqual(@as(usize, 1), module.qualified_owners.len);
+    try testing.expectEqualStrings("Reserved", module.qualified_owners[0]);
+
+    const specialized = try monomorphize.transformReport(arena.allocator(), module, &reporter);
+    try testing.expectEqual(@as(usize, 1), specialized.qualified_owners.len);
+    try testing.expectEqualStrings("Reserved", specialized.qualified_owners[0]);
+
+    var checker = sema.Checker.init(&reporter);
+    checker.checkModule(specialized);
+    var reserved_diagnostics: usize = 0;
+    for (reporter.diagnostics.items) |diagnostic| {
+        if (std.mem.indexOf(u8, diagnostic.message, "E_RESERVED_QUALIFIED_NAME") != null) {
+            reserved_diagnostics += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 3), reserved_diagnostics);
 }
 
 test "monomorphize total specialization cap reports a focused diagnostic" {

@@ -15,6 +15,10 @@ pub const Module = struct {
     /// bindings — a local may not shadow them (sema enforces this).
     qualified_owners: [][]const u8 = &.{},
 
+    pub fn withDecls(self: Module, decls: []Decl) Module {
+        return .{ .decls = decls, .qualified_owners = self.qualified_owners };
+    }
+
     /// Shallow free of the top-level `decls` slice only. The AST is built with an
     /// arena allocator that owns all nested allocations (params, bodies, block
     /// items, type exprs, …), so they are reclaimed when the arena is freed. This

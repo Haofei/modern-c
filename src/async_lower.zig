@@ -354,7 +354,7 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
         return .{ .decls = try out.toOwnedSlice(arena), .qualified_owners = try owners.toOwnedSlice(arena) };
     }
 
-    return .{ .decls = try out.toOwnedSlice(arena), .qualified_owners = module.qualified_owners };
+    return module.withDecls(try out.toOwnedSlice(arena));
 }
 
 // ---- Pass-3 UFCS patcher: rewrite `G.poll` member exprs (G a generated future) to `ident(G__poll)`
