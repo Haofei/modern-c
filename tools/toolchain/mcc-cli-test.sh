@@ -130,6 +130,7 @@ assert_stdout_contains "mcc symbols <file.mc>" "--help symbols command"
 assert_stdout_contains "mcc build <file.mc> -o <exe>" "--help build command"
 assert_stdout_contains "--remap-prefix=FROM=TO" "--help remap-prefix option"
 assert_stdout_contains "--std-dir=<dir>" "--help installed std-dir option"
+assert_stdout_contains "--visibility=legacy|explicit" "--help visibility mode option"
 assert_stdout_contains "MC_PATH=dir[:dir...]" "--help MC_PATH fallback"
 assert_stdout_contains "or - to read MC source from stdin" "--help stdin input"
 assert_stdout_contains "exit codes:" "--help exit-code section"
@@ -199,6 +200,21 @@ assert_stdout_empty "--help with extra arg"
 assert_stderr_contains "usage:" "--help extra-arg usage"
 
 printf 'export fn main() -> u32 { return 0; }\n' >"$WORK/ok.mc"
+
+printf 'fn hidden() -> u32 { return 1; }\n' >"$WORK/visibility_lib.mc"
+printf 'import "./visibility_lib.mc";\nfn use_hidden() -> u32 { return hidden(); }\n' >"$WORK/visibility_root.mc"
+run_case check "$WORK/visibility_root.mc" --visibility=legacy
+assert_rc 0 "legacy visibility compatibility"
+assert_stderr_empty "legacy visibility compatibility"
+
+run_case check "$WORK/visibility_root.mc" --visibility=explicit
+assert_rc 1 "explicit visibility private default"
+assert_stderr_contains "E_PRIVATE_IMPORT" "explicit visibility private default"
+
+run_case check "$WORK/visibility_root.mc" --visibility=invalid
+assert_rc 1 "invalid visibility mode"
+assert_stderr_contains "usage:" "invalid visibility mode usage"
+
 run_case emit-c "$WORK/ok.mc" -o "$WORK/ok.c"
 assert_rc 0 "emit-c output path"
 assert_stdout_empty "emit-c output path"

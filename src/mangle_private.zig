@@ -68,13 +68,17 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, boundaries: ?[]co
     const b = boundaries orelse return module;
     if (b.len < 2) return module;
 
-    // A file is "strict" (opts into §30 visibility) iff it has >= 1 `pub` decl. Only strict
-    // files have file-private items; a non-strict file's items stay globally visible (legacy).
+    // Explicit mode makes every file private-by-default. Legacy mode preserves the original
+    // per-file opt-in rule for source compatibility.
     var strict_files = std.AutoHashMap(usize, void).init(arena);
     defer strict_files.deinit();
-    for (module.decls) |decl| {
-        if (!decl.is_pub) continue;
-        if (originFileIndex(b, decl.span.offset)) |fi| try strict_files.put(fi, {});
+    if (module.visibility_mode == .explicit_public) {
+        for (b, 0..) |_, fi| try strict_files.put(fi, {});
+    } else {
+        for (module.decls) |decl| {
+            if (!decl.is_pub) continue;
+            if (originFileIndex(b, decl.span.offset)) |fi| try strict_files.put(fi, {});
+        }
     }
     if (strict_files.count() == 0) return module;
 

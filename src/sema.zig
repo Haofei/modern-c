@@ -585,20 +585,26 @@ pub const Checker = struct {
         self.trivial_drop_types = &trivial_drop_types;
         defer self.trivial_drop_types = null;
 
-        // Opt-in module visibility: a file with >= 1 `pub` declaration is "strict"; its
-        // non-`pub`/non-`export` top-level items are private to it (E_PRIVATE_IMPORT when
-        // referenced from another file). No strict file -> the map stays empty and every
-        // module is fully visible, so existing code is unaffected.
+        // Explicit mode makes every imported file private-by-default. Legacy mode preserves
+        // the original rule where a file becomes strict only after declaring some `pub` item.
         var private_items = std.StringHashMap([]const u8).init(self.reporter.allocator);
         defer private_items.deinit();
         if (self.file_boundaries != null) {
             var strict_files = std.StringHashMap(void).init(self.reporter.allocator);
             defer strict_files.deinit();
-            for (module.decls) |decl| {
-                if (decl.is_pub) {
-                    if (self.originFile(decl.span.offset)) |f| strict_files.put(f, {}) catch {
+            if (module.visibility_mode == .explicit_public) {
+                for (self.file_boundaries.?) |boundary| {
+                    strict_files.put(boundary.path, {}) catch {
                         self.oom = true;
                     };
+                }
+            } else {
+                for (module.decls) |decl| {
+                    if (decl.is_pub) {
+                        if (self.originFile(decl.span.offset)) |f| strict_files.put(f, {}) catch {
+                            self.oom = true;
+                        };
+                    }
                 }
             }
             if (strict_files.count() > 0) {
@@ -6057,16 +6063,14 @@ pub const Checker = struct {
         return origin;
     }
 
-    // Opt-in module visibility (§30): reject a reference to a name that is private to a
-    // strict module (declared without `pub`) from a DIFFERENT file. A use within the same
-    // file, a `pub`/`export` item, or any name in a non-strict module is allowed (the name
-    // is simply absent from `private_items`).
+    // Reject a cross-file reference to a declaration private under the active visibility
+    // mode. Uses within the defining file and `pub`/`export` declarations remain allowed.
     fn checkImportVisibility(self: *Checker, name: []const u8, use_span: diagnostics.Span) void {
         const private = self.private_items orelse return;
         const def_file = private.get(name) orelse return;
         const use_file = self.originFile(use_span.offset) orelse return;
         if (!std.mem.eql(u8, use_file, def_file)) {
-            self.errorCode(use_span, "E_PRIVATE_IMPORT", "this name is private to its module (declared without `pub` in a module that marks its public surface); only `pub`/`export` items are visible to importing files");
+            self.errorCode(use_span, "E_PRIVATE_IMPORT", "this name is private under the active visibility mode; only `pub`/`export` items are visible to importing files");
         }
     }
 

@@ -40,6 +40,39 @@ fn parseWithAllocator(source: []const u8, allocator: std.mem.Allocator, reporter
     return p.parseModule(allocator);
 }
 
+fn checkVisibilityMode(source: []const u8, imported_offset: usize, mode: ast.VisibilityMode) !bool {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "visibility_root.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var module = try parseWithAllocator(source, arena.allocator(), &reporter);
+    defer module.deinit(arena.allocator());
+    module.visibility_mode = mode;
+    const boundaries = [_]diagnostics.FileBoundary{
+        .{ .start = 0, .path = "visibility_root.mc" },
+        .{ .start = imported_offset, .path = "visibility_lib.mc" },
+    };
+    var checker = sema.Checker.init(&reporter);
+    checker.file_boundaries = &boundaries;
+    checker.checkModule(module);
+    return hasDiagnosticCode(&reporter, "E_PRIVATE_IMPORT");
+}
+
+test "explicit visibility is independent of unrelated pub declarations" {
+    const importer = "fn use_hidden() -> u32 { return hidden(); }\n";
+    const private_library = "fn hidden() -> u32 { return 1; }\n";
+    const private_library_with_unrelated_pub = private_library ++ "pub fn unrelated() -> u32 { return 2; }\n";
+    const public_library = "pub fn hidden() -> u32 { return 1; }\n";
+
+    try std.testing.expect(!try checkVisibilityMode(importer ++ private_library, importer.len, .legacy_pub_opt_in));
+    try std.testing.expect(try checkVisibilityMode(importer ++ private_library_with_unrelated_pub, importer.len, .legacy_pub_opt_in));
+
+    try std.testing.expect(try checkVisibilityMode(importer ++ private_library, importer.len, .explicit_public));
+    try std.testing.expect(try checkVisibilityMode(importer ++ private_library_with_unrelated_pub, importer.len, .explicit_public));
+    try std.testing.expect(!try checkVisibilityMode(importer ++ public_library, importer.len, .explicit_public));
+}
+
 test "move CFG skeleton joins branch states through worklist" {
     var cfg = sema_model.MoveCfg.init(std.testing.allocator);
     defer cfg.deinit();

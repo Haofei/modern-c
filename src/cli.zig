@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const ast = @import("ast.zig");
 const backend = @import("backend.zig");
 const lower_c = @import("lower_c.zig");
 
@@ -12,6 +13,7 @@ pub const Options = struct {
     arch_flag: ?[]const u8 = null,
     platform_flag: ?[]const u8 = null,
     std_dir: ?[]const u8 = null,
+    visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in,
     output_path: ?[]const u8 = null,
     stub_asm: bool = false,
     remap_prefix: ?PathRemap = null,
@@ -29,6 +31,7 @@ pub const Options = struct {
         var saw_platform_flag = false;
         var saw_stub_asm_flag = false;
         var saw_std_dir_flag = false;
+        var saw_visibility_flag = false;
         var saw_output_flag = false;
         var saw_remap_prefix_flag = false;
         var saw_json_flag = false;
@@ -59,6 +62,16 @@ pub const Options = struct {
                 const value = flag["--std-dir=".len..];
                 if (value.len == 0) return error.InvalidArgs;
                 opts.std_dir = value;
+            } else if (std.mem.startsWith(u8, flag, "--visibility=")) {
+                saw_visibility_flag = true;
+                const value = flag["--visibility=".len..];
+                if (std.mem.eql(u8, value, "legacy")) {
+                    opts.visibility_mode = .legacy_pub_opt_in;
+                } else if (std.mem.eql(u8, value, "explicit")) {
+                    opts.visibility_mode = .explicit_public;
+                } else {
+                    return error.InvalidArgs;
+                }
             } else if (std.mem.eql(u8, flag, "-o")) {
                 saw_output_flag = true;
                 if (opts.output_path != null) return error.InvalidArgs;
@@ -107,6 +120,7 @@ pub const Options = struct {
             .saw_platform_flag = saw_platform_flag,
             .saw_stub_asm_flag = saw_stub_asm_flag,
             .saw_std_dir_flag = saw_std_dir_flag,
+            .saw_visibility_flag = saw_visibility_flag,
             .saw_output_flag = saw_output_flag,
             .saw_remap_prefix_flag = saw_remap_prefix_flag,
             .saw_json_flag = saw_json_flag,
@@ -191,6 +205,7 @@ pub const Options = struct {
         saw_platform_flag: bool,
         saw_stub_asm_flag: bool,
         saw_std_dir_flag: bool,
+        saw_visibility_flag: bool,
         saw_output_flag: bool,
         saw_remap_prefix_flag: bool,
         saw_json_flag: bool,
@@ -211,6 +226,7 @@ pub const Options = struct {
         if (seen.saw_arch_flag and !accepts_checks) return invalidOptionForCommand("--arch", command);
         if (seen.saw_platform_flag and !accepts_checks) return invalidOptionForCommand("--platform", command);
         if (seen.saw_std_dir_flag and !isSourceLoadingCommand(command)) return invalidOptionForCommand("--std-dir", command);
+        if (seen.saw_visibility_flag and !isSourceLoadingCommand(command)) return invalidOptionForCommand("--visibility", command);
         if (seen.saw_output_flag and !accepts_output_path) return invalidOptionForCommand("-o", command);
         if (seen.saw_remap_prefix_flag and !is_c_artifact_command) return invalidOptionForCommand("--remap-prefix", command);
         if (seen.saw_json_flag and !std.mem.eql(u8, command, "check")) return invalidOptionForCommand("--json", command);

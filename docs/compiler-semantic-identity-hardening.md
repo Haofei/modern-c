@@ -1,6 +1,6 @@
 # Compiler semantic identity hardening
 
-Status: **open**.
+Status: **review findings implemented; conditional architecture follow-ups remain**.
 Review baseline: **`5df7d566a9986e3736b6bc92458eb89b73ee04cb`**.
 Last updated: **2026-07-18**.
 
@@ -30,10 +30,11 @@ optimizations.
 | P1 | Qualified resolution depends on declaration/import order | **Fixed for the current flattened-module model** | Qualified references remain structured through parsing and a complete post-parse symbol pass resolves them after all imported declarations have been collected. |
 | P2 | Generic-call lookahead may approach quadratic time | **Bounded** | `lessStartsGenericCall` still uses speculative lexing, but each candidate is capped at 1024 tokens and fails with `E_GENERIC_LOOKAHEAD_LIMIT`; an adversarial repeated-`<` regression gates the bound. |
 | P2 | Import expansion has no graph-wide resource budget | **Fixed** | `LoadLimits` bounds files, cumulative input, depth, and expanded source; iterative DFS removes call-stack dependence and graph-shape regressions cover cycles, a wide DAG, and a deep chain. |
-| P2 design decision | One `pub` declaration changes the whole file's visibility mode | Confirmed intentional behavior | `ast.Decl.is_pub` documents the compatibility rule; this is a non-local API rule rather than an implementation accident. |
+| P2 design decision | One `pub` declaration changes the whole file's visibility mode | **Fixed in explicit mode; legacy behavior retained for compatibility** | `--visibility=explicit` selects a build-wide private-by-default policy consumed by sema and private-name mangling; unrelated `pub` declarations cannot change it. |
 
-`zig build test` passes on the review baseline with Zig 0.16.0. That is the
-existing baseline only; it does not cover the collision counterexamples below.
+The reviewed baseline passed its existing `zig build test` gate with Zig 0.16.0
+but did not cover these counterexamples. The current implementation adds the
+focused regressions listed below and keeps the full gate green.
 
 ## Required identity model
 
@@ -230,14 +231,26 @@ an unbounded-resource gap: speculative work is already capped per candidate.
 
 ## Separate visibility decision
 
-The current implicit-public/explicit-public compatibility switch is not part of
-the P0 identity repair. Track it as an explicit language-design decision:
+Status: **complete with an opt-in migration mode**.
 
-- [ ] Choose an edition, manifest option, or fixed language-wide visibility
+- [x] Choose an edition, manifest option, or fixed language-wide visibility
   default instead of inferring the mode from whether any declaration is `pub`.
-- [ ] Define migration diagnostics and source compatibility behavior.
-- [ ] Add API-surface tests proving an unrelated declaration cannot silently
+- [x] Define migration diagnostics and source compatibility behavior.
+- [x] Add API-surface tests proving an unrelated declaration cannot silently
   change visibility of existing declarations under the selected modern mode.
+
+The selected policy is a build-wide `--visibility=legacy|explicit` option.
+`legacy` remains the default for source compatibility and retains the old
+per-file `pub` opt-in rule. `explicit` makes every file private-by-default;
+only `pub` and `export` declarations are importable. Existing projects migrate
+by running checks in explicit mode and marking intended API declarations when
+`E_PRIVATE_IMPORT` identifies an unexported cross-file dependency.
+
+`ast.Module.visibility_mode` is preserved through async lowering and
+monomorphization. Sema and `mangle_private` consume the same mode. Unit tests
+cover the legacy/explicit behavior matrix, unrelated-`pub` stability, pass
+metadata preservation, and cross-file private-name mangling; the CLI transcript
+gate covers option parsing and end-to-end diagnostics.
 
 ## Execution order
 

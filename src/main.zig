@@ -32,6 +32,7 @@ const monomorphize = @import("monomorphize.zig");
 const monomorphize_tests = @import("monomorphize_tests.zig");
 const async_lower = @import("async_lower.zig");
 const mangle_private = @import("mangle_private.zig");
+const mangle_private_tests = @import("mangle_private_tests.zig");
 const parser = @import("parser.zig");
 const parser_tests = @import("parser_tests.zig");
 const sema = @import("sema.zig");
@@ -44,6 +45,7 @@ const symbols = @import("symbols.zig");
 // rule for `impl` blocks of `opaque struct`s (a peer `impl` in a different file may not name the
 // type's private fields). Null when no module was loaded (e.g. `fmt`, which bypasses the loader).
 var combined_boundaries: ?[]const loader.FileBoundary = null;
+var active_visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in;
 
 const usage =
     \\usage:
@@ -80,6 +82,9 @@ const usage =
     \\  MC_PATH=dir[:dir...]  after --std-dir misses, search entries left-to-right as
     \\                         import roots. For import "std/x.mc", an entry named std
     \\                         maps to <entry>/x.mc; otherwise to <entry>/std/x.mc.
+    \\  --visibility=legacy|explicit
+    \\                         legacy keeps per-file `pub` opt-in visibility; explicit
+    \\                         makes every file private-by-default except `pub`/`export`.
     \\
     \\source artifact reproducibility (emit-c and emit-map only):
     \\  --remap-prefix=FROM=TO replace a matching source path prefix in emitted C
@@ -213,6 +218,7 @@ fn runMain(init: std.process.Init) !void {
     const options = cli.Options.parse(command, &args) catch |err| switch (err) {
         error.InvalidArgs => return failUsage(),
     };
+    active_visibility_mode = options.visibility_mode;
     const is_emit_layout = cli.Options.isEmitLayout(command);
     const is_emit_c_struct = cli.Options.isEmitCStruct(command);
     const reads_stdin = std.mem.eql(u8, path, "-");
@@ -997,10 +1003,11 @@ fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *
 
 fn parseModuleOrReportMode(source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {
     var p = parser.Parser.init(source, diag);
-    const module = p.parseModule(allocator) catch |err| {
+    var module = p.parseModule(allocator) catch |err| {
         if (render_errors) diag.render();
         return err;
     };
+    module.visibility_mode = active_visibility_mode;
     // Lower `async fn` / `await` to stackless Future state machines BEFORE monomorphize/sema, so
     // the move/borrow checker and both backends only ever see ordinary MC. No-op for modules
     // without any `async fn` (passes the module through untouched).
@@ -1043,6 +1050,7 @@ test {
     _ = lexer;
     _ = lexer_tests;
     _ = loader;
+    _ = mangle_private_tests;
     _ = lower_c;
     _ = lower_c_tests;
     _ = lower_llvm;

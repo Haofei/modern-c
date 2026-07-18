@@ -351,7 +351,11 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
             }
             if (!present) try owners.append(arena, k.*);
         }
-        return .{ .decls = try out.toOwnedSlice(arena), .qualified_owners = try owners.toOwnedSlice(arena) };
+        return .{
+            .decls = try out.toOwnedSlice(arena),
+            .qualified_owners = try owners.toOwnedSlice(arena),
+            .visibility_mode = module.visibility_mode,
+        };
     }
 
     return module.withDecls(try out.toOwnedSlice(arena));

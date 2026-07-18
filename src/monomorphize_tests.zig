@@ -186,7 +186,8 @@ test "monomorphize preserves qualified-owner metadata and diagnostics" {
     defer arena.deinit();
 
     var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
+    var module = try p.parseModule(arena.allocator());
+    module.visibility_mode = .explicit_public;
     try testing.expect(!reporter.has_errors);
     try testing.expectEqual(@as(usize, 1), module.qualified_owners.len);
     try testing.expectEqualStrings("Reserved", module.qualified_owners[0]);
@@ -194,6 +195,7 @@ test "monomorphize preserves qualified-owner metadata and diagnostics" {
     const specialized = try monomorphize.transformReport(arena.allocator(), module, &reporter);
     try testing.expectEqual(@as(usize, 1), specialized.qualified_owners.len);
     try testing.expectEqualStrings("Reserved", specialized.qualified_owners[0]);
+    try testing.expectEqual(ast.VisibilityMode.explicit_public, specialized.visibility_mode);
 
     var checker = sema.Checker.init(&reporter);
     checker.checkModule(specialized);

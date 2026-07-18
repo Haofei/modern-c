@@ -8,15 +8,21 @@ pub const Ident = struct {
     span: Span,
 };
 
+pub const VisibilityMode = enum {
+    legacy_pub_opt_in,
+    explicit_public,
+};
+
 pub const Module = struct {
     decls: []Decl,
     /// Names that own a qualified namespace (`module X`, `impl X`). Resolution rewrites
     /// `X.member` to a mangled top-level symbol, so these names are reserved against local
     /// bindings — a local may not shadow them (sema enforces this).
     qualified_owners: [][]const u8 = &.{},
+    visibility_mode: VisibilityMode = .legacy_pub_opt_in,
 
     pub fn withDecls(self: Module, decls: []Decl) Module {
-        return .{ .decls = decls, .qualified_owners = self.qualified_owners };
+        return .{ .decls = decls, .qualified_owners = self.qualified_owners, .visibility_mode = self.visibility_mode };
     }
 
     /// Shallow free of the top-level `decls` slice only. The AST is built with an
@@ -77,11 +83,9 @@ pub const Decl = struct {
     span: Span,
     attrs: []Attr,
     kind: Kind,
-    // `pub` — opt-in module visibility (§30). A file with at least one `pub` declaration
-    // is "strict": only its `pub` (and `export`) items are visible to importing files;
-    // the rest are file-private (E_PRIVATE_IMPORT on cross-file use). A file with no `pub`
-    // declaration is unrestricted (every top-level item visible), so existing code is
-    // unaffected — a module opts into the boundary by marking its public surface.
+    // Explicit public visibility. In legacy mode, a file containing any `pub` opts into
+    // private-by-default behavior. In explicit mode, every file is private by default and
+    // this bit (or `export`) is the only way to expose a declaration to importers.
     is_pub: bool = false,
 
     pub const Kind = union(enum) {
