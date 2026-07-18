@@ -502,13 +502,10 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
     // Implicit fall-through exit at the end of the body (a `void` return): only a
     // real exit edge if control can actually reach it. If the body diverges on every
     // path (e.g. ends in `return`), each such exit edge was already leak-checked.
+    // Route the reachable normal exit through the same CFG/worklist transport as
+    // explicit `return` and `?` exits instead of scanning the caller state here.
     if (fell_through) {
-        var it = state.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.live and !entry.value_ptr.deferred) {
-                self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value is never consumed (must be moved, returned, or freed)");
-            }
-        }
+        moveExitEdgeCfg(self, &state, "linear `move` value is never consumed (must be moved, returned, or freed)");
     }
 }
 

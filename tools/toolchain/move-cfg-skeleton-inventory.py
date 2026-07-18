@@ -61,6 +61,12 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
             "worklist.enqueue(self, short.join);",
         ],
     },
+    "checkMoveLinearity": {
+        "required": [
+            "moveExitEdgeCfg(self, &state, \"linear `move` value is never consumed (must be moved, returned, or freed)\");",
+        ],
+        "forbidden": ["var it = state.iterator();"],
+    },
 }
 
 ANCHORS: dict[str, list[str]] = {
