@@ -54,7 +54,12 @@ pub fn sliceReturnTypeForCall(ctx: TypeQueryContext, call: anytype) ?ast.TypeExp
 pub fn sliceReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |call| sliceReturnTypeForCall(ctx, call),
-        .slice => |node| blk: {
+        // Real source slices have an exact MIR result type. Generated
+        // zero-span nodes retain the base-derived fallback because no
+        // source-keyed fact can identify them.
+        .slice => |node| if (expr.span.line != 0 and expr.span.column != 0)
+            ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span)
+        else blk: {
             const base_ty = ctx.source_type_for_expr(ctx.source_ctx, node.base.*, locals) orelse break :blk null;
             const inferred = sliceTypeForBase(ctx, base_ty, node.base.*.span) orelse break :blk null;
             break :blk requireExpressionResultType(ctx, expr, inferred);

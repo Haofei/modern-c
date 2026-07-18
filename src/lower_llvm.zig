@@ -8314,7 +8314,12 @@ const LlvmEmitter = struct {
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
                 self.requireExpressionResultType(expr, self.indexElementType(node.base.*)),
-            .slice => |node| self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null),
+            // Real source slices have an exact MIR result type. Slice
+            // emission still derives base storage mechanics separately.
+            .slice => |node| if (expr.span.line != 0 and expr.span.column != 0)
+                if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
+            else
+                self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null),
             .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else if (expr.span.line != 0 and expr.span.column != 0)
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
