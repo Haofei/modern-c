@@ -85,6 +85,13 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
         ],
         "forbidden": [],
     },
+    "runLoopBodyCfgWorklist": {
+        "required": [
+            "if (block == loop_cfg.continue_source) checkLoopExitLeaks(self, block_state, null);",
+            "} else if (block == loop_cfg.break_exit) {\n            checkLoopExitLeaks(self, block_state, null);",
+        ],
+        "forbidden": [],
+    },
 }
 
 ANCHORS: dict[str, list[str]] = {

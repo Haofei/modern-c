@@ -2858,8 +2858,12 @@ fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, work
         } else if (block == loop_cfg.break_source or block == loop_cfg.continue_source) {
             // The queued state belongs to this loop frame, so the active frame
             // is the same target that a labeled exit resolved during AST walk.
-            checkLoopExitLeaks(self, block_state, null);
+            // `continue` returns directly to the loop head, while `break`
+            // continues to the terminal CFG block below before diagnostics.
+            if (block == loop_cfg.continue_source) checkLoopExitLeaks(self, block_state, null);
             worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == loop_cfg.break_exit) {
+            checkLoopExitLeaks(self, block_state, null);
         }
     }
 }
