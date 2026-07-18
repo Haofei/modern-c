@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-18, based on the current compiler worktree**.
-Evidence register: **716 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **717 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -882,7 +882,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Usize parameter index facts are independent move state | `usize` parameters no longer occupy synthetic non-live `MoveSlot`s. They enter `MoveState.index_facts` as symbolic facts, and `constIndexValue` / `symbolicIndexValue` consume that independent state before the remaining legacy local-slot fallback. The facts survive matching CFG joins and are conservatively dropped across divergent loops, early exits, and scoped blocks through the shared `MoveState` transport. Local declaration and assignment producers remain M1.2b work. | `src/sema_move.zig` `checkMoveLinearity`, `constIndexValue`, `symbolicIndexValue`, `reportLoopOuterResourceChanges`, `recordLoopEarlyExitInvalidations`, and `preserveOuterScopedMoveState`; move-state transport unit test; existing parameter symbolic-index spec fixtures; full production gate; `git diff --check`. |
 
-| Local index facts use independent move state | `usize` local declarations register non-ownership `index_bindings` and write stable constant/symbolic values to `MoveState.index_facts`; assignments update or clear that fact without creating a pure `MoveSlot`. Scope cleanup retains only outer bindings and their current facts, while clone/join/loop/early-exit transport carries both binding identity and value facts. The remaining `MoveSlot.const_index` / `symbolic_index` checks have no source producer and are M1.2c retirement work. | `src/sema_model.zig` `MoveState.index_bindings`; `src/sema_move.zig` local declaration/assignment paths, `preserveOuterScopedMoveState`, `finalizeBranchLocals`, `cloneMoveState`, `replaceMoveState`, and `mergeMoveBranchesImpl`; move-state clone/join/scope unit coverage; full production gate; `git diff --check`. |
+| Local index facts use independent move state | `usize` local declarations register non-ownership `index_bindings` and write stable constant/symbolic values to `MoveState.index_facts`; assignments update or clear that fact without creating a pure `MoveSlot`. Scope cleanup retains only outer bindings and their current facts, while clone/join/loop/early-exit transport carries both binding identity and value facts. | `src/sema_model.zig` `MoveState.index_bindings`; `src/sema_move.zig` local declaration/assignment paths, `preserveOuterScopedMoveState`, `finalizeBranchLocals`, `cloneMoveState`, `replaceMoveState`, and `mergeMoveBranchesImpl`; move-state clone/join/scope unit coverage; full production gate; `git diff --check`. |
+| Move checker index facts no longer occupy slots | `MoveSlot` no longer stores constant or symbolic index metadata. Index reads use only `MoveState.index_facts`; loop and short-circuit joins, early-exit invalidation, assignment handling, and ownership scans no longer classify or inspect a pure index slot. `move-place-identity-inventory.py` rejects reintroduction of the old fields, readers, or helper authority. | `src/sema_model.zig` `MoveSlot` / `MoveIndexFact`; `src/sema_move.zig` `constIndexValue`, `symbolicIndexValue`, loop and join helpers; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 
@@ -928,8 +929,8 @@ they must not introduce a conflicting next action.
 
 | Workstream | Final compiler property | Completed boundary | Current phase | Next bounded action | Whole-workstream exit |
 |---|---|---|---|---|---|
-| Typed semantic facts / typed MIR | C and LLVM consume the same MIR-owned type, call-target, provenance, representation, ABI, and safety decisions. AST is used only for admitted emission mechanics. | T1 inventory/admission is complete. T2 has migrated the listed direct call, builtin, storage, integer/default, target-typed char, bounds/range, representation, varargs, trap, member/index, function-address, bounded data-address, and source-member result slices, including top-level const globals. | **Queued: T2.1 select the next family.** | After M1.2c and M3 close, select one different registered expression-result or call-target family and record its producer, C/LLVM consumers, and missing/stale behavior before code changes. | T3 gives every registered legacy family a MIR-owned, conservative, or diagnostic disposition; T4 then proves no lowering-affecting backend inference is unregistered. |
-| CFG/place move checker | Every supported move decision is made by structural `MovePlace` identity plus CFG transfer/join state; compatibility strings are indexes/debug data only. | M1 has migrated typed aliases, borrow escapes, alias consumption, early-exit invalidation, typed alias storage matching, source-identifier root lookup, expression resource checks, named-alias consumers, ordinary consume/borrow/defer/forget binding entries, assignment overwrite ownership lookup, and all current parameter/local index producer/read paths. M2 has bounded branch, loop, and deferred-loop routing. | **Current: M1.2c pure-index-slot retirement.** | Delete `MoveSlot.const_index` / `symbolic_index` and all legacy correctness branches; preserve the dynamic-index rejection boundary. | M1/M3 define or reject every projection; M2 routes every supported control-flow transfer through the common worklist; M4 removes compatibility-key correctness authority. |
+| Typed semantic facts / typed MIR | C and LLVM consume the same MIR-owned type, call-target, provenance, representation, ABI, and safety decisions. AST is used only for admitted emission mechanics. | T1 inventory/admission is complete. T2 has migrated the listed direct call, builtin, storage, integer/default, target-typed char, bounds/range, representation, varargs, trap, member/index, function-address, bounded data-address, and source-member result slices, including top-level const globals. | **Queued: T2.1 select the next family.** | After M3 closes, select one different registered expression-result or call-target family and record its producer, C/LLVM consumers, and missing/stale behavior before code changes. | T3 gives every registered legacy family a MIR-owned, conservative, or diagnostic disposition; T4 then proves no lowering-affecting backend inference is unregistered. |
+| CFG/place move checker | Every supported move decision is made by structural `MovePlace` identity plus CFG transfer/join state; compatibility strings are indexes/debug data only. | M1 has migrated typed aliases, borrow escapes, alias consumption, early-exit invalidation, typed alias storage matching, source-identifier root lookup, expression resource checks, named-alias consumers, ordinary consume/borrow/defer/forget binding entries, assignment overwrite ownership lookup, and all parameter/local index producer/read paths. M2 has bounded branch, loop, and deferred-loop routing. | **Current: M3 projection audit.** | Enumerate field, dereference, fixed/dynamic element, wildcard, and alias projections; assign each a typed overlap rule or retain its diagnostic. | M1/M3 define or reject every projection; M2 routes every supported control-flow transfer through the common worklist; M4 removes compatibility-key correctness authority. |
 | Pointer-provenance race lowering | No C or LLVM lowering path turns an MC race into optimizer UB; positive local/global provenance comes only from MIR facts. | P1 conservative scalar default, P2 direct MIR proofs, and P3 policy for the currently admitted pointer-flow matrix are complete. | **P4.1: trigger-driven fallback register closure.** | Do not add speculative pointer shapes. When T2 or M1 exposes one unclassified source-to-dereference flow, register it and choose exactly one policy: MIR proof, race-tolerant default, or diagnosed unsupported. | P4.2 verifies C/LLVM policy parity, including absent-proof paths, for every registered flow. |
 
 ### Locked Phase Sequences
@@ -942,11 +943,11 @@ counts never advance these sequences by themselves.
 
 | Workstream | Final goal | Ordered phase sequence | Current position | What may start next |
 |---|---|---|---|---|
-| Typed semantic facts / typed MIR | One MIR-owned semantic decision is consumed consistently by C and LLVM, with no unregistered lowering inference. | `T1 inventory` -> repeat `T2.1 select` -> `T2.2 migrate` -> `T2.3 admit` for each registered family -> `T3 classify remaining families` -> `T4 eliminate/register all inference`. | T1 complete; the next T2 family is queued. | Only after M1.2c and M3 record their exit evidence, name exactly one family and its producer, consumers, and absent/stale policy. |
-| CFG/place move checker | Structural places and CFG transfer/join, rather than compatibility keys or statement shape, decide every supported move result. | `M1.1 place identity` -> `M1.2a independent index representation` -> `M1.2b producer/state-flow migration` -> `M1.2c retire pure index slots` -> `M3 projection audit/admission` -> `M2.1/M2.2 route remaining CFG transfers` -> `M4 retire compatibility-key authority`. | M1.1, M1.2a, and M1.2b complete; M1.2c is current. | Delete the old index fields and all pure-index-slot correctness branches. M3 cannot start first. |
+| Typed semantic facts / typed MIR | One MIR-owned semantic decision is consumed consistently by C and LLVM, with no unregistered lowering inference. | `T1 inventory` -> repeat `T2.1 select` -> `T2.2 migrate` -> `T2.3 admit` for each registered family -> `T3 classify remaining families` -> `T4 eliminate/register all inference`. | T1 complete; the next T2 family is queued. | Only after M3 records its exit evidence, name exactly one family and its producer, consumers, and absent/stale policy. |
+| CFG/place move checker | Structural places and CFG transfer/join, rather than compatibility keys or statement shape, decide every supported move result. | `M1.1 place identity` -> `M1.2a independent index representation` -> `M1.2b producer/state-flow migration` -> `M1.2c retire pure index slots` -> `M3 projection audit/admission` -> `M2.1/M2.2 route remaining CFG transfers` -> `M4 retire compatibility-key authority`. | M1 is complete; M3 is current. | Produce the projection inventory and retain an explicit rule or diagnostic for every row. |
 | Pointer-provenance race lowering | Every pointer dereference has a declared MIR proof, conservative race-tolerant default, or diagnostic policy in both backends. | `P1 conservative default` -> `P2 direct MIR proofs` -> `P3 admitted-flow policy` -> repeat `P4.1 register/decide exposed boundary` -> `P4.2 audit complete register`. | P1-P3 complete for the named matrix; P4.1 is triggered only. | A T2 or move change must expose a named unclassified source-to-dereference flow. Do not create a speculative pointer slice. |
 
-**Global selection rule:** finish `M1.2c`, then `M3`; then execute one complete
+**Global selection rule:** finish `M3`; then execute one complete
 `T2.1 -> T2.2 -> T2.3` family. Pointer work may interrupt only for the triggered
 P4.1 condition above. The later M2 and M4 phases remain mandatory for move-checker
 closure; they are not erased by completing one M1 or M3 slice. This is a serial
@@ -1012,16 +1013,15 @@ language shapes.
 | Typed facts | T2.1 queued | Function-address, bounded data-address including const globals, target-typed char-literal, and source member-expression result typing are complete. The next patch selects one different registered family after the current M1.2/M3 phase closes. | Advance the selected family only after artifact, C/LLVM positive, and missing/stale-fact evidence all pass. |
 | Typed facts | T3 queued | The remaining registered fallbacks need a final MIR-owned, conservative, or diagnostic disposition. | Start only after the current T2 family is closed end to end. |
 | Typed facts | T4 pending | Remove or explicitly register all remaining lowering-affecting backend inference. | Start only after every register row has a T3 disposition. |
-| Move checker | M1.2a/M1.2b complete | `MoveState` carries independent facts; `usize` parameter and local declaration/assignment producer/read facts use it through CFG and scope boundaries. | No transition; M1.2c may now remove the old encoding. |
-| Move checker | M1.2c current | Delete pure-index-slot correctness authority and retain only independent facts. | Do not start M3 until the old `MoveSlot` index-fact encoding is no longer a fallback. |
-| Move checker | M3 queued | Audit field, deref, element, wildcard, and alias projection overlap after M1.2 is closed. | Do not admit dynamic/non-local array and arbitrary pointer-array moves without positive and negative coverage. |
+| Move checker | M1.2a/M1.2b/M1.2c complete | `MoveState` carries independent facts; no `MoveSlot` field or branch represents index metadata. | No transition; M3 may now start. |
+| Move checker | M3 current | Audit field, deref, element, wildcard, and alias projection overlap after M1 closes. | Do not admit dynamic/non-local array and arbitrary pointer-array moves without positive and negative coverage. |
 | Move checker | M2 partial, not selected | `if let`, switch, short-circuit, while-condition, ordinary loop backedges, labeled `break`/`continue`, and deferred loops have bounded worklist routing. `return` and `?` already use the shared exit-CFG constructor, but their state transfer is still a dedicated exit check rather than common worklist propagation. | Advance a routing family only after its specialized executor is no longer correctness authority. |
 | Move checker | M4 pending | Remove formatted-key correctness authority from supported paths. | Start only after M1 projection and M2 routing boundaries have been closed. |
 | Provenance | P1-P3 complete for the named matrix | Unknown scalar leaves are conservative; documented direct proofs and current boundary policies are fact-owned or fail closed. | A new pointer-flow class reopens only its affected P3 boundary. |
 | Provenance | P4.1 triggered | There is no active syntax-expansion task. A patch starts only after T2/M1 identifies an unclassified flow. | Register the flow and select MIR proof, conservative lowering, or a diagnostic before either backend supports it. |
 | Provenance | P4.2 queued | Audit that each registered boundary has the same C and LLVM policy. | Close only with positive and absent-proof evidence for every fallback-register row. |
 
-**Implementation order:** finish M1.2c and M3 in order; then
+**Implementation order:** finish M3; then
 select and complete one T2 family end-to-end. Pointer work interrupts the
 sequence only for a newly observed unclassified flow. These are ordered closure
 units, not three simultaneous tasks or percentage-based backlogs.
@@ -1034,25 +1034,22 @@ names its input boundary, expected semantic owner, affected C and LLVM
 consumers, and the tests that will prove missing/stale behavior. This prevents a
 large architectural item from looking active merely because it is unfinished.
 
-**Current selection state: M1.2c pure-index-slot retirement.** M1.2a created
-one `MoveState` transport and M1.2b migrated the `usize` parameter and local
-declaration/assignment producer/read paths. The next patch removes legacy
-`MoveSlot` index fields and every branch that treats a non-live slot as index
-metadata. Unclassified projections and unsupported routes remain fail-closed
-and are recorded for M3.
+**Current selection state: M3 projection audit.** M1.2c is complete: index
+metadata exists only in `MoveState.index_facts`, and `MoveSlot` has no index
+fields or pure-index compatibility branches. The next patch must enumerate every
+field, dereference, element, wildcard, and alias projection decision, then give
+each a structural overlap rule or retain an explicit diagnostic.
 
-This is deliberately an implementation gate, not hidden progress: M1.2c starts
-only after all source producer/read paths use independent state, and ends only
-when no correctness branch can inspect a pure index slot. No T2 family is active
-until M3 closes and this document records its exact source family and semantic
-decision.
+This is deliberately an implementation gate, not hidden progress: M3 closes
+only when every admitted projection has positive and conflicting-place evidence,
+and every unsupported projection has a stable diagnostic. No T2 family is active
+until that inventory and its admission boundary close.
 
 | Order | Eligible unit | Phase | Concrete first deliverable | Slice closes only when |
 |---|---|---|---|---|
-| 1 | Pure-index-slot retirement | M1.2c | Delete every legacy `MoveSlot.const_index` / `symbolic_index` correctness use. | Inventory and tests show ownership and index facts have separate stores. |
-| 2 | Projection audit | M3 | Enumerate every remaining field/deref/element/wildcard/alias overlap decision; give each an exact typed-place rule or retain its diagnostic. | Every admitted projection has positive and conflicting-place evidence; every unsupported one has a stable diagnostic. |
-| 3 | Next typed semantic-fact family | T2.1-T2.3 | Select one different registered expression-result or call-target family; either prove its syntax use is mechanics-only or add an MIR fact with both consumers and a missing/stale gate. | The family has artifact coverage, C/LLVM positive coverage, and missing/stale rejection or an explicitly tested conservative/diagnosed policy. |
-| 4 | Newly exposed pointer-flow boundary | P4.1, triggered only | Register the exact source-to-dereference flow exposed by the selected M1/T2 change and choose MIR proof, race-tolerant lowering, or a diagnostic. | C and LLVM both demonstrate the policy and the absent-proof path. |
+| 1 | Projection audit | M3 | Enumerate every remaining field/deref/element/wildcard/alias overlap decision; give each an exact typed-place rule or retain its diagnostic. | Every admitted projection has positive and conflicting-place evidence; every unsupported one has a stable diagnostic. |
+| 2 | Next typed semantic-fact family | T2.1-T2.3 | Select one different registered expression-result or call-target family; either prove its syntax use is mechanics-only or add an MIR fact with both consumers and a missing/stale gate. | The family has artifact coverage, C/LLVM positive coverage, and missing/stale rejection or an explicitly tested conservative/diagnosed policy. |
+| 3 | Newly exposed pointer-flow boundary | P4.1, triggered only | Register the exact source-to-dereference flow exposed by the selected M1/T2 change and choose MIR proof, race-tolerant lowering, or a diagnostic. | C and LLVM both demonstrate the policy and the absent-proof path. |
 
 The first four rows are ordered work. The fifth is an interruption rule, not
 planned feature expansion. Do not mark any umbrella workstream complete,
@@ -1107,7 +1104,7 @@ the current phase is the only implementation work that may be called active.
 | Workstream | Current phase | Concrete current objective | What advances it | What does *not* advance it |
 |---|---|---|---|---|
 | Typed semantic facts / typed MIR | **T2.1 - queued after M1.2/M3** | Choose one remaining registered lowering decision and state its MIR producer, C/LLVM consumers, and missing/stale policy before changing lowering. | A named family selection, followed by T2.2/T2.3 producer, consumer, and admission gates. | Adding an unrelated fact or fixture without retiring a named inference decision. |
-| CFG/place move checker | **M1.2c - current** | Delete the pure-index-slot authority now that parameter and local index producers/readers use the independent store. | No `MoveSlot` field or correctness branch represents index metadata; ownership decisions do not inspect it. | Carrying a typed place while a string key or pure index slot still determines correctness. |
+| CFG/place move checker | **M3 - current** | Inventory every field, dereference, element, wildcard, and alias projection; give each a typed overlap rule or stable diagnostic. | Every admitted projection has positive and conflicting-place coverage; unsupported forms remain fail-closed. | Adding a new projection spelling without a named rule or diagnostic. |
 | Pointer-provenance race lowering | **P4 - triggered only** | Keep the current conservative boundary matrix closed; act only when T2 or move work exposes a new pointer-flow boundary. | A named new boundary with a chosen MIR proof, conservative lowering, or diagnostic in both backends. | Expanding positive-provenance recognition merely because another syntax spelling exists. |
 
 The current serial order is deliberate: M1.2 removes a known mixed-state
@@ -1406,9 +1403,9 @@ through statement-local expression identities.
 
 | Phase | Status | Goal and deliverable | Evidence and exit condition |
 |---|---|---|---|
-| M1: typed place foundations | **In progress: M1.2c** | **Goal:** ownership identity is structural rather than formatted text, and index metadata cannot masquerade as ownership state. **Deliverable:** `MovePlace` roots/projections for every supported local, field, dereference, array-element, wildcard, and alias path, plus an independent index-fact state representation. M1.1 migrated named-alias consumers and assignment overwrite ownership lookup. M1.2a completed `MoveState` transport plus parameter producer/read migration; M1.2b migrated local declarations and assignments. M1.2c deletes the old pure-index-slot authority. | Reads, moves, assignments, defer borrows, and alias invalidation compare typed places. Compatibility strings may index state but cannot decide correctness; migrated index queries use only independent index facts. |
+| M1: typed place foundations | **Complete for the index-fact boundary** | **Goal:** ownership identity is structural rather than formatted text, and index metadata cannot masquerade as ownership state. **Deliverable:** `MovePlace` roots/projections for every supported local, field, dereference, array-element, wildcard, and alias path, plus an independent index-fact state representation. M1.1 migrated named-alias consumers and assignment overwrite ownership lookup. M1.2a completed `MoveState` transport plus parameter producer/read migration; M1.2b migrated local declarations and assignments; M1.2c removed the old pure-index-slot authority. | Reads, moves, assignments, defer borrows, and alias invalidation compare typed places. Compatibility strings may index state but cannot decide correctness; index queries use only independent index facts. |
 | M2: CFG/worklist routing | **Partially implemented; not the next slice** | **Goal:** ownership state follows control flow, not statement shape. **Deliverable:** one transfer/join model for branches, short-circuit paths, loops, `defer`, and exits. `if let`, switch, short-circuit, while-condition, ordinary loop backedges, labeled `break`/`continue`, and deferred loops have bounded routes; remaining non-deferred exit paths do not. | Unit and diagnostic tests cover joins, backedges, early exits, and invalidation; specialized executors retire only after equivalent worklist coverage exists. |
-| M3: admission boundary | **Queued after M1.2c** | **Goal:** unsupported move paths remain explicit rather than accidentally accepted. **Deliverable:** a typed-place/CFG rule for each admitted array/pointer case, or a retained diagnostic for it. | Dynamic/non-local move-array and arbitrary pointer-to-array paths stay fail-closed until the rule has positive and negative coverage. |
+| M3: admission boundary | **Current** | **Goal:** unsupported move paths remain explicit rather than accidentally accepted. **Deliverable:** a typed-place/CFG rule for each admitted array/pointer case, or a retained diagnostic for it. | Dynamic/non-local move-array and arbitrary pointer-to-array paths stay fail-closed until the rule has positive and negative coverage. |
 | M4: checker closure | **Pending after M1-M3** | **Goal:** the supported `move` subset is controlled entirely by typed places and CFG dataflow. **Deliverable:** remove string-key correctness authority and obsolete specialized control-flow logic. | The workstream closes when every supported move path uses the common engine and every intentionally unsupported path has a stable diagnostic. |
 
 Closure matrix:
@@ -1427,7 +1424,7 @@ enough if the string remains the deciding identity.
 | M1.1: place identity | M1 | Every supported read, consume, assignment, defer borrow, and alias invalidation compares `MovePlace`, not a formatted compatibility key. | Positive ownership cases and conflicting-place diagnostics use the same typed overlap rule. |
 | M1.2a: index-fact representation | M1 | Move const/symbolic index metadata out of ownership `MoveSlot` semantics and into an independent fact representation keyed by the source binding. | An ownership slot and an index fact can coexist without either being selected through the other's key or fields. |
 | M1.2b: index-fact state flow | M1 | Migrate declaration/assignment producers, index readers, state clone/join, loop invalidation, and cleanup to independent index facts. | Focused tests prove constant and symbolic facts survive ordinary and CFG flow, and stale facts are invalidated. |
-| M1.2c: pure-index-slot retirement | M1 | Remove `MoveSlot.const_index` / `symbolic_index` correctness use and the pure-index-slot classification. | Inventory confirms index reads never use move slots and ownership checks never classify index facts. |
+| M1.2c: pure-index-slot retirement (complete) | M1 | `MoveSlot` has no index metadata or pure-index classification; all index reads use `MoveState.index_facts`. | Inventory confirms index reads never use move slots and ownership checks never classify index facts. |
 | M3.1: projection inventory | M3 | List every supported field, deref, fixed/dynamic element, wildcard, and alias projection decision and identify its typed overlap rule or explicit diagnostic. | No supported projection relies on a formatted compatibility key; every unsupported projection has a named boundary. |
 | M3.2: projection admission | M3 | Add or retain exact overlap behavior for each inventory row. | Positive and conflicting-place tests cover admitted rows; dynamic/non-local move-array and arbitrary pointer-to-array cases remain fail-closed until admitted. |
 | M2.1: branch and short-circuit joins | M2, partial | `if let`, multi-arm `switch`, and short-circuit RHS paths have bounded common-worklist routing. Finish only after every remaining named branch/short-circuit transfer has no direct merge or manual join enqueue. | Join diagnostics and accepted paths no longer depend on statement-specific state merging. |
@@ -1473,12 +1470,10 @@ deferred-borrow, read-side alias, and unsupported-channel rows above are
 regression coverage; they do not close the remaining typed-place map migration
 or CFG rewrite.
 
-**Next move action:** implement M1.2c. Delete `MoveSlot.const_index` /
-`symbolic_index`, pure-index-slot classification, and their legacy clone/join,
-loop, and ownership exclusions. Retain the independent fact behavior and the
-dynamic-index fail-closed boundary. M3 then follows with a projection inventory
-and admission/rejection rules. Do not broaden unsupported projections merely to
-add fixtures.
+**Next move action:** implement M3. Build the projection inventory for fields,
+dereferences, fixed/dynamic elements, wildcards, and aliases. Each row must name
+the structural overlap rule and positive/conflicting coverage, or retain a stable
+diagnostic. Do not broaden unsupported projections merely to add fixtures.
 
 ### Production-Ready Exit Rule
 

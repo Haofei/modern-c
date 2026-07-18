@@ -668,19 +668,9 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *MoveState, i
         self.oom = true;
         return;
     };
-    var index_fact_removals: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer index_fact_removals.deinit(self.reporter.allocator);
-
     var it = entry_state.iterator();
     while (it.next()) |entry| {
-        const after = matchingMoveStateSlot(iteration_state, entry.key_ptr.*, entry.value_ptr.*) orelse {
-            if (isPureIndexFactSlot(entry.value_ptr.*)) {
-                index_fact_removals.append(self.reporter.allocator, entry.key_ptr.*) catch {
-                    self.oom = true;
-                };
-            }
-            continue;
-        };
+        const after = matchingMoveStateSlot(iteration_state, entry.key_ptr.*, entry.value_ptr.*) orelse continue;
         const before = entry.value_ptr.*;
         if (before.live != after.live or before.deferred != after.deferred or !sameDeferredBorrowFact(before, after)) {
             self.errorCode(before.span, "E_MOVE_LOOP_RESOURCE", "cannot consume or reserve an outer linear `move` value inside a loop; the loop may run zero or multiple times");
@@ -690,13 +680,8 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *MoveState, i
             entry.value_ptr.deferred_borrow_place = null;
         } else if (!sameAliasFact(before, after)) {
             entry.value_ptr.* = divergentAliasSlot(entry.key_ptr.*, before);
-        } else if (isPureIndexFactSlot(before) and !sameIndexFact(before, after)) {
-            index_fact_removals.append(self.reporter.allocator, entry.key_ptr.*) catch {
-                self.oom = true;
-            };
         }
     }
-    for (index_fact_removals.items) |k| _ = entry_state.remove(k);
 
     var iter_it = iteration_state.iterator();
     while (iter_it.next()) |entry| {
@@ -932,43 +917,14 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                             _ = state.remove(id.text);
                         }
                     } else if (state.getPtr(id.text)) |slot| {
-                        const next_const_index = if (self.move_ctx) |mctx|
-                            constIndexValue(self, a.value, state, mctx.*)
-                        else
-                            null;
-                        if (next_const_index) |index| {
-                            slot.const_index = index;
-                            slot.symbolic_index = null;
+                        if (slot.type_only) {
                             slot.live = false;
-                            slot.ty = null;
-                            slot.type_only = false;
-                            slot.alias_of = null;
-                            slot.alias_place = null;
-                            slot.escaped_borrow = null;
-                            slot.full_deref_alias = false;
-                        } else if (if (self.move_ctx) |mctx| symbolicIndexValue(self, a.value, state, mctx.*) else null) |symbol| {
-                            slot.const_index = null;
-                            slot.symbolic_index = symbol;
-                            slot.live = false;
-                            slot.ty = null;
-                            slot.type_only = false;
-                            slot.alias_of = null;
-                            slot.alias_place = null;
-                            slot.escaped_borrow = null;
-                            slot.full_deref_alias = false;
-                        } else if ((slot.const_index != null or slot.symbolic_index != null) and slot.ty == null and slot.alias_of == null) {
-                            _ = state.remove(id.text);
-                        } else if (slot.type_only) {
-                            slot.live = false;
-                            slot.symbolic_index = null;
                             slot.alias_of = null;
                             slot.alias_place = null;
                             slot.escaped_borrow = null;
                             slot.full_deref_alias = false;
                         } else {
                             slot.live = true;
-                            slot.const_index = null;
-                            slot.symbolic_index = null;
                         }
                     }
                 },
@@ -1080,7 +1036,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
         .label = if (loop.loop_label) |label| label.text else null,
         .entry_names = std.StringHashMap(void).init(self.reporter.allocator),
         .entry_state = cloneMoveState(self, state),
-        .invalidated_const_indexes = std.StringHashMap(void).init(self.reporter.allocator),
+        .invalidated_index_facts = std.StringHashMap(void).init(self.reporter.allocator),
         .invalidated_alias_places = .empty,
         .invalidated_untyped_aliases = false,
         .pending_exits = .empty,
@@ -1114,7 +1070,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
     }
     if (self.move_loop_stack.pop()) |popped| {
         var loop_frame = popped;
-        applyLoopEarlyExitConstIndexInvalidations(state, &loop_frame);
+        applyLoopEarlyExitIndexFactInvalidations(state, &loop_frame);
         applyLoopEarlyExitAliasInvalidations(state, &loop_frame);
         loop_frame.deinit();
     }
@@ -1380,13 +1336,13 @@ fn recordLoopEarlyExitInvalidations(self: *Checker, frame: *LoopMoveFrame, state
     var index_it = frame.entry_state.index_facts.facts.iterator();
     while (index_it.next()) |entry| {
         const after = state.index_facts.get(entry.key_ptr.*) orelse {
-            frame.invalidated_const_indexes.put(entry.key_ptr.*, {}) catch {
+            frame.invalidated_index_facts.put(entry.key_ptr.*, {}) catch {
                 self.oom = true;
             };
             continue;
         };
         if (!entry.value_ptr.eql(after)) {
-            frame.invalidated_const_indexes.put(entry.key_ptr.*, {}) catch {
+            frame.invalidated_index_facts.put(entry.key_ptr.*, {}) catch {
                 self.oom = true;
             };
         }
@@ -1395,21 +1351,7 @@ fn recordLoopEarlyExitInvalidations(self: *Checker, frame: *LoopMoveFrame, state
     var it = frame.entry_state.iterator();
     while (it.next()) |entry| {
         const before = entry.value_ptr.*;
-        if (!isPureIndexFactSlot(before) and before.alias_of == null) continue;
-        if (isPureIndexFactSlot(before)) {
-            const after = state.get(entry.key_ptr.*) orelse {
-                frame.invalidated_const_indexes.put(entry.key_ptr.*, {}) catch {
-                    self.oom = true;
-                };
-                continue;
-            };
-            if (!isPureIndexFactSlot(after) or !sameIndexFact(before, after)) {
-                frame.invalidated_const_indexes.put(entry.key_ptr.*, {}) catch {
-                    self.oom = true;
-                };
-            }
-            continue;
-        }
+        if (before.alias_of == null) continue;
 
         if (before.place) |storage_place| {
             const after = aliasSlotForStoragePlace(storage_place, state);
@@ -1434,10 +1376,9 @@ fn recordInvalidatedAliasPlace(self: *Checker, frame: *LoopMoveFrame, place: Mov
     };
 }
 
-fn applyLoopEarlyExitConstIndexInvalidations(state: *MoveState, frame: *const LoopMoveFrame) void {
-    var it = frame.invalidated_const_indexes.keyIterator();
+fn applyLoopEarlyExitIndexFactInvalidations(state: *MoveState, frame: *const LoopMoveFrame) void {
+    var it = frame.invalidated_index_facts.keyIterator();
     while (it.next()) |name| {
-        _ = state.remove(name.*);
         _ = state.index_facts.remove(name.*);
     }
 }
@@ -1546,8 +1487,6 @@ fn mergeMoveBranchesImpl(
             slot.deferred_borrow_place = null;
         } else if (!sameAliasFact(slot, other)) {
             slot = divergentAliasSlot(entry.key_ptr.*, slot);
-        } else if (isPureIndexFactSlot(slot) and !sameIndexFact(slot, other)) {
-            continue;
         }
         merged.put(entry.key_ptr.*, slot) catch {
             self.oom = true;
@@ -1827,7 +1766,7 @@ test "loop early-exit alias invalidation uses typed storage places" {
         .allocator = std.testing.allocator,
         .entry_names = std.StringHashMap(void).init(std.testing.allocator),
         .entry_state = entry_state,
-        .invalidated_const_indexes = std.StringHashMap(void).init(std.testing.allocator),
+        .invalidated_index_facts = std.StringHashMap(void).init(std.testing.allocator),
         .invalidated_alias_places = .empty,
         .invalidated_untyped_aliases = false,
         .pending_exits = .empty,
@@ -1870,7 +1809,7 @@ test "loop early-exit alias invalidation uses typed storage places" {
         .allocator = std.testing.allocator,
         .entry_names = std.StringHashMap(void).init(std.testing.allocator),
         .entry_state = legacy_entry,
-        .invalidated_const_indexes = std.StringHashMap(void).init(std.testing.allocator),
+        .invalidated_index_facts = std.StringHashMap(void).init(std.testing.allocator),
         .invalidated_alias_places = .empty,
         .invalidated_untyped_aliases = false,
         .pending_exits = .empty,
@@ -2253,7 +2192,7 @@ fn isOwnershipMoveSubplace(slot: MoveSlot, key: []const u8) bool {
 
 fn isOwnershipMovePlace(slot: MoveSlot, key: []const u8) bool {
     _ = key;
-    return slot.alias_of == null and !slot.type_only and !isPureIndexFactSlot(slot) and slot.place != null;
+    return slot.alias_of == null and !slot.type_only and slot.place != null;
 }
 
 // `exprIsMoveTyped` is a correctness decision for `drop` and dereference
@@ -2326,7 +2265,7 @@ fn rootMoveSlotForPlace(place: MovePlace, state: *const MoveState) ?MoveSlot {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
-        if (slot.alias_of != null or isPureIndexFactSlot(slot)) continue;
+        if (slot.alias_of != null) continue;
         const tracked = slot.place orelse continue;
         if (tracked.isSubplace()) continue;
         if (std.mem.eql(u8, tracked.root, place.root)) return slot;
@@ -2338,7 +2277,7 @@ fn rootMoveSlotPtrForPlace(place: MovePlace, state: *MoveState) ?*MoveSlot {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr;
-        if (slot.alias_of != null or isPureIndexFactSlot(slot.*)) continue;
+        if (slot.alias_of != null) continue;
         const tracked = slot.place orelse continue;
         if (tracked.isSubplace()) continue;
         if (std.mem.eql(u8, tracked.root, place.root)) return slot;
@@ -2807,7 +2746,6 @@ fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics
             checkStaleAlias(self, name, slot.*, span, state);
             return;
         }
-        if (isPureIndexFactSlot(slot.*)) return;
         if (!slot.live) {
             self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");
         } else if (slot.escaped_borrow != null) {
@@ -2995,19 +2933,9 @@ fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *MoveState, 
 }
 
 fn mergeShortCircuitMoveStates(self: *Checker, state: *MoveState, rhs_state: *const MoveState, span: diagnostics.Span, deferred: bool) void {
-    var index_fact_removals: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer index_fact_removals.deinit(self.reporter.allocator);
-
     var it = state.iterator();
     while (it.next()) |entry| {
-        const after = matchingMoveStateSlot(rhs_state, entry.key_ptr.*, entry.value_ptr.*) orelse {
-            if (isPureIndexFactSlot(entry.value_ptr.*)) {
-                index_fact_removals.append(self.reporter.allocator, entry.key_ptr.*) catch {
-                    self.oom = true;
-                };
-            }
-            continue;
-        };
+        const after = matchingMoveStateSlot(rhs_state, entry.key_ptr.*, entry.value_ptr.*) orelse continue;
         const before = entry.value_ptr.*;
         if (before.live != after.live or before.deferred != after.deferred or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow) or !sameDeferredBorrowFact(before, after)) {
             self.errorCode(span, "E_MOVE_BRANCH_MISMATCH", if (deferred) "cannot consume, reserve, or defer-borrow an outer linear `move` value only on one side of a short-circuit expression" else "cannot consume, reserve, or escape an outer linear `move` value only on one side of a short-circuit expression");
@@ -3018,13 +2946,8 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *MoveState, rhs_state: *co
             entry.value_ptr.deferred_borrow_place = null;
         } else if (!sameAliasFact(before, after)) {
             entry.value_ptr.* = divergentAliasSlot(entry.key_ptr.*, before);
-        } else if (isPureIndexFactSlot(before) and !sameIndexFact(before, after)) {
-            index_fact_removals.append(self.reporter.allocator, entry.key_ptr.*) catch {
-                self.oom = true;
-            };
         }
     }
-    for (index_fact_removals.items) |k| _ = state.remove(k);
 
     var rhs_it = rhs_state.iterator();
     while (rhs_it.next()) |entry| {
@@ -3113,8 +3036,6 @@ fn moveSlotStateEqual(left: MoveSlot, right: MoveSlot) bool {
         sameDeferredBorrowFact(left, right) and
         std.meta.eql(left.ty, right.ty) and
         left.type_only == right.type_only and
-        left.const_index == right.const_index and
-        sameMaybeKey(left.symbolic_index, right.symbolic_index) and
         sameAliasFact(left, right) and
         sameMaybeSpan(left.escaped_borrow, right.escaped_borrow) and
         left.cleanup_local == right.cleanup_local;
@@ -3133,27 +3054,6 @@ fn placeHasWildcardProjection(place: MovePlace) bool {
         if (projection == .wildcard_index) return true;
     }
     return false;
-}
-
-fn isPureIndexFactSlot(slot: MoveSlot) bool {
-    return !slot.live and
-        !slot.deferred and
-        !slot.deferred_borrow and
-        slot.ty == null and
-        (slot.const_index != null or slot.symbolic_index != null) and
-        slot.alias_of == null and
-        slot.escaped_borrow == null and
-        !slot.cleanup_local and
-        !slot.full_deref_alias;
-}
-
-fn sameIndexFact(left: MoveSlot, right: MoveSlot) bool {
-    if (!isPureIndexFactSlot(left) or !isPureIndexFactSlot(right)) return false;
-    if (left.const_index != null or right.const_index != null) {
-        return left.const_index != null and right.const_index != null and left.const_index.? == right.const_index.?;
-    }
-    if (left.symbolic_index == null or right.symbolic_index == null) return false;
-    return std.mem.eql(u8, left.symbolic_index.?, right.symbolic_index.?);
 }
 
 // ----- place sensitivity: track a `move` field moved out of its aggregate -----
@@ -3277,7 +3177,7 @@ fn constIndexValue(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx:
                 .constant => |index| index,
                 .symbolic => null,
             };
-            return if (state.get(id.text)) |slot| slot.const_index else null;
+            return null;
         },
         .binary => |node| {
             switch (node.op) {
@@ -3355,7 +3255,7 @@ fn symbolicIndexValue(self: *Checker, expr: ast.Expr, state: *const MoveState, c
                 .constant => null,
                 .symbolic => |symbol| symbol,
             };
-            return if (state.get(id.text)) |slot| slot.symbolic_index else null;
+            return null;
         },
         .binary => |node| symbolicIndexBinaryValue(self, node, state, ctx),
         else => null,
@@ -4049,7 +3949,7 @@ fn stateContainsMovePlace(place: MovePlace, state: *const MoveState) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
-        if (slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) continue;
+        if (slot.alias_of != null or slot.type_only) continue;
         if (slot.place) |tracked| if (tracked.eql(place)) return true;
     }
     return false;
@@ -4059,7 +3959,7 @@ fn stateHasConflictingMovePlace(place: MovePlace, state: *const MoveState) bool 
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
-        if (slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) continue;
+        if (slot.alias_of != null or slot.type_only) continue;
         if (slot.place) |tracked| {
             if (!tracked.eql(place) and tracked.conflicts(place)) return true;
         }
@@ -4075,7 +3975,7 @@ fn stateHasMovedPlace(place: MovePlace, state: *const MoveState) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
-        if (slot.live or slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) continue;
+        if (slot.live or slot.alias_of != null or slot.type_only) continue;
         if (slot.place) |tracked| if (tracked.eql(place)) return true;
     }
     return false;
@@ -4085,7 +3985,7 @@ fn stateHasMovedConflictingPlace(place: MovePlace, state: *const MoveState) bool
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
-        if (slot.live or slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) continue;
+        if (slot.live or slot.alias_of != null or slot.type_only) continue;
         if (slot.place) |tracked| {
             if (!tracked.eql(place) and tracked.conflicts(place)) return true;
         }
@@ -4101,7 +4001,7 @@ fn stateHasMovedChildPlace(place: MovePlace, state: *const MoveState) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
-        if (slot.live or slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) continue;
+        if (slot.live or slot.alias_of != null or slot.type_only) continue;
         if (slot.place) |tracked| if (place.isPrefixOf(tracked)) return true;
     }
     return false;
@@ -4126,7 +4026,7 @@ pub fn hasMovedSubplace(base: MovePlace, state: *const MoveState) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
-        if (slot.alias_of != null or slot.type_only or isPureIndexFactSlot(slot)) continue;
+        if (slot.alias_of != null or slot.type_only) continue;
         if (slot.place) |tracked| if (base.isPrefixOf(tracked)) return true;
     }
     return false;
@@ -5406,7 +5306,7 @@ fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *MoveSt
 fn recordTypeOnlyPlaceRoot(self: *Checker, name: ast.Ident, maybe_ty: ?ast.TypeExpr, state: *MoveState, cleanup_local: bool) void {
     const ty = maybe_ty orelse return;
     if (state.get(name.text)) |slot| {
-        if (slot.alias_of != null or isPureIndexFactSlot(slot) or (slot.live and !slot.type_only)) return;
+        if (slot.alias_of != null or (slot.live and !slot.type_only)) return;
     }
     state.put(name.text, .{ .live = false, .span = name.span, .place = .{ .root = name.text }, .ty = ty, .type_only = true, .cleanup_local = cleanup_local }) catch {
         self.oom = true;

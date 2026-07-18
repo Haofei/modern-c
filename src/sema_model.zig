@@ -223,15 +223,6 @@ pub const MoveSlot = struct {
     // fixed-array/member paths. It is not a linear value and must not participate in move,
     // borrow, or leak diagnostics.
     type_only: bool = false,
-    // Non-live scalar locals proven to hold a constant array index. The move checker uses
-    // these only to turn `arr[i]` into the same stable place as `arr[0]` when `i` was
-    // initialized from a constant index literal.
-    const_index: ?usize = null,
-    // Non-live scalar locals/params that name a stable but runtime-known array index.
-    // This is narrower than arbitrary symbolic arithmetic: `arr[i]` and a copied
-    // immutable `let j = i` can share a precise dynamic place key, while concrete
-    // and unrelated dynamic indexes still conflict conservatively.
-    symbolic_index: ?[]const u8 = null,
     // T1.2: if this binding is a pointer/reference DERIVED from a tracked `move` binding
     // (taken via `&x` and bound to `let p = &x`), this is the referent's binding name. The
     // alias is itself a borrow - not a linear resource (`live`/leak rules do not apply to it)
@@ -488,7 +479,7 @@ pub const LoopMoveFrame = struct {
     label: ?[]const u8 = null,
     entry_names: std.StringHashMap(void),
     entry_state: MoveState,
-    invalidated_const_indexes: std.StringHashMap(void),
+    invalidated_index_facts: std.StringHashMap(void),
     invalidated_alias_places: std.ArrayListUnmanaged(MovePlace) = .empty,
     // An alias without a typed storage place cannot be matched across an
     // early-exit edge. Keep it conservative rather than using its map key as
@@ -499,7 +490,7 @@ pub const LoopMoveFrame = struct {
     pub fn deinit(self: *LoopMoveFrame) void {
         self.entry_names.deinit();
         self.entry_state.deinit();
-        self.invalidated_const_indexes.deinit();
+        self.invalidated_index_facts.deinit();
         self.invalidated_alias_places.deinit(self.allocator);
         for (self.pending_exits.items) |*exit_state| exit_state.state.deinit();
         self.pending_exits.deinit(self.allocator);

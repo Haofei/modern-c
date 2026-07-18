@@ -38,6 +38,10 @@ ANCHORS: dict[str, list[str]] = {
         "fn markDeferredBorrowAliasReferent",
         "fn markDeferredBorrowReferent(self: *Checker, borrowed_place: MovePlace",
     ],
+    "src/sema_model.zig": [
+        "pub const MoveSlot = struct",
+        "pub const MoveIndexFact = union(enum)",
+    ],
     "docs/compiler-production-readiness.md": [
         "Move checker alias assignment updates use typed storage places",
         "Move checker alias key formatter has no external callers",
@@ -45,6 +49,7 @@ ANCHORS: dict[str, list[str]] = {
         "Move checker laundered referents are typed",
         "Move checker deferred aliases use typed referents",
         "move-place-identity-inventory.py",
+        "Move checker index facts no longer occupy slots",
     ],
 }
 
@@ -64,10 +69,21 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "state.getPtr(target_info.key)": 0,
         "state.remove(target_info.key)": 0,
         "outer.contains(aliasReferentRoot(referent))": 0,
+        # M1.2c keeps array-index metadata exclusively in MoveState.index_facts.
+        "slot.const_index": 0,
+        "slot.symbolic_index": 0,
+        "isPureIndexFactSlot": 0,
+        "sameIndexFact": 0,
     },
 }
 
 BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
+    "src/sema_model.zig": {
+        ("pub const MoveSlot = struct", "pub const MoveIndexFact = union(enum)"): [
+            "const_index",
+            "symbolic_index",
+        ],
+    },
     "src/sema_move.zig": {
         ("fn aliasWildcardPlaceInfo", "fn aliasPlaceBaseType"): [
             "const base = aliasPlaceKey(self, ix.base.*, state) orelse return null;",
