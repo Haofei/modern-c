@@ -36,6 +36,35 @@ fn expectForwardQualifiedBindings(source: []const u8) !void {
     try std.testing.expectEqualStrings("Widget__make", impl_call orelse return error.TestExpectedEqual);
 }
 
+fn expectImportBudgetResult(root_path: []const u8, limits: loader.LoadLimits, expected_code: ?[]const u8) !void {
+    const root_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, root_path, std.testing.allocator, .limited(1 << 20));
+    defer std.testing.allocator.free(root_source);
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, root_path, root_source);
+    defer reporter.deinit();
+
+    const combined = try loader.loadCombinedSourceWithBoundariesOptionsReport(
+        std.testing.allocator,
+        std.testing.io,
+        root_path,
+        root_source,
+        null,
+        .{ .limits = limits },
+        &reporter,
+    );
+    defer std.testing.allocator.free(combined);
+
+    if (expected_code) |code| {
+        try std.testing.expect(reporter.has_errors);
+        var found = false;
+        for (reporter.diagnostics.items) |diagnostic| {
+            if (std.mem.indexOf(u8, diagnostic.message, code) != null) found = true;
+        }
+        try std.testing.expect(found);
+    } else {
+        try std.testing.expect(!reporter.has_errors);
+    }
+}
+
 test "parser covers MC declaration and statement examples" {
     const source =
         \\extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
@@ -177,6 +206,67 @@ test "imported qualified references resolve after loader flattening" {
     try std.testing.expect(std.mem.indexOf(u8, combined, "module Util") != null);
     try std.testing.expect(std.mem.indexOf(u8, combined, "fn call_module").? < std.mem.indexOf(u8, combined, "module Util").?);
     try expectForwardQualifiedBindings(combined);
+}
+
+test "loader enforces exact graph-wide import budgets" {
+    const root_path = "tests/spec_support/qualified_forward_root.mc";
+    const imported_path = "tests/spec_support/qualified_forward_module.mc";
+    const root_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, root_path, std.testing.allocator, .limited(1 << 20));
+    defer std.testing.allocator.free(root_source);
+    const imported_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, imported_path, std.testing.allocator, .limited(1 << 20));
+    defer std.testing.allocator.free(imported_source);
+    const total_input = root_source.len + imported_source.len;
+    const total_expanded = total_input + 2;
+
+    try expectImportBudgetResult(root_path, .{ .max_files = 2 }, null);
+    try expectImportBudgetResult(root_path, .{ .max_files = 1 }, "E_IMPORT_FILE_LIMIT");
+    try expectImportBudgetResult(root_path, .{ .max_import_depth = 1 }, null);
+    try expectImportBudgetResult(root_path, .{ .max_import_depth = 0 }, "E_IMPORT_DEPTH_LIMIT");
+    try expectImportBudgetResult(root_path, .{ .max_total_input_bytes = total_input }, null);
+    try expectImportBudgetResult(root_path, .{ .max_total_input_bytes = total_input - 1 }, "E_IMPORT_TOTAL_BYTES_LIMIT");
+    try expectImportBudgetResult(root_path, .{ .max_expanded_source_bytes = total_expanded }, null);
+    try expectImportBudgetResult(root_path, .{ .max_expanded_source_bytes = total_expanded - 1 }, "E_IMPORT_EXPANDED_SOURCE_LIMIT");
+
+    try std.testing.expectError(error.ImportBudgetExceeded, loader.loadCombinedSourceWithBoundariesOptionsReport(
+        std.testing.allocator,
+        std.testing.io,
+        root_path,
+        root_source,
+        null,
+        .{ .limits = .{ .max_files = 1 } },
+        null,
+    ));
+}
+
+test "loader handles cycles wide DAGs and deep chains iteratively" {
+    const cycle_path = "tests/spec_support/import_cycle_a.mc";
+    const cycle_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, cycle_path, std.testing.allocator, .limited(1 << 20));
+    defer std.testing.allocator.free(cycle_source);
+    const cycle_combined = try loader.loadCombinedSource(std.testing.allocator, std.testing.io, cycle_path, cycle_source);
+    defer std.testing.allocator.free(cycle_combined);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, cycle_combined, "CYCLE_A"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, cycle_combined, "CYCLE_B"));
+
+    const wide_path = "tests/spec_support/import_wide_root.mc";
+    const wide_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, wide_path, std.testing.allocator, .limited(1 << 20));
+    defer std.testing.allocator.free(wide_source);
+    var boundaries: std.ArrayList(loader.FileBoundary) = .empty;
+    defer {
+        for (boundaries.items) |boundary| std.testing.allocator.free(boundary.path);
+        boundaries.deinit(std.testing.allocator);
+    }
+    const wide_combined = try loader.loadCombinedSourceWithBoundaries(std.testing.allocator, std.testing.io, wide_path, wide_source, &boundaries, null, null);
+    defer std.testing.allocator.free(wide_combined);
+    try std.testing.expectEqual(@as(usize, 4), boundaries.items.len);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, wide_combined, "WIDE_COMMON"));
+    const left_offset = std.mem.indexOf(u8, wide_combined, "WIDE_LEFT").?;
+    const common_offset = std.mem.indexOf(u8, wide_combined, "WIDE_COMMON").?;
+    const right_offset = std.mem.indexOf(u8, wide_combined, "WIDE_RIGHT").?;
+    try std.testing.expect(left_offset < common_offset and common_offset < right_offset);
+
+    const deep_path = "tests/spec_support/import_deep_0.mc";
+    try expectImportBudgetResult(deep_path, .{ .max_import_depth = 3 }, null);
+    try expectImportBudgetResult(deep_path, .{ .max_import_depth = 2 }, "E_IMPORT_DEPTH_LIMIT");
 }
 
 test "parser distinguishes relational operators from generic calls" {

@@ -29,7 +29,7 @@ optimizations.
 | P1 | `monomorphize` drops `Module.qualified_owners` | **Fixed** | `Module.withDecls` preserves metadata; monomorphize and the non-extending async path use it, while the extending async path is explicit. |
 | P1 | Qualified resolution depends on declaration/import order | **Fixed for the current flattened-module model** | Qualified references remain structured through parsing and a complete post-parse symbol pass resolves them after all imported declarations have been collected. |
 | P2 | Generic-call lookahead may approach quadratic time | **Bounded** | `lessStartsGenericCall` still uses speculative lexing, but each candidate is capped at 1024 tokens and fails with `E_GENERIC_LOOKAHEAD_LIMIT`; an adversarial repeated-`<` regression gates the bound. |
-| P2 | Import expansion has no graph-wide resource budget | Inspected, high confidence | A visited set and per-file size limit exist; total files, bytes, depth, and expanded tokens are not bounded. |
+| P2 | Import expansion has no graph-wide resource budget | **Fixed** | `LoadLimits` bounds files, cumulative input, depth, and expanded source; iterative DFS removes call-stack dependence and graph-shape regressions cover cycles, a wide DAG, and a deep chain. |
 | P2 design decision | One `pub` declaration changes the whole file's visibility mode | Confirmed intentional behavior | `ast.Decl.is_pub` documents the compatibility rule; this is a non-local API rule rather than an implementation accident. |
 
 `zig build test` passes on the review baseline with Zig 0.16.0. That is the
@@ -197,6 +197,8 @@ post-parse pass rather than reintroduce source-order lookup.
 
 ### S5 - Bound parser and import resources
 
+Status: **complete for correctness and resource bounds**.
+
 Goal: adversarial source and dependency graphs have explicit, tested limits.
 
 - [x] Confirm the repeated ambiguous-`<` worst case from control flow: each
@@ -206,16 +208,25 @@ Goal: adversarial source and dependency graphs have explicit, tested limits.
 - [x] Add an adversarial repeated-`<` regression that exceeds the bound.
 - [ ] Tokenize once and memoize generic-call lookahead if parser throughput
   measurements show the bounded repeated lexing is still material in practice.
-- [ ] Add configurable import limits for file count, cumulative input bytes,
-  import depth, and expanded token/source size.
-- [ ] Replace recursive import traversal with an explicit stack before claiming
+- [x] Add configurable import limits for file count, cumulative input bytes,
+  import depth, and expanded source size.
+- [x] Replace recursive import traversal with an explicit stack before claiming
   deep-graph robustness.
-- [ ] Emit stable diagnostics identifying which resource budget was exceeded.
-- [ ] Add exact-limit, one-over-limit, cycle, wide-DAG, and deep-chain tests.
+- [x] Emit stable diagnostics identifying which resource budget was exceeded.
+- [x] Add exact-limit, one-over-limit, cycle, wide-DAG, and deep-chain tests.
 
 Exit condition: parser complexity is measured and bounded, and import expansion
 cannot consume unbounded memory or call-stack depth from a finite configured
 build budget.
+
+Implementation evidence: `max_generic_lookahead_tokens` and
+`E_GENERIC_LOOKAHEAD_LIMIT`; `LoadLimits`, `reserveFile`, and iterative
+`expandAll`; exact/one-over tests for every budget; cycle, shared-dependency DAG,
+and deep-chain fixtures under `tests/spec_support`; focused parser tests and
+`zig build test`.
+
+The unchecked token-buffer item is a conditional throughput optimization, not
+an unbounded-resource gap: speculative work is already capped per candidate.
 
 ## Separate visibility decision
 

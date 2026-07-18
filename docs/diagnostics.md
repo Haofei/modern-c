@@ -107,6 +107,10 @@ Total codes: **230**.
 | `E_ILLEGAL_SLICE_CAST` | cannot cast a non-slice value to a slice: a slice is a fat pointer (ptr+len) and the length has no source. Build one with a slicing expression \`a[i..j]\`, a byte view (\`mem.as_bytes\`), or a string literal | `src/sema.zig:2970` |
 | `E_IMPORT_NOT_FOUND` | cannot find import "{s}" (resolved candidate: {s}) | `src/loader.zig:263` |
 | `E_IMPORT_OUTSIDE_SANDBOX` | import "{s}" resolves to {s}, outside the import sandbox rooted at {s} | `src/loader.zig:250` |
+| `E_IMPORT_FILE_LIMIT` | import graph exceeds the configured file limit | `src/loader.zig` |
+| `E_IMPORT_TOTAL_BYTES_LIMIT` | import graph exceeds the configured cumulative input limit | `src/loader.zig` |
+| `E_IMPORT_DEPTH_LIMIT` | import depth exceeds the configured limit | `src/loader.zig` |
+| `E_IMPORT_EXPANDED_SOURCE_LIMIT` | expanded source exceeds the configured limit | `src/loader.zig` |
 | `E_INDEX_BASE_NOT_ARRAY_OR_SLICE` | indexing is defined only for arrays and slices<br>slicing is defined only for arrays and slices | `src/mir_verify_util.zig:85`<br>`src/sema.zig:3248`<br>`src/sema.zig:3270` |
 | `E_INDEX_NOT_USIZE` | array and slice indices must be checked usize<br>slice range bounds must be checked usize | `src/mir_verify_util.zig:86`<br>`src/sema.zig:3257`<br>`src/sema.zig:3274`<br>`src/sema.zig:3278`<br>`src/sema.zig:5718` |
 | `E_INTEGER_LITERAL_OUT_OF_RANGE` | integer literal is not representable in the annotated type | `src/mir_verify_util.zig:83`<br>`src/sema.zig:4922`<br>`src/sema.zig:4930`<br>`src/sema.zig:4943`<br>`src/sema.zig:4946`<br>`src/sema.zig:4953`<br>_+5 more_ |

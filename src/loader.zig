@@ -31,13 +31,43 @@ const token = @import("token.zig");
 // needed: the combined source the rest of the pipeline sees contains only
 // ordinary declarations.
 
-pub const LoadError = error{ImportNotFound} || std.mem.Allocator.Error;
+pub const LoadError = error{ ImportNotFound, ImportBudgetExceeded } || std.mem.Allocator.Error;
+
+pub const LoadLimits = struct {
+    max_files: usize = 10_000,
+    max_total_input_bytes: usize = 512 * 1024 * 1024,
+    max_import_depth: usize = 256,
+    max_expanded_source_bytes: usize = 512 * 1024 * 1024,
+};
 
 pub const LoadOptions = struct {
     arch: ?[]const u8 = null,
     platform: ?[]const u8 = null,
     std_dir: ?[]const u8 = null,
     mc_path: []const []const u8 = &.{},
+    limits: LoadLimits = .{},
+};
+
+const LoadBudget = struct {
+    limits: LoadLimits,
+    file_count: usize = 0,
+    total_input_bytes: usize = 0,
+    expanded_source_bytes: usize = 0,
+    exhausted: bool = false,
+};
+
+const ImportOrigin = struct {
+    file_start: usize,
+    span: diagnostics.Span,
+    requested: []const u8,
+};
+
+const PendingFile = struct {
+    path: []const u8,
+    display_path: []const u8,
+    source: []const u8,
+    source_owned: bool,
+    depth: usize,
 };
 
 const InstalledRootKind = enum {
@@ -146,12 +176,6 @@ pub fn loadCombinedSourceWithBoundariesOptionsReport(
     options: LoadOptions,
     reporter: ?*diagnostics.Reporter,
 ) LoadError![]u8 {
-    var visited = std.StringHashMap(void).init(allocator);
-    defer {
-        var it = visited.keyIterator();
-        while (it.next()) |k| allocator.free(k.*);
-        visited.deinit();
-    }
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     const canon_root = (try realPathFileDupe(allocator, io, root_path)) orelse try canonicalize(allocator, root_path, ".");
@@ -179,13 +203,13 @@ pub fn loadCombinedSourceWithBoundariesOptionsReport(
             .path = try canonicalizeConfiguredRoot(allocator, io, trimmed, cwd_root),
         });
     }
-    try expand(
+    var budget = LoadBudget{ .limits = options.limits };
+    try expandAll(
         allocator,
         io,
         canon_root,
         root_path,
         root_source,
-        &visited,
         &out,
         boundaries,
         options.arch orelse default_arch,
@@ -193,17 +217,17 @@ pub fn loadCombinedSourceWithBoundariesOptionsReport(
         sandbox_root,
         installed_roots.items,
         reporter,
+        &budget,
     );
     return out.toOwnedSlice(allocator);
 }
 
-fn expand(
+fn expandAll(
     allocator: std.mem.Allocator,
     io: std.Io,
     path: []const u8,
     display_path: []const u8,
     source: []const u8,
-    visited: *std.StringHashMap(void),
     out: *std.ArrayList(u8),
     boundaries: ?*std.ArrayList(FileBoundary),
     arch: []const u8,
@@ -211,63 +235,158 @@ fn expand(
     sandbox_root: []const u8,
     installed_roots: []const InstalledRoot,
     reporter: ?*diagnostics.Reporter,
+    budget: *LoadBudget,
 ) LoadError!void {
-    if (visited.contains(path)) return;
-    try visited.put(try allocator.dupe(u8, path), {});
-    const file_source = stripUtf8Bom(source);
+    var graph_arena = std.heap.ArenaAllocator.init(allocator);
+    defer graph_arena.deinit();
+    const graph_allocator = graph_arena.allocator();
 
-    // Record where this file's text starts in the combined source (before appending it).
-    const file_start = out.items.len;
-    if (boundaries) |b| try b.append(allocator, .{ .start = file_start, .path = try allocator.dupe(u8, display_path) });
+    var discovered = std.StringHashMap(void).init(allocator);
+    defer discovered.deinit();
+    var pending: std.ArrayList(PendingFile) = .empty;
+    defer {
+        for (pending.items) |item| if (item.source_owned) allocator.free(item.source);
+        pending.deinit(allocator);
+    }
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
+    try reserveFile(reporter, budget, null, 0, stripUtf8Bom(source).len);
+    if (budget.exhausted) return;
+    try discovered.put(path, {});
+    try pending.append(allocator, .{ .path = path, .display_path = display_path, .source = source, .source_owned = false, .depth = 0 });
 
-    const imports = try scanImports(a, io, path, file_source, arch, platform, sandbox_root, installed_roots);
+    while (pending.pop()) |item| {
+        defer if (item.source_owned) allocator.free(item.source);
+        if (budget.exhausted) break;
 
-    // Append this file's source with its import statements blanked out.
-    const blanked = try allocator.dupe(u8, file_source);
-    defer allocator.free(blanked);
-    for (imports) |imp| {
-        var i = imp.start;
-        while (i < imp.end and i < blanked.len) : (i += 1) {
-            if (blanked[i] != '\n' and blanked[i] != '\r') blanked[i] = ' ';
+        const file_source = stripUtf8Bom(item.source);
+        const file_start = out.items.len;
+        if (boundaries) |b| try b.append(allocator, .{ .start = file_start, .path = try allocator.dupe(u8, item.display_path) });
+        const imports = try scanImports(graph_allocator, io, item.path, file_source, arch, platform, sandbox_root, installed_roots);
+
+        const blanked = try allocator.dupe(u8, file_source);
+        defer allocator.free(blanked);
+        for (imports) |imp| {
+            var i = imp.start;
+            while (i < imp.end and i < blanked.len) : (i += 1) {
+                if (blanked[i] != '\n' and blanked[i] != '\r') blanked[i] = ' ';
+            }
+        }
+        try out.appendSlice(allocator, blanked);
+        try out.append(allocator, '\n');
+
+        var children: std.ArrayList(PendingFile) = .empty;
+        defer {
+            for (children.items) |child| if (child.source_owned) allocator.free(child.source);
+            children.deinit(allocator);
+        }
+        for (imports) |imp| {
+            const origin = ImportOrigin{ .file_start = file_start, .span = imp.span, .requested = imp.requested };
+            if (imp.outside_sandbox) {
+                if (reporter) |r| {
+                    r.err(.{
+                        .offset = file_start + imp.span.offset,
+                        .len = imp.span.len,
+                        .line = imp.span.line,
+                        .column = imp.span.column,
+                    }, "E_IMPORT_OUTSIDE_SANDBOX: import \"{s}\" resolves to {s}, outside the import sandbox rooted at {s}", .{ imp.requested, imp.path, sandbox_root });
+                    continue;
+                }
+                return error.ImportNotFound;
+            }
+            if (discovered.contains(imp.path)) continue;
+            if (item.depth >= budget.limits.max_import_depth) {
+                try rejectBudget(reporter, budget, origin, "E_IMPORT_DEPTH_LIMIT", "import depth exceeds configured limit {d}", .{budget.limits.max_import_depth});
+                break;
+            }
+            if (budget.file_count >= budget.limits.max_files) {
+                try rejectBudget(reporter, budget, origin, "E_IMPORT_FILE_LIMIT", "import graph exceeds configured file limit {d}", .{budget.limits.max_files});
+                break;
+            }
+            const imp_source = std.Io.Dir.cwd().readFileAlloc(io, imp.path, allocator, .limited(64 * 1024 * 1024)) catch {
+                if (reporter) |r| {
+                    r.err(.{
+                        .offset = file_start + imp.span.offset,
+                        .len = imp.span.len,
+                        .line = imp.span.line,
+                        .column = imp.span.column,
+                    }, "E_IMPORT_NOT_FOUND: cannot find import \"{s}\" (resolved candidate: {s})", .{ imp.requested, imp.path });
+                    continue;
+                }
+                return error.ImportNotFound;
+            };
+            errdefer allocator.free(imp_source);
+            try reserveFile(reporter, budget, origin, item.depth + 1, stripUtf8Bom(imp_source).len);
+            if (budget.exhausted) {
+                allocator.free(imp_source);
+                break;
+            }
+            try discovered.put(imp.path, {});
+            try children.append(allocator, .{
+                .path = imp.path,
+                .display_path = imp.display_path,
+                .source = imp_source,
+                .source_owned = true,
+                .depth = item.depth + 1,
+            });
+        }
+        if (budget.exhausted) break;
+        var child_index = children.items.len;
+        while (child_index > 0) {
+            child_index -= 1;
+            try pending.append(allocator, children.items[child_index]);
+            children.items[child_index].source_owned = false;
         }
     }
-    try out.appendSlice(allocator, blanked);
-    try out.append(allocator, '\n');
+}
 
-    // Then expand each imported file once.
-    for (imports) |imp| {
-        if (imp.outside_sandbox) {
-            if (reporter) |r| {
-                r.err(.{
-                    .offset = file_start + imp.span.offset,
-                    .len = imp.span.len,
-                    .line = imp.span.line,
-                    .column = imp.span.column,
-                }, "E_IMPORT_OUTSIDE_SANDBOX: import \"{s}\" resolves to {s}, outside the import sandbox rooted at {s}", .{ imp.requested, imp.path, sandbox_root });
-                continue;
-            }
-            return error.ImportNotFound;
-        }
-        if (visited.contains(imp.path)) continue;
-        const imp_source = std.Io.Dir.cwd().readFileAlloc(io, imp.path, allocator, .limited(64 * 1024 * 1024)) catch {
-            if (reporter) |r| {
-                r.err(.{
-                    .offset = file_start + imp.span.offset,
-                    .len = imp.span.len,
-                    .line = imp.span.line,
-                    .column = imp.span.column,
-                }, "E_IMPORT_NOT_FOUND: cannot find import \"{s}\" (resolved candidate: {s})", .{ imp.requested, imp.path });
-                continue;
-            }
-            return error.ImportNotFound;
-        };
-        defer allocator.free(imp_source);
-        try expand(allocator, io, imp.path, imp.display_path, imp_source, visited, out, boundaries, arch, platform, sandbox_root, installed_roots, reporter);
+fn reserveFile(reporter: ?*diagnostics.Reporter, budget: *LoadBudget, origin: ?ImportOrigin, depth: usize, input_bytes: usize) LoadError!void {
+    if (depth > budget.limits.max_import_depth) {
+        return rejectBudget(reporter, budget, origin, "E_IMPORT_DEPTH_LIMIT", "import depth exceeds configured limit {d}", .{budget.limits.max_import_depth});
     }
+    if (budget.file_count >= budget.limits.max_files) {
+        return rejectBudget(reporter, budget, origin, "E_IMPORT_FILE_LIMIT", "import graph exceeds configured file limit {d}", .{budget.limits.max_files});
+    }
+    const next_total = std.math.add(usize, budget.total_input_bytes, input_bytes) catch {
+        return rejectBudget(reporter, budget, origin, "E_IMPORT_TOTAL_BYTES_LIMIT", "import graph exceeds configured cumulative input limit {d} bytes", .{budget.limits.max_total_input_bytes});
+    };
+    if (next_total > budget.limits.max_total_input_bytes) {
+        return rejectBudget(reporter, budget, origin, "E_IMPORT_TOTAL_BYTES_LIMIT", "import graph exceeds configured cumulative input limit {d} bytes", .{budget.limits.max_total_input_bytes});
+    }
+    const contribution = std.math.add(usize, input_bytes, 1) catch {
+        return rejectBudget(reporter, budget, origin, "E_IMPORT_EXPANDED_SOURCE_LIMIT", "expanded source exceeds configured limit {d} bytes", .{budget.limits.max_expanded_source_bytes});
+    };
+    const next_expanded = std.math.add(usize, budget.expanded_source_bytes, contribution) catch {
+        return rejectBudget(reporter, budget, origin, "E_IMPORT_EXPANDED_SOURCE_LIMIT", "expanded source exceeds configured limit {d} bytes", .{budget.limits.max_expanded_source_bytes});
+    };
+    if (next_expanded > budget.limits.max_expanded_source_bytes) {
+        return rejectBudget(reporter, budget, origin, "E_IMPORT_EXPANDED_SOURCE_LIMIT", "expanded source exceeds configured limit {d} bytes", .{budget.limits.max_expanded_source_bytes});
+    }
+    budget.file_count += 1;
+    budget.total_input_bytes = next_total;
+    budget.expanded_source_bytes = next_expanded;
+}
+
+fn rejectBudget(
+    reporter: ?*diagnostics.Reporter,
+    budget: *LoadBudget,
+    origin: ?ImportOrigin,
+    code: []const u8,
+    comptime message: []const u8,
+    args: anytype,
+) LoadError!void {
+    if (reporter) |r| {
+        const where = if (origin) |value| diagnostics.Span{
+            .offset = value.file_start + value.span.offset,
+            .len = value.span.len,
+            .line = value.span.line,
+            .column = value.span.column,
+        } else diagnostics.Span{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+        const requested = if (origin) |value| value.requested else "<root>";
+        r.err(where, "{s}: import \"{s}\": " ++ message, .{ code, requested } ++ args);
+        budget.exhausted = true;
+        return;
+    }
+    return error.ImportBudgetExceeded;
 }
 
 // Find top-level `import "path";` statements by lexing. Returns the resolved
