@@ -2656,7 +2656,7 @@ fn immediateFullDerefMoveReferent(self: *Checker, expr: ast.Expr, state: *const 
 }
 
 fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-    if (state.getPtr(name)) |slot| {
+    if (bindingMoveSlotPtrForIdent(name, state)) |slot| {
         if (slot.type_only) return;
         // T1.2: a pointer alias used by value (e.g. passed to a callee that reads
         // through it). The alias is not itself a linear resource — it is not

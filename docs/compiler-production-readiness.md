@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-18, based on the current compiler worktree**.
-Evidence register: **711 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **712 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -873,6 +873,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Move forget consumes structural roots | `forget_unchecked(owner)` no longer treats the source identifier as a `MoveState` compatibility key. The move checker resolves the ownership root with `MovePlace`, marks that root consumed, and clears its child places. A regression stores the root under `compat:owner` while the source still says `owner`, proving the key cannot control forget semantics. This is one M1.1 consumer migration, not closure of move-place identity or CFG analysis. | `src/sema_move.zig` `moveForget` / `rootMoveSlotPtrForPlace`; unit test `move forget consumes typed roots rather than compatibility keys`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 | Move borrows and defers find structural binding roots | The identifier entries for `moveBorrow` and `moveDefer` now locate their own `MoveSlot` through `MovePlace.root`, so source spelling cannot choose a different compatibility-map entry after CFG rewriting. Alias slots remain distinct from their carried referent, preserving stale-alias and deferred-borrow behavior. This is one M1.1 consumer migration, not completion of alias analysis or CFG routing. | `src/sema_move.zig` `bindingMoveSlotPtrForIdent` / `moveBorrow` / `moveDefer`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
+
+| Move consume finds structural binding roots | The primary by-value consume path now locates its `MoveSlot` with the same `MovePlace.root` rule used by borrow, defer, and forget. A compatibility key can no longer decide whether a source binding is live, deferred, escaped, or already consumed. Alias slots remain handled as aliases after structural binding lookup. This is one M1.1 consumer migration, not checker closure. | `src/sema_move.zig` `bindingMoveSlotPtrForIdent` / `consumeTrackedMoveBinding`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 ### Bounded Workstream Status
 
