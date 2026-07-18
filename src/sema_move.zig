@@ -207,6 +207,7 @@ const LoopBodyMoveCfg = struct {
     break_source: sema_model.MoveCfgBlockId,
     break_exit: sema_model.MoveCfgBlockId,
     continue_source: sema_model.MoveCfgBlockId,
+    continue_exit: sema_model.MoveCfgBlockId,
 
     fn deinit(self: *LoopBodyMoveCfg) void {
         self.cfg.deinit();
@@ -250,6 +251,11 @@ fn loopBodyMoveCfg(self: *Checker) ?LoopBodyMoveCfg {
         cfg.deinit();
         return null;
     };
+    const continue_exit = cfg.addBlock(.exit) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
     cfg.addEdge(entry, loop_head, .normal) catch {
         self.oom = true;
         cfg.deinit();
@@ -275,7 +281,12 @@ fn loopBodyMoveCfg(self: *Checker) ?LoopBodyMoveCfg {
         cfg.deinit();
         return null;
     };
-    cfg.addEdge(continue_source, loop_head, .early_exit) catch {
+    cfg.addEdge(continue_source, continue_exit, .early_exit) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(continue_exit, loop_head, .early_exit) catch {
         self.oom = true;
         cfg.deinit();
         return null;
@@ -289,6 +300,7 @@ fn loopBodyMoveCfg(self: *Checker) ?LoopBodyMoveCfg {
         .break_source = break_source,
         .break_exit = break_exit,
         .continue_source = continue_source,
+        .continue_exit = continue_exit,
     };
 }
 
@@ -2858,12 +2870,10 @@ fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, work
         } else if (block == loop_cfg.break_source or block == loop_cfg.continue_source) {
             // The queued state belongs to this loop frame, so the active frame
             // is the same target that a labeled exit resolved during AST walk.
-            // `continue` returns directly to the loop head, while `break`
-            // continues to the terminal CFG block below before diagnostics.
-            if (block == loop_cfg.continue_source) checkLoopExitLeaks(self, block_state, null);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == loop_cfg.break_exit) {
+        } else if (block == loop_cfg.break_exit or block == loop_cfg.continue_exit) {
             checkLoopExitLeaks(self, block_state, null);
+            if (block == loop_cfg.continue_exit) worklist.propagateSuccessors(self, block, block_state);
         }
     }
 }

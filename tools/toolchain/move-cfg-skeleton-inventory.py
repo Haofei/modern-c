@@ -31,8 +31,8 @@ CFG_CONSTRUCTION_HELPERS: dict[str, dict[str, int]] = {
         "cfg.addEdge(": 2,
     },
     "loopBodyMoveCfg": {
-        "cfg.addBlock(": 7,
-        "cfg.addEdge(": 6,
+        "cfg.addBlock(": 8,
+        "cfg.addEdge(": 7,
     },
 }
 
@@ -87,8 +87,8 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
     },
     "runLoopBodyCfgWorklist": {
         "required": [
-            "if (block == loop_cfg.continue_source) checkLoopExitLeaks(self, block_state, null);",
-            "} else if (block == loop_cfg.break_exit) {\n            checkLoopExitLeaks(self, block_state, null);",
+            "} else if (block == loop_cfg.break_exit or block == loop_cfg.continue_exit) {\n            checkLoopExitLeaks(self, block_state, null);",
+            "if (block == loop_cfg.continue_exit) worklist.propagateSuccessors(self, block, block_state);",
         ],
         "forbidden": [],
     },
