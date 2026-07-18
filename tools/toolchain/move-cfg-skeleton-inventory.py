@@ -23,8 +23,8 @@ CFG_CONSTRUCTION_HELPERS: dict[str, dict[str, int]] = {
         "cfg.addEdge(": 3,
     },
     "twoArmMoveCfg": {
-        "cfg.addBlock(": 4,
-        "cfg.addEdge(": 4,
+        "cfg.addBlock(": 6,
+        "cfg.addEdge(": 6,
     },
     "multiArmMoveCfg": {
         "cfg.addBlock(": 3,
@@ -76,6 +76,24 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
     "moveDeferBlock": {
         "required": [
             "} else if (block_id == linear.exit) {\n            reportMoveLocalsLeavingScope",
+        ],
+        "forbidden": [],
+    },
+    "moveIfLetCfg": {
+        "required": [
+            "} else if (block == branch.then_exit) {",
+            "finalizeBranchLocals(self, block_state, state, true);",
+            "} else if (block == branch.else_exit) {",
+        ],
+        "forbidden": [
+            "finalizeBranchLocals(self, block_state, state, !then_div);",
+            "finalizeBranchLocals(self, block_state, state, !else_div);",
+        ],
+    },
+    "moveDeferIfLetCfg": {
+        "required": [
+            "} else if (block == branch.then_exit or block == branch.else_exit) {",
+            "worklist.propagateSuccessors(self, block, block_state);",
         ],
         "forbidden": [],
     },

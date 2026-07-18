@@ -377,6 +377,8 @@ const TwoArmMoveCfg = struct {
     entry: sema_model.MoveCfgBlockId,
     then_block: sema_model.MoveCfgBlockId,
     else_block: sema_model.MoveCfgBlockId,
+    then_exit: sema_model.MoveCfgBlockId,
+    else_exit: sema_model.MoveCfgBlockId,
     join: sema_model.MoveCfgBlockId,
 
     fn deinit(self: *TwoArmMoveCfg) void {
@@ -401,6 +403,16 @@ fn twoArmMoveCfg(self: *Checker) ?TwoArmMoveCfg {
         cfg.deinit();
         return null;
     };
+    const then_exit = cfg.addBlock(.exit) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    const else_exit = cfg.addBlock(.exit) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
     const join = cfg.addBlock(.branch_join) catch {
         self.oom = true;
         cfg.deinit();
@@ -416,17 +428,35 @@ fn twoArmMoveCfg(self: *Checker) ?TwoArmMoveCfg {
         cfg.deinit();
         return null;
     };
-    cfg.addEdge(then_block, join, .normal) catch {
+    cfg.addEdge(then_block, then_exit, .normal) catch {
         self.oom = true;
         cfg.deinit();
         return null;
     };
-    cfg.addEdge(else_block, join, .normal) catch {
+    cfg.addEdge(else_block, else_exit, .normal) catch {
         self.oom = true;
         cfg.deinit();
         return null;
     };
-    return .{ .cfg = cfg, .entry = entry, .then_block = then_block, .else_block = else_block, .join = join };
+    cfg.addEdge(then_exit, join, .normal) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    cfg.addEdge(else_exit, join, .normal) catch {
+        self.oom = true;
+        cfg.deinit();
+        return null;
+    };
+    return .{
+        .cfg = cfg,
+        .entry = entry,
+        .then_block = then_block,
+        .else_block = else_block,
+        .then_exit = then_exit,
+        .else_exit = else_exit,
+        .join = join,
+    };
 }
 
 const MultiArmMoveCfg = struct {
@@ -1100,6 +1130,7 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *co
     defer worklist.deinit();
     var then_div = false;
     var else_div = false;
+    var then_bound_name: ?[]const u8 = null;
     var joined = false;
 
     while (worklist.pop()) |block| {
@@ -1109,24 +1140,26 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *co
             moveConsume(self, node.value, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
         } else if (block == branch.then_block) {
-            const bound_name = addIfLetMoveBinding(self, node.pattern, node.value, block_state, aliases);
+            then_bound_name = addIfLetMoveBinding(self, node.pattern, node.value, block_state, aliases);
             then_div = moveBlock(self, node.then_block, block_state, aliases);
-            if (bound_name) |name| {
-                if (!then_div) {
-                    if (block_state.getPtr(name)) |slot| {
-                        if (slot.live and !slot.deferred) {
-                            self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in an if-let branch is never consumed (must be moved, returned, or freed)");
-                        }
+            if (!then_div) worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.else_block) {
+            if (node.else_block) |else_body| else_div = moveBlock(self, else_body, block_state, aliases);
+            if (!else_div) worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.then_exit) {
+            if (then_bound_name) |name| {
+                if (block_state.getPtr(name)) |slot| {
+                    if (slot.live and !slot.deferred) {
+                        self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in an if-let branch is never consumed (must be moved, returned, or freed)");
                     }
                 }
                 _ = block_state.remove(name);
             }
-            finalizeBranchLocals(self, block_state, state, !then_div);
-            if (!then_div) worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.else_block) {
-            if (node.else_block) |else_body| else_div = moveBlock(self, else_body, block_state, aliases);
-            finalizeBranchLocals(self, block_state, state, !else_div);
-            if (!else_div) worklist.propagateSuccessors(self, block, block_state);
+            finalizeBranchLocals(self, block_state, state, true);
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.else_exit) {
+            finalizeBranchLocals(self, block_state, state, true);
+            worklist.propagateSuccessors(self, block, block_state);
         } else if (block == branch.join) {
             replaceMoveState(self, state, block_state);
             joined = true;
@@ -5267,6 +5300,8 @@ fn moveDeferIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases
             worklist.propagateSuccessors(self, block, block_state);
         } else if (block == branch.else_block) {
             if (node.else_block) |else_block| moveDeferBlock(self, else_block, block_state, aliases);
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.then_exit or block == branch.else_exit) {
             worklist.propagateSuccessors(self, block, block_state);
         } else if (block == branch.join) {
             replaceMoveState(self, state, block_state);
