@@ -82,6 +82,90 @@ test "monomorphize detects comptime parameter in block array length" {
     try testing.expect(saw_specialized);
 }
 
+test "monomorphize keeps delimiter-colliding generic instances distinct" {
+    const source =
+        \\struct A__B { value: u32 }
+        \\struct A { value: u32 }
+        \\struct B__C { value: u32 }
+        \\struct C { value: u32 }
+        \\struct Pair<T, U> { left: T, right: U }
+        \\union Choice<T, U> { left: T, right: U }
+        \\
+        \\fn pick(comptime T: type, comptime U: type, value: T) -> T {
+        \\    return value;
+        \\}
+        \\
+        \\fn trigger(a: A__B, b: A) -> u32 {
+        \\    let p1: Pair<A__B, C> = uninit;
+        \\    let p2: Pair<A, B__C> = uninit;
+        \\    let c1: Choice<A__B, C> = uninit;
+        \\    let c2: Choice<A, B__C> = uninit;
+        \\    let x: A__B = pick(A__B, C, a);
+        \\    let y: A = pick(A, B__C, b);
+        \\    return 0;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(testing.allocator, "generic_key_collision.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    try testing.expect(!reporter.has_errors);
+
+    const specialized = try monomorphize.transformReport(arena.allocator(), module, &reporter);
+    try testing.expect(!reporter.has_errors);
+
+    var pair_names: [2][]const u8 = undefined;
+    var pair_left_types: [2][]const u8 = undefined;
+    var pair_count: usize = 0;
+    var choice_names: [2][]const u8 = undefined;
+    var choice_left_types: [2][]const u8 = undefined;
+    var choice_count: usize = 0;
+    var pick_names: [2][]const u8 = undefined;
+    var pick_param_types: [2][]const u8 = undefined;
+    var pick_count: usize = 0;
+
+    for (specialized.decls) |decl| switch (decl.kind) {
+        .struct_decl => |sd| {
+            const identity = (sd.semantic_identity orelse sd.name).text;
+            if (!std.mem.eql(u8, identity, "Pair")) continue;
+            try testing.expect(pair_count < pair_names.len);
+            pair_names[pair_count] = sd.name.text;
+            pair_left_types[pair_count] = sd.fields[0].ty.kind.name.text;
+            pair_count += 1;
+        },
+        .union_decl => |ud| {
+            if (!std.mem.startsWith(u8, ud.name.text, "mcg_")) continue;
+            try testing.expect(choice_count < choice_names.len);
+            choice_names[choice_count] = ud.name.text;
+            choice_left_types[choice_count] = ud.cases[0].ty.?.kind.name.text;
+            choice_count += 1;
+        },
+        .fn_decl => |fd| {
+            if (!std.mem.startsWith(u8, fd.name.text, "mcg_")) continue;
+            try testing.expect(pick_count < pick_names.len);
+            pick_names[pick_count] = fd.name.text;
+            pick_param_types[pick_count] = fd.params[0].ty.kind.name.text;
+            pick_count += 1;
+        },
+        else => {},
+    };
+
+    try testing.expectEqual(@as(usize, 2), pair_count);
+    try testing.expectEqual(@as(usize, 2), choice_count);
+    try testing.expectEqual(@as(usize, 2), pick_count);
+    try testing.expect(!std.mem.eql(u8, pair_names[0], pair_names[1]));
+    try testing.expect(!std.mem.eql(u8, choice_names[0], choice_names[1]));
+    try testing.expect(!std.mem.eql(u8, pick_names[0], pick_names[1]));
+    try testing.expect(!std.mem.eql(u8, pair_left_types[0], pair_left_types[1]));
+    try testing.expect(!std.mem.eql(u8, choice_left_types[0], choice_left_types[1]));
+    try testing.expect(!std.mem.eql(u8, pick_param_types[0], pick_param_types[1]));
+}
+
 test "monomorphize total specialization cap reports a focused diagnostic" {
     try testing.expectEqual(@as(usize, 128), monomorphize.default_max_monomorphization_depth);
     try testing.expectEqual(@as(usize, 4096), monomorphize.default_max_monomorphization_instances);

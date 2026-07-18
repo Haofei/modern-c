@@ -24,8 +24,8 @@ optimizations.
 | Priority | Finding | Review status | Current evidence |
 |---|---|---|---|
 | P0 | Opaque-owner prefix collision can authorize private field access | **Fixed** | `FnDecl.associated_owner` and `StructDecl.semantic_identity` preserve exact ownership through mangling and specialization; `opaqueAccessAllowed` and the orphan check consume those identities. |
-| P0 | Generic instance keys collide after delimiter joining | Inspected, high confidence | `src/monomorphize.zig` deduplicates function, struct, and union instances by the generated mangled name. |
-| P0 | Tuple interning merges different structural types | Inspected, high confidence | `src/parser.zig` deduplicates tuples by an unframed string signature and encodes every function-pointer/closure type as `fn`. |
+| P0 | Generic instance keys collide after delimiter joining | **Fixed for the admitted generic-argument model** | Function, struct, and union maps use `GenericInstanceKey`; dangerous linkage components use a reserved hex encoding and an inverse-map collision guard. |
+| P0 | Tuple interning merges different structural types | **Fixed** | Parser interning compares complete `TypeExpr[]` structure; generated names are output identities only and receive a unique suffix when a readable candidate collides. |
 | P1 | `monomorphize` drops `Module.qualified_owners` | Confirmed code defect; main-pipeline impact bounded | The generic rewrite returns only `.decls`; the normal driver runs generic precheck before this loss, so the originally claimed main-path bypass is not yet demonstrated. |
 | P1 | Qualified resolution depends on declaration/import order | Inspected, high confidence | Parser resolution uses symbols registered so far; loader emits the importer before imported files; monomorphization adds a conditional late call-only resolution path. |
 | P2 pending measurement | Generic-call lookahead may approach quadratic time | Plausible, not yet measured | `lessStartsGenericCall` clones the lexer and scans forward for each candidate `<`. |
@@ -64,14 +64,15 @@ the final fixes permanent.
 - [x] Add `opaque_owner_prefix_collision` with a private read and private
   construction attempt; both must report the appropriate private-access
   diagnostic after the fix.
-- [ ] Add `generic_instance_delimiter_collision` covering functions, structs,
+- [x] Add `generic_instance_delimiter_collision` covering functions, structs,
   and tagged unions with `Pair<A__B, C>` versus `Pair<A, B__C>`.
-- [ ] Add `tuple_component_name_collision` for `(A_B, C)` versus `(A, B_C)`.
-- [ ] Add `tuple_function_signature_collision` for distinct function-pointer
+- [x] Add `tuple_component_name_collision` for `(A_B, C)` versus `(A, B_C)`.
+- [x] Add `tuple_function_signature_collision` for distinct function-pointer
   parameter/return signatures and closure types.
-- [ ] Assert distinct semantic keys, distinct generated declarations, correct
-  layout, and matching C/LLVM runtime behavior where the test is executable.
-- [ ] Add a debug/internal-error guard that rejects one output linkage name
+- [x] Assert distinct semantic keys and generated declarations plus the expected
+  substituted field/parameter types. Existing tuple C lowering remains covered;
+  add differential runtime coverage when LLVM admits tuple execution.
+- [x] Add a debug/internal-error guard that rejects one output linkage name
   being assigned to two unequal structural keys.
 
 Exit condition: every P0 has a reproducer that fails on the reviewed design and
@@ -110,22 +111,27 @@ by this owner-identity change.
 
 ### S2 - Make generic and tuple keys structural
 
+Status: **complete for the currently admitted generic and tuple type forms**.
+
 Goal: specialization and type interning cannot merge unequal semantic inputs.
 
-- [ ] Introduce `GenericInstanceKey { generic_decl, args }` with structural hash
+- [x] Introduce `GenericInstanceKey { generic_decl, args }` with structural hash
   and equality.
-- [ ] Canonicalize type arguments, typed constant values, mutability, address
-  space, and every other semantics-affecting generic argument.
-- [ ] Key function, struct, and union instance maps by `GenericInstanceKey`.
-- [ ] Generate deterministic linkage names only after the structural key has
+- [x] Canonicalize the currently admitted named-type and `i128` constant
+  arguments. Any future qualifier/address-space/type-form admission must first
+  extend `CanonicalGenericArg` and its hash/equality.
+- [x] Key function, struct, and union instance maps by `GenericInstanceKey`.
+- [x] Generate deterministic linkage names only after the structural key has
   selected or created an instance.
-- [ ] Introduce `TupleKey { elements }` using canonical element type identities.
-- [ ] Include complete function-pointer and closure signatures in tuple element
+- [x] Intern tuples through `TupleEntry.elements` structural comparison rather
+  than through the synthesized name. A future typed parser/HIR may replace this
+  syntax key with canonical `TypeId[]` without changing the authority boundary.
+- [x] Include complete function-pointer and closure signatures in tuple element
   identity, including parameters, return type, effects, and relevant qualifiers.
-- [ ] Key tuple interning by `TupleKey`; keep synthesized names diagnostic/linkage
+- [x] Keep synthesized tuple names diagnostic/linkage
   artifacts only.
-- [ ] Add collision checks for user declarations versus synthesized linkage
-  names.
+- [x] Reject one synthesized linkage name mapping to unequal structural keys;
+  normal sema duplicate-declaration checks continue to cover user declarations.
 
 Exit condition: unequal generic argument vectors and unequal tuple element
 vectors cannot resolve to the same semantic instance, even if their display or

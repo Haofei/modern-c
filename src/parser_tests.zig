@@ -150,6 +150,63 @@ test "parser distinguishes relational operators from generic calls" {
     try std.testing.expectEqual(@as(usize, 1), call.type_args.len);
 }
 
+test "parser keeps delimiter and function-signature tuple types distinct" {
+    const source =
+        \\struct A_B { value: u32 }
+        \\struct A { value: u32 }
+        \\struct B_C { value: u32 }
+        \\struct C { value: u32 }
+        \\fn components(x: (A_B, C), y: (A, B_C), again: (A_B, C)) -> void {}
+        \\fn signatures(x: (fn(u32) -> u32, u8), y: (fn(u64) -> u64, u8)) -> void {}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "tuple_identity.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var names: [4][]const u8 = undefined;
+    var count: usize = 0;
+    var saw_a_b: usize = 0;
+    var saw_a: usize = 0;
+    var saw_fn_u32: usize = 0;
+    var saw_fn_u64: usize = 0;
+    for (module.decls) |decl| {
+        if (decl.kind != .struct_decl) continue;
+        const sd = decl.kind.struct_decl;
+        if (!std.mem.startsWith(u8, sd.name.text, "__tuple")) continue;
+        try std.testing.expect(count < names.len);
+        names[count] = sd.name.text;
+        count += 1;
+        switch (sd.fields[0].ty.kind) {
+            .name => |name| {
+                if (std.mem.eql(u8, name.text, "A_B")) saw_a_b += 1;
+                if (std.mem.eql(u8, name.text, "A")) saw_a += 1;
+            },
+            .fn_pointer => |signature| {
+                const param_name = signature.params[0].kind.name.text;
+                if (std.mem.eql(u8, param_name, "u32")) saw_fn_u32 += 1;
+                if (std.mem.eql(u8, param_name, "u64")) saw_fn_u64 += 1;
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 4), count);
+    for (names, 0..) |left, i| {
+        for (names[i + 1 ..]) |right| try std.testing.expect(!std.mem.eql(u8, left, right));
+    }
+    try std.testing.expectEqual(@as(usize, 1), saw_a_b);
+    try std.testing.expectEqual(@as(usize, 1), saw_a);
+    try std.testing.expectEqual(@as(usize, 1), saw_fn_u32);
+    try std.testing.expectEqual(@as(usize, 1), saw_fn_u64);
+}
+
 test "return statement span covers the whole statement" {
     const source = "fn f() -> u32 { return 1; }\n";
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "ret.mc", source);

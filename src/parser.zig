@@ -5,6 +5,7 @@ const diagnostics = @import("diagnostics.zig");
 const lexer = @import("lexer.zig");
 const token = @import("token.zig");
 const layout = @import("layout.zig");
+const sema_type = @import("sema_type.zig");
 
 const max_parse_depth: usize = 256;
 
@@ -16,10 +17,12 @@ pub const Parser = struct {
     allocator: std.mem.Allocator = undefined,
     // Tuples are desugared to synthesized nominal structs at parse time, so the rest of the
     // compiler only ever sees ordinary structs. `synth_decls` holds the generated struct decls
-    // (prepended to the module); `tuple_names` dedups them by structural signature so the same
-    // tuple shape is one nominal struct everywhere.
+    // (prepended to the module); `tuple_entries` owns the structural interning key while
+    // `tuple_names` only maps generated output names back to those entries.
     synth_decls: std.ArrayList(ast.Decl) = .empty,
-    tuple_names: std.StringHashMap(void) = undefined,
+    tuple_entries: std.ArrayList(TupleEntry) = .empty,
+    tuple_names: std.StringHashMap(usize) = undefined,
+    tuple_collision_counter: usize = 0,
     // Tuple destructuring `let (a, b) = e` expands to several statements (a temp + per-field
     // bindings); the extra statements wait here and are drained into the enclosing block.
     pending_stmts: std.ArrayList(ast.Stmt) = .empty,
@@ -52,7 +55,9 @@ pub const Parser = struct {
 
     pub fn parseModule(self: *Parser, allocator: std.mem.Allocator) !ast.Module {
         self.allocator = allocator;
-        self.tuple_names = std.StringHashMap(void).init(allocator);
+        self.tuple_entries = .empty;
+        defer self.tuple_entries.deinit(allocator);
+        self.tuple_names = std.StringHashMap(usize).init(allocator);
         defer self.tuple_names.deinit();
         self.impl_methods = std.StringHashMap([]const u8).init(allocator);
         defer self.impl_methods.deinit();
@@ -360,11 +365,39 @@ pub const Parser = struct {
     }
 
     // ---- tuple desugaring (tuples -> synthesized nominal structs) ----
+    const TupleEntry = struct {
+        elements: []const ast.TypeExpr,
+        name: []const u8,
+    };
+
+    fn sameTupleElements(left: []const ast.TypeExpr, right: []const ast.TypeExpr) bool {
+        if (left.len != right.len) return false;
+        for (left, right) |left_elem, right_elem| {
+            if (!sema_type.sameTypeSyntax(left_elem, right_elem)) return false;
+        }
+        return true;
+    }
+
+    fn uniqueTupleName(self: *Parser, preferred: []const u8) ![]const u8 {
+        if (!self.tuple_names.contains(preferred)) return preferred;
+        while (true) {
+            const suffix = self.tuple_collision_counter;
+            self.tuple_collision_counter += 1;
+            const candidate = try std.fmt.allocPrint(self.allocator, "{s}__mct{d}", .{ preferred, suffix });
+            if (!self.tuple_names.contains(candidate)) return candidate;
+        }
+    }
+
     fn synthTupleStruct(self: *Parser, elems: []ast.TypeExpr, span: ast.Span) !ast.Ident {
-        const name = try self.tupleStructName(elems);
+        const preferred = try self.tupleStructName(elems);
+        for (self.tuple_entries.items) |entry| {
+            if (sameTupleElements(entry.elements, elems)) return .{ .text = entry.name, .span = span };
+        }
+        const name = try self.uniqueTupleName(preferred);
         const name_ident = ast.Ident{ .text = name, .span = span };
-        if (self.tuple_names.contains(name)) return name_ident;
-        try self.tuple_names.put(name, {});
+        const entry_index = self.tuple_entries.items.len;
+        try self.tuple_entries.append(self.allocator, .{ .elements = elems, .name = name });
+        try self.tuple_names.put(name, entry_index);
         const fields = try self.allocator.alloc(ast.Field, elems.len);
         for (elems, 0..) |elem, i| {
             const fname = try std.fmt.allocPrint(self.allocator, "_{d}", .{i});

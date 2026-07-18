@@ -53,6 +53,59 @@ pub const SubstValue = union(enum) {
 };
 pub const Subst = std.StringHashMap(SubstValue);
 
+const CanonicalGenericArg = union(enum) {
+    int: i128,
+    type_name: []const u8,
+};
+
+const GenericInstanceKey = struct {
+    generic_name: []const u8,
+    generic_offset: usize,
+    args: []const CanonicalGenericArg,
+};
+
+const GenericInstanceKeyContext = struct {
+    pub fn hash(_: @This(), key: GenericInstanceKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(std.mem.asBytes(&key.generic_offset));
+        hasher.update(key.generic_name);
+        for (key.args) |arg| switch (arg) {
+            .int => |value| {
+                hasher.update(&[_]u8{0});
+                hasher.update(std.mem.asBytes(&value));
+            },
+            .type_name => |name| {
+                hasher.update(&[_]u8{1});
+                const name_len = name.len;
+                hasher.update(std.mem.asBytes(&name_len));
+                hasher.update(name);
+            },
+        };
+        return hasher.final();
+    }
+
+    pub fn eql(_: @This(), a: GenericInstanceKey, b: GenericInstanceKey) bool {
+        if (a.generic_offset != b.generic_offset or
+            !std.mem.eql(u8, a.generic_name, b.generic_name) or
+            a.args.len != b.args.len)
+        {
+            return false;
+        }
+        for (a.args, b.args) |left, right| {
+            if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+            switch (left) {
+                .int => |value| if (value != right.int) return false,
+                .type_name => |name| if (!std.mem.eql(u8, name, right.type_name)) return false,
+            }
+        }
+        return true;
+    }
+};
+
+const InstanceMap = std.HashMap(GenericInstanceKey, *Instance, GenericInstanceKeyContext, std.hash_map.default_max_load_percentage);
+const StructInstanceMap = std.HashMap(GenericInstanceKey, *StructInstance, GenericInstanceKeyContext, std.hash_map.default_max_load_percentage);
+const UnionInstanceMap = std.HashMap(GenericInstanceKey, *UnionInstance, GenericInstanceKeyContext, std.hash_map.default_max_load_percentage);
+
 const TypeGenericInfo = struct {
     decl: ast.FnDecl,
     // names of the comptime parameters that this function is generic over
@@ -140,17 +193,19 @@ const Rewriter = struct {
     const_fns: *const std.StringHashMap(ast.FnDecl),
     // Instances are arena-allocated (stable pointers) so adding one mid-pass — which a
     // generic fn calling another generic fn does — never dangles an in-progress subst.
-    // The maps dedup by mangled name; the lists drive the worklist passes.
-    instances: *std.StringHashMap(*Instance),
+    // The maps dedup by structural generic identity; the lists drive the worklist passes.
+    instances: *InstanceMap,
     inst_list: *std.ArrayList(*Instance),
     generic_structs: *const std.StringHashMap(GenericStructInfo),
-    struct_instances: *std.StringHashMap(*StructInstance),
+    struct_instances: *StructInstanceMap,
     struct_list: *std.ArrayList(*StructInstance),
     // Generic tagged unions, parallel to the struct machinery: each concrete use
     // `Opt<u32>` monomorphizes to a distinct non-generic tagged union `Opt__u32`.
     generic_unions: *const std.StringHashMap(GenericUnionInfo),
-    union_instances: *std.StringHashMap(*UnionInstance),
+    union_instances: *UnionInstanceMap,
     union_list: *std.ArrayList(*UnionInstance),
+    // Defensive inverse map: one linkage name may represent only one structural instance.
+    linkage_keys: *std.StringHashMap(GenericInstanceKey),
     // Module-level integer `const`s, so a const can be used as a const-generic argument
     // (`Ring<u32, RQ_CAP>`), not just an integer literal.
     int_consts: *const std.StringHashMap(i128),
@@ -243,9 +298,10 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
     // generic structs is returned unchanged, so existing code is untouched.
     if (type_generic.count() == 0 and generic_structs.count() == 0 and generic_unions.count() == 0) return module;
 
-    var instances = std.StringHashMap(*Instance).init(arena);
-    var struct_instances = std.StringHashMap(*StructInstance).init(arena);
-    var union_instances = std.StringHashMap(*UnionInstance).init(arena);
+    var instances = InstanceMap.init(arena);
+    var struct_instances = StructInstanceMap.init(arena);
+    var union_instances = UnionInstanceMap.init(arena);
+    var linkage_keys = std.StringHashMap(GenericInstanceKey).init(arena);
     var inst_list: std.ArrayList(*Instance) = .empty;
     var struct_list: std.ArrayList(*StructInstance) = .empty;
     var union_list: std.ArrayList(*UnionInstance) = .empty;
@@ -261,6 +317,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
         .generic_unions = &generic_unions,
         .union_instances = &union_instances,
         .union_list = &union_list,
+        .linkage_keys = &linkage_keys,
         .int_consts = &int_consts,
         .field_types = &field_types,
         .fn_names = &fn_names,
@@ -747,8 +804,7 @@ fn memberCalleeDirect(rw: *Rewriter, callee: ast.Expr) ?[]const u8 {
 fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo, node: anytype) anyerror!?ast.Expr {
     if (node.args.len != info.decl.params.len) return null;
     var subst = Subst.init(rw.arena);
-    var mangled: std.ArrayList(u8) = .empty;
-    try mangled.appendSlice(rw.arena, info.decl.name.text);
+    var canonical_args: std.ArrayList(CanonicalGenericArg) = .empty;
     var kept_args: std.ArrayList(ast.Expr) = .empty;
     for (info.decl.params, node.args) |param, arg| {
         // Apply the enclosing substitution first, so a generic function that forwards its
@@ -759,13 +815,11 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
             // `comptime T: type`: bind to the argument's type name.
             const tn = typeArgName(arg_clone, rw.field_types) orelse return null;
             try subst.put(param.name.text, .{ .type_name = tn });
-            try mangled.appendSlice(rw.arena, "__");
-            try mangled.appendSlice(rw.arena, tn);
+            try canonical_args.append(rw.arena, .{ .type_name = tn });
         } else if (param.is_comptime) {
             const value = foldConst(rw, arg_clone) orelse return null; // not a constant -> leave call as-is (sema will diagnose)
             try subst.put(param.name.text, .{ .int = value });
-            const seg = try std.fmt.allocPrint(rw.arena, "__{d}", .{value});
-            try mangled.appendSlice(rw.arena, seg);
+            try canonical_args.append(rw.arena, .{ .int = value });
         } else {
             try kept_args.append(rw.arena, arg_clone);
         }
@@ -795,8 +849,15 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
             }
         }
     }
-    const mangled_name = try mangled.toOwnedSlice(rw.arena);
-    if (!rw.instances.contains(mangled_name)) {
+    const canonical_slice = try canonical_args.toOwnedSlice(rw.arena);
+    const instance_key = GenericInstanceKey{
+        .generic_name = info.decl.name.text,
+        .generic_offset = info.decl.name.span.offset,
+        .args = canonical_slice,
+    };
+    const mangled_name = try mangleGenericInstance(rw.arena, info.decl.name.text, canonical_slice);
+    try registerGenericLinkage(rw, mangled_name, instance_key, node.callee.*.span);
+    if (!rw.instances.contains(instance_key)) {
         const depth = rw.current_depth + 1;
         const origin = createInstantiationOrigin(rw, .function, mangled_name, node.callee.*.span, depth);
         const limit_failed = !admitInstance(rw, node.callee.*.span, origin, depth);
@@ -815,7 +876,7 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
             .bound_failed = bound_failed,
             .limit_failed = limit_failed,
         };
-        rw.instances.put(mangled_name, inst) catch {
+        rw.instances.put(instance_key, inst) catch {
             rw.oom = true;
         };
         rw.inst_list.append(rw.arena, inst) catch {
@@ -1069,6 +1130,69 @@ fn constGenericValue(text: []const u8) ?i128 {
     return std.fmt.parseInt(i128, text, 0) catch null;
 }
 
+fn genericNameNeedsEscaping(name: []const u8) bool {
+    return std.mem.indexOf(u8, name, "__") != null or std.mem.startsWith(u8, name, "mcg_");
+}
+
+fn appendHexBytes(arena: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) !void {
+    const hex = "0123456789abcdef";
+    for (bytes) |byte| {
+        try out.append(arena, hex[byte >> 4]);
+        try out.append(arena, hex[byte & 0x0f]);
+    }
+}
+
+// Preserve established names for ordinary identifiers while giving every name that can
+// collide with the `__` separator a reserved, fully encoded linkage form. Semantic caches
+// use GenericInstanceKey regardless; this function only produces backend/source symbols.
+fn mangleGenericInstance(arena: std.mem.Allocator, base: []const u8, args: []const CanonicalGenericArg) ![]const u8 {
+    var escaped = genericNameNeedsEscaping(base);
+    if (!escaped) {
+        for (args) |arg| switch (arg) {
+            .type_name => |name| if (genericNameNeedsEscaping(name)) {
+                escaped = true;
+            },
+            .int => {},
+        };
+    }
+
+    var out: std.ArrayList(u8) = .empty;
+    if (escaped) {
+        try out.appendSlice(arena, "mcg_");
+        try appendHexBytes(arena, &out, base);
+        for (args) |arg| switch (arg) {
+            .type_name => |name| {
+                try out.appendSlice(arena, "__t_");
+                try appendHexBytes(arena, &out, name);
+            },
+            .int => |value| try out.appendSlice(arena, try std.fmt.allocPrint(arena, "__i_{d}", .{value})),
+        };
+    } else {
+        try out.appendSlice(arena, base);
+        for (args) |arg| switch (arg) {
+            .type_name => |name| {
+                try out.appendSlice(arena, "__");
+                try out.appendSlice(arena, name);
+            },
+            .int => |value| try out.appendSlice(arena, try std.fmt.allocPrint(arena, "__{d}", .{value})),
+        };
+    }
+    return out.toOwnedSlice(arena);
+}
+
+fn registerGenericLinkage(rw: *Rewriter, name: []const u8, key: GenericInstanceKey, span: ast.Span) !void {
+    const gop = try rw.linkage_keys.getOrPut(name);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = key;
+        return;
+    }
+    if (GenericInstanceKeyContext.eql(.{}, gop.value_ptr.*, key)) return;
+    if (rw.reporter) |reporter| {
+        reporter.err(span, "E_INTERNAL_GENERIC_LINKAGE_COLLISION: unequal generic instance keys produced the same linkage name `{s}`", .{name});
+    }
+    return error.GenericLinkageCollision;
+}
+
 // Compute the mangled concrete name and type-parameter substitution for a use of a
 // generic declaration `Base<Arg, …>` (shared by generic structs and generic tagged
 // unions). Returns null if the argument count is wrong or an argument is not a concrete
@@ -1076,13 +1200,13 @@ fn constGenericValue(text: []const u8) ?i128 {
 const InstantiationKey = struct {
     name: []const u8,
     subst: Subst,
+    semantic: GenericInstanceKey,
 };
-fn instantiateGeneric(ctx: *const CloneCtx, rw: *Rewriter, base: []const u8, type_params: []const ast.Ident, node: anytype) anyerror!?InstantiationKey {
+fn instantiateGeneric(ctx: *const CloneCtx, rw: *Rewriter, base: []const u8, generic_offset: usize, type_params: []const ast.Ident, node: anytype) anyerror!?InstantiationKey {
     if (node.args.len != type_params.len) return null;
     var subst = Subst.init(rw.arena);
-    var mangled: std.ArrayList(u8) = .empty;
-    try mangled.appendSlice(rw.arena, base);
-    for (type_params, node.args) |param, arg| {
+    const canonical_args = try rw.arena.alloc(CanonicalGenericArg, type_params.len);
+    for (type_params, node.args, 0..) |param, arg, index| {
         // The argument resolves to a concrete type name (after any outer substitution),
         // or a const-generic *value* (an integer) bound into `[N]T` array lengths.
         const arg_clone = try cloneType(ctx, arg);
@@ -1090,30 +1214,36 @@ fn instantiateGeneric(ctx: *const CloneCtx, rw: *Rewriter, base: []const u8, typ
             .name => |n| n.text,
             else => return null,
         };
-        try mangled.appendSlice(rw.arena, "__");
         if (constGenericValue(tn)) |value| {
             // an integer literal type-argument (`Ring<u32, 8>`). Mangle from the parsed
             // value's canonical decimal form, not the raw lexeme, so `Buf<0x10>`,
             // `Buf<16>`, and a folded const `Buf<N>` all name the same instance.
             try subst.put(param.text, .{ .int = value });
-            try mangled.appendSlice(rw.arena, try std.fmt.allocPrint(rw.arena, "{d}", .{value}));
+            canonical_args[index] = .{ .int = value };
         } else if (rw.int_consts.get(tn)) |value| {
             // a const used as a const-generic argument (`Ring<u32, RQ_CAP>`)
             try subst.put(param.text, .{ .int = value });
-            try mangled.appendSlice(rw.arena, try std.fmt.allocPrint(rw.arena, "{d}", .{value}));
+            canonical_args[index] = .{ .int = value };
         } else {
             // a concrete type name (`Ring<u32, …>`'s `u32`)
             try subst.put(param.text, .{ .type_name = tn });
-            try mangled.appendSlice(rw.arena, tn);
+            canonical_args[index] = .{ .type_name = tn };
         }
     }
-    return .{ .name = try mangled.toOwnedSlice(rw.arena), .subst = subst };
+    const semantic = GenericInstanceKey{ .generic_name = base, .generic_offset = generic_offset, .args = canonical_args };
+    const name = try mangleGenericInstance(rw.arena, base, canonical_args);
+    try registerGenericLinkage(rw, name, semantic, node.base.span);
+    return .{
+        .name = name,
+        .subst = subst,
+        .semantic = semantic,
+    };
 }
 
 fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, info: GenericStructInfo, node: anytype) anyerror!?[]const u8 {
     const sd = info.decl;
-    const key = (try instantiateGeneric(ctx, rw, sd.name.text, sd.type_params, node)) orelse return null;
-    if (!rw.struct_instances.contains(key.name)) {
+    const key = (try instantiateGeneric(ctx, rw, sd.name.text, sd.name.span.offset, sd.type_params, node)) orelse return null;
+    if (!rw.struct_instances.contains(key.semantic)) {
         const depth = rw.current_depth + 1;
         const origin = createInstantiationOrigin(rw, .@"struct", key.name, node.base.span, depth);
         const limit_failed = !admitInstance(rw, node.base.span, origin, depth);
@@ -1122,7 +1252,7 @@ fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, info: GenericStruct
             return key.name;
         };
         si.* = .{ .decl = sd, .subst = key.subst, .mangled = key.name, .is_pub = info.is_pub, .depth = depth, .origin = origin, .limit_failed = limit_failed };
-        rw.struct_instances.put(key.name, si) catch {
+        rw.struct_instances.put(key.semantic, si) catch {
             rw.oom = true;
         };
         rw.struct_list.append(rw.arena, si) catch {
@@ -1136,8 +1266,8 @@ fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, info: GenericStruct
 // `Opt<u32>` → `Opt__u32`, mirroring rewriteGenericStruct.
 fn rewriteGenericUnion(ctx: *const CloneCtx, rw: *Rewriter, info: GenericUnionInfo, node: anytype) anyerror!?[]const u8 {
     const ud = info.decl;
-    const key = (try instantiateGeneric(ctx, rw, ud.name.text, ud.type_params, node)) orelse return null;
-    if (!rw.union_instances.contains(key.name)) {
+    const key = (try instantiateGeneric(ctx, rw, ud.name.text, ud.name.span.offset, ud.type_params, node)) orelse return null;
+    if (!rw.union_instances.contains(key.semantic)) {
         const depth = rw.current_depth + 1;
         const origin = createInstantiationOrigin(rw, .@"union", key.name, node.base.span, depth);
         const limit_failed = !admitInstance(rw, node.base.span, origin, depth);
@@ -1146,7 +1276,7 @@ fn rewriteGenericUnion(ctx: *const CloneCtx, rw: *Rewriter, info: GenericUnionIn
             return key.name;
         };
         ui.* = .{ .decl = ud, .subst = key.subst, .mangled = key.name, .is_pub = info.is_pub, .depth = depth, .origin = origin, .limit_failed = limit_failed };
-        rw.union_instances.put(key.name, ui) catch {
+        rw.union_instances.put(key.semantic, ui) catch {
             rw.oom = true;
         };
         rw.union_list.append(rw.arena, ui) catch {
