@@ -322,9 +322,14 @@ pub const MoveIndexFacts = struct {
     pub fn clone(self: *const MoveIndexFacts, allocator: std.mem.Allocator) !MoveIndexFacts {
         var result = MoveIndexFacts.init(allocator);
         errdefer result.deinit();
-        var it = self.facts.iterator();
-        while (it.next()) |entry| try result.put(entry.key_ptr.*, entry.value_ptr.*);
+        try result.replaceFrom(self);
         return result;
+    }
+
+    pub fn replaceFrom(self: *MoveIndexFacts, incoming: *const MoveIndexFacts) !void {
+        self.facts.clearRetainingCapacity();
+        var it = incoming.facts.iterator();
+        while (it.next()) |entry| try self.put(entry.key_ptr.*, entry.value_ptr.*);
     }
 
     // An index fact is usable only when every incoming path proves the exact
@@ -396,6 +401,64 @@ test "move index facts retain only equal CFG join facts" {
     try std.testing.expect((left.get("same") orelse unreachable).eql(.{ .constant = 1 }));
 }
 
+// Transitional aggregate state for the move checker. The compatibility-map
+// surface forwards to `slots` so existing ownership consumers can migrate
+// independently, while every clone, CFG edge, loop snapshot, and pending exit
+// now transports index facts as first-class state.
+pub const MoveState = struct {
+    slots: std.StringHashMap(MoveSlot),
+    index_facts: MoveIndexFacts,
+
+    pub fn init(allocator: std.mem.Allocator) MoveState {
+        return .{
+            .slots = std.StringHashMap(MoveSlot).init(allocator),
+            .index_facts = MoveIndexFacts.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *MoveState) void {
+        self.slots.deinit();
+        self.index_facts.deinit();
+    }
+
+    pub fn get(self: *const MoveState, key: []const u8) ?MoveSlot {
+        return self.slots.get(key);
+    }
+
+    pub fn getPtr(self: *MoveState, key: []const u8) ?*MoveSlot {
+        return self.slots.getPtr(key);
+    }
+
+    pub fn put(self: *MoveState, key: []const u8, value: MoveSlot) !void {
+        try self.slots.put(key, value);
+    }
+
+    pub fn remove(self: *MoveState, key: []const u8) bool {
+        return self.slots.remove(key);
+    }
+
+    pub fn contains(self: *const MoveState, key: []const u8) bool {
+        return self.slots.contains(key);
+    }
+
+    pub fn count(self: *const MoveState) usize {
+        return self.slots.count();
+    }
+
+    pub fn iterator(self: *const MoveState) std.StringHashMap(MoveSlot).Iterator {
+        return self.slots.iterator();
+    }
+
+    pub fn keyIterator(self: *const MoveState) std.StringHashMap(MoveSlot).KeyIterator {
+        return self.slots.keyIterator();
+    }
+
+    pub fn clearRetainingCapacity(self: *MoveState) void {
+        self.slots.clearRetainingCapacity();
+        self.index_facts.facts.clearRetainingCapacity();
+    }
+};
+
 pub const LoopMoveExitKind = enum {
     break_exit,
     continue_exit,
@@ -406,7 +469,7 @@ pub const LoopMoveExitKind = enum {
 // ready to transport them through that loop's exit or head blocks.
 pub const LoopMoveExitState = struct {
     kind: LoopMoveExitKind,
-    state: std.StringHashMap(MoveSlot),
+    state: MoveState,
 };
 
 pub const LoopMoveFrame = struct {
@@ -416,7 +479,7 @@ pub const LoopMoveFrame = struct {
     // and backend lowering.
     label: ?[]const u8 = null,
     entry_names: std.StringHashMap(void),
-    entry_state: std.StringHashMap(MoveSlot),
+    entry_state: MoveState,
     invalidated_const_indexes: std.StringHashMap(void),
     invalidated_alias_places: std.ArrayListUnmanaged(MovePlace) = .empty,
     // An alias without a typed storage place cannot be matched across an

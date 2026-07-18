@@ -24,6 +24,7 @@ pub const Context = sema_model.Context;
 pub const MoveSlot = sema_model.MoveSlot;
 pub const MovePlace = sema_model.MovePlace;
 pub const MovePlaceProjection = sema_model.MovePlaceProjection;
+pub const MoveState = sema_model.MoveState;
 pub const LoopMoveFrame = sema_model.LoopMoveFrame;
 pub const TypeClass = sema_model.TypeClass;
 const LoopLabelNode = sema_model.LoopLabelNode;

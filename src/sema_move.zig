@@ -18,6 +18,7 @@ const sema = @import("sema.zig");
 const spine = sema;
 const Checker = sema.Checker;
 const MoveSlot = sema.MoveSlot;
+const MoveState = sema.MoveState;
 const LoopMoveFrame = sema.LoopMoveFrame;
 const LoopMoveExitKind = sema_model.LoopMoveExitKind;
 const Context = sema.Context;
@@ -43,7 +44,7 @@ const MoveCfgJoinPolicy = union(enum) {
 const MoveStateCfgWorklist = struct {
     allocator: std.mem.Allocator,
     cfg: *const sema_model.MoveCfg,
-    states: []?std.StringHashMap(MoveSlot),
+    states: []?MoveState,
     queued: []bool,
     // A deferred cleanup loop widens its zero-iteration/backedge states and
     // reports the resulting outer-resource change as E_MOVE_LOOP_RESOURCE.
@@ -53,8 +54,8 @@ const MoveStateCfgWorklist = struct {
     join_policy: MoveCfgJoinPolicy = .generic,
     queue: std.ArrayListUnmanaged(sema_model.MoveCfgBlockId) = .empty,
 
-    fn init(self: *Checker, cfg: *const sema_model.MoveCfg, entry: sema_model.MoveCfgBlockId, state: *const std.StringHashMap(MoveSlot)) ?MoveStateCfgWorklist {
-        const states = self.reporter.allocator.alloc(?std.StringHashMap(MoveSlot), cfg.blocks.items.len) catch {
+    fn init(self: *Checker, cfg: *const sema_model.MoveCfg, entry: sema_model.MoveCfgBlockId, state: *const MoveState) ?MoveStateCfgWorklist {
+        const states = self.reporter.allocator.alloc(?MoveState, cfg.blocks.items.len) catch {
             self.oom = true;
             return null;
         };
@@ -97,7 +98,7 @@ const MoveStateCfgWorklist = struct {
         return block;
     }
 
-    fn statePtr(self: *MoveStateCfgWorklist, block: sema_model.MoveCfgBlockId) ?*std.StringHashMap(MoveSlot) {
+    fn statePtr(self: *MoveStateCfgWorklist, block: sema_model.MoveCfgBlockId) ?*MoveState {
         if (self.states[block]) |*state| return state;
         return null;
     }
@@ -117,7 +118,7 @@ const MoveStateCfgWorklist = struct {
     // All real-state CFG joins enter here. Callers may omit a successor when an
     // AST transfer has already run for that block, but cannot reimplement the
     // ownership merge or worklist requeue policy themselves.
-    fn propagateSuccessor(self: *MoveStateCfgWorklist, checker: *Checker, to: sema_model.MoveCfgBlockId, outgoing: *const std.StringHashMap(MoveSlot)) void {
+    fn propagateSuccessor(self: *MoveStateCfgWorklist, checker: *Checker, to: sema_model.MoveCfgBlockId, outgoing: *const MoveState) void {
         const changed = if (self.states[to]) |*joined| blk: {
             var before = cloneMoveState(checker, joined);
             defer before.deinit();
@@ -134,14 +135,14 @@ const MoveStateCfgWorklist = struct {
         if (changed) self.enqueue(checker, to);
     }
 
-    fn propagateSuccessorsExcept(self: *MoveStateCfgWorklist, checker: *Checker, from: sema_model.MoveCfgBlockId, outgoing: *const std.StringHashMap(MoveSlot), excluded: ?sema_model.MoveCfgBlockId) void {
+    fn propagateSuccessorsExcept(self: *MoveStateCfgWorklist, checker: *Checker, from: sema_model.MoveCfgBlockId, outgoing: *const MoveState, excluded: ?sema_model.MoveCfgBlockId) void {
         for (self.cfg.edges.items) |edge| {
             if (edge.from != from or edge.to == excluded) continue;
             self.propagateSuccessor(checker, edge.to, outgoing);
         }
     }
 
-    fn propagateSuccessors(self: *MoveStateCfgWorklist, checker: *Checker, from: sema_model.MoveCfgBlockId, outgoing: *const std.StringHashMap(MoveSlot)) void {
+    fn propagateSuccessors(self: *MoveStateCfgWorklist, checker: *Checker, from: sema_model.MoveCfgBlockId, outgoing: *const MoveState) void {
         self.propagateSuccessorsExcept(checker, from, outgoing, null);
     }
 };
@@ -471,7 +472,7 @@ fn multiArmMoveCfg(self: *Checker, arm_count: usize) ?MultiArmMoveCfg {
 
 pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     const body = fn_decl.body orelse return;
-    var state = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
+    var state = MoveState.init(self.reporter.allocator);
     defer state.deinit();
     defer {
         for (self.move_place_keys.items) |k| self.reporter.allocator.free(k);
@@ -483,7 +484,7 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
                 self.oom = true;
             };
         } else if (isUsizeType(param.ty)) {
-            state.put(param.name.text, .{ .live = false, .span = param.name.span, .symbolic_index = param.name.text }) catch {
+            state.index_facts.put(param.name.text, .{ .symbolic = param.name.text }) catch {
                 self.oom = true;
             };
         } else if (self.move_ctx) |ctx| {
@@ -508,7 +509,7 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
     }
 }
 
-fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var linear = linearMoveCfg(self, .exit) orelse return false;
     defer linear.deinit();
 
@@ -536,7 +537,7 @@ fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *std.StringHashMa
 // (every path through it ends in `return`/`break`/`continue`), in which case the
 // join after the block is unreachable. Statements after a diverging statement are
 // dead code and are not analyzed.
-pub fn moveBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+pub fn moveBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     for (block.items) |stmt| {
         if (moveStmt(self, stmt, state, aliases)) return true;
     }
@@ -546,7 +547,7 @@ pub fn moveBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(Mov
 // A lexical `{ ... }` sub-scope. Returns whether the block diverges. Block-local
 // `move` bindings are dropped from `state` on the way out; if the block falls through
 // (does not diverge) any still-live local is a leak at the scope's normal exit edge.
-pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var before = cloneMoveState(self, state);
     defer before.deinit();
 
@@ -576,8 +577,8 @@ pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *std.StringHashM
     return diverges;
 }
 
-fn preserveOuterScopedMoveState(self: *Checker, state: *std.StringHashMap(MoveSlot), before: *const std.StringHashMap(MoveSlot)) void {
-    var scoped = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
+fn preserveOuterScopedMoveState(self: *Checker, state: *MoveState, before: *const MoveState) void {
+    var scoped = MoveState.init(self.reporter.allocator);
     defer scoped.deinit();
     var it = before.iterator();
     while (it.next()) |entry| {
@@ -598,6 +599,16 @@ fn preserveOuterScopedMoveState(self: *Checker, state: *std.StringHashMap(MoveSl
             self.oom = true;
         };
     }
+    // Index facts have no ownership slot after M1.2a. Preserve only bindings
+    // that existed before this lexical block, so index locals do not escape
+    // while reassigned outer facts retain their current value.
+    var facts_it = before.index_facts.facts.iterator();
+    while (facts_it.next()) |entry| {
+        const current = state.index_facts.get(entry.key_ptr.*) orelse continue;
+        scoped.index_facts.put(entry.key_ptr.*, current) catch {
+            self.oom = true;
+        };
+    }
     replaceMoveState(self, state, &scoped);
 }
 
@@ -605,7 +616,7 @@ fn preserveOuterScopedMoveState(self: *Checker, state: *std.StringHashMap(MoveSl
 // `return` (the whole function exits) and at a `?` operator (the function exits on
 // the error branch). A `deferred` binding is scheduled for lexical cleanup that runs
 // on the exit edge, so it is not a leak.
-pub fn checkMoveExitEdge(self: *Checker, state: *const std.StringHashMap(MoveSlot), message: []const u8) void {
+pub fn checkMoveExitEdge(self: *Checker, state: *const MoveState, message: []const u8) void {
     var it = state.iterator();
     while (it.next()) |entry| {
         if (entry.value_ptr.live and !entry.value_ptr.deferred) {
@@ -614,7 +625,7 @@ pub fn checkMoveExitEdge(self: *Checker, state: *const std.StringHashMap(MoveSlo
     }
 }
 
-fn moveExitEdgeCfg(self: *Checker, state: *const std.StringHashMap(MoveSlot), message: []const u8) void {
+fn moveExitEdgeCfg(self: *Checker, state: *const MoveState, message: []const u8) void {
     var exit_cfg = exitMoveCfg(self) orelse return;
     defer exit_cfg.deinit();
 
@@ -630,11 +641,11 @@ fn moveExitEdgeCfg(self: *Checker, state: *const std.StringHashMap(MoveSlot), me
     }
 }
 
-pub fn checkMoveExit(self: *Checker, state: *const std.StringHashMap(MoveSlot)) void {
+pub fn checkMoveExit(self: *Checker, state: *const MoveState) void {
     moveExitEdgeCfg(self, state, "linear `move` value is still live on this function-exit path (must be moved, returned, or freed)");
 }
 
-pub fn reportMoveLocalsLeavingScope(self: *Checker, inner: *const std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), message: []const u8) void {
+pub fn reportMoveLocalsLeavingScope(self: *Checker, inner: *const MoveState, outer: *const MoveState, message: []const u8) void {
     var it = inner.iterator();
     while (it.next()) |entry| {
         if (moveStateSlotMatches(outer, entry.key_ptr.*, entry.value_ptr.*)) continue;
@@ -644,7 +655,13 @@ pub fn reportMoveLocalsLeavingScope(self: *Checker, inner: *const std.StringHash
     }
 }
 
-pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *std.StringHashMap(MoveSlot), iteration_state: *const std.StringHashMap(MoveSlot)) void {
+pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *MoveState, iteration_state: *const MoveState) void {
+    // A loop may execute zero or multiple times. Preserve an independent index
+    // fact only when the iteration state proves exactly the entry value.
+    _ = entry_state.index_facts.intersectInto(&iteration_state.index_facts) catch {
+        self.oom = true;
+        return;
+    };
     var index_fact_removals: std.ArrayListUnmanaged([]const u8) = .empty;
     defer index_fact_removals.deinit(self.reporter.allocator);
 
@@ -688,7 +705,7 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *std.StringHa
     }
 }
 
-pub fn addIfLetMoveBinding(self: *Checker, pattern: ast.Pattern, value: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+pub fn addIfLetMoveBinding(self: *Checker, pattern: ast.Pattern, value: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
     const ctx = self.move_ctx orelse return null;
     const value_ty = spine.exprResultType(value, ctx.*) orelse return null;
     switch (pattern.kind) {
@@ -731,7 +748,7 @@ pub fn checkUnusedMoveResult(self: *Checker, e: ast.Expr, aliases: *const std.St
 // enclosing block on every path (`return`, `break`, `continue`, or a branch all of
 // whose arms diverge) — so the statements that follow are unreachable and the join
 // after it has no predecessor here.
-pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     switch (stmt.kind) {
         .let_decl, .var_decl => |decl| {
             if (decl.init) |init_expr| moveConsume(self, init_expr, state, aliases);
@@ -1038,7 +1055,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
     }
 }
 
-fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     if (loop.iterable) |iter| {
         switch (loop.kind) {
             .@"for" => moveBorrow(self, iter, state, aliases),
@@ -1103,7 +1120,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(MoveSlo
 // transfer runs in entry, arm-local bindings live only in then, and only
 // non-diverging arms reach the join.  This is deliberately the first production
 // CFG slice; switch and loop still use their existing specialized transfer rules.
-fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var branch = twoArmMoveCfg(self) orelse return false;
     defer branch.deinit();
 
@@ -1152,7 +1169,7 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *std.StringHashMap(MoveS
 // Route all switch arms through the same real-state CFG worklist. Each arm gets a
 // cloned post-subject state; only fallthrough arms contribute an incoming state to
 // the shared join block, where MoveStateCfgWorklist performs the ownership merge.
-fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     if (node.arms.len == 0) {
         moveConsume(self, node.subject, state, aliases);
         return false;
@@ -1194,7 +1211,7 @@ fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *std.StringHashMap(Mov
     return all_diverge;
 }
 
-fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, state: *std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, state: *MoveState, outer: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var bound_name: ?[]const u8 = null;
     for (arm.patterns) |pattern| {
         const payload_ty: ?ast.TypeExpr = switch (pattern.kind) {
@@ -1239,7 +1256,7 @@ fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, 
 // local is a leak at the arm's normal exit; a diverging arm already leak-checked its
 // locals at the exit edge. Afterwards `branch` holds only outer names, so two arms can
 // be merged by comparing the same keys.
-pub fn finalizeBranchLocals(self: *Checker, branch: *std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), report: bool) void {
+pub fn finalizeBranchLocals(self: *Checker, branch: *MoveState, outer: *const MoveState, report: bool) void {
     var removals: std.ArrayListUnmanaged([]const u8) = .empty;
     defer removals.deinit(self.reporter.allocator);
     var it = branch.iterator();
@@ -1262,10 +1279,10 @@ pub fn finalizeBranchLocals(self: *Checker, branch: *std.StringHashMap(MoveSlot)
 // must then have consistent ownership across them (else E_MOVE_BRANCH_MISMATCH).
 pub fn joinMoveBranches(
     self: *Checker,
-    dest: *std.StringHashMap(MoveSlot),
-    left: *const std.StringHashMap(MoveSlot),
+    dest: *MoveState,
+    left: *const MoveState,
     left_div: bool,
-    right: *const std.StringHashMap(MoveSlot),
+    right: *const MoveState,
     right_div: bool,
 ) void {
     if (left_div and right_div) return; // join is unreachable; leave `dest` as-is
@@ -1284,7 +1301,7 @@ pub fn joinMoveBranches(
 // value still live (a name not present at loop entry, and not reserved by a defer)
 // leaks on that edge — the iteration exits without consuming it. Mirrors
 // `checkMoveExit` for `return`, but bounded to the innermost loop's body locals.
-pub fn checkLoopExitLeaks(self: *Checker, state: *std.StringHashMap(MoveSlot), target: ?ast.Ident) void {
+pub fn checkLoopExitLeaks(self: *Checker, state: *MoveState, target: ?ast.Ident) void {
     const frame = moveLoopTargetFrame(self, target) orelse return;
     // `break`/`continue` is terminal in its block, so this is the only visit; we do
     // NOT clear the slot, which would corrupt the live state the enclosing branch
@@ -1301,7 +1318,7 @@ pub fn checkLoopExitLeaks(self: *Checker, state: *std.StringHashMap(MoveSlot), t
     recordLoopEarlyExitInvalidations(self, frame, state);
 }
 
-fn moveLoopExitEdgeCfg(self: *Checker, state: *const std.StringHashMap(MoveSlot), target: ?ast.Ident, kind: LoopMoveExitKind) void {
+fn moveLoopExitEdgeCfg(self: *Checker, state: *const MoveState, target: ?ast.Ident, kind: LoopMoveExitKind) void {
     const frame = moveLoopTargetFrame(self, target) orelse return;
     var exit_state = cloneMoveState(self, state);
     frame.pending_exits.append(self.reporter.allocator, .{
@@ -1332,7 +1349,22 @@ fn moveLoopTargetFrame(self: *Checker, target: ?ast.Ident) ?*LoopMoveFrame {
     return &self.move_loop_stack.items[self.move_loop_stack.items.len - 1];
 }
 
-fn recordLoopEarlyExitInvalidations(self: *Checker, frame: *LoopMoveFrame, state: *const std.StringHashMap(MoveSlot)) void {
+fn recordLoopEarlyExitInvalidations(self: *Checker, frame: *LoopMoveFrame, state: *const MoveState) void {
+    var index_it = frame.entry_state.index_facts.facts.iterator();
+    while (index_it.next()) |entry| {
+        const after = state.index_facts.get(entry.key_ptr.*) orelse {
+            frame.invalidated_const_indexes.put(entry.key_ptr.*, {}) catch {
+                self.oom = true;
+            };
+            continue;
+        };
+        if (!entry.value_ptr.eql(after)) {
+            frame.invalidated_const_indexes.put(entry.key_ptr.*, {}) catch {
+                self.oom = true;
+            };
+        }
+    }
+
     var it = frame.entry_state.iterator();
     while (it.next()) |entry| {
         const before = entry.value_ptr.*;
@@ -1375,12 +1407,15 @@ fn recordInvalidatedAliasPlace(self: *Checker, frame: *LoopMoveFrame, place: Mov
     };
 }
 
-fn applyLoopEarlyExitConstIndexInvalidations(state: *std.StringHashMap(MoveSlot), frame: *const LoopMoveFrame) void {
+fn applyLoopEarlyExitConstIndexInvalidations(state: *MoveState, frame: *const LoopMoveFrame) void {
     var it = frame.invalidated_const_indexes.keyIterator();
-    while (it.next()) |name| _ = state.remove(name.*);
+    while (it.next()) |name| {
+        _ = state.remove(name.*);
+        _ = state.index_facts.remove(name.*);
+    }
 }
 
-fn applyLoopEarlyExitAliasInvalidations(state: *std.StringHashMap(MoveSlot), frame: *const LoopMoveFrame) void {
+fn applyLoopEarlyExitAliasInvalidations(state: *MoveState, frame: *const LoopMoveFrame) void {
     for (frame.invalidated_alias_places.items) |place| {
         var state_it = state.iterator();
         while (state_it.next()) |entry| {
@@ -1400,18 +1435,22 @@ fn applyLoopEarlyExitAliasInvalidations(state: *std.StringHashMap(MoveSlot), fra
     }
 }
 
-pub fn cloneMoveState(self: *Checker, state: *const std.StringHashMap(MoveSlot)) std.StringHashMap(MoveSlot) {
-    var clone = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
+pub fn cloneMoveState(self: *Checker, state: *const MoveState) MoveState {
+    var clone = MoveState.init(self.reporter.allocator);
     var it = state.iterator();
     while (it.next()) |entry| {
         clone.put(entry.key_ptr.*, entry.value_ptr.*) catch {
             self.oom = true;
         };
     }
+    clone.index_facts.replaceFrom(&state.index_facts) catch {
+        self.oom = true;
+        return clone;
+    };
     return clone;
 }
 
-pub fn replaceMoveState(self: *Checker, dest: *std.StringHashMap(MoveSlot), src: *const std.StringHashMap(MoveSlot)) void {
+pub fn replaceMoveState(self: *Checker, dest: *MoveState, src: *const MoveState) void {
     dest.clearRetainingCapacity();
     var it = src.iterator();
     while (it.next()) |entry| {
@@ -1419,25 +1458,29 @@ pub fn replaceMoveState(self: *Checker, dest: *std.StringHashMap(MoveSlot), src:
             self.oom = true;
         };
     }
+    dest.index_facts.replaceFrom(&src.index_facts) catch {
+        self.oom = true;
+        return;
+    };
 }
 
 pub fn mergeMoveBranches(
     self: *Checker,
-    dest: *std.StringHashMap(MoveSlot),
-    left: *const std.StringHashMap(MoveSlot),
-    right: *const std.StringHashMap(MoveSlot),
+    dest: *MoveState,
+    left: *const MoveState,
+    right: *const MoveState,
 ) void {
     mergeMoveBranchesImpl(self, dest, left, right, true);
 }
 
 fn mergeMoveBranchesImpl(
     self: *Checker,
-    dest: *std.StringHashMap(MoveSlot),
-    left: *const std.StringHashMap(MoveSlot),
-    right: *const std.StringHashMap(MoveSlot),
+    dest: *MoveState,
+    left: *const MoveState,
+    right: *const MoveState,
     report_diagnostics: bool,
 ) void {
-    var merged = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
+    var merged = MoveState.init(self.reporter.allocator);
     defer merged.deinit();
 
     var it = left.iterator();
@@ -1483,6 +1526,15 @@ fn mergeMoveBranchesImpl(
         }
     }
 
+    merged.index_facts.replaceFrom(&left.index_facts) catch {
+        self.oom = true;
+        return;
+    };
+    _ = merged.index_facts.intersectInto(&right.index_facts) catch {
+        self.oom = true;
+        return;
+    };
+
     replaceMoveState(self, dest, &merged);
 }
 
@@ -1491,7 +1543,7 @@ fn mergeMoveBranchesImpl(
 // when a compatibility key was formatted differently along the two incoming
 // paths. Untyped legacy aliases and index facts retain their separate metadata
 // rules.
-fn matchingMoveStateSlot(state: *const std.StringHashMap(MoveSlot), key: []const u8, slot: MoveSlot) ?MoveSlot {
+fn matchingMoveStateSlot(state: *const MoveState, key: []const u8, slot: MoveSlot) ?MoveSlot {
     if (isOwnershipMovePlace(slot, key)) {
         const place = slot.place.?;
         var it = state.iterator();
@@ -1517,7 +1569,7 @@ fn matchingMoveStateSlot(state: *const std.StringHashMap(MoveSlot), key: []const
     return state.get(key);
 }
 
-fn moveStateSlotMatches(state: *const std.StringHashMap(MoveSlot), key: []const u8, slot: MoveSlot) bool {
+fn moveStateSlotMatches(state: *const MoveState, key: []const u8, slot: MoveSlot) bool {
     return matchingMoveStateSlot(state, key, slot) != null;
 }
 
@@ -1540,11 +1592,11 @@ test "move branch joins match subplaces by typed place rather than compatibility
     defer reporter.deinit();
     var checker = Checker.init(&reporter);
 
-    var left = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var left = MoveState.init(std.testing.allocator);
     defer left.deinit();
-    var right = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var right = MoveState.init(std.testing.allocator);
     defer right.deinit();
-    var joined = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var joined = MoveState.init(std.testing.allocator);
     defer joined.deinit();
 
     const root: sema_model.MovePlace = .{ .root = "owner" };
@@ -1566,10 +1618,37 @@ test "move branch joins match subplaces by typed place rather than compatibility
     try std.testing.expectEqual(@as(usize, 0), joined.count());
 }
 
-test "move branch joins match roots by typed place rather than compatibility key" {
-    var left = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+test "move state transports independent index facts through clone and join" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-index-state.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+
+    var left = MoveState.init(std.testing.allocator);
     defer left.deinit();
-    var right = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    try left.index_facts.put("index", .{ .constant = 1 });
+
+    var cloned = cloneMoveState(&checker, &left);
+    defer cloned.deinit();
+    try std.testing.expect(moveStatesEqual(&left, &cloned));
+
+    var same = MoveState.init(std.testing.allocator);
+    defer same.deinit();
+    try same.index_facts.put("index", .{ .constant = 1 });
+
+    var joined = MoveState.init(std.testing.allocator);
+    defer joined.deinit();
+    mergeMoveBranches(&checker, &joined, &left, &same);
+    try std.testing.expect((joined.index_facts.get("index") orelse unreachable).eql(.{ .constant = 1 }));
+
+    try same.index_facts.put("index", .{ .symbolic = "runtime_index" });
+    mergeMoveBranches(&checker, &joined, &left, &same);
+    try std.testing.expect(joined.index_facts.get("index") == null);
+}
+
+test "move branch joins match roots by typed place rather than compatibility key" {
+    var left = MoveState.init(std.testing.allocator);
+    defer left.deinit();
+    var right = MoveState.init(std.testing.allocator);
     defer right.deinit();
 
     const root: MovePlace = .{ .root = "owner" };
@@ -1592,9 +1671,9 @@ test "move CFG boundary state handlers match ownership subplaces by typed place"
     const root_slot = MoveSlot{ .live = true, .span = span, .place = root };
     const moved_slot = MoveSlot{ .live = false, .span = span, .place = place };
 
-    var loop_entry = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var loop_entry = MoveState.init(std.testing.allocator);
     defer loop_entry.deinit();
-    var loop_iteration = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var loop_iteration = MoveState.init(std.testing.allocator);
     defer loop_iteration.deinit();
     try loop_entry.put("owner", root_slot);
     try loop_entry.put("owner.resource:entry", moved_slot);
@@ -1604,9 +1683,9 @@ test "move CFG boundary state handlers match ownership subplaces by typed place"
     try std.testing.expect(!reporter.has_errors);
     try std.testing.expect(loop_entry.get("owner").?.live);
 
-    var short_left = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var short_left = MoveState.init(std.testing.allocator);
     defer short_left.deinit();
-    var short_right = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var short_right = MoveState.init(std.testing.allocator);
     defer short_right.deinit();
     try short_left.put("owner", root_slot);
     try short_left.put("owner.resource:left", moved_slot);
@@ -1616,9 +1695,9 @@ test "move CFG boundary state handlers match ownership subplaces by typed place"
     try std.testing.expect(!reporter.has_errors);
     try std.testing.expect(short_left.get("owner").?.live);
 
-    var before_scope = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var before_scope = MoveState.init(std.testing.allocator);
     defer before_scope.deinit();
-    var after_scope = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var after_scope = MoveState.init(std.testing.allocator);
     defer after_scope.deinit();
     try before_scope.put("owner", root_slot);
     try before_scope.put("owner.resource:before", moved_slot);
@@ -1646,11 +1725,11 @@ test "move CFG alias facts match typed referent places" {
         .{ .live = false, .span = span, .alias_of = "owner.resource" },
         .{ .live = false, .span = span, .alias_of = "owner.resource" },
     ));
-    var left = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var left = MoveState.init(std.testing.allocator);
     defer left.deinit();
-    var right = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var right = MoveState.init(std.testing.allocator);
     defer right.deinit();
-    var joined = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var joined = MoveState.init(std.testing.allocator);
     defer joined.deinit();
     // The compatibility storage spellings diverge across CFG predecessors, but
     // both aliases occupy the same structural storage place.
@@ -1674,7 +1753,7 @@ test "loop early-exit alias invalidation uses typed storage places" {
     const replacement = owner.project(.{ .field = "replacement" }).?;
     const storage: MovePlace = .{ .root = "borrow" };
 
-    var entry_state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var entry_state = MoveState.init(std.testing.allocator);
     try entry_state.put("compat:borrow:entry", .{
         .live = false,
         .span = span,
@@ -1693,7 +1772,7 @@ test "loop early-exit alias invalidation uses typed storage places" {
     };
     defer frame.deinit();
 
-    var early_exit = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var early_exit = MoveState.init(std.testing.allocator);
     defer early_exit.deinit();
     try early_exit.put("compat:borrow:exit", .{
         .live = false,
@@ -1706,7 +1785,7 @@ test "loop early-exit alias invalidation uses typed storage places" {
     try std.testing.expectEqual(@as(usize, 1), frame.invalidated_alias_places.items.len);
     try std.testing.expect(!frame.invalidated_untyped_aliases);
 
-    var post_loop = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var post_loop = MoveState.init(std.testing.allocator);
     defer post_loop.deinit();
     try post_loop.put("compat:borrow:post", .{
         .live = false,
@@ -1723,7 +1802,7 @@ test "loop early-exit alias invalidation uses typed storage places" {
     // A legacy alias cannot be matched across the early-exit edge by its map
     // key. It is therefore conservatively divergent, and a later use reports
     // the same stale-alias diagnostic as any other divergent alias.
-    var legacy_entry = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var legacy_entry = MoveState.init(std.testing.allocator);
     try legacy_entry.put("legacy:entry", .{ .live = false, .span = span, .alias_of = "owner.resource" });
     var legacy_frame = LoopMoveFrame{
         .allocator = std.testing.allocator,
@@ -1736,12 +1815,12 @@ test "loop early-exit alias invalidation uses typed storage places" {
     };
     defer legacy_frame.deinit();
 
-    var legacy_exit = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var legacy_exit = MoveState.init(std.testing.allocator);
     defer legacy_exit.deinit();
     recordLoopEarlyExitInvalidations(&checker, &legacy_frame, &legacy_exit);
     try std.testing.expect(legacy_frame.invalidated_untyped_aliases);
 
-    var legacy_post = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var legacy_post = MoveState.init(std.testing.allocator);
     defer legacy_post.deinit();
     try legacy_post.put("different:legacy:key", .{ .live = false, .span = span, .alias_of = "owner.resource" });
     applyLoopEarlyExitAliasInvalidations(&legacy_post, &legacy_frame);
@@ -1774,11 +1853,11 @@ test "move CFG deferred borrows use typed places rather than compatibility keys"
         .deferred_borrow_place = borrowed,
     };
 
-    var left = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var left = MoveState.init(std.testing.allocator);
     defer left.deinit();
-    var right = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var right = MoveState.init(std.testing.allocator);
     defer right.deinit();
-    var joined = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var joined = MoveState.init(std.testing.allocator);
     defer joined.deinit();
     try left.put("owner", left_slot);
     try right.put("owner", right_slot);
@@ -1788,9 +1867,9 @@ test "move CFG deferred borrows use typed places rather than compatibility keys"
     try std.testing.expect(!reporter.has_errors);
     try std.testing.expect(joined.get("owner").?.live);
 
-    var loop_entry = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var loop_entry = MoveState.init(std.testing.allocator);
     defer loop_entry.deinit();
-    var loop_iteration = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var loop_iteration = MoveState.init(std.testing.allocator);
     defer loop_iteration.deinit();
     try loop_entry.put("owner", left_slot);
     try loop_iteration.put("owner", right_slot);
@@ -1807,7 +1886,7 @@ test "move root ownership lookup uses typed places rather than compatibility key
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
     const field = root.project(.{ .field = "resource" }).?;
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var state = MoveState.init(std.testing.allocator);
     defer state.deinit();
 
     // The string key intentionally does not equal `owner`. The typed root is
@@ -1826,7 +1905,7 @@ test "move forget consumes typed roots rather than compatibility keys" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-forget-root.mc", "");
     defer reporter.deinit();
     var checker = Checker.init(&reporter);
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var state = MoveState.init(std.testing.allocator);
     defer state.deinit();
     var aliases = std.StringHashMap(ast.TypeExpr).init(std.testing.allocator);
     defer aliases.deinit();
@@ -1846,7 +1925,7 @@ test "move place construction resolves typed roots before compatibility keys" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-place-root.mc", "");
     defer reporter.deinit();
     var checker = Checker.init(&reporter);
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var state = MoveState.init(std.testing.allocator);
     defer state.deinit();
     const ty = ast_query.simpleNameType("Resource", span);
     const owner = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "owner", .span = span } } };
@@ -1867,7 +1946,7 @@ test "move expression typing uses structural ownership roots rather than map key
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
     const owner = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "owner", .span = span } } };
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var state = MoveState.init(std.testing.allocator);
     defer state.deinit();
     var aliases = std.StringHashMap(ast.TypeExpr).init(std.testing.allocator);
     defer aliases.deinit();
@@ -1889,7 +1968,7 @@ test "move subplace outer-scope classification uses typed roots rather than comp
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
     const field = root.project(.{ .field = "resource" }).?;
-    var outer = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var outer = MoveState.init(std.testing.allocator);
     defer outer.deinit();
 
     try outer.put("compat:owner", .{ .live = true, .span = span, .place = root });
@@ -1899,7 +1978,7 @@ test "move subplace outer-scope classification uses typed roots rather than comp
 test "move alias producers require carried typed referent places" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var state = MoveState.init(std.testing.allocator);
     defer state.deinit();
 
     try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
@@ -1916,9 +1995,9 @@ test "move cleanup aliases match outer roots by typed place" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
     const field = root.project(.{ .field = "resource" }).?;
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var state = MoveState.init(std.testing.allocator);
     defer state.deinit();
-    var outer = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var outer = MoveState.init(std.testing.allocator);
     defer outer.deinit();
 
     // Neither compatibility key names the structural root. A cleanup alias of
@@ -1934,7 +2013,7 @@ test "move cleanup aliases match outer roots by typed place" {
 test "move stale aliases require carried typed referent places" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var state = MoveState.init(std.testing.allocator);
     defer state.deinit();
 
     try state.put("compat:owner", .{ .live = false, .span = span, .place = root });
@@ -1967,7 +2046,7 @@ test "move deferred aliases recover typed places from their state slots" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
     const borrowed = root.project(.{ .field = "resource" }).?;
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var state = MoveState.init(std.testing.allocator);
     defer state.deinit();
 
     // The root's compatibility key cannot be reconstructed from the alias
@@ -1990,7 +2069,7 @@ test "move deferred alias reservations reject key-only referents" {
 
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var state = MoveState.init(std.testing.allocator);
     defer state.deinit();
 
     try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
@@ -2007,9 +2086,9 @@ test "move short-circuit joins use typed roots rather than compatibility keys" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
     const field = root.project(.{ .field = "resource" }).?;
-    var bypass = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var bypass = MoveState.init(std.testing.allocator);
     defer bypass.deinit();
-    var rhs = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var rhs = MoveState.init(std.testing.allocator);
     defer rhs.deinit();
 
     try bypass.put("compat:owner", .{ .live = true, .span = span, .place = root });
@@ -2027,7 +2106,7 @@ test "move escaped borrows use typed roots rather than compatibility keys" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
     const field = root.project(.{ .field = "resource" }).?;
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var state = MoveState.init(std.testing.allocator);
     defer state.deinit();
 
     try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
@@ -2055,7 +2134,7 @@ test "move borrowed subplaces use typed places rather than compatibility keys" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
     const field = root.project(.{ .field = "resource" }).?;
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var state = MoveState.init(std.testing.allocator);
     defer state.deinit();
 
     // A pointer-return alias retains this place. Its ownership must not depend
@@ -2072,7 +2151,7 @@ test "move alias root consumption uses typed place rather than compatibility key
 
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
-    var state = std.StringHashMap(MoveSlot).init(std.testing.allocator);
+    var state = MoveState.init(std.testing.allocator);
     defer state.deinit();
 
     try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
@@ -2119,7 +2198,7 @@ fn isOwnershipMovePlace(slot: MoveSlot, key: []const u8) bool {
 // diagnostics. Source spelling may find a compatibility-map entry, but only a
 // structural, non-alias ownership root may establish that the expression owns a
 // linear resource.
-fn ownershipBindingMoveSlotForIdent(name: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+fn ownershipBindingMoveSlotForIdent(name: []const u8, state: *const MoveState) ?MoveSlot {
     const expected: MovePlace = .{ .root = name };
     var it = state.iterator();
     while (it.next()) |entry| {
@@ -2133,7 +2212,7 @@ fn ownershipBindingMoveSlotForIdent(name: []const u8, state: *const std.StringHa
 // Named aliases are also structural bindings. Their map keys may be rewritten
 // by CFG joins, so a typed alias consumer must locate the alias's own storage
 // root instead of treating source spelling as a compatibility-map key.
-fn aliasBindingMoveSlotForIdent(name: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+fn aliasBindingMoveSlotForIdent(name: []const u8, state: *const MoveState) ?MoveSlot {
     const expected: MovePlace = .{ .root = name };
     var it = state.iterator();
     while (it.next()) |entry| {
@@ -2145,7 +2224,7 @@ fn aliasBindingMoveSlotForIdent(name: []const u8, state: *const std.StringHashMa
     return null;
 }
 
-fn bindingMoveSlotPtrForIdent(name: []const u8, state: *std.StringHashMap(MoveSlot)) ?*MoveSlot {
+fn bindingMoveSlotPtrForIdent(name: []const u8, state: *MoveState) ?*MoveSlot {
     const expected: MovePlace = .{ .root = name };
     if (state.getPtr(name)) |slot| {
         if (slot.place) |place| if (place.eql(expected)) return slot;
@@ -2159,7 +2238,7 @@ fn bindingMoveSlotPtrForIdent(name: []const u8, state: *std.StringHashMap(MoveSl
     return null;
 }
 
-fn ownershipMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) ?*MoveSlot {
+fn ownershipMoveSlotPtrForPlace(place: MovePlace, state: *MoveState) ?*MoveSlot {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr;
@@ -2168,7 +2247,7 @@ fn ownershipMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(Move
     return null;
 }
 
-fn ownershipMoveSlotForPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+fn ownershipMoveSlotForPlace(place: MovePlace, state: *const MoveState) ?MoveSlot {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -2181,7 +2260,7 @@ fn ownershipMoveSlotForPlace(place: MovePlace, state: *const std.StringHashMap(M
 // metadata, but ownership checks must not recover a root by formatting or
 // looking up a string key. A root place is matched structurally so a renamed
 // compatibility entry cannot change move semantics.
-fn rootMoveSlotForPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+fn rootMoveSlotForPlace(place: MovePlace, state: *const MoveState) ?MoveSlot {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -2193,7 +2272,7 @@ fn rootMoveSlotForPlace(place: MovePlace, state: *const std.StringHashMap(MoveSl
     return null;
 }
 
-fn rootMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) ?*MoveSlot {
+fn rootMoveSlotPtrForPlace(place: MovePlace, state: *MoveState) ?*MoveSlot {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr;
@@ -2208,7 +2287,7 @@ fn rootMoveSlotPtrForPlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)
 // A direct `&place` has a typed storage place before it crosses an aggregate or
 // call boundary. Escape tracking only needs to poison the owning root, but it
 // must find that owner through the typed place while that information exists.
-fn borrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
+fn borrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *const MoveState) ?MovePlace {
     const target = switch (expr.kind) {
         .address_of => |inner| inner.*,
         .cast => |node| return borrowedMoveRootPlace(self, node.value.*, state),
@@ -2231,7 +2310,7 @@ fn borrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *const std.Strin
 // `&t as usize` parses as `&(t as usize)`. Preserve `t`'s structural place
 // before the integer cast drops pointer provenance, rather than recovering the
 // root from the cast syntax's compatibility key.
-fn integerCastBorrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
+fn integerCastBorrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *const MoveState) ?MovePlace {
     const cast = switch (expr.kind) {
         .cast => |node| node,
         .grouped => |inner| return integerCastBorrowedMoveRootPlace(self, inner.*, state),
@@ -2244,7 +2323,7 @@ fn integerCastBorrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *cons
     return .{ .root = place.root };
 }
 
-fn markEscapedBorrowForPlace(place: MovePlace, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+fn markEscapedBorrowForPlace(place: MovePlace, escape_span: diagnostics.Span, state: *MoveState) void {
     if (rootMoveSlotPtrForPlace(place, state)) |slot| {
         if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
     }
@@ -2257,7 +2336,7 @@ fn rejectUntypedBorrowEscape(self: *Checker, escape_span: diagnostics.Span) void
     self.errorCode(escape_span, "E_USE_AFTER_MOVE", "cannot store or return a borrow of a linear `move` value without typed place metadata");
 }
 
-fn hasUntypedBorrowAlias(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) bool {
+fn hasUntypedBorrowAlias(expr: ast.Expr, state: *const MoveState) bool {
     const target = switch (expr.kind) {
         .address_of => |inner| inner.*,
         .cast => |node| return hasUntypedBorrowAlias(node.value.*, state),
@@ -2275,7 +2354,7 @@ fn hasUntypedBorrowAlias(expr: ast.Expr, state: *const std.StringHashMap(MoveSlo
 // A named alias reaches this escape path with the source place it carried at
 // registration. Keep that place through the recursive aggregate/call scan;
 // `alias_of` must not be used to reconstruct ownership identity here.
-fn markEscapedBorrowForCarriedAlias(value: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) bool {
+fn markEscapedBorrowForCarriedAlias(value: ast.Expr, escape_span: diagnostics.Span, state: *MoveState) bool {
     const referent = carriedAliasReferentForExpr(value, state) orelse return false;
     const place = typedAliasReferentPlace(referent) orelse return true;
     const root = rootMoveSlotForPlace(place, state) orelse return true;
@@ -2286,7 +2365,7 @@ fn markEscapedBorrowForCarriedAlias(value: ast.Expr, escape_span: diagnostics.Sp
 // Map keys remain compatibility indexes, but ownership updates are addressed by
 // the structured place. A repeated producer for the same place updates its
 // existing slot rather than adding another formatted-key entry.
-fn recordOwnershipMovePlace(self: *Checker, key: []const u8, place: MovePlace, slot: MoveSlot, state: *std.StringHashMap(MoveSlot)) void {
+fn recordOwnershipMovePlace(self: *Checker, key: []const u8, place: MovePlace, slot: MoveSlot, state: *MoveState) void {
     if (ownershipMoveSlotPtrForPlace(place, state)) |existing| {
         existing.* = slot;
         return;
@@ -2296,7 +2375,7 @@ fn recordOwnershipMovePlace(self: *Checker, key: []const u8, place: MovePlace, s
     };
 }
 
-fn removeOwnershipMovePlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) bool {
+fn removeOwnershipMovePlace(place: MovePlace, state: *MoveState) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -2307,7 +2386,7 @@ fn removeOwnershipMovePlace(place: MovePlace, state: *std.StringHashMap(MoveSlot
     return false;
 }
 
-fn moveSubplaceRootInOuter(slot: MoveSlot, key: []const u8, outer: *const std.StringHashMap(MoveSlot)) bool {
+fn moveSubplaceRootInOuter(slot: MoveSlot, key: []const u8, outer: *const MoveState) bool {
     _ = key;
     const place = slot.place orelse return false;
     return rootMoveSlotForPlace(place, outer) != null;
@@ -2319,7 +2398,7 @@ fn trackedSubplaceRoot(slot: MoveSlot, key: []const u8) ?[]const u8 {
     return if (place.isSubplace()) place.root else null;
 }
 
-fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) void {
+fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const MoveState) void {
     const place = aliasStoragePlaceForExpr(self, expr, state);
     var it = state.iterator();
     while (it.next()) |entry| {
@@ -2364,7 +2443,7 @@ fn moveProjectionsMayOverlap(left: MoveProjection, right: MoveProjection) bool {
     };
 }
 
-fn aliasStoragePlaceForExpr(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MovePlace {
+fn aliasStoragePlaceForExpr(self: *Checker, expr: ast.Expr, state: *const MoveState) ?MovePlace {
     if (placeKeyAndType(self, expr, state)) |pp| return pp.place;
     switch (expr.kind) {
         .grouped => |inner| return aliasStoragePlaceForExpr(self, inner.*, state),
@@ -2377,7 +2456,7 @@ fn aliasStoragePlaceForExpr(self: *Checker, expr: ast.Expr, state: *const std.St
     return null;
 }
 
-fn fullDerefMoveSubplace(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
+fn fullDerefMoveSubplace(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
     const target = switch (expr.kind) {
         .address_of => |inner| inner.*,
         .grouped => |inner| return fullDerefMoveSubplace(self, inner.*, state, aliases),
@@ -2401,13 +2480,13 @@ const AliasReferent = struct {
     full_deref: bool,
 };
 
-fn aliasReferentIsTracked(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot)) bool {
+fn aliasReferentIsTracked(referent: AliasReferent, state: *const MoveState) bool {
     return trackedAliasReferent(referent, state) != null;
 }
 
 // Every newly registered alias must carry its typed referent. A compatibility
 // key indexes alias storage only; it cannot recover ownership identity.
-fn trackedAliasReferent(referent: AliasReferent, state: *const std.StringHashMap(MoveSlot)) ?AliasReferent {
+fn trackedAliasReferent(referent: AliasReferent, state: *const MoveState) ?AliasReferent {
     const place = typedAliasReferentPlace(referent) orelse return null;
     if (rootMoveSlotForPlace(place, state) == null) return null;
     return .{ .key = referent.key, .place = place, .full_deref = referent.full_deref };
@@ -2422,7 +2501,7 @@ fn carriedAliasReferent(slot: MoveSlot) ?AliasReferent {
     return .{ .key = key, .place = place, .full_deref = slot.full_deref_alias };
 }
 
-fn carriedAliasReferentForExpr(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?AliasReferent {
+fn carriedAliasReferentForExpr(expr: ast.Expr, state: *const MoveState) ?AliasReferent {
     return switch (expr.kind) {
         .ident => |id| blk: {
             const slot = aliasBindingMoveSlotForIdent(id.text, state) orelse break :blk null;
@@ -2437,12 +2516,12 @@ fn typedAliasReferentPlace(referent: AliasReferent) ?MovePlace {
     return referent.place;
 }
 
-fn aliasReferentTargetsOuter(referent: AliasReferent, outer: *const std.StringHashMap(MoveSlot)) bool {
+fn aliasReferentTargetsOuter(referent: AliasReferent, outer: *const MoveState) bool {
     const place = typedAliasReferentPlace(referent) orelse return false;
     return rootMoveSlotForPlace(place, outer) != null;
 }
 
-fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
+fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
     if (fullDerefMoveSubplace(self, expr, state, aliases)) |pp| {
         return .{ .key = pp.key, .place = pp.place, .full_deref = true };
     }
@@ -2459,7 +2538,7 @@ fn aliasReferentForExpr(self: *Checker, expr: ast.Expr, state: *const std.String
     return carriedAliasReferentForExpr(expr, state);
 }
 
-fn directAliasReferentPlace(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?PlaceKeyTy {
+fn directAliasReferentPlace(self: *Checker, expr: ast.Expr, state: *const MoveState) ?PlaceKeyTy {
     const target = switch (expr.kind) {
         .address_of => |inner| inner.*,
         .grouped => |inner| return directAliasReferentPlace(self, inner.*, state),
@@ -2478,7 +2557,7 @@ fn isAssumeNoaliasCall(call: anytype) bool {
 }
 
 // Consume the move bindings used by-value in `expr` (checking liveness).
-pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     switch (expr.kind) {
         .ident => |id| {
             consumeTrackedMoveBinding(self, id.text, expr.span, state);
@@ -2643,7 +2722,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
     }
 }
 
-fn immediateFullDerefMoveReferent(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
+fn immediateFullDerefMoveReferent(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
     if (fullDerefMoveSubplace(self, expr, state, aliases)) |referent| return .{ .key = referent.key, .place = referent.place, .full_deref = true };
     if (directAliasReferentPlace(self, expr, state)) |referent| {
         return .{ .key = referent.key, .place = referent.place, .full_deref = true };
@@ -2656,7 +2735,7 @@ fn immediateFullDerefMoveReferent(self: *Checker, expr: ast.Expr, state: *const 
     return referent;
 }
 
-fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics.Span, state: *MoveState) void {
     if (bindingMoveSlotPtrForIdent(name, state)) |slot| {
         if (slot.type_only) return;
         // T1.2: a pointer alias used by value (e.g. passed to a callee that reads
@@ -2694,7 +2773,7 @@ fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics
     }
 }
 
-fn consumeTrackedMoveReferent(self: *Checker, referent: AliasReferent, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+fn consumeTrackedMoveReferent(self: *Checker, referent: AliasReferent, span: diagnostics.Span, state: *MoveState) void {
     const place = typedAliasReferentPlace(referent) orelse {
         self.errorCode(span, "E_USE_AFTER_MOVE", "cannot move a linear `move` value through an alias without a typed referent place");
         return;
@@ -2709,7 +2788,7 @@ fn consumeTrackedMoveReferent(self: *Checker, referent: AliasReferent, span: dia
 // An alias can retain a typed root place while its compatibility lookup key was
 // rewritten by an assignment or CFG merge. Root consumption must follow that
 // place, not the compatibility spelling, or the owner can be left live.
-fn consumeTrackedMoveRootPlace(self: *Checker, place: MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+fn consumeTrackedMoveRootPlace(self: *Checker, place: MovePlace, span: diagnostics.Span, state: *MoveState) void {
     const slot = rootMoveSlotPtrForPlace(place, state) orelse return;
     if (slot.type_only) return;
     if (!slot.live) {
@@ -2730,7 +2809,7 @@ fn consumeTrackedMoveRootPlace(self: *Checker, place: MovePlace, span: diagnosti
     }
 }
 
-fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, span: diagnostics.Span, state: *MoveState) void {
     const root = rootMoveSlotForPlace(place, state) orelse return;
     if (!root.live) {
         self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` field after its owner was moved");
@@ -2750,7 +2829,7 @@ fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, sp
 // A while condition has a zero-iteration bypass and an evaluated-condition path.
 // The worklist owns transport between those blocks; loop widening remains the
 // existing dedicated rule so condition-only moves retain E_MOVE_LOOP_RESOURCE.
-fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     var short = shortCircuitMoveCfg(self) orelse return;
     defer short.deinit();
 
@@ -2774,7 +2853,7 @@ fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *std.String
 // evaluated once for diagnostics, then its outgoing state travels over the
 // backedge and joins the zero-iteration path at the head. The existing loop
 // widening below remains the authority for rejecting outer-resource changes.
-fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist, body: ast.Block, result_state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr), body_diverges: *bool, body_visited: *bool) void {
+fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist, body: ast.Block, result_state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), body_diverges: *bool, body_visited: *bool) void {
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
         if (block == loop_cfg.entry) {
@@ -2814,7 +2893,7 @@ fn enqueuePendingLoopExitStates(self: *Checker, loop_cfg: *const LoopBodyMoveCfg
     }
 }
 
-fn moveLoopBodyCfg(self: *Checker, body: ast.Block, entry_state: *const std.StringHashMap(MoveSlot), result_state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn moveLoopBodyCfg(self: *Checker, body: ast.Block, entry_state: *const MoveState, result_state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var loop_cfg = loopBodyMoveCfg(self) orelse return false;
     defer loop_cfg.deinit();
 
@@ -2833,7 +2912,7 @@ fn moveLoopBodyCfg(self: *Checker, body: ast.Block, entry_state: *const std.Stri
     return body_diverges;
 }
 
-fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     var short = shortCircuitMoveCfg(self) orelse return;
     defer short.deinit();
 
@@ -2853,7 +2932,7 @@ fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringH
     }
 }
 
-fn mergeShortCircuitMoveStates(self: *Checker, state: *std.StringHashMap(MoveSlot), rhs_state: *const std.StringHashMap(MoveSlot), span: diagnostics.Span, deferred: bool) void {
+fn mergeShortCircuitMoveStates(self: *Checker, state: *MoveState, rhs_state: *const MoveState, span: diagnostics.Span, deferred: bool) void {
     var index_fact_removals: std.ArrayListUnmanaged([]const u8) = .empty;
     defer index_fact_removals.deinit(self.reporter.allocator);
 
@@ -2898,7 +2977,7 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *std.StringHashMap(MoveSlo
     }
 }
 
-fn moveDeferShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+fn moveDeferShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     var short = shortCircuitMoveCfg(self) orelse return;
     defer short.deinit();
 
@@ -2949,7 +3028,8 @@ fn sameDeferredBorrowFact(left: MoveSlot, right: MoveSlot) bool {
     return !left.deferred_borrow and !right.deferred_borrow;
 }
 
-fn moveStatesEqual(left: *const std.StringHashMap(MoveSlot), right: *const std.StringHashMap(MoveSlot)) bool {
+fn moveStatesEqual(left: *const MoveState, right: *const MoveState) bool {
+    if (!left.index_facts.eql(&right.index_facts)) return false;
     if (left.count() != right.count()) return false;
     var it = left.iterator();
     while (it.next()) |entry| {
@@ -3037,7 +3117,7 @@ const AliasPlaceInfo = struct {
 // whose root is a tracked move binding — so nested fields, not just one level, are
 // distinct places. The key is allocated and owned by `move_place_keys`. Returns null if
 // the root is not a tracked move binding or a field type cannot be resolved.
-pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?PlaceKeyTy {
+pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const MoveState) ?PlaceKeyTy {
     switch (expr.kind) {
         .grouped => |inner| return placeKeyAndType(self, inner.*, state),
         .ident => |id| {
@@ -3105,7 +3185,7 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const std.StringH
 // Source identifier spelling is a map index only. A typed root slot can retain
 // a different compatibility key after CFG joins, so resolve the exact root
 // place before falling back to key-only metadata such as index facts.
-fn bindingMoveSlotForIdent(name: []const u8, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+fn bindingMoveSlotForIdent(name: []const u8, state: *const MoveState) ?MoveSlot {
     const expected: MovePlace = .{ .root = name };
     if (state.get(name)) |slot| {
         if (slot.place) |place| {
@@ -3121,11 +3201,17 @@ fn bindingMoveSlotForIdent(name: []const u8, state: *const std.StringHashMap(Mov
     return null;
 }
 
-fn constIndexValue(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), ctx: Context) ?usize {
+fn constIndexValue(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) ?usize {
     if (parseArrayLen(expr, ctx.const_fns, ctx.const_globals)) |k| return k;
     switch (expr.kind) {
         .grouped => |inner| return constIndexValue(self, inner.*, state, ctx),
-        .ident => |id| return if (state.get(id.text)) |slot| slot.const_index else null,
+        .ident => |id| {
+            if (state.index_facts.get(id.text)) |fact| return switch (fact) {
+                .constant => |index| index,
+                .symbolic => null,
+            };
+            return if (state.get(id.text)) |slot| slot.const_index else null;
+        },
         .binary => |node| {
             switch (node.op) {
                 .mul => {
@@ -3176,7 +3262,7 @@ fn constIndexValue(self: *Checker, expr: ast.Expr, state: *const std.StringHashM
     }
 }
 
-fn stableIndexPlaceKnown(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), ctx: Context) bool {
+fn stableIndexPlaceKnown(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) bool {
     return constIndexValue(self, expr, state, ctx) != null or symbolicIndexValue(self, expr, state, ctx) != null;
 }
 
@@ -3194,16 +3280,22 @@ fn indexIdentName(expr: ast.Expr) ?[]const u8 {
     };
 }
 
-fn symbolicIndexValue(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), ctx: Context) ?[]const u8 {
+fn symbolicIndexValue(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) ?[]const u8 {
     return switch (expr.kind) {
         .grouped => |inner| symbolicIndexValue(self, inner.*, state, ctx),
-        .ident => |id| if (state.get(id.text)) |slot| slot.symbolic_index else null,
+        .ident => |id| {
+            if (state.index_facts.get(id.text)) |fact| return switch (fact) {
+                .constant => null,
+                .symbolic => |symbol| symbol,
+            };
+            return if (state.get(id.text)) |slot| slot.symbolic_index else null;
+        },
         .binary => |node| symbolicIndexBinaryValue(self, node, state, ctx),
         else => null,
     };
 }
 
-fn symbolicIndexBinaryValue(self: *Checker, node: anytype, state: *const std.StringHashMap(MoveSlot), ctx: Context) ?[]const u8 {
+fn symbolicIndexBinaryValue(self: *Checker, node: anytype, state: *const MoveState, ctx: Context) ?[]const u8 {
     const left_symbol = symbolicIndexValue(self, node.left.*, state, ctx);
     const right_symbol = symbolicIndexValue(self, node.right.*, state, ctx);
     const left_const = parseArrayLen(node.left.*, ctx.const_fns, ctx.const_globals);
@@ -3582,7 +3674,7 @@ fn storageElementType(ty: ast.TypeExpr, ctx: Context) ?ast.TypeExpr {
     };
 }
 
-fn derefPlaceElementType(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), ctx: Context) ?ast.TypeExpr {
+fn derefPlaceElementType(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) ?ast.TypeExpr {
     const inner = switch (expr.kind) {
         .deref => |node| node.*,
         else => return null,
@@ -3593,7 +3685,7 @@ fn derefPlaceElementType(self: *Checker, expr: ast.Expr, state: *const std.Strin
 
 // The place key for a `move`-typed field access (at any nesting depth), or null if the
 // accessed place is not a tracked move field.
-pub fn moveFieldPlaceKey(self: *Checker, expr: ast.Expr, m: anytype, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
+pub fn moveFieldPlaceKey(self: *Checker, expr: ast.Expr, m: anytype, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
     _ = m;
     const pp = placeKeyAndType(self, expr, state) orelse return null;
     // A field is a move place if its type *embeds* a move resource by value — not only a
@@ -3605,13 +3697,13 @@ pub fn moveFieldPlaceKey(self: *Checker, expr: ast.Expr, m: anytype, state: *con
     return pp;
 }
 
-pub fn moveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
+pub fn moveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
     const pp = placeKeyAndType(self, expr, state) orelse return null;
     if (!self.typeEmbedsMoveByValue(pp.ty, aliases)) return null;
     return pp;
 }
 
-fn wildcardMoveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
+fn wildcardMoveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
     if (nestedWildcardIndexedPlaceKeyAndType(self, expr, state, aliases)) |pp| {
         if (!self.typeEmbedsMoveByValue(pp.ty, aliases)) return null;
         return pp;
@@ -3646,7 +3738,7 @@ fn wildcardMoveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const std
     }
 }
 
-fn nestedWildcardIndexedPlaceKeyAndType(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
+fn nestedWildcardIndexedPlaceKeyAndType(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
     switch (expr.kind) {
         .grouped => |inner| return nestedWildcardIndexedPlaceKeyAndType(self, inner.*, state, aliases),
         .index => |ix| {
@@ -3737,7 +3829,7 @@ fn arrayLiteralElementEmbedsMove(self: *Checker, expr: ast.Expr, ctx: Context, a
     }
 }
 
-fn arrayIndexEmbedsMove(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn arrayIndexEmbedsMove(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     switch (expr.kind) {
         .grouped => |inner| return arrayIndexEmbedsMove(self, inner.*, state, aliases),
         .index => |ix| {
@@ -3790,7 +3882,7 @@ fn arrayLiteralLenAndElementEmbedsMove(self: *Checker, expr: ast.Expr, ctx: Cont
     }
 }
 
-fn nonNameableSingletonIndexResultType(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?ast.TypeExpr {
+fn nonNameableSingletonIndexResultType(self: *Checker, expr: ast.Expr, state: *const MoveState) ?ast.TypeExpr {
     switch (expr.kind) {
         .grouped => |inner| return nonNameableSingletonIndexResultType(self, inner.*, state),
         .index => |ix| {
@@ -3810,7 +3902,7 @@ fn nonNameableSingletonIndexResultType(self: *Checker, expr: ast.Expr, state: *c
     }
 }
 
-fn selectedArrayLiteralItemLenAndElementEmbedsMove(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), ctx: Context, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ArrayMoveShape {
+fn selectedArrayLiteralItemLenAndElementEmbedsMove(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ArrayMoveShape {
     switch (expr.kind) {
         .grouped => |inner| return selectedArrayLiteralItemLenAndElementEmbedsMove(self, inner.*, state, ctx, aliases),
         .index => |ix| {
@@ -3835,7 +3927,7 @@ fn selectedArrayLiteralItemLenAndElementEmbedsMove(self: *Checker, expr: ast.Exp
     }
 }
 
-fn nonNameableArrayExprLenAndElementEmbedsMove(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), ctx: Context, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ArrayMoveShape {
+fn nonNameableArrayExprLenAndElementEmbedsMove(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ArrayMoveShape {
     if (arrayLiteralLenAndElementEmbedsMove(self, expr, ctx, aliases)) |literal| return literal;
     if (selectedArrayLiteralItemLenAndElementEmbedsMove(self, expr, state, ctx, aliases)) |literal| return literal;
     const ty_expr = nonNameableSingletonIndexResultType(self, expr, state) orelse spine.exprResultType(expr, ctx) orelse return null;
@@ -3848,7 +3940,7 @@ fn nonNameableArrayExprLenAndElementEmbedsMove(self: *Checker, expr: ast.Expr, s
     return .{ .len = len, .embeds = self.typeEmbedsMoveByValue(array.child.*, aliases) };
 }
 
-fn nonNameableSingletonMoveIndex(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn nonNameableSingletonMoveIndex(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     switch (expr.kind) {
         .grouped => |inner| return nonNameableSingletonMoveIndex(self, inner.*, state, aliases),
         .index => |ix| {
@@ -3863,12 +3955,12 @@ fn nonNameableSingletonMoveIndex(self: *Checker, expr: ast.Expr, state: *const s
 
 // Whether the place denoted by `expr` (a possibly-nested field access) is recorded as
 // moved out.
-pub fn placeExprIsMoved(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) bool {
+pub fn placeExprIsMoved(self: *Checker, expr: ast.Expr, state: *const MoveState) bool {
     const pp = placeKeyAndType(self, expr, state) orelse return false;
     return stateHasMovedPlaceOrConflict(pp.place, state);
 }
 
-fn stateContainsMovePlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+fn stateContainsMovePlace(place: MovePlace, state: *const MoveState) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -3878,7 +3970,7 @@ fn stateContainsMovePlace(place: MovePlace, state: *const std.StringHashMap(Move
     return false;
 }
 
-fn stateHasConflictingMovePlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+fn stateHasConflictingMovePlace(place: MovePlace, state: *const MoveState) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -3890,11 +3982,11 @@ fn stateHasConflictingMovePlace(place: MovePlace, state: *const std.StringHashMa
     return false;
 }
 
-fn stateHasActivePlaceOrConflict(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+fn stateHasActivePlaceOrConflict(place: MovePlace, state: *const MoveState) bool {
     return stateContainsMovePlace(place, state) or stateHasConflictingMovePlace(place, state);
 }
 
-fn stateHasMovedPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+fn stateHasMovedPlace(place: MovePlace, state: *const MoveState) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -3904,7 +3996,7 @@ fn stateHasMovedPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot
     return false;
 }
 
-fn stateHasMovedConflictingPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+fn stateHasMovedConflictingPlace(place: MovePlace, state: *const MoveState) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -3916,11 +4008,11 @@ fn stateHasMovedConflictingPlace(place: MovePlace, state: *const std.StringHashM
     return false;
 }
 
-fn stateHasMovedPlaceOrConflict(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+fn stateHasMovedPlaceOrConflict(place: MovePlace, state: *const MoveState) bool {
     return stateHasMovedPlace(place, state) or stateHasMovedConflictingPlace(place, state);
 }
 
-fn stateHasMovedChildPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+fn stateHasMovedChildPlace(place: MovePlace, state: *const MoveState) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -3930,22 +4022,22 @@ fn stateHasMovedChildPlace(place: MovePlace, state: *const std.StringHashMap(Mov
     return false;
 }
 
-fn stateHasMovedPlaceChildOrConflict(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+fn stateHasMovedPlaceChildOrConflict(place: MovePlace, state: *const MoveState) bool {
     return stateHasMovedPlaceOrConflict(place, state) or stateHasMovedChildPlace(place, state);
 }
 
-fn stateHasMovedPlaceOrChild(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+fn stateHasMovedPlaceOrChild(place: MovePlace, state: *const MoveState) bool {
     return stateContainsMovePlace(place, state) or hasMovedSubplace(place, state);
 }
 
-fn deferredBorrowConflictsWithTrackedPlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+fn deferredBorrowConflictsWithTrackedPlace(place: MovePlace, state: *const MoveState) bool {
     const root_slot = rootMoveSlotForPlace(place, state) orelse return false;
     const borrowed = root_slot.deferred_borrow_place orelse return false;
     return borrowed.eql(place) or borrowed.isPrefixOf(place) or place.isPrefixOf(borrowed) or borrowed.conflicts(place);
 }
 
 // Whether any field of `base` has been moved out (a partial move of the aggregate).
-pub fn hasMovedSubplace(base: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+pub fn hasMovedSubplace(base: MovePlace, state: *const MoveState) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -3957,7 +4049,7 @@ pub fn hasMovedSubplace(base: MovePlace, state: *const std.StringHashMap(MoveSlo
 
 // Remove every typed child place when the whole aggregate leaves play (consumed
 // or forgotten), so a later same-named binding starts clean.
-pub fn clearSubplaces(base: MovePlace, state: *std.StringHashMap(MoveSlot)) void {
+pub fn clearSubplaces(base: MovePlace, state: *MoveState) void {
     // A HashMap iterator is invalidated by a removal, so rescan from the top
     // after each one. The number of tracked places per function is tiny.
     var removed_any = true;
@@ -3979,7 +4071,7 @@ pub fn clearSubplaces(base: MovePlace, state: *std.StringHashMap(MoveSlot)) void
 // `forget_unchecked(x)` discards the whole aggregate husk: consume the binding and drop
 // its field-move records (the husk is being thrown away, moved-out fields and all), so a
 // partial move is fine here — unlike a real whole-aggregate move.
-pub fn moveForget(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+pub fn moveForget(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     switch (expr.kind) {
         .ident => |id| {
             var root_place = MovePlace{ .root = id.text };
@@ -4006,7 +4098,7 @@ pub fn moveForget(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Move
 // Whether `expr` denotes a linear `move` value — a tracked move binding by name, or
 // any expression whose inferred type is a move type. Used to reject `drop` of a
 // resource.
-pub fn exprIsMoveTyped(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+pub fn exprIsMoveTyped(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     switch (expr.kind) {
         .ident => |id| if (ownershipBindingMoveSlotForIdent(id.text, state) != null) return true,
         .grouped => |inner| return exprIsMoveTyped(self, inner.*, state, aliases),
@@ -4026,13 +4118,13 @@ pub fn exprIsMoveTyped(self: *Checker, expr: ast.Expr, state: *const std.StringH
 // Whether `drop(expr)` is a SAFE final use: expr's `move` type is `#[trivial_drop]`,
 // so the author has asserted completing it needs no release. Looks the type up via the
 // binding's recorded type (or the expression's inferred type).
-pub fn exprIsTrivialDrop(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+pub fn exprIsTrivialDrop(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     const set = self.trivial_drop_types orelse return false;
     const name = exprMoveTypeName(self, expr, state, aliases) orelse return false;
     return set.contains(name);
 }
 
-pub fn exprMoveTypeName(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+pub fn exprMoveTypeName(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
     switch (expr.kind) {
         .ident => |id| if (state.get(id.text)) |slot| {
             if (slot.ty) |t| return self.moveTypeNameOf(t, aliases);
@@ -4050,7 +4142,7 @@ pub fn exprMoveTypeName(self: *Checker, expr: ast.Expr, state: *const std.String
 // p = &a`), reading through it after the referent `a` was moved out is a stale-alias
 // use-after-move. The alias slot itself stays live (a pointer copy is fine); it is the
 // referent's moved-out state that poisons reads through the alias.
-pub fn checkStaleAlias(self: *Checker, name: []const u8, slot: MoveSlot, span: diagnostics.Span, state: *const std.StringHashMap(MoveSlot)) void {
+pub fn checkStaleAlias(self: *Checker, name: []const u8, slot: MoveSlot, span: diagnostics.Span, state: *const MoveState) void {
     _ = name;
     if (aliasSlotReferentMoved(slot, state)) {
         self.errorCode(span, "E_USE_AFTER_MOVE", "use of an alias derived from a linear `move` value after that value was moved (the alias is now stale)");
@@ -4064,7 +4156,7 @@ pub fn checkStaleAlias(self: *Checker, name: []const u8, slot: MoveSlot, span: d
 // memory we cannot prove dead. The DIRECT scalar pointer-local case (`let p = &t`, which
 // the stale-alias mechanism already tracks precisely) is handled by the caller NOT routing
 // here — only stores into aggregate/array memory or subfield aliases reach this.
-pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostics.Span, state: *MoveState) void {
     // T1.2: an ARRAY-LITERAL initializer (`let arr: [1]*T = .{ &t }`) launders a borrow of a
     // move binding into array memory we cannot prove dead — symmetric with the `arr[0] = &t`
     // element-ASSIGNMENT path (which reaches this same hook) and the struct-literal field path.
@@ -4153,7 +4245,7 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
 // receives a copy of the struct/array containing `&t`, so the borrow reaches memory we cannot
 // prove dead. We therefore descend into struct/array literal arguments (peeling `grouped`) and
 // run the full recursive escape scan on the aggregate's contents — at any nesting depth.
-pub fn markBorrowEscapeCallArg(self: *Checker, arg: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+pub fn markBorrowEscapeCallArg(self: *Checker, arg: ast.Expr, escape_span: diagnostics.Span, state: *MoveState) void {
     switch (arg.kind) {
         .grouped => |inner| return markBorrowEscapeCallArg(self, inner.*, escape_span, state),
         // An aggregate literal argument is copied into the callee — scan its contents (which
@@ -4169,7 +4261,7 @@ pub fn markBorrowEscapeCallArg(self: *Checker, arg: ast.Expr, escape_span: diagn
 // If the return type can contain pointer-like storage, the callee may have copied an argument
 // borrow into that returned value. Unlike a pointer return (`let q = id(&t)`), there is no
 // scalar alias local to track precisely, so conservatively mark the borrowed move root escaped.
-pub fn markBorrowEscapeCapturedCallResult(self: *Checker, value: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+pub fn markBorrowEscapeCapturedCallResult(self: *Checker, value: ast.Expr, escape_span: diagnostics.Span, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     const ctx = self.move_ctx orelse return;
     const call = switch (value.kind) {
         .call => |c| c,
@@ -4185,7 +4277,7 @@ pub fn markBorrowEscapeCapturedCallResult(self: *Checker, value: ast.Expr, escap
     for (call.args) |arg| markBorrowEscapeCapturedCallArg(self, arg, escape_span, state);
 }
 
-fn markBorrowEscapeCapturedCallArg(self: *Checker, arg: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+fn markBorrowEscapeCapturedCallArg(self: *Checker, arg: ast.Expr, escape_span: diagnostics.Span, state: *MoveState) void {
     switch (arg.kind) {
         .grouped => |inner| return markBorrowEscapeCapturedCallArg(self, inner.*, escape_span, state),
         .struct_literal => |fields| {
@@ -4292,7 +4384,7 @@ fn layoutFieldsCanCarryBorrow(fields: std.StringHashMap(ast.TypeExpr), ctx: Cont
 // or null. Narrowed to KNOWN pointer-returning direct calls so a non-pointer result
 // (`pk(&t) -> u32`) — which cannot retain the borrow — does not register an alias and the
 // legit case still accepts.
-fn callLaunderedMoveAliasReferent(self: *Checker, init_expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
+fn callLaunderedMoveAliasReferent(self: *Checker, init_expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
     const ctx = self.move_ctx orelse return null;
     const call = switch (init_expr.kind) {
         .call => |c| c,
@@ -4350,7 +4442,7 @@ pub fn registerAggregateFieldAliases(
     base_place: ?MovePlace,
     escape_span: diagnostics.Span,
     init_expr: ast.Expr,
-    state: *std.StringHashMap(MoveSlot),
+    state: *MoveState,
     aliases: *const std.StringHashMap(ast.TypeExpr),
 ) void {
     const fields = switch (init_expr.kind) {
@@ -4422,7 +4514,7 @@ pub fn fieldExprIsStructLiteral(expr: ast.Expr) bool {
 
 // (bug #3) If `expr` is a member access `base.f…` whose place-key names a registered
 // field-place borrow alias, return its slot — for the stale-alias check on member reads.
-pub fn aggregateFieldAliasSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+pub fn aggregateFieldAliasSlot(self: *Checker, expr: ast.Expr, state: *const MoveState) ?MoveSlot {
     const storage_place = aliasStoragePlaceForExpr(self, expr, state);
     if (storage_place) |place| {
         if (aliasSlotForStoragePlace(place, state)) |slot| return slot;
@@ -4437,7 +4529,7 @@ pub fn recordAssignedAggregateFieldAliasOrEscape(
     target: ast.Expr,
     value: ast.Expr,
     escape_span: diagnostics.Span,
-    state: *std.StringHashMap(MoveSlot),
+    state: *MoveState,
     aliases: *const std.StringHashMap(ast.TypeExpr),
 ) void {
     const target_info = aliasPlaceInfo(self, target, state) orelse
@@ -4480,7 +4572,7 @@ pub fn registerArrayElementAliases(
     base_place: ?MovePlace,
     escape_span: diagnostics.Span,
     init_expr: ast.Expr,
-    state: *std.StringHashMap(MoveSlot),
+    state: *MoveState,
     aliases: *const std.StringHashMap(ast.TypeExpr),
 ) void {
     const items = switch (init_expr.kind) {
@@ -4530,7 +4622,7 @@ pub fn recordAssignedAliasPlaceOrEscape(
     target: ast.Expr,
     value: ast.Expr,
     escape_span: diagnostics.Span,
-    state: *std.StringHashMap(MoveSlot),
+    state: *MoveState,
     aliases: *const std.StringHashMap(ast.TypeExpr),
 ) void {
     const target_info = aliasPlaceInfo(self, target, state) orelse
@@ -4547,7 +4639,7 @@ fn recordAliasPlaceOrEscapeWithKey(
     key_place: MovePlace,
     value: ast.Expr,
     escape_span: diagnostics.Span,
-    state: *std.StringHashMap(MoveSlot),
+    state: *MoveState,
     aliases: *const std.StringHashMap(ast.TypeExpr),
 ) void {
     const referent = aliasReferentForExpr(self, value, state, aliases) orelse {
@@ -4578,7 +4670,7 @@ fn recordAliasPlaceOrEscapeWithKey(
     };
 }
 
-pub fn aliasPlaceSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+pub fn aliasPlaceSlot(self: *Checker, expr: ast.Expr, state: *const MoveState) ?MoveSlot {
     const storage_place = aliasStoragePlaceForExpr(self, expr, state);
     if (storage_place) |place| {
         if (aliasSlotForStoragePlace(place, state)) |slot| return slot;
@@ -4588,7 +4680,7 @@ pub fn aliasPlaceSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHa
     return null;
 }
 
-fn aliasSlotForStoragePlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+fn aliasSlotForStoragePlace(place: MovePlace, state: *const MoveState) ?MoveSlot {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -4600,7 +4692,7 @@ fn aliasSlotForStoragePlace(place: MovePlace, state: *const std.StringHashMap(Mo
     return null;
 }
 
-fn aliasSlotPtrForStoragePlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) ?*MoveSlot {
+fn aliasSlotPtrForStoragePlace(place: MovePlace, state: *MoveState) ?*MoveSlot {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr;
@@ -4612,7 +4704,7 @@ fn aliasSlotPtrForStoragePlace(place: MovePlace, state: *std.StringHashMap(MoveS
     return null;
 }
 
-fn removeAliasSlotForStoragePlace(place: MovePlace, state: *std.StringHashMap(MoveSlot)) bool {
+fn removeAliasSlotForStoragePlace(place: MovePlace, state: *MoveState) bool {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -4626,7 +4718,7 @@ fn removeAliasSlotForStoragePlace(place: MovePlace, state: *std.StringHashMap(Mo
     return false;
 }
 
-fn staleAliasWildcardSlotForConcretePlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+fn staleAliasWildcardSlotForConcretePlace(place: MovePlace, state: *const MoveState) ?MoveSlot {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -4638,7 +4730,7 @@ fn staleAliasWildcardSlotForConcretePlace(place: MovePlace, state: *const std.St
     return null;
 }
 
-fn aliasConflictingSlotForStoragePlace(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+fn aliasConflictingSlotForStoragePlace(place: MovePlace, state: *const MoveState) ?MoveSlot {
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -4650,7 +4742,7 @@ fn aliasConflictingSlotForStoragePlace(place: MovePlace, state: *const std.Strin
     return null;
 }
 
-fn aliasIndexExprType(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), ctx: Context) ?ast.TypeExpr {
+fn aliasIndexExprType(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) ?ast.TypeExpr {
     switch (expr.kind) {
         .grouped => |inner| return aliasIndexExprType(self, inner.*, state, ctx),
         .ident => |id| {
@@ -4677,21 +4769,21 @@ fn aliasIndexExprType(self: *Checker, expr: ast.Expr, state: *const std.StringHa
     }
 }
 
-fn aliasSlotReferentMoved(slot: MoveSlot, state: *const std.StringHashMap(MoveSlot)) bool {
+fn aliasSlotReferentMoved(slot: MoveSlot, state: *const MoveState) bool {
     if (slot.divergent_alias) return true;
     _ = slot.alias_of orelse return false;
     if (slot.alias_place) |typed| return referentPlaceMoved(typed, state);
     return true;
 }
 
-fn referentPlaceMoved(place: MovePlace, state: *const std.StringHashMap(MoveSlot)) bool {
+fn referentPlaceMoved(place: MovePlace, state: *const MoveState) bool {
     if (rootMoveSlotForPlace(place, state)) |root| {
         if (!root.live) return true;
     }
     return stateHasMovedPlaceChildOrConflict(place, state);
 }
 
-fn aliasPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?AliasPlaceInfo {
+fn aliasPlaceInfo(self: *Checker, expr: ast.Expr, state: *const MoveState) ?AliasPlaceInfo {
     const pp = placeKeyAndType(self, expr, state) orelse return null;
     const key = self.reporter.allocator.dupe(u8, pp.key) catch {
         self.oom = true;
@@ -4700,7 +4792,7 @@ fn aliasPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.StringHashMa
     return .{ .key = key, .place = pp.place };
 }
 
-fn aliasWildcardPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?AliasPlaceInfo {
+fn aliasWildcardPlaceInfo(self: *Checker, expr: ast.Expr, state: *const MoveState) ?AliasPlaceInfo {
     switch (expr.kind) {
         .grouped => |inner| return aliasWildcardPlaceInfo(self, inner.*, state),
         .member => |m| {
@@ -4739,7 +4831,7 @@ fn aliasWildcardPlaceInfo(self: *Checker, expr: ast.Expr, state: *const std.Stri
     }
 }
 
-fn aliasPlaceBaseType(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?ast.TypeExpr {
+fn aliasPlaceBaseType(expr: ast.Expr, state: *const MoveState) ?ast.TypeExpr {
     switch (expr.kind) {
         .grouped => |inner| return aliasPlaceBaseType(inner.*, state),
         .ident => |id| {
@@ -4752,7 +4844,7 @@ fn aliasPlaceBaseType(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot))
 }
 
 // Borrow: check the move bindings referenced are live, without consuming.
-pub fn moveBorrow(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+pub fn moveBorrow(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     switch (expr.kind) {
         .ident => |id| {
             if (bindingMoveSlotPtrForIdent(id.text, state)) |slot| {
@@ -4822,7 +4914,7 @@ pub fn moveBorrow(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Move
     }
 }
 
-fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
+fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?PlaceKeyTy {
     switch (expr.kind) {
         .grouped => |inner| return deferredBorrowPlaceKey(self, inner.*, state, aliases),
         else => {},
@@ -4834,7 +4926,7 @@ fn deferredBorrowPlaceKey(self: *Checker, expr: ast.Expr, state: *const std.Stri
     return pp;
 }
 
-fn markDeferredBorrowReferent(self: *Checker, borrowed_place: MovePlace, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+fn markDeferredBorrowReferent(self: *Checker, borrowed_place: MovePlace, span: diagnostics.Span, state: *MoveState) void {
     const root_slot = rootMoveSlotPtrForPlace(borrowed_place, state) orelse return;
     if (root_slot.cleanup_local) {
         checkStaleAlias(self, "", .{ .live = false, .span = span, .alias_of = borrowed_place.root, .alias_place = borrowed_place }, span, state);
@@ -4869,12 +4961,12 @@ fn markDeferredBorrowReferent(self: *Checker, borrowed_place: MovePlace, span: d
     root_slot.deferred_borrow_place = borrowed_place;
 }
 
-fn markDeferredBorrowAliasReferent(self: *Checker, referent: AliasReferent, span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+fn markDeferredBorrowAliasReferent(self: *Checker, referent: AliasReferent, span: diagnostics.Span, state: *MoveState) void {
     const borrowed_place = deferredAliasBorrowPlace(referent.place) orelse return;
     markDeferredBorrowReferent(self, borrowed_place, span, state);
 }
 
-fn moveDeferSliceBase(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+fn moveDeferSliceBase(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     switch (expr.kind) {
         .grouped => |inner| moveDeferSliceBase(self, inner.*, state, aliases),
         .struct_literal => |fields| for (fields) |field| moveDefer(self, field.value, state, aliases),
@@ -4884,7 +4976,7 @@ fn moveDeferSliceBase(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(
 }
 
 // `defer <expr>`: reserve the move bindings the deferred expr will consume.
-pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     switch (expr.kind) {
         .ident => |id| {
             if (bindingMoveSlotPtrForIdent(id.text, state)) |slot| {
@@ -4993,7 +5085,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveS
     }
 }
 
-fn moveDeferBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+fn moveDeferBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     var before = cloneMoveState(self, state);
     defer before.deinit();
 
@@ -5017,7 +5109,7 @@ fn moveDeferBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(Mo
     preserveOuterScopedMoveState(self, state, &before);
 }
 
-fn cleanupLocalAliasReferent(self: *Checker, init: ast.Expr, state: *const std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
+fn cleanupLocalAliasReferent(self: *Checker, init: ast.Expr, state: *const MoveState, outer: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?AliasReferent {
     switch (init.kind) {
         .grouped => |inner| return cleanupLocalAliasReferent(self, inner.*, state, outer, aliases),
         else => {},
@@ -5029,7 +5121,7 @@ fn cleanupLocalAliasReferent(self: *Checker, init: ast.Expr, state: *const std.S
     return .{ .key = referent.key, .place = place, .full_deref = referent.full_deref };
 }
 
-fn recordDeferredIdentAssignmentAlias(self: *Checker, name: ast.Ident, value: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+fn recordDeferredIdentAssignmentAlias(self: *Checker, name: ast.Ident, value: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     if (aliasReferentForExpr(self, value, state, aliases)) |referent| {
         if (trackedAliasReferent(referent, state)) |tracked_referent| {
             if (state.getPtr(name.text)) |slot| {
@@ -5052,7 +5144,7 @@ fn recordDeferredIdentAssignmentAlias(self: *Checker, name: ast.Ident, value: as
     }
 }
 
-fn moveDeferStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+fn moveDeferStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, outer: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     switch (stmt.kind) {
         .let_decl, .var_decl => |decl| {
             if (decl.init) |init| {
@@ -5088,7 +5180,7 @@ fn moveDeferStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveS
     }
 }
 
-fn moveDeferLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+fn moveDeferLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     // Deferred cleanup loops still have zero-or-many iteration semantics. Analyze
     // their source condition/body once, then let the same loop-head worklist used
     // by ordinary loops merge the zero-iteration and backedge states. `break` and
@@ -5130,7 +5222,7 @@ fn moveDeferLoopCfg(self: *Checker, loop: ast.Loop, state: *std.StringHashMap(Mo
     }
 }
 
-fn moveDeferSwitchCfg(self: *Checker, node: ast.Switch, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+fn moveDeferSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     if (node.arms.len == 0) {
         moveDefer(self, node.subject, state, aliases);
         return;
@@ -5165,7 +5257,7 @@ fn moveDeferSwitchCfg(self: *Checker, node: ast.Switch, state: *std.StringHashMa
     }
 }
 
-fn moveDeferIfLetCfg(self: *Checker, node: ast.IfLet, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+fn moveDeferIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     var branch = twoArmMoveCfg(self) orelse return;
     defer branch.deinit();
 
@@ -5188,7 +5280,7 @@ fn moveDeferIfLetCfg(self: *Checker, node: ast.IfLet, state: *std.StringHashMap(
     }
 }
 
-fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     if (decl.names.len == 0) return;
     var binding_ty: ?ast.TypeExpr = decl.ty;
     if (binding_ty == null) {
@@ -5226,7 +5318,7 @@ fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *std.St
     }
 }
 
-fn recordTypeOnlyPlaceRoot(self: *Checker, name: ast.Ident, maybe_ty: ?ast.TypeExpr, state: *std.StringHashMap(MoveSlot), cleanup_local: bool) void {
+fn recordTypeOnlyPlaceRoot(self: *Checker, name: ast.Ident, maybe_ty: ?ast.TypeExpr, state: *MoveState, cleanup_local: bool) void {
     const ty = maybe_ty orelse return;
     if (state.get(name.text)) |slot| {
         if (slot.alias_of != null or isPureIndexFactSlot(slot) or (slot.live and !slot.type_only)) return;
