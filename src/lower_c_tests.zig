@@ -5772,20 +5772,9 @@ test "lower-c module blocks namespace functions and constants" {
         \\}
     ;
 
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mod.mc", source);
-    defer reporter.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try lower_c.appendC(std.testing.allocator, module, &output);
+    try appendCTest("mod.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Math__square") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Math__PI") != null);
@@ -5804,20 +5793,9 @@ test "lower-c impl blocks desugar to mangled free functions" {
         \\}
     ;
 
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "impl.mc", source);
-    defer reporter.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try lower_c.appendC(std.testing.allocator, module, &output);
+    try appendCTest("impl.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Tensor__get") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Tensor__get(t)") != null);

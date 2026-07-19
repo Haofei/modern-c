@@ -2564,7 +2564,7 @@ test "MIR owns span-identified result types for compound expressions" {
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "expression_results").?;
-    try std.testing.expectEqual(@as(usize, 11), countTargetTypeFactsByKind(function, .expression_result));
+    try std.testing.expectEqual(@as(usize, 15), countTargetTypeFactsByKind(function, .expression_result));
     var last_source: ?mir.SourcePoint = null;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .expression_result) continue;

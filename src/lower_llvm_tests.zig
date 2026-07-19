@@ -433,7 +433,8 @@ test "LLVM consumes tagged-union target type facts without function-name collisi
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_union_target_type_facts.mc", source, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "@number(i64 11)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "zext i32 11 to i64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "@number(i64 %") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "store i32 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "store i32 2") != null);
 }
@@ -5804,14 +5805,16 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(raw_many_offset_zero_body, "store ptr @shared_counter, ptr %p.addr.");
     try expectContains(raw_many_offset_zero_body, "; mir pointer_provenance consumed fn=possibly_racing_raw_many_offset_zero_pointer_load subject=q provenance=global_storage reason=none");
     try expectContains(raw_many_offset_zero_body, "getelementptr i32, ptr %");
-    try expectContains(raw_many_offset_zero_body, ", i64 0");
+    try expectContains(raw_many_offset_zero_body, "zext i32 0 to i64");
+    try expectContains(raw_many_offset_zero_body, ", i64 %");
     try expectContains(raw_many_offset_zero_body, "load atomic i32, ptr %");
     try expectContains(raw_many_offset_zero_body, " unordered, align 4");
     try expectNotContains(raw_many_offset_zero_body, "load i32, ptr %");
 
     const raw_many_offset_one_body = try llvmFunctionBody(output.items, "define internal i32 @raw_many_offset_one_pointer_lowers_atomic");
     try expectContains(raw_many_offset_one_body, "store ptr @shared_counter, ptr %p.addr.");
-    try expectContains(raw_many_offset_one_body, ", i64 1");
+    try expectContains(raw_many_offset_one_body, "zext i32 1 to i64");
+    try expectContains(raw_many_offset_one_body, ", i64 %");
     try expectContains(raw_many_offset_one_body, "load atomic i32, ptr %");
     try expectContains(raw_many_offset_one_body, " unordered, align 4");
     try expectNotContains(raw_many_offset_one_body, "load i32, ptr %");
@@ -5825,7 +5828,8 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
 
     const raw_many_offset_unknown_body = try llvmFunctionBody(output.items, "define internal i32 @raw_many_offset_unknown_pointer_lowers_atomic");
     try expectContains(raw_many_offset_unknown_body, "call ptr @external_raw_many_pointer()");
-    try expectContains(raw_many_offset_unknown_body, ", i64 0");
+    try expectContains(raw_many_offset_unknown_body, "zext i32 0 to i64");
+    try expectContains(raw_many_offset_unknown_body, ", i64 %");
     try expectContains(raw_many_offset_unknown_body, "load atomic i32, ptr %");
     try expectContains(raw_many_offset_unknown_body, " unordered, align 4");
     try expectNotContains(raw_many_offset_unknown_body, "load i32, ptr %");
@@ -8403,7 +8407,8 @@ test "LLVM raw-many zero direct local without MIR fact lowers conservatively" {
     try expectContains(body, "; mir pointer_provenance consumed fn=raw_many_zero_requires_mir_fact subject=p provenance=global_storage reason=none");
     try expectNotContains(body, "; mir pointer_provenance consumed fn=raw_many_zero_requires_mir_fact subject=q");
     try expectContains(body, "getelementptr i32, ptr %");
-    try expectContains(body, ", i64 0");
+    try expectContains(body, "zext i32 0 to i64");
+    try expectContains(body, ", i64 %");
     try expectContains(body, "load atomic i32, ptr %");
     try expectContains(body, " unordered, align 4");
     try expectNotContains(body, "load i32, ptr %");
@@ -8493,7 +8498,8 @@ test "LLVM raw-many zero direct local without MIR fact lowers conservatively" {
     try expectContains(assignment_body, "; mir pointer_provenance consumed fn=raw_many_zero_assignment_requires_mir_fact subject=p provenance=global_storage reason=none");
     try expectNotContains(assignment_body, "; mir pointer_provenance consumed fn=raw_many_zero_assignment_requires_mir_fact subject=q");
     try expectContains(assignment_body, "getelementptr i32, ptr %");
-    try expectContains(assignment_body, ", i64 0");
+    try expectContains(assignment_body, "zext i32 0 to i64");
+    try expectContains(assignment_body, ", i64 %");
     try expectContains(assignment_body, "load atomic i32, ptr %");
     try expectContains(assignment_body, " unordered, align 4");
     try expectNotContains(assignment_body, "load i32, ptr %");
@@ -11544,7 +11550,8 @@ test "LLVM proven-local wide-scalar deref stays plain" {
 
     const body = try llvmFunctionBody(output.items, "define internal i128 @local_wide");
     try expectContains(body, "; mir pointer_provenance consumed fn=local_wide subject=p provenance=local_storage reason=none");
-    try expectContains(body, "store i128 9, ptr %");
+    try expectContains(body, "zext i32 9 to i128");
+    try expectContains(body, "store i128 %");
     try expectContains(body, "load i128, ptr %");
     try expectNotContains(body, " atomic ");
 }
