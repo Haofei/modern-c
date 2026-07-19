@@ -139,6 +139,14 @@ pub fn negatedLiteralIsI64Min(expr: ast.Expr) bool {
     };
 }
 
+pub fn isIntegerLiteralExpr(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .int_literal => true,
+        .grouped => |inner| isIntegerLiteralExpr(inner.*),
+        else => false,
+    };
+}
+
 fn literalMagnitudeIsI64Min(literal: []const u8) bool {
     var buf: [64]u8 = undefined;
     var n: usize = 0;

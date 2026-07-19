@@ -1908,9 +1908,12 @@ const CEmitter = struct {
             inferred orelse return null
         else
             return null;
-        if (inferred) |ty| {
+        // A negated integer literal is context-typed as one expression. The
+        // positive magnitude may independently default to u32, including for
+        // `-2147483648`, so it must not override the MIR-owned unary result.
+        if (inferred) |ty| if (!(node.op == .neg and lower_c_const.isIntegerLiteralExpr(node.expr.*))) {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return null;
-        }
+        };
         return fact_ty;
     }
 

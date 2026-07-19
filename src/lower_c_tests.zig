@@ -5489,6 +5489,32 @@ test "lower-c emits support helpers used by evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_signal_fence") == null);
 }
 
+test "lower-c context-types minimum signed integer unary literals" {
+    const source =
+        \\fn direct() -> i32 {
+        \\    let value: i32 = -2147483648;
+        \\    return value;
+        \\}
+        \\
+        \\fn grouped() -> i32 {
+        \\    let value: i32 = -(2147483648);
+        \\    return value;
+        \\}
+        \\
+        \\fn dynamic(value: i32) -> i32 {
+        \\    return -value;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_min_signed_unary_literal.mc", source, &output);
+
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "2147483648"));
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "((int32_t)-2147483648)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_neg_i32(value)") != null);
+}
+
 test "lower-c emits cstr as immutable C string pointer" {
     const source =
         \\extern "C" fn strlen(s: cstr) -> usize;
