@@ -2655,6 +2655,8 @@ Evaluation order is defined:
 ```txt
 Function arguments evaluate left to right.
 Binary operators evaluate left operand then right operand.
+Array elements and struct-literal field expressions evaluate in lexical source order;
+named struct fields are stored at their declaration-defined layout positions afterward.
 Assignment evaluates RHS, then LHS address, then stores.
 && and || short-circuit.
 ```

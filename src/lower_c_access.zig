@@ -302,8 +302,8 @@ pub fn emitRawManyOffsetDerefTargetAssignmentStmt(ctx: EmitContext, assignment: 
     const should_sequence = exprContainsCall(inner) or exprContainsCall(assignment.value);
     if (!should_sequence) return false;
 
-    const ptr_temp = (try emitRawManyOffsetValueTempFromCallForce(ctx, call, locals, ptr_ty, true)) orelse return false;
     const value_temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, assignment.value, locals, element_ty);
+    const ptr_temp = (try emitRawManyOffsetValueTempFromCallForce(ctx, call, locals, ptr_ty, true)) orelse return false;
 
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "*{s} = {s};\n", .{ ptr_temp.name, value_temp.name });
@@ -565,8 +565,8 @@ pub fn emitLocalIndexTargetAssignmentStmt(ctx: EmitContext, assignment: anytype,
     const element_ty = localIndexElementType(index.base.*, locals) orelse return false;
 
     const usize_ty = simpleNameType("usize", index.index.span);
-    const index_temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, index.index.*, locals, usize_ty);
     const value_temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, assignment.value, locals, element_ty);
+    const index_temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, index.index.*, locals, usize_ty);
 
     try writeIndent(ctx);
     if (sliceAccessForExpr(index.base.*, locals)) |slice| {

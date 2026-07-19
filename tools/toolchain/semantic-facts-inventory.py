@@ -364,21 +364,21 @@ AGGREGATE_RETURN_CFG_DECISION_AUDIT: dict[str, list[str]] = {
 
 EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT: dict[str, list[str]] = {
     "docs/compiler-production-readiness.md": [
-        "| Extern/export struct-by-value ABI hazards fail closed |",
+        "| Extern/export struct and optional ABI hazards fail closed |",
         "| `c-abi-aggregate-lowering` | Accepted fail-closed external ABI boundary:",
-        "Struct-by-value C ABI at `extern`/`export`",
+        "Struct and optional C ABI hazards at explicit `extern \"C\"`/`export`",
     ],
     "docs/typed-semantic-facts.md": [
         "| `c-abi-aggregate-lowering` |",
-        "Extern/export struct-by-value boundaries are an accepted fail-closed diagnostic policy",
+        "Explicit C ABI declarations and exported functions reject named structs and tagged/fat optional values",
     ],
     "src/sema.zig": [
         "fn checkExternExportStructAbi(",
         "E_EXTERN_STRUCT_BY_VALUE",
-        "fn isByValueStructAbiType(",
+        "fn externAbiTypeNeedsClassification(",
     ],
     "src/sema_tests.zig": [
-        "test \"rejects by-value struct signatures at extern and export ABI boundaries\"",
+        "test \"rejects structs and tagged optionals at extern and export ABI boundaries\"",
         "countDiagnosticCode(&reporter, \"E_EXTERN_STRUCT_BY_VALUE\")",
     ],
     "tests/c_emit/bad/extern_struct_param_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
@@ -386,6 +386,7 @@ EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT: dict[str, list[str]] = {
     "tests/c_emit/bad/export_struct_param_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
     "tests/c_emit/bad/export_struct_return_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
     "tests/c_emit/bad/export_generic_struct_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
+    "tests/c_emit/bad/extern_optional_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
 }
 
 C_AGGREGATE_GLOBAL_REPRESENTATION_POLICY_AUDIT: dict[str, list[str]] = {

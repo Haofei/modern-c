@@ -5557,7 +5557,7 @@ test "lower-c emits cstr as immutable C string pointer" {
         \\export fn return_cstr() -> cstr {
         \\    return identity("xyz");
         \\}
-        \\export fn return_bytes() -> []const u8 { return "bytes"; }
+        \\fn return_bytes() -> []const u8 { return "bytes"; }
     ;
 
     var output: std.ArrayList(u8) = .empty;
@@ -6249,11 +6249,11 @@ test "lower-c emits packed bits MMIO reads and field masks" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static bool ready(UartLsr status)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((status & UINT8_C(2)) != 0);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static UartLsr set_ready(UartLsr status, bool flag)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "status = (UartLsr)((status & (UartLsr)~UINT8_C(2)) | (flag ? UINT8_C(2) : (UartLsr)0));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "status = (UartLsr)((status & (UartLsr)~UINT8_C(2)) | (mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void set_global_ready(bool flag)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "UartLsr mc_tmp1 = (UartLsr)mc_race_load_u8(&status);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_tmp1 = (UartLsr)((mc_tmp1 & (UartLsr)~UINT8_C(2)) | (flag ? UINT8_C(2) : (UartLsr)0));") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u8(&status, (uint8_t)mc_tmp1);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "(UartLsr)mc_race_load_u8(&status);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " = (UartLsr)((mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u8(&status, (uint8_t)mc_tmp") != null);
 }
 
 test "lower-c emits C ABI for simple Result types" {
@@ -6707,12 +6707,10 @@ test "lower-c emits try in assignment and expression statements" {
     try appendCTest("emit_c_try_assignment_expr_stmt.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "value = mc_tmp0.payload.ok;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp1 = make_result();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_value, (uint32_t)mc_tmp1.payload.ok);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp2 = make_result();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp2.is_ok) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp3 = make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".payload.ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "value = mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_value, (uint32_t)mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, ".payload.ok;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "consume(mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
@@ -6747,7 +6745,7 @@ test "lower-c emits simple functions and race-safe globals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t add(uint32_t a, uint32_t b)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_counter, (uint32_t)x);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_counter, (uint32_t)mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((uint32_t)mc_race_load_u32(&shared_counter));") != null);
 }
 
@@ -6796,7 +6794,7 @@ test "lower-c proven-local wide-scalar deref stays plain" {
     try appendCTest("emit_c_wide_local_deref.mc", source, &output);
     const body = try cFunctionBody(output.items, "static unsigned __int128 local_wide(void)");
     try expectContains(body, "/* mir pointer_provenance consumed fn=local_wide subject=p provenance=local_storage reason=none source=");
-    try expectContains(body, "*p = 9;");
+    try expectContains(body, "*p = mc_tmp");
     try expectContains(body, "return *p;");
     try expectNotContains(body, "mc_race_");
 }
@@ -6852,7 +6850,7 @@ test "lower-c pointer member scalar access lowers race-tolerantly" {
     const load_body = try cFunctionBody(output.items, "static uint32_t pointer_member_load(SharedPair * p)");
     try expectContains(load_body, "return ((uint32_t)mc_race_load_u32(&(p->value)));");
     const store_body = try cFunctionBody(output.items, "static void pointer_member_store(SharedPair * p, uint32_t x)");
-    try expectContains(store_body, "mc_race_store_u32(&(p->value), (uint32_t)x);");
+    try expectContains(store_body, "mc_race_store_u32(&(p->value), (uint32_t)mc_tmp");
     const call_load_body = try cFunctionBody(output.items, "static uint32_t call_pointer_member_load(void)");
     try expectContains(call_load_body, "return ((uint32_t)mc_race_load_u32(&(external_pair()->value)));");
 }
@@ -6951,7 +6949,7 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     try appendCTest("emit_c_pointer_member_aggregate_store.mc", store_source, &store_output);
     const store_body = try cFunctionBody(store_output.items, "static void pointer_member_aggregate_store(Outer * p, Inner value)");
     try expectContains(store_body, "Outer * mc_ptr");
-    try expectContains(store_body, "Inner mc_value");
+    try expectContains(store_body, "Inner mc_tmp");
     try expectContains(store_body, "mc_race_store_u32");
 
     const call_source =
@@ -6982,7 +6980,7 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     const call_store_body = try cFunctionBody(call_output.items, "static void call_pointer_member_aggregate_store(Inner value)");
     try expectContains(call_store_body, "Outer * mc_ptr");
     try expectContains(call_store_body, "external_outer()");
-    try expectContains(call_store_body, "Inner mc_value");
+    try expectContains(call_store_body, "Inner mc_tmp");
     try expectContains(call_store_body, "mc_race_store_u32");
 
     const nested_source =
@@ -7020,7 +7018,7 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     try expectContains(nested_init_body, "mc_race_load_u32");
     const nested_store_body = try cFunctionBody(nested_output.items, "static void nested_pointer_member_aggregate_store(Outer * p, Leaf value)");
     try expectContains(nested_store_body, "Outer * mc_ptr");
-    try expectContains(nested_store_body, "Leaf mc_value");
+    try expectContains(nested_store_body, "Leaf mc_tmp");
     try expectContains(nested_store_body, "mc_race_store_u32");
 
     const nested_call_source =
@@ -7054,7 +7052,7 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     const nested_call_store_body = try cFunctionBody(nested_call_output.items, "static void call_nested_pointer_member_aggregate_store(Leaf value)");
     try expectContains(nested_call_store_body, "Outer * mc_ptr");
     try expectContains(nested_call_store_body, "external_nested_outer()");
-    try expectContains(nested_call_store_body, "Leaf mc_value");
+    try expectContains(nested_call_store_body, "Leaf mc_tmp");
     try expectContains(nested_call_store_body, "mc_race_store_u32");
 
     const local_source =
@@ -7090,7 +7088,10 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     try expectContains(local_body, "return p->middle.inner;");
     const local_copy_body = try cFunctionBody(local_output.items, "static uint32_t local_pointer_member_aggregate_copy_stays_plain(void)");
     try expectContains(local_copy_body, "/* mir pointer_provenance consumed fn=local_pointer_member_aggregate_copy_stays_plain subject=p provenance=local_storage reason=none source=");
-    try expectContains(local_copy_body, "p->middle.inner = replacement;");
+    const rhs_temp = std.mem.indexOf(u8, local_copy_body, " = replacement;") orelse return error.TestUnexpectedResult;
+    const lhs_store = std.mem.indexOf(u8, local_copy_body, "p->middle.inner = ") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(rhs_temp < lhs_store);
+    try expectNotContains(local_copy_body, "p->middle.inner = replacement;");
     try expectContains(local_copy_body, "Inner inner = p->middle.inner;");
     try expectNotContains(local_copy_body, "mc_race_");
 }
@@ -7164,7 +7165,7 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     try appendCTest("emit_c_pointer_aggregate_store.mc", store_source, &store_output);
     const store_body = try cFunctionBody(store_output.items, "static void pointer_aggregate_store(Cell * p, Cell value)");
     try expectContains(store_body, "Cell * mc_ptr");
-    try expectContains(store_body, "Cell mc_value");
+    try expectContains(store_body, "Cell mc_tmp");
     try expectContains(store_body, "mc_race_store_u32");
 
     const raw_many_load_source =
@@ -7202,7 +7203,7 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     try appendCTest("emit_c_raw_many_aggregate_store.mc", raw_many_store_source, &raw_many_store_output);
     const raw_many_store_body = try cFunctionBody(raw_many_store_output.items, "static void raw_many_aggregate_store(Cell * p, uintptr_t i, Cell value)");
     try expectContains(raw_many_store_body, "Cell * mc_ptr");
-    try expectContains(raw_many_store_body, "Cell mc_value");
+    try expectContains(raw_many_store_body, "Cell mc_tmp");
     try expectContains(raw_many_store_body, "mc_race_store_u32");
 
     const call_raw_many_source =
@@ -7235,7 +7236,7 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     const call_raw_many_store_body = try cFunctionBody(call_raw_many_output.items, "static void call_raw_many_aggregate_store(uintptr_t i, Cell value)");
     try expectContains(call_raw_many_store_body, "Cell * mc_ptr");
     try expectContains(call_raw_many_store_body, "external_cells()");
-    try expectContains(call_raw_many_store_body, "Cell mc_value");
+    try expectContains(call_raw_many_store_body, "Cell mc_tmp");
     try expectContains(call_raw_many_store_body, "mc_race_store_u32");
 
     const local_source =
@@ -7299,7 +7300,7 @@ test "lower-c aggregate pointer deref value copies lower field-wise race-toleran
     const local_raw_many_store_body = try cFunctionBody(local_raw_many_store_output.items, "static Cell local_raw_many_zero_aggregate_store(Cell value)");
     try expectContains(local_raw_many_store_body, "/* mir pointer_provenance consumed fn=local_raw_many_zero_aggregate_store subject=p provenance=local_storage reason=none");
     try expectContains(local_raw_many_store_body, "/* mir pointer_provenance consumed fn=local_raw_many_zero_aggregate_store subject=q provenance=local_storage reason=none");
-    try expectContains(local_raw_many_store_body, "*q = value;");
+    try expectContains(local_raw_many_store_body, "*q = mc_tmp");
     try expectNotContains(local_raw_many_store_body, "mc_race_");
 }
 
@@ -8068,7 +8069,7 @@ test "lower-c indexed aggregate field value copies lower recursively" {
     try appendCTest("emit_c_slice_aggregate_field_store.mc", slice_store_source, &slice_store_output);
     const slice_store_body = try cFunctionBody(slice_store_output.items, "static void slice_inner_store(mc_slice_mut_struct_Cell cells, uintptr_t i, Inner value)");
     try expectContains(slice_store_body, "Inner * mc_ptr");
-    try expectContains(slice_store_body, "Inner mc_value");
+    try expectContains(slice_store_body, "Inner mc_tmp");
     try expectContains(slice_store_body, "cells.ptr[mc_check_index_usize(");
     try expectContains(slice_store_body, "mc_race_store_u32");
 
@@ -8149,7 +8150,7 @@ test "lower-c indexed aggregate field value copies lower recursively" {
     try expectNotContains(local_body, "mc_race_load_u32");
     const local_store_body = try cFunctionBody(local_output.items, "static Inner local_array_inner_store(uintptr_t i, Inner value)");
     try expectContains(local_store_body, "cells.elems[mc_check_index_usize(");
-    try expectContains(local_store_body, ".inner = value;");
+    try expectContains(local_store_body, ".inner = mc_tmp");
     try expectContains(local_store_body, "return cells.elems[mc_check_index_usize(i, 4)].inner;");
     try expectNotContains(local_store_body, "mc_race_load_u32");
     try expectNotContains(local_store_body, "mc_race_store_u32");
@@ -8407,7 +8408,7 @@ test "lower-c nested indexed aggregate field value copies lower recursively" {
 
     const slice_store_body = try cFunctionBody(output.items, "static void slice_leaf_store(mc_slice_mut_struct_Cell cells, uintptr_t i, Leaf value)");
     try expectContains(slice_store_body, "Leaf * mc_ptr");
-    try expectContains(slice_store_body, "Leaf mc_value");
+    try expectContains(slice_store_body, "Leaf mc_tmp");
     try expectContains(slice_store_body, "cells.ptr[mc_check_index_usize(");
     try expectContains(slice_store_body, "mc_race_store_u32");
 
@@ -8426,7 +8427,7 @@ test "lower-c nested indexed aggregate field value copies lower recursively" {
     try expectNotContains(local_body, "mc_race_load_u32");
     const local_store_body = try cFunctionBody(output.items, "static Leaf local_array_leaf_store(uintptr_t i, Leaf value)");
     try expectContains(local_store_body, "cells.elems[mc_check_index_usize(");
-    try expectContains(local_store_body, ".inner.leaf = value;");
+    try expectContains(local_store_body, ".inner.leaf = mc_tmp");
     try expectContains(local_store_body, "return cells.elems[mc_check_index_usize(i, 4)].inner.leaf;");
     try expectNotContains(local_store_body, "mc_race_load_u32");
     try expectNotContains(local_store_body, "mc_race_store_u32");
@@ -8536,7 +8537,7 @@ test "lower-c aggregate whole-element access lowers recursively" {
     try appendCTest("emit_c_slice_aggregate_store.mc", slice_store_source, &slice_store_output);
     const slice_store_body = try cFunctionBody(slice_store_output.items, "static void slice_cell_store(mc_slice_mut_struct_Cell cells, uintptr_t i, Cell value)");
     try expectContains(slice_store_body, "Cell * mc_ptr");
-    try expectContains(slice_store_body, "Cell mc_value");
+    try expectContains(slice_store_body, "Cell mc_tmp");
     try expectContains(slice_store_body, "cells.ptr[mc_check_index_usize(");
     try expectContains(slice_store_body, "mc_race_store_u32");
 
@@ -8572,7 +8573,7 @@ test "lower-c aggregate whole-element access lowers recursively" {
     try appendCTest("emit_c_pointer_array_aggregate_store.mc", pointer_array_store_source, &pointer_array_store_output);
     const pointer_array_store_body = try cFunctionBody(pointer_array_store_output.items, "static void pointer_array_cell_store(mc_array_struct_Cell_4 * pa, uintptr_t i, Cell value)");
     try expectContains(pointer_array_store_body, "Cell * mc_ptr");
-    try expectContains(pointer_array_store_body, "Cell mc_value");
+    try expectContains(pointer_array_store_body, "Cell mc_tmp");
     try expectContains(pointer_array_store_body, "(*pa).elems[mc_check_index_usize(");
     try expectContains(pointer_array_store_body, "mc_race_store_u32");
 
@@ -8634,7 +8635,7 @@ test "lower-c aggregate whole-element access lowers recursively" {
     try expectNotContains(local_pointer_array_load_body, "mc_race_load_u32");
     const local_pointer_array_store_body = try cFunctionBody(local_pointer_array_output.items, "static Cell local_pointer_array_cell_store(uintptr_t i, Cell value)");
     try expectContains(local_pointer_array_store_body, "/* mir pointer_provenance consumed fn=local_pointer_array_cell_store subject=pa provenance=local_storage reason=none source=");
-    try expectContains(local_pointer_array_store_body, "(*pa).elems[mc_check_index_usize(i, 4)] = value;");
+    try expectContains(local_pointer_array_store_body, "(*pa).elems[mc_check_index_usize(i, 4)] = mc_tmp");
     try expectNotContains(local_pointer_array_store_body, "mc_race_store_u32");
 }
 
@@ -9226,13 +9227,13 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_global_load subject=gp provenance=global_storage reason=none source=");
     try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(gp));");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_global_store subject=gp provenance=global_storage reason=none source=");
-    try expectContains(output.items, "mc_race_store_u32(gp, (uint32_t)x);");
+    try expectContains(output.items, "mc_race_store_u32(gp, (uint32_t)mc_tmp");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_copy_load subject=copy provenance=global_storage reason=none source=");
     try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(copy));");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_copy_store subject=copy provenance=global_storage reason=reassignment source=");
-    try expectContains(output.items, "mc_race_store_u32(copy, (uint32_t)x);");
+    try expectContains(output.items, "mc_race_store_u32(copy, (uint32_t)mc_tmp");
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_local_storage_stays_plain subject=lp provenance=local_storage reason=none source=");
-    try expectContains(output.items, "*lp = 6;");
+    try expectContains(output.items, "*lp = mc_tmp");
     try expectContains(output.items, "return *lp;");
     const local_copy_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_local_copy_stays_plain(void)");
     try expectContains(local_copy_body, "/* mir pointer_provenance consumed fn=pointer_fact_local_copy_stays_plain subject=copy provenance=local_storage reason=none source=");
@@ -9249,7 +9250,7 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
     try expectContains(call_pointer_body, "return ((uint32_t)mc_race_load_u32(external_pointer()));");
     try expectNotContains(call_pointer_body, "return *external_pointer();");
     const call_pointer_store_body = try cFunctionBody(output.items, "static void call_produced_pointer_store_lowers_race_tolerant(uint32_t x)");
-    try expectContains(call_pointer_store_body, "mc_race_store_u32(external_pointer(), (uint32_t)x);");
+    try expectContains(call_pointer_store_body, "mc_race_store_u32(external_pointer(), (uint32_t)mc_tmp");
     try expectNotContains(call_pointer_store_body, "*external_pointer() = x;");
     const member_pointer_body = try cFunctionBody(output.items, "static uint32_t member_loaded_pointer_lowers_race_tolerant(PtrBox b)");
     try expectContains(member_pointer_body, "return ((uint32_t)mc_race_load_u32(b.p));");
@@ -9291,12 +9292,12 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
 
     const raw_many_zero_store_body = try cFunctionBody(output.items, "static void pointer_fact_raw_many_zero_store(uint32_t x)");
     try expectContains(raw_many_zero_store_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_zero_store subject=q provenance=global_storage reason=none source=");
-    try expectContains(raw_many_zero_store_body, "mc_race_store_u32(q, (uint32_t)x);");
+    try expectContains(raw_many_zero_store_body, "mc_race_store_u32(q, (uint32_t)mc_tmp");
 
     const raw_many_zero_local_body = try cFunctionBody(output.items, "static uint32_t pointer_fact_raw_many_zero_local_stays_plain(void)");
     try expectContains(raw_many_zero_local_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_zero_local_stays_plain subject=p provenance=local_storage reason=none source=");
     try expectContains(raw_many_zero_local_body, "/* mir pointer_provenance consumed fn=pointer_fact_raw_many_zero_local_stays_plain subject=q provenance=local_storage reason=none source=");
-    try expectContains(raw_many_zero_local_body, "*q = 9;");
+    try expectContains(raw_many_zero_local_body, "*q = mc_tmp");
     try expectContains(raw_many_zero_local_body, "return *q;");
     try expectNotContains(raw_many_zero_local_body, "mc_race_");
 
@@ -9402,11 +9403,11 @@ test "lower-c raw-many zero wrappers without MIR destination facts lower conserv
 
     const grouped_store_body = try cFunctionBody(normal_output.items, "static uint32_t c_raw_many_zero_grouped_store_requires_mir_fact(void)");
     try expectContains(grouped_store_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_grouped_store_requires_mir_fact subject=q provenance=global_storage reason=none source=");
-    try expectContains(grouped_store_body, "mc_race_store_u32(q, (uint32_t)9);");
+    try expectContains(grouped_store_body, "mc_race_store_u32(q, (uint32_t)mc_tmp");
 
     const casted_store_body = try cFunctionBody(normal_output.items, "static uint32_t c_raw_many_zero_casted_store_requires_mir_fact(void)");
     try expectContains(casted_store_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_casted_store_requires_mir_fact subject=q provenance=global_storage reason=none source=");
-    try expectContains(casted_store_body, "mc_race_store_u32(q, (uint32_t)9);");
+    try expectContains(casted_store_body, "mc_race_store_u32(q, (uint32_t)mc_tmp");
 
     var missing_grouped_output: std.ArrayList(u8) = .empty;
     defer missing_grouped_output.deinit(std.testing.allocator);
@@ -9432,7 +9433,7 @@ test "lower-c raw-many zero wrappers without MIR destination facts lower conserv
     const missing_grouped_store_body = try cFunctionBody(missing_grouped_store_output.items, "static uint32_t c_raw_many_zero_grouped_store_requires_mir_fact(void)");
     try expectContains(missing_grouped_store_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_grouped_store_requires_mir_fact subject=p provenance=global_storage reason=none source=");
     try expectNotContains(missing_grouped_store_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_grouped_store_requires_mir_fact subject=q");
-    try expectContains(missing_grouped_store_body, "mc_race_store_u32(q, (uint32_t)9);");
+    try expectContains(missing_grouped_store_body, "mc_race_store_u32(q, (uint32_t)mc_tmp");
     try expectNotContains(missing_grouped_store_body, "*q =");
 
     var missing_casted_store_output: std.ArrayList(u8) = .empty;
@@ -9441,7 +9442,7 @@ test "lower-c raw-many zero wrappers without MIR destination facts lower conserv
     const missing_casted_store_body = try cFunctionBody(missing_casted_store_output.items, "static uint32_t c_raw_many_zero_casted_store_requires_mir_fact(void)");
     try expectContains(missing_casted_store_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_casted_store_requires_mir_fact subject=p provenance=global_storage reason=none source=");
     try expectNotContains(missing_casted_store_body, "/* mir pointer_provenance consumed fn=c_raw_many_zero_casted_store_requires_mir_fact subject=q");
-    try expectContains(missing_casted_store_body, "mc_race_store_u32(q, (uint32_t)9);");
+    try expectContains(missing_casted_store_body, "mc_race_store_u32(q, (uint32_t)mc_tmp");
     try expectNotContains(missing_casted_store_body, "*q =");
 }
 
@@ -9769,7 +9770,7 @@ test "lower-c noalias direct pointers without MIR destination facts lower conser
 
     const normal_local_body = try cFunctionBody(normal_output.items, "static uint32_t c_noalias_local_requires_mir_fact(void)");
     try expectContains(normal_local_body, "/* mir pointer_provenance consumed fn=c_noalias_local_requires_mir_fact subject=p provenance=local_storage reason=none source=");
-    try expectContains(normal_local_body, "*p = 9;");
+    try expectContains(normal_local_body, "*p = mc_tmp");
     try expectContains(normal_local_body, "return *p;");
     try expectNotContains(normal_local_body, "mc_race_load_u32(p)");
     try expectNotContains(normal_local_body, "mc_race_store_u32(p");
@@ -12681,7 +12682,7 @@ test "lower-c emits extern structs and member access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Packet *)raw);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t read_value(Packet packet)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return packet.value;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "packet.value = value;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "packet.value = mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return packet.ptr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return make_packet().value;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * make_ptr(void);") != null);
@@ -12747,7 +12748,7 @@ test "lower-c emits overlay unions as byte storage" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return word.storage[mc_check_index_usize(0, 4)];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "memcpy(word.storage, &mc_tmp1, 4);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "word.storage[mc_check_index_usize(0, 4)] = value;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "word.storage[mc_check_index_usize(0, 4)] = mc_ov") != null);
 }
 
 test "lower-c emits assert trap" {
@@ -13030,6 +13031,34 @@ test "lower-c sequences return call arguments left to right" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "value = combine(next_value(), next_value());") == null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "consume(next_value(), next_value());") == null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "box_value(next_value())") == null);
+}
+
+test "lower-c evaluates assignment RHS before LHS and struct fields in source order" {
+    const source =
+        \\struct Pair { first: u32, second: u32 }
+        \\extern fn next_index() -> usize;
+        \\extern fn next_value() -> u32;
+        \\extern fn mark(value: u32) -> u32;
+        \\fn ordered_assignment(values: []mut u32) -> void { values[next_index()] = next_value(); }
+        \\fn ordered_literal() -> Pair { return .{ .second = mark(2), .first = mark(1) }; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("emit_c_assignment_and_literal_order.mc", source, &output);
+
+    const assignment = try cFunctionBody(output.items, "static void ordered_assignment(mc_slice_mut_u32 values)");
+    const rhs = std.mem.indexOf(u8, assignment, "next_value()") orelse return error.TestUnexpectedResult;
+    const lhs = std.mem.indexOf(u8, assignment, "next_index()") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(rhs < lhs);
+
+    const literal = try cFunctionBody(output.items, "static Pair ordered_literal(void)");
+    const second_value = std.mem.indexOf(u8, literal, " = 2;") orelse return error.TestUnexpectedResult;
+    const second_call = std.mem.indexOfPos(u8, literal, second_value, "mark(") orelse return error.TestUnexpectedResult;
+    const first_value = std.mem.indexOfPos(u8, literal, second_call, " = 1;") orelse return error.TestUnexpectedResult;
+    const first_call = std.mem.indexOfPos(u8, literal, first_value, "mark(") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(second_value < second_call);
+    try std.testing.expect(second_call < first_value);
+    try std.testing.expect(first_value < first_call);
 }
 
 test "lower-c emits unsafe contract blocks as scoped blocks" {

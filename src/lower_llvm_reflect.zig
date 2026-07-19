@@ -28,6 +28,7 @@ const typeNameEql = lower_llvm_type.typeNameEql;
 const comptimeArraySize = type_layout.comptimeArraySize;
 const comptimeBitOffsetFromBytes = type_layout.comptimeBitOffset;
 const comptimeLayoutAdd = type_layout.comptimeLayoutAdd;
+const comptimeTaggedOptionalLayout = type_layout.comptimeTaggedOptionalLayout;
 
 fn castU64(value: i128) ?u64 {
     return std.math.cast(u64, value);
@@ -144,9 +145,18 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i
             if (libraryScalarLlvmType(name.text) != null) return 1;
             return null;
         },
-        .pointer, .raw_many_pointer => 8,
-        .dyn_trait => 16,
-        .nullable => |child| if (isPointerLikeType(child.*)) 8 else if (isDynTraitLlvmType(child.*)) 16 else null,
+        .pointer, .raw_many_pointer, .fn_pointer => 8,
+        .dyn_trait, .closure_type => 16,
+        .nullable => |child| if (isPointerLikeType(resolveAliasType(env, child.*)))
+            8
+        else if (isDynTraitLlvmType(resolveAliasType(env, child.*)))
+            16
+        else if (nullablePayloadIsValueType(env, child.*)) blk: {
+            const payload_size = comptimeSizeOf(env, child.*, depth + 1) orelse break :blk null;
+            const payload_align = comptimeAlignOf(env, child.*, depth + 1) orelse break :blk null;
+            const layout = comptimeTaggedOptionalLayout(payload_size, payload_align) orelse break :blk null;
+            break :blk layout.size;
+        } else null,
         .slice => 16,
         .generic => |g| {
             if (std.mem.eql(u8, g.base.text, "Result") and g.args.len == 2) {
@@ -198,9 +208,15 @@ pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?
             if (libraryScalarLlvmType(name.text) != null) return 1;
             return null;
         },
-        .pointer, .raw_many_pointer, .slice => 8,
-        .dyn_trait => 8,
-        .nullable => |child| if (isPointerLikeType(child.*)) 8 else if (isDynTraitLlvmType(child.*)) 8 else null,
+        .pointer, .raw_many_pointer, .fn_pointer, .slice, .dyn_trait, .closure_type => 8,
+        .nullable => |child| if (isPointerLikeType(resolveAliasType(env, child.*)) or isDynTraitLlvmType(resolveAliasType(env, child.*)))
+            8
+        else if (nullablePayloadIsValueType(env, child.*)) blk: {
+            const payload_size = comptimeSizeOf(env, child.*, depth + 1) orelse break :blk null;
+            const payload_align = comptimeAlignOf(env, child.*, depth + 1) orelse break :blk null;
+            const layout = comptimeTaggedOptionalLayout(payload_size, payload_align) orelse break :blk null;
+            break :blk layout.alignment;
+        } else null,
         .generic => |g| {
             if (std.mem.eql(u8, g.base.text, "Result") and g.args.len == 2) {
                 const ok_align = comptimeResultPayloadAlignOf(env, g.args[0], depth + 1) orelse return null;
@@ -321,6 +337,14 @@ fn packedBitsFieldIndex(info: PackedBitsInfo, field_name: []const u8) ?usize {
 
 pub fn resolveAliasType(env: *const ReflectEnv, ty: ast.TypeExpr) ast.TypeExpr {
     return resolveAliasTypeDepth(env, ty, 0);
+}
+
+fn nullablePayloadIsValueType(env: *const ReflectEnv, child: ast.TypeExpr) bool {
+    const resolved = resolveAliasType(env, child);
+    return switch (resolved.kind) {
+        .name => |name| !std.mem.eql(u8, name.text, "c_void"),
+        else => false,
+    };
 }
 
 fn resolveAliasTypeDepth(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ast.TypeExpr {

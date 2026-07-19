@@ -28,6 +28,7 @@ EMIT_LLVM_BAD_FIXTURES = (
     "tests/c_emit/bad/export_struct_return_by_value.mc",
     "tests/c_emit/bad/extern_struct_param_by_value.mc",
     "tests/c_emit/bad/extern_struct_return_by_value.mc",
+    "tests/c_emit/bad/extern_optional_by_value.mc",
 )
 
 

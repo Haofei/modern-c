@@ -7,7 +7,7 @@
 extern "C" fn strlen(s: cstr) -> usize;
 extern "C" fn returns_cstr() -> cstr;
 extern "C" fn takes_ptr(p: *const u8) -> usize;
-extern "C" fn takes_slice(s: []const u8) -> usize;
+extern fn takes_slice(s: []const u8) -> usize;
 
 fn accept_cstr_argument() -> usize {
     return strlen("abc");

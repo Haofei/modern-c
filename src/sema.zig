@@ -970,8 +970,12 @@ pub const Checker = struct {
         const type_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases };
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
-                const abi_boundary = decl.kind == .extern_fn or fn_decl.exported;
-                self.checkFn(fn_decl, abi_boundary, no_lang_trap, irq_context, bounded, is_naked, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases);
+                // Bare `extern fn` is an unresolved declaration in the active MC
+                // backend ABI. Only explicit `extern "C"` and exported definitions
+                // cross the stable C ABI boundary.
+                const abi_boundary = (decl.kind == .extern_fn and fn_decl.abi != null) or fn_decl.exported;
+                const move_abi_boundary = decl.kind == .extern_fn or fn_decl.exported;
+                self.checkFn(fn_decl, abi_boundary, move_abi_boundary, no_lang_trap, irq_context, bounded, is_naked, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases);
                 // T(term)1: bounded-loop / no-unbounded-recursion check for IRQ/atomic
                 // and `#[bounded]` functions (opt-in; existing code is unaffected).
                 if (hasBoundedContext(decl.attrs)) {
@@ -1365,7 +1369,7 @@ pub const Checker = struct {
         if (scope.hasOom()) self.oom = true;
     }
 
-    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, abi_boundary: bool, no_lang_trap: bool, irq_context: bool, bounded: bool, is_naked: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, abi_boundary: bool, move_abi_boundary: bool, no_lang_trap: bool, irq_context: bool, bounded: bool, is_naked: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         self.current_fn_owner = if (fn_decl.associated_owner) |owner| owner.text else null;
         defer self.current_fn_owner = null;
         var scope = Scope.init(self.reporter.allocator);
@@ -1402,7 +1406,7 @@ pub const Checker = struct {
 
         for (fn_decl.params) |param| {
             self.checkType(param.ty, .storage, sig_ctx);
-            if (abi_boundary and self.typeIsMoveArray(param.ty, type_aliases)) {
+            if (move_abi_boundary and self.typeIsMoveArray(param.ty, type_aliases)) {
                 self.errorCode(param.ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "extern/export ABI parameters cannot pass arrays of linear `move` values by value; pass the resources behind pointers or in a `move` container instead");
             }
             if (isCBackendReservedLocalName(param.name.text)) {
@@ -1427,7 +1431,7 @@ pub const Checker = struct {
         const return_kind = if (fn_decl.return_type) |ty| classifyTypeCtx(ty, sig_ctx) else TypeClass.void;
         const returns_never = if (fn_decl.return_type) |ty| blk: {
             self.checkType(ty, .return_type, sig_ctx);
-            if (abi_boundary and self.typeIsMoveArray(ty, type_aliases)) {
+            if (move_abi_boundary and self.typeIsMoveArray(ty, type_aliases)) {
                 self.errorCode(ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "extern/export ABI returns cannot carry arrays of linear `move` values by value; return resources behind pointers or in a `move` container instead");
             }
             break :blk isTypeName(ty, "never");
@@ -1497,15 +1501,14 @@ pub const Checker = struct {
     }
 
     fn checkExternExportStructAbi(self: *Checker, fn_decl: ast.FnDecl, ctx: Context) void {
-        const include_plain_structs = true;
         for (fn_decl.params) |param| {
-            if (isByValueStructAbiType(param.ty, ctx, include_plain_structs)) {
-                self.errorCode(param.ty.span, "E_EXTERN_STRUCT_BY_VALUE", "extern/export functions cannot pass structs by value until C ABI classification is implemented; pass a pointer instead");
+            if (externAbiTypeNeedsClassification(param.ty, ctx)) {
+                self.errorCode(param.ty.span, "E_EXTERN_STRUCT_BY_VALUE", "extern/export functions cannot pass structs or tagged optional values by value until target ABI classification is implemented; pass a pointer instead");
             }
         }
         if (fn_decl.return_type) |ret_ty| {
-            if (isByValueStructAbiType(ret_ty, ctx, include_plain_structs)) {
-                self.errorCode(ret_ty.span, "E_EXTERN_STRUCT_BY_VALUE", "extern/export functions cannot return structs by value until C ABI classification is implemented; return through an out pointer instead");
+            if (externAbiTypeNeedsClassification(ret_ty, ctx)) {
+                self.errorCode(ret_ty.span, "E_EXTERN_STRUCT_BY_VALUE", "extern/export functions cannot return structs or tagged optional values by value until target ABI classification is implemented; return through an out pointer instead");
             }
         }
     }
@@ -7275,15 +7278,37 @@ fn canInitialize(target: TypeClass, initializer: TypeClass) bool {
     return false;
 }
 
-fn isByValueStructAbiType(ty: ast.TypeExpr, ctx: Context, include_plain_structs: bool) bool {
+fn externAbiTypeNeedsClassification(ty: ast.TypeExpr, ctx: Context) bool {
     const resolved = resolveAliasType(ty, ctx);
     return switch (resolved.kind) {
         .name => |name| blk: {
             const structs = ctx.structs orelse break :blk false;
-            const info = structs.get(name.text) orelse break :blk false;
-            break :blk include_plain_structs or info.abi != null;
+            break :blk structs.contains(name.text);
         },
-        .qualified => |node| isByValueStructAbiType(node.child.*, ctx, include_plain_structs),
+        .pointer, .raw_many_pointer, .fn_pointer => false,
+        .array, .slice, .closure_type, .dyn_trait => false,
+        .nullable => |child| switch (resolveAliasType(child.*, ctx).kind) {
+            .pointer, .raw_many_pointer, .fn_pointer => false,
+            else => true,
+        },
+        .generic => |node| {
+            if ((std.mem.eql(u8, node.base.text, "MaybeUninit") or std.mem.eql(u8, node.base.text, "atomic")) and node.args.len == 1) {
+                return externAbiTypeNeedsClassification(node.args[0], ctx);
+            }
+            if (std.mem.eql(u8, node.base.text, "wrap") or
+                std.mem.eql(u8, node.base.text, "sat") or
+                std.mem.eql(u8, node.base.text, "serial") or
+                std.mem.eql(u8, node.base.text, "counter") or
+                std.mem.eql(u8, node.base.text, "Reg") or
+                std.mem.eql(u8, node.base.text, "RegBits") or
+                std.mem.eql(u8, node.base.text, "MmioPtr") or
+                std.mem.eql(u8, node.base.text, "PhysPtr") or
+                std.mem.eql(u8, node.base.text, "UserPtr") or
+                std.mem.eql(u8, node.base.text, "DmaBuf")) return false;
+            return false;
+        },
+        .qualified => |node| externAbiTypeNeedsClassification(node.child.*, ctx),
+        .member => false,
         else => false,
     };
 }

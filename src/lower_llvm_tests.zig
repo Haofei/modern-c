@@ -20,7 +20,8 @@ test "LLVM nullable initialization and race lowering follow representation" {
     try appendLlvmTest("llvm_nullable_representation.mc", source, &output);
 
     const reset_body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @reset");
-    try expectContains(reset_body, "store { i1, i32 } zeroinitializer");
+    try expectContains(reset_body, "call void @llvm.memset.p0.i64(ptr align 4");
+    try expectContains(reset_body, "i64 8, i1 false)");
     try expectNotContains(reset_body, "store { i1, i32 } null");
 
     const scalar_load = try llvmFunctionBody(output.items, "define internal { i1, i32 } @load_scalar");
@@ -38,23 +39,60 @@ test "LLVM nullable initialization and race lowering follow representation" {
     try expectContains(point_store, "store atomic i8");
 }
 
-test "LLVM aggregate literal storage materializes visible bytes" {
+test "LLVM aggregate literal storage materializes every allocation byte" {
     const source =
         \\struct Padded { small: u8, wide: u64 }
+        \\struct Nested { value: Padded }
+        \\struct OptionalHolder { value: ?Padded }
         \\#[c_union]
         \\struct Storage { small: u8, wide: u64 }
+        \\extern fn maybe_padded() -> ?Padded;
         \\fn padded() -> Padded { return .{ .small = 1, .wide = 2 }; }
+        \\fn nested() -> Nested { return .{ .value = .{ .small = 1, .wide = 2 } }; }
+        \\fn padded_array() -> [1]Padded { return .{ .{ .small = 1, .wide = 2 } }; }
+        \\fn optional_holder() -> OptionalHolder { return .{ .value = maybe_padded() }; }
         \\fn storage() -> Storage { return .{ .small = 1, .wide = uninit }; }
+        \\fn padded_uninit() -> Padded { var value: Padded = uninit; value = .{ .small = 3, .wide = 4 }; return value; }
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTest("llvm_materialized_aggregate_bytes.mc", source, &output);
 
     const padded_body = try llvmFunctionBody(output.items, "define internal { i8, i64 } @padded");
-    try expectContains(padded_body, "store { i8, i64 } zeroinitializer");
+    try expectContains(padded_body, "call void @llvm.memset.p0.i64(ptr align 8");
+    try expectContains(padded_body, "i64 16, i1 false)");
+    try expectNotContains(padded_body, "store { i8, i64 } zeroinitializer");
+    const nested_body = try llvmFunctionBody(output.items, "define internal { { i8, i64 } } @nested");
+    try expectContains(nested_body, "call void @llvm.memset.p0.i64(ptr align 8");
+    try expectNotContains(nested_body, "store { i8, i64 }");
+    const array_body = try llvmFunctionBody(output.items, "define internal [1 x { i8, i64 }] @padded_array");
+    try expectContains(array_body, "call void @llvm.memset.p0.i64(ptr align 8");
+    try expectNotContains(array_body, "store { i8, i64 }");
+    const optional_body = try llvmFunctionBody(output.items, "define internal { { i1, { i8, i64 } } } @optional_holder");
+    try expectContains(optional_body, "call void @llvm.memset.p0.i64(ptr align 8");
+    try expectNotContains(optional_body, "store { i1, { i8, i64 } }");
     const storage_body = try llvmFunctionBody(output.items, "define internal [1 x i64] @storage");
-    try expectContains(storage_body, "store [1 x i64] zeroinitializer");
+    try expectContains(storage_body, "call void @llvm.memset.p0.i64(ptr align 8");
+    try expectContains(storage_body, "i64 8, i1 false)");
     try expectContains(storage_body, "store i8");
+    const uninit_body = try llvmFunctionBody(output.items, "define internal { i8, i64 } @padded_uninit");
+    try std.testing.expect(std.mem.count(u8, uninit_body, "call void @llvm.memset.p0.i64(ptr align 8") >= 2);
+}
+
+test "LLVM struct literal fields evaluate in lexical source order" {
+    const source =
+        \\struct Pair { first: u32, second: u32 }
+        \\extern fn mark(value: u32) -> u32;
+        \\fn ordered_literal() -> Pair { return .{ .second = mark(2), .first = mark(1) }; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_struct_literal_order.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @ordered_literal");
+    const second = std.mem.indexOf(u8, body, "call i32 @mark(i32 2)") orelse return error.TestUnexpectedResult;
+    const first = std.mem.indexOf(u8, body, "call i32 @mark(i32 1)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(second < first);
 }
 
 fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {

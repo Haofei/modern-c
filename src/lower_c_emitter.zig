@@ -1026,7 +1026,7 @@ const CEmitter = struct {
             .packed_bits = &self.packed_bits,
             .emit_ctx = self,
             .emit_expr_with_target = emitExprWithTargetForArith,
-            .emit_unchecked_add_value_temp = emitUncheckedAddValueTempForAggregate,
+            .emit_unchecked_add_value_temp = emitSequencedValueTempForAggregate,
             .operand_emit_type = operandEmitTypeForAggregate,
             .global_assignment_target = globalAssignmentTargetForAggregate,
             .emit_assign_target = emitAssignTargetForAggregate,
@@ -1500,6 +1500,7 @@ const CEmitter = struct {
             .allocator = self.allocator,
             .scratch = self.scratch.allocator(),
             .out = self.out,
+            .temp_index = &self.temp_index,
             .type_aliases = &self.type_aliases,
             .functions = &self.functions,
             .packed_bits = &self.packed_bits,
@@ -2107,9 +2108,11 @@ const CEmitter = struct {
         return lower_c_aggregate.emitUncheckedAddAggregateCallArgTemp(self.aggregateEmitContext(), arg, locals, mir_target_ty);
     }
 
-    fn emitUncheckedAddValueTempForAggregate(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
+    fn emitSequencedValueTempForAggregate(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.emitUncheckedAddValueTemp(expr, locals, target_ty, range_target);
+        if (expr.kind == .uninit_literal) return null;
+        if (try self.emitUncheckedAddValueTemp(expr, locals, target_ty, range_target)) |temp| return temp;
+        return try self.emitSequencedCallArgTemp(expr, locals, target_ty);
     }
 
     fn operandEmitTypeForAggregate(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -3101,21 +3104,20 @@ const CEmitter = struct {
 
     fn emitDefaultAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            const target_ty = simpleNameType(target.info.type_name, assignment.value.span);
+            const value_temp = try self.emitSequencedCallArgTemp(assignment.value, locals, target_ty);
             try self.writeIndent();
             try appendGlobalStorePrefix(self.allocator, self.out, target);
-            // Pass the global's type as the value target, so a struct-literal value
-            // (`g = .{ … }`) lowers to a typed compound literal like the non-global
-            // path; scalars/pointers are unaffected by the extra type hint.
-            try self.emitExprWithTarget(assignment.value, locals, simpleNameType(target.info.type_name, assignment.value.span));
+            try self.out.appendSlice(self.allocator, value_temp.name);
             try appendGlobalStoreSuffix(self.allocator, self.out, target);
         } else if (try self.emitOrdinaryHookedAssignmentStmt(assignment.target, assignment.value, locals)) {
             return;
         } else {
+            const target_ty = self.operandEmitType(assignment.target, locals) orelse return error.UnsupportedCEmission;
+            const value_temp = try self.emitSequencedCallArgTemp(assignment.value, locals, target_ty);
             try self.writeIndent();
             try self.emitAssignTarget(assignment.target, locals);
-            try self.out.appendSlice(self.allocator, " = ");
-            try self.emitExprWithTarget(assignment.value, locals, self.operandEmitType(assignment.target, locals));
-            try self.out.appendSlice(self.allocator, ";\n");
+            try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
         }
     }
 
@@ -3738,6 +3740,7 @@ const CEmitter = struct {
         if (!ordinaryStoreHookTarget(target)) return false;
         const target_ty = self.operandEmitType(target, locals) orelse return false;
         const target_c_ty = try self.cTypeFor(target_ty, .typedef_name);
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals.?, target_ty);
         const ptr_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_storep{d}", .{self.temp_index});
         self.temp_index += 1;
 
@@ -3748,9 +3751,7 @@ const CEmitter = struct {
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}((uintptr_t){s}, (uintptr_t)sizeof(*{s}));\n", .{ hook, ptr_temp, ptr_temp });
         try self.writeIndent();
-        try self.out.print(self.allocator, "*{s} = ", .{ptr_temp});
-        try self.emitExprWithTarget(value, locals, target_ty);
-        try self.out.appendSlice(self.allocator, ";\n");
+        try self.out.print(self.allocator, "*{s} = {s};\n", .{ ptr_temp, value_temp.name });
         return true;
     }
 
@@ -4898,26 +4899,24 @@ const CEmitter = struct {
     }
 
     fn emitPackedBitsGlobalFieldWrite(self: *CEmitter, base_ty: []const u8, info: PackedBitsInfo, global_name: []const u8, mask: []const u8, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, simpleNameType("bool", value.span));
         const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
         self.temp_index += 1;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s} = ({s})mc_race_load_{s}(&{s});\n", .{ base_ty, temp_name, base_ty, info.repr_name, global_name });
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} = ({s})(({s} & ({s})~{s}) | (", .{ temp_name, base_ty, temp_name, base_ty, mask });
-        try self.emitExpr(value, locals);
-        try self.out.print(self.allocator, " ? {s} : ({s})0));\n", .{ mask, base_ty });
+        try self.out.print(self.allocator, "{s} = ({s})(({s} & ({s})~{s}) | ({s} ? {s} : ({s})0));\n", .{ temp_name, base_ty, temp_name, base_ty, mask, value_temp.name, mask, base_ty });
         try self.writeIndent();
         try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ({s}){s});\n", .{ info.repr_name, global_name, info.repr_c_type, temp_name });
     }
 
     fn emitPackedBitsLocalFieldWrite(self: *CEmitter, base: ast.Expr, base_ty: []const u8, mask: []const u8, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, simpleNameType("bool", value.span));
         try self.writeIndent();
         try self.emitExpr(base, locals);
         try self.out.print(self.allocator, " = ({s})((", .{base_ty});
         try self.emitExpr(base, locals);
-        try self.out.print(self.allocator, " & ({s})~{s}) | (", .{ base_ty, mask });
-        try self.emitExpr(value, locals);
-        try self.out.print(self.allocator, " ? {s} : ({s})0));\n", .{ mask, base_ty });
+        try self.out.print(self.allocator, " & ({s})~{s}) | ({s} ? {s} : ({s})0));\n", .{ base_ty, mask, value_temp.name, mask, base_ty });
     }
 
     fn globalAssignmentTarget(self: *CEmitter, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
@@ -4937,8 +4936,8 @@ const CEmitter = struct {
     fn emitGlobalArrayIndexAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
         const index = indexExpr(assignment.target) orelse return false;
         const access = globalArrayElementAccess(index, locals, &self.globals) orelse return false;
-        const index_temp = try self.emitSequencedCallArgTemp(access.index, locals, simpleNameType("usize", access.index.span));
         const value_temp = try self.emitSequencedCallArgTemp(assignment.value, locals, access.element_info.source_ty);
+        const index_temp = try self.emitSequencedCallArgTemp(access.index, locals, simpleNameType("usize", access.index.span));
 
         try self.writeIndent();
         try appendGlobalArrayElementStore(self.allocator, self.out, access, index_temp.name, value_temp.name);
@@ -4951,8 +4950,8 @@ const CEmitter = struct {
         const access = globalArrayElementAccess(index, locals, &self.globals) orelse return false;
         const field = self.globalArrayElementMemberField(access, member.name.text) orelse return false;
         const field_info = try self.globalElementInfoFromType(field.ty);
-        const index_temp = try self.emitSequencedCallArgTemp(access.index, locals, simpleNameType("usize", access.index.span));
         const value_temp = try self.emitSequencedCallArgTemp(assignment.value, locals, field.ty);
+        const index_temp = try self.emitSequencedCallArgTemp(access.index, locals, simpleNameType("usize", access.index.span));
 
         try self.writeIndent();
         try appendGlobalArrayElementMemberStore(self.allocator, self.out, access, field_info, try self.cIdent(member.name.text), index_temp.name, value_temp.name);
@@ -6508,21 +6507,15 @@ const CEmitter = struct {
                 const info = self.globalInfoFromType(pointee_ty) catch null;
                 if (info) |global_info| {
                     if (global_info.aggregate) {
+                        const value_temp = try self.emitSequencedCallArgTemp(value, locals, pointee_ty);
                         const ptr_ty = try self.pointerTypeFor(pointee_ty, .mut, .typedef_name);
                         const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
-                        self.temp_index += 1;
-                        const value_ty = try self.cTypeFor(pointee_ty, .typedef_name);
-                        const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
                         self.temp_index += 1;
                         try self.writeIndent();
                         try self.out.print(self.allocator, "{s} {s} = ", .{ ptr_ty, ptr_name });
                         try self.emitExpr(inner, locals);
                         try self.out.appendSlice(self.allocator, ";\n");
-                        try self.writeIndent();
-                        try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
-                        try self.emitExprWithTarget(value, locals, pointee_ty);
-                        try self.out.appendSlice(self.allocator, ";\n");
-                        try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, pointee_ty, value_name);
+                        try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, pointee_ty, value_temp.name);
                         return true;
                     }
                 }
@@ -6532,22 +6525,20 @@ const CEmitter = struct {
             .plain => return false,
             .race_scalar => |info| {
                 const pointee_ty = self.derefPointeeType(inner, locals) orelse return false;
+                const value_temp = try self.emitSequencedCallArgTemp(value, locals, pointee_ty);
                 try self.writeIndent();
                 try self.out.print(self.allocator, "mc_race_store_{s}(", .{info.race_type_name});
                 try self.emitExpr(inner, locals);
-                try self.out.print(self.allocator, ", ({s})", .{info.race_c_type});
-                try self.emitExprWithTarget(value, locals, pointee_ty);
-                try self.out.appendSlice(self.allocator, ");\n");
+                try self.out.print(self.allocator, ", ({s}){s});\n", .{ info.race_c_type, value_temp.name });
                 return true;
             },
             .race_pointer => |info| {
                 const pointee_ty = self.derefPointeeType(inner, locals) orelse return false;
+                const value_temp = try self.emitSequencedCallArgTemp(value, locals, pointee_ty);
                 try self.writeIndent();
                 try self.out.appendSlice(self.allocator, "__atomic_store_n(");
                 try self.emitExpr(inner, locals);
-                try self.out.print(self.allocator, ", ({s})", .{info.c_type});
-                try self.emitExprWithTarget(value, locals, pointee_ty);
-                try self.out.appendSlice(self.allocator, ", __ATOMIC_RELAXED);\n");
+                try self.out.print(self.allocator, ", ({s}){s}, __ATOMIC_RELAXED);\n", .{ info.c_type, value_temp.name });
                 return true;
             },
         }
@@ -6861,42 +6852,33 @@ const CEmitter = struct {
         const info = self.globalInfoFromType(field_ty) catch return false;
         if (info.aggregate) {
             if (self.derefPointerHasProvenLocalStorage(member.base.*, locals)) return false;
+            const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
             const base_ty = self.operandEmitType(member.base.*, locals) orelse self.exprSourceTypeForEmission(member.base.*, locals) orelse return false;
             const base_c_ty = try self.cTypeFor(base_ty, .typedef_name);
             const base_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
-            self.temp_index += 1;
-            const value_ty = try self.cTypeFor(field_ty, .typedef_name);
-            const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
             self.temp_index += 1;
             const field_name = try self.cIdent(member.name.text);
             try self.writeIndent();
             try self.out.print(self.allocator, "{s} {s} = ", .{ base_c_ty, base_name });
             try self.emitExpr(member.base.*, locals);
             try self.out.appendSlice(self.allocator, ";\n");
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
-            try self.emitExprWithTarget(value, locals, field_ty);
-            try self.out.appendSlice(self.allocator, ";\n");
             const field_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&({s}->{s})", .{ base_name, field_name });
-            try self.emitRaceTolerantAggregateStoreFromPtr(field_ptr, field_ty, value_name);
+            try self.emitRaceTolerantAggregateStoreFromPtr(field_ptr, field_ty, value_temp.name);
             return true;
         }
         const field_name = try self.cIdent(member.name.text);
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
         try self.writeIndent();
         if (info.pointer_like) {
             try self.out.appendSlice(self.allocator, "__atomic_store_n(&(");
             try self.emitExpr(member.base.*, locals);
-            try self.out.print(self.allocator, "->{s}), ({s})", .{ field_name, info.c_type });
-            try self.emitExprWithTarget(value, locals, field_ty);
-            try self.out.appendSlice(self.allocator, ", __ATOMIC_RELAXED);\n");
+            try self.out.print(self.allocator, "->{s}), ({s}){s}, __ATOMIC_RELAXED);\n", .{ field_name, info.c_type, value_temp.name });
             return true;
         }
         if (!lower_c_shape.raceScalarHelperExists(info.race_type_name)) return error.UnsupportedCEmission;
         try self.out.print(self.allocator, "mc_race_store_{s}(&(", .{info.race_type_name});
         try self.emitExpr(member.base.*, locals);
-        try self.out.print(self.allocator, "->{s}), ({s})", .{ field_name, info.race_c_type });
-        try self.emitExprWithTarget(value, locals, field_ty);
-        try self.out.appendSlice(self.allocator, ");\n");
+        try self.out.print(self.allocator, "->{s}), ({s}){s});\n", .{ field_name, info.race_c_type, value_temp.name });
         return true;
     }
 
@@ -7058,14 +7040,12 @@ const CEmitter = struct {
         const element_ty = self.operandEmitType(target, locals) orelse return false;
         const info = self.globalInfoFromType(element_ty) catch return false;
 
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, element_ty);
         const usize_ty = simpleNameType("usize", index.index.*.span);
         const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
         if (info.aggregate) {
             const ptr_ty = try self.pointerTypeFor(element_ty, .mut, .typedef_name);
             const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
-            self.temp_index += 1;
-            const value_ty = try self.cTypeFor(element_ty, .typedef_name);
-            const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
             self.temp_index += 1;
             try self.writeIndent();
             try self.out.print(self.allocator, "{s} {s} = &(", .{ ptr_ty, ptr_name });
@@ -7073,14 +7053,9 @@ const CEmitter = struct {
             try self.out.print(self.allocator, ".{s}[mc_check_index_usize({s}, ", .{ slice.ptr_field, index_temp.name });
             try self.emitExpr(index.base.*, locals);
             try self.out.print(self.allocator, ".{s})]);\n", .{slice.len_field});
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
-            try self.emitExprWithTarget(value, locals, element_ty);
-            try self.out.appendSlice(self.allocator, ";\n");
-            try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, element_ty, value_name);
+            try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, element_ty, value_temp.name);
             return true;
         }
-        const value_temp = try self.emitSequencedCallArgTemp(value, locals, element_ty);
 
         try self.writeIndent();
         if (info.pointer_like) {
@@ -7171,27 +7146,20 @@ const CEmitter = struct {
         const element_ty = base_arr.kind.array.child.*;
         const info = self.globalInfoFromType(element_ty) catch return false;
 
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, element_ty);
         const usize_ty = simpleNameType("usize", index.index.*.span);
         const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
         if (info.aggregate) {
             const ptr_ty = try self.pointerTypeFor(element_ty, .mut, .typedef_name);
             const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
             self.temp_index += 1;
-            const value_ty = try self.cTypeFor(element_ty, .typedef_name);
-            const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
-            self.temp_index += 1;
             try self.writeIndent();
             try self.out.print(self.allocator, "{s} {s} = &(", .{ ptr_ty, ptr_name });
             try self.emitPointerArrayIndexExpr(index, locals, base_arr, index_temp.name);
             try self.out.appendSlice(self.allocator, ");\n");
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
-            try self.emitExprWithTarget(value, locals, element_ty);
-            try self.out.appendSlice(self.allocator, ";\n");
-            try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, element_ty, value_name);
+            try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, element_ty, value_temp.name);
             return true;
         }
-        const value_temp = try self.emitSequencedCallArgTemp(value, locals, element_ty);
 
         try self.writeIndent();
         if (info.pointer_like) {
@@ -7219,27 +7187,20 @@ const CEmitter = struct {
         const info = self.globalInfoFromType(field_ty) catch return false;
         const field_name = try self.cIdent(member.name.text);
 
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
         const usize_ty = simpleNameType("usize", index.index.*.span);
         const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
         if (info.aggregate) {
             const ptr_ty = try self.pointerTypeFor(field_ty, .mut, .typedef_name);
             const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
             self.temp_index += 1;
-            const value_ty = try self.cTypeFor(field_ty, .typedef_name);
-            const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
-            self.temp_index += 1;
             try self.writeIndent();
             try self.out.print(self.allocator, "{s} {s} = &(", .{ ptr_ty, ptr_name });
             if (!try self.emitIndexedMemberAddressExpr(index, field_name, locals, index_temp.name)) return false;
             try self.out.appendSlice(self.allocator, ");\n");
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
-            try self.emitExprWithTarget(value, locals, field_ty);
-            try self.out.appendSlice(self.allocator, ";\n");
-            try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, field_ty, value_name);
+            try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, field_ty, value_temp.name);
             return true;
         }
-        const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
 
         try self.writeIndent();
         if (info.pointer_like) {
@@ -7264,27 +7225,20 @@ const CEmitter = struct {
         const field_ty = self.indexedMemberPathFinalType(index, fields.items, locals) orelse return false;
         const info = self.globalInfoFromType(field_ty) catch return false;
 
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
         const usize_ty = simpleNameType("usize", index.index.*.span);
         const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
         if (info.aggregate) {
             const ptr_ty = try self.pointerTypeFor(field_ty, .mut, .typedef_name);
             const ptr_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
             self.temp_index += 1;
-            const value_ty = try self.cTypeFor(field_ty, .typedef_name);
-            const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
-            self.temp_index += 1;
             try self.writeIndent();
             try self.out.print(self.allocator, "{s} {s} = &(", .{ ptr_ty, ptr_name });
             if (!try self.emitIndexedMemberPathAddressExpr(index, fields.items, locals, index_temp.name)) return false;
             try self.out.appendSlice(self.allocator, ");\n");
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
-            try self.emitExprWithTarget(value, locals, field_ty);
-            try self.out.appendSlice(self.allocator, ";\n");
-            try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, field_ty, value_name);
+            try self.emitRaceTolerantAggregateStoreFromPtr(ptr_name, field_ty, value_temp.name);
             return true;
         }
-        const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
 
         try self.writeIndent();
         if (info.pointer_like) {
@@ -7307,27 +7261,20 @@ const CEmitter = struct {
         if (self.derefPointerHasProvenLocalStorage(path.root, locals)) return false;
         const field_ty = self.pointerMemberPathFinalType(path.root, path.fields, locals) orelse return false;
         const info = self.globalInfoFromType(field_ty) catch return false;
+        const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
         if (info.aggregate) {
             const root_ty = self.operandEmitType(path.root, locals) orelse self.exprSourceTypeForEmission(path.root, locals) orelse return false;
             const root_c_ty = try self.cTypeFor(root_ty, .typedef_name);
             const root_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
             self.temp_index += 1;
-            const value_ty = try self.cTypeFor(field_ty, .typedef_name);
-            const value_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_value{d}", .{self.temp_index});
-            self.temp_index += 1;
             try self.writeIndent();
             try self.out.print(self.allocator, "{s} {s} = ", .{ root_c_ty, root_name });
             try self.emitExpr(path.root, locals);
             try self.out.appendSlice(self.allocator, ";\n");
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ value_ty, value_name });
-            try self.emitExprWithTarget(value, locals, field_ty);
-            try self.out.appendSlice(self.allocator, ";\n");
             const field_ptr = try self.pointerMemberPathPtrExpr(root_name, path.fields);
-            try self.emitRaceTolerantAggregateStoreFromPtr(field_ptr, field_ty, value_name);
+            try self.emitRaceTolerantAggregateStoreFromPtr(field_ptr, field_ty, value_temp.name);
             return true;
         }
-        const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
 
         try self.writeIndent();
         if (info.pointer_like) {

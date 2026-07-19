@@ -236,17 +236,15 @@ pub fn emitTryExprStmtWithReplacements(ctx: TryReplacementEmitContext, mode: Try
 }
 
 pub fn emitTryAssignmentWithReplacements(ctx: TryReplacementEmitContext, mode: TryReplacementMode, assignment: anytype, locals: *std.StringHashMap(LocalInfo), replacements: []const lower_c_model.TryReplacement) !void {
+    const target_ty = assignmentTargetType(ctx, assignment, locals) orelse return error.UnsupportedCEmission;
+    const temp_name = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
+    ctx.temp_index.* += 1;
     try writeIndent(ctx);
-    if (ctx.global_assignment_target(ctx.emit_ctx, assignment.target, locals)) |target| {
-        try appendGlobalStorePrefix(ctx.allocator, ctx.out, target);
-        try emitTryExprWithReplacements(ctx, mode, assignment.value, locals, null, replacements);
-        try appendGlobalStoreSuffix(ctx.allocator, ctx.out, target);
-    } else {
-        try ctx.emit_assign_target(ctx.emit_ctx, assignment.target, locals);
-        try ctx.out.appendSlice(ctx.allocator, " = ");
-        try emitTryExprWithReplacements(ctx, mode, assignment.value, locals, null, replacements);
-        try ctx.out.appendSlice(ctx.allocator, ";\n");
-    }
+    try ctx.emit_declarator(ctx.emit_ctx, target_ty, temp_name);
+    try ctx.out.appendSlice(ctx.allocator, " = ");
+    try emitTryExprWithReplacements(ctx, mode, assignment.value, locals, target_ty, replacements);
+    try ctx.out.appendSlice(ctx.allocator, ";\n");
+    try emitAssignmentFromTemp(ctx, assignment.target, locals, temp_name);
 }
 
 pub fn emitResultTrySequencedBinaryReturn(ctx: TryReplacementEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {

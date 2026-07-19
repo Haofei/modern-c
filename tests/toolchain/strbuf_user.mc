@@ -12,8 +12,10 @@ extern "C" fn mc_free(addr: usize, n: usize) -> void;
 // The driver returns a `[]const u8` over a static "N=" so sb_put_str is exercised with a
 // genuine slice. (MC's own ways to mint a `[]const u8` locally do not lower on the C
 // backend — string-literal-to-slice and array-slice-view both fail; see findings — so an
-// extern returning a slice, the tests/llvm/slices.mc pattern, is the portable source.)
-extern "C" fn sb_label() -> []const u8;
+// a backend-private extern returning a slice, as in tests/llvm/slices.mc, supplies the fixture.)
+// This is a backend-private MC declaration implemented by the C-only test driver;
+// it is deliberately not an `extern "C"` stable-ABI declaration.
+extern fn sb_label() -> []const u8;
 
 struct MallocAlloc {
     count: u32, // allocations served (also keeps `self` used)

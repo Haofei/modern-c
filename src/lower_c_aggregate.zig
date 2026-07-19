@@ -76,30 +76,90 @@ pub const EmitContext = struct {
 pub fn emitArrayLiteral(ctx: EmitContext, items: []const ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
     const resolved_target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty);
     const child_ty = resolvedArrayChildType(resolved_target_ty) orelse return error.UnsupportedCEmission;
-    try ctx.out.print(ctx.allocator, "({s}){{ .elems = {{ ", .{try ctx.c_type(ctx.emit_ctx, resolved_target_ty)});
-    for (items, 0..) |item, i| {
-        if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
-        try emitExprOrTargetTypedUninit(ctx, item, locals, child_ty);
+    if (locals == null) {
+        try ctx.out.print(ctx.allocator, "({s}){{ .elems = {{ ", .{try ctx.c_type(ctx.emit_ctx, resolved_target_ty)});
+        for (items, 0..) |item, i| {
+            if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
+            try emitExprOrTargetTypedUninit(ctx, item, null, child_ty);
+        }
+        try ctx.out.appendSlice(ctx.allocator, " } }");
+        return;
     }
-    try ctx.out.appendSlice(ctx.allocator, " } }");
+    var names: std.ArrayList([]const u8) = .empty;
+    defer names.deinit(ctx.scratch);
+    try ctx.out.appendSlice(ctx.allocator, "({ ");
+    for (items) |item| {
+        const name = try nextTempName(ctx);
+        try names.append(ctx.scratch, name);
+        try ctx.out.print(ctx.allocator, "{s} {s} = ", .{ try ctx.c_type(ctx.emit_ctx, child_ty), name });
+        try emitExprOrTargetTypedUninit(ctx, item, locals, child_ty);
+        try ctx.out.appendSlice(ctx.allocator, "; ");
+    }
+    try ctx.out.print(ctx.allocator, "({s}){{ .elems = {{ ", .{try ctx.c_type(ctx.emit_ctx, resolved_target_ty)});
+    for (names.items, 0..) |name, i| {
+        if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
+        try ctx.out.appendSlice(ctx.allocator, name);
+    }
+    try ctx.out.appendSlice(ctx.allocator, " } }; })");
 }
 
 pub fn emitStructLiteral(ctx: EmitContext, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
     const resolved_target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty);
     const struct_decl = structDeclForResolvedTarget(ctx, resolved_target_ty) orelse return error.UnsupportedCEmission;
-    try ctx.out.print(ctx.allocator, "({s}){{ ", .{try ctx.c_type(ctx.emit_ctx, resolved_target_ty)});
-    if (struct_decl.is_c_union) {
-        try emitCUnionLiteralFields(ctx, struct_decl, fields, locals);
+    if (locals == null) {
+        if (struct_decl.is_c_union) {
+            var active: ?ast.StructLiteralField = null;
+            for (fields) |field| {
+                if (field.value.kind != .uninit_literal) active = field;
+            }
+            const field = active orelse fields[0];
+            const field_ty = structFieldType(struct_decl, field.name.text) orelse return error.UnsupportedCEmission;
+            try ctx.out.print(ctx.allocator, "({s}){{ .{s} = ", .{ try ctx.c_type(ctx.emit_ctx, resolved_target_ty), try ctx.c_ident(ctx.emit_ctx, field.name.text) });
+            try emitExprOrTargetTypedUninit(ctx, field.value, null, field_ty);
+            try ctx.out.appendSlice(ctx.allocator, " }");
+            return;
+        }
+        try ctx.out.print(ctx.allocator, "({s}){{ ", .{try ctx.c_type(ctx.emit_ctx, resolved_target_ty)});
+        for (fields, 0..) |field, i| {
+            if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
+            const field_ty = structFieldType(struct_decl, field.name.text) orelse return error.UnsupportedCEmission;
+            try ctx.out.print(ctx.allocator, ".{s} = ", .{try ctx.c_ident(ctx.emit_ctx, field.name.text)});
+            try emitExprOrTargetTypedUninit(ctx, field.value, null, field_ty);
+        }
         try ctx.out.appendSlice(ctx.allocator, " }");
         return;
     }
-    for (fields, 0..) |field, i| {
-        if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
+    if (struct_decl.is_c_union) {
+        var active: ?ast.StructLiteralField = null;
+        for (fields) |field| {
+            if (field.value.kind != .uninit_literal) active = field;
+        }
+        const field = active orelse fields[0];
         const field_ty = structFieldType(struct_decl, field.name.text) orelse return error.UnsupportedCEmission;
-        try ctx.out.print(ctx.allocator, ".{s} = ", .{try ctx.c_ident(ctx.emit_ctx, field.name.text)});
+        const name = try nextTempName(ctx);
+        try ctx.out.print(ctx.allocator, "({{ {s} {s} = ", .{ try ctx.c_type(ctx.emit_ctx, field_ty), name });
         try emitExprOrTargetTypedUninit(ctx, field.value, locals, field_ty);
+        try ctx.out.print(ctx.allocator, "; ({s}){{ .{s} = {s} }}; }})", .{ try ctx.c_type(ctx.emit_ctx, resolved_target_ty), try ctx.c_ident(ctx.emit_ctx, field.name.text), name });
+        return;
     }
-    try ctx.out.appendSlice(ctx.allocator, " }");
+    var names: std.ArrayList([]const u8) = .empty;
+    defer names.deinit(ctx.scratch);
+    try ctx.out.appendSlice(ctx.allocator, "({ ");
+    for (fields) |field| {
+        const field_ty = structFieldType(struct_decl, field.name.text) orelse return error.UnsupportedCEmission;
+        const name = try nextTempName(ctx);
+        try names.append(ctx.scratch, name);
+        try ctx.out.print(ctx.allocator, "{s} {s} = ", .{ try ctx.c_type(ctx.emit_ctx, field_ty), name });
+        try emitExprOrTargetTypedUninit(ctx, field.value, locals, field_ty);
+        try ctx.out.appendSlice(ctx.allocator, "; ");
+    }
+    try ctx.out.print(ctx.allocator, "({s}){{ ", .{try ctx.c_type(ctx.emit_ctx, resolved_target_ty)});
+    for (fields, names.items, 0..) |field, name, i| {
+        if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
+        try ctx.out.print(ctx.allocator, ".{s} = ", .{try ctx.c_ident(ctx.emit_ctx, field.name.text)});
+        try ctx.out.appendSlice(ctx.allocator, name);
+    }
+    try ctx.out.appendSlice(ctx.allocator, " }; })");
 }
 
 pub fn emitArrayLiteralWithTemps(ctx: EmitContext, items: []const ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, temps: []const ?SequencedArgTemp) anyerror!void {
@@ -124,7 +184,22 @@ pub fn emitStructLiteralWithTemps(ctx: EmitContext, fields: []const ast.StructLi
     const struct_decl = structDeclForResolvedTarget(ctx, resolved_target_ty) orelse return error.UnsupportedCEmission;
     try ctx.out.print(ctx.allocator, "({s}){{ ", .{try ctx.c_type(ctx.emit_ctx, resolved_target_ty)});
     if (struct_decl.is_c_union) {
-        try emitCUnionLiteralFields(ctx, struct_decl, fields, locals);
+        var active_index: usize = 0;
+        for (fields, 0..) |field, i| {
+            if (field.value.kind != .uninit_literal) active_index = i;
+        }
+        const field = fields[active_index];
+        const field_ty = structFieldType(struct_decl, field.name.text) orelse return error.UnsupportedCEmission;
+        try ctx.out.print(ctx.allocator, ".{s} = ", .{try ctx.c_ident(ctx.emit_ctx, field.name.text)});
+        if (active_index < temps.len) {
+            if (temps[active_index]) |temp| {
+                try ctx.out.appendSlice(ctx.allocator, temp.name);
+            } else {
+                try emitExprOrTargetTypedUninit(ctx, field.value, locals, field_ty);
+            }
+        } else {
+            try emitExprOrTargetTypedUninit(ctx, field.value, locals, field_ty);
+        }
         try ctx.out.appendSlice(ctx.allocator, " }");
         return;
     }

@@ -54,6 +54,7 @@ pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), modul
     try out.appendSlice(allocator, "declare void @llvm.va_start(ptr)\n");
     try out.appendSlice(allocator, "declare void @llvm.va_copy(ptr, ptr)\n");
     try out.appendSlice(allocator, "declare void @llvm.va_end(ptr)\n\n");
+    try out.appendSlice(allocator, "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\n");
     // Weak no-op `define`s for every sanitizer shadow hook so EVERY build links and behaves
     // identically when no sanitizer runtime is present. A linked runtime (the ksan/msan/csan
     // profiles) provides STRONG definitions that override these; a default build never calls

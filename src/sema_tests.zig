@@ -575,7 +575,7 @@ test "explicit trap rejects type arguments before MIR construction" {
     try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_INVALID_TRAP_KIND"));
 }
 
-test "rejects by-value struct signatures at extern and export ABI boundaries" {
+test "rejects structs and tagged optionals at extern and export ABI boundaries" {
     const source =
         \\extern "C" struct Packet {
         \\    value: u32,
@@ -591,6 +591,10 @@ test "rejects by-value struct signatures at extern and export ABI boundaries" {
         \\extern "C" fn take_packet(packet: Packet) -> void;
         \\extern "C" fn make_packet() -> PacketAlias;
         \\extern fn take_packet_ptr(packet: *Packet) -> void;
+        \\extern "C" fn take_optional(value: ?u32) -> void;
+        \\extern "C" fn make_array() -> [2]u32;
+        \\extern "C" fn take_slice(value: []const u8) -> void;
+        \\extern "C" fn make_result() -> Result<u32, u32>;
         \\
         \\export fn exported_take(plain: Plain) -> u32 {
         \\    return plain.value;
@@ -611,5 +615,27 @@ test "rejects by-value struct signatures at extern and export ABI boundaries" {
     try checkSource(source, &reporter);
 
     try std.testing.expect(reporter.has_errors);
-    try std.testing.expectEqual(@as(usize, 4), countDiagnosticCode(&reporter, "E_EXTERN_STRUCT_BY_VALUE"));
+    try std.testing.expectEqual(@as(usize, 5), countDiagnosticCode(&reporter, "E_EXTERN_STRUCT_BY_VALUE"));
+}
+
+test "nullable classification resolves aliases inside the type constructor" {
+    const source =
+        \\type Word = u32;
+        \\type Word2 = Word;
+        \\type WordPtr = *mut u32;
+        \\fn scalar(value: ?Word2) -> bool {
+        \\    if let inner = value { return inner != 0; }
+        \\    return false;
+        \\}
+        \\fn pointer(value: ?WordPtr) -> bool {
+        \\    if let inner = value { return true; }
+        \\    return false;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "nullable_aliases.mc", source);
+    defer reporter.deinit();
+
+    try checkSource(source, &reporter);
+    try std.testing.expect(!reporter.has_errors);
 }

@@ -21,6 +21,25 @@ pub const ComptimeStructLayout = struct {
     field_offset: ?i128,
 };
 
+pub const ComptimeOptionalLayout = struct {
+    size: i128,
+    alignment: i128,
+    payload_offset: i128,
+};
+
+/// Layout of the tagged value-optional representation `{ bool present; T value; }`.
+/// Pointer and fat-pointer niche optionals bypass this helper and retain their child layout.
+pub fn comptimeTaggedOptionalLayout(payload_size: i128, payload_alignment: i128) ?ComptimeOptionalLayout {
+    if (payload_size < 0 or payload_alignment <= 0) return null;
+    const payload_offset = alignForward(@as(i128, 1), payload_alignment) orelse return null;
+    const end = comptimeLayoutAdd(payload_offset, payload_size) orelse return null;
+    return .{
+        .size = alignForward(end, payload_alignment) orelse return null,
+        .alignment = payload_alignment,
+        .payload_offset = payload_offset,
+    };
+}
+
 /// Size of a fixed array in bytes, or null when the comptime layout would overflow the
 /// i128 layout domain. Reflection callers use null as "unknown" so hostile array lengths
 /// fail closed instead of trapping the compiler.
@@ -166,6 +185,18 @@ test "comptimeArraySize and comptimeBitOffset fail closed on i128 overflow" {
     try std.testing.expectEqual(@as(?i128, null), comptimeArraySize(@as(i128, -1), 8));
     try std.testing.expectEqual(@as(?i128, 16), comptimeBitOffset(2));
     try std.testing.expectEqual(@as(?i128, null), comptimeBitOffset(std.math.maxInt(i128)));
+}
+
+test "comptimeTaggedOptionalLayout matches bool plus aligned payload" {
+    try std.testing.expectEqual(
+        ComptimeOptionalLayout{ .size = 8, .alignment = 4, .payload_offset = 4 },
+        comptimeTaggedOptionalLayout(4, 4).?,
+    );
+    try std.testing.expectEqual(
+        ComptimeOptionalLayout{ .size = 16, .alignment = 8, .payload_offset = 8 },
+        comptimeTaggedOptionalLayout(8, 8).?,
+    );
+    try std.testing.expectEqual(@as(?ComptimeOptionalLayout, null), comptimeTaggedOptionalLayout(-1, 1));
 }
 
 test "comptimeStructLayout fails closed on field size overflow" {

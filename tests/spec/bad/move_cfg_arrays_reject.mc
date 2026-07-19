@@ -30,11 +30,9 @@ struct BadArrayContainer {
 type HandleArray = [4]Handle;
 type NestedHandleArray = [2][1]Handle;
 
-// --- rejected: an exported function cannot return an array of `move` resources
+// --- rejected: an unresolved function cannot return an array of `move` resources
 //     by value, including through an alias ---
-export fn reject_move_array_return() -> HandleArray { // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    return .{ acquire(), acquire(), acquire(), acquire() };
-}
+extern fn reject_move_array_return() -> HandleArray; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
 
 // --- rejected: an extern function cannot accept an array of `move` resources by
 //     value, including through a nested alias ---

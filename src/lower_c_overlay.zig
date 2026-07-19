@@ -98,14 +98,17 @@ pub fn emitOverlayFieldWriteStmt(ctx: EmitContext, assignment: anytype, locals: 
 
             if (access.field.byte_array_len) |len| {
                 // Byte view: storage byte == view element.
+                const byte_ty = overlayByteArrayElementType(access.field.ty) orelse return false;
+                const val_name = try nextTempName(ctx, "mc_ov");
+                try ctx.write_indent(ctx.emit_ctx);
+                try ctx.out.print(ctx.allocator, "{s} {s} = ", .{ try ctx.c_type(ctx.emit_ctx, byte_ty), val_name });
+                try ctx.emit_expr_with_target(ctx.emit_ctx, assignment.value, locals, byte_ty);
+                try ctx.out.appendSlice(ctx.allocator, ";\n");
                 try ctx.write_indent(ctx.emit_ctx);
                 try ctx.emit_expr(ctx.emit_ctx, access.base, locals);
                 try ctx.out.appendSlice(ctx.allocator, ".storage[mc_check_index_usize(");
                 try ctx.emit_expr(ctx.emit_ctx, node.index.*, locals);
-                try ctx.out.print(ctx.allocator, ", {s})] = ", .{len});
-                const byte_ty = overlayByteArrayElementType(access.field.ty) orelse return false;
-                try ctx.emit_expr_with_target(ctx.emit_ctx, assignment.value, locals, byte_ty);
-                try ctx.out.appendSlice(ctx.allocator, ";\n");
+                try ctx.out.print(ctx.allocator, ", {s})] = {s};\n", .{ len, val_name });
                 return true;
             }
 

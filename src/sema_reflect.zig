@@ -23,6 +23,7 @@ const reflectionKind = sema_builtin.reflectionKind;
 const reflectionTypeExprFromArg = sema_builtin.reflectionTypeExprFromArg;
 const comptimeArraySize = type_layout.comptimeArraySize;
 const comptimeLayoutAdd = type_layout.comptimeLayoutAdd;
+const comptimeTaggedOptionalLayout = type_layout.comptimeTaggedOptionalLayout;
 const scalarLayout = type_layout.scalarLayout;
 const simpleNameType = ast_query.simpleNameType;
 const typeName = ast_query.typeName;
@@ -82,7 +83,12 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i
             }
             return null;
         },
-        .pointer, .raw_many_pointer => return 8,
+        .pointer, .raw_many_pointer, .fn_pointer => return 8,
+        .dyn_trait, .closure_type => return 16,
+        .nullable => |child| {
+            const layout = comptimeNullableLayout(env, child.*, depth + 1) orelse return null;
+            return layout.size;
+        },
         .slice => return 16,
         .generic => |g| {
             if (isPointerLikeGeneric(g.base.text)) return 8;
@@ -121,7 +127,11 @@ pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?
             }
             return null;
         },
-        .pointer, .raw_many_pointer, .slice => return 8,
+        .pointer, .raw_many_pointer, .fn_pointer, .slice, .dyn_trait, .closure_type => return 8,
+        .nullable => |child| {
+            const layout = comptimeNullableLayout(env, child.*, depth + 1) orelse return null;
+            return layout.alignment;
+        },
         .generic => |g| {
             if (isPointerLikeGeneric(g.base.text)) return 8;
             if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
@@ -134,6 +144,29 @@ pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?
         .qualified => |node| return comptimeAlignOf(env, node.child.*, depth + 1),
         else => return null,
     }
+}
+
+fn resolveReflectionAlias(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ast.TypeExpr {
+    if (depth > 64) return ty;
+    return switch (ty.kind) {
+        .name => |name| if (env.aliases.get(name.text)) |target| resolveReflectionAlias(env, target, depth + 1) else ty,
+        .qualified => |node| resolveReflectionAlias(env, node.child.*, depth + 1),
+        else => ty,
+    };
+}
+
+fn comptimeNullableLayout(env: *const ReflectEnv, child: ast.TypeExpr, depth: usize) ?type_layout.ComptimeOptionalLayout {
+    const resolved = resolveReflectionAlias(env, child, 0);
+    return switch (resolved.kind) {
+        .pointer, .raw_many_pointer, .fn_pointer => .{ .size = 8, .alignment = 8, .payload_offset = 0 },
+        .dyn_trait => .{ .size = 16, .alignment = 8, .payload_offset = 0 },
+        .name => |name| if (std.mem.eql(u8, name.text, "c_void")) null else blk: {
+            const size = comptimeSizeOf(env, resolved, depth + 1) orelse break :blk null;
+            const alignment = comptimeAlignOf(env, resolved, depth + 1) orelse break :blk null;
+            break :blk comptimeTaggedOptionalLayout(size, alignment);
+        },
+        else => null,
+    };
 }
 
 pub fn comptimeFieldOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {

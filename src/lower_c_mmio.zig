@@ -95,6 +95,7 @@ pub const ReplacementEmitContext = struct {
     allocator: std.mem.Allocator,
     scratch: std.mem.Allocator,
     out: *std.ArrayList(u8),
+    temp_index: *usize,
     type_aliases: *const std.StringHashMap(ast.TypeExpr),
     functions: *const std.StringHashMap(FnInfo),
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
@@ -389,17 +390,11 @@ pub fn emitDirectReadAssignment(ctx: EmitContext, replacement_ctx: ReplacementEm
     const call = ast_query.callExpr(assignment.value) orelse return false;
     const read = (try directReadAccess(ctx, call, locals)) orelse return false;
 
-    const global_target = replacement_ctx.global_assignment_target(replacement_ctx.emit_ctx, assignment.target, locals);
-    if (std.mem.eql(u8, read.access.ordering, "acquire") or global_target != null) {
-        const temp_name = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
-        ctx.temp_index.* += 1;
-        try emitReadDecl(ctx.context, read.value_c_type, temp_name, read.access);
-        try emitAcquireBarrierIfNeeded(ctx.context, read.access);
-        try emitAssignmentFromTemp(ctx.context, replacement_ctx, assignment.target, locals, temp_name);
-        return true;
-    }
-
-    try emitInlineReadAssignment(ctx.context, replacement_ctx, assignment.target, locals, read.value_c_type, read.access);
+    const temp_name = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
+    ctx.temp_index.* += 1;
+    try emitReadDecl(ctx.context, read.value_c_type, temp_name, read.access);
+    try emitAcquireBarrierIfNeeded(ctx.context, read.access);
+    try emitAssignmentFromTemp(ctx.context, replacement_ctx, assignment.target, locals, temp_name);
     return true;
 }
 
@@ -839,16 +834,14 @@ fn emitInlineReadAssignment(ctx: Context, replacement_ctx: ReplacementEmitContex
 }
 
 fn emitReadReplacementAssignment(ctx: Context, replacement_ctx: ReplacementEmitContext, target_expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), nested: *std.StringHashMap(LocalInfo), value: ast.Expr, replacements: []const MmioReadReplacement) !void {
-    if (replacement_ctx.global_assignment_target(replacement_ctx.emit_ctx, target_expr, locals)) |target| {
-        try appendGlobalStorePrefix(ctx.allocator, ctx.out, target);
-        try emitReadExprWithReplacements(replacement_ctx, value, nested, null, replacements);
-        try appendGlobalStoreSuffix(ctx.allocator, ctx.out, target);
-    } else {
-        try replacement_ctx.emit_assign_target(replacement_ctx.emit_ctx, target_expr, locals);
-        try ctx.out.appendSlice(ctx.allocator, " = ");
-        try emitReadExprWithReplacements(replacement_ctx, value, nested, replacement_ctx.operand_emit_type(replacement_ctx.emit_ctx, target_expr, locals), replacements);
-        try ctx.out.appendSlice(ctx.allocator, ";\n");
-    }
+    const target_ty = assignmentTargetType(replacement_ctx, .{ .target = target_expr, .value = value }, locals) orelse return error.UnsupportedCEmission;
+    const temp_name = try std.fmt.allocPrint(replacement_ctx.scratch, "mc_tmp{d}", .{replacement_ctx.temp_index.*});
+    replacement_ctx.temp_index.* += 1;
+    try replacement_ctx.emit_declarator(replacement_ctx.emit_ctx, target_ty, temp_name);
+    try ctx.out.appendSlice(ctx.allocator, " = ");
+    try emitReadExprWithReplacements(replacement_ctx, value, nested, target_ty, replacements);
+    try ctx.out.appendSlice(ctx.allocator, ";\n");
+    try emitAssignmentFromTemp(ctx, replacement_ctx, target_expr, locals, temp_name);
 }
 
 pub fn emitReadInferredLocalInitWithReplacements(ctx: Context, replacement_ctx: ReplacementEmitContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const MmioReadReplacement) !void {

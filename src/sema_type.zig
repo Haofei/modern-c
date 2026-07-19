@@ -438,16 +438,19 @@ pub fn classifyType(ty: ast.TypeExpr) TypeClass {
 
 pub fn classifyTypeCtx(ty: ast.TypeExpr, ctx: Context) TypeClass {
     const resolved = resolveAliasType(ty, ctx);
-    // A value optional `?Struct`/`?EnumAlias`/… whose payload is a NAMED aggregate
-    // classifies as `.unknown` under the ctx-free `classifyType` (it has no type
-    // tables). With ctx we can tell a concrete named value type (→ value optional)
-    // from a bare generic type parameter (→ stays unknown, may be a pointer).
-    if (classifyType(resolved) == .unknown) {
-        if (nullableInnerType(resolved)) |inner| {
-            const resolved_inner = resolveAliasType(inner, ctx);
-            if (isDynTraitTypeExpr(resolved_inner)) return .nullable_dyn_trait;
-            if (namedTypeIsKnownValue(resolved_inner, ctx)) return .nullable_value;
-        }
+    if (nullableInnerType(resolved)) |inner| {
+        const resolved_inner = resolveAliasType(inner, ctx);
+        const inner_class = classifyTypeCtx(resolved_inner, ctx);
+        return switch (inner_class) {
+            .c_void_pointer => .nullable_c_void_pointer,
+            .pointer, .raw_many_pointer => .nullable_pointer,
+            else => if (isDynTraitTypeExpr(resolved_inner))
+                .nullable_dyn_trait
+            else if (isValueOptionalPayloadClass(inner_class) or namedTypeIsKnownValue(resolved_inner, ctx))
+                .nullable_value
+            else
+                .unknown,
+        };
     }
     return classifyType(resolved);
 }

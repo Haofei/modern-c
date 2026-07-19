@@ -39,6 +39,13 @@ struct HugeSizeOverflow {
     b: [9223372036854775808][9223372036854775808]u8,
 }
 
+type OptionalWord = u32;
+
+struct OptionalHolder {
+    prefix: u8,
+    value: ?OptionalWord,
+}
+
 extern mmio struct Uart16550 {
     thr: Reg<u8, .write>,
     lsr: Reg<u8, .read>,
@@ -205,6 +212,11 @@ fn accept_comptime_reflection_offsets() -> void {
         assert(repr_of(RegBits<u8, ModeBits, .read>) == 1);
         assert(sizeof([]u8) == 16);
         assert(alignof([]u8) == 8);
+        assert(sizeof(?u32) == 8);
+        assert(alignof(?u32) == 4);
+        assert(sizeof(?OptionalWord) == 8);
+        assert(sizeof(OptionalHolder) == 12);
+        assert(alignof(OptionalHolder) == 4);
         assert(field_offset(Packet, .len) == 0);
         assert(field_offset(Packet, .tag) == 2);
         assert(field_offset(Uart16550, .lsr) == 1);

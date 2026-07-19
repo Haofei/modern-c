@@ -15,8 +15,14 @@ export fn mc_entry() -> u32 { … }                       // MC function visible
 
 - **`extern "C" fn …;`** — declare a C function MC may call. Parameter/return types must be
   ABI types (fixed-width ints, floats, pointers, `c_void` pointers, `extern struct`s).
+- **`extern fn …;`** — declare an unresolved function using the active MC backend's
+  internal ABI. This form is used by generated runtime/test seams and is not C ABI stable.
 - **`export fn …`** — give an MC function external linkage so C (or another TU) can call it.
 - **`extern struct`** — a struct whose layout matches the C ABI (no MC-chosen reordering).
+
+By-value aggregates whose target calling convention is not yet classified are rejected
+at explicit C ABI and export boundaries with `E_EXTERN_STRUCT_BY_VALUE`. This currently
+includes tagged optionals such as `?u32`; use a pointer or out parameter instead.
 
 ## `c_void`, not MC `void`
 
