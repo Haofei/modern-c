@@ -23,6 +23,42 @@
 #   mcc-registry.sh install  <pkg-dir>          --registry <reg> [--frozen]
 set -euo pipefail
 
+die() { echo "mcc-registry: $*" >&2; exit 1; }
+
+validate_name() {
+    local value="$1"
+    [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [ "$value" != "." ] && [ "$value" != ".." ] ||
+        die "invalid package name '$value'"
+}
+
+validate_version() {
+    local value="$1"
+    [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid package version '$value'"
+}
+
+validate_constraint() {
+    local value="$1" version="$1"
+    case "$value" in =*|^*) version="${value:1}" ;; esac
+    validate_version "$version"
+}
+
+canonical_dir() {
+    local path="$1"
+    [ ! -L "$path" ] || die "refusing symlinked root '$path'"
+    mkdir -p "$path"
+    (cd "$path" && pwd -P)
+}
+
+require_plain_path() {
+    local root="$1"; shift
+    local current="$root" component
+    for component in "$@"; do
+        current="$current/$component"
+        [ ! -L "$current" ] || die "refusing symlink in managed path '$current'"
+    done
+    case "$current" in "$root"/*) ;; *) die "managed path escaped root '$root'" ;; esac
+}
+
 # --- shared manifest parsing (same convention as mcc-pkg.sh) ---------------------------------
 field_in() {
     sed -E '/^[[:space:]]*\[/q' "$1" | sed -n -E "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*(.*[^[:space:]])[[:space:]]*\$/\1/p" | head -n1
@@ -61,9 +97,24 @@ ver_major() { printf '%s' "$1" | cut -d. -f1; }
 # Is $1 >= $2 by version ordering? (sort -V puts the larger last.)
 ver_ge() { [ "$(printf '%s\n%s\n' "$1" "$2" | LC_ALL=C sort -V | tail -n1)" = "$1" ]; }
 
+version_satisfies() {
+    local version="$1" constraint="$2" base major
+    validate_version "$version"
+    validate_constraint "$constraint"
+    case "$constraint" in
+        =*) [ "$version" = "${constraint#=}" ] ;;
+        ^*)
+            base="${constraint#^}"; major="$(ver_major "$base")"
+            [ "$(ver_major "$version")" = "$major" ] && ver_ge "$version" "$base"
+            ;;
+        *) [ "$version" = "$constraint" ] ;;
+    esac
+}
+
 # All published versions of a package, version-sorted ascending.
 published_versions() {
     local reg="$1" name="$2"
+    validate_name "$name"
     [ -f "$reg/index" ] || return 0
     awk -F'\t' -v n="$name" '$1==n {print $2}' "$reg/index" | LC_ALL=C sort -V
 }
@@ -71,8 +122,12 @@ published_versions() {
 # Resolve a constraint against the registry; print the chosen version or fail.
 resolve_version() {
     local reg="$1" name="$2" constraint="$3"
+    validate_name "$name"
+    validate_constraint "$constraint"
     local versions; versions="$(published_versions "$reg" "$name")"
     [ -n "$versions" ] || { echo "mcc-registry: no published versions for '$name'" >&2; return 1; }
+    local indexed
+    for indexed in $versions; do validate_version "$indexed"; done
 
     case "$constraint" in
         =*)
@@ -116,27 +171,37 @@ case "$cmd" in
         [ -f "$MAN" ] || { echo "mcc-registry: no mcpkg.txt in $DIR" >&2; exit 1; }
         name="$(field_in "$MAN" name)"; version="$(field_in "$MAN" version)"
         [ -n "$name" ] && [ -n "$version" ] || { echo "mcc-registry: manifest needs name + version" >&2; exit 1; }
+        validate_name "$name"; validate_version "$version"
+        REG="$(canonical_dir "$REG")"
+        require_plain_path "$REG" pkgs "$name" "$version"
+        mkdir -p "$REG/pkgs/$name"
         dest="$REG/pkgs/$name/$version"
         if [ -d "$dest" ]; then
             echo "mcc-registry: $name@$version already published (immutable); refusing to overwrite" >&2; exit 1
         fi
-        mkdir -p "$dest"
+        [ ! -e "$dest" ] || die "$name@$version has a non-directory registry entry"
+        stage="$(mktemp -d "$REG/pkgs/$name/.publish.XXXXXX")"
         # Copy the package tree minus vendor/build artifacts.
         ( cd "$DIR" && find . -type f ! -path './mc_packages/*' ! -name 'mcpkg.lock' ! -name '*.o' \
-            | while read -r f; do mkdir -p "$dest/$(dirname "$f")"; cp "$f" "$dest/$f"; done )
-        checksum_dir "$dest" > "$dest/.checksum"
-        mkdir -p "$REG"
-        printf '%s\t%s\n' "$name" "$version" >> "$REG/index"
-        LC_ALL=C sort -u "$REG/index" -o "$REG/index"
+            | while read -r f; do mkdir -p "$stage/$(dirname "$f")"; cp "$f" "$stage/$f"; done )
+        checksum_dir "$stage" > "$stage/.checksum"
+        mv "$stage" "$dest"
+        index_tmp="$(mktemp "$REG/.index.XXXXXX")"
+        [ ! -f "$REG/index" ] || cp "$REG/index" "$index_tmp"
+        printf '%s\t%s\n' "$name" "$version" >> "$index_tmp"
+        LC_ALL=C sort -u "$index_tmp" -o "$index_tmp"
+        mv "$index_tmp" "$REG/index"
         echo "published: $name@$version -> $dest ($(cat "$dest/.checksum"))"
         ;;
     versions)
         name="${ARGS[0]:?usage: versions <name> --registry <reg>}"
+        REG="$(canonical_dir "$REG")"
         published_versions "$REG" "$name"
         ;;
     resolve)
         name="${ARGS[0]:?usage: resolve <name> <constraint> --registry <reg>}"
         constraint="${ARGS[1]:?usage: resolve <name> <constraint> --registry <reg>}"
+        REG="$(canonical_dir "$REG")"
         resolve_version "$REG" "$name" "$constraint"
         ;;
     install)
@@ -145,9 +210,20 @@ case "$cmd" in
         [ -f "$MAN" ] || { echo "mcc-registry: no mcpkg.txt in $DIR" >&2; exit 1; }
         LOCK="$DIR/mcpkg.lock"
         VENDOR="$DIR/mc_packages"
+        REG="$(canonical_dir "$REG")"
+        [ ! -L "$VENDOR" ] || die "refusing symlinked vendor root '$VENDOR'"
+        VENDOR="$(canonical_dir "$VENDOR")"
         # Read any existing lock into a lookup (name -> "version checksum").
         locked_version() { [ -f "$LOCK" ] && awk -v n="$1" '$1==n {print $2}' "$LOCK"; }
         locked_checksum() { [ -f "$LOCK" ] && awk -v n="$1" '$1==n {print $3}' "$LOCK"; }
+
+        if [ -f "$LOCK" ]; then
+            awk '
+                /^#/ || NF == 0 { next }
+                NF != 3 { exit 1 }
+                seen[$1]++ { exit 1 }
+            ' "$LOCK" || die "malformed or duplicate lockfile entry"
+        fi
 
         new_lock="$(mktemp)"
         printf '# mcpkg.lock v1 — generated by mcc-registry; do not edit by hand\n' > "$new_lock"
@@ -155,11 +231,14 @@ case "$cmd" in
         count=0
         while read -r name constraint; do
             [ -n "$name" ] || continue
+            validate_name "$name"; validate_constraint "$constraint"
             count=$((count + 1))
             pinned="$(locked_version "$name" || true)"
             if [ -n "$pinned" ]; then
                 # Reproducible path: honor the locked version (must still satisfy the constraint).
-                if [ "$(resolve_version "$REG" "$name" "$constraint")" = "" ]; then :; fi
+                validate_version "$pinned"
+                version_satisfies "$pinned" "$constraint" ||
+                    die "locked $name@$pinned does not satisfy manifest constraint '$constraint'"
                 version="$pinned"
                 if ! published_versions "$REG" "$name" | grep -qx "$version"; then
                     echo "mcc-registry: locked $name@$version is not in the registry" >&2; exit 1
@@ -170,6 +249,7 @@ case "$cmd" in
                 fi
                 version="$(resolve_version "$REG" "$name" "$constraint")"
             fi
+            require_plain_path "$REG" pkgs "$name" "$version"
             src="$REG/pkgs/$name/$version"
             [ -d "$src" ] || { echo "mcc-registry: $name@$version missing from registry" >&2; exit 1; }
             # Verify the published checksum, then verify the lock's checksum if present.
@@ -179,14 +259,26 @@ case "$cmd" in
                 echo "mcc-registry: checksum mismatch for $name@$version (registry tampered)" >&2; exit 1
             fi
             lc="$(locked_checksum "$name" || true)"
+            [ -z "$lc" ] || [[ "$lc" =~ ^[0-9a-f]{64}$ ]] || die "invalid checksum for '$name' in lockfile"
             if [ -n "$lc" ] && [ "$lc" != "$have" ]; then
                 echo "mcc-registry: $name@$version checksum differs from lockfile (not reproducible)" >&2; exit 1
             fi
-            # Vendor the resolved version (copy the tree, minus the registry's .checksum marker).
-            rm -rf "$VENDOR/$name"
-            mkdir -p "$VENDOR/$name"
+            # Build in a root-local staging directory, then replace the validated target by rename.
+            require_plain_path "$VENDOR" "$name"
+            target="$VENDOR/$name"
+            [ ! -e "$target" ] || [ -d "$target" ] || die "vendor target '$target' is not a directory"
+            stage="$(mktemp -d "$VENDOR/.install.XXXXXX")"
             ( cd "$src" && find . -type f ! -name '.checksum' \
-                | while read -r f; do mkdir -p "$VENDOR/$name/$(dirname "$f")"; cp "$f" "$VENDOR/$name/$f"; done )
+                | while read -r f; do mkdir -p "$stage/$(dirname "$f")"; cp "$f" "$stage/$f"; done )
+            if [ -d "$target" ]; then
+                backup="$VENDOR/.old.$name.$$"
+                [ ! -e "$backup" ] || die "internal backup path already exists"
+                mv "$target" "$backup"
+                if ! mv "$stage" "$target"; then mv "$backup" "$target"; die "failed to install '$name'"; fi
+                rm -rf -- "$backup"
+            else
+                mv "$stage" "$target"
+            fi
             printf '%s\t%s\t%s\n' "$name" "$version" "$have" >> "$new_lock"
             echo "installed: $name@$version ($constraint) -> mc_packages/$name"
         done < <(registry_deps_of "$MAN")
