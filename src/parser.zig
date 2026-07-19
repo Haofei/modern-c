@@ -12,6 +12,8 @@ const max_generic_lookahead_tokens: usize = 1024;
 
 pub const Parser = struct {
     lx: lexer.Lexer,
+    tokens: std.ArrayList(token.Token) = .empty,
+    token_index: usize = 0,
     previous: token.Token,
     current: token.Token,
     reporter: *diagnostics.Reporter,
@@ -56,6 +58,9 @@ pub const Parser = struct {
 
     pub fn parseModule(self: *Parser, allocator: std.mem.Allocator) !ast.Module {
         self.allocator = allocator;
+        self.tokens = .empty;
+        defer self.tokens.deinit(allocator);
+        try self.bufferTokens(allocator);
         self.tuple_entries = .empty;
         defer self.tuple_entries.deinit(allocator);
         self.tuple_names = std.StringHashMap(usize).init(allocator);
@@ -1123,9 +1128,8 @@ pub const Parser = struct {
         // `IDENT :` immediately followed by a loop keyword is a loop label; any
         // other `ident :` is left for its existing meaning.
         if (self.current.kind == .identifier) {
-            var lx = self.lx;
-            if (lx.next().kind == .colon) {
-                const after = lx.next().kind;
+            if (self.peekKind(1) == .colon) {
+                const after = self.peekKind(2);
                 if (after == .kw_for or after == .kw_while) {
                     const loop_label = ident(self.current);
                     self.advance(); // label ident
@@ -1917,7 +1921,7 @@ pub const Parser = struct {
 
     fn lessStartsGenericCall(self: *Parser) anyerror!bool {
         if (self.current.kind != .less) return false;
-        var lx = self.lx;
+        var index = self.token_index + 1;
         var depth: usize = 0;
         var saw_type_token = false;
         var scanned: usize = 0;
@@ -1928,7 +1932,8 @@ pub const Parser = struct {
                 return error.ParseFailed;
             }
             scanned += 1;
-            const tok = lx.next();
+            const tok = self.tokenAt(index);
+            index += 1;
             switch (tok.kind) {
                 .eof, .semicolon, .l_brace, .r_brace, .fat_arrow, .equal => return false,
                 .less => {
@@ -1937,7 +1942,7 @@ pub const Parser = struct {
                 },
                 .greater => {
                     if (depth == 0) {
-                        return saw_type_token and lx.next().kind == .l_paren;
+                        return saw_type_token and self.tokenAt(index).kind == .l_paren;
                     }
                     depth -= 1;
                     saw_type_token = true;
@@ -1946,7 +1951,7 @@ pub const Parser = struct {
                     // `>>` closes two levels (a nested generic's `>` plus the outer).
                     if (depth == 0) return false;
                     depth -= 1;
-                    if (depth == 0) return saw_type_token and lx.next().kind == .l_paren;
+                    if (depth == 0) return saw_type_token and self.tokenAt(index).kind == .l_paren;
                     saw_type_token = true;
                 },
                 .comma => {
@@ -2129,7 +2134,8 @@ pub const Parser = struct {
 
     fn advance(self: *Parser) void {
         self.previous = self.current;
-        self.current = self.lx.next();
+        if (self.token_index + 1 < self.tokens.items.len) self.token_index += 1;
+        self.current = self.tokens.items[self.token_index];
     }
 
     fn synchronizeTopLevel(self: *Parser, start_offset: usize) void {
@@ -2280,18 +2286,35 @@ pub const Parser = struct {
 
     fn isLabeledLoopStart(self: *Parser) bool {
         if (self.current.kind != .identifier) return false;
-        var lx = self.lx;
-        if (lx.next().kind != .colon) return false;
-        const after = lx.next().kind;
+        if (self.peekKind(1) != .colon) return false;
+        const after = self.peekKind(2);
         return after == .kw_for or after == .kw_while;
     }
 
     fn startsStructLiteralField(self: *Parser) bool {
         if (self.current.kind != .dot) return false;
-        var lx = self.lx;
-        const name = lx.next();
+        const name = self.tokenAt(self.token_index + 1);
         if (!self.isSymbol(name.kind)) return false;
-        return lx.next().kind == .equal;
+        return self.peekKind(2) == .equal;
+    }
+
+    fn bufferTokens(self: *Parser, allocator: std.mem.Allocator) !void {
+        self.tokens = .empty;
+        self.token_index = 0;
+        try self.tokens.append(allocator, self.current);
+        while (self.tokens.items[self.tokens.items.len - 1].kind != .eof) {
+            try self.tokens.append(allocator, self.lx.next());
+        }
+        self.previous = self.tokens.items[0];
+        self.current = self.tokens.items[0];
+    }
+
+    fn tokenAt(self: *const Parser, index: usize) token.Token {
+        return self.tokens.items[@min(index, self.tokens.items.len - 1)];
+    }
+
+    fn peekKind(self: *const Parser, distance: usize) token.Kind {
+        return self.tokenAt(self.token_index + distance).kind;
     }
 
     fn isSymbol(_: *Parser, kind: token.Kind) bool {
