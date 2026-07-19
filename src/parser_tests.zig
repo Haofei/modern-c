@@ -199,6 +199,32 @@ test "parser leaves qualified references for the dedicated resolver" {
     try std.testing.expectEqualStrings("M__f", resolved_callee.kind.ident.text);
 }
 
+test "qualified resolver validates symbol origins against the module graph" {
+    const source =
+        \\fn main() -> u32 { return M.f(); }
+        \\module M { fn f() -> u32 { return 1; } }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "qualified_graph.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+
+    var files = [_]loader.ModuleFile{.{
+        .id = @enumFromInt(0),
+        .canonical_path = "qualified_graph.mc",
+        .display_path = "qualified_graph.mc",
+        .depth = 0,
+        .source_start = 0,
+        .source_len = 1,
+    }};
+    var imports = [_]loader.ImportEdge{};
+    const graph = loader.ModuleGraph{ .files = files[0..], .imports = imports[0..] };
+    try std.testing.expectError(error.InvalidModuleGraph, name_resolve.transformWithGraph(arena.allocator(), module, &graph));
+}
+
 test "qualified resolution is independent of declaration order and unrelated generics" {
     const uses =
         \\fn call_module() -> u32 { return Util.answer(); }
@@ -297,6 +323,90 @@ test "loader handles cycles wide DAGs and deep chains iteratively" {
     const deep_path = "tests/spec_support/import_deep_0.mc";
     try expectImportBudgetResult(deep_path, .{ .max_import_depth = 3 }, null);
     try expectImportBudgetResult(deep_path, .{ .max_import_depth = 2 }, "E_IMPORT_DEPTH_LIMIT");
+}
+
+fn graphFileId(graph: loader.ModuleGraph, basename: []const u8) !loader.FileId {
+    for (graph.files) |file| {
+        if (std.mem.eql(u8, std.fs.path.basename(file.canonical_path), basename)) return file.id;
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn graphHasEdge(graph: loader.ModuleGraph, importer: loader.FileId, imported: loader.FileId) bool {
+    for (graph.imports) |edge| {
+        if (edge.importer == importer and edge.imported == imported) return true;
+    }
+    return false;
+}
+
+test "loader publishes stable module graph identities and edges" {
+    const wide_path = "tests/spec_support/import_wide_root.mc";
+    const wide_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, wide_path, std.testing.allocator, .limited(1 << 20));
+    defer std.testing.allocator.free(wide_source);
+    var wide = try loader.loadProjectOptionsReport(std.testing.allocator, std.testing.io, wide_path, wide_source, .{}, null);
+    defer wide.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 4), wide.graph.files.len);
+    try std.testing.expectEqual(@as(usize, 4), wide.graph.imports.len);
+    for (wide.graph.files, 0..) |file, index| try std.testing.expectEqual(index, @intFromEnum(file.id));
+
+    const root = try graphFileId(wide.graph, "import_wide_root.mc");
+    const left = try graphFileId(wide.graph, "import_wide_left.mc");
+    const right = try graphFileId(wide.graph, "import_wide_right.mc");
+    const common = try graphFileId(wide.graph, "import_wide_common.mc");
+    try std.testing.expectEqual(@as(usize, 0), @intFromEnum(root));
+    try std.testing.expectEqual(@as(usize, 1), @intFromEnum(left));
+    try std.testing.expectEqual(@as(usize, 2), @intFromEnum(right));
+    try std.testing.expectEqual(@as(usize, 3), @intFromEnum(common));
+    try std.testing.expect(graphHasEdge(wide.graph, root, left));
+    try std.testing.expect(graphHasEdge(wide.graph, root, right));
+    try std.testing.expect(graphHasEdge(wide.graph, left, common));
+    try std.testing.expect(graphHasEdge(wide.graph, right, common));
+    try std.testing.expect(wide.graph.files[@intFromEnum(left)].source_start < wide.graph.files[@intFromEnum(common)].source_start);
+    try std.testing.expect(wide.graph.files[@intFromEnum(common)].source_start < wide.graph.files[@intFromEnum(right)].source_start);
+    for (wide.graph.files) |file| {
+        try std.testing.expect(file.source_len > 0);
+        var found_boundary = false;
+        for (wide.boundaries) |boundary| {
+            if (std.mem.eql(u8, std.fs.path.basename(boundary.path), std.fs.path.basename(file.display_path))) {
+                try std.testing.expectEqual(file.source_start, boundary.start);
+                found_boundary = true;
+            }
+        }
+        try std.testing.expect(found_boundary);
+    }
+
+    const cycle_path = "tests/spec_support/import_cycle_a.mc";
+    const cycle_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, cycle_path, std.testing.allocator, .limited(1 << 20));
+    defer std.testing.allocator.free(cycle_source);
+    var cycle = try loader.loadProjectOptionsReport(std.testing.allocator, std.testing.io, cycle_path, cycle_source, .{}, null);
+    defer cycle.deinit(std.testing.allocator);
+    const cycle_a = try graphFileId(cycle.graph, "import_cycle_a.mc");
+    const cycle_b = try graphFileId(cycle.graph, "import_cycle_b.mc");
+    try std.testing.expectEqual(@as(usize, 2), cycle.graph.files.len);
+    try std.testing.expectEqual(@as(usize, 2), cycle.graph.imports.len);
+    try std.testing.expect(graphHasEdge(cycle.graph, cycle_a, cycle_b));
+    try std.testing.expect(graphHasEdge(cycle.graph, cycle_b, cycle_a));
+}
+
+test "module graph construction fails closed on allocation failure" {
+    const root_path = "tests/spec_support/import_wide_root.mc";
+    const root_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, root_path, std.testing.allocator, .limited(1 << 20));
+    defer std.testing.allocator.free(root_source);
+
+    var saw_oom = false;
+    for (0..256) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+        const result = loader.loadProjectOptionsReport(failing.allocator(), std.testing.io, root_path, root_source, .{}, null);
+        if (result) |project_value| {
+            var project = project_value;
+            project.deinit(failing.allocator());
+        } else |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            saw_oom = true;
+        }
+    }
+    try std.testing.expect(saw_oom);
 }
 
 test "parser distinguishes relational operators from generic calls" {

@@ -205,7 +205,7 @@ printf 'fn hidden() -> u32 { return 1; }\n' >"$WORK/visibility_lib.mc"
 printf 'import "./visibility_lib.mc";\nfn use_hidden() -> u32 { return hidden(); }\n' >"$WORK/visibility_root.mc"
 run_case check "$WORK/visibility_root.mc" --visibility=legacy
 assert_rc 0 "legacy visibility compatibility"
-assert_stderr_empty "legacy visibility compatibility"
+assert_stderr_contains "parsed 2 top-level declarations" "legacy visibility compatibility"
 
 run_case check "$WORK/visibility_root.mc" --visibility=explicit
 assert_rc 1 "explicit visibility private default"

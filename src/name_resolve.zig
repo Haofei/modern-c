@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const loader = @import("loader.zig");
 
 const QualifiedKey = struct {
     owner: []const u8,
@@ -25,6 +26,15 @@ const QualifiedKeyContext = struct {
 const QualifiedMap = std.HashMap(QualifiedKey, []const u8, QualifiedKeyContext, 80);
 
 pub fn transform(allocator: std.mem.Allocator, module: ast.Module) !ast.Module {
+    return transformWithGraph(allocator, module, null);
+}
+
+pub fn transformWithGraph(allocator: std.mem.Allocator, module: ast.Module, graph: ?*const loader.ModuleGraph) !ast.Module {
+    if (graph) |module_graph| {
+        for (module.qualified_symbols) |symbol| {
+            if (fileForOffset(module_graph.*, symbol.owner.span.offset) == null) return error.InvalidModuleGraph;
+        }
+    }
     var symbols = QualifiedMap.init(allocator);
     defer symbols.deinit();
     for (module.qualified_symbols) |symbol| {
@@ -32,6 +42,19 @@ pub fn transform(allocator: std.mem.Allocator, module: ast.Module) !ast.Module {
     }
     try resolveDecls(&symbols, module.decls);
     return module;
+}
+
+fn fileForOffset(graph: loader.ModuleGraph, offset: usize) ?loader.FileId {
+    var found: ?loader.FileId = null;
+    var best_start: usize = 0;
+    for (graph.files) |file| {
+        const source_end = std.math.add(usize, file.source_start, file.source_len) catch continue;
+        if (file.source_start <= offset and offset < source_end and (found == null or file.source_start >= best_start)) {
+            found = file.id;
+            best_start = file.source_start;
+        }
+    }
+    return found;
 }
 
 fn resolveDecls(symbols: *const QualifiedMap, decls: []ast.Decl) std.mem.Allocator.Error!void {

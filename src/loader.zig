@@ -62,7 +62,58 @@ const ImportOrigin = struct {
     requested: []const u8,
 };
 
+pub const FileBoundary = diagnostics.FileBoundary;
+pub const FileId = enum(u32) { _ };
+
+pub const ModuleFile = struct {
+    id: FileId,
+    canonical_path: []const u8,
+    display_path: []const u8,
+    depth: usize,
+    source_start: usize = 0,
+    source_len: usize = 0,
+};
+
+pub const ImportEdge = struct {
+    importer: FileId,
+    imported: FileId,
+    span: diagnostics.Span,
+};
+
+pub const ModuleGraph = struct {
+    files: []ModuleFile,
+    imports: []ImportEdge,
+
+    pub fn deinit(self: *ModuleGraph, allocator: std.mem.Allocator) void {
+        for (self.files) |file| {
+            allocator.free(file.canonical_path);
+            allocator.free(file.display_path);
+        }
+        allocator.free(self.files);
+        allocator.free(self.imports);
+    }
+};
+
+pub const LoadedProject = struct {
+    source: []u8,
+    boundaries: []FileBoundary,
+    graph: ModuleGraph,
+
+    pub fn deinit(self: *LoadedProject, allocator: std.mem.Allocator) void {
+        allocator.free(self.source);
+        for (self.boundaries) |boundary| allocator.free(boundary.path);
+        allocator.free(self.boundaries);
+        self.graph.deinit(allocator);
+    }
+};
+
+const GraphBuilder = struct {
+    files: std.ArrayList(ModuleFile) = .empty,
+    imports: std.ArrayList(ImportEdge) = .empty,
+};
+
 const PendingFile = struct {
+    id: FileId,
     path: []const u8,
     display_path: []const u8,
     source: []const u8,
@@ -102,8 +153,6 @@ const ResolvedImport = struct {
 // origin file by taking the last boundary whose `start <= span.offset`. The orphan rule in
 // sema uses this to compare the defining file of an `opaque struct` against the file of a
 // peer `impl` accessor, so a cross-file `impl` can no longer forge access to private fields.
-pub const FileBoundary = diagnostics.FileBoundary;
-
 // The virtual arch directory: an `import "kernel/arch/active/<x>"` is rewritten to
 // `import "kernel/arch/<arch>/<x>"` where <arch> is the `--arch` selection (default
 // "riscv64"). This is the arch-selection seam (plan R0b): ONE generic core module (e.g.
@@ -176,6 +225,66 @@ pub fn loadCombinedSourceWithBoundariesOptionsReport(
     options: LoadOptions,
     reporter: ?*diagnostics.Reporter,
 ) LoadError![]u8 {
+    return loadCombinedSourceGraph(allocator, io, root_path, root_source, boundaries, options, reporter, null);
+}
+
+pub fn loadProjectOptionsReport(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    root_path: []const u8,
+    root_source: []const u8,
+    options: LoadOptions,
+    reporter: ?*diagnostics.Reporter,
+) LoadError!LoadedProject {
+    var boundaries: std.ArrayList(FileBoundary) = .empty;
+    errdefer {
+        for (boundaries.items) |boundary| allocator.free(boundary.path);
+        boundaries.deinit(allocator);
+    }
+    var graph_builder = GraphBuilder{};
+    errdefer {
+        for (graph_builder.files.items) |file| {
+            allocator.free(file.canonical_path);
+            allocator.free(file.display_path);
+        }
+        graph_builder.files.deinit(allocator);
+        graph_builder.imports.deinit(allocator);
+    }
+    const source = try loadCombinedSourceGraph(allocator, io, root_path, root_source, &boundaries, options, reporter, &graph_builder);
+    errdefer allocator.free(source);
+    const boundary_slice = try boundaries.toOwnedSlice(allocator);
+    errdefer {
+        for (boundary_slice) |boundary| allocator.free(boundary.path);
+        allocator.free(boundary_slice);
+    }
+    const files = try graph_builder.files.toOwnedSlice(allocator);
+    errdefer {
+        for (files) |file| {
+            allocator.free(file.canonical_path);
+            allocator.free(file.display_path);
+        }
+        allocator.free(files);
+    }
+    return .{
+        .source = source,
+        .boundaries = boundary_slice,
+        .graph = .{
+            .files = files,
+            .imports = try graph_builder.imports.toOwnedSlice(allocator),
+        },
+    };
+}
+
+fn loadCombinedSourceGraph(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    root_path: []const u8,
+    root_source: []const u8,
+    boundaries: ?*std.ArrayList(FileBoundary),
+    options: LoadOptions,
+    reporter: ?*diagnostics.Reporter,
+    graph: ?*GraphBuilder,
+) LoadError![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     const canon_root = (try realPathFileDupe(allocator, io, root_path)) orelse try canonicalize(allocator, root_path, ".");
@@ -218,6 +327,7 @@ pub fn loadCombinedSourceWithBoundariesOptionsReport(
         installed_roots.items,
         reporter,
         &budget,
+        graph,
     );
     return out.toOwnedSlice(allocator);
 }
@@ -236,12 +346,13 @@ fn expandAll(
     installed_roots: []const InstalledRoot,
     reporter: ?*diagnostics.Reporter,
     budget: *LoadBudget,
+    graph: ?*GraphBuilder,
 ) LoadError!void {
     var graph_arena = std.heap.ArenaAllocator.init(allocator);
     defer graph_arena.deinit();
     const graph_allocator = graph_arena.allocator();
 
-    var discovered = std.StringHashMap(void).init(allocator);
+    var discovered = std.StringHashMap(FileId).init(allocator);
     defer discovered.deinit();
     var pending: std.ArrayList(PendingFile) = .empty;
     defer {
@@ -251,8 +362,9 @@ fn expandAll(
 
     try reserveFile(reporter, budget, null, 0, stripUtf8Bom(source).len);
     if (budget.exhausted) return;
-    try discovered.put(path, {});
-    try pending.append(allocator, .{ .path = path, .display_path = display_path, .source = source, .source_owned = false, .depth = 0 });
+    const root_id = try recordFile(allocator, graph, path, display_path, 0);
+    try discovered.put(path, root_id);
+    try pending.append(allocator, .{ .id = root_id, .path = path, .display_path = display_path, .source = source, .source_owned = false, .depth = 0 });
 
     while (pending.pop()) |item| {
         defer if (item.source_owned) allocator.free(item.source);
@@ -260,7 +372,12 @@ fn expandAll(
 
         const file_source = stripUtf8Bom(item.source);
         const file_start = out.items.len;
-        if (boundaries) |b| try b.append(allocator, .{ .start = file_start, .path = try allocator.dupe(u8, item.display_path) });
+        setSourceRange(graph, item.id, file_start, file_source.len);
+        if (boundaries) |b| {
+            const boundary_path = try allocator.dupe(u8, item.display_path);
+            errdefer allocator.free(boundary_path);
+            try b.append(allocator, .{ .start = file_start, .path = boundary_path });
+        }
         const imports = try scanImports(graph_allocator, io, item.path, file_source, arch, platform, sandbox_root, installed_roots);
 
         const blanked = try allocator.dupe(u8, file_source);
@@ -293,7 +410,10 @@ fn expandAll(
                 }
                 return error.ImportNotFound;
             }
-            if (discovered.contains(imp.path)) continue;
+            if (discovered.get(imp.path)) |imported_id| {
+                try recordImport(allocator, graph, item.id, imported_id, imp.span);
+                continue;
+            }
             if (item.depth >= budget.limits.max_import_depth) {
                 try rejectBudget(reporter, budget, origin, "E_IMPORT_DEPTH_LIMIT", "import depth exceeds configured limit {d}", .{budget.limits.max_import_depth});
                 break;
@@ -302,7 +422,8 @@ fn expandAll(
                 try rejectBudget(reporter, budget, origin, "E_IMPORT_FILE_LIMIT", "import graph exceeds configured file limit {d}", .{budget.limits.max_files});
                 break;
             }
-            const imp_source = std.Io.Dir.cwd().readFileAlloc(io, imp.path, allocator, .limited(64 * 1024 * 1024)) catch {
+            const imp_source = std.Io.Dir.cwd().readFileAlloc(io, imp.path, allocator, .limited(64 * 1024 * 1024)) catch |err| {
+                if (err == error.OutOfMemory) return error.OutOfMemory;
                 if (reporter) |r| {
                     r.err(.{
                         .offset = file_start + imp.span.offset,
@@ -320,8 +441,11 @@ fn expandAll(
                 allocator.free(imp_source);
                 break;
             }
-            try discovered.put(imp.path, {});
+            const imported_id = try recordFile(allocator, graph, imp.path, imp.display_path, item.depth + 1);
+            try discovered.put(imp.path, imported_id);
+            try recordImport(allocator, graph, item.id, imported_id, imp.span);
             try children.append(allocator, .{
+                .id = imported_id,
                 .path = imp.path,
                 .display_path = imp.display_path,
                 .source = imp_source,
@@ -336,6 +460,46 @@ fn expandAll(
             try pending.append(allocator, children.items[child_index]);
             children.items[child_index].source_owned = false;
         }
+    }
+}
+
+fn recordFile(
+    allocator: std.mem.Allocator,
+    graph: ?*GraphBuilder,
+    canonical_path: []const u8,
+    display_path: []const u8,
+    depth: usize,
+) std.mem.Allocator.Error!FileId {
+    const id: FileId = @enumFromInt(if (graph) |builder| builder.files.items.len else 0);
+    if (graph) |builder| {
+        const canonical_copy = try allocator.dupe(u8, canonical_path);
+        errdefer allocator.free(canonical_copy);
+        const display_copy = try allocator.dupe(u8, display_path);
+        errdefer allocator.free(display_copy);
+        try builder.files.append(allocator, .{
+            .id = id,
+            .canonical_path = canonical_copy,
+            .display_path = display_copy,
+            .depth = depth,
+        });
+    }
+    return id;
+}
+
+fn recordImport(
+    allocator: std.mem.Allocator,
+    graph: ?*GraphBuilder,
+    importer: FileId,
+    imported: FileId,
+    span: diagnostics.Span,
+) std.mem.Allocator.Error!void {
+    if (graph) |builder| try builder.imports.append(allocator, .{ .importer = importer, .imported = imported, .span = span });
+}
+
+fn setSourceRange(graph: ?*GraphBuilder, id: FileId, source_start: usize, source_len: usize) void {
+    if (graph) |builder| {
+        builder.files.items[@intFromEnum(id)].source_start = source_start;
+        builder.files.items[@intFromEnum(id)].source_len = source_len;
     }
 }
 

@@ -46,6 +46,7 @@ const symbols = @import("symbols.zig");
 // rule for `impl` blocks of `opaque struct`s (a peer `impl` in a different file may not name the
 // type's private fields). Null when no module was loaded (e.g. `fmt`, which bypasses the loader).
 var combined_boundaries: ?[]const loader.FileBoundary = null;
+var combined_module_graph: ?*const loader.ModuleGraph = null;
 var active_visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in;
 
 const usage =
@@ -245,11 +246,6 @@ fn runMain(init: std.process.Init) !void {
     // Resolve `import "path";` declarations by textual inclusion (section 22 /
     // module system). With no imports this is the original source plus a
     // trailing newline, so single-file behavior is unchanged.
-    var boundaries: std.ArrayList(loader.FileBoundary) = .empty;
-    defer {
-        for (boundaries.items) |b| allocator.free(b.path);
-        boundaries.deinit(allocator);
-    }
     var load_diag = diagnostics.Reporter.init(allocator, path, root_source);
     defer load_diag.deinit();
     var mc_path_entries: std.ArrayList([]const u8) = .empty;
@@ -260,19 +256,20 @@ fn runMain(init: std.process.Init) !void {
             if (entry.len != 0) try mc_path_entries.append(allocator, entry);
         }
     }
-    const source = try loader.loadCombinedSourceWithBoundariesOptionsReport(allocator, init.io, loader_root_path, root_source, &boundaries, .{
+    var loaded = try loader.loadProjectOptionsReport(allocator, init.io, loader_root_path, root_source, .{
         .arch = options.arch_flag,
         .platform = options.platform_flag,
         .std_dir = options.std_dir,
         .mc_path = mc_path_entries.items,
     }, &load_diag);
-    defer allocator.free(source);
-    if (reads_stdin and boundaries.items.len > 0) {
-        allocator.free(boundaries.items[0].path);
-        boundaries.items[0].path = try allocator.dupe(u8, path);
+    defer loaded.deinit(allocator);
+    const source = loaded.source;
+    if (reads_stdin and loaded.boundaries.len > 0) {
+        allocator.free(loaded.boundaries[0].path);
+        loaded.boundaries[0].path = try allocator.dupe(u8, path);
     }
     load_diag.source = source;
-    load_diag.file_boundaries = boundaries.items;
+    load_diag.file_boundaries = loaded.boundaries;
     if (load_diag.has_errors) {
         if (std.mem.eql(u8, command, "check") and options.json_diagnostics) {
             var out: std.ArrayList(u8) = .empty;
@@ -284,8 +281,10 @@ fn runMain(init: std.process.Init) !void {
         }
         return error.ImportNotFound;
     }
-    combined_boundaries = boundaries.items;
+    combined_boundaries = loaded.boundaries;
     defer combined_boundaries = null;
+    combined_module_graph = &loaded.graph;
+    defer combined_module_graph = null;
 
     if (std.mem.eql(u8, command, "lex")) {
         try runLex(allocator, path, source);
@@ -1009,7 +1008,7 @@ fn parseModuleOrReportMode(source: []const u8, allocator: std.mem.Allocator, dia
         return err;
     };
     module.visibility_mode = active_visibility_mode;
-    const resolved = name_resolve.transform(allocator, module) catch |err| {
+    const resolved = name_resolve.transformWithGraph(allocator, module, combined_module_graph) catch |err| {
         if (render_errors) diag.render();
         return err;
     };
