@@ -66,6 +66,15 @@ Emacs Eglot:
 ```
 
 Use an absolute path for `MCC` when the editor may start the server from a
-different working directory. The server creates temporary sibling `.mc` files
-beside the edited document so relative imports resolve the same way they do for
-the compiler CLI.
+different working directory. Relative `MCC` paths containing a directory are
+normalized when the server starts. Unsaved source is passed to `mcc` over stdin
+with the document directory as the compiler working directory, so relative imports
+resolve without writing beside the source file. This works with read-only trees.
+
+Compiler requests have a hard timeout controlled by
+`MC_LSP_MCC_TIMEOUT_SECONDS` (15 seconds by default). Diagnostics are debounced,
+obsolete checks are terminated, imported-file diagnostics retain their source
+URI, and stale imported diagnostics are explicitly cleared. Symbol spans include
+their source path, so definition, references, and rename operate across the current
+import graph. Workspace symbol search also discovers unopened `.mc` files under
+the roots supplied by the client, up to the server's 10,000-document safety limit.

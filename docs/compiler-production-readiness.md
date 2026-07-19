@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-18, based on the current compiler worktree**.
-Evidence register: **729 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **732 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -160,6 +160,9 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Labeled async loop jumps are implemented | `break :label` and `continue :label` inside await-bearing async loops now resolve to the named source loop's state-machine exit/head rather than being rejected or accidentally targeting an inner copied loop. | `1f4e67e9 Support labeled async loop jumps`; `src/async_lower.zig` async loop target stack and labeled poll-loop edge; `tests/c_emit/fuzz_async_loop_breakcont.mc` labeled break/continue fixture; focused C/LLVM fixture probe returns `1` on both backends. |
 | Async reserved forms fail closed with check-mode diagnostics | The remaining reserved async forms named by the roadmap are now gated under `mcc check`: dyn-future await / unresolved future expressions, await-bearing `for` loops, constructor-formed borrow-across-await, and first-await self-reference/pinning all reject with stable explicit diagnostic codes instead of relying only on backend rejection. | `6f636d56 Gate async reserved forms under check`; `tests/c_emit/bad/async_await_unresolved_dyn.mc`; `tests/c_emit/bad/async_for_await_nested.mc`; `tests/c_emit/bad/async_borrow_across_await.mc`; `tests/c_emit/bad/async_borrow_pinning.mc`; `tests/diagnostics/bad-golden.tsv`; `python3 tools/toolchain/bad-diagnostics-test.py --check`. |
 | Release artifact packaging and local qualification gates are implemented | Repo-local gates now prove pinned release metadata, ReleaseSafe installability, deterministic tarballs, SHA256SUMS, release inventory, CycloneDX SBOM, required payload docs/files, tag-version rejection, GitHub/Sigstore attestation wiring, and release workflow upload staging. | `7e0d4592 docs: narrow release qualification ledger item`; `.github/workflows/release.yml`; `tools/ci/package-release.py`; `tools/toolchain/release-metadata-test.py`; `tools/toolchain/package-release-test.py`; `tools/toolchain/release-safe-install-test.sh`; `build/qemu.zig`; `build/tiers.zig`; `docs/release-process.md`; `SECURITY.md`; `STABILITY.md`; `CHANGELOG.md`; `zig build release-metadata-test package-release-test release-safe-install-test`. |
+| Offline registry identities, paths, and locks fail closed | Package names/versions use a strict safe grammar; canonical managed roots reject symlink components; publish/install use root-local staging and rename; every lock entry is structurally validated; and a pinned version must satisfy the current manifest constraint, including under `--frozen`. | `tools/toolchain/mcc-registry.sh`; `tools/toolchain/pkg-registry-test.sh`; traversal, outside-sentinel, symlink-root, malformed identity/constraint/lock, incompatible pin, and frozen-drift regressions; `zig build pkg-registry-test`; `git diff --check`. |
+| Release, CI, source-package, and external publication controls are closed for pre-release use | Release binds exact SHA/source/binary version, runs no-skip `m0`, requires a clean tree, and refuses existing releases/assets; CI has ref concurrency, deadlines, pinned Zig cache, PR `fast`, and push `m0`; `zig fetch` materialization proves the complete source package outside Git; GitHub protects `v*` tags and enables Private Vulnerability Reporting. No public release has been created, so release evidence remains intentionally pending until an actual qualified tag exists. | `.github/workflows/ci.yml`; `.github/workflows/release.yml`; `build.zig.zon`; `tools/toolchain/source-package-test.sh`; `tools/toolchain/release-publication-audit.sh`; `tools/toolchain/release-metadata-test.py`; `docs/release-process.md`; `SECURITY.md`; `zig build source-package-test release-metadata-test`; read-only GitHub publication audit. |
+| LSP file identity, process lifetime, and import-graph behavior are qualified | File URIs use standards-based encoding; unsaved source is compiled through stdin overlays in the document cwd without sibling writes; every compiler subprocess has a hard timeout; diagnostics debounce/cancel and preserve/clear imported-file URIs; symbol spans carry source paths for import-graph definition/reference/rename; workspace symbols discover unopened files under client roots. Public docs call this a CLI-backed qualified server rather than a universally full implementation. | `src/symbols.zig`; `src/main.zig`; `tools/lsp/mc-lsp.py`; `tools/lsp/lsp-test.py`; `tools/toolchain/mcc-symbols-test.sh`; `README.md`; `docs/lsp.md`; encoded/Unicode URI, read-only tree, timeout recovery, imported diagnostic clear, unopened workspace file, and cross-file navigation regressions; `zig build mcc-symbols-test lsp-test`; `git diff --check`. |
 | Native macOS host support and LLVM major are gated | The documented macOS host tier is no longer an unverified README claim: CI has a native `macos-15` job, pins `MC_LLVM_MAJOR=18`, installs and selects Homebrew `llvm@18`, prints the selected LLVM tools, and runs the host/fast gate. The release metadata gate now locks the exact README support row, job comment, gate name, tool-version probes, and non-floating macOS runner. | `.github/workflows/ci.yml` `macos` job; `README.md` LLVM Support Matrix; `tools/toolchain/release-metadata-test.py` `require_llvm_support_matrix` and native macOS CI assertions; `zig build release-metadata-test readiness-ledger-test`; `git diff --check`. |
 | Supply-chain process and license provenance are gated | Every license-bearing vendored dependency now has a provenance README, license path, retained-subset description, local-modification note, source version/hash evidence, and CVE/advisory update process. The aggregate license manifest is checked against those provenance records, SECURITY.md provides the current intake/support policy, the threat model includes compiler and supply-chain attack surfaces, Docker/Zig/LLVM pins are locked, and workflow actions are SHA-pinned. | `docs/vendoring.md`; `third_party/*/README.vendored.md`; `THIRD-PARTY-LICENSES.md`; `SECURITY.md`; `docs/threat-model.md`; `Dockerfile`; `.github/workflows/*.yml`; `tools/toolchain/vendoring-test.py`; `tools/toolchain/third-party-licenses-test.py`; `tools/toolchain/release-metadata-test.py`; `zig build vendoring-test third-party-licenses-test release-metadata-test readiness-ledger-test`; `git diff --check`. |
 | Zig package version identity is gated | The compiler now has a repo-local package/version identity instead of relying only on CI prose: `build.zig.zon` records `0.7.0-dev` and `minimum_zig_version`, `.zigversion` pins the local toolchain, and the release metadata gate rejects drift unless both files agree with the expected Zig 0.16.0 release toolchain. | `build.zig.zon`; `.zigversion`; `tools/toolchain/release-metadata-test.py` version and minimum-Zig checks; `zig build release-metadata-test readiness-ledger-test`; `git diff --check`. |
@@ -2008,18 +2011,14 @@ on tricky invariants is exceptional; ~11.2k lines of in-repo Zig tests.
 - **[P1] Crash classes: parser recursion, mono explosion, 128-bit folding.** Covered
   in §5.1/§5.2 (blockers #1, #6, and the eval guards) — listed here because the fix
   surface is the Zig implementation.
-- **[P1] Performance architecture: whole-program, single-threaded, Debug by
-  default.** Every invocation flattens the full import graph into one buffer and
-  re-lexes/parses/checks everything (`src/main.zig:138`, `src/loader.zig:6-27`); no
-  caching or incremental machinery; no `std.Thread` in `src/`; `emit-llvm` builds
-  MIR twice (verify in `main` + `mir.buildOpt` inside the backend,
-  `src/lower_llvm.zig:210`); the LSP spawns a synchronous full `mcc check` on every
-  `didChange` with no debounce (`tools/lsp/mc-lsp.py:732-737`), blocking
-  hover/completion behind it; the default and CI-installed build is Debug
-  (`standardOptimizeOption`, `build/compiler.zig:10`; `tools/m0-parallel.sh:20`).
-  Editor latency at kernel scale (203 files, ~1.1 MB) pays whole-program Debug sema
-  per keystroke. Staged fix: LSP debounce+cancel (S); ship/pin ReleaseSafe (S);
-  reuse the verify-phase MIR (S); per-file parse cache + fact table (L).
+- **[P1] Performance architecture: whole-program and single-threaded.** Every
+  compiler invocation still loads and checks its complete import graph without an
+  incremental semantic cache. The CLI-backed LSP now debounces edits, terminates
+  obsolete checks, enforces a hard subprocess timeout, uses stdin overlays for
+  read-only trees, and caches unchanged document results. This bounds process
+  lifetime and removes the old per-keystroke/sibling-temp behavior, but it does not
+  make compiler analysis incremental or in-process. Remaining work is per-file
+  parse/typed-fact caching and a reusable `Compilation` context.
   **[inspected]**
 - **[P2] Sema's results are discarded; no typed AST/IR.** `ast.Expr` has no type
   slot (`src/ast.zig:495-497`); type identity is syntax comparison
@@ -2049,7 +2048,8 @@ on tricky invariants is exceptional; ~11.2k lines of in-repo Zig tests.
 
 Strengths: LSP is feature-rich (diagnostics with compiler codes, hover, goto-def,
 references, rename, semantic tokens, completion, signature help, call hierarchy,
-formatting, UTF-16-correct) and cannot drift because it shells out to `mcc`; it and
+formatting, UTF-16-correct, encoded/read-only paths, imported diagnostics,
+workspace discovery, and import-graph navigation) and cannot drift because it shells out to `mcc`; it and
 the formatter, symbol indexer, and editor client are CI-gated (`build/tiers.zig:363-366`).
 The spec is 5.5k lines, updated same-day as HEAD, with an enforced coverage gate. A
 gated 447-line self-verifying `examples/feature_showcase.mc` exists. Dev-environment
@@ -2211,11 +2211,11 @@ reproducible with commands; clean secrets hygiene; compatible licenses).
   expectations. `docs/vendoring.md` defines the re-vendor and CVE/advisory watch
   process, and `vendoring-test` now also requires the aggregate license manifest
   to link every dependency README and license file.
-- **[P1] No SECURITY.md / vulnerability-report channel.** **fixed for the current
-  public-intake policy**: `SECURITY.md` documents supported versions, report fields,
-  current public GitHub issue intake, and explicitly names the absence of a private
-  embargo/SLA. A private advisory channel remains future process maturity, not a
-  hidden current guarantee.
+- **[P1] No SECURITY.md / vulnerability-report channel.** **fixed**:
+  `SECURITY.md` directs sensitive reports to GitHub Private Vulnerability Reporting
+  without a public-first disclosure step and defines acknowledgement, triage,
+  embargo/disclosure, and GHSA/CVE expectations. Ordinary non-security correctness
+  bugs continue to use public issues.
 - **[P1] The threat model explicitly excludes the compiler and supply chain.**
   **fixed**: `docs/threat-model.md` now treats external `mcc` use on untrusted
   source as an attacker-reachable compiler surface, models diagnostics/miscompile/

@@ -92,12 +92,13 @@ jobs:
           fi
           zig build preflight
           zig build release-metadata-test package-release-test release-safe-install-test
-          MC_REQUIRE_TOOLS=1 zig build m0 2>&1 | tee release-m0.log
-          if grep -n '^SKIP:' release-m0.log; then
+          release_m0_log="$RUNNER_TEMP/release-m0.log"
+          MC_REQUIRE_TOOLS=1 zig build m0 2>&1 | tee "$release_m0_log"
+          if grep -n '^SKIP:' "$release_m0_log"; then
             echo "release m0 skipped at least one gate" >&2
             exit 1
           fi
-          python3 tools/ci/pass-gates.py assert --tier ci-m0-pass --log release-m0.log
+          python3 tools/ci/pass-gates.py assert --tier ci-m0-pass --log "$release_m0_log"
           zig build -Dversion="${{ steps.meta.outputs.version }}" install --prefix zig-out/version-check
           test "$(zig-out/version-check/bin/mcc --version)" = "mcc ${{ steps.meta.outputs.version }}"
           test -z "$(git status --porcelain --untracked-files=all)"

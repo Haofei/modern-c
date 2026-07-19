@@ -122,6 +122,10 @@ mv "$DRIFT/mcpkg.txt.new" "$DRIFT/mcpkg.txt"
 if bash "$REGTOOL" install "$DRIFT" --registry "$REG" >/dev/null 2>&1; then
     fail "install accepted a malformed constraint"
 fi
+printf '# mcpkg.lock v1\nmathlib\t1.2.0\tnot-a-checksum\n' > "$DRIFT/mcpkg.lock"
+if bash "$REGTOOL" install "$DRIFT" --registry "$REG" >/dev/null 2>&1; then
+    fail "install accepted a malformed lockfile checksum"
+fi
 
 VENDOR_LINK="$W/vendor-link-app"
 cp -R "$FIX/app" "$VENDOR_LINK"

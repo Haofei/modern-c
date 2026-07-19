@@ -510,7 +510,7 @@ fn runSymbols(allocator: std.mem.Allocator, path: []const u8, source: []const u8
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try symbols.emitJson(allocator, module, &output);
+    try symbols.emitJson(allocator, module, &diag, &output);
     try writeStdout(output.items);
 }
 

@@ -1,5 +1,7 @@
-# MC compiler development image — the full toolchain the build/test gates need, pinned to
-# match .github/workflows/ci.yml so a local container reproduces CI exactly. Multi-arch:
+# MC compiler development image — the full toolchain the build/test gates need. The base
+# image digest, Zig artifact hashes, and LLVM major match CI; Ubuntu apt microversions follow
+# the configured Ubuntu 24.04 repositories, so this is controlled but not bit-for-bit exact.
+# Multi-arch:
 # builds natively on linux/amd64 and linux/arm64 (Apple Silicon), selecting the matching
 # Zig release at build time. The repo itself is NOT copied in — mount it at /work (see
 # docker-compose.yml) so host edits are live; the image is just the toolchain.

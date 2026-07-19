@@ -35,8 +35,10 @@ import re
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
+import pathlib
+import urllib.parse
+import urllib.request
 
 # `path:line:col: error: rest` — the CLI diagnostic format, where `rest` is either
 # `E_CODE: message` (a checked diagnostic) or a bare message (e.g. a parse error like
@@ -51,8 +53,11 @@ VERSION_RE = re.compile(r'^\s*\.version\s*=\s*"([^"]+)"\s*,?\s*$')
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BUILD_ZIG_ZON = os.path.join(HERE, "build.zig.zon")
 MCC = os.environ.get("MCC", "mcc")
+if not os.path.isabs(MCC) and os.sep in MCC:
+    MCC = os.path.abspath(MCC)
 DIAGNOSTIC_DEBOUNCE_MS = int(os.environ.get("MC_LSP_DIAGNOSTIC_DEBOUNCE_MS", "150"))
 DIAGNOSTIC_DEBOUNCE_SECONDS = max(DIAGNOSTIC_DEBOUNCE_MS, 0) / 1000.0
+MCC_TIMEOUT_SECONDS = max(float(os.environ.get("MC_LSP_MCC_TIMEOUT_SECONDS", "15")), 0.1)
 WRITE_LOCK = threading.RLock()
 
 
@@ -99,13 +104,19 @@ def write_message(stream, payload):
 
 
 def uri_to_path(uri):
-    if uri.startswith("file://"):
-        return uri[len("file://"):]
+    parsed = urllib.parse.urlparse(uri)
+    if parsed.scheme == "file":
+        path = urllib.request.url2pathname(urllib.parse.unquote(parsed.path))
+        if parsed.netloc and parsed.netloc not in ("", "localhost"):
+            path = f"//{parsed.netloc}{path}"
+        if os.name == "nt" and re.match(r"^/[A-Za-z]:", path):
+            path = path[1:]
+        return path
     return uri
 
 
 def path_to_uri(path):
-    return "file://" + path
+    return pathlib.Path(path).absolute().as_uri()
 
 
 # ---- positions -----------------------------------------------------------------------------
@@ -129,26 +140,25 @@ def line_of(text_lines, one_based_line):
 
 
 # ---- run the compiler on the in-memory document --------------------------------------------
-# The text is written to a sibling temp file of the real document so that `import "..."`
-# (resolved relative to the file's directory) still finds its targets, then `mcc <args> <tmp>`
-# runs on that temp. Returns (returncode, stdout, stderr, tmp_path); tmp_path is the (now
-# deleted) name the compiler used, so callers can match it against `source_path` in the output.
+# mcc accepts `-` as source input and resolves its imports relative to cwd. This is a real
+# in-memory overlay: it preserves relative-import behavior without requiring the source tree
+# to be writable.
 def run_on_temp(path, text, args):
     directory = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(prefix=".mclsp_", suffix=".mc", dir=directory)
+    argv = [MCC, args[0], "-", *args[1:]]
     try:
-        with os.fdopen(fd, "w") as f:
-            f.write(text)
-        proc = subprocess.run([MCC] + args + [tmp], capture_output=True, text=True)
-        return proc.returncode, proc.stdout, proc.stderr, tmp
+        proc = subprocess.run(argv, cwd=directory, input=text,
+                              capture_output=True, text=True, timeout=MCC_TIMEOUT_SECONDS)
+        return proc.returncode, proc.stdout, proc.stderr, "-"
     except FileNotFoundError:
         log(f"compiler '{MCC}' not found")
-        return 127, "", "", tmp
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        return 127, "", "", "-"
+    except subprocess.TimeoutExpired:
+        log(f"compiler '{MCC}' exceeded {MCC_TIMEOUT_SECONDS:g}s timeout")
+        return 124, "", "mcc subprocess timed out", "-"
+    except OSError as exc:
+        log(f"compiler '{MCC}' failed: {exc}")
+        return 126, "", str(exc), "-"
 
 
 class DiagnosticRun:
@@ -213,43 +223,47 @@ class DiagnosticRun:
 
 def run_diagnostic_on_temp(path, text, cancel_handle):
     directory = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(prefix=".mclsp_", suffix=".mc", dir=directory)
+    tmp = "-"
     try:
-        with os.fdopen(fd, "w") as f:
-            f.write(text)
         if cancel_handle is not None and cancel_handle.is_canceled():
             return None
-        popen_kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
+        popen_kwargs = {"cwd": directory, "stdin": subprocess.PIPE, "stdout": subprocess.PIPE,
+                        "stderr": subprocess.PIPE, "text": True}
         if os.name == "posix":
             popen_kwargs["start_new_session"] = True
         def run_check(args):
+            argv = [MCC, args[0], "-", *args[1:]]
             try:
-                proc = subprocess.Popen([MCC] + args, **popen_kwargs)
+                proc = subprocess.Popen(argv, **popen_kwargs)
             except FileNotFoundError:
                 log(f"compiler '{MCC}' not found")
                 return 127, "", ""
             if cancel_handle is not None:
                 cancel_handle.attach(proc)
-            out, err = proc.communicate()
+            try:
+                out, err = proc.communicate(text, timeout=MCC_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                DiagnosticRun()._terminate(proc)
+                out, err = proc.communicate()
+                log(f"compiler '{MCC}' exceeded {MCC_TIMEOUT_SECONDS:g}s diagnostic timeout")
+                return 124, out, err
             if cancel_handle is not None and cancel_handle.is_canceled():
                 return None
             return proc.returncode, out, err
 
-        result = run_check(["check", tmp, "--json"])
+        result = run_check(["check", "--json"])
         if result is None:
             return None
         rc, out, err = result
-        if rc != 127 and _json_diagnostics_payload(out) is None:
-            legacy = run_check(["check", tmp])
+        if rc not in (124, 126, 127) and _json_diagnostics_payload(out) is None:
+            legacy = run_check(["check"])
             if legacy is None:
                 return None
             rc, out, err = legacy
         return rc, out, err, tmp
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+    except OSError as exc:
+        log(f"compiler '{MCC}' failed: {exc}")
+        return 126, "", str(exc), tmp
 
 
 # ---- diagnostics ---------------------------------------------------------------------------
@@ -263,10 +277,28 @@ def _json_diagnostics_payload(out):
     return None
 
 
-def _lsp_diagnostic_from_json(item, tmp, text_lines):
+def diagnostic_uri(root_uri, tmp, path):
+    if not path or path == tmp or path == "-":
+        return root_uri
+    if not os.path.isabs(path):
+        path = os.path.join(os.path.dirname(uri_to_path(root_uri)), path)
+    return path_to_uri(path)
+
+
+def diagnostic_lines(uri, root_uri, root_lines):
+    if uri == root_uri:
+        return root_lines
+    try:
+        with open(uri_to_path(uri), encoding="utf-8") as source:
+            return source.read().split("\n")
+    except OSError:
+        return []
+
+
+def _lsp_diagnostic_from_json(item, root_uri, tmp, text_lines):
     path = item.get("path") or item.get("file")
-    if path != tmp:
-        return None
+    item_uri = diagnostic_uri(root_uri, tmp, path)
+    item_lines = diagnostic_lines(item_uri, root_uri, text_lines)
     try:
         ln = int(item.get("line", 1))
         col = int(item.get("column", 1))
@@ -279,7 +311,7 @@ def _lsp_diagnostic_from_json(item, tmp, text_lines):
         length = max(int(length), 1)
     except (TypeError, ValueError):
         length = 1
-    line_text = line_of(text_lines, ln)
+    line_text = line_of(item_lines, ln)
     start_char = byte_col_to_utf16(line_text, col)
     end_char = byte_col_to_utf16(line_text, col + length)
     if end_char <= start_char:
@@ -303,8 +335,7 @@ def _lsp_diagnostic_from_json(item, tmp, text_lines):
         if not isinstance(note, dict):
             continue
         note_path = note.get("path") or note.get("file")
-        if note_path != tmp:
-            continue
+        note_uri = diagnostic_uri(root_uri, tmp, note_path)
         try:
             note_ln = int(note.get("line", 1))
             note_col = int(note.get("column", 1))
@@ -317,14 +348,14 @@ def _lsp_diagnostic_from_json(item, tmp, text_lines):
             note_length = max(int(note_length), 1)
         except (TypeError, ValueError):
             note_length = 1
-        note_line_text = line_of(text_lines, note_ln)
+        note_line_text = line_of(diagnostic_lines(note_uri, root_uri, text_lines), note_ln)
         note_start = byte_col_to_utf16(note_line_text, note_col)
         note_end = byte_col_to_utf16(note_line_text, note_col + note_length)
         if note_end <= note_start:
             note_end = note_start + 1
         related.append({
             "location": {
-                "uri": path_to_uri(note_path),
+                "uri": note_uri,
                 "range": {
                     "start": {"line": max(note_ln - 1, 0), "character": note_start},
                     "end": {"line": max(note_ln - 1, 0), "character": note_end},
@@ -334,28 +365,29 @@ def _lsp_diagnostic_from_json(item, tmp, text_lines):
         })
     if related:
         diag["relatedInformation"] = related
-    return diag
+    return item_uri, diag
 
 
-def _diagnostics_from_json(out, tmp, text_lines):
+def _diagnostics_from_json(out, root_uri, tmp, text_lines):
     payload = _json_diagnostics_payload(out)
     if payload is None:
         return None
-    diags = []
+    by_uri = {}
     seen = set()
     for item in payload["diagnostics"]:
         if not isinstance(item, dict):
             continue
-        diag = _lsp_diagnostic_from_json(item, tmp, text_lines)
-        if diag is None:
+        converted = _lsp_diagnostic_from_json(item, root_uri, tmp, text_lines)
+        if converted is None:
             continue
+        item_uri, diag = converted
         start = diag["range"]["start"]
-        key = (start["line"], start["character"], diag.get("code"), diag.get("message"))
+        key = (item_uri, start["line"], start["character"], diag.get("code"), diag.get("message"))
         if key in seen:
             continue
         seen.add(key)
-        diags.append(diag)
-    return diags
+        by_uri.setdefault(item_uri, []).append(diag)
+    return by_uri
 
 
 def run_diagnostics(uri, text, cancel_handle=None):
@@ -376,12 +408,14 @@ def run_diagnostics(uri, text, cancel_handle=None):
         _diagnostics_cache[uri] = (text, copy.deepcopy(diags))
         return diags
     text_lines = text.split("\n")
-    json_diags = _diagnostics_from_json(out, tmp, text_lines)
+    json_diags = _diagnostics_from_json(out, uri, tmp, text_lines)
     if json_diags is not None:
         if cancel_handle is not None and cancel_handle.is_canceled():
             return None
-        _diagnostics_cache[uri] = (text, copy.deepcopy(json_diags))
-        return json_diags
+        root_diags = json_diags.get(uri, [])
+        _related_diagnostics_cache[uri] = {key: value for key, value in json_diags.items() if key != uri}
+        _diagnostics_cache[uri] = (text, copy.deepcopy(root_diags))
+        return root_diags
     diags = []
     seen = set()
     for line in (out + "\n" + err).splitlines():
@@ -491,12 +525,15 @@ def document_symbols(uri, text):
 # Cached per-document so a hover/definition/reference burst reuses one compiler call.
 _index_cache = {}  # uri -> (text, index)
 _diagnostics_cache = {}  # uri -> (text, diagnostics)
+_related_diagnostics_cache = {}  # root uri -> {imported uri: diagnostics}
+_published_related_diagnostics = {}  # root uri -> imported URIs last published
 _document_symbol_cache = {}  # uri -> (text, document symbols)
 
 
 def invalidate_document_caches(uri):
     _index_cache.pop(uri, None)
     _diagnostics_cache.pop(uri, None)
+    _related_diagnostics_cache.pop(uri, None)
     _document_symbol_cache.pop(uri, None)
 
 
@@ -524,6 +561,35 @@ def span_to_range(lines, span):
     return {"start": {"line": ln, "character": start}, "end": {"line": ln, "character": end}}
 
 
+def span_uri(root_uri, span):
+    path = span.get("path")
+    if not path or path == "-":
+        return root_uri
+    if not os.path.isabs(path):
+        path = os.path.join(os.path.dirname(uri_to_path(root_uri)), path)
+    return path_to_uri(path)
+
+
+def span_lines(root_uri, root_lines, span):
+    target_uri = span_uri(root_uri, span)
+    if target_uri == root_uri:
+        return root_lines
+    try:
+        with open(uri_to_path(target_uri), encoding="utf-8") as source:
+            return source.read().split("\n")
+    except OSError:
+        return []
+
+
+def span_location(root_uri, root_lines, span):
+    return {"uri": span_uri(root_uri, span),
+            "range": span_to_range(span_lines(root_uri, root_lines, span), span)}
+
+
+def span_identity(root_uri, span):
+    return (span_uri(root_uri, span), span["line"], span["col"])
+
+
 def _le(a, b):
     return (a["line"], a["character"]) <= (b["line"], b["character"])
 
@@ -533,19 +599,23 @@ def in_range(pos, rng):
 
 
 # Find the def or ref whose span covers `position`: returns ("ref"|"def", entry) or (None, None).
-def covering(index, lines, position):
+def covering(index, lines, position, uri=None):
     for r in index.get("refs", []):
+        if uri is not None and span_uri(uri, r["span"]) != uri:
+            continue
         if in_range(position, span_to_range(lines, r["span"])):
             return "ref", r
     for d in index.get("defs", []):
+        if uri is not None and span_uri(uri, d["span"]) != uri:
+            continue
         if in_range(position, span_to_range(lines, d["span"])):
             return "def", d
     return None, None
 
 
 # The declaration span (with len) the symbol under `position` belongs to, or None.
-def target_def(index, lines, position):
-    kind, sym = covering(index, lines, position)
+def target_def(index, lines, position, uri=None):
+    kind, sym = covering(index, lines, position, uri)
     if kind == "ref":
         return sym["def"]      # {line, col, len}
     if kind == "def":
@@ -556,7 +626,7 @@ def target_def(index, lines, position):
 def hover(uri, text, position):
     index = get_index(uri, text)
     lines = text.split("\n")
-    kind, sym = covering(index, lines, position)
+    kind, sym = covering(index, lines, position, uri)
     if not sym:
         return None
     md = f"```mc\n{sym['name']}: {sym['type']}\n```\n*{sym['kind']}*"
@@ -566,40 +636,42 @@ def hover(uri, text, position):
 def goto_definition(uri, text, position):
     index = get_index(uri, text)
     lines = text.split("\n")
-    d = target_def(index, lines, position)
+    d = target_def(index, lines, position, uri)
     if not d:
         return None
-    return {"uri": uri, "range": span_to_range(lines, d)}
+    return span_location(uri, lines, d)
 
 
-def _occurrences(index, lines, position, include_decl):
-    d = target_def(index, lines, position)
+def _occurrences(index, lines, uri, position, include_decl):
+    d = target_def(index, lines, position, uri)
     if not d:
         return []
-    tl, tc = d["line"], d["col"]
-    ranges = [span_to_range(lines, r["span"]) for r in index.get("refs", [])
-              if r["def"]["line"] == tl and r["def"]["col"] == tc]
+    identity = span_identity(uri, d)
+    locations = [span_location(uri, lines, r["span"]) for r in index.get("refs", [])
+                 if span_identity(uri, r["def"]) == identity]
     if include_decl:
-        ranges.append(span_to_range(lines, d))
-    return ranges
+        locations.append(span_location(uri, lines, d))
+    return locations
 
 
 def find_references(uri, text, position, include_decl):
-    return [{"uri": uri, "range": r}
-            for r in _occurrences(get_index(uri, text), text.split("\n"), position, include_decl)]
+    return _occurrences(get_index(uri, text), text.split("\n"), uri, position, include_decl)
 
 
 def document_highlight(uri, text, position):
-    return [{"range": r, "kind": 2}  # DocumentHighlightKind.Read
-            for r in _occurrences(get_index(uri, text), text.split("\n"), position, True)]
+    return [{"range": location["range"], "kind": 2}  # DocumentHighlightKind.Read
+            for location in _occurrences(get_index(uri, text), text.split("\n"), uri, position, True)
+            if location["uri"] == uri]
 
 
 def do_rename(uri, text, position, new_name):
-    edits = [{"range": r, "newText": new_name}
-             for r in _occurrences(get_index(uri, text), text.split("\n"), position, True)]
-    if not edits:
+    locations = _occurrences(get_index(uri, text), text.split("\n"), uri, position, True)
+    if not locations:
         return None
-    return {"changes": {uri: edits}}
+    changes = {}
+    for location in locations:
+        changes.setdefault(location["uri"], []).append({"range": location["range"], "newText": new_name})
+    return {"changes": changes}
 
 
 # Semantic tokens: classify every identifier occurrence (defs + refs) by its symbol kind, then
@@ -619,6 +691,8 @@ def semantic_tokens(uri, text):
     lines = text.split("\n")
     toks = []
     for entry in index.get("defs", []) + index.get("refs", []):
+        if span_uri(uri, entry["span"]) != uri:
+            continue
         ttype = KIND_TO_TOKEN.get(entry["kind"])
         if ttype is None:
             continue
@@ -641,21 +715,52 @@ def semantic_tokens(uri, text):
 
 
 # ---- workspace symbols (workspace/symbol) --------------------------------------------------
-def workspace_symbols(docs, query):
+def workspace_sources(docs, roots):
+    sources = dict(docs)
+    skipped = {".git", ".zig-cache", "zig-out", "zig-pkg", "mc_packages"}
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for directory, dirnames, filenames in os.walk(root):
+            dirnames[:] = [name for name in dirnames if name not in skipped]
+            for filename in filenames:
+                if not filename.endswith(".mc"):
+                    continue
+                path = os.path.join(directory, filename)
+                uri = path_to_uri(path)
+                if uri in sources:
+                    continue
+                try:
+                    with open(path, encoding="utf-8") as source:
+                        sources[uri] = source.read()
+                except OSError:
+                    continue
+                if len(sources) >= 10_000:
+                    return sources
+    return sources
+
+
+def workspace_symbols(docs, query, roots=()):
     q = query.lower()
     results = []
-    for uri, text in docs.items():
+    seen = set()
+    for uri, text in workspace_sources(docs, roots).items():
         index = get_index(uri, text)
-        lines = text.split("\n")
         for d in index.get("defs", []):
             if d["kind"] in ("param", "local", "local_mut"):
                 continue  # workspace symbols are top-level only
             if q and q not in d["name"].lower():
                 continue
+            location = span_location(uri, text.split("\n"), d["span"])
+            key = (location["uri"], location["range"]["start"]["line"],
+                   location["range"]["start"]["character"], d["name"], d["kind"])
+            if key in seen:
+                continue
+            seen.add(key)
             results.append({
                 "name": d["name"],
                 "kind": KIND_TO_SYMBOLKIND.get(d["kind"], 13),
-                "location": {"uri": uri, "range": span_to_range(lines, d["span"])},
+                "location": location,
             })
     return results
 
@@ -1178,8 +1283,20 @@ def publish_diagnostics(out, uri, diagnostics):
     })
 
 
+def publish_related_diagnostics(out, root_uri):
+    related = _related_diagnostics_cache.get(root_uri, {})
+    previous = _published_related_diagnostics.get(root_uri, set())
+    for stale_uri in previous - set(related):
+        publish_diagnostics(out, stale_uri, [])
+    for related_uri, diagnostics in related.items():
+        publish_diagnostics(out, related_uri, diagnostics)
+    _published_related_diagnostics[root_uri] = set(related)
+
+
 def publish(out, uri, text):
-    publish_diagnostics(out, uri, run_diagnostics(uri, text))
+    diagnostics = run_diagnostics(uri, text)
+    publish_diagnostics(out, uri, diagnostics)
+    publish_related_diagnostics(out, uri)
 
 
 # ---- server loop ---------------------------------------------------------------------------
@@ -1188,6 +1305,8 @@ def main():
     args = sys.argv[1:]
     if "--mcc" in args:
         MCC = args[args.index("--mcc") + 1]
+        if not os.path.isabs(MCC) and os.sep in MCC:
+            MCC = os.path.abspath(MCC)
 
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
@@ -1197,6 +1316,7 @@ def main():
     active_diag_runs = {}  # uri -> DiagnosticRun
     state_lock = threading.RLock()
     shutting_down = False
+    workspace_roots = []
 
     def next_doc_version(uri):
         return doc_versions.get(uri, 0) + 1
@@ -1262,6 +1382,7 @@ def main():
                     return
 
             publish_diagnostics(stdout, uri, diagnostics)
+            publish_related_diagnostics(stdout, uri)
 
         timer = threading.Timer(DIAGNOSTIC_DEBOUNCE_SECONDS, worker)
         timer.daemon = True
@@ -1280,6 +1401,19 @@ def main():
         mid = msg.get("id")
 
         if method == "initialize":
+            params = msg.get("params", {})
+            folders = params.get("workspaceFolders") or []
+            for folder in folders:
+                folder_uri = folder.get("uri") if isinstance(folder, dict) else None
+                if folder_uri:
+                    workspace_roots.append(uri_to_path(folder_uri))
+            root_uri = params.get("rootUri")
+            root_path = params.get("rootPath")
+            if root_uri:
+                workspace_roots.append(uri_to_path(root_uri))
+            elif root_path:
+                workspace_roots.append(root_path)
+            workspace_roots[:] = list(dict.fromkeys(os.path.abspath(root) for root in workspace_roots))
             write_message(stdout, {
                 "jsonrpc": "2.0",
                 "id": mid,
@@ -1303,7 +1437,7 @@ def main():
                         "completionProvider": {"triggerCharacters": ["."]},
                         "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
                         "diagnosticProvider": {  # LSP 3.17 pull model (in addition to push)
-                            "interFileDependencies": False,
+                            "interFileDependencies": True,
                             "workspaceDiagnostics": False,
                         },
                     },
@@ -1326,6 +1460,8 @@ def main():
         elif method == "textDocument/didSave":
             uri = msg["params"]["textDocument"]["uri"]
             cancel_pending_diagnostics(uri)
+            _diagnostics_cache.pop(uri, None)
+            _related_diagnostics_cache.pop(uri, None)
             publish(stdout, uri, get_doc_text(uri))
         elif method == "textDocument/didClose":
             uri = msg["params"]["textDocument"]["uri"]
@@ -1334,6 +1470,8 @@ def main():
                 docs.pop(uri, None)
                 doc_versions.pop(uri, None)
                 invalidate_document_caches(uri)
+                for related_uri in _published_related_diagnostics.pop(uri, set()):
+                    publish_diagnostics(stdout, related_uri, [])
         elif method == "textDocument/formatting":
             uri = msg["params"]["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
@@ -1389,7 +1527,7 @@ def main():
                                               "items": run_diagnostics(uri, get_doc_text(uri))}})
         elif method == "workspace/symbol":
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": workspace_symbols(docs, msg["params"].get("query", ""))})
+                                   "result": workspace_symbols(docs, msg["params"].get("query", ""), workspace_roots)})
         elif method == "textDocument/prepareCallHierarchy":
             p = msg["params"]
             uri = p["textDocument"]["uri"]

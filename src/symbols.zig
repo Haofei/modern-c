@@ -479,7 +479,7 @@ fn writeJsonString(out: *std.ArrayList(u8), a: std.mem.Allocator, s: []const u8)
     try out.append(a, '"');
 }
 
-pub fn emitJson(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
+pub fn emitJson(allocator: std.mem.Allocator, module: ast.Module, reporter: *const diagnostics.Reporter, out: *std.ArrayList(u8)) !void {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();
@@ -497,8 +497,11 @@ pub fn emitJson(allocator: std.mem.Allocator, module: ast.Module, out: *std.Arra
     for (module.decls) |decl| try walkDeclBody(&b, decl);
 
     const w = struct {
-        fn span(o: *std.ArrayList(u8), al: std.mem.Allocator, s: Span) !void {
-            try o.print(al, "{{\"line\":{d},\"col\":{d},\"len\":{d}}}", .{ s.line, s.column, s.len });
+        fn span(o: *std.ArrayList(u8), al: std.mem.Allocator, rep: *const diagnostics.Reporter, s: Span) !void {
+            const loc = rep.location(s);
+            try o.appendSlice(al, "{\"path\":");
+            try writeJsonString(o, al, loc.path);
+            try o.print(al, ",\"line\":{d},\"col\":{d},\"len\":{d}}}", .{ loc.line, loc.column, s.len });
         }
     };
 
@@ -512,7 +515,7 @@ pub fn emitJson(allocator: std.mem.Allocator, module: ast.Module, out: *std.Arra
         try out.appendSlice(allocator, ",\"type\":");
         try writeJsonString(out, allocator, d.ty);
         try out.appendSlice(allocator, ",\"span\":");
-        try w.span(out, allocator, d.span);
+        try w.span(out, allocator, reporter, d.span);
         try out.append(allocator, '}');
     }
     try out.appendSlice(allocator, "],\"refs\":[");
@@ -525,9 +528,9 @@ pub fn emitJson(allocator: std.mem.Allocator, module: ast.Module, out: *std.Arra
         try out.appendSlice(allocator, ",\"type\":");
         try writeJsonString(out, allocator, r.ty);
         try out.appendSlice(allocator, ",\"span\":");
-        try w.span(out, allocator, r.span);
+        try w.span(out, allocator, reporter, r.span);
         try out.appendSlice(allocator, ",\"def\":");
-        try w.span(out, allocator, r.def);
+        try w.span(out, allocator, reporter, r.def);
         try out.append(allocator, '}');
     }
     try out.appendSlice(allocator, "],\"fields\":[");
@@ -542,7 +545,7 @@ pub fn emitJson(allocator: std.mem.Allocator, module: ast.Module, out: *std.Arra
         try out.appendSlice(allocator, ",\"type\":");
         try writeJsonString(out, allocator, f.ty);
         try out.appendSlice(allocator, ",\"span\":");
-        try w.span(out, allocator, f.span);
+        try w.span(out, allocator, reporter, f.span);
         try out.append(allocator, '}');
     }
     try out.appendSlice(allocator, "]}\n");

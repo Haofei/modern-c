@@ -26,8 +26,8 @@ Before tagging a release:
 
 1. Choose the release version and build with `zig build -Dversion=<version> install`.
 2. Confirm `SECURITY.md`, `STABILITY.md`, and `CHANGELOG.md` describe the support
-   window and compatibility surfaces for that exact tag. Until a private advisory
-   channel exists, releases remain best-effort with no embargo or SLA.
+   window and compatibility surfaces for that exact tag. Private vulnerability
+   reports use GitHub Security Advisories with coordinated embargo/disclosure.
 3. Run `zig build m0` on Ubuntu 24.04 with LLVM 18 (`MC_LLVM_MAJOR=18`) and no skips.
 4. Run `zig build m0` in the pinned Linux container with no skips.
 5. Confirm the nightly rotating-seed mcfuzz workflow is green for the release
@@ -142,6 +142,8 @@ bash tools/toolchain/release-publication-audit.sh
 The audit is read-only and uses `gh` list/API calls only. It verifies:
 
 - branch protection for the target branch;
+- an active `Protect release tags` ruleset for immutable `v*` tags;
+- enabled GitHub Private Vulnerability Reporting;
 - recent `release.yml` workflow-run evidence;
 - existing GitHub Release publication evidence.
 

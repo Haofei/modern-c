@@ -4,8 +4,8 @@ MC is a spec-first compiler prototype for a kernel-profile, Zig-like systems
 language. The project explores how a C replacement for low-level systems code
 could make machine contracts explicit without promising memory safety.
 
-The compiler currently has two verified backend paths for the implemented spec
-surface:
+The compiler currently has two differentially qualified backend paths for the
+documented, implemented subset:
 
 - C emission through `emit-c`
 - LLVM IR emission through `emit-llvm`, then object generation through `llc`
@@ -61,10 +61,12 @@ Implemented today:
   registry with semver-ish version resolution, `publish`/`install`, and a
   reproducible lockfile through `tools/toolchain/mcc-registry.sh`
 - a token-preserving source formatter (`mcc fmt [--check]`), a JSON symbol index
-  (`mcc symbols`), and a full language server (`tools/lsp/mc-lsp.py`, with a VS Code
+  (`mcc symbols`), and a CLI-backed language server (`tools/lsp/mc-lsp.py`, with a VS Code
   client in `editors/vscode/`) providing diagnostics (the compiler's own `E_` codes),
   hover, go-to-definition, find-references, rename, document/workspace symbols,
-  semantic tokens, completion, signature help, call hierarchy, and formatting
+  semantic tokens, completion, signature help, call hierarchy, and formatting;
+  cross-file navigation is qualified for files reachable through the current import
+  graph, while workspace symbols discover unopened `.mc` files under the workspace root
 - a small standard library under `std/`
 
 The milestone gate is:

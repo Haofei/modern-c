@@ -32,6 +32,14 @@ def field_named(owner, name):
     cands = [f for f in fields if f["owner"] == owner and f["name"] == name]
     return cands[0] if cands else None
 
+for collection in (defs, refs, fields):
+    for item in collection:
+        if not item["span"].get("path"):
+            fail(f"symbol span is missing source path: {item}")
+for ref in refs:
+    if not ref["def"].get("path"):
+        fail(f"reference target is missing source path: {ref}")
+
 # Declarations are all present with the right kinds + stringified types.
 add = def_named("add", "function") or fail("no function def 'add'")
 if add["type"] != "fn(u32, u32) -> u32":

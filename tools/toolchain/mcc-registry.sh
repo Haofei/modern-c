@@ -221,6 +221,9 @@ case "$cmd" in
             awk '
                 /^#/ || NF == 0 { next }
                 NF != 3 { exit 1 }
+                $1 !~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/ { exit 1 }
+                $2 !~ /^[0-9]+\.[0-9]+\.[0-9]+$/ { exit 1 }
+                length($3) != 64 || $3 !~ /^[0-9a-f]+$/ { exit 1 }
                 seen[$1]++ { exit 1 }
             ' "$LOCK" || die "malformed or duplicate lockfile entry"
         fi

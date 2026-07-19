@@ -74,6 +74,60 @@ else
   fi
 fi
 
+rules_out="$tmpdir/rulesets.json"
+rules_err="$tmpdir/rulesets.err"
+if run_gh "$rules_out" "$rules_err" api --method GET "repos/${REPO}/rulesets"; then
+  ruleset_id="$(python3 - "$rules_out" <<'PY'
+import json, sys
+rulesets = json.load(open(sys.argv[1], encoding="utf-8"))
+for item in rulesets:
+    if (item.get("name") == "Protect release tags" and item.get("target") == "tag"
+            and item.get("enforcement") == "active"):
+        print(item.get("id", ""))
+        break
+PY
+  )"
+  if [ -n "$ruleset_id" ]; then
+    ruleset_out="$tmpdir/release-tag-ruleset.json"
+    ruleset_err="$tmpdir/release-tag-ruleset.err"
+    if run_gh "$ruleset_out" "$ruleset_err" api --method GET "repos/${REPO}/rulesets/${ruleset_id}" &&
+      python3 - "$ruleset_out" <<'PY'
+import json, sys
+item = json.load(open(sys.argv[1], encoding="utf-8"))
+includes = item.get("conditions", {}).get("ref_name", {}).get("include", [])
+types = {rule.get("type") for rule in item.get("rules", [])}
+raise SystemExit(0 if "refs/tags/v*" in includes and {"deletion", "non_fast_forward"} <= types else 1)
+PY
+    then
+      pass "active Protect release tags ruleset blocks deletion and movement of refs/tags/v*."
+    else
+      fail "Protect release tags does not enforce the required v* deletion/non-fast-forward rules."
+    fi
+  else
+    fail "active Protect release tags ruleset is missing for ${REPO}."
+  fi
+else
+  fail "could not verify release-tag rulesets for ${REPO}."
+  sed 's/^/  gh: /' "$rules_err"
+fi
+
+pvr_out="$tmpdir/private-vulnerability-reporting.json"
+pvr_err="$tmpdir/private-vulnerability-reporting.err"
+if run_gh "$pvr_out" "$pvr_err" api --method GET "repos/${REPO}/private-vulnerability-reporting"; then
+  if python3 - "$pvr_out" <<'PY'
+import json, sys
+raise SystemExit(0 if json.load(open(sys.argv[1], encoding="utf-8")).get("enabled") is True else 1)
+PY
+  then
+    pass "GitHub Private Vulnerability Reporting is enabled."
+  else
+    fail "GitHub Private Vulnerability Reporting is disabled for ${REPO}."
+  fi
+else
+  fail "could not verify Private Vulnerability Reporting for ${REPO}."
+  sed 's/^/  gh: /' "$pvr_err"
+fi
+
 runs_out="$tmpdir/release-runs.json"
 runs_err="$tmpdir/release-runs.err"
 if run_gh "$runs_out" "$runs_err" run list \

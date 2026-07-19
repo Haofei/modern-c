@@ -250,7 +250,8 @@ def require_release_artifact_metadata() -> None:
         "does not match build.zig.zon",
         "MC_REQUIRE_TOOLS=1 zig build m0",
         "release m0 skipped at least one gate",
-        "tools/ci/pass-gates.py assert --tier ci-m0-pass --log release-m0.log",
+        'release_m0_log="$RUNNER_TEMP/release-m0.log"',
+        'tools/ci/pass-gates.py assert --tier ci-m0-pass --log "$release_m0_log"',
         'test "$(zig-out/version-check/bin/mcc --version)" = "mcc ${{ steps.meta.outputs.version }}"',
         'git status --porcelain --untracked-files=all',
         "tools/ci/package-release.py release",
@@ -341,7 +342,8 @@ def require_release_artifact_metadata() -> None:
         package_path,
         "ReleaseSafe",
         "window and compatibility surfaces",
-        "best-effort with no embargo or SLA",
+        "Private vulnerability",
+        "coordinated embargo/disclosure",
         "tag-triggered publication rejects development versions",
         "SHA256SUMS",
         "release inventory",
@@ -437,10 +439,30 @@ def require_release_support_policy() -> None:
         "exact tag",
         "artifact digest",
         "release inventory/SBOM",
-        "no embargo or SLA",
+        "GitHub Private Vulnerability Reporting",
+        "security/advisories/new",
+        "Do not open a public issue for an undisclosed vulnerability",
+        "three business days",
+        "seven business days",
+        "best-effort targets rather than an SLA",
+        "embargo and disclosure date",
+        "GHSA and CVE",
     ):
         if needle not in security:
             fail(f"SECURITY.md does not document tagged-release support policy requirement {needle!r}")
+
+    publication_audit = read("tools/toolchain/release-publication-audit.sh")
+    for needle in (
+        "repos/${REPO}/rulesets",
+        "Protect release tags",
+        "repos/${REPO}/private-vulnerability-reporting",
+        "Private Vulnerability Reporting is enabled",
+    ):
+        if needle not in publication_audit:
+            fail(f"release publication audit does not verify external control {needle!r}")
+
+    if "ask for a private contact in the issue" in security or "Until a private advisory channel exists" in security:
+        fail("SECURITY.md must not require a public-first vulnerability report")
 
     stability = read("STABILITY.md")
     for needle in (
@@ -584,11 +606,26 @@ def main() -> None:
     require_llvm_support_matrix()
     require_release_support_policy()
     readme = read("README.md")
+    if "two verified backend paths" in readme:
+        fail("README.md must describe bounded differential qualification, not verified backends")
+    if "a full language server" in readme:
+        fail("README.md must not claim the CLI-backed LSP is universally full")
+    for needle in (
+        "two differentially qualified backend paths",
+        "documented, implemented subset",
+        "CLI-backed language server",
+        "cross-file navigation is qualified for files reachable through the current import",
+    ):
+        if needle not in readme:
+            fail(f"README.md does not contain qualified public positioning {needle!r}")
     macos_row = f"| macOS host gate | Homebrew `llvm@{EXPECTED_LLVM_MAJOR}` on `macos-15` | Host/fast qualification path; the workflow places `llvm@{EXPECTED_LLVM_MAJOR}` first on `PATH`. |"
     if macos_row not in readme:
         fail("README.md must document the exact native macOS LLVM host gate row")
 
     dockerfile = read("Dockerfile")
+    if "reproduces CI exactly" in dockerfile:
+        fail("Dockerfile must not claim floating apt microversions reproduce CI exactly")
+    require_contains("Dockerfile", "controlled but not bit-for-bit exact")
     require_contains("Dockerfile", f"FROM {EXPECTED_DOCKER_BASE_IMAGE}")
     require_contains("Dockerfile", f"ARG LLVM_MAJOR={EXPECTED_LLVM_MAJOR}")
     require_contains("Dockerfile", "ENV MC_LLVM_MAJOR=${LLVM_MAJOR}")
@@ -609,6 +646,28 @@ def main() -> None:
         fail("Dockerfile must not trust Zig download integrity from a build-time index fetch")
     if "sort -V | tail -n1" in dockerfile or "llvm-*" in dockerfile:
         fail("Dockerfile must select the pinned LLVM major, not the highest installed one")
+
+    lsp_docs = read("docs/lsp.md")
+    for needle in (
+        "passed to `mcc` over stdin",
+        "read-only trees",
+        "MC_LSP_MCC_TIMEOUT_SECONDS",
+        "imported-file diagnostics",
+        "import graph",
+        "unopened `.mc` files",
+    ):
+        if needle not in lsp_docs:
+            fail(f"docs/lsp.md does not document LSP hardening requirement {needle!r}")
+
+    readiness = read("docs/compiler-production-readiness.md")
+    for stale in (
+        "with no debounce",
+        "current public GitHub issue intake",
+        "A private advisory channel remains future process maturity",
+    ):
+        if stale in readiness:
+            fail(f"docs/compiler-production-readiness.md retains stale current claim {stale!r}")
+    require_contains("docs/compiler-production-readiness.md", "## Historical Audit Snapshot")
 
     print("PASS: release-metadata-test - version, Docker/Zig/LLVM/action pins, nightly fuzz/bench, release artifacts, attestations, and process docs are in sync")
 

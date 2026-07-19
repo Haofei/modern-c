@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import pathlib
 
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SERVER = os.path.join(HERE, "tools", "lsp", "mc-lsp.py")
@@ -37,6 +38,7 @@ MONO_BAD = (
     "}\n"
 )
 CANCEL_BAD = "# cancel_probe\n" + BAD
+TIMEOUT_BAD = "# timeout_probe\n" + GOOD
 MESSY = "fn   f( )->u32{\n        return 7;\n}\n"  # misindented -> formatting changes it
 # A multi-byte string literal before an undefined-identifier error on the same line: the LSP
 # `character` must be the UTF-16 offset of `missing_id`, not its byte offset.
@@ -217,8 +219,11 @@ def main():
             "    with open(os.environ['MC_LSP_TEST_CHECK_COUNTER'], 'a') as count_file:\n"
             "        count_file.write('1\\n')\n"
             "    check_path = next((arg for arg in sys.argv[2:] if not arg.startswith('--')), sys.argv[-1])\n"
-            "    with open(check_path) as source_file:\n"
-            "        source = source_file.read()\n"
+            "    if check_path == '-':\n"
+            "        source = sys.stdin.read()\n"
+            "    else:\n"
+            "        with open(check_path) as source_file:\n"
+            "            source = source_file.read()\n"
             "    if 'cancel_probe' in source:\n"
             "        killed_path = path_from_env('MC_LSP_TEST_SLOW_KILLED')\n"
             "        def on_term(signum, frame):\n"
@@ -228,14 +233,19 @@ def main():
             "        write_marker(path_from_env('MC_LSP_TEST_SLOW_STARTED'), str(os.getpid()))\n"
             "        while True:\n"
             "            time.sleep(0.05)\n"
+            "    if 'timeout_probe' in source:\n"
+            "        while True:\n"
+            "            time.sleep(0.05)\n"
             "elif len(sys.argv) > 1 and sys.argv[1] == 'emit-map':\n"
             "    with open(os.environ['MC_LSP_TEST_EMIT_MAP_COUNTER'], 'a') as count_file:\n"
             "        count_file.write('1\\n')\n"
-            "proc = subprocess.run([os.environ['MC_LSP_TEST_REAL_MCC']] + sys.argv[1:])\n"
+            "forward_input = source if 'source' in globals() and '-' in sys.argv[1:] else None\n"
+            "proc = subprocess.run([os.environ['MC_LSP_TEST_REAL_MCC']] + sys.argv[1:], input=forward_input, text=True)\n"
             "sys.exit(proc.returncode)\n"
         )
     os.chmod(wrapper_path, 0o755)
     env = dict(os.environ, MCC=wrapper_path, MC_LSP_DIAGNOSTIC_DEBOUNCE_MS="50",
+               MC_LSP_MCC_TIMEOUT_SECONDS="1.5",
                MC_LSP_TEST_REAL_MCC=mcc, MC_LSP_TEST_CHECK_COUNTER=counter_path,
                MC_LSP_TEST_EMIT_MAP_COUNTER=emit_map_counter_path,
                MC_LSP_TEST_SLOW_STARTED=slow_started_path,
@@ -247,14 +257,14 @@ def main():
         f.write(BAD)
     with open(good_path, "w") as f:
         f.write(GOOD)
-    bad_uri = "file://" + bad_path
-    good_uri = "file://" + good_path
+    bad_uri = pathlib.Path(bad_path).as_uri()
+    good_uri = pathlib.Path(good_path).as_uri()
 
     proc = subprocess.Popen([sys.executable, SERVER], stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, env=env)
     try:
         proc.stdin.write(frame({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                                "params": {"capabilities": {}}}))
+                                "params": {"capabilities": {}, "rootUri": pathlib.Path(workdir).as_uri()}}))
         proc.stdin.flush()
         init = read_message(proc.stdout)
         assert init.get("id") == 1 and "result" in init, f"bad initialize result: {init}"
@@ -358,6 +368,61 @@ def main():
         cancel_diags = diagnostics_for(proc, cancel_uri)
         if cancel_diags:
             raise SystemExit(f"FAIL: lsp-test — cancelled stale check published diagnostics: {cancel_diags}")
+
+        # A wedged compiler request hits a hard timeout and the single-process server remains
+        # responsive for the next request.
+        timeout_path = os.path.join(workdir, "timeout.mc")
+        with open(timeout_path, "w") as f:
+            f.write(TIMEOUT_BAD)
+        timeout_uri = pathlib.Path(timeout_path).as_uri()
+        started = time.monotonic()
+        did_open(proc, timeout_uri, TIMEOUT_BAD)
+        timeout_diags = diagnostics_for(proc, timeout_uri)
+        if timeout_diags:
+            raise SystemExit(f"FAIL: lsp-test — timeout should fail closed without stale diagnostics: {timeout_diags}")
+        if time.monotonic() - started > 4.0:
+            raise SystemExit("FAIL: lsp-test — compiler hard timeout did not bound request latency")
+
+        # URI decoding and stdin overlays work in an encoded, read-only source directory.
+        encoded_dir = os.path.join(workdir, "space \u00fc")
+        os.mkdir(encoded_dir)
+        encoded_path = os.path.join(encoded_dir, "broken file.mc")
+        with open(encoded_path, "w") as f:
+            f.write(BAD)
+        os.chmod(encoded_dir, 0o555)
+        encoded_uri = pathlib.Path(encoded_path).as_uri()
+        try:
+            did_open(proc, encoded_uri, BAD)
+            encoded_diags = diagnostics_for(proc, encoded_uri)
+        finally:
+            os.chmod(encoded_dir, 0o755)
+        if EXPECTED_CODE not in [d.get("code") for d in encoded_diags]:
+            raise SystemExit(f"FAIL: lsp-test — encoded/read-only URI lost diagnostics: {encoded_diags}")
+
+        # Imported diagnostics retain the imported file URI rather than being dropped.
+        imported_path = os.path.join(workdir, "imported_bad.mc")
+        imported_root_path = os.path.join(workdir, "import_root.mc")
+        with open(imported_path, "w") as f:
+            f.write(BAD)
+        imported_root = 'import "./imported_bad.mc";\nfn import_root() -> u32 { return 0; }\n'
+        with open(imported_root_path, "w") as f:
+            f.write(imported_root)
+        imported_uri = pathlib.Path(imported_path).as_uri()
+        imported_root_uri = pathlib.Path(imported_root_path).as_uri()
+        did_open(proc, imported_root_uri, imported_root)
+        diagnostics_for(proc, imported_root_uri)
+        imported_diags = diagnostics_for(proc, imported_uri)
+        if EXPECTED_CODE not in [d.get("code") for d in imported_diags]:
+            raise SystemExit(f"FAIL: lsp-test — imported file diagnostic was not published: {imported_diags}")
+        with open(imported_path, "w") as f:
+            f.write(GOOD)
+        proc.stdin.write(frame({"jsonrpc": "2.0", "method": "textDocument/didSave",
+                                "params": {"textDocument": {"uri": imported_root_uri}}}))
+        proc.stdin.flush()
+        diagnostics_for(proc, imported_root_uri)
+        cleared_imported = diagnostics_for(proc, imported_uri)
+        if cleared_imported:
+            raise SystemExit(f"FAIL: lsp-test — stale imported diagnostics were not cleared: {cleared_imported}")
 
         # --- document symbols (via `mcc emit-map`) -------------------------------------------
         sym_path = os.path.join(workdir, "sym.mc")
@@ -474,6 +539,43 @@ def main():
         if not any(s["name"] == "caller" and s["kind"] == 12 for s in (ws or [])):
             raise SystemExit(f"FAIL: lsp-test — workspace/symbol did not find function 'caller': {ws}")
 
+        # Workspace discovery includes unopened .mc files under initialize.rootUri.
+        unopened_path = os.path.join(workdir, "unopened.mc")
+        with open(unopened_path, "w") as f:
+            f.write("fn unopened_workspace_symbol() -> u32 { return 9; }\n")
+        ws_unopened = request(proc, 43, "workspace/symbol", {"query": "unopened_workspace_symbol"})
+        if not any(s["name"] == "unopened_workspace_symbol" and
+                   s["location"]["uri"] == pathlib.Path(unopened_path).as_uri()
+                   for s in (ws_unopened or [])):
+            raise SystemExit(f"FAIL: lsp-test — workspace/symbol ignored unopened file: {ws_unopened}")
+
+        # Imported symbol spans carry source paths, enabling cross-file navigation and edits.
+        cross_lib_path = os.path.join(workdir, "cross_lib.mc")
+        cross_root_path = os.path.join(workdir, "cross_root.mc")
+        cross_lib = "fn cross_target(x: u32) -> u32 { return x + 1; }\n"
+        cross_root = 'import "./cross_lib.mc";\nfn cross_caller() -> u32 { return cross_target(4); }\n'
+        with open(cross_lib_path, "w") as f:
+            f.write(cross_lib)
+        with open(cross_root_path, "w") as f:
+            f.write(cross_root)
+        cross_root_uri = pathlib.Path(cross_root_path).as_uri()
+        cross_lib_uri = pathlib.Path(cross_lib_path).as_uri()
+        did_open(proc, cross_root_uri, cross_root)
+        diagnostics_for(proc, cross_root_uri)
+        cross_td = {"textDocument": {"uri": cross_root_uri}}
+        cross_pos = pos_of(cross_root, 1, "cross_target")
+        cross_def = request(proc, 44, "textDocument/definition", {**cross_td, "position": cross_pos})
+        if not cross_def or cross_def["uri"] != cross_lib_uri or cross_def["range"]["start"]["line"] != 0:
+            raise SystemExit(f"FAIL: lsp-test — cross-file definition has wrong location: {cross_def}")
+        cross_refs = request(proc, 45, "textDocument/references",
+                             {**cross_td, "position": cross_pos, "context": {"includeDeclaration": True}})
+        if {entry["uri"] for entry in (cross_refs or [])} != {cross_root_uri, cross_lib_uri}:
+            raise SystemExit(f"FAIL: lsp-test — cross-file references incomplete: {cross_refs}")
+        cross_rename = request(proc, 46, "textDocument/rename",
+                               {**cross_td, "position": cross_pos, "newName": "renamed_target"})
+        if set((cross_rename or {}).get("changes", {})) != {cross_root_uri, cross_lib_uri}:
+            raise SystemExit(f"FAIL: lsp-test — cross-file rename incomplete: {cross_rename}")
+
         # call hierarchy: caller() -> target(). Incoming to target = caller; outgoing from caller = target.
         prep_t = request(proc, 29, "textDocument/prepareCallHierarchy", {**td, "position": pos_of(NAV, 0, "target")})
         if not prep_t or prep_t[0]["name"] != "target":
@@ -584,9 +686,9 @@ def main():
             proc.kill()
 
     print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, debounced didChange, "
-          "in-flight cancellation, pull), "
+          "in-flight cancellation, hard timeout, imported-file, pull), encoded/read-only URI overlay, "
           "documentSymbol outline, `mcc fmt` formatting, UTF-16 positions, hover/definition/"
-          "references/highlight/rename/semantic-tokens, identifier/member/type-filtered completion, signature help, workspace "
+          "references/highlight/rename/semantic-tokens (including cross-file), identifier/member/type-filtered completion, signature help, workspace "
           "symbols, and call hierarchy all verified")
 
 
