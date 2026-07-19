@@ -977,6 +977,22 @@ fn sameExprSyntax(left: ast.Expr, right: ast.Expr) bool {
             for (left_node.args, right_node.args) |left_arg, right_arg| if (!sameExprSyntax(left_arg, right_arg)) break :blk false;
             break :blk true;
         },
+        .block => |left_block| blk: {
+            const right_block = switch (right.kind) {
+                .block => |block| block,
+                else => unreachable,
+            };
+            if (left_block.items.len != 1 or right_block.items.len != 1) break :blk false;
+            const left_return = switch (left_block.items[0].kind) {
+                .@"return" => |value| value orelse break :blk false,
+                else => break :blk false,
+            };
+            const right_return = switch (right_block.items[0].kind) {
+                .@"return" => |value| value orelse break :blk false,
+                else => break :blk false,
+            };
+            break :blk sameExprSyntax(left_return, right_return);
+        },
         else => false,
     };
 }

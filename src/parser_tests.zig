@@ -265,6 +265,10 @@ test "imported qualified references resolve after loader flattening" {
 }
 
 test "loader enforces exact graph-wide import budgets" {
+    // DIAGNOSTIC_UNIT: E_IMPORT_FILE_LIMIT
+    // DIAGNOSTIC_UNIT: E_IMPORT_TOTAL_BYTES_LIMIT
+    // DIAGNOSTIC_UNIT: E_IMPORT_DEPTH_LIMIT
+    // DIAGNOSTIC_UNIT: E_IMPORT_EXPANDED_SOURCE_LIMIT
     const root_path = "tests/spec_support/qualified_forward_root.mc";
     const imported_path = "tests/spec_support/qualified_forward_module.mc";
     const root_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, root_path, std.testing.allocator, .limited(1 << 20));
@@ -450,6 +454,7 @@ test "parser distinguishes relational operators from generic calls" {
 }
 
 test "parser bounds adversarial generic-call lookahead" {
+    // DIAGNOSTIC_UNIT: E_GENERIC_LOOKAHEAD_LIMIT
     var source: std.ArrayList(u8) = .empty;
     defer source.deinit(std.testing.allocator);
     try source.appendSlice(std.testing.allocator, "fn adversarial(a: u32) -> bool { return a");

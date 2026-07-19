@@ -1330,30 +1330,6 @@ pub fn finalizeBranchLocals(self: *Checker, branch: *MoveState, outer: *const Mo
     }
 }
 
-// Join two control-flow arms into `dest`. A diverging arm does not reach the join, so
-// it contributes nothing: the join is the surviving arm's state (or unreachable if
-// both diverge). Only when both arms fall through are they merged — and a `move` value
-// must then have consistent ownership across them (else E_MOVE_BRANCH_MISMATCH).
-pub fn joinMoveBranches(
-    self: *Checker,
-    dest: *MoveState,
-    left: *const MoveState,
-    left_div: bool,
-    right: *const MoveState,
-    right_div: bool,
-) void {
-    if (left_div and right_div) return; // join is unreachable; leave `dest` as-is
-    if (left_div) {
-        replaceMoveState(self, dest, right);
-        return;
-    }
-    if (right_div) {
-        replaceMoveState(self, dest, left);
-        return;
-    }
-    mergeMoveBranches(self, dest, left, right);
-}
-
 // At a `break`/`continue`, the current iteration ends. Any loop-body-local `move`
 // value still live (a name not present at loop entry, and not reserved by a defer)
 // leaks on that edge — the iteration exits without consuming it. Mirrors
@@ -2407,10 +2383,6 @@ fn markEscapedBorrowForPlace(place: MovePlace, escape_span: diagnostics.Span, st
 // A key-only escape candidate must never recover its owner by formatted text.
 // Its producer lost the typed place required for ownership tracking, so reject
 // the store/call boundary instead of accepting a potentially dangling borrow.
-fn rejectUntypedBorrowEscape(self: *Checker, escape_span: diagnostics.Span) void {
-    self.errorCode(escape_span, "E_USE_AFTER_MOVE", "cannot store or return a borrow of a linear `move` value without typed place metadata");
-}
-
 fn hasUntypedBorrowAlias(expr: ast.Expr, state: *const MoveState) bool {
     const target = switch (expr.kind) {
         .address_of => |inner| inner.*,
@@ -3070,12 +3042,6 @@ fn sameMaybeSpan(left: ?diagnostics.Span, right: ?diagnostics.Span) bool {
     return l.offset == r.offset and l.len == r.len and l.line == r.line and l.column == r.column;
 }
 
-fn sameMaybeKey(left: ?[]const u8, right: ?[]const u8) bool {
-    if (left == null and right == null) return true;
-    if (left == null or right == null) return false;
-    return std.mem.eql(u8, left.?, right.?);
-}
-
 fn sameMaybePlace(left: ?MovePlace, right: ?MovePlace) bool {
     if (left == null and right == null) return true;
     if (left == null or right == null) return false;
@@ -3127,13 +3093,6 @@ fn deferredAliasBorrowPlace(place: ?MovePlace) ?MovePlace {
         if (projection.* == .symbolic_index) projection.* = .wildcard_index;
     }
     return result;
-}
-
-fn placeHasWildcardProjection(place: MovePlace) bool {
-    for (place.projections[0..place.projection_count]) |projection| {
-        if (projection == .wildcard_index) return true;
-    }
-    return false;
 }
 
 // ----- place sensitivity: track a `move` field moved out of its aggregate -----
@@ -4265,7 +4224,7 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
                         return;
                     }
                     if (hasUntypedBorrowAlias(c.value.*, state)) {
-                        rejectUntypedBorrowEscape(self, escape_span);
+                        self.errorCode(escape_span, "E_USE_AFTER_MOVE", "cannot store or return a borrow of a linear `move` value without typed place metadata");
                         return;
                     }
                 }
@@ -4285,7 +4244,7 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
                 return;
             }
             if (hasUntypedBorrowAlias(inner.*, state)) {
-                rejectUntypedBorrowEscape(self, escape_span);
+                self.errorCode(escape_span, "E_USE_AFTER_MOVE", "cannot store or return a borrow of a linear `move` value without typed place metadata");
                 return;
             }
         },
@@ -4297,7 +4256,7 @@ pub fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostic
         return;
     }
     if (markEscapedBorrowForCarriedAlias(value, escape_span, state)) return;
-    if (hasUntypedBorrowAlias(value, state)) rejectUntypedBorrowEscape(self, escape_span);
+    if (hasUntypedBorrowAlias(value, state)) self.errorCode(escape_span, "E_USE_AFTER_MOVE", "cannot store or return a borrow of a linear `move` value without typed place metadata");
 }
 
 // T1.3 (borrow-escape through a CALL argument). Scan a call argument for a borrow of a live
@@ -4367,7 +4326,7 @@ fn markBorrowEscapeCapturedCallArg(self: *Checker, arg: ast.Expr, escape_span: d
     }
     if (markEscapedBorrowForCarriedAlias(arg, escape_span, state)) return;
     if (hasUntypedBorrowAlias(arg, state)) {
-        rejectUntypedBorrowEscape(self, escape_span);
+        self.errorCode(escape_span, "E_USE_AFTER_MOVE", "cannot store or return a borrow of a linear `move` value without typed place metadata");
     }
 }
 
@@ -4807,32 +4766,6 @@ fn aliasConflictingSlotForStoragePlace(place: MovePlace, state: *const MoveState
     return null;
 }
 
-fn aliasIndexExprType(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) ?ast.TypeExpr {
-    switch (expr.kind) {
-        .grouped => |inner| return aliasIndexExprType(self, inner.*, state, ctx),
-        .ident => |id| {
-            const slot = state.get(id.text) orelse return spine.exprResultType(expr, ctx);
-            return slot.ty orelse spine.exprResultType(expr, ctx);
-        },
-        .member => |m| {
-            const base_ty = aliasIndexExprType(self, m.base.*, state, ctx) orelse
-                spine.exprResultType(m.base.*, ctx) orelse
-                return spine.exprResultType(expr, ctx);
-            return spine.structFieldType(base_ty, m.name.text, ctx) orelse spine.exprResultType(expr, ctx);
-        },
-        .index => |ix| {
-            const base_ty = resolveAliasType(aliasIndexExprType(self, ix.base.*, state, ctx) orelse
-                spine.exprResultType(ix.base.*, ctx) orelse
-                return spine.exprResultType(expr, ctx), ctx);
-            const array = switch (base_ty.kind) {
-                .array => |node| node,
-                else => return spine.exprResultType(expr, ctx),
-            };
-            return array.child.*;
-        },
-        else => return spine.exprResultType(expr, ctx),
-    }
-}
 
 fn aliasSlotReferentMoved(slot: MoveSlot, state: *const MoveState) bool {
     if (slot.divergent_alias) return true;

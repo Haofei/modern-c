@@ -1330,7 +1330,12 @@ const LlvmEmitter = struct {
 
     fn emitExprInner(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) anyerror![]const u8 {
         const semantic_expected_ty = if (expr.kind == .null_literal)
-            if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission
+            if (expr.span.line == 0 or expr.span.column == 0)
+                expected_ty
+            else if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact|
+                fact.target_ty
+            else
+                return error.UnsupportedLlvmEmission
         else
             expected_ty;
         // Tier 2 coercion: a `*T` value -> `*dyn Trait` builds the fat pointer
@@ -1353,14 +1358,14 @@ const LlvmEmitter = struct {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .char_literal => |literal| try self.emitCharLiteralWithTarget(literal, expr.span, semantic_expected_ty),
             .string_literal => |literal| try self.emitStringLiteral(literal, expr.span),
-            .float_literal => |literal| if (self.mirTargetTypeFactAt(.float_literal, expr.span)) |fact|
-                try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(fact.target_ty))
+            .float_literal => |literal| if (self.contextualTargetTypeAt(.float_literal, expr.span, semantic_expected_ty)) |target_ty|
+                try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(target_ty))
             else
                 error.UnsupportedLlvmEmission,
             .bool_literal => |value| if (value) "1" else "0",
             .null_literal => "null",
-            .enum_literal => |literal| if (self.mirTargetTypeFactAt(.enum_literal, expr.span)) |fact|
-                if (self.enumDeclForType(fact.target_ty)) |enum_decl|
+            .enum_literal => |literal| if (self.contextualTargetTypeAt(.enum_literal, expr.span, semantic_expected_ty)) |target_ty|
+                if (self.enumDeclForType(target_ty)) |enum_decl|
                     try self.enumCaseValueByName(enum_decl, literal.text)
                 else
                     error.UnsupportedLlvmEmission
@@ -1368,15 +1373,15 @@ const LlvmEmitter = struct {
                 error.UnsupportedLlvmEmission,
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
             .call => |call| try self.emitCall(call, expected_ty, expr.span),
-            .array_literal => |items| if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact|
-                try self.emitArrayLiteralValue(fact.target_ty, items)
+            .array_literal => |items| if (self.contextualTargetTypeAt(.array_literal, expr.span, semantic_expected_ty)) |target_ty|
+                try self.emitArrayLiteralValue(target_ty, items)
             else
                 error.UnsupportedLlvmEmission,
-            .struct_literal => |fields| if (self.mirTargetTypeFactAt(.struct_literal, expr.span)) |fact|
-                if (self.packedBitsInfoForType(fact.target_ty)) |info|
+            .struct_literal => |fields| if (self.contextualTargetTypeAt(.struct_literal, expr.span, semantic_expected_ty)) |target_ty|
+                if (self.packedBitsInfoForType(target_ty)) |info|
                     try self.emitPackedBitsLiteralValue(info, fields)
                 else
-                    try self.emitStructLiteralValue(fact.target_ty, fields)
+                    try self.emitStructLiteralValue(target_ty, fields)
             else
                 error.UnsupportedLlvmEmission,
             .binary => |node| try self.emitBinary(node, expected_ty),
@@ -1394,9 +1399,26 @@ const LlvmEmitter = struct {
             else
                 try self.emitMemberLoad(node, expr.span),
             .try_expr => |node| try self.emitTryExpr(node.operand.*, node.mapped, expected_ty),
+            .block => |block| try self.emitBlockExprValue(block, expected_ty),
             else => self.unsupportedExprValue(expr),
         };
         return try self.coerceExprValue(value, expr, expected_ty);
+    }
+
+    fn emitBlockExprValue(self: *LlvmEmitter, block: ast.Block, expected_ty: ast.TypeExpr) ![]const u8 {
+        if (block.items.len == 0) return error.UnsupportedLlvmEmission;
+        for (block.items[0 .. block.items.len - 1]) |stmt| {
+            switch (stmt.kind) {
+                .let_decl, .var_decl, .@"defer", .@"return", .@"break", .@"continue" => return error.UnsupportedLlvmEmission,
+                else => {},
+            }
+            if (try self.emitStmt(stmt, expected_ty)) return error.UnsupportedLlvmEmission;
+        }
+        const value = switch (block.items[block.items.len - 1].kind) {
+            .expr => |expr| expr,
+            else => return error.UnsupportedLlvmEmission,
+        };
+        return self.emitExpr(value, expected_ty);
     }
 
     fn coerceExprValue(self: *LlvmEmitter, value: []const u8, expr: ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
@@ -2896,6 +2918,7 @@ const LlvmEmitter = struct {
     }
 
     fn requireMirSwitchSubjectType(self: *LlvmEmitter, subject: ast.Expr) !ast.TypeExpr {
+        if (subject.span.line == 0 or subject.span.column == 0) return self.exprType(subject) orelse error.UnsupportedLlvmEmission;
         const fact_ty = (self.mirTargetTypeFactAt(.switch_subject, subject.span) orelse return error.UnsupportedLlvmEmission).target_ty;
         if (self.exprType(subject)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
@@ -2904,6 +2927,7 @@ const LlvmEmitter = struct {
     }
 
     fn requireMirIfLetSubjectType(self: *LlvmEmitter, value: ast.Expr) !ast.TypeExpr {
+        if (value.span.line == 0 or value.span.column == 0) return self.exprType(value) orelse error.UnsupportedLlvmEmission;
         const fact_ty = (self.mirTargetTypeFactAt(.if_let_subject, value.span) orelse return error.UnsupportedLlvmEmission).target_ty;
         if (self.exprType(value)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
@@ -2912,6 +2936,7 @@ const LlvmEmitter = struct {
     }
 
     fn requireMirTryOperandType(self: *LlvmEmitter, operand: ast.Expr) !ast.TypeExpr {
+        if (operand.span.line == 0 or operand.span.column == 0) return self.exprType(operand) orelse error.UnsupportedLlvmEmission;
         const fact_ty = (self.mirTargetTypeFactAt(.try_operand, operand.span) orelse return error.UnsupportedLlvmEmission).target_ty;
         if (self.exprType(operand)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
@@ -3561,7 +3586,7 @@ const LlvmEmitter = struct {
 
     fn emitDeref(self: *LlvmEmitter, ptr_expr: ast.Expr, deref_span: ast.Span) ![]const u8 {
         const inferred_pointee_ty = self.derefPointeeType(ptr_expr) orelse return error.UnsupportedLlvmEmission;
-        const pointee_ty = (self.mirTargetTypeFactAt(.expression_result, deref_span) orelse return error.UnsupportedLlvmEmission).target_ty;
+        const pointee_ty = self.expressionResultTypeAt(deref_span, inferred_pointee_ty) orelse return error.UnsupportedLlvmEmission;
         if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointee_ty), self.resolveAliasType(inferred_pointee_ty))) return error.UnsupportedLlvmEmission;
         const ptr = try self.emitExpr(ptr_expr, try self.pointerTypeFor(pointee_ty));
         if (self.isAggregateType(pointee_ty) and !self.pointerExprHasProvenLocalStorage(ptr_expr)) {
@@ -3598,14 +3623,14 @@ const LlvmEmitter = struct {
             // Array views (byte or non-byte) are read element-wise via the index path;
             // a bare member load only applies to scalar members.
             if (overlayArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
-            const field_ty = (self.mirTargetTypeFactAt(.expression_result, member_span) orelse return error.UnsupportedLlvmEmission).target_ty;
+            const field_ty = self.expressionResultTypeAt(member_span, field.ty) orelse return error.UnsupportedLlvmEmission;
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(field.ty))) return error.UnsupportedLlvmEmission;
             const ptr = try self.emitOverlayFieldAddress(node.base.*, field);
             try self.emitOrdinaryShadowHook(ptr, field.ty, .load_pre);
             return try self.emitOrdinaryLoad(field.ty, ptr, self.memberBaseIsGlobal(node));
         }
         const inferred_field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
-        const field_ty = (self.mirTargetTypeFactAt(.expression_result, member_span) orelse return error.UnsupportedLlvmEmission).target_ty;
+        const field_ty = self.expressionResultTypeAt(member_span, inferred_field.ty) orelse return error.UnsupportedLlvmEmission;
         if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field.ty))) return error.UnsupportedLlvmEmission;
         const field = inferred_field;
         const ptr = try self.emitMemberAddress(node);
@@ -5180,10 +5205,16 @@ const LlvmEmitter = struct {
 
     fn mirCallTargetKindAt(self: *LlvmEmitter, span: ast.Span) ?mir.CallTargetKind {
         const function = self.currentMirFunction() orelse return null;
+        var matched: ?mir.CallTargetKind = null;
         for (function.call_target_facts) |fact| {
-            if (mirSourceMatches(span, fact.source)) return fact.kind;
+            if (!mirSourceMatches(span, fact.source)) continue;
+            if (matched) |kind| {
+                if (kind != fact.kind) return null;
+            } else {
+                matched = fact.kind;
+            }
         }
-        return null;
+        return matched;
     }
 
     fn mirHasCallTargetKindAt(self: *LlvmEmitter, kind: mir.CallTargetKind, span: ast.Span) bool {
@@ -5242,6 +5273,11 @@ const LlvmEmitter = struct {
             }
         };
         return matched;
+    }
+
+    fn contextualTargetTypeAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, generated_ty: ast.TypeExpr) ?ast.TypeExpr {
+        if (span.line == 0 or span.column == 0) return generated_ty;
+        return if (self.mirTargetTypeFactAt(kind, span)) |fact| fact.target_ty else null;
     }
 
     fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
@@ -5888,7 +5924,7 @@ const LlvmEmitter = struct {
         var result: []const u8 = "zeroinitializer";
         const resolved_ty = self.resolveAliasType(ty);
         switch (resolved_ty.kind) {
-            .closure_type => {
+            .closure_type, .dyn_trait => {
                 for (0..2) |i| {
                     const field_ptr = try self.nextTemp();
                     try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ field_ptr, aggregate_ty, ptr, i });
@@ -5896,6 +5932,40 @@ const LlvmEmitter = struct {
                     try self.out.print(self.allocator, "  {s} = load atomic ptr, ptr {s} unordered, align 8{s}\n", .{ field_value, field_ptr, try self.debugCallSuffix() });
                     const next = try self.nextTemp();
                     try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, ptr {s}, {d}\n", .{ next, aggregate_ty, result, field_value, i });
+                    result = next;
+                }
+            },
+            .slice => {
+                for (0..2) |i| {
+                    const field_ptr = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ field_ptr, aggregate_ty, ptr, i });
+                    const field_ty = if (i == 0) "ptr" else "i64";
+                    const field_value = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = load atomic {s}, ptr {s} unordered, align 8{s}\n", .{ field_value, field_ty, field_ptr, try self.debugCallSuffix() });
+                    const next = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{ next, aggregate_ty, result, field_ty, field_value, i });
+                    result = next;
+                }
+            },
+            .generic => |node| {
+                if (!std.mem.eql(u8, node.base.text, "Result") or node.args.len != 2) return error.UnsupportedLlvmEmission;
+                for (0..3) |i| {
+                    const semantic_ty = if (i == 0)
+                        simpleType(ty.span, "bool")
+                    else if (typeNameEql(self.resolveAliasType(node.args[i - 1]), "void"))
+                        simpleType(ty.span, "u8")
+                    else
+                        node.args[i - 1];
+                    const field_ptr = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ field_ptr, aggregate_ty, ptr, i });
+                    const field_value = if (self.isAggregateType(semantic_ty))
+                        try self.emitRaceTolerantAggregateDerefLoad(field_ptr, semantic_ty)
+                    else blk: {
+                        try self.emitOrdinaryShadowHook(field_ptr, semantic_ty, .load_pre);
+                        break :blk try self.emitOrdinaryLoad(semantic_ty, field_ptr, true);
+                    };
+                    const next = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{ next, aggregate_ty, result, try self.llvmType(semantic_ty), field_value, i });
                     result = next;
                 }
             },
@@ -5917,8 +5987,40 @@ const LlvmEmitter = struct {
                 }
             },
             else => {
+                if (self.overlayInfoForType(ty)) |overlay| {
+                    return try self.emitRaceTolerantLlvmArrayLoad(ptr, aggregate_ty, "i8", std.math.cast(usize, overlay.size) orelse return error.UnsupportedLlvmEmission, 1);
+                }
+                if (self.taggedUnionForType(ty)) |union_decl| {
+                    const layout = self.taggedUnionLayout(union_decl, 0) orelse return error.UnsupportedLlvmEmission;
+                    const tag_ptr = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, aggregate_ty, ptr });
+                    const tag = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = load atomic i32, ptr {s} unordered, align 4{s}\n", .{ tag, tag_ptr, try self.debugCallSuffix() });
+                    const with_tag = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, i32 {s}, 0\n", .{ with_tag, aggregate_ty, result, tag });
+                    result = with_tag;
+                    if (layout.padding_size != 0) {
+                        const padding_ty = try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i8]", .{layout.padding_size});
+                        const padding = try self.emitRaceTolerantLlvmArrayFieldLoad(ptr, aggregate_ty, 1, padding_ty, "i8", layout.padding_size, 1);
+                        const with_padding = try self.nextTemp();
+                        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 1\n", .{ with_padding, aggregate_ty, result, padding_ty, padding });
+                        result = with_padding;
+                    }
+                    const storage_ty = try self.taggedUnionPayloadStorageType(layout);
+                    const element_ty = try std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{layout.payload_alignment * 8});
+                    const storage = try self.emitRaceTolerantLlvmArrayFieldLoad(ptr, aggregate_ty, layout.payload_field_index, storage_ty, element_ty, layout.storage_count, layout.payload_alignment);
+                    const with_storage = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{ with_storage, aggregate_ty, result, storage_ty, storage, layout.payload_field_index });
+                    result = with_storage;
+                    return result;
+                }
                 const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
-                if (struct_decl.is_c_union) return error.UnsupportedLlvmEmission;
+                if (struct_decl.is_c_union) {
+                    const layout = self.cUnionStorageLayout(struct_decl) orelse return error.UnsupportedLlvmEmission;
+                    if (layout.alignment > 8) return error.UnsupportedLlvmEmission;
+                    const element_ty = try std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{layout.alignment * 8});
+                    return try self.emitRaceTolerantLlvmArrayLoad(ptr, aggregate_ty, element_ty, layout.count, layout.alignment);
+                }
                 for (struct_decl.fields, 0..) |field, i| {
                     const field_ptr = try self.nextTemp();
                     try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ field_ptr, aggregate_ty, ptr, i });
@@ -5941,13 +6043,45 @@ const LlvmEmitter = struct {
         const aggregate_ty = try self.llvmType(ty);
         const resolved_ty = self.resolveAliasType(ty);
         switch (resolved_ty.kind) {
-            .closure_type => {
+            .closure_type, .dyn_trait => {
                 for (0..2) |i| {
                     const field_value = try self.nextTemp();
                     try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ field_value, aggregate_ty, value, i });
                     const field_ptr = try self.nextTemp();
                     try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ field_ptr, aggregate_ty, ptr, i });
                     try self.out.print(self.allocator, "  store atomic ptr {s}, ptr {s} unordered, align 8{s}\n", .{ field_value, field_ptr, try self.debugCallSuffix() });
+                }
+            },
+            .slice => {
+                for (0..2) |i| {
+                    const field_ty = if (i == 0) "ptr" else "i64";
+                    const field_value = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ field_value, aggregate_ty, value, i });
+                    const field_ptr = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ field_ptr, aggregate_ty, ptr, i });
+                    try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} unordered, align 8{s}\n", .{ field_ty, field_value, field_ptr, try self.debugCallSuffix() });
+                }
+            },
+            .generic => |node| {
+                if (!std.mem.eql(u8, node.base.text, "Result") or node.args.len != 2) return error.UnsupportedLlvmEmission;
+                for (0..3) |i| {
+                    const semantic_ty = if (i == 0)
+                        simpleType(ty.span, "bool")
+                    else if (typeNameEql(self.resolveAliasType(node.args[i - 1]), "void"))
+                        simpleType(ty.span, "u8")
+                    else
+                        node.args[i - 1];
+                    const field_value = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ field_value, aggregate_ty, value, i });
+                    const field_ptr = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ field_ptr, aggregate_ty, ptr, i });
+                    if (self.isAggregateType(semantic_ty)) {
+                        try self.emitRaceTolerantAggregateDerefStore(field_ptr, semantic_ty, field_value);
+                    } else {
+                        try self.emitOrdinaryShadowHook(field_ptr, semantic_ty, .store_pre);
+                        try self.emitOrdinaryStore(semantic_ty, try self.llvmType(semantic_ty), field_value, field_ptr, true);
+                        try self.emitOrdinaryShadowHook(field_ptr, semantic_ty, .store_post);
+                    }
                 }
             },
             .array => |array| {
@@ -5968,8 +6102,38 @@ const LlvmEmitter = struct {
                 }
             },
             else => {
+                if (self.overlayInfoForType(ty)) |overlay| {
+                    try self.emitRaceTolerantLlvmArrayStore(ptr, aggregate_ty, "i8", std.math.cast(usize, overlay.size) orelse return error.UnsupportedLlvmEmission, 1, value);
+                    return;
+                }
+                if (self.taggedUnionForType(ty)) |union_decl| {
+                    const layout = self.taggedUnionLayout(union_decl, 0) orelse return error.UnsupportedLlvmEmission;
+                    const tag = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ tag, aggregate_ty, value });
+                    const tag_ptr = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, aggregate_ty, ptr });
+                    try self.out.print(self.allocator, "  store atomic i32 {s}, ptr {s} unordered, align 4{s}\n", .{ tag, tag_ptr, try self.debugCallSuffix() });
+                    if (layout.padding_size != 0) {
+                        const padding_ty = try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i8]", .{layout.padding_size});
+                        const padding = try self.nextTemp();
+                        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ padding, aggregate_ty, value });
+                        try self.emitRaceTolerantLlvmArrayFieldStore(ptr, aggregate_ty, 1, padding_ty, "i8", layout.padding_size, 1, padding);
+                    }
+                    const storage_ty = try self.taggedUnionPayloadStorageType(layout);
+                    const storage = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ storage, aggregate_ty, value, layout.payload_field_index });
+                    const element_ty = try std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{layout.payload_alignment * 8});
+                    try self.emitRaceTolerantLlvmArrayFieldStore(ptr, aggregate_ty, layout.payload_field_index, storage_ty, element_ty, layout.storage_count, layout.payload_alignment, storage);
+                    return;
+                }
                 const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
-                if (struct_decl.is_c_union) return error.UnsupportedLlvmEmission;
+                if (struct_decl.is_c_union) {
+                    const layout = self.cUnionStorageLayout(struct_decl) orelse return error.UnsupportedLlvmEmission;
+                    if (layout.alignment > 8) return error.UnsupportedLlvmEmission;
+                    const element_ty = try std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{layout.alignment * 8});
+                    try self.emitRaceTolerantLlvmArrayStore(ptr, aggregate_ty, element_ty, layout.count, layout.alignment, value);
+                    return;
+                }
                 for (struct_decl.fields, 0..) |field, i| {
                     const field_value = try self.nextTemp();
                     try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ field_value, aggregate_ty, value, i });
@@ -5984,6 +6148,42 @@ const LlvmEmitter = struct {
                     }
                 }
             },
+        }
+    }
+
+    fn emitRaceTolerantLlvmArrayFieldLoad(self: *LlvmEmitter, ptr: []const u8, aggregate_ty: []const u8, field_index: usize, array_ty: []const u8, element_ty: []const u8, count: usize, alignment: usize) ![]const u8 {
+        const array_ptr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ array_ptr, aggregate_ty, ptr, field_index });
+        return self.emitRaceTolerantLlvmArrayLoad(array_ptr, array_ty, element_ty, count, alignment);
+    }
+
+    fn emitRaceTolerantLlvmArrayLoad(self: *LlvmEmitter, ptr: []const u8, array_ty: []const u8, element_ty: []const u8, count: usize, alignment: usize) ![]const u8 {
+        var result: []const u8 = "zeroinitializer";
+        for (0..count) |i| {
+            const element_ptr = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {d}\n", .{ element_ptr, array_ty, ptr, i });
+            const element = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = load atomic {s}, ptr {s} unordered, align {d}{s}\n", .{ element, element_ty, element_ptr, alignment, try self.debugCallSuffix() });
+            const next = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n", .{ next, array_ty, result, element_ty, element, i });
+            result = next;
+        }
+        return result;
+    }
+
+    fn emitRaceTolerantLlvmArrayFieldStore(self: *LlvmEmitter, ptr: []const u8, aggregate_ty: []const u8, field_index: usize, array_ty: []const u8, element_ty: []const u8, count: usize, alignment: usize, value: []const u8) !void {
+        const array_ptr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ array_ptr, aggregate_ty, ptr, field_index });
+        return self.emitRaceTolerantLlvmArrayStore(array_ptr, array_ty, element_ty, count, alignment, value);
+    }
+
+    fn emitRaceTolerantLlvmArrayStore(self: *LlvmEmitter, ptr: []const u8, array_ty: []const u8, element_ty: []const u8, count: usize, alignment: usize, value: []const u8) !void {
+        for (0..count) |i| {
+            const element = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ element, array_ty, value, i });
+            const element_ptr = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {d}\n", .{ element_ptr, array_ty, ptr, i });
+            try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} unordered, align {d}{s}\n", .{ element_ty, element, element_ptr, alignment, try self.debugCallSuffix() });
         }
     }
 
@@ -6339,7 +6539,8 @@ const LlvmEmitter = struct {
     }
 
     fn emitArrayLiteralStores(self: *LlvmEmitter, array_ptr: []const u8, array_ty: ast.TypeExpr, items: []const ast.Expr) !void {
-        const array = switch (array_ty.kind) {
+        const resolved_array_ty = self.resolveAliasType(array_ty);
+        const array = switch (resolved_array_ty.kind) {
             .array => |array| array,
             else => return error.UnsupportedLlvmEmission,
         };
@@ -6349,7 +6550,7 @@ const LlvmEmitter = struct {
         const element_llvm = try self.llvmType(element_ty);
         for (items, 0..) |item, i| {
             const ptr = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(array_ty), array_ptr, i });
+            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(resolved_array_ty), array_ptr, i });
             const value = if (isUninitExpr(item))
                 try self.zeroInitializer(element_ty)
             else
@@ -6405,12 +6606,13 @@ const LlvmEmitter = struct {
     }
 
     fn emitArrayLiteralValue(self: *LlvmEmitter, array_ty: ast.TypeExpr, items: []const ast.Expr) ![]const u8 {
-        if (array_ty.kind != .array) return error.UnsupportedLlvmEmission;
+        const resolved_array_ty = self.resolveAliasType(array_ty);
+        if (resolved_array_ty.kind != .array) return error.UnsupportedLlvmEmission;
         const ptr = try self.nextTemp();
-        try self.emitAlloca(ptr, try self.llvmType(array_ty));
-        try self.emitArrayLiteralStores(ptr, array_ty, items);
+        try self.emitAlloca(ptr, try self.llvmType(resolved_array_ty));
+        try self.emitArrayLiteralStores(ptr, resolved_array_ty, items);
         const value = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ value, try self.llvmType(array_ty), ptr });
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ value, try self.llvmType(resolved_array_ty), ptr });
         return value;
     }
 
@@ -6445,6 +6647,14 @@ const LlvmEmitter = struct {
         }
         if (self.mirTargetTypeFactAt(.tagged_union, span)) |fact| {
             return (try self.emitTaggedUnionConstructor(call, fact.target_ty)) orelse error.UnsupportedLlvmEmission;
+        }
+        // Async lowering creates direct calls without source locations. Such calls
+        // cannot safely query location-keyed builtin facts shared by other generated
+        // nodes, so resolve declared functions before builtin dispatch.
+        if (span.line == 0 or span.column == 0) {
+            if (self.directCallName(call.callee.*)) |callee| {
+                if (self.fn_sigs.contains(callee)) return try self.emitDirectCall(callee, call, expected_ty);
+            }
         }
         if (try self.emitBuiltinValueCall(call, expected_ty, span)) |value| return value;
         if (self.directCallName(call.callee.*)) |callee| {
@@ -6584,10 +6794,11 @@ const LlvmEmitter = struct {
         for (call.args, 0..) |arg, i| {
             const arg_ty = if (i < sig.params.len) blk: {
                 const fact_ty = (self.mirTargetTypeFactAtOwned(.direct_call_argument, arg.span, callee, i) orelse return error.UnsupportedLlvmEmission).target_ty;
-                if (!std.meta.eql(fact_ty, sig.params[i].ty)) return error.UnsupportedLlvmEmission;
+                if (!directCallFactMatchesDeclared(fact_ty, sig.params[i].ty)) return error.UnsupportedLlvmEmission;
                 break :blk fact_ty;
             } else self.exprType(arg) orelse expected_ty;
-            try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg") });
+            const arg_value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg");
+            try args.append(self.allocator, .{ .ty = arg_ty, .value = arg_value });
         }
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = call {s} @{s}(", .{ result, ret_ty, callee });
@@ -6880,10 +7091,28 @@ const LlvmEmitter = struct {
             return try self.castValue(value, info.enum_ty, info.repr_ty);
         }
         if (self.byteViewCallInfo(call)) |info| return try self.emitByteViewCall(call, info);
-        const result_constructor = if (self.mirCallTargetKindAt(span)) |kind| mir.resultConstructorFactInfo(kind) else null;
+        const generated_result_constructor: ?mir.ResultConstructorFactInfo = if (span.line == 0 or span.column == 0)
+            if (calleeIdentName(call.callee.*)) |name|
+                if (std.mem.eql(u8, name, "ok"))
+                    .{ .target_kind = .result_ok, .tag = "ok" }
+                else if (std.mem.eql(u8, name, "err"))
+                    .{ .target_kind = .result_err, .tag = "err" }
+                else
+                    null
+            else
+                null
+        else
+            null;
+        const result_constructor = generated_result_constructor orelse
+            if (self.mirCallTargetKindAt(span)) |kind| mir.resultConstructorFactInfo(kind) else null;
         if (result_constructor) |constructor| {
-            const fact = self.mirTargetTypeFactAt(constructor.target_kind, span) orelse return error.UnsupportedLlvmEmission;
-            return try self.emitResultConstructorValue(call, fact.target_ty, constructor.tag);
+            const result_ty = if (span.line == 0 or span.column == 0)
+                expected_ty
+            else if (self.mirTargetTypeFactAt(constructor.target_kind, span)) |fact|
+                fact.target_ty
+            else
+                return error.UnsupportedLlvmEmission;
+            return try self.emitResultConstructorValue(call, result_ty, constructor.tag);
         }
         if (self.mirTargetTypeFactAt(.result_ok, span) != null or self.mirTargetTypeFactAt(.result_err, span) != null) return error.UnsupportedLlvmEmission;
         if (self.domainResidueCallInfo(call)) |info| {
@@ -7073,7 +7302,12 @@ const LlvmEmitter = struct {
     }
 
     fn emitUnary(self: *LlvmEmitter, node: anytype, unary_span: ast.Span) ![]const u8 {
-        const inferred_ty = if (node.op == .logical_not) simpleType(unary_span, "bool") else self.exprType(node.expr.*);
+        const inferred_ty = if (node.op == .logical_not)
+            simpleType(unary_span, "bool")
+        else if (node.op == .neg and node.expr.kind == .int_literal)
+            null
+        else
+            self.exprType(node.expr.*);
         const ty = self.requireExpressionResultType(.{ .kind = .{ .unary = node }, .span = unary_span }, inferred_ty) orelse return error.UnsupportedLlvmEmission;
         return switch (node.op) {
             .logical_not => blk: {
@@ -8278,6 +8512,8 @@ const LlvmEmitter = struct {
             else
                 null,
             .float_literal => null,
+            .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else null,
+            .block => if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null,
             .grouped => |inner| self.exprType(inner.*),
             .call => |call| if (self.mirTargetTypeFactAt(.qualified_union_result, expr.span)) |fact|
                 fact.target_ty
@@ -8337,9 +8573,17 @@ const LlvmEmitter = struct {
     }
 
     fn requireExpressionResultType(self: *LlvmEmitter, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {
-        const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
-        const expected = inferred orelse return fact.target_ty;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected))) return null;
+        const expected = inferred orelse if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| return fact.target_ty else return null;
+        return self.expressionResultTypeAt(expr.span, expected);
+    }
+
+    fn expressionResultTypeAt(self: *LlvmEmitter, span: ast.Span, inferred: ast.TypeExpr) ?ast.TypeExpr {
+        // Async lowering creates zero-span expressions whose construction site
+        // already determines their type. Multiple generated nodes share that
+        // sentinel span, so a span-keyed MIR lookup cannot identify one fact.
+        if (span.line == 0 or span.column == 0) return inferred;
+        const fact = self.mirTargetTypeFactAt(.expression_result, span) orelse return null;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) return null;
         return fact.target_ty;
     }
 
@@ -8788,19 +9032,29 @@ const LlvmEmitter = struct {
     // type gets both the largest arm's size AND its alignment. All arms live at offset 0, so
     // member access needs no GEP (see emitMemberAddress); the pointer IS reinterpreted per arm.
     fn cUnionLlvmType(self: *LlvmEmitter, struct_decl: ast.StructDecl) ![]const u8 {
+        const layout = self.cUnionStorageLayout(struct_decl) orelse return error.UnsupportedLlvmEmission;
+        return std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i{d}]", .{ layout.count, layout.alignment * 8 });
+    }
+
+    const CUnionStorageLayout = struct { count: usize, alignment: usize };
+
+    fn cUnionStorageLayout(self: *LlvmEmitter, struct_decl: ast.StructDecl) ?CUnionStorageLayout {
         var max_size: i128 = 0;
         var max_align: i128 = 1;
         for (struct_decl.fields) |field| {
-            const size = self.comptimeSizeOf(field.ty, 0) orelse return error.UnsupportedLlvmEmission;
-            const alignment = self.comptimeAlignOf(field.ty, 0) orelse return error.UnsupportedLlvmEmission;
-            if (alignment <= 0) return error.UnsupportedLlvmEmission;
+            const size = self.comptimeSizeOf(field.ty, 0) orelse return null;
+            const alignment = self.comptimeAlignOf(field.ty, 0) orelse return null;
+            if (alignment <= 0) return null;
             if (size > max_size) max_size = size;
             if (alignment > max_align) max_align = alignment;
         }
-        if (max_align != 1 and max_align != 2 and max_align != 4 and max_align != 8 and max_align != 16) return error.UnsupportedLlvmEmission;
-        const aligned_size = alignForward(max_size, max_align) orelse return error.UnsupportedLlvmEmission;
+        if (max_align != 1 and max_align != 2 and max_align != 4 and max_align != 8 and max_align != 16) return null;
+        const aligned_size = alignForward(max_size, max_align) orelse return null;
         const count = @max(@as(i128, 1), @divExact(aligned_size, max_align));
-        return std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i{d}]", .{ count, max_align * 8 });
+        return .{
+            .count = std.math.cast(usize, count) orelse return null,
+            .alignment = std.math.cast(usize, max_align) orelse return null,
+        };
     }
 
     fn overlayField(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) ?ast.Field {
@@ -9380,6 +9634,8 @@ const LlvmEmitter = struct {
             .array => true,
             .slice => true,
             .closure_type => true,
+            .dyn_trait => true,
+            .nullable => |child| self.nullablePayloadIsValueType(child.*) or self.isAggregateType(child.*),
             .name => self.structDeclForType(resolved_ty) != null or self.overlayInfoForType(resolved_ty) != null or self.taggedUnionForType(resolved_ty) != null,
             .generic => |node| std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2,
             else => false,

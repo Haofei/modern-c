@@ -448,10 +448,6 @@ pub const MoveState = struct {
         return self.slots.iterator();
     }
 
-    pub fn keyIterator(self: *const MoveState) std.StringHashMap(MoveSlot).KeyIterator {
-        return self.slots.keyIterator();
-    }
-
     pub fn clearRetainingCapacity(self: *MoveState) void {
         self.slots.clearRetainingCapacity();
         self.index_facts.facts.clearRetainingCapacity();

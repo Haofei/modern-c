@@ -489,6 +489,16 @@ test "LLVM conversion literal source type comes from MIR" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "trunc i32 300 to i8") != null);
 }
 
+test "LLVM negative integer literal uses the MIR unary result type" {
+    const source =
+        \\fn negative_one() -> i32 { return -1; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_negative_integer_literal_result_type.mc", source, &output);
+    try expectContains(output.items, "ret i32 -1");
+}
+
 test "LLVM explicit casts require MIR source and target type facts" {
     const source =
         \\fn widen(value: u32) -> u64 { return value as u64; }
@@ -1537,6 +1547,7 @@ test "LLVM inferred local direct addresses require MIR types" {
 test "LLVM compound expressions require complete MIR result facts" {
     const source =
         \\struct Pair { value: u8 }
+        \\struct SliceHolder { value: []const u8 }
         \\overlay union Word { value: u32, bytes: [4]u8 }
         \\packed bits Flags: u8 { set: bool }
         \\fn member_result() -> u8 {
@@ -1578,6 +1589,13 @@ test "LLVM compound expressions require complete MIR result facts" {
         \\fn binary_result(left: u32) -> u32 {
         \\    let value = left + 1;
         \\    return value;
+        \\}
+        \\fn nested_binary_result(index: usize) -> u8 {
+        \\    return (((index * 31) + 7) & 0xFF) as u8;
+        \\}
+        \\fn pointer_member_result(holder: *mut SliceHolder) -> usize {
+        \\    let value: []const u8 = holder.value;
+        \\    return value.len;
         \\}
         \\fn address_target(value: u32) -> u32 { return value + 1; }
         \\fn function_address_result() -> u32 {
@@ -3468,6 +3486,33 @@ test "LLVM pointer-member closure loads lower leaf-wise race-tolerantly" {
     try expectContains(output.items, "load atomic ptr, ptr %");
     try expectContains(output.items, "insertvalue { ptr, ptr }");
     try expectContains(output.items, "call i32 %");
+}
+
+test "LLVM pointer-member slice copies lower leaf-wise race-tolerantly" {
+    const source =
+        \\struct Holder { view: []const u8 }
+        \\fn load_view(holder: *mut Holder) -> []const u8 {
+        \\    return holder.view;
+        \\}
+        \\fn store_view(holder: *mut Holder, value: []const u8) -> void {
+        \\    holder.view = value;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_pointer_member_slice_copy.mc", source, &output);
+
+    const load_body = try llvmFunctionBody(output.items, "define internal { ptr, i64 } @load_view");
+    try expectContains(load_body, "load atomic ptr, ptr %");
+    try expectContains(load_body, "load atomic i64, ptr %");
+    try expectContains(load_body, "insertvalue { ptr, i64 }");
+    try expectNotContains(load_body, "load atomic { ptr, i64 }");
+
+    const store_body = try llvmFunctionBody(output.items, "define internal void @store_view");
+    try expectContains(store_body, "store atomic ptr ");
+    try expectContains(store_body, "store atomic i64 ");
+    try expectNotContains(store_body, "store atomic { ptr, i64 }");
 }
 
 test "LLVM rejects prebuilt MIR with missing fence call target facts" {
@@ -7115,7 +7160,7 @@ test "LLVM aggregate whole-element index access lowers recursively" {
     try expectNotContains(local_store_body, " atomic ");
 }
 
-test "LLVM union aggregate whole-element index access fails closed" {
+test "LLVM union aggregate whole-element index access lowers race-tolerantly" {
     const overlay_slice_load_source =
         \\overlay union Word {
         \\    bits: u32,
@@ -7128,7 +7173,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var overlay_slice_load_output: std.ArrayList(u8) = .empty;
     defer overlay_slice_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_union_element_load.mc", overlay_slice_load_source, &overlay_slice_load_output));
+    try appendLlvmTest("llvm_slice_union_element_load.mc", overlay_slice_load_source, &overlay_slice_load_output);
 
     const overlay_slice_store_source =
         \\overlay union Word {
@@ -7142,7 +7187,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var overlay_slice_store_output: std.ArrayList(u8) = .empty;
     defer overlay_slice_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_union_element_store.mc", overlay_slice_store_source, &overlay_slice_store_output));
+    try appendLlvmTest("llvm_slice_union_element_store.mc", overlay_slice_store_source, &overlay_slice_store_output);
 
     const c_union_slice_load_source =
         \\#[c_union]
@@ -7157,7 +7202,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var c_union_slice_load_output: std.ArrayList(u8) = .empty;
     defer c_union_slice_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_c_union_element_load.mc", c_union_slice_load_source, &c_union_slice_load_output));
+    try appendLlvmTest("llvm_slice_c_union_element_load.mc", c_union_slice_load_source, &c_union_slice_load_output);
 
     const c_union_slice_store_source =
         \\#[c_union]
@@ -7172,7 +7217,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var c_union_slice_store_output: std.ArrayList(u8) = .empty;
     defer c_union_slice_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_c_union_element_store.mc", c_union_slice_store_source, &c_union_slice_store_output));
+    try appendLlvmTest("llvm_slice_c_union_element_store.mc", c_union_slice_store_source, &c_union_slice_store_output);
 
     const nested_overlay_slice_load_source =
         \\overlay union Word {
@@ -7188,7 +7233,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var nested_overlay_slice_load_output: std.ArrayList(u8) = .empty;
     defer nested_overlay_slice_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_nested_union_element_load.mc", nested_overlay_slice_load_source, &nested_overlay_slice_load_output));
+    try appendLlvmTest("llvm_slice_nested_union_element_load.mc", nested_overlay_slice_load_source, &nested_overlay_slice_load_output);
 
     const nested_overlay_slice_store_source =
         \\overlay union Word {
@@ -7204,7 +7249,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var nested_overlay_slice_store_output: std.ArrayList(u8) = .empty;
     defer nested_overlay_slice_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_nested_union_element_store.mc", nested_overlay_slice_store_source, &nested_overlay_slice_store_output));
+    try appendLlvmTest("llvm_slice_nested_union_element_store.mc", nested_overlay_slice_store_source, &nested_overlay_slice_store_output);
 
     const nested_c_union_slice_load_source =
         \\#[c_union]
@@ -7221,7 +7266,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var nested_c_union_slice_load_output: std.ArrayList(u8) = .empty;
     defer nested_c_union_slice_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_nested_c_union_element_load.mc", nested_c_union_slice_load_source, &nested_c_union_slice_load_output));
+    try appendLlvmTest("llvm_slice_nested_c_union_element_load.mc", nested_c_union_slice_load_source, &nested_c_union_slice_load_output);
 
     const nested_c_union_slice_store_source =
         \\#[c_union]
@@ -7238,7 +7283,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var nested_c_union_slice_store_output: std.ArrayList(u8) = .empty;
     defer nested_c_union_slice_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_nested_c_union_element_store.mc", nested_c_union_slice_store_source, &nested_c_union_slice_store_output));
+    try appendLlvmTest("llvm_slice_nested_c_union_element_store.mc", nested_c_union_slice_store_source, &nested_c_union_slice_store_output);
 
     const tagged_slice_load_source =
         \\union Token {
@@ -7252,7 +7297,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var tagged_slice_load_output: std.ArrayList(u8) = .empty;
     defer tagged_slice_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_tagged_union_element_load.mc", tagged_slice_load_source, &tagged_slice_load_output));
+    try appendLlvmTest("llvm_slice_tagged_union_element_load.mc", tagged_slice_load_source, &tagged_slice_load_output);
 
     const tagged_slice_store_source =
         \\union Token {
@@ -7266,7 +7311,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var tagged_slice_store_output: std.ArrayList(u8) = .empty;
     defer tagged_slice_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_tagged_union_element_store.mc", tagged_slice_store_source, &tagged_slice_store_output));
+    try appendLlvmTest("llvm_slice_tagged_union_element_store.mc", tagged_slice_store_source, &tagged_slice_store_output);
 
     const nested_tagged_slice_load_source =
         \\union Token {
@@ -7282,7 +7327,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var nested_tagged_slice_load_output: std.ArrayList(u8) = .empty;
     defer nested_tagged_slice_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_nested_tagged_union_element_load.mc", nested_tagged_slice_load_source, &nested_tagged_slice_load_output));
+    try appendLlvmTest("llvm_slice_nested_tagged_union_element_load.mc", nested_tagged_slice_load_source, &nested_tagged_slice_load_output);
 
     const nested_tagged_slice_store_source =
         \\union Token {
@@ -7298,7 +7343,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var nested_tagged_slice_store_output: std.ArrayList(u8) = .empty;
     defer nested_tagged_slice_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_nested_tagged_union_element_store.mc", nested_tagged_slice_store_source, &nested_tagged_slice_store_output));
+    try appendLlvmTest("llvm_slice_nested_tagged_union_element_store.mc", nested_tagged_slice_store_source, &nested_tagged_slice_store_output);
 
     const overlay_pointer_array_load_source =
         \\overlay union Word {
@@ -7312,7 +7357,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var overlay_pointer_array_load_output: std.ArrayList(u8) = .empty;
     defer overlay_pointer_array_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_array_overlay_union_element_load.mc", overlay_pointer_array_load_source, &overlay_pointer_array_load_output));
+    try appendLlvmTest("llvm_pointer_array_overlay_union_element_load.mc", overlay_pointer_array_load_source, &overlay_pointer_array_load_output);
 
     const overlay_pointer_array_store_source =
         \\overlay union Word {
@@ -7326,7 +7371,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var overlay_pointer_array_store_output: std.ArrayList(u8) = .empty;
     defer overlay_pointer_array_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_array_overlay_union_element_store.mc", overlay_pointer_array_store_source, &overlay_pointer_array_store_output));
+    try appendLlvmTest("llvm_pointer_array_overlay_union_element_store.mc", overlay_pointer_array_store_source, &overlay_pointer_array_store_output);
 
     const c_union_pointer_array_load_source =
         \\#[c_union]
@@ -7341,7 +7386,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var c_union_pointer_array_load_output: std.ArrayList(u8) = .empty;
     defer c_union_pointer_array_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_array_c_union_element_load.mc", c_union_pointer_array_load_source, &c_union_pointer_array_load_output));
+    try appendLlvmTest("llvm_pointer_array_c_union_element_load.mc", c_union_pointer_array_load_source, &c_union_pointer_array_load_output);
 
     const c_union_pointer_array_store_source =
         \\#[c_union]
@@ -7356,7 +7401,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var c_union_pointer_array_store_output: std.ArrayList(u8) = .empty;
     defer c_union_pointer_array_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_array_c_union_element_store.mc", c_union_pointer_array_store_source, &c_union_pointer_array_store_output));
+    try appendLlvmTest("llvm_pointer_array_c_union_element_store.mc", c_union_pointer_array_store_source, &c_union_pointer_array_store_output);
 
     const nested_overlay_pointer_array_load_source =
         \\overlay union Word {
@@ -7372,7 +7417,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var nested_overlay_pointer_array_load_output: std.ArrayList(u8) = .empty;
     defer nested_overlay_pointer_array_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_array_nested_overlay_union_element_load.mc", nested_overlay_pointer_array_load_source, &nested_overlay_pointer_array_load_output));
+    try appendLlvmTest("llvm_pointer_array_nested_overlay_union_element_load.mc", nested_overlay_pointer_array_load_source, &nested_overlay_pointer_array_load_output);
 
     const nested_overlay_pointer_array_store_source =
         \\overlay union Word {
@@ -7388,7 +7433,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var nested_overlay_pointer_array_store_output: std.ArrayList(u8) = .empty;
     defer nested_overlay_pointer_array_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_array_nested_overlay_union_element_store.mc", nested_overlay_pointer_array_store_source, &nested_overlay_pointer_array_store_output));
+    try appendLlvmTest("llvm_pointer_array_nested_overlay_union_element_store.mc", nested_overlay_pointer_array_store_source, &nested_overlay_pointer_array_store_output);
 
     const nested_c_union_pointer_array_load_source =
         \\#[c_union]
@@ -7405,7 +7450,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var nested_c_union_pointer_array_load_output: std.ArrayList(u8) = .empty;
     defer nested_c_union_pointer_array_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_array_nested_c_union_element_load.mc", nested_c_union_pointer_array_load_source, &nested_c_union_pointer_array_load_output));
+    try appendLlvmTest("llvm_pointer_array_nested_c_union_element_load.mc", nested_c_union_pointer_array_load_source, &nested_c_union_pointer_array_load_output);
 
     const nested_c_union_pointer_array_store_source =
         \\#[c_union]
@@ -7422,7 +7467,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var nested_c_union_pointer_array_store_output: std.ArrayList(u8) = .empty;
     defer nested_c_union_pointer_array_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_array_nested_c_union_element_store.mc", nested_c_union_pointer_array_store_source, &nested_c_union_pointer_array_store_output));
+    try appendLlvmTest("llvm_pointer_array_nested_c_union_element_store.mc", nested_c_union_pointer_array_store_source, &nested_c_union_pointer_array_store_output);
 
     const tagged_pointer_array_load_source =
         \\union Token {
@@ -7436,7 +7481,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var tagged_pointer_array_load_output: std.ArrayList(u8) = .empty;
     defer tagged_pointer_array_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_array_tagged_union_element_load.mc", tagged_pointer_array_load_source, &tagged_pointer_array_load_output));
+    try appendLlvmTest("llvm_pointer_array_tagged_union_element_load.mc", tagged_pointer_array_load_source, &tagged_pointer_array_load_output);
 
     const tagged_pointer_array_store_source =
         \\union Token {
@@ -7450,7 +7495,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var tagged_pointer_array_store_output: std.ArrayList(u8) = .empty;
     defer tagged_pointer_array_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_array_tagged_union_element_store.mc", tagged_pointer_array_store_source, &tagged_pointer_array_store_output));
+    try appendLlvmTest("llvm_pointer_array_tagged_union_element_store.mc", tagged_pointer_array_store_source, &tagged_pointer_array_store_output);
 
     const nested_tagged_pointer_array_load_source =
         \\union Token {
@@ -7466,7 +7511,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var nested_tagged_pointer_array_load_output: std.ArrayList(u8) = .empty;
     defer nested_tagged_pointer_array_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_array_nested_tagged_union_element_load.mc", nested_tagged_pointer_array_load_source, &nested_tagged_pointer_array_load_output));
+    try appendLlvmTest("llvm_pointer_array_nested_tagged_union_element_load.mc", nested_tagged_pointer_array_load_source, &nested_tagged_pointer_array_load_output);
 
     const nested_tagged_pointer_array_store_source =
         \\union Token {
@@ -7482,7 +7527,7 @@ test "LLVM union aggregate whole-element index access fails closed" {
     ;
     var nested_tagged_pointer_array_store_output: std.ArrayList(u8) = .empty;
     defer nested_tagged_pointer_array_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_array_nested_tagged_union_element_store.mc", nested_tagged_pointer_array_store_source, &nested_tagged_pointer_array_store_output));
+    try appendLlvmTest("llvm_pointer_array_nested_tagged_union_element_store.mc", nested_tagged_pointer_array_store_source, &nested_tagged_pointer_array_store_output);
 }
 
 test "LLVM indexed aggregate scalar fields lower race-tolerantly" {
@@ -7718,7 +7763,7 @@ test "LLVM indexed aggregate field value copies lower recursively" {
     try expectNotContains(local_store_body, " atomic ");
 }
 
-test "LLVM union indexed aggregate field value copies fail closed" {
+test "LLVM union indexed aggregate field value copies lower race-tolerantly" {
     const overlay_load_source =
         \\overlay union Word {
         \\    bits: u32,
@@ -7733,7 +7778,7 @@ test "LLVM union indexed aggregate field value copies fail closed" {
     ;
     var overlay_load_output: std.ArrayList(u8) = .empty;
     defer overlay_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_union_field_load.mc", overlay_load_source, &overlay_load_output));
+    try appendLlvmTest("llvm_slice_union_field_load.mc", overlay_load_source, &overlay_load_output);
 
     const overlay_store_source =
         \\overlay union Word {
@@ -7749,7 +7794,7 @@ test "LLVM union indexed aggregate field value copies fail closed" {
     ;
     var overlay_store_output: std.ArrayList(u8) = .empty;
     defer overlay_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_union_field_store.mc", overlay_store_source, &overlay_store_output));
+    try appendLlvmTest("llvm_slice_union_field_store.mc", overlay_store_source, &overlay_store_output);
 
     const c_union_load_source =
         \\#[c_union]
@@ -7766,7 +7811,7 @@ test "LLVM union indexed aggregate field value copies fail closed" {
     ;
     var c_union_load_output: std.ArrayList(u8) = .empty;
     defer c_union_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_c_union_field_load.mc", c_union_load_source, &c_union_load_output));
+    try appendLlvmTest("llvm_slice_c_union_field_load.mc", c_union_load_source, &c_union_load_output);
 
     const c_union_store_source =
         \\#[c_union]
@@ -7783,7 +7828,7 @@ test "LLVM union indexed aggregate field value copies fail closed" {
     ;
     var c_union_store_output: std.ArrayList(u8) = .empty;
     defer c_union_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_c_union_field_store.mc", c_union_store_source, &c_union_store_output));
+    try appendLlvmTest("llvm_slice_c_union_field_store.mc", c_union_store_source, &c_union_store_output);
 
     const nested_overlay_load_source =
         \\overlay union Word {
@@ -7802,7 +7847,7 @@ test "LLVM union indexed aggregate field value copies fail closed" {
     ;
     var nested_overlay_load_output: std.ArrayList(u8) = .empty;
     defer nested_overlay_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_nested_union_field_load.mc", nested_overlay_load_source, &nested_overlay_load_output));
+    try appendLlvmTest("llvm_slice_nested_union_field_load.mc", nested_overlay_load_source, &nested_overlay_load_output);
 
     const nested_overlay_store_source =
         \\overlay union Word {
@@ -7821,7 +7866,7 @@ test "LLVM union indexed aggregate field value copies fail closed" {
     ;
     var nested_overlay_store_output: std.ArrayList(u8) = .empty;
     defer nested_overlay_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_nested_union_field_store.mc", nested_overlay_store_source, &nested_overlay_store_output));
+    try appendLlvmTest("llvm_slice_nested_union_field_store.mc", nested_overlay_store_source, &nested_overlay_store_output);
 
     const nested_c_union_load_source =
         \\#[c_union]
@@ -7841,7 +7886,7 @@ test "LLVM union indexed aggregate field value copies fail closed" {
     ;
     var nested_c_union_load_output: std.ArrayList(u8) = .empty;
     defer nested_c_union_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_nested_c_union_field_load.mc", nested_c_union_load_source, &nested_c_union_load_output));
+    try appendLlvmTest("llvm_slice_nested_c_union_field_load.mc", nested_c_union_load_source, &nested_c_union_load_output);
 
     const nested_c_union_store_source =
         \\#[c_union]
@@ -7861,7 +7906,7 @@ test "LLVM union indexed aggregate field value copies fail closed" {
     ;
     var nested_c_union_store_output: std.ArrayList(u8) = .empty;
     defer nested_c_union_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_nested_c_union_field_store.mc", nested_c_union_store_source, &nested_c_union_store_output));
+    try appendLlvmTest("llvm_slice_nested_c_union_field_store.mc", nested_c_union_store_source, &nested_c_union_store_output);
 
     const tagged_load_source =
         \\union Token {
@@ -7877,7 +7922,7 @@ test "LLVM union indexed aggregate field value copies fail closed" {
     ;
     var tagged_load_output: std.ArrayList(u8) = .empty;
     defer tagged_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_tagged_union_field_load.mc", tagged_load_source, &tagged_load_output));
+    try appendLlvmTest("llvm_slice_tagged_union_field_load.mc", tagged_load_source, &tagged_load_output);
 
     const tagged_store_source =
         \\union Token {
@@ -7893,7 +7938,7 @@ test "LLVM union indexed aggregate field value copies fail closed" {
     ;
     var tagged_store_output: std.ArrayList(u8) = .empty;
     defer tagged_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_tagged_union_field_store.mc", tagged_store_source, &tagged_store_output));
+    try appendLlvmTest("llvm_slice_tagged_union_field_store.mc", tagged_store_source, &tagged_store_output);
 
     const nested_tagged_load_source =
         \\union Token {
@@ -7912,7 +7957,7 @@ test "LLVM union indexed aggregate field value copies fail closed" {
     ;
     var nested_tagged_load_output: std.ArrayList(u8) = .empty;
     defer nested_tagged_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_nested_tagged_union_field_load.mc", nested_tagged_load_source, &nested_tagged_load_output));
+    try appendLlvmTest("llvm_slice_nested_tagged_union_field_load.mc", nested_tagged_load_source, &nested_tagged_load_output);
 
     const nested_tagged_store_source =
         \\union Token {
@@ -7931,7 +7976,7 @@ test "LLVM union indexed aggregate field value copies fail closed" {
     ;
     var nested_tagged_store_output: std.ArrayList(u8) = .empty;
     defer nested_tagged_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_slice_nested_tagged_union_field_store.mc", nested_tagged_store_source, &nested_tagged_store_output));
+    try appendLlvmTest("llvm_slice_nested_tagged_union_field_store.mc", nested_tagged_store_source, &nested_tagged_store_output);
 }
 
 test "LLVM nested indexed aggregate field value copies lower recursively" {
@@ -10788,7 +10833,7 @@ test "LLVM simple aggregate pointer deref value copy lowers field-wise race-tole
     try expectNotContains(local_raw_many_store_body, " atomic ");
 }
 
-test "LLVM union aggregate pointer deref value copies fail closed" {
+test "LLVM union aggregate pointer deref value copies lower race-tolerantly" {
     const overlay_load_source =
         \\overlay union Word {
         \\    value: u32,
@@ -10801,24 +10846,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var load_output: std.ArrayList(u8) = .empty;
     defer load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_union_load.mc", overlay_load_source, &load_output));
-
-    var diagnostic_parsed = try test_support.parseCheckedModule("llvm_pointer_union_load_diagnostic.mc", overlay_load_source);
-    defer diagnostic_parsed.deinit();
-    var diagnostic_reporter = diagnostics.Reporter.init(std.testing.allocator, "llvm_pointer_union_load_diagnostic.mc", overlay_load_source);
-    defer diagnostic_reporter.deinit();
-    var diagnostic_output: std.ArrayList(u8) = .empty;
-    defer diagnostic_output.deinit(std.testing.allocator);
-    const llvm_backend = lower_llvm.mcBackend();
-    try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerFn(llvm_backend.ctx, std.testing.allocator, diagnostic_parsed.module, &diagnostic_output, .{
-        .profile = .kernel,
-        .source_path = "llvm_pointer_union_load_diagnostic.mc",
-        .reporter = &diagnostic_reporter,
-    }));
-    try std.testing.expect(diagnostic_reporter.has_errors);
-    try std.testing.expectEqual(@as(usize, 1), diagnostic_reporter.diagnostics.items.len);
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic_reporter.diagnostics.items[0].message, "E_BACKEND_UNSUPPORTED") != null);
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic_reporter.diagnostics.items[0].message, "deref") != null);
+    try appendLlvmTest("llvm_pointer_union_load.mc", overlay_load_source, &load_output);
 
     const overlay_store_source =
         \\overlay union Word {
@@ -10832,7 +10860,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var store_output: std.ArrayList(u8) = .empty;
     defer store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_union_store.mc", overlay_store_source, &store_output));
+    try appendLlvmTest("llvm_pointer_union_store.mc", overlay_store_source, &store_output);
 
     const c_union_load_source =
         \\#[c_union]
@@ -10847,7 +10875,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var c_union_load_output: std.ArrayList(u8) = .empty;
     defer c_union_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_c_union_load.mc", c_union_load_source, &c_union_load_output));
+    try appendLlvmTest("llvm_pointer_c_union_load.mc", c_union_load_source, &c_union_load_output);
 
     const c_union_store_source =
         \\#[c_union]
@@ -10862,7 +10890,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var c_union_store_output: std.ArrayList(u8) = .empty;
     defer c_union_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_c_union_store.mc", c_union_store_source, &c_union_store_output));
+    try appendLlvmTest("llvm_pointer_c_union_store.mc", c_union_store_source, &c_union_store_output);
 
     const overlay_raw_many_load_source =
         \\overlay union Word {
@@ -10878,7 +10906,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var raw_many_load_output: std.ArrayList(u8) = .empty;
     defer raw_many_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_raw_many_union_load.mc", overlay_raw_many_load_source, &raw_many_load_output));
+    try appendLlvmTest("llvm_raw_many_union_load.mc", overlay_raw_many_load_source, &raw_many_load_output);
 
     const overlay_raw_many_store_source =
         \\overlay union Word {
@@ -10894,7 +10922,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var raw_many_store_output: std.ArrayList(u8) = .empty;
     defer raw_many_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_raw_many_union_store.mc", overlay_raw_many_store_source, &raw_many_store_output));
+    try appendLlvmTest("llvm_raw_many_union_store.mc", overlay_raw_many_store_source, &raw_many_store_output);
 
     const c_union_raw_many_load_source =
         \\#[c_union]
@@ -10911,7 +10939,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var c_union_raw_many_load_output: std.ArrayList(u8) = .empty;
     defer c_union_raw_many_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_raw_many_c_union_load.mc", c_union_raw_many_load_source, &c_union_raw_many_load_output));
+    try appendLlvmTest("llvm_raw_many_c_union_load.mc", c_union_raw_many_load_source, &c_union_raw_many_load_output);
 
     const c_union_raw_many_store_source =
         \\#[c_union]
@@ -10928,7 +10956,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var c_union_raw_many_store_output: std.ArrayList(u8) = .empty;
     defer c_union_raw_many_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_raw_many_c_union_store.mc", c_union_raw_many_store_source, &c_union_raw_many_store_output));
+    try appendLlvmTest("llvm_raw_many_c_union_store.mc", c_union_raw_many_store_source, &c_union_raw_many_store_output);
 
     const tagged_load_source =
         \\union Token {
@@ -10942,7 +10970,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var tagged_load_output: std.ArrayList(u8) = .empty;
     defer tagged_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_tagged_union_load.mc", tagged_load_source, &tagged_load_output));
+    try appendLlvmTest("llvm_pointer_tagged_union_load.mc", tagged_load_source, &tagged_load_output);
 
     const tagged_store_source =
         \\union Token {
@@ -10956,7 +10984,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var tagged_store_output: std.ArrayList(u8) = .empty;
     defer tagged_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_tagged_union_store.mc", tagged_store_source, &tagged_store_output));
+    try appendLlvmTest("llvm_pointer_tagged_union_store.mc", tagged_store_source, &tagged_store_output);
 
     const tagged_raw_many_load_source =
         \\union Token {
@@ -10972,7 +11000,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var tagged_raw_many_load_output: std.ArrayList(u8) = .empty;
     defer tagged_raw_many_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_raw_many_tagged_union_load.mc", tagged_raw_many_load_source, &tagged_raw_many_load_output));
+    try appendLlvmTest("llvm_raw_many_tagged_union_load.mc", tagged_raw_many_load_source, &tagged_raw_many_load_output);
 
     const tagged_raw_many_store_source =
         \\union Token {
@@ -10988,7 +11016,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var tagged_raw_many_store_output: std.ArrayList(u8) = .empty;
     defer tagged_raw_many_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_raw_many_tagged_union_store.mc", tagged_raw_many_store_source, &tagged_raw_many_store_output));
+    try appendLlvmTest("llvm_raw_many_tagged_union_store.mc", tagged_raw_many_store_source, &tagged_raw_many_store_output);
 
     const nested_overlay_load_source =
         \\overlay union Word {
@@ -11005,7 +11033,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var nested_overlay_load_output: std.ArrayList(u8) = .empty;
     defer nested_overlay_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_union_load.mc", nested_overlay_load_source, &nested_overlay_load_output));
+    try appendLlvmTest("llvm_pointer_nested_union_load.mc", nested_overlay_load_source, &nested_overlay_load_output);
 
     const nested_overlay_store_source =
         \\overlay union Word {
@@ -11022,7 +11050,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var nested_overlay_store_output: std.ArrayList(u8) = .empty;
     defer nested_overlay_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_union_store.mc", nested_overlay_store_source, &nested_overlay_store_output));
+    try appendLlvmTest("llvm_pointer_nested_union_store.mc", nested_overlay_store_source, &nested_overlay_store_output);
 
     const nested_c_union_load_source =
         \\#[c_union]
@@ -11040,7 +11068,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var nested_c_union_load_output: std.ArrayList(u8) = .empty;
     defer nested_c_union_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_c_union_load.mc", nested_c_union_load_source, &nested_c_union_load_output));
+    try appendLlvmTest("llvm_pointer_nested_c_union_load.mc", nested_c_union_load_source, &nested_c_union_load_output);
 
     const nested_c_union_store_source =
         \\#[c_union]
@@ -11058,7 +11086,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var nested_c_union_store_output: std.ArrayList(u8) = .empty;
     defer nested_c_union_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_c_union_store.mc", nested_c_union_store_source, &nested_c_union_store_output));
+    try appendLlvmTest("llvm_pointer_nested_c_union_store.mc", nested_c_union_store_source, &nested_c_union_store_output);
 
     const nested_tagged_load_source =
         \\union Token {
@@ -11075,7 +11103,7 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var nested_tagged_load_output: std.ArrayList(u8) = .empty;
     defer nested_tagged_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_tagged_union_load.mc", nested_tagged_load_source, &nested_tagged_load_output));
+    try appendLlvmTest("llvm_pointer_nested_tagged_union_load.mc", nested_tagged_load_source, &nested_tagged_load_output);
 
     const nested_tagged_store_source =
         \\union Token {
@@ -11092,10 +11120,10 @@ test "LLVM union aggregate pointer deref value copies fail closed" {
     ;
     var nested_tagged_store_output: std.ArrayList(u8) = .empty;
     defer nested_tagged_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_tagged_union_store.mc", nested_tagged_store_source, &nested_tagged_store_output));
+    try appendLlvmTest("llvm_pointer_nested_tagged_union_store.mc", nested_tagged_store_source, &nested_tagged_store_output);
 }
 
-test "LLVM union pointer-member aggregate value copies fail closed" {
+test "LLVM union pointer-member aggregate value copies lower race-tolerantly" {
     const overlay_member_load_source =
         \\overlay union Word {
         \\    bits: u32,
@@ -11110,7 +11138,7 @@ test "LLVM union pointer-member aggregate value copies fail closed" {
     ;
     var overlay_load_output: std.ArrayList(u8) = .empty;
     defer overlay_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_union_member_load.mc", overlay_member_load_source, &overlay_load_output));
+    try appendLlvmTest("llvm_pointer_union_member_load.mc", overlay_member_load_source, &overlay_load_output);
 
     const overlay_member_store_source =
         \\overlay union Word {
@@ -11126,7 +11154,7 @@ test "LLVM union pointer-member aggregate value copies fail closed" {
     ;
     var overlay_store_output: std.ArrayList(u8) = .empty;
     defer overlay_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_union_member_store.mc", overlay_member_store_source, &overlay_store_output));
+    try appendLlvmTest("llvm_pointer_union_member_store.mc", overlay_member_store_source, &overlay_store_output);
 
     const c_union_member_load_source =
         \\#[c_union]
@@ -11143,7 +11171,7 @@ test "LLVM union pointer-member aggregate value copies fail closed" {
     ;
     var c_union_load_output: std.ArrayList(u8) = .empty;
     defer c_union_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_c_union_member_load.mc", c_union_member_load_source, &c_union_load_output));
+    try appendLlvmTest("llvm_pointer_c_union_member_load.mc", c_union_member_load_source, &c_union_load_output);
 
     const c_union_member_store_source =
         \\#[c_union]
@@ -11160,7 +11188,7 @@ test "LLVM union pointer-member aggregate value copies fail closed" {
     ;
     var c_union_store_output: std.ArrayList(u8) = .empty;
     defer c_union_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_c_union_member_store.mc", c_union_member_store_source, &c_union_store_output));
+    try appendLlvmTest("llvm_pointer_c_union_member_store.mc", c_union_member_store_source, &c_union_store_output);
 
     const nested_overlay_member_load_source =
         \\overlay union Word {
@@ -11179,7 +11207,7 @@ test "LLVM union pointer-member aggregate value copies fail closed" {
     ;
     var nested_overlay_load_output: std.ArrayList(u8) = .empty;
     defer nested_overlay_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_union_member_load.mc", nested_overlay_member_load_source, &nested_overlay_load_output));
+    try appendLlvmTest("llvm_pointer_nested_union_member_load.mc", nested_overlay_member_load_source, &nested_overlay_load_output);
 
     const nested_overlay_member_store_source =
         \\overlay union Word {
@@ -11198,7 +11226,7 @@ test "LLVM union pointer-member aggregate value copies fail closed" {
     ;
     var nested_overlay_store_output: std.ArrayList(u8) = .empty;
     defer nested_overlay_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_union_member_store.mc", nested_overlay_member_store_source, &nested_overlay_store_output));
+    try appendLlvmTest("llvm_pointer_nested_union_member_store.mc", nested_overlay_member_store_source, &nested_overlay_store_output);
 
     const nested_c_union_member_load_source =
         \\#[c_union]
@@ -11218,7 +11246,7 @@ test "LLVM union pointer-member aggregate value copies fail closed" {
     ;
     var nested_c_union_load_output: std.ArrayList(u8) = .empty;
     defer nested_c_union_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_c_union_member_load.mc", nested_c_union_member_load_source, &nested_c_union_load_output));
+    try appendLlvmTest("llvm_pointer_nested_c_union_member_load.mc", nested_c_union_member_load_source, &nested_c_union_load_output);
 
     const nested_c_union_member_store_source =
         \\#[c_union]
@@ -11238,7 +11266,7 @@ test "LLVM union pointer-member aggregate value copies fail closed" {
     ;
     var nested_c_union_store_output: std.ArrayList(u8) = .empty;
     defer nested_c_union_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_c_union_member_store.mc", nested_c_union_member_store_source, &nested_c_union_store_output));
+    try appendLlvmTest("llvm_pointer_nested_c_union_member_store.mc", nested_c_union_member_store_source, &nested_c_union_store_output);
 
     const tagged_member_load_source =
         \\union Token {
@@ -11254,7 +11282,7 @@ test "LLVM union pointer-member aggregate value copies fail closed" {
     ;
     var tagged_load_output: std.ArrayList(u8) = .empty;
     defer tagged_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_tagged_union_member_load.mc", tagged_member_load_source, &tagged_load_output));
+    try appendLlvmTest("llvm_pointer_tagged_union_member_load.mc", tagged_member_load_source, &tagged_load_output);
 
     const tagged_member_store_source =
         \\union Token {
@@ -11270,7 +11298,7 @@ test "LLVM union pointer-member aggregate value copies fail closed" {
     ;
     var tagged_store_output: std.ArrayList(u8) = .empty;
     defer tagged_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_tagged_union_member_store.mc", tagged_member_store_source, &tagged_store_output));
+    try appendLlvmTest("llvm_pointer_tagged_union_member_store.mc", tagged_member_store_source, &tagged_store_output);
 
     const nested_tagged_member_load_source =
         \\union Token {
@@ -11289,7 +11317,7 @@ test "LLVM union pointer-member aggregate value copies fail closed" {
     ;
     var nested_tagged_load_output: std.ArrayList(u8) = .empty;
     defer nested_tagged_load_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_tagged_union_member_load.mc", nested_tagged_member_load_source, &nested_tagged_load_output));
+    try appendLlvmTest("llvm_pointer_nested_tagged_union_member_load.mc", nested_tagged_member_load_source, &nested_tagged_load_output);
 
     const nested_tagged_member_store_source =
         \\union Token {
@@ -11308,7 +11336,7 @@ test "LLVM union pointer-member aggregate value copies fail closed" {
     ;
     var nested_tagged_store_output: std.ArrayList(u8) = .empty;
     defer nested_tagged_store_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmTest("llvm_pointer_nested_tagged_union_member_store.mc", nested_tagged_member_store_source, &nested_tagged_store_output));
+    try appendLlvmTest("llvm_pointer_nested_tagged_union_member_store.mc", nested_tagged_member_store_source, &nested_tagged_store_output);
 }
 
 test "LLVM nested aggregate pointer deref value copy lowers recursively" {

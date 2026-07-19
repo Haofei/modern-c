@@ -6424,6 +6424,7 @@ const CEmitter = struct {
     const RaceAggregateKind = union(enum) {
         scalar: GlobalInfo,
         pointer: GlobalInfo,
+        slice: ast.TypeExpr,
         @"struct": ast.StructDecl,
         array: ast.TypeExpr,
         dyn_trait: []const u8,
@@ -6587,6 +6588,7 @@ const CEmitter = struct {
             if (self.tagged_unions.get(name)) |union_decl| return .{ .tagged_union = union_decl };
         }
         switch (resolved.kind) {
+            .slice => return .{ .slice = resolved },
             .array => return .{ .array = resolved },
             .generic => |node| {
                 if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {
@@ -6607,6 +6609,11 @@ const CEmitter = struct {
         switch (try self.raceAggregateKind(ty)) {
             .scalar => |info| try self.out.print(self.allocator, "(({s})mc_race_load_{s}({s}))", .{ info.c_type, info.race_type_name, ptr_expr }),
             .pointer => |info| try self.out.print(self.allocator, "(({s})__atomic_load_n({s}, __ATOMIC_RELAXED))", .{ info.c_type, ptr_expr }),
+            .slice => |slice_ty| try self.out.print(self.allocator, "({s}){{ .ptr = __atomic_load_n(&(({s})->ptr), __ATOMIC_RELAXED), .len = (size_t)mc_race_load_usize(&(({s})->len)) }}", .{
+                try self.cTypeFor(slice_ty, .typedef_name),
+                ptr_expr,
+                ptr_expr,
+            }),
             .@"struct" => |decl| {
                 try self.out.print(self.allocator, "({s}){{ ", .{try self.cTypeFor(ty, .typedef_name)});
                 for (decl.fields, 0..) |field, i| {
@@ -6653,6 +6660,12 @@ const CEmitter = struct {
             .pointer => |info| {
                 try self.writeIndent();
                 try self.out.print(self.allocator, "__atomic_store_n({s}, ({s}){s}, __ATOMIC_RELAXED);\n", .{ ptr_expr, info.c_type, value_expr });
+            },
+            .slice => {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "__atomic_store_n(&(({s})->ptr), {s}.ptr, __ATOMIC_RELAXED);\n", .{ ptr_expr, value_expr });
+                try self.writeIndent();
+                try self.out.print(self.allocator, "mc_race_store_usize(&(({s})->len), (uintptr_t){s}.len);\n", .{ ptr_expr, value_expr });
             },
             .@"struct" => |decl| {
                 for (decl.fields) |field| {

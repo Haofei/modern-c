@@ -3301,6 +3301,7 @@ const FunctionBuilder = struct {
     return_type_expr: ?ast.TypeExpr,
     no_lang_trap: bool,
     irq_context: bool,
+    naked: bool = false,
     summaries: *const std.StringHashMap(FunctionSummary),
     enums: *const std.StringHashMap(EnumSummary),
     structs: *const std.StringHashMap(StructSummary),
@@ -3391,6 +3392,7 @@ const FunctionBuilder = struct {
             .return_type_expr = fn_decl.return_type,
             .no_lang_trap = hasAttr(attrs, "no_lang_trap"),
             .irq_context = hasAttr(attrs, "irq_context"),
+            .naked = hasAttr(attrs, "naked"),
             // `#[naked]` is an implicit strict-unsafe context (the asm body needs no
             // `unsafe {}` wrapper), matching sema — so no `.unsafe_check` is emitted.
             .active_unsafe = hasAttr(attrs, "naked"),
@@ -4007,8 +4009,11 @@ const FunctionBuilder = struct {
             .asm_stmt => {
                 if (!self.active_unsafe) try self.addInstr(.unsafe_check, "asm.opaque", .unknown, stmt.span);
                 try self.addInstr(.asm_effect, "opaque", .value, stmt.span);
-                self.setTerminator(.unreachable_);
-                return true;
+                if (self.naked) {
+                    self.setTerminator(.unreachable_);
+                    return true;
+                }
+                return false;
             },
             .@"defer" => |expr| {
                 try self.addInstr(.defer_cleanup, "cleanup", .void, stmt.span);
@@ -4334,6 +4339,7 @@ const FunctionBuilder = struct {
             return ty;
         }
         return switch (subject.kind) {
+            .int_literal => ast_query.simpleNameType("u32", subject.span),
             .binary => |node| if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op)) ast_query.simpleNameType("bool", subject.span) else null,
             .unary => |node| if (node.op == .logical_not) ast_query.simpleNameType("bool", subject.span) else null,
             .grouped => |inner| self.switchSubjectTypeExpr(inner.*),
@@ -5585,7 +5591,15 @@ const FunctionBuilder = struct {
                     try self.addInstr(.typed_load, exprText(expr), ty, expr.span);
                     try self.addRuntimeRepresentationCheck(ty, expr.span, exprText(expr));
                 }
-                try self.buildExpr(node.base.*);
+                if (self.assignment_target_type_expr) |result_ty| {
+                    if (try self.structuralSingletonArrayTypeExpr(node.base.*, result_ty)) |base_ty| {
+                        try self.buildExprWithTargetType(node.base.*, base_ty);
+                    } else {
+                        try self.buildExpr(node.base.*);
+                    }
+                } else {
+                    try self.buildExpr(node.base.*);
+                }
                 try self.buildExpr(node.index.*);
             },
             .slice => |node| {
@@ -6223,7 +6237,7 @@ const FunctionBuilder = struct {
 
     fn addExpressionResultFact(self: *FunctionBuilder, expr: ast.Expr) !void {
         switch (expr.kind) {
-            .int_literal, .bool_literal, .member, .index, .slice, .deref, .try_expr, .unary, .binary, .address_of => {},
+            .int_literal, .bool_literal, .member, .index, .slice, .deref, .try_expr, .unary, .binary, .address_of, .cast, .grouped, .block => {},
             else => return,
         }
         const ty = (try self.expressionResultTypeExpr(expr)) orelse return;
@@ -6249,17 +6263,48 @@ const FunctionBuilder = struct {
                 // lowering the complete pointer type without extending address
                 // inference to calls, pointer chains, or immutable globals.
                 try self.inferredLocalAddressTypeExpr(expr.span, inner.*),
-            .deref => |inner| self.directAddressDerefTypeExpr(inner.*),
+            .deref => |inner| self.directAddressDerefTypeExpr(inner.*) orelse self.assignment_target_type_expr,
             .unary => |node| if (node.op == .logical_not)
                 ast_query.simpleNameType("bool", expr.span)
             else
-                self.typeExprForExpr(node.expr.*) orelse self.assignment_target_type_expr,
+                self.knownExpressionResultTypeExpr(node.expr.*) orelse
+                    self.assignment_target_type_expr orelse
+                    (try self.expressionResultTypeExpr(node.expr.*)),
             .binary => |node| if (mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op))
                 ast_query.simpleNameType("bool", expr.span)
             else if (mirIsArithmeticBinary(node.op) or mirIsBitwiseBinary(node.op))
-                self.typeExprForExpr(node.left.*) orelse self.typeExprForExpr(node.right.*)
+                self.knownExpressionResultTypeExpr(node.left.*) orelse
+                    self.knownExpressionResultTypeExpr(node.right.*) orelse
+                    self.assignment_target_type_expr orelse
+                    (try self.expressionResultTypeExpr(node.left.*)) orelse
+                    (try self.expressionResultTypeExpr(node.right.*))
             else
                 null,
+            .cast => |node| node.ty.*,
+            .index => |node| if (self.exprIsStructurallyArrayValued(node.base.*)) self.assignment_target_type_expr else null,
+            .block => |block| blk: {
+                if (block.items.len == 0) break :blk null;
+                const tail = switch (block.items[block.items.len - 1].kind) {
+                    .expr => |tail| tail,
+                    else => break :blk null,
+                };
+                break :blk self.knownExpressionResultTypeExpr(tail) orelse
+                    self.assignment_target_type_expr orelse
+                    (try self.expressionResultTypeExpr(tail));
+            },
+            .grouped => |inner| try self.expressionResultTypeExpr(inner.*),
+            else => null,
+        };
+    }
+
+    fn knownExpressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
+        if (self.typeExprForExpr(expr)) |ty| return ty;
+        return switch (expr.kind) {
+            .unary => |node| self.knownExpressionResultTypeExpr(node.expr.*),
+            .binary => |node| self.knownExpressionResultTypeExpr(node.left.*) orelse
+                self.knownExpressionResultTypeExpr(node.right.*),
+            .cast => |node| node.ty.*,
+            .grouped => |inner| self.knownExpressionResultTypeExpr(inner.*),
             else => null,
         };
     }
@@ -6657,14 +6702,21 @@ const FunctionBuilder = struct {
     }
 
     fn addRangeFactForUncheckedCall(self: *FunctionBuilder, callee_name: []const u8, args: []ast.Expr, span: ast.Span) !void {
-        if (self.semantic_expr_depth != 1 and !self.isTopLevelCallArgContext()) return;
         const op = noOverflowUncheckedOp(callee_name) orelse return;
         if (args.len < 2) return;
         const region_id = self.active_contract_region_id orelse return;
         if (self.active_contract == null or !std.mem.eql(u8, self.active_contract.?, "no_overflow")) return;
+        const target = self.assignment_target orelse "value";
+        for (self.range_facts.items) |fact| {
+            if (fact.region_id == region_id and
+                std.mem.eql(u8, fact.target, target) and
+                std.mem.eql(u8, fact.op, op) and
+                fact.line == span.line and
+                fact.column == span.column) return;
+        }
         try self.range_facts.append(self.allocator, .{
             .region_id = region_id,
-            .target = self.assignment_target orelse "value",
+            .target = target,
             .op = op,
             .left = exprText(args[0]),
             .right = exprText(args[1]),
@@ -6685,6 +6737,13 @@ const FunctionBuilder = struct {
         if (call.args.len < 2) return;
         const region_id = self.active_contract_region_id orelse return;
         if (self.active_contract == null or !std.mem.eql(u8, self.active_contract.?, "no_overflow")) return;
+        for (self.range_facts.items) |fact| {
+            if (fact.region_id == region_id and
+                std.mem.eql(u8, fact.target, target) and
+                std.mem.eql(u8, fact.op, op) and
+                fact.line == expr.span.line and
+                fact.column == expr.span.column) return;
+        }
         try self.range_facts.append(self.allocator, .{
             .region_id = region_id,
             .target = target,
@@ -6700,11 +6759,6 @@ const FunctionBuilder = struct {
     fn rangeFactTypeForExpr(self: *FunctionBuilder, expr: ast.Expr) ValueType {
         const ty = self.exprType(expr);
         return if (ty == .unknown) self.assignment_target_ty else ty;
-    }
-
-    fn isTopLevelCallArgContext(self: *FunctionBuilder) bool {
-        const target = self.assignment_target orelse return false;
-        return std.mem.eql(u8, target, "call_arg");
     }
 
     fn addNullabilityConversionCheck(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, span: ast.Span) !void {
@@ -6758,9 +6812,60 @@ const FunctionBuilder = struct {
     }
 
     fn addIndexBaseCheck(self: *FunctionBuilder, expr: ast.Expr, span: ast.Span) !void {
+        if (self.exprIsStructurallyArrayValued(expr)) return;
         const source_ty = self.exprType(expr);
         if (isMirIndexableBase(source_ty)) return;
         try self.addInstr(.conversion_check, "index_base_not_array_or_slice", source_ty, span);
+    }
+
+    fn exprIsStructurallyArrayValued(self: *FunctionBuilder, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .array_literal => true,
+            .grouped => |inner| self.exprIsStructurallyArrayValued(inner.*),
+            .index => |node| self.structuralArrayElementIsArrayValued(node.base.*),
+            else => false,
+        };
+    }
+
+    fn structuralArrayElementIsArrayValued(self: *FunctionBuilder, base: ast.Expr) bool {
+        return switch (base.kind) {
+            .array_literal => |items| items.len > 0 and self.exprIsStructurallyArrayValued(items[0]),
+            .grouped => |inner| self.structuralArrayElementIsArrayValued(inner.*),
+            else => false,
+        };
+    }
+
+    fn structuralSingletonArrayTypeExpr(self: *FunctionBuilder, expr: ast.Expr, leaf_ty: ast.TypeExpr) !?ast.TypeExpr {
+        if (!self.structuralArrayValueHasSingletonLength(expr)) return null;
+        const child = try self.allocator.create(ast.TypeExpr);
+        errdefer self.allocator.destroy(child);
+        child.* = leaf_ty;
+        try self.generated_type_expr_nodes.append(self.allocator, child);
+        return ast.TypeExpr{
+            .span = expr.span,
+            .kind = .{ .array = .{
+                .len = .{ .span = expr.span, .kind = .{ .int_literal = "1" } },
+                .child = child,
+            } },
+        };
+    }
+
+    fn structuralArrayValueHasSingletonLength(self: *FunctionBuilder, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .array_literal => |items| items.len == 1,
+            .grouped => |inner| self.structuralArrayValueHasSingletonLength(inner.*),
+            .index => |node| self.structuralIndexedElementHasSingletonLength(node.base.*),
+            else => false,
+        };
+    }
+
+    fn structuralIndexedElementHasSingletonLength(self: *FunctionBuilder, base: ast.Expr) bool {
+        return switch (base.kind) {
+            .array_literal => |items| items.len > 0 and self.structuralArrayValueHasSingletonLength(items[0]),
+            .grouped => |inner| self.structuralIndexedElementHasSingletonLength(inner.*),
+            .index => |node| self.structuralIndexedElementHasSingletonLength(node.base.*),
+            else => false,
+        };
     }
 
     fn addIndexOperandCheck(self: *FunctionBuilder, expr: ast.Expr, span: ast.Span) !void {
@@ -6777,6 +6882,7 @@ const FunctionBuilder = struct {
 
     fn addRepresentationUseForValue(self: *FunctionBuilder, target_ty: ValueType, detail: []const u8, span: ast.Span, value_id: []const u8) !void {
         if (representationCheckKind(target_ty) == null) return;
+        if (std.mem.eql(u8, value_id, "uninit")) return;
         try self.addInstrWithValue(.representation_use, detail, target_ty, span, value_id);
     }
 
@@ -8609,20 +8715,14 @@ const FunctionBuilder = struct {
                 self.typeExprForExpr(node.left.*) orelse
                     self.typeExprForExpr(node.right.*) orelse
                     try self.explicitCastSourceTypeExpr(node.left.*, target_ty),
-            .address_of => |inner| blk: {
-                const child_ty = self.typeExprForExpr(inner.*) orelse return error.UnsupportedMirConstruction;
-                const child = try self.allocator.create(ast.TypeExpr);
-                errdefer self.allocator.destroy(child);
-                child.* = child_ty;
-                try self.generated_type_expr_nodes.append(self.allocator, child);
-                break :blk ast.TypeExpr{ .span = expr.span, .kind = .{ .pointer = .{ .mutability = .none, .child = child } } };
-            },
+            .address_of => (try self.expressionResultTypeExpr(expr)) orelse return error.UnsupportedMirConstruction,
             .call => |call| self.explicitCastCallSourceTypeExpr(call, target_ty) orelse return error.UnsupportedMirConstruction,
             else => return error.UnsupportedMirConstruction,
         };
     }
 
     fn explicitCastCallSourceTypeExpr(self: *FunctionBuilder, call: anytype, target_ty: ast.TypeExpr) ?ast.TypeExpr {
+        if (self.inferredLocalCallType(call)) |ty| return ty;
         if (isMirBitcastCallee(call.callee.*) and call.type_args.len == 1 and call.args.len == 1) return call.type_args[0];
         if (self.conversionCallFactInfo(call)) |conversion| return conversion.target_ty;
         if (reflectionCallTargetKind(call) != null) return ast_query.simpleNameType("usize", call.callee.*.span);
@@ -8803,6 +8903,7 @@ const FunctionBuilder = struct {
         return switch (expr.kind) {
             .ident => |ident| self.local_type_exprs.get(ident.text) orelse self.global_type_exprs.get(ident.text),
             .member => |node| blk: {
+                if (self.enumVariantPathTypeExpr(node)) |ty| break :blk ty;
                 const base_ty = self.typeExprForExpr(node.base.*) orelse break :blk null;
                 const resolved_base = aggregateTargetTypeAlias(base_ty, self.aliases);
                 if ((resolved_base.kind == .slice or resolved_base.kind == .array) and std.mem.eql(u8, node.name.text, "len")) {
@@ -8913,6 +9014,7 @@ const FunctionBuilder = struct {
                 .bool
             else
                 self.exprType(node.left.*),
+            .block => |block| if (blockValueExpr(block)) |value| self.exprType(value) else .unknown,
             .member => |node| if (self.enumVariantPathTypeExpr(node)) |ty|
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
             else
@@ -8922,6 +9024,14 @@ const FunctionBuilder = struct {
             else
                 .unknown,
             else => valueTypeFromExpr(expr),
+        };
+    }
+
+    fn blockValueExpr(block: ast.Block) ?ast.Expr {
+        if (block.items.len == 0) return null;
+        return switch (block.items[block.items.len - 1].kind) {
+            .expr => |expr| expr,
+            else => null,
         };
     }
 

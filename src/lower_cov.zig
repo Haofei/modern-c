@@ -22,6 +22,7 @@
 //! never armed, so a normally-built `mcc` pays nothing.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 // Fixed-capacity, allocation-free recorder. We store the (static, comptime) name
 // pointers as they fire and de-duplicate at dump time. 1<<20 slots is far more than
@@ -54,10 +55,22 @@ pub fn init(value: std.Io, out_path: ?[]const u8) void {
 /// Record that lowering function `name` was entered. `name` must be a comptime
 /// string literal (stable pointer) so the de-dup at dump time can compare by bytes.
 pub fn hit(name: []const u8) void {
+    if (builtin.is_test and !armed) {
+        init(std.testing.io, std.process.Environ.getPosix(std.testing.environ, "MC_LOWER_COV"));
+    }
     if (!enabled) return;
     if (count >= cap) return;
+    if (builtin.is_test) {
+        for (names[0..count]) |existing| {
+            if (std.mem.eql(u8, existing, name)) return;
+        }
+    }
     names[count] = name;
     count += 1;
+    // The default Zig test runner has no guaranteed final-test ordering or
+    // process-exit hook. Persist after each newly observed test label; the
+    // de-dup above bounds this to one small rewrite per covered function.
+    if (builtin.is_test) dump();
 }
 
 /// Write the unique set of fired function names to the file named by `MC_LOWER_COV`,

@@ -853,6 +853,7 @@ fn aggregate_return_local_assignment_pointer_field_load() -> u32 {
 }
 
 fn aggregate_return_local_only_pointer_field_lowers_atomic() -> u32 {
+    // SWEEP_SKIP_DEPENDS_ON_REJECTED_DECL: returned_pointer_holder_local_only
     let holder: PointerHolder = returned_pointer_holder_local_only();
     let p: *mut u32 = holder.ptr;
     // EXPECT: lower-llvm does not treat callee-local storage returned inside an aggregate as caller-local; the deref stays conservative.

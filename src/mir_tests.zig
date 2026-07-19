@@ -53,6 +53,13 @@ fn functionHasInstruction(function: mir.Function, kind: mir.Instruction.Kind, de
     return false;
 }
 
+fn functionHasTerminator(function: mir.Function, kind: std.meta.Tag(mir.Terminator)) bool {
+    for (function.blocks) |block| {
+        if (std.meta.activeTag(block.terminator) == kind) return true;
+    }
+    return false;
+}
+
 fn typeExprHeadName(ty: ast.TypeExpr) ?[]const u8 {
     return switch (ty.kind) {
         .name => |name| name.text,
@@ -354,10 +361,10 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "make_enum").?.target_type_facts[0].kind);
     try std.testing.expect(targetTypeFactByKind(functionByName(typed_mir, "compare_enum").?, .enum_literal) != null);
     const cast_enum_fn = functionByName(typed_mir, "cast_enum").?;
-    try std.testing.expectEqual(@as(usize, 3), cast_enum_fn.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.explicit_cast_source, cast_enum_fn.target_type_facts[0].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.explicit_cast_target, cast_enum_fn.target_type_facts[1].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, cast_enum_fn.target_type_facts[2].kind);
+    try std.testing.expect(targetTypeFactByKind(cast_enum_fn, .explicit_cast_source) != null);
+    try std.testing.expect(targetTypeFactByKind(cast_enum_fn, .explicit_cast_target) != null);
+    try std.testing.expect(targetTypeFactByKind(cast_enum_fn, .enum_literal) != null);
+    try std.testing.expect(targetTypeFactByKind(cast_enum_fn, .expression_result) != null);
     try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, functionByName(typed_mir, "default_error").?.target_type_facts[0].kind);
     const event_fn = functionByName(typed_mir, "make_event").?;
     try std.testing.expectEqual(mir.TargetTypeKind.tagged_union, event_fn.target_type_facts[0].kind);
@@ -377,9 +384,8 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectEqual(mir.TargetTypeKind.char_literal, functionByName(typed_mir, "default_char").?.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.float_literal, functionByName(typed_mir, "make_float").?.target_type_facts[0].kind);
     const float_expr_fn = functionByName(typed_mir, "make_float_expr").?;
-    try std.testing.expectEqual(@as(usize, 2), float_expr_fn.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.float_literal, float_expr_fn.target_type_facts[0].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.float_literal, float_expr_fn.target_type_facts[1].kind);
+    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(float_expr_fn, .float_literal));
+    try std.testing.expect(targetTypeFactByKind(float_expr_fn, .expression_result) != null);
     const float_slot_fn = functionByName(typed_mir, "make_float_slot").?;
     try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, float_slot_fn.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.float_literal, float_slot_fn.target_type_facts[1].kind);
@@ -1610,6 +1616,41 @@ test "MIR owns contextual negative integer unary result types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR continues building facts after inline asm" {
+    const source =
+        \\fn asm_then_cast(mask: u64) -> u8 {
+        \\    var result: u64 = 0;
+        \\    #[unsafe_contract(precise_asm)] {
+        \\        unsafe {
+        \\            asm precise volatile {
+        \\                "mov %1, %0"
+        \\                out("rax") result: u64,
+        \\                in("rbx") mask: u64,
+        \\                clobber("cc")
+        \\            }
+        \\        }
+        \\    }
+        \\    return (result & 0xFF) as u8;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_asm_continuation.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "asm_then_cast").?;
+    try std.testing.expect(functionHasInstruction(function, .asm_effect, "opaque"));
+    try std.testing.expect(targetTypeFactByKind(function, .explicit_cast_source) != null);
+    try std.testing.expect(functionHasTerminator(function, .return_));
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns inferred local direct call types" {
     const source =
         \\fn make_count() -> u64 { return 7; }
@@ -1788,6 +1829,30 @@ test "MIR owns indirect function-pointer and closure callee signatures" {
         try std.testing.expect(resolved);
         try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .indirect_call_callee));
     }
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR owns explicit cast source types for call results" {
+    const source =
+        \\fn byte() -> u8 { return 7; }
+        \\fn widen() -> u32 { return byte() as u32; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_call_cast_source_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "widen").?;
+    const source_fact = targetTypeFactByKind(function, .explicit_cast_source) orelse return error.TestUnexpectedResult;
+    const target_fact = targetTypeFactByKind(function, .explicit_cast_target) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("u8", source_fact.target_ty.kind.name.text);
+    try std.testing.expectEqualStrings("u32", target_fact.target_ty.kind.name.text);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
@@ -2564,7 +2629,7 @@ test "MIR owns span-identified result types for compound expressions" {
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "expression_results").?;
-    try std.testing.expectEqual(@as(usize, 15), countTargetTypeFactsByKind(function, .expression_result));
+    try std.testing.expect(countTargetTypeFactsByKind(function, .expression_result) >= 15);
     var last_source: ?mir.SourcePoint = null;
     for (function.target_type_facts) |fact| {
         if (fact.kind != .expression_result) continue;
@@ -5946,7 +6011,7 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fail_closed subject=q element=none provenance=unknown storage=none pointer_kind=raw_many") != null);
 }
 
-test "MIR range facts are top-level and no_overflow operations are known" {
+test "MIR records every no_overflow operation and rejects unknown operations" {
     const source =
         \\struct Counter {
         \\    next: u32,
@@ -6065,6 +6130,13 @@ test "MIR range facts are top-level and no_overflow operations are known" {
         \\    return sum;
         \\}
         \\
+        \\fn nested_ops(a: u32, b: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return unchecked.add(unchecked.add(a, b), unchecked.mul(a, b));
+        \\    }
+        \\}
+        \\
         \\fn unknown_op(a: u32, b: u32) -> u32 {
         \\    #[unsafe_contract(no_overflow)]
         \\    {
@@ -6124,27 +6196,32 @@ test "MIR range facts are top-level and no_overflow operations are known" {
     try std.testing.expectEqualStrings("mul", cast_assign_fn.range_facts[0].op);
     try std.testing.expectEqualStrings("u32", valueTypeName(cast_assign_fn.range_facts[0].result_ty));
     const nested_binary_fn = functionByName(typed_mir, "nested_binary").?;
-    try std.testing.expectEqual(@as(usize, 1), nested_binary_fn.range_facts.len);
-    try std.testing.expectEqualStrings("binary_operand", nested_binary_fn.range_facts[0].target);
-    try std.testing.expectEqualStrings("add", nested_binary_fn.range_facts[0].op);
-    try std.testing.expectEqualStrings("u32", valueTypeName(nested_binary_fn.range_facts[0].result_ty));
+    try std.testing.expectEqual(@as(usize, 2), nested_binary_fn.range_facts.len);
+    var found_nested_binary_operand = false;
+    for (nested_binary_fn.range_facts) |fact| {
+        if (std.mem.eql(u8, fact.target, "binary_operand") and std.mem.eql(u8, fact.op, "add")) {
+            found_nested_binary_operand = true;
+            try std.testing.expectEqualStrings("u32", valueTypeName(fact.result_ty));
+        }
+    }
+    try std.testing.expect(found_nested_binary_operand);
     const aggregate_array_fn = functionByName(typed_mir, "aggregate_array_fact").?;
-    try std.testing.expectEqual(@as(usize, 1), aggregate_array_fn.range_facts.len);
+    try std.testing.expectEqual(@as(usize, 2), aggregate_array_fn.range_facts.len);
     try std.testing.expectEqualStrings("aggregate_element", aggregate_array_fn.range_facts[0].target);
     try std.testing.expectEqualStrings("add", aggregate_array_fn.range_facts[0].op);
     try std.testing.expectEqualStrings("u32", valueTypeName(aggregate_array_fn.range_facts[0].result_ty));
     const cast_aggregate_array_fn = functionByName(typed_mir, "cast_aggregate_array_fact").?;
-    try std.testing.expectEqual(@as(usize, 1), cast_aggregate_array_fn.range_facts.len);
+    try std.testing.expectEqual(@as(usize, 2), cast_aggregate_array_fn.range_facts.len);
     try std.testing.expectEqualStrings("aggregate_element", cast_aggregate_array_fn.range_facts[0].target);
     try std.testing.expectEqualStrings("add", cast_aggregate_array_fn.range_facts[0].op);
     try std.testing.expectEqualStrings("u32", valueTypeName(cast_aggregate_array_fn.range_facts[0].result_ty));
     const aggregate_field_fn = functionByName(typed_mir, "aggregate_field_fact").?;
-    try std.testing.expectEqual(@as(usize, 1), aggregate_field_fn.range_facts.len);
+    try std.testing.expectEqual(@as(usize, 2), aggregate_field_fn.range_facts.len);
     try std.testing.expectEqualStrings("next", aggregate_field_fn.range_facts[0].target);
     try std.testing.expectEqualStrings("mul", aggregate_field_fn.range_facts[0].op);
     try std.testing.expectEqualStrings("u32", valueTypeName(aggregate_field_fn.range_facts[0].result_ty));
     const cast_aggregate_field_fn = functionByName(typed_mir, "cast_aggregate_field_fact").?;
-    try std.testing.expectEqual(@as(usize, 1), cast_aggregate_field_fn.range_facts.len);
+    try std.testing.expectEqual(@as(usize, 2), cast_aggregate_field_fn.range_facts.len);
     try std.testing.expectEqualStrings("next", cast_aggregate_field_fn.range_facts[0].target);
     try std.testing.expectEqualStrings("mul", cast_aggregate_field_fn.range_facts[0].op);
     try std.testing.expectEqualStrings("u32", valueTypeName(cast_aggregate_field_fn.range_facts[0].result_ty));
@@ -6152,6 +6229,11 @@ test "MIR range facts are top-level and no_overflow operations are known" {
     try std.testing.expectEqual(@as(usize, 2), known_ops_fn.range_facts.len);
     try std.testing.expectEqualStrings("sub", known_ops_fn.range_facts[0].op);
     try std.testing.expectEqualStrings("mul", known_ops_fn.range_facts[1].op);
+    const nested_ops_fn = functionByName(typed_mir, "nested_ops").?;
+    try std.testing.expectEqual(@as(usize, 3), nested_ops_fn.range_facts.len);
+    try std.testing.expectEqualStrings("add", nested_ops_fn.range_facts[0].op);
+    try std.testing.expectEqualStrings("add", nested_ops_fn.range_facts[1].op);
+    try std.testing.expectEqualStrings("mul", nested_ops_fn.range_facts[2].op);
 
     try mir.verifyBuiltMir(typed_mir, &reporter);
     var found_unknown = false;

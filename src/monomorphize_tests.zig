@@ -107,6 +107,7 @@ test "monomorphize keeps delimiter-colliding generic instances distinct" {
         \\}
     ;
 
+    // DIAGNOSTIC_UNIT: E_INTERNAL_GENERIC_LINKAGE_COLLISION
     var reporter = diagnostics.Reporter.init(testing.allocator, "generic_key_collision.mc", source);
     defer reporter.deinit();
 

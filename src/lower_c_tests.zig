@@ -7068,6 +7068,25 @@ test "lower-c pointer member aggregate value copies lower field-wise race-tolera
     try expectNotContains(local_copy_body, "mc_race_");
 }
 
+test "lower-c pointer member slice copies lower field-wise race-tolerantly" {
+    const source =
+        \\struct Holder { view: []const u8 }
+        \\fn load_view(p: *mut Holder) -> []const u8 { return p.view; }
+        \\fn store_view(p: *mut Holder, value: []const u8) -> void { p.view = value; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("emit_c_pointer_member_slice_copy.mc", source, &output);
+
+    const load_body = try cFunctionBody(output.items, "static mc_slice_const_u8 load_view(Holder * p)");
+    try expectContains(load_body, ".ptr = __atomic_load_n");
+    try expectContains(load_body, ".len = (size_t)mc_race_load_usize");
+
+    const store_body = try cFunctionBody(output.items, "static void store_view(Holder * p, mc_slice_const_u8 value)");
+    try expectContains(store_body, "__atomic_store_n");
+    try expectContains(store_body, "mc_race_store_usize");
+}
+
 test "lower-c aggregate pointer deref value copies lower field-wise race-tolerantly" {
     const load_source =
         \\struct Cell {

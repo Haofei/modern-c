@@ -5557,3 +5557,14 @@ fn accept_block_reinitialize_moved_field() -> u32 {
     unsafe { forget_unchecked(p); }
     return consume(a) + consume(b);
 }
+
+// Accepted: deferred cleanup analysis routes if-let arms through the same CFG
+// worklist used by immediate move analysis.
+fn accept_defer_if_let_cfg(maybe: ?*Res) -> u32 {
+    defer {
+        if let p = maybe {
+            peek(p);
+        }
+    };
+    return 0;
+}

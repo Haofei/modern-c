@@ -65,15 +65,19 @@ def split_top_level(src):
     return chunks
 
 
+def is_rejected_chunk(chunk):
+    return "EXPECT_ERROR" in chunk or "SWEEP_SKIP_DEPENDS_ON_REJECTED_DECL" in chunk
+
+
 def strip_expect_error(src):
-    """Drop every top-level chunk carrying an EXPECT_ERROR marker (the C-emit sweep)."""
-    return "".join(ch for ch in split_top_level(src) if "EXPECT_ERROR" not in ch)
+    """Drop rejected declarations and declarations that depend on them."""
+    return "".join(ch for ch in split_top_level(src) if not is_rejected_chunk(ch))
 
 
 def normalize_valid_chunk(chunk):
     """Drop EXPECT_ERROR chunks; rewrite a top-level `fn foo(...);` prototype to an
     `extern fn` so the stripped LLVM program still type-checks (the LLVM sweeps)."""
-    if "EXPECT_ERROR" in chunk:
+    if is_rejected_chunk(chunk):
         return ""
     if chunk.strip().endswith(";") and re.search(r"(?m)^\s*fn\s+\w+\s*\(", chunk):
         return re.sub(r"(?m)^(\s*)fn\s+", r"\1extern fn ", chunk, count=1)
