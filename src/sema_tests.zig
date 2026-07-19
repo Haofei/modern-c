@@ -73,6 +73,34 @@ test "explicit visibility is independent of unrelated pub declarations" {
     try std.testing.expect(!try checkVisibilityMode(importer ++ public_library, importer.len, .explicit_public));
 }
 
+test "trait orphan ownership keeps double-underscore type names exact" {
+    const defining_file =
+        \\trait Marked { fn mark(self: *Self) -> u32; }
+        \\struct Vault__Inner { value: u32 }
+    ;
+    const peer_file =
+        \\impl Marked for Vault__Inner {
+        \\    fn mark(self: *Vault__Inner) -> u32 { return self.value; }
+        \\}
+    ;
+    const source = defining_file ++ peer_file;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "owner_exact_a.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    const boundaries = [_]diagnostics.FileBoundary{
+        .{ .start = 0, .path = "owner_exact_a.mc" },
+        .{ .start = defining_file.len, .path = "owner_exact_b.mc" },
+    };
+    var checker = sema.Checker.init(&reporter);
+    checker.file_boundaries = &boundaries;
+    checker.checkModule(module);
+    try std.testing.expect(hasDiagnosticCode(&reporter, "E_ORPHAN_IMPL"));
+}
+
 test "move CFG skeleton joins branch states through worklist" {
     var cfg = sema_model.MoveCfg.init(std.testing.allocator);
     defer cfg.deinit();

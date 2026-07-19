@@ -6043,15 +6043,6 @@ pub const Checker = struct {
         };
     }
 
-    // The leading owner segment of a (possibly mangled) symbol: the text before the first
-    // `__`. `impl`/`module` members and monomorphization specializations are all named
-    // `Owner__…`, so two symbols belong to the same owner namespace iff their owner segments
-    // are equal. A plain symbol with no `__` is its own owner.
-    fn ownerSegment(name: []const u8) []const u8 {
-        if (std.mem.indexOf(u8, name, "__")) |idx| return name[0..idx];
-        return name;
-    }
-
     // The origin file of a span (its byte offset) in the import-flattened source: the last
     // boundary whose start <= offset. Null when no boundaries are tracked (single-file check).
     fn originFile(self: *Checker, offset: usize) ?[]const u8 {
@@ -6095,6 +6086,7 @@ pub const Checker = struct {
                 .struct_decl => |sd| {
                     const file = self.originFile(sd.name.span.offset) orelse continue;
                     self.recordTypeFile(&type_files, sd.name, file);
+                    if (sd.semantic_identity) |identity| self.recordTypeFile(&type_files, identity, file);
                     if (sd.is_opaque) {
                         const owner = (sd.semantic_identity orelse sd.name).text;
                         // Later specializations of one template share this identity and file.
@@ -6146,8 +6138,7 @@ pub const Checker = struct {
     }
 
     fn recordTypeFile(self: *Checker, files: *std.StringHashMap([]const u8), name: ast.Ident, file: []const u8) void {
-        const owner = ownerSegment(name.text);
-        if (!files.contains(owner)) files.put(owner, file) catch {
+        if (!files.contains(name.text)) files.put(name.text, file) catch {
             self.oom = true;
         };
     }
