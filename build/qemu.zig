@@ -67,6 +67,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTestOpts(ctx, "release-metadata-test", "Check release/version/security/stability metadata stays in sync", &.{ "python3", "tools/toolchain/release-metadata-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "package-release-test", "Smoke-test release packaging metadata and deterministic tarballs without building a release", &.{ "python3", "tools/toolchain/package-release-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "release-safe-install-test", "Build and smoke-test an installed ReleaseSafe compiler", &.{ "bash", "tools/toolchain/release-safe-install-test.sh" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "source-package-test", "Materialize the Zig source package and verify its promised build surface", &.{ "bash", "tools/toolchain/source-package-test.sh" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "ci-pass-gates-test", "Check CI PASS assertions are derived from tier definitions", &.{ "python3", "tools/ci/pass-gates.py", "check" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "dev-gates-test", "Check focused development gate routing contracts", &.{ "python3", "tools/toolchain/dev-gates-test.py" }, .{ .install = false });
 

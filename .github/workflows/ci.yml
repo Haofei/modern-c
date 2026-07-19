@@ -4,9 +4,17 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-global-cache
+
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     env:
       MC_LLVM_MAJOR: "18"
     steps:
@@ -16,6 +24,11 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:
           version: 0.16.0
+      # actions/cache@v4
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}
+          key: zig-0.16-${{ runner.os }}-${{ hashFiles('build.zig.zon') }}
       - name: Install integration-test tools
         run: |
           sudo apt-get update
@@ -34,6 +47,7 @@ jobs:
       - name: Preflight the QEMU toolchain (fail fast with a clear report)
         run: zig build preflight
       - name: Run full milestone gate without skips
+        if: github.event_name == 'push'
         shell: bash
         # MC_REQUIRE_TOOLS=1 makes a missing tool FAIL at the gate (not silently SKIP), instead of
         # relying on the implicit CI env var. The grep is then belt-and-suspenders.
@@ -48,6 +62,9 @@ jobs:
           # read from build/tiers.zig, and the verifier also proves each name is an
           # m0 dependency, so CI cannot silently drift away from the tier.
           python3 tools/ci/pass-gates.py assert --tier ci-m0-pass --log m0.log
+      - name: Run pull-request qualification gate
+        if: github.event_name == 'pull_request'
+        run: zig build fast
 
   docker:
     # Keeps the cross-platform dev image (Dockerfile / docker-compose.yml) honest: the image
@@ -55,6 +72,7 @@ jobs:
     # clang/ld.lld/llc/qemu, so it is also the reproducible place to run the C+LLVM QEMU async
     # gates as REAL gates — independent of whatever the bare runner's apt happened to install.
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     env:
       MC_LLVM_MAJOR: "18"
     steps:
@@ -91,6 +109,7 @@ jobs:
     # macos-15 currently carries Homebrew llvm@18, matching the Linux LLVM qualification major
     # while avoiding the deprecated macos-14 image and the moving latest-label alias.
     runs-on: macos-15
+    timeout-minutes: 60
     env:
       MC_LLVM_MAJOR: "18"
     steps:
@@ -100,6 +119,11 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:
           version: 0.16.0
+      # actions/cache@v4
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}
+          key: zig-0.16-${{ runner.os }}-${{ hashFiles('build.zig.zon') }}
       - name: Configure Homebrew LLVM 18
         shell: bash
         run: |

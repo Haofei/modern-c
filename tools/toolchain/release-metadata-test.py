@@ -246,6 +246,13 @@ def require_release_artifact_metadata() -> None:
         "Run release workflow qualification checks",
         "zig build preflight",
         "zig build release-metadata-test package-release-test release-safe-install-test",
+        'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+        "does not match build.zig.zon",
+        "MC_REQUIRE_TOOLS=1 zig build m0",
+        "release m0 skipped at least one gate",
+        "tools/ci/pass-gates.py assert --tier ci-m0-pass --log release-m0.log",
+        'test "$(zig-out/version-check/bin/mcc --version)" = "mcc ${{ steps.meta.outputs.version }}"',
+        'git status --porcelain --untracked-files=all',
         "tools/ci/package-release.py release",
         "--version",
         "--commit \"$GITHUB_SHA\"",
@@ -265,12 +272,15 @@ def require_release_artifact_metadata() -> None:
         "zig-out/release/*.vsix",
         "startsWith(github.ref, 'refs/tags/v')",
         "gh release upload",
+        "release assets are immutable",
     ):
         require_contains(workflow_path, needle)
     if "ubuntu-latest" in workflow:
         fail(f"{workflow_path} must not use ubuntu-latest for release artifacts")
     if "softprops/action-gh-release" in workflow or "ncipollo/release-action" in workflow:
         fail(f"{workflow_path} must use gh release upload instead of a release action")
+    if "--clobber" in workflow:
+        fail(f"{workflow_path} must not replace published release assets")
     qualification_step = workflow.find("Run release workflow qualification checks")
     package_step = workflow.find("Build ReleaseSafe release tarballs")
     if qualification_step < 0 or package_step < 0 or qualification_step > package_step:
@@ -317,6 +327,11 @@ def require_release_artifact_metadata() -> None:
         for tier in ("m0_step", "fast_step", "c0_step"):
             if f'{tier}.dependOn(ctx.cmd("{gate}"))' not in tiers:
                 fail(f"build/tiers.zig does not wire {gate} into {tier}")
+    require_contains("build/qemu.zig", '"source-package-test"')
+    require_contains("build/qemu.zig", '"tools/toolchain/source-package-test.sh"')
+    for tier in ("m0_step", "fast_step", "c0_step"):
+        if f'{tier}.dependOn(ctx.cmd("source-package-test"))' not in tiers:
+            fail(f"build/tiers.zig does not wire source-package-test into {tier}")
     if "mcc build" in workflow or "mcc build" in packager:
         fail("release artifact workflow must not implement or invoke `mcc build`")
 
@@ -474,6 +489,19 @@ def main() -> None:
         fail("build/compiler.zig does not expose build_options to src/main.zig")
 
     ci = read(".github/workflows/ci.yml")
+    for needle in (
+        "concurrency:",
+        "group: ci-${{ github.workflow }}-${{ github.ref }}",
+        "cancel-in-progress: true",
+        "timeout-minutes: 120",
+        "timeout-minutes: 60",
+        "actions/cache@",
+        "ZIG_GLOBAL_CACHE_DIR",
+        "Run pull-request qualification gate",
+        "if: github.event_name == 'pull_request'",
+        "if: github.event_name == 'push'",
+    ):
+        require_contains(".github/workflows/ci.yml", needle)
     require_contains(".github/workflows/ci.yml", f"runs-on: {EXPECTED_UBUNTU_RUNNER}")
     require_contains(".github/workflows/ci.yml", f'MC_LLVM_MAJOR: "{EXPECTED_LLVM_MAJOR}"')
     require_contains(".github/workflows/ci.yml", f"clang-{EXPECTED_LLVM_MAJOR} lld-{EXPECTED_LLVM_MAJOR} llvm-{EXPECTED_LLVM_MAJOR}")
@@ -496,6 +524,22 @@ def main() -> None:
         require_contains(".github/workflows/ci.yml", needle)
     if re.search(r"runs-on:\s*macos-latest\b", ci):
         fail(".github/workflows/ci.yml must not use macos-latest for native macOS qualification")
+
+    zon_paths = zon[zon.find(".paths"):]
+    for path in (
+        '"selfhost"',
+        '"third_party"',
+        '"editors"',
+        '".github"',
+        '"SECURITY.md"',
+        '"STABILITY.md"',
+        '"CHANGELOG.md"',
+        '"THIRD-PARTY-LICENSES.md"',
+        '"Dockerfile"',
+        '"docker-compose.yml"',
+    ):
+        if path not in zon_paths:
+            fail(f"build.zig.zon source package omits qualification input {path}")
 
     nightly_fuzz_path = ".github/workflows/nightly-fuzz.yml"
     nightly_fuzz = read(nightly_fuzz_path)

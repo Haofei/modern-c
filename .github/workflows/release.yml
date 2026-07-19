@@ -16,6 +16,10 @@ on:
         type: boolean
         default: true
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   id-token: write
@@ -25,6 +29,7 @@ permissions:
 jobs:
   release-artifacts:
     runs-on: ubuntu-24.04
+    timeout-minutes: 180
     env:
       MC_LLVM_MAJOR: "18"
     steps:
@@ -78,8 +83,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          source_version="$(sed -nE 's/^[[:space:]]*\.version = "([^"]+)",/\1/p' build.zig.zon)"
+          test -n "$source_version"
+          if [[ "$source_version" != "${{ steps.meta.outputs.version }}" ]]; then
+            echo "release version ${{ steps.meta.outputs.version }} does not match build.zig.zon $source_version" >&2
+            exit 1
+          fi
           zig build preflight
           zig build release-metadata-test package-release-test release-safe-install-test
+          MC_REQUIRE_TOOLS=1 zig build m0 2>&1 | tee release-m0.log
+          if grep -n '^SKIP:' release-m0.log; then
+            echo "release m0 skipped at least one gate" >&2
+            exit 1
+          fi
+          python3 tools/ci/pass-gates.py assert --tier ci-m0-pass --log release-m0.log
+          zig build -Dversion="${{ steps.meta.outputs.version }}" install --prefix zig-out/version-check
+          test "$(zig-out/version-check/bin/mcc --version)" = "mcc ${{ steps.meta.outputs.version }}"
+          test -z "$(git status --porcelain --untracked-files=all)"
 
       - name: Build ReleaseSafe release tarballs
         shell: bash
@@ -167,13 +188,14 @@ jobs:
           set -euo pipefail
           tag="${{ steps.meta.outputs.tag }}"
           version="${{ steps.meta.outputs.version }}"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --notes "mcc $version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists; release assets are immutable" >&2
+            exit 1
           fi
+          gh release create "$tag" --title "$tag" --notes "mcc $version"
           gh release upload "$tag" \
             zig-out/release/*.tar.gz \
             zig-out/release/SHA256SUMS \
             zig-out/release/*inventory*.json \
             zig-out/release/*sbom*.json \
-            zig-out/release/*.vsix \
-            --clobber
+            zig-out/release/*.vsix

@@ -424,6 +424,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("release-metadata-test"));
     m0_step.dependOn(ctx.cmd("package-release-test"));
     m0_step.dependOn(ctx.cmd("release-safe-install-test"));
+    m0_step.dependOn(ctx.cmd("source-package-test"));
     // ci-pass-gates-test prevents CI's positive PASS assertions from drifting away from tiers.zig.
     m0_step.dependOn(ctx.cmd("ci-pass-gates-test"));
     // dev-gates-test keeps focused local gate routing cheap and conservative.
@@ -944,6 +945,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("release-metadata-test"));
     fast_step.dependOn(ctx.cmd("package-release-test"));
     fast_step.dependOn(ctx.cmd("release-safe-install-test"));
+    fast_step.dependOn(ctx.cmd("source-package-test"));
     fast_step.dependOn(ctx.cmd("ci-pass-gates-test"));
     fast_step.dependOn(ctx.cmd("dev-gates-test"));
     fast_step.dependOn(ctx.cmd("c-test"));
@@ -998,6 +1000,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("release-metadata-test")); // release/version/process metadata remains present
     c0_step.dependOn(ctx.cmd("package-release-test")); // release packager remains smoke-tested without cross-builds
     c0_step.dependOn(ctx.cmd("release-safe-install-test")); // ReleaseSafe installed compiler smoke stays covered
+    c0_step.dependOn(ctx.cmd("source-package-test")); // fetched source package preserves the complete qualification inputs
     c0_step.dependOn(ctx.cmd("ci-pass-gates-test")); // CI anti-vacuity assertions stay derived from tier definitions
     c0_step.dependOn(ctx.cmd("test"));
     c0_step.dependOn(ctx.cmd("c-test"));

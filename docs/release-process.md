@@ -17,6 +17,8 @@ The development version is `0.7.0-dev`.
   `v` and passes `-Dversion=<version>` to Zig.
 - Manual dispatch may package `0.7.0-dev` for dry-run artifact inspection, but
   tag-triggered publication rejects development versions containing `-dev`.
+- Every workflow release version must exactly match `build.zig.zon`; cutting a
+  stable tag therefore requires committing the stable source version first.
 
 ## Release Checklist
 
@@ -44,10 +46,12 @@ Before tagging a release:
 9. Run a manual dry run of `.github/workflows/release.yml` for the candidate
    version. The workflow builds with Zig 0.16.0, `-Doptimize=ReleaseSafe`, and
    `-Dversion=<version>` via `tools/ci/package-release.py`. The release workflow
-   also runs `zig build preflight` plus the `release-metadata-test`,
-   `package-release-test`, and `release-safe-install-test` build steps before
-   building artifacts, so the publishing path proves its own pinned toolchain
-   and release invariants.
+   verifies `GITHUB_SHA` and the source version, runs `zig build preflight`, the
+   focused `release-metadata-test`, `package-release-test`, and
+   `release-safe-install-test` gates, and a complete no-skip
+   `MC_REQUIRE_TOOLS=1 zig build m0` before building artifacts. It also runs the built compiler and checks its
+   reported version, then requires a clean source tree, so the publishing path proves
+   the exact source revision passed the documented qualification bar.
 10. Confirm the dry-run workflow artifact contains tarballs for
    `x86_64-linux-musl`, `aarch64-linux-musl`, `x86_64-macos`, and
    `aarch64-macos`.
@@ -61,7 +65,9 @@ Before tagging a release:
 12. Confirm the workflow generated Sigstore-backed artifact attestations with
    `actions/attest` using `subject-checksums: zig-out/release/SHA256SUMS`.
 13. Tag the exact commit and record the tag in `CHANGELOG.md`. Pushing `v*`
-   creates or updates the GitHub Release assets with `gh release upload`.
+   creates one GitHub Release with immutable assets. Publication fails if that
+   release already exists; `gh release upload` never uses replacement mode, and
+   replacing an asset requires a new version and tag.
 
 ## Release Artifacts
 
@@ -107,6 +113,16 @@ For repository-scoped checks, use the repository owner that published the releas
 The attestation confirms the artifact digest and the GitHub Actions provenance;
 the CycloneDX SBOM remains the component inventory for dependency and license
 review.
+
+## Complete Source Package
+
+`build.zig.zon` includes the compiler, tests, self-host sources, vendored source
+and licenses, editor integration, workflows, and release metadata needed by the
+qualification surface. `zig build source-package-test` invokes `zig fetch` to
+materialize that exact `.paths` selection into a fresh directory without `.git`,
+then runs `zig build test` and `zig build release-metadata-test` there. This keeps
+the Zig source package and the repository checkout from becoming two different
+qualification inputs.
 
 The current target set is:
 
