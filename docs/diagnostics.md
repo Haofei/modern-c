@@ -37,7 +37,7 @@ Total codes: **236**.
 | `E_ATOMIC_OPERATION` | atomic fetch_add/fetch_sub requires an integer payload type<br>unknown atomic operation | `src/mir_verify_util.zig:189`<br>`src/sema.zig:3678`<br>`src/sema.zig:3705` |
 | `E_ATOMIC_ORDERING` | atomic load ordering must be .relaxed, .acquire, or .seq_cst<br>atomic read-modify-write ordering must be a valid atomic memory order<br>atomic store ordering must be .relaxed, .release, or .seq_cst | `src/mir_verify_util.zig:191`<br>`src/sema.zig:3751`<br>`src/sema.zig:3755`<br>`src/sema.zig:3761`<br>`src/sema.zig:3765`<br>`src/sema.zig:3771`<br>_+1 more_ |
 | `E_AWAIT_OUTSIDE_ASYNC` | \`await\` is only valid inside an \`async fn\` (in '{s}') | `src/async_lower.zig:255` |
-| `E_BACKEND_UNSUPPORTED` | C backend does not yet support {s}<br>LLVM backend does not yet support {s}<br>{s} backend does not yet support this construct | `src/lower_c_emitter.zig:3408`<br>`src/lower_c_emitter.zig:3832`<br>`src/lower_llvm.zig:1289`<br>`src/lower_llvm.zig:1296`<br>`src/main.zig:872` |
+| `E_BACKEND_UNSUPPORTED` | C backend does not yet support {s}<br>LLVM backend does not yet support {s}<br>{s} backend does not yet support this construct | `src/lower_c_emitter.zig:3408`<br>`src/lower_c_emitter.zig:3832`<br>`src/lower_llvm.zig:1293`<br>`src/lower_llvm.zig:1300`<br>`src/main.zig:872` |
 | `E_BITCAST_TYPE` | bitcast pointer-reinterpret may not cross into or out of an opaque/secret/userptr class<br>bitcast source must have a fixed scalar, pointer, or address-class layout<br>bitcast source type must be known<br>_+1 more_ | `src/mir_verify_util.zig:194`<br>`src/sema.zig:4064`<br>`src/sema.zig:4074`<br>`src/sema.zig:4077`<br>`src/sema.zig:4092` |
 | `E_BITWISE_ARITH_DOMAIN_OPERAND` | bitwise operations are not defined on this arithmetic domain | `src/mir_verify_util.zig:144`<br>`src/sema.zig:2853`<br>`src/sema.zig:2934` |
 | `E_BITWISE_BOOL_OPERAND` | bitwise operations are not defined on bool operands | `src/mir_verify_util.zig:155`<br>`src/sema.zig:2844`<br>`src/sema.zig:2928` |
@@ -135,7 +135,7 @@ Total codes: **236**.
 | `E_LOCAL_ADDRESS_ESCAPE` | cannot return a closure that captures local storage (the environment would dangle)<br>cannot return the address of local storage<br>cannot return the address of local storage inside an aggregate (the borrow would dangle)<br>_+2 more_ | `src/mir_verify_util.zig:196`<br>`src/sema.zig:2708`<br>`src/sema.zig:2712`<br>`src/sema.zig:5385`<br>`src/sema.zig:5390`<br>`src/sema.zig:5478`<br>_+1 more_ |
 | `E_LOCAL_REQUIRES_INITIALIZER` | ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage | `src/sema.zig:2562` |
 | `E_MC_VOID_POINTER_FFI` | use c_void for C opaque object pointers, not MC void | `src/sema.zig:3426` |
-| `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:9370` |
+| `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:9480` |
 | `E_MMIO_ACCESS_FORBIDDEN` | MIR verifier found MMIO register access disallowed by Reg/RegBits mode<br>MMIO register access mode does not allow read<br>MMIO register access mode does not allow write | `src/mir.zig:877`<br>`src/sema.zig:3650`<br>`src/sema.zig:3660` |
 | `E_MMIO_ACCESS_MODE` | MMIO register access mode must be .read, .write, or .read_write | `src/sema.zig:3630`<br>`src/sema.zig:3635` |
 | `E_MMIO_DIRECT_ASSIGN` | MIR verifier found direct assignment to an MMIO register<br>MMIO registers must be accessed through typed read/write methods | `src/mir.zig:871`<br>`src/sema.zig:2493` |

@@ -6429,6 +6429,7 @@ const CEmitter = struct {
         array: ast.TypeExpr,
         dyn_trait: []const u8,
         closure: []const u8,
+        value_optional: ast.TypeExpr,
         result: struct { ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr },
         tagged_union: ast.UnionDecl,
     };
@@ -6582,6 +6583,11 @@ const CEmitter = struct {
             return .{ .scalar = info };
         }
         const resolved = self.resolveAliasType(ty);
+        if (resolved.kind == .nullable) {
+            const child = resolved.kind.nullable.*;
+            if (lower_c_type.nullablePayloadIsValueType(&self.type_aliases, child)) return .{ .value_optional = child };
+            return self.raceAggregateKind(child);
+        }
         if (resolved.kind == .dyn_trait) return .{ .dyn_trait = try self.cTypeFor(resolved, .typedef_name) };
         if (resolved.kind == .closure_type) return .{ .closure = try self.cTypeFor(resolved, .typedef_name) };
         if (typeName(resolved)) |name| {
@@ -6646,6 +6652,7 @@ const CEmitter = struct {
                 ptr_expr,
                 ptr_expr,
             }),
+            .value_optional => |child| try self.emitRaceTolerantValueOptionalLoadFromPtr(ptr_expr, ty, child),
             .result => |result| try self.emitRaceTolerantResultLoadFromPtr(ptr_expr, ty, result.ok_ty, result.err_ty),
             .tagged_union => |decl| try self.emitRaceTolerantTaggedUnionLoadFromPtr(ptr_expr, ty, decl),
         }
@@ -6686,6 +6693,7 @@ const CEmitter = struct {
             },
             .dyn_trait => try self.emitRaceTolerantDynTraitStoreFromPtr(ptr_expr, value_expr),
             .closure => try self.emitRaceTolerantClosureStoreFromPtr(ptr_expr, value_expr),
+            .value_optional => |child| try self.emitRaceTolerantValueOptionalStoreFromPtr(ptr_expr, value_expr, child),
             .result => |result| try self.emitRaceTolerantResultStoreFromPtr(ptr_expr, value_expr, result.ok_ty, result.err_ty),
             .tagged_union => |decl| try self.emitRaceTolerantTaggedUnionStoreFromPtr(ptr_expr, decl, value_expr),
         }
@@ -6703,6 +6711,34 @@ const CEmitter = struct {
         try self.out.print(self.allocator, "__atomic_store_n(&(({s})->env), {s}.env, __ATOMIC_RELAXED);\n", .{ ptr_expr, value_expr });
         try self.writeIndent();
         try self.out.print(self.allocator, "__atomic_store_n(&(({s})->code), {s}.code, __ATOMIC_RELAXED);\n", .{ ptr_expr, value_expr });
+    }
+
+    fn emitRaceTolerantValueOptionalLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr, child: ast.TypeExpr) anyerror!void {
+        const optional_ty = try self.cTypeFor(ty, .typedef_name);
+        const value_name = try self.nextTempName();
+        const tag_name = try self.nextTempName();
+        try self.out.print(self.allocator, "({{ {s} {s} = ({s}){{0}}; bool {s} = mc_race_load_bool(&(({s})->present)); {s}.present = {s}; if ({s}) {{ {s}.value = ", .{
+            optional_ty,
+            value_name,
+            optional_ty,
+            tag_name,
+            ptr_expr,
+            value_name,
+            tag_name,
+            tag_name,
+            value_name,
+        });
+        const payload_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->value)", .{ptr_expr});
+        try self.emitRaceTolerantAggregateLoadFromPtr(payload_ptr, child);
+        try self.out.print(self.allocator, "; }} {s}; }})", .{value_name});
+    }
+
+    fn emitRaceTolerantValueOptionalStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, value_expr: []const u8, child: ast.TypeExpr) anyerror!void {
+        const payload_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->value)", .{ptr_expr});
+        const payload_value = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.value", .{value_expr});
+        try self.emitRaceTolerantAggregateStoreFromPtr(payload_ptr, child, payload_value);
+        try self.writeIndent();
+        try self.out.print(self.allocator, "mc_race_store_bool(&(({s})->present), (bool){s}.present);\n", .{ ptr_expr, value_expr });
     }
 
     fn emitRaceTolerantResultLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror!void {

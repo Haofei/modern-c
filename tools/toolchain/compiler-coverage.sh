@@ -134,12 +134,18 @@ chmod +x "$WRAPPER"
 # test suite as part of the corpus so the zero-uncovered ratchet measures those
 # helpers against their direct regression tests instead of treating them as dead.
 unit_cov="$(mktemp "$OUTDIR/cov/hit.unit.XXXXXX")"
-if ! MC_LOWER_COV="$unit_cov" zig build test > "$OUTDIR/unit-test.log" 2>&1; then
+if ! MC_LOWER_COV="$unit_cov" zig build test-unit > "$OUTDIR/unit-test.log" 2>&1; then
     echo "FAIL: compiler-coverage instrumented unit tests failed"
     tail -80 "$OUTDIR/unit-test.log"
     exit 1
 fi
-echo "folded instrumented compiler unit tests"
+spec_cov="$(mktemp "$OUTDIR/cov/hit.spec.XXXXXX")"
+if ! MC_LOWER_COV="$spec_cov" zig build test-spec > "$OUTDIR/spec-test.log" 2>&1; then
+    echo "FAIL: compiler-coverage instrumented specification tests failed"
+    tail -80 "$OUTDIR/spec-test.log"
+    exit 1
+fi
+echo "folded instrumented compiler unit and specification tests"
 
 # Existing deterministic check corpora that heavily exercise parse/sema without QEMU.
 nspec=0

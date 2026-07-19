@@ -10,6 +10,33 @@ const mir = @import("mir.zig");
 const parser = @import("parser.zig");
 const test_support = @import("test_support.zig");
 
+test "lower-c value optional pointer derefs lower race-tolerantly" {
+    const source =
+        \\struct Point { x: u32, y: u32 }
+        \\fn load_scalar(p: *mut ?u32) -> ?u32 { return p.*; }
+        \\fn store_scalar(p: *mut ?u32, value: ?u32) -> void { p.* = value; }
+        \\fn load_point(p: *mut ?Point) -> ?Point { return p.*; }
+        \\fn store_point(p: *mut ?Point, value: ?Point) -> void { p.* = value; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("emit_c_optional_race.mc", source, &output);
+
+    const scalar_load = try cFunctionBody(output.items, "static mc_opt_u32 load_scalar(mc_opt_u32 * p)");
+    try expectContains(scalar_load, "mc_race_load_bool");
+    try expectContains(scalar_load, "mc_race_load_u32");
+    const scalar_store = try cFunctionBody(output.items, "static void store_scalar(mc_opt_u32 * p, mc_opt_u32 value)");
+    try expectContains(scalar_store, "mc_race_store_u32");
+    try expectContains(scalar_store, "mc_race_store_bool");
+
+    const point_load = try cFunctionBody(output.items, "static mc_opt_struct_Point load_point(mc_opt_struct_Point * p)");
+    try expectContains(point_load, "mc_race_load_bool");
+    try std.testing.expect(std.mem.count(u8, point_load, "mc_race_load_u32") == 2);
+    const point_store = try cFunctionBody(output.items, "static void store_point(mc_opt_struct_Point * p, mc_opt_struct_Point value)");
+    try std.testing.expect(std.mem.count(u8, point_store, "mc_race_store_u32") == 2);
+    try expectContains(point_store, "mc_race_store_bool");
+}
+
 fn appendCTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();

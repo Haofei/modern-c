@@ -1979,6 +1979,22 @@ No optimizer assumption is created.
 
 The compiler may still optimize ordinary memory, but not by using the premise that ordinary data races are impossible.
 
+For aggregate ordinary memory, a race-tolerant backend may implement one source
+load or store as multiple target-width accesses. This is a deliberately
+non-coherent model: a racing load may combine fields from different racing
+stores, including pointer/length, data/vtable, code/environment, or tag/payload
+pairs that no execution ever stored as one aggregate value. Such a result does
+not carry a cross-field representation-validity guarantee. Using it in a later
+projection, dereference, dispatch, or match remains a consequence of the
+erroneous race and may trap or have target-defined machine effects.
+
+This rule does not license optimization assumptions. A backend must not assume
+that reconstructed fields are mutually consistent, fold away validation because
+the source type normally has an invariant, or attach `nonnull`, `noundef`,
+`noalias`, range, or valid-tag facts merely because the raced value has an
+aggregate source type. Programs requiring a coherent aggregate snapshot must use
+an atomic representation or an explicit synchronization/versioning protocol.
+
 `volatile` is not atomic.
 
 Volatile/MMIO means:

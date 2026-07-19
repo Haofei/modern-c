@@ -6,6 +6,57 @@ const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const test_support = @import("test_support.zig");
 
+test "LLVM nullable initialization and race lowering follow representation" {
+    const source =
+        \\struct Point { x: u32, y: u32 }
+        \\fn reset() -> ?u32 { var value: ?u32 = uninit; value = null; return value; }
+        \\fn load_scalar(p: *mut ?u32) -> ?u32 { return p.*; }
+        \\fn store_scalar(p: *mut ?u32, value: ?u32) -> void { p.* = value; }
+        \\fn load_point(p: *mut ?Point) -> ?Point { return p.*; }
+        \\fn store_point(p: *mut ?Point, value: ?Point) -> void { p.* = value; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_nullable_representation.mc", source, &output);
+
+    const reset_body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @reset");
+    try expectContains(reset_body, "store { i1, i32 } zeroinitializer");
+    try expectNotContains(reset_body, "store { i1, i32 } null");
+
+    const scalar_load = try llvmFunctionBody(output.items, "define internal { i1, i32 } @load_scalar");
+    try expectContains(scalar_load, "load atomic i8");
+    try expectContains(scalar_load, "load atomic i32");
+    const scalar_store = try llvmFunctionBody(output.items, "define internal void @store_scalar");
+    try expectContains(scalar_store, "store atomic i32");
+    try expectContains(scalar_store, "store atomic i8");
+
+    const point_load = try llvmFunctionBody(output.items, "define internal { i1, { i32, i32 } } @load_point");
+    try expectContains(point_load, "load atomic i8");
+    try std.testing.expect(std.mem.count(u8, point_load, "load atomic i32") == 2);
+    const point_store = try llvmFunctionBody(output.items, "define internal void @store_point");
+    try std.testing.expect(std.mem.count(u8, point_store, "store atomic i32") == 2);
+    try expectContains(point_store, "store atomic i8");
+}
+
+test "LLVM aggregate literal storage materializes visible bytes" {
+    const source =
+        \\struct Padded { small: u8, wide: u64 }
+        \\#[c_union]
+        \\struct Storage { small: u8, wide: u64 }
+        \\fn padded() -> Padded { return .{ .small = 1, .wide = 2 }; }
+        \\fn storage() -> Storage { return .{ .small = 1, .wide = uninit }; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_materialized_aggregate_bytes.mc", source, &output);
+
+    const padded_body = try llvmFunctionBody(output.items, "define internal { i8, i64 } @padded");
+    try expectContains(padded_body, "store { i8, i64 } zeroinitializer");
+    const storage_body = try llvmFunctionBody(output.items, "define internal [1 x i64] @storage");
+    try expectContains(storage_body, "store [1 x i64] zeroinitializer");
+    try expectContains(storage_body, "store i8");
+}
+
 fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();

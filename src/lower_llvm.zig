@@ -1066,7 +1066,11 @@ const LlvmEmitter = struct {
                 "0"
             else
                 error.UnsupportedLlvmEmission,
-            .pointer, .raw_many_pointer, .nullable => "null",
+            .pointer, .raw_many_pointer => "null",
+            .nullable => |child| if (self.nullablePayloadIsValueType(child.*) or self.isAggregateType(child.*))
+                "zeroinitializer"
+            else
+                "null",
             .slice => "zeroinitializer",
             .array => "zeroinitializer",
             .qualified => |node| try self.zeroInitializer(node.child.*),
@@ -5924,6 +5928,27 @@ const LlvmEmitter = struct {
         var result: []const u8 = "zeroinitializer";
         const resolved_ty = self.resolveAliasType(ty);
         switch (resolved_ty.kind) {
+            .nullable => |child| {
+                if (!self.nullablePayloadIsValueType(child.*)) {
+                    if (!self.isAggregateType(child.*)) return error.UnsupportedLlvmEmission;
+                    return self.emitRaceTolerantAggregateDerefLoad(ptr, child.*);
+                }
+                const tag_ty = simpleType(ty.span, "bool");
+                const tag_ptr = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, aggregate_ty, ptr });
+                const tag = try self.emitOrdinaryLoad(tag_ty, tag_ptr, true);
+                const with_tag = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, i1 {s}, 0\n", .{ with_tag, aggregate_ty, result, tag });
+                const payload_ptr = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 1\n", .{ payload_ptr, aggregate_ty, ptr });
+                const payload = if (self.isAggregateType(child.*))
+                    try self.emitRaceTolerantAggregateDerefLoad(payload_ptr, child.*)
+                else
+                    try self.emitOrdinaryLoad(child.*, payload_ptr, true);
+                const with_payload = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 1\n", .{ with_payload, aggregate_ty, with_tag, try self.llvmType(child.*), payload });
+                return with_payload;
+            },
             .closure_type, .dyn_trait => {
                 for (0..2) |i| {
                     const field_ptr = try self.nextTemp();
@@ -6043,6 +6068,27 @@ const LlvmEmitter = struct {
         const aggregate_ty = try self.llvmType(ty);
         const resolved_ty = self.resolveAliasType(ty);
         switch (resolved_ty.kind) {
+            .nullable => |child| {
+                if (!self.nullablePayloadIsValueType(child.*)) {
+                    if (!self.isAggregateType(child.*)) return error.UnsupportedLlvmEmission;
+                    return self.emitRaceTolerantAggregateDerefStore(ptr, child.*, value);
+                }
+                const payload = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, aggregate_ty, value });
+                const payload_ptr = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 1\n", .{ payload_ptr, aggregate_ty, ptr });
+                if (self.isAggregateType(child.*)) {
+                    try self.emitRaceTolerantAggregateDerefStore(payload_ptr, child.*, payload);
+                } else {
+                    try self.emitOrdinaryStore(child.*, try self.llvmType(child.*), payload, payload_ptr, true);
+                }
+                const tag = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ tag, aggregate_ty, value });
+                const tag_ptr = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, aggregate_ty, ptr });
+                try self.emitOrdinaryStore(simpleType(ty.span, "bool"), "i1", tag, tag_ptr, true);
+                return;
+            },
             .closure_type, .dyn_trait => {
                 for (0..2) |i| {
                     const field_value = try self.nextTemp();
@@ -6548,13 +6594,18 @@ const LlvmEmitter = struct {
         if (items.len != len) return error.UnsupportedLlvmEmission;
         const element_ty = array.child.*;
         const element_llvm = try self.llvmType(element_ty);
-        for (items, 0..) |item, i| {
-            const ptr = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(resolved_array_ty), array_ptr, i });
-            const value = if (isUninitExpr(item))
+        var values: std.ArrayList([]const u8) = .empty;
+        defer values.deinit(self.allocator);
+        for (items) |item| {
+            try values.append(self.allocator, if (isUninitExpr(item))
                 try self.zeroInitializer(element_ty)
             else
-                try self.emitExprWithMirRangeTarget(item, element_ty, "aggregate_element");
+                try self.emitExprWithMirRangeTarget(item, element_ty, "aggregate_element"));
+        }
+        try self.out.print(self.allocator, "  store {s} zeroinitializer, ptr {s}{s}\n", .{ try self.llvmType(resolved_array_ty), array_ptr, try self.debugCallSuffix() });
+        for (values.items, 0..) |value, i| {
+            const ptr = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(resolved_array_ty), array_ptr, i });
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ element_llvm, value, ptr, try self.debugCallSuffix() });
         }
     }
@@ -6583,6 +6634,7 @@ const LlvmEmitter = struct {
 
     fn emitStructLiteralStores(self: *LlvmEmitter, struct_ptr: []const u8, struct_ty: ast.TypeExpr, fields: []const ast.StructLiteralField) !void {
         const struct_decl = self.structDeclForType(struct_ty) orelse return error.UnsupportedLlvmEmission;
+        const struct_llvm = try self.llvmType(struct_ty);
         if (struct_decl.is_c_union) {
             const active = self.cUnionLiteralActiveField(fields) orelse return error.UnsupportedLlvmEmission;
             const field = self.structDeclField(struct_decl, active.name.text) orelse return error.UnsupportedLlvmEmission;
@@ -6590,17 +6642,23 @@ const LlvmEmitter = struct {
                 try self.zeroInitializer(field.ty)
             else
                 try self.emitExprWithMirRangeTarget(active.value, field.ty, field.name.text);
+            try self.out.print(self.allocator, "  store {s} zeroinitializer, ptr {s}{s}\n", .{ struct_llvm, struct_ptr, try self.debugCallSuffix() });
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(field.ty), value, struct_ptr, try self.debugCallSuffix() });
             return;
         }
-        for (struct_decl.fields, 0..) |field, i| {
+        var values: std.ArrayList([]const u8) = .empty;
+        defer values.deinit(self.allocator);
+        for (struct_decl.fields) |field| {
             const value_expr = structLiteralField(fields, field.name.text) orelse return error.UnsupportedLlvmEmission;
-            const ptr = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ ptr, try self.llvmType(struct_ty), struct_ptr, i });
-            const value = if (isUninitExpr(value_expr))
+            try values.append(self.allocator, if (isUninitExpr(value_expr))
                 try self.zeroInitializer(field.ty)
             else
-                try self.emitExprWithMirRangeTarget(value_expr, field.ty, field.name.text);
+                try self.emitExprWithMirRangeTarget(value_expr, field.ty, field.name.text));
+        }
+        try self.out.print(self.allocator, "  store {s} zeroinitializer, ptr {s}{s}\n", .{ struct_llvm, struct_ptr, try self.debugCallSuffix() });
+        for (struct_decl.fields, values.items, 0..) |field, value, i| {
+            const ptr = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ ptr, struct_llvm, struct_ptr, i });
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(field.ty), value, ptr, try self.debugCallSuffix() });
         }
     }

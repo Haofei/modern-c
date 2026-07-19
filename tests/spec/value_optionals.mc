@@ -60,3 +60,27 @@ fn point_sum(o: ?Point) -> u32 {
     }
     return 0;
 }
+
+// Backend zero materialization must follow the actual tagged representation.
+fn reset_optional() -> ?u32 {
+    var value: ?u32 = uninit;
+    value = null;
+    return value;
+}
+
+// Unknown pointer provenance uses the race-tolerant tagged representation path.
+fn load_optional(p: *mut ?u32) -> ?u32 {
+    return p.*;
+}
+
+fn store_optional(p: *mut ?u32, value: ?u32) -> void {
+    p.* = value;
+}
+
+fn load_optional_point(p: *mut ?Point) -> ?Point {
+    return p.*;
+}
+
+fn store_optional_point(p: *mut ?Point, value: ?Point) -> void {
+    p.* = value;
+}

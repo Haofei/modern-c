@@ -47,6 +47,8 @@ pub fn build(b: *std.Build) h.Ctx {
         .root_module = root_module,
     });
     const test_cmd = b.addRunArtifact(unit_tests);
+    const unit_test_step = b.step("test-unit", "Run compiler unit tests");
+    unit_test_step.dependOn(&test_cmd.step);
 
     // Keep the specification fixture suite as an explicit build dependency.
     // Importing it through main is not sufficient for Zig's lazy test analysis.
@@ -63,13 +65,15 @@ pub fn build(b: *std.Build) h.Ctx {
         .root_module = spec_test_module,
     });
     const spec_test_cmd = b.addRunArtifact(spec_tests);
-    test_cmd.step.dependOn(&spec_test_cmd.step);
+    const spec_test_step = b.step("test-spec", "Run specification fixture tests");
+    spec_test_step.dependOn(&spec_test_cmd.step);
 
     // `test` has no install dep (in-process unit tests). Registered into ctx so
     // the tier aggregations can depend on its command step like the others.
-    ctx.cmds.put("test", &test_cmd.step) catch @panic("OOM");
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&test_cmd.step);
+    test_step.dependOn(&spec_test_cmd.step);
+    ctx.cmds.put("test", test_step) catch @panic("OOM");
 
     return ctx;
 }

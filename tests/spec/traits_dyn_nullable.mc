@@ -28,6 +28,16 @@ struct Registry {
     count: usize,
 }
 
+// Nullable fat-pointer storage uses the same two-word representation as *dyn.
+// Unknown pointer provenance therefore takes the recursive race-tolerant path.
+fn load_nullable_device(p: *mut ?*dyn CharDevice) -> ?*dyn CharDevice {
+    return p.*;
+}
+
+fn store_nullable_device(p: *mut ?*dyn CharDevice, value: ?*dyn CharDevice) -> void {
+    p.* = value;
+}
+
 export fn registry_init(r: *mut Registry) -> void {
     var i: usize = 0;
     while i < 4 {

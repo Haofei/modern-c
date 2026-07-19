@@ -328,6 +328,10 @@ pub fn aggregateGlobalCShape(ctx: Context, ty: ast.TypeExpr) ?AggregateGlobalCSh
         .slice => .slice,
         .closure_type => .closure,
         .dyn_trait => .dyn_trait,
+        .nullable => |child| if (lower_c_type.nullablePayloadIsValueType(ctx.type_aliases, child.*))
+            .declared_aggregate
+        else
+            aggregateGlobalCShape(ctx, child.*),
         .generic => |node| {
             if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1) {
                 return if (aggregateGlobalCShape(ctx, node.args[0]) != null) .maybe_uninit else null;

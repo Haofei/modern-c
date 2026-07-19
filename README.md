@@ -213,6 +213,9 @@ The LLVM backend consumes the same semantic and MIR verification pipeline, emits
 textual IR, and uses `llc` for object generation. Its qualified surface is
 established by IR assembly, object, optimizer, differential, runtime, and QEMU
 gates rather than by a claim that every language form is supported.
+Expected differential exclusions are explicit in the checked
+[`diff-backend-expected-skips.tsv`](tools/toolchain/diff-backend-expected-skips.tsv)
+manifest; an unlisted skip fails the gate.
 
 ```sh
 zig build llvm-test
