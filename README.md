@@ -1,138 +1,109 @@
 # MC / modern-c
 
-MC is a spec-first compiler prototype for a kernel-profile, Zig-like systems
-language. The project explores how a C replacement for low-level systems code
-could make machine contracts explicit without promising memory safety.
+MC is a spec-first systems language and compiler for kernels, drivers, and
+freestanding software. It explores a specific question: how much low-level
+machine behavior can be made explicit and checkable without hiding allocation,
+control flow, hardware access, or optimizer assumptions?
 
-The compiler currently has two differentially qualified backend paths for the
-documented, implemented subset:
+MC is a research prototype, not a production C replacement. The compiler has
+two differentially qualified backend paths for the documented, implemented subset:
 
-- C emission through `emit-c`
-- LLVM IR emission through `emit-llvm`, then object generation through `llc`
+- checked C emission;
+- textual LLVM IR emission and object generation.
 
-Both backends are exercised by host tests, toolchain tests, broad fixture sweeps,
-and QEMU kernel tests. The kernel e2e test scripts in `zig build m0` are wired
-for both C and LLVM lowering.
+The useful claim is deliberately narrow: within the tested subset, MC either
+emits the documented lowering or rejects the unsupported construct. The current
+production assessment and its remaining architecture work are tracked in
+[`docs/compiler-production-readiness.md`](docs/compiler-production-readiness.md).
 
-MC is still a prototype. It is useful as a language/compiler experiment and as a
-testbed for kernel-oriented type and runtime contracts; it is not a production
-C replacement.
+## Why MC Exists
 
-## What MC Tries To Prove
+Low-level code often carries its most important rules in comments: which address
+space a value belongs to, whether an access is MMIO, whether arithmetic may wrap,
+whether a resource must move exactly once, or whether a function may trap. MC
+tries to represent those rules in source and carry them through semantic analysis
+and MIR verification.
 
-MC keeps low-level behavior visible. The language and compiler try to turn common
-systems-programming traps into one of three explicit outcomes:
+The language currently includes:
 
-- compile-time diagnostics
-- runtime traps with a known language edge
-- typed `Result` values
+- checked arithmetic by default, plus explicit wrapping, saturating, serial, and
+  counter domains;
+- distinct physical, virtual, DMA, and MMIO address types;
+- explicit atomics, fences, IRQ effects, DMA/cache ownership transitions, and
+  unsafe boundaries;
+- `move` resources for ownership-sensitive handles;
+- `Result<T, E>`, optional values, tagged unions, traits, closures, generics, and
+  bounded value-level comptime evaluation;
+- `#[no_lang_trap]`, `#[bounded]`, `#[irq_context]`, and unsafe contracts;
+- a rule that optimization mode cannot silently change the semantics of an
+  already accepted program.
 
-Important design points include:
+MC does not claim general memory safety. Raw pointers remain available, and the
+current compiler does not implement a general borrow checker or lifetime system.
 
-- explicit arithmetic domains: checked, wrapping, saturating, serial, and counter
-- typed address classes and MMIO access
-- unsafe blocks and unsafe contracts instead of hidden optimizer assumptions
-- linear `move` resources for ownership-sensitive handles
-- explicit atomics, fences, DMA/cache markers, and IRQ witnesses
-- kernel-profile defaults with an opt-in hosted profile
-- generated C and LLVM IR that avoid hidden assumptions such as `nuw`, `nsw`,
-  `nonnull`, `noalias`, `noundef`, `poison`, `inbounds`, and `undef`
-
-The full language design lives in
+The normative language contract is
 [`docs/spec/MC_0.7_Final_Design.md`](docs/spec/MC_0.7_Final_Design.md).
 
-## Current Status
+## Quick Start
 
-Implemented today:
-
-- lexer, parser, semantic checker, HIR/MIR lowering, MIR verification, and fact
-  inspection
-- checked C emission for the implemented language surface
-- LLVM IR emission for the same current backend surface
-- LLVM object generation through `tools/toolchain/mcc-llvm-cc.sh`
-- source map output for generated C via `emit-map`
-- initial LLVM debug metadata, verified by `llvm-debug-test`
-- a spec fixture suite under `tests/spec`
-- generated-C fixtures under `tests/c_emit`
-- kernel, driver, filesystem, IPC, process, memory-management, networking, SMP,
-  and architecture tests under QEMU
-- data-driven host-driver tests for kernel libraries in `tools/lib/host-tests.tsv`
-- local package manifests through `tools/toolchain/mcc-pkg.sh`, and an offline
-  registry with semver-ish version resolution, `publish`/`install`, and a
-  reproducible lockfile through `tools/toolchain/mcc-registry.sh`
-- a token-preserving source formatter (`mcc fmt [--check]`), a JSON symbol index
-  (`mcc symbols`), and a CLI-backed language server (`tools/lsp/mc-lsp.py`, with a VS Code
-  client in `editors/vscode/`) providing diagnostics (the compiler's own `E_` codes),
-  hover, go-to-definition, find-references, rename, document/workspace symbols,
-  semantic tokens, completion, signature help, call hierarchy, and formatting;
-  cross-file navigation is qualified for files reachable through the current import
-  graph, while workspace symbols discover unopened `.mc` files under the workspace root
-- a small standard library under `std/`
-
-The milestone gate is:
+The required compiler version is Zig 0.16.0. A native development environment
+also needs Python 3 and LLVM 18 on `PATH`.
 
 ```sh
-zig build m0
+zig build
+zig-out/bin/mcc --version
+zig-out/bin/mcc check tests/spec/arithmetic_checked.mc
+zig-out/bin/mcc emit-c tests/c_emit/smoke.mc -o /tmp/smoke.c
+zig-out/bin/mcc emit-llvm tests/c_emit/smoke.mc -o /tmp/smoke.ll
 ```
 
-`m0` runs the unit tests, C backend tests, LLVM IR/object tests, optimizer
-checks, package/toolchain tests, host-driver tests, and the QEMU kernel matrix.
-Tests that require external tools self-skip when the required tool is absent.
-
-The focused RISC-V board-surrogate validation gate is:
+Build and run a small hosted executable:
 
 ```sh
-zig build riscv-qemu-validation
+printf 'export fn main() -> u32 { return 42; }\n' >/tmp/answer.mc
+zig-out/bin/mcc build /tmp/answer.mc -o /tmp/answer
+/tmp/answer
+printf 'exit status: %s\n' "$?"
 ```
 
-That gate runs the RISC-V QEMU `virt` + OpenSBI S-mode platform, IRQ, virtio-blk,
-virtio-net, confined QuickJS, real broker, TCP-backed `host_net_fetch`, and
-IRQ-backed `SYS_POLL` storage/network gates across both C and LLVM backends. It is
-the repeatable validation path when VisionFive 2 hardware is unavailable; it is
-not a substitute for final real-board boot and soak evidence.
+`mcc build` is intentionally limited to the documented nullary hosted `main`
+boundary. Kernel and freestanding programs use the emission drivers and their
+target-specific link flows.
 
 ## Development Environment
 
-The toolchain is Zig 0.16.0 plus clang/lld/llvm and QEMU (riscv64/aarch64/x86_64).
-You can install those natively, or use the bundled container, which pins the exact
-toolchain from CI and runs on Linux, macOS (incl. Apple Silicon), and Windows/WSL.
+Required for compiler and host development:
+
+- Zig `0.16.0`;
+- `clang` from LLVM 18;
+- LLVM 18 tools: `llvm-as`, `llc`, `opt`, `llvm-dwarfdump`;
+- Python 3.
+
+The QEMU qualification gates additionally use `qemu-system-riscv64`,
+`qemu-system-aarch64`, `qemu-system-x86_64`, `ld.lld`, and `llvm-objcopy`.
+
+Use the native toolchain directly, or run the same build steps in the development
+container:
 
 ```sh
-make docker-build          # build the dev image (selects amd64 or arm64 automatically)
-make fast                  # host-only inner-loop gate (~seconds), no QEMU
-make test                  # compiler unit + spec suite
-make m0                    # full milestone gate: clang + llvm + QEMU
-make run CMD='zig build riscv-qemu-validation' # focused RISC-V QEMU/OpenSBI surrogate
-make shell                 # interactive shell at /work
-make run CMD='zig build abi-test'
+make docker-build
+make fast
+make test
+make m0
+make shell
 ```
 
-Equivalently, without `make`:
+Equivalent container commands:
 
 ```sh
 docker compose build dev
 docker compose run --rm dev zig build fast
 docker compose run --rm dev zig build m0
-docker compose run --rm dev                 # interactive shell
 ```
 
-The repo is bind-mounted live; `.zig-cache` and `zig-out` are container-local volumes
-so host (e.g. macOS) artifacts never mix with the Linux build. With the toolchain on
-your `PATH`, the same gates run natively as `zig build <step>`.
-
-For a reduced inner-loop gate set based on the files you changed:
-
-```sh
-tools/dev-gates.py                 # staged + unstaged + untracked changes
-tools/dev-gates.py --base origin/master
-tools/dev-gates.py src/sema.zig tests/spec/no_implicit_conversion.mc
-tools/dev-gates.py --run           # execute only the focused checks/gates above
-```
-
-This is a development-time selector. It prints focused gates plus the broader
-confidence and truth gates. Use `--run` for the edit/test loop, `tools/fast-parallel.sh`
-for broad local confidence before pushing a substantial slice, and `zig build m0`
-for a release/production claim.
+The image pins its base digest and Zig download. Ubuntu apt packages remain tied
+to the configured distribution repositories, so the environment is controlled
+but not bit-for-bit identical across rebuild dates.
 
 ### LLVM Support Matrix
 
@@ -144,31 +115,20 @@ for a release/production claim.
 | Other LLVM majors | Any non-18 LLVM toolchain | Unqualified until the major is added to CI, Docker, preflight, and this matrix. |
 
 LLVM backend wrappers intentionally resolve `clang`, `ld.lld`, `llvm-as`, `llc`,
-and `opt` from `PATH`. For supported runs, those unversioned tool names must
-resolve to the qualified LLVM 18 toolchain.
+and `opt` from `PATH`. A qualified run must resolve those names to the qualified LLVM 18 toolchain.
 
-## Backend Coverage
+## Compiler Workflow
 
-### C Backend
+The compiler pipeline is:
 
-`emit-c` is the original checked backend. It emits freestanding C by default and
-uses Clang/GCC builtins for traps, checked arithmetic, atomics, and 128-bit
-intermediate arithmetic. The generated C is intentionally not portable ISO C11.
-
-Useful C gates:
-
-```sh
-zig build c-test
-zig build sweep
-zig build cc-test
-zig build m0
+```text
+source -> AST -> semantic analysis -> HIR -> MIR -> verification -> C or LLVM
 ```
 
-Useful compiler commands:
+Inspect each stage from the command line:
 
 ```sh
-zig-out/bin/mcc --help
-zig-out/bin/mcc --version
+zig-out/bin/mcc lex tests/spec/arithmetic_checked.mc
 zig-out/bin/mcc check tests/spec/arithmetic_checked.mc
 zig-out/bin/mcc check tests/spec/arithmetic_checked.mc --json
 zig-out/bin/mcc facts tests/spec/arithmetic_checked.mc
@@ -177,11 +137,15 @@ zig-out/bin/mcc verify-hir tests/spec/arithmetic_checked.mc
 zig-out/bin/mcc lower-mir tests/spec/arithmetic_checked.mc
 zig-out/bin/mcc verify tests/spec/arithmetic_checked.mc
 zig-out/bin/mcc lower-ir tests/spec/arithmetic_checked.mc
+```
+
+Emission and tooling commands:
+
+```sh
+zig-out/bin/mcc lower-c tests/c_emit/smoke.mc
 zig-out/bin/mcc emit-c tests/c_emit/smoke.mc -o /tmp/smoke.c
 zig-out/bin/mcc emit-map tests/c_emit/smoke.mc -o /tmp/smoke.mcmap
 zig-out/bin/mcc emit-llvm tests/c_emit/smoke.mc -o /tmp/smoke.ll
-printf 'export fn main() -> u32 { return 7; }\n' >/tmp/mcc-build-ok.mc
-zig-out/bin/mcc build /tmp/mcc-build-ok.mc -o /tmp/mcc-build-ok
 zig-out/bin/mcc emit-layout tests/c_emit/struct.mc --structs=Pair
 zig-out/bin/mcc emit-c-struct tests/c_emit/struct.mc --structs=Pair
 zig-out/bin/mcc fmt tests/spec/arithmetic_checked.mc --check
@@ -190,281 +154,183 @@ zig-out/bin/mcc list-tests tests/test/lang_tests.mc
 zig-out/bin/mcc explain E_UNKNOWN_IDENTIFIER
 ```
 
-### LLVM Backend
+Run `zig-out/bin/mcc --help` for profile, check-mode, import-path, remapping, and
+stdin options. `emit-c` defaults to the kernel/freestanding profile; hosted C is
+explicitly selected with `--profile=hosted`.
 
-`emit-llvm` uses the same semantic and MIR verification path as C emission, then
-emits textual LLVM IR. The LLVM test suite verifies IR assembly, object lowering,
-debug metadata, object linking/running, package builds, standard-library objects,
-spec sweeps, C-fixture sweeps, optimizer pipeline compatibility, and QEMU boot
-behavior.
+## Qualification
 
-Useful LLVM gates:
+Use the smallest gate that matches the work, then finish substantial compiler or
+kernel changes with the milestone gate.
+
+```sh
+zig build test       # compiler unit tests and spec conformance
+zig build c-test     # checked C backend
+zig build llvm-test  # LLVM backend
+zig build fast       # broad host-only development gate
+zig build m0         # complete compiler, backend, toolchain, and QEMU milestone
+```
+
+Normal local gates may report a skip when an external tool is unavailable. A
+qualification run must fail instead of skipping:
+
+```sh
+MC_REQUIRE_TOOLS=1 MC_LLVM_MAJOR=18 zig build m0
+```
+
+`m0` covers unit and spec tests, C and LLVM fixture sweeps, IR assembly and object
+generation, optimizer compatibility, differential execution, fuzz oracles,
+package and release tooling, host-driver tests, and the QEMU kernel matrix.
+
+For an edit loop, the repository can select focused gates from changed files:
+
+```sh
+tools/dev-gates.py
+tools/dev-gates.py --base origin/master
+tools/dev-gates.py --run
+```
+
+The complete test architecture and gate ownership model are documented in
+[`docs/test-architecture.md`](docs/test-architecture.md).
+
+## Backends
+
+### C
+
+The C backend emits freestanding C by default and uses Clang/GCC builtins for
+traps, checked arithmetic, atomics, and wide intermediate arithmetic. Generated
+C is an implementation artifact and differential oracle, not portable ISO C11.
+
+```sh
+zig build c-test
+zig build sweep
+zig build cc-test
+```
+
+### LLVM
+
+The LLVM backend consumes the same semantic and MIR verification pipeline, emits
+textual IR, and uses `llc` for object generation. Its qualified surface is
+established by IR assembly, object, optimizer, differential, runtime, and QEMU
+gates rather than by a claim that every language form is supported.
 
 ```sh
 zig build llvm-test
-zig build llvm-obj-test
-zig build llvm-debug-test
 zig build llvm-sweep
 zig build llvm-spec-obj-sweep
-zig build llvm-c-sweep
 zig build llvm-opt-sweep
-zig build llvm-c-obj-sweep
-zig build llvm-cc-test
 zig build llvm-runtime-test
-zig build llvm-toolchain-test
-zig build llvm-std-test
-zig build llvm-pkg-test
-zig build llvm-host-suite-test
-zig build m0
 ```
 
-The driver for object generation is:
+Object generation is available through:
 
 ```sh
 tools/toolchain/mcc-llvm-cc.sh path/to/file.mc -o file.o
 ```
 
-## Kernel And QEMU Coverage
+## Kernel Validation
 
-The kernel e2e matrix is now backend-selectable. Every kernel/QEMU script family
-used by `m0` has a C invocation and an LLVM invocation.
+The repository contains MC kernel modules, C runtime support, drivers, user-mode
+components, and host models used to exercise the language against realistic
+freestanding workloads. Coverage includes MMIO, timers and traps, schedulers,
+syscalls, processes, IPC, virtual memory, filesystems, networking, SMP, virtio,
+and multiple target architectures.
 
-Covered areas include:
-
-- typed MMIO and trap/timer paths
-- cooperative threads, round-robin scheduling, timer preemption, and scheduler
-  VM switching
-- syscall dispatch, U-mode entry, user-mode process lifecycle, ELF load/run,
-  `exec`, file syscalls, socket syscalls, and the user shell
-- IPC request/reply, multi-slot IPC, source filtering, notifications, timeouts,
-  registry lookup, signals, restart supervision, heartbeat liveness, capability
-  gates, and least-privilege checks
-- Sv39 activation, address-space switching, per-process page tables, context
-  switches that swap `satp`, demand paging, anonymous mmap, copy-on-write,
-  crash containment, and per-server MMU isolation
-- frame allocator, kernel heap, and page-table host checks
-- user-mode block/filesystem/network servers
-- virtio-net, virtio-blk, UDP transmit with pcap verification, ARP/ICMP gateway
-  round trip, live virtio-net RX routing, e1000 PCI probing, and synthetic NIC
-  driver-library checks
-- SMP boot/sync, ticket-lock mutual exclusion, and inter-processor interrupts
-- integrated RISC-V kernel boot and integrated kernel+network boot
-- OpenSBI boot, aarch64 QEMU boot, and x86-64 native/QEMU scheduler boot
-
-Examples:
+The focused RISC-V board-surrogate gate is:
 
 ```sh
 zig build riscv-qemu-validation
+```
+
+It runs the RISC-V QEMU `virt` and OpenSBI path across both compiler backends,
+including IRQ, storage, networking, and confined runtime integration. This is a
+repeatable surrogate when VisionFive 2 hardware is unavailable; it is not final
+real-board boot or soak evidence.
+
+Useful narrower gates include:
+
+```sh
 zig build qemu-test
 zig build llvm-qemu-test
 zig build kmain-test
 zig build llvm-kmain-test
-zig build kmain-net-test
-zig build llvm-kmain-net-test
-zig build ushell-test
-zig build llvm-ushell-test
-zig build sbi-boot-test
-zig build llvm-sbi-boot-test
 zig build aarch64-test
-zig build llvm-aarch64-test
 zig build x86-qemu-test
-zig build llvm-x86-qemu-test
 ```
 
-Interactive user shell boot:
+See [`docs/qemu-validation-checklist.md`](docs/qemu-validation-checklist.md) for
+the complete validation boundary.
 
-```sh
-zig build run-ushell
-zig build run-llvm-ushell
-```
+## Developer Tooling
 
-## Requirements
+The repository includes:
 
-Required for normal development:
+- a token-preserving formatter through `mcc fmt`;
+- structured diagnostics and `mcc explain`;
+- JSON symbol indexing through `mcc symbols`;
+- local package manifests and an offline, filesystem-backed registry with lock
+  files, safe package identities, and publish/install commands;
+- a CLI-backed language server in `tools/lsp/mc-lsp.py` and a VS Code client in
+  `editors/vscode/`.
 
-- Zig `0.16.0`
-- `clang` from LLVM 18
-- LLVM 18 tools: `llvm-as`, `llc`, `opt`, `llvm-dwarfdump`
-- Python 3
+The language server provides compiler diagnostics, hover, completion, navigation,
+references, rename, symbols, semantic tokens, signature help, call hierarchy,
+and formatting; cross-file navigation is qualified for files reachable through the current import
+graph. Workspace symbols also discover unopened `.mc` files under the workspace
+root. Completion and formatting remain intentionally simpler than mature IDE
+toolchains.
 
-Required for QEMU gates:
+## Current Boundaries
 
-- `qemu-system-riscv64`
-- `qemu-system-aarch64`
-- `qemu-system-x86_64`
-- `ld.lld`
-- `llvm-objcopy`
+MC is not generally production-ready. The three open compiler architecture
+workstreams are:
 
-Most tests check for their tools and skip cleanly if the environment cannot run
-that gate.
+1. complete pointer-provenance handling for race-tolerant lowering;
+2. make typed semantic facts and typed MIR the sole authority consumed by both
+   backends;
+3. complete CFG/place-based move ownership analysis.
 
-## Build
+Other deliberate or current limitations include:
 
-Build the compiler:
+- no general lifetime or borrow checker;
+- value-level comptime rather than unrestricted type computation;
+- no separate-compilation or mature incremental module graph;
+- an offline registry rather than a public network package ecosystem;
+- a token-preserving reindenter rather than a full pretty printer;
+- incomplete hardware qualification and production kernel hardening;
+- no stable public release yet.
 
-```sh
-zig build
-```
+Exit criteria, phases, evidence, and design risks are maintained in
+[`docs/compiler-production-readiness.md`](docs/compiler-production-readiness.md).
+The shorter repository-wide backlog is [`docs/todo.md`](docs/todo.md).
 
-Run the full milestone gate:
+## Repository Map
 
-```sh
-zig build m0
-```
+| Path | Purpose |
+| --- | --- |
+| `src/` | Compiler implementation and unit tests |
+| `std/` | MC standard library |
+| `tests/spec/` | Normative language and diagnostic fixtures |
+| `tests/c_emit/`, `tests/llvm/` | Backend fixtures |
+| `tests/qemu/` | Programs used by QEMU and host-driver gates |
+| `kernel/`, `user/` | Kernel runtime, MC modules, and user-mode components |
+| `selfhost/` | Self-hosting experiments |
+| `tools/` | Drivers, fuzzers, package tools, LSP, and test harnesses |
+| `demo/`, `examples/` | Hosted and hardware-oriented examples |
+| `docs/` | Specifications, reference material, qualification, and plans |
 
-Run a spec conformance-level tier (subsets of `m0` aligned to the staged
-C-backend profiles in spec §L — validate the level you touch):
+Start with [`docs/README.md`](docs/README.md) to see which documents are current
+sources of truth and which are historical records.
 
-```sh
-zig build c0   # §L.1 baseline language: fixtures + spec-coverage gate, emit-C sweep, demo lowering
-zig build c1   # §L.2 kernel profile: c0 + kernel suite (MMIO, DMA, move checking, address-space lowering)
-```
+## Release And Security
 
-The `test` gate includes a spec-section coverage check: every normative section
-of the spec must be exercised by at least one `tests/spec/*.mc` fixture (tagged
-`// SPEC: section=`), or be listed in `coverage_exempt` in `src/spec_tests.zig`.
+There is no stable public release yet. Release artifacts, checksums, SBOMs,
+attestations, version identity, and immutable publication controls are described
+in [`docs/release-process.md`](docs/release-process.md).
 
-Run core checks:
-
-```sh
-zig build test
-zig build c-test
-zig build sweep
-zig build llvm-test
-zig build llvm-opt-sweep
-```
-
-Differential and dynamic gates (also part of `m0`) — these execute the emitted
-code rather than only compiling it, which is what static review and `-fsyntax-only`
-sweeps cannot do:
-
-```sh
-zig build diff-backend   # compile each host fixture through BOTH backends; assert C and LLVM agree
-zig build diff-fuzz      # generate random MC programs; assert the two backends agree on each (seed-reproducible)
-zig build move-fuzz      # generate move-resource programs; assert every resource is released once (live_count==0)
-zig build sanitize       # run the host-driver corpus under ASan + UBSan over the emitted C
-zig build vqfault-test   # virtqueue completion fault injection (bad id / not-in-flight / length overflow)
-zig build wrap-test      # long-running ring-index / pool-generation wrap and pool-exhaustion invariants
-```
-
-`mcfuzz` (`tools/fuzz/mcfuzz.py`) is the type-directed framework — a type model over the whole
-scalar system plus structs and enums, a generator that produces well-typed programs by
-construction, and pluggable oracles:
-
-It covers ints (every width, signed/unsigned), f64, bool, structs, enums, fixed arrays, and a DAG
-of helper functions with calls. Oracles (all in `m0`):
-
-```sh
-zig build fuzz             # differential: C vs LLVM agree (status + stdout) over the full type system
-zig build fuzz-trap        # trap-consistency: programs that may overflow/divide-by-zero must trap on BOTH backends together
-zig build fuzz-sanitize    # emitted C is UBSan-clean
-zig build fuzz-robust      # robustness: `mcc check` never crashes/hangs on mutated (malformed) input
-zig build fuzz-failclosed  # soundness: `mcc check` must reject deliberately ill-typed programs
-zig build fuzz-determinism # emit-c / emit-llvm are byte-deterministic for the same input
-zig build fuzz-pipeline    # every lowering/verify stage succeeds on a check-accepted program
-```
-
-Additional standalone oracles exist for deeper runs:
-
-```sh
-zig build fuzz-metamorphic # semantics-preserving source transform must not change the result
-zig build fuzz-optlevel    # emitted C agrees at -O0 and -O2
-zig build fuzz-reference   # compiled output matches the independent Python reference interpreter
-zig build fuzz-corpus      # replay persisted regression seeds
-```
-
-A fuzzer failure prints the seed; reproduce with `tools/fuzz/mcfuzz.py gen <seed>` and minimize
-with `tools/fuzz/mcfuzz.py shrink --seed <seed> --oracle <name>`. The older one-shape generators
-(`diff-fuzz`/`move-fuzz`) reproduce via `tools/toolchain/mcgen.py <seed>` / `mcgen_move.py <seed>`.
-Raise `COUNT=` on any of them to explore further.
-
-## Compiler CLI
-
-Run the compiler through Zig:
-
-```sh
-zig build run -- check tests/spec/arithmetic_checked.mc
-zig build run -- verify tests/spec/no_lang_trap.mc
-zig build run -- lower-mir tests/spec/no_lang_trap.mc
-zig build run -- emit-c tests/c_emit/smoke.mc
-zig build run -- emit-llvm tests/c_emit/smoke.mc
-zig build run -- emit-map tests/c_emit/smoke.mc
-```
-
-Installed binary after `zig build`:
-
-```sh
-zig-out/bin/mcc check tests/spec/arithmetic_checked.mc
-zig-out/bin/mcc emit-c tests/c_emit/smoke.mc
-zig-out/bin/mcc emit-llvm tests/c_emit/smoke.mc
-```
-
-Available commands:
-
-- `lex <file.mc>`
-- `check <file.mc>`
-- `run-trap <file.mc>`
-- `facts <file.mc>`
-- `lower-hir <file.mc>`
-- `verify-hir <file.mc>`
-- `lower-mir <file.mc>`
-- `verify <file.mc>`
-- `lower-ir <file.mc>`
-- `lower-c <file.mc>`
-- `emit-c <file.mc> [--profile=kernel|hosted]`
-- `emit-map <file.mc> [--profile=kernel|hosted]`
-- `emit-llvm <file.mc>`
-
-`emit-c` defaults to the kernel/freestanding profile. The hosted profile is
-explicit:
-
-```sh
-zig build run -- emit-c demo/hosted/elementwise.mc --profile=hosted
-zig build hosted-test
-```
-
-The hosted profile is for code that uses `std/hosted_io` and `std/mathf`; it
-links against libc and libm.
-
-## Repository Layout
-
-- `src/` - compiler implementation
-- `std/` - MC standard-library modules used by tests and demos
-- `tests/spec/` - spec and diagnostic fixtures
-- `tests/c_emit/` - generated-C/backend fixtures
-- `tests/llvm/` - LLVM-specific backend fixtures
-- `tests/qemu/` - MC programs booted or linked by QEMU/host-driver gates
-- `kernel/` - C runtimes and MC kernel modules used by QEMU tests
-- `tools/toolchain/` - compiler, package, sweep, and LLVM driver tests
-- `tools/arch/`, `tools/proc/`, `tools/mem/`, `tools/ipc/`, `tools/fs/`,
-  `tools/net/`, `tools/lang/` - e2e test scripts
-- `tools/lib/` - data-driven host-driver harness and manifest
-- `demo/` - hardware and hosted demos
-- `docs/` - specs, reference docs, and roadmap notes; start at
-  [`docs/README.md`](docs/README.md)
-
-## What Is Still Prototype Work
-
-The current backend milestone is complete for the implemented spec surface, but
-the project as a whole is still not production-grade. Several areas remain
-prototype work:
-
-- full arbitrary comptime *type* computation (deliberately out of scope — MC
-  evaluates values, not types; see spec §22)
-- a broader MIR optimization pass set (the fact-gated optimizer currently has
-  two transforms: const-index bounds-check elision and divide/modulo
-  by-constant check elision)
-- a networked package registry with signing (the current registry, version
-  resolution, lockfile, and publish/install flow are offline/filesystem-local)
-- a full pretty-printing formatter (`mcc fmt` is currently a token-preserving
-  reindenter) and richer, type-directed LSP completion (`.`-member field completion
-  and type-filtered candidates; the current completion offers identifiers in scope +
-  keywords/types)
-- complete DMA/cache-coherence simulation
-- broader per-architecture production kernel hardening
-- full VFS/POSIX/network service completeness
-
-See [`docs/todo.md`](docs/todo.md) for the current consolidated follow-up list.
+Report security issues through the private process in
+[`SECURITY.md`](SECURITY.md). Compatibility expectations are documented in
+[`STABILITY.md`](STABILITY.md).
 
 ## License
 
