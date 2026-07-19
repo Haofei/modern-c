@@ -13,16 +13,28 @@ pub const VisibilityMode = enum {
     explicit_public,
 };
 
+pub const QualifiedSymbol = struct {
+    owner: Ident,
+    member: Ident,
+    linkage_name: []const u8,
+};
+
 pub const Module = struct {
     decls: []Decl,
     /// Names that own a qualified namespace (`module X`, `impl X`). Resolution rewrites
     /// `X.member` to a mangled top-level symbol, so these names are reserved against local
     /// bindings — a local may not shadow them (sema enforces this).
     qualified_owners: [][]const u8 = &.{},
+    qualified_symbols: []const QualifiedSymbol = &.{},
     visibility_mode: VisibilityMode = .legacy_pub_opt_in,
 
     pub fn withDecls(self: Module, decls: []Decl) Module {
-        return .{ .decls = decls, .qualified_owners = self.qualified_owners, .visibility_mode = self.visibility_mode };
+        return .{
+            .decls = decls,
+            .qualified_owners = self.qualified_owners,
+            .qualified_symbols = self.qualified_symbols,
+            .visibility_mode = self.visibility_mode,
+        };
     }
 
     /// Shallow free of the top-level `decls` slice only. The AST is built with an

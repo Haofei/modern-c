@@ -3,6 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const loader = @import("loader.zig");
+const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
 
 const Parser = parser.Parser;
@@ -15,7 +16,8 @@ fn expectForwardQualifiedBindings(source: []const u8) !void {
     defer arena.deinit();
 
     var p = Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
+    const parsed = try p.parseModule(arena.allocator());
+    const module = try name_resolve.transform(arena.allocator(), parsed);
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
@@ -153,20 +155,48 @@ test "qualified expression resolution OOM does not fall back to member access" {
 
         var p = Parser.init(source, &reporter);
         const parsed = p.parseModule(arena.allocator());
-        if (parsed) |module| {
-            defer module.deinit(arena.allocator());
-            try std.testing.expect(!reporter.has_errors);
+        if (parsed) |syntax_module| {
+            const resolved = name_resolve.transform(arena.allocator(), syntax_module);
+            if (resolved) |module| {
+                defer module.deinit(arena.allocator());
+                try std.testing.expect(!reporter.has_errors);
 
-            const main_fn = module.decls[1].kind.fn_decl;
-            const ret_expr = main_fn.body.?.items[0].kind.@"return".?;
-            const callee = ret_expr.kind.call.callee.*;
-            try std.testing.expectEqualStrings("M__f", callee.kind.ident.text);
+                const main_fn = module.decls[1].kind.fn_decl;
+                const ret_expr = main_fn.body.?.items[0].kind.@"return".?;
+                const callee = ret_expr.kind.call.callee.*;
+                try std.testing.expectEqualStrings("M__f", callee.kind.ident.text);
+            } else |err| {
+                try std.testing.expectEqual(error.OutOfMemory, err);
+                saw_oom = true;
+            }
         } else |err| {
             try std.testing.expectEqual(error.OutOfMemory, err);
             saw_oom = true;
         }
     }
     try std.testing.expect(saw_oom);
+}
+
+test "parser leaves qualified references for the dedicated resolver" {
+    const source =
+        \\fn main() -> u32 { return M.f(); }
+        \\module M { fn f() -> u32 { return 1; } }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "qualified_phase_boundary.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = Parser.init(source, &reporter);
+    const syntax_module = try p.parseModule(arena.allocator());
+    defer syntax_module.deinit(arena.allocator());
+    try std.testing.expectEqual(@as(usize, 1), syntax_module.qualified_symbols.len);
+    const syntax_callee = syntax_module.decls[0].kind.fn_decl.body.?.items[0].kind.@"return".?.kind.call.callee.*;
+    try std.testing.expectEqual(std.meta.Tag(ast.Expr.Kind).member, std.meta.activeTag(syntax_callee.kind));
+
+    const resolved = try name_resolve.transform(arena.allocator(), syntax_module);
+    const resolved_callee = resolved.decls[0].kind.fn_decl.body.?.items[0].kind.@"return".?.kind.call.callee.*;
+    try std.testing.expectEqualStrings("M__f", resolved_callee.kind.ident.text);
 }
 
 test "qualified resolution is independent of declaration order and unrelated generics" {

@@ -3,6 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
+const name_resolve = @import("name_resolve.zig");
 const sema = @import("sema.zig");
 
 pub const ParsedModule = struct {
@@ -34,7 +35,8 @@ pub fn parseModule(source_name: []const u8, source: []const u8) !ParsedModule {
     errdefer arena.deinit();
 
     var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
+    const syntax_module = try p.parseModule(arena.allocator());
+    const module = try name_resolve.transform(arena.allocator(), syntax_module);
     errdefer module.deinit(arena.allocator());
 
     var parsed = ParsedModule{

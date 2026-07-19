@@ -11,6 +11,7 @@ const lower_c = @import("lower_c.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const monomorphize = @import("monomorphize.zig");
+const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
@@ -901,8 +902,9 @@ fn allMetadataValuesSupported(path: []const u8, key: []const u8, value: []const 
 fn parseSpecModule(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !ast.Module {
     var p = parser.Parser.init(source, reporter);
     const module = try p.parseModule(allocator);
-    try generic_precheck.check(allocator, module, reporter, null);
-    return try monomorphize.transformReport(allocator, module, reporter);
+    const resolved = try name_resolve.transform(allocator, module);
+    try generic_precheck.check(allocator, resolved, reporter, null);
+    return try monomorphize.transformReport(allocator, resolved, reporter);
 }
 
 fn parseSpecModuleForExpectedDiagnostics(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !?ast.Module {

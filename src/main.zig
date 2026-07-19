@@ -33,6 +33,7 @@ const monomorphize_tests = @import("monomorphize_tests.zig");
 const async_lower = @import("async_lower.zig");
 const mangle_private = @import("mangle_private.zig");
 const mangle_private_tests = @import("mangle_private_tests.zig");
+const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
 const parser_tests = @import("parser_tests.zig");
 const sema = @import("sema.zig");
@@ -1008,10 +1009,14 @@ fn parseModuleOrReportMode(source: []const u8, allocator: std.mem.Allocator, dia
         return err;
     };
     module.visibility_mode = active_visibility_mode;
+    const resolved = name_resolve.transform(allocator, module) catch |err| {
+        if (render_errors) diag.render();
+        return err;
+    };
     // Lower `async fn` / `await` to stackless Future state machines BEFORE monomorphize/sema, so
     // the move/borrow checker and both backends only ever see ordinary MC. No-op for modules
     // without any `async fn` (passes the module through untouched).
-    const lowered = async_lower.transform(allocator, module, diag) catch |err| {
+    const lowered = async_lower.transform(allocator, resolved, diag) catch |err| {
         if (render_errors) diag.render();
         return err;
     };
@@ -1051,6 +1056,7 @@ test {
     _ = lexer_tests;
     _ = loader;
     _ = mangle_private_tests;
+    _ = name_resolve;
     _ = lower_c;
     _ = lower_c_tests;
     _ = lower_llvm;

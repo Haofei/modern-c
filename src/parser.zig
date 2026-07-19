@@ -34,10 +34,8 @@ pub const Parser = struct {
     // existing statement-`switch` (return/assign arms), so the rest of the compiler only ever sees
     // ordinary statement switches. `swexpr_counter` mints the temp for the initializer form.
     swexpr_counter: usize = 0,
-    // `impl Type { fn m(…) }` associated functions are desugared to free functions `Type__m`;
-    // `impl_methods` maps the call form `Type.m` to the mangled free-function name so that
-    // `Type.m(args)` call sites can be rewritten (impl block must precede the call).
-    impl_methods: std.StringHashMap([]const u8) = undefined,
+    // Structured qualified definitions exported to the dedicated name-resolution pass.
+    qualified_symbols: std.ArrayList(ast.QualifiedSymbol) = .empty,
     // Names that own a qualified namespace (module/impl), exported on the Module so sema can
     // reserve them against local bindings (prevents a local from shadowing a qualified owner).
     qualified_owners: std.StringHashMap(void) = undefined,
@@ -65,8 +63,8 @@ pub const Parser = struct {
         defer self.tuple_entries.deinit(allocator);
         self.tuple_names = std.StringHashMap(usize).init(allocator);
         defer self.tuple_names.deinit();
-        self.impl_methods = std.StringHashMap([]const u8).init(allocator);
-        defer self.impl_methods.deinit();
+        self.qualified_symbols = .empty;
+        defer self.qualified_symbols.deinit(allocator);
         self.qualified_owners = std.StringHashMap(void).init(allocator);
         defer self.qualified_owners.deinit();
         var decls: std.ArrayList(ast.Decl) = .empty;
@@ -126,17 +124,24 @@ pub const Parser = struct {
         }
 
         if (self.had_parse_error) return error.ParseFailed;
-        try self.resolveCollectedQualifiedDecls(decls.items);
-
         // Prepend synthesized tuple structs so they precede any use.
         const owners = try self.collectOwnerNames(allocator);
-        if (self.synth_decls.items.len == 0) return .{ .decls = try decls.toOwnedSlice(allocator), .qualified_owners = owners };
+        const qualified_symbols = try self.qualified_symbols.toOwnedSlice(allocator);
+        if (self.synth_decls.items.len == 0) return .{
+            .decls = try decls.toOwnedSlice(allocator),
+            .qualified_owners = owners,
+            .qualified_symbols = qualified_symbols,
+        };
         var all: std.ArrayList(ast.Decl) = .empty;
         errdefer all.deinit(allocator);
         try all.appendSlice(allocator, self.synth_decls.items);
         try all.appendSlice(allocator, decls.items);
         decls.deinit(allocator);
-        return .{ .decls = try all.toOwnedSlice(allocator), .qualified_owners = owners };
+        return .{
+            .decls = try all.toOwnedSlice(allocator),
+            .qualified_owners = owners,
+            .qualified_symbols = qualified_symbols,
+        };
     }
 
     // `impl Type { fn m(…) {…} … }` — associated functions desugared to free functions named
@@ -195,7 +200,7 @@ pub const Parser = struct {
         const trait_rel_name = self.current; // the un-mangled method name
         var fn_decl = try self.finishFnDecl(null, false, exported);
         const self_mode = selfModeOfParams(fn_decl.params);
-        try self.registerQualified(type_name.text, fn_decl.name.text);
+        try self.registerQualified(type_name, fn_decl.name);
         const mangled = try self.mangleQualified(type_name.text, fn_decl.name.text);
         if (trait_name != null) {
             try conf_methods.append(allocator, .{
@@ -277,20 +282,6 @@ pub const Parser = struct {
         });
     }
 
-    // If `base` is a bare identifier `Owner` and `Owner.name` is a registered qualified symbol
-    // (impl associated function, module function, or module constant), return an identifier
-    // expression for the mangled free symbol `Owner__name`.
-    fn resolveQualified(self: *Parser, base: ast.Expr, name: ast.Ident) !?ast.Expr {
-        const owner = switch (base.kind) {
-            .ident => |id| id,
-            else => return null,
-        };
-        const key = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ owner.text, name.text });
-        const mangled = self.impl_methods.get(key) orelse return null;
-        const span = joinSpan(base.span, name.span);
-        return ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = mangled, .span = span } } };
-    }
-
     // `module Name { fn f(…) {…}  global g: T = …; … }` — a namespace. Each function and global
     // is desugared to a mangled top-level declaration `Name__f` / `Name__g`, and `Name.f` /
     // `Name.g` access sites resolve to it (qualified symbol identity; see resolveQualified).
@@ -316,7 +307,7 @@ pub const Parser = struct {
         const exported = self.match(.kw_export);
         if (self.match(.kw_fn)) {
             var fn_decl = try self.finishFnDecl(null, false, exported);
-            try self.registerQualified(mod_name.text, fn_decl.name.text);
+            try self.registerQualified(mod_name, fn_decl.name);
             fn_decl.name = .{ .text = try self.mangleQualified(mod_name.text, fn_decl.name.text), .span = fn_decl.name.span };
             try decls.append(allocator, .{ .span = joinSpan(start, fn_decl.name.span), .attrs = &[_]ast.Attr{}, .kind = .{ .fn_decl = fn_decl } });
         } else if (self.matchIdentifierText("global") or self.current.kind == .kw_const) {
@@ -325,7 +316,7 @@ pub const Parser = struct {
             const ty = if (self.match(.colon)) try self.parseType() else null;
             const initializer = if (self.match(.equal)) try self.parseExpr(0) else null;
             _ = try self.expectTok(.semicolon, "expected ';' after module global");
-            try self.registerQualified(mod_name.text, g_name.text);
+            try self.registerQualified(mod_name, g_name);
             const mangled = try self.mangleQualified(mod_name.text, g_name.text);
             try decls.append(allocator, .{ .span = joinSpan(start, g_name.span), .attrs = &[_]ast.Attr{}, .kind = .{ .global_decl = .{ .name = .{ .text = mangled, .span = g_name.span }, .ty = ty, .init = initializer, .is_const = is_const } } });
         } else {
@@ -357,10 +348,13 @@ pub const Parser = struct {
         };
     }
 
-    fn registerQualified(self: *Parser, owner: []const u8, name: []const u8) !void {
-        const key = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ owner, name });
-        try self.impl_methods.put(key, try self.mangleQualified(owner, name));
-        try self.qualified_owners.put(owner, {});
+    fn registerQualified(self: *Parser, owner: ast.Ident, name: ast.Ident) !void {
+        try self.qualified_symbols.append(self.allocator, .{
+            .owner = owner,
+            .member = name,
+            .linkage_name = try self.mangleQualified(owner.text, name.text),
+        });
+        try self.qualified_owners.put(owner.text, {});
     }
 
     fn collectOwnerNames(self: *Parser, allocator: std.mem.Allocator) ![][]const u8 {
@@ -369,167 +363,6 @@ pub const Parser = struct {
         var it = self.qualified_owners.keyIterator();
         while (it.next()) |k| try list.append(allocator, k.*);
         return list.toOwnedSlice(allocator);
-    }
-
-    // Resolve qualified references only after the complete flattened source has been parsed.
-    // During parsing, `.member` is the structured unresolved Owner/member form. Deferring this
-    // rewrite makes binding independent of declaration/import order and unrelated generics.
-    fn resolveCollectedQualifiedDecls(self: *Parser, decls: []ast.Decl) anyerror!void {
-        for (decls) |*decl| switch (decl.kind) {
-            .fn_decl, .extern_fn => |*fn_decl| {
-                for (fn_decl.params) |*param| try self.resolveCollectedQualifiedType(&param.ty);
-                if (fn_decl.return_type) |*return_type| try self.resolveCollectedQualifiedType(return_type);
-                if (fn_decl.body) |*body| try self.resolveCollectedQualifiedBlock(body);
-            },
-            .type_alias => |*alias| try self.resolveCollectedQualifiedType(&alias.ty),
-            .struct_decl => |*struct_decl| for (struct_decl.fields) |*field| try self.resolveCollectedQualifiedType(&field.ty),
-            .packed_bits_decl => |*packed_decl| {
-                try self.resolveCollectedQualifiedType(&packed_decl.repr);
-                for (packed_decl.fields) |*field| try self.resolveCollectedQualifiedType(&field.ty);
-            },
-            .overlay_union_decl => |*overlay| for (overlay.fields) |*field| try self.resolveCollectedQualifiedType(&field.ty),
-            .global_decl => |*global| {
-                if (global.ty) |*ty| try self.resolveCollectedQualifiedType(ty);
-                if (global.init) |*initializer| try self.resolveCollectedQualifiedExpr(initializer);
-            },
-            .enum_decl => |*enum_decl| {
-                if (enum_decl.repr) |*repr| try self.resolveCollectedQualifiedType(repr);
-                for (enum_decl.cases) |*case| if (case.value) |*value| try self.resolveCollectedQualifiedExpr(value);
-            },
-            .union_decl => |*union_decl| for (union_decl.cases) |*case| if (case.ty) |*ty| try self.resolveCollectedQualifiedType(ty),
-            .trait_decl => |*trait| for (trait.methods) |*method| {
-                for (method.params) |*param| try self.resolveCollectedQualifiedType(&param.ty);
-                if (method.return_type) |*return_type| try self.resolveCollectedQualifiedType(return_type);
-            },
-            .impl_trait => |*impl_trait| for (impl_trait.methods) |*method| {
-                for (method.params) |*param| try self.resolveCollectedQualifiedType(&param.ty);
-                if (method.return_type) |*return_type| try self.resolveCollectedQualifiedType(return_type);
-            },
-            .opaque_decl => {},
-        };
-    }
-
-    fn resolveCollectedQualifiedBlock(self: *Parser, block: *ast.Block) anyerror!void {
-        for (block.items) |*stmt| try self.resolveCollectedQualifiedStmt(stmt);
-    }
-
-    fn resolveCollectedQualifiedStmt(self: *Parser, stmt: *ast.Stmt) anyerror!void {
-        switch (stmt.kind) {
-            .let_decl, .var_decl => |*local| {
-                if (local.ty) |*ty| try self.resolveCollectedQualifiedType(ty);
-                if (local.init) |*initializer| try self.resolveCollectedQualifiedExpr(initializer);
-            },
-            .loop => |*loop| {
-                if (loop.iterable) |*iterable| try self.resolveCollectedQualifiedExpr(iterable);
-                try self.resolveCollectedQualifiedBlock(&loop.body);
-            },
-            .if_let => |*if_let| {
-                try self.resolveCollectedQualifiedExpr(&if_let.value);
-                try self.resolveCollectedQualifiedPattern(&if_let.pattern);
-                try self.resolveCollectedQualifiedBlock(&if_let.then_block);
-                if (if_let.else_block) |*else_block| try self.resolveCollectedQualifiedBlock(else_block);
-            },
-            .@"switch" => |*switch_node| {
-                try self.resolveCollectedQualifiedExpr(&switch_node.subject);
-                for (switch_node.arms) |*arm| {
-                    for (arm.patterns) |*pattern| try self.resolveCollectedQualifiedPattern(pattern);
-                    switch (arm.body) {
-                        .block => |*body| try self.resolveCollectedQualifiedBlock(body),
-                        .expr => |*expr| try self.resolveCollectedQualifiedExpr(expr),
-                    }
-                }
-            },
-            .unsafe_block, .comptime_block, .block => |*block| try self.resolveCollectedQualifiedBlock(block),
-            .contract_block => |*contract| try self.resolveCollectedQualifiedBlock(&contract.block),
-            .@"return" => |*value| if (value.*) |*expr| try self.resolveCollectedQualifiedExpr(expr),
-            .@"defer", .assert, .expr => |*expr| try self.resolveCollectedQualifiedExpr(expr),
-            .assignment => |*assignment| {
-                try self.resolveCollectedQualifiedExpr(&assignment.target);
-                try self.resolveCollectedQualifiedExpr(&assignment.value);
-            },
-            .asm_stmt, .@"break", .@"continue" => {},
-        }
-    }
-
-    fn resolveCollectedQualifiedPattern(self: *Parser, pattern: *ast.Pattern) anyerror!void {
-        if (pattern.kind == .literal) try self.resolveCollectedQualifiedExpr(&pattern.kind.literal);
-    }
-
-    fn resolveCollectedQualifiedExpr(self: *Parser, expr: *ast.Expr) anyerror!void {
-        switch (expr.kind) {
-            .array_literal => |items| for (items) |*item| try self.resolveCollectedQualifiedExpr(item),
-            .struct_literal => |fields| for (fields) |*field| try self.resolveCollectedQualifiedExpr(&field.value),
-            .grouped, .address_of, .deref, .await_expr => |inner| try self.resolveCollectedQualifiedExpr(inner),
-            .block => |*block| try self.resolveCollectedQualifiedBlock(block),
-            .unary => |*unary_node| try self.resolveCollectedQualifiedExpr(unary_node.expr),
-            .binary => |*binary| {
-                try self.resolveCollectedQualifiedExpr(binary.left);
-                try self.resolveCollectedQualifiedExpr(binary.right);
-            },
-            .cast => |*cast| {
-                try self.resolveCollectedQualifiedExpr(cast.value);
-                try self.resolveCollectedQualifiedType(cast.ty);
-            },
-            .call => |*call| {
-                try self.resolveCollectedQualifiedExpr(call.callee);
-                for (call.type_args) |*type_arg| try self.resolveCollectedQualifiedType(type_arg);
-                for (call.args) |*arg| try self.resolveCollectedQualifiedExpr(arg);
-            },
-            .index => |*index| {
-                try self.resolveCollectedQualifiedExpr(index.base);
-                try self.resolveCollectedQualifiedExpr(index.index);
-            },
-            .slice => |*slice| {
-                try self.resolveCollectedQualifiedExpr(slice.base);
-                try self.resolveCollectedQualifiedExpr(slice.start);
-                try self.resolveCollectedQualifiedExpr(slice.end);
-            },
-            .member => |*member| {
-                try self.resolveCollectedQualifiedExpr(member.base);
-                if (try self.resolveQualified(member.base.*, member.name)) |resolved| expr.* = resolved;
-            },
-            .try_expr => |*try_expr| {
-                try self.resolveCollectedQualifiedExpr(try_expr.operand);
-                if (try_expr.mapped) |mapped| try self.resolveCollectedQualifiedExpr(mapped);
-            },
-            .ident,
-            .int_literal,
-            .float_literal,
-            .string_literal,
-            .char_literal,
-            .bool_literal,
-            .null_literal,
-            .uninit_literal,
-            .unreachable_expr,
-            .void_literal,
-            .enum_literal,
-            => {},
-        }
-    }
-
-    fn resolveCollectedQualifiedType(self: *Parser, ty: *ast.TypeExpr) anyerror!void {
-        switch (ty.kind) {
-            .array => |*array| {
-                try self.resolveCollectedQualifiedExpr(&array.len);
-                try self.resolveCollectedQualifiedType(array.child);
-            },
-            .pointer => |*pointer| try self.resolveCollectedQualifiedType(pointer.child),
-            .raw_many_pointer => |*pointer| try self.resolveCollectedQualifiedType(pointer.child),
-            .slice => |*slice| try self.resolveCollectedQualifiedType(slice.child),
-            .qualified => |*qualified| try self.resolveCollectedQualifiedType(qualified.child),
-            .nullable => |child| try self.resolveCollectedQualifiedType(child),
-            .member => |*member| try self.resolveCollectedQualifiedType(member.base),
-            .generic => |*generic| for (generic.args) |*arg| try self.resolveCollectedQualifiedType(arg),
-            .fn_pointer => |*function| {
-                for (function.params) |*param| try self.resolveCollectedQualifiedType(param);
-                try self.resolveCollectedQualifiedType(function.ret);
-            },
-            .closure_type => |*closure| {
-                for (closure.params) |*param| try self.resolveCollectedQualifiedType(param);
-                try self.resolveCollectedQualifiedType(closure.ret);
-            },
-            .name, .enum_literal, .dyn_trait => {},
-        }
     }
 
     // ---- tuple desugaring (tuples -> synthesized nominal structs) ----

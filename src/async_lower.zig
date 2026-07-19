@@ -354,6 +354,7 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
         return .{
             .decls = try out.toOwnedSlice(arena),
             .qualified_owners = try owners.toOwnedSlice(arena),
+            .qualified_symbols = module.qualified_symbols,
             .visibility_mode = module.visibility_mode,
         };
     }
