@@ -524,7 +524,7 @@ const CEmitter = struct {
     }
 
     fn collectFnDeclArtifact(self: *CEmitter, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) !void {
-        try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = is_extern, .error_from = error_from.hasAttr(attrs) });
+        try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = is_extern, .is_variadic = fn_decl.is_variadic, .error_from = error_from.hasAttr(attrs) });
         if (!is_extern and fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
         if (!is_extern) if (backendNameOverride(attrs)) |name| try self.backend_names.put(fn_decl.name.text, name);
         try self.collectFunctionSliceTypes(fn_decl);
@@ -2479,9 +2479,9 @@ const CEmitter = struct {
                 if (self.nullablePayloadIsValueOptional(child.*)) {
                     const payload = self.resolveAliasType(child.*);
                     const name = try lower_c_names.optTypeName(self.typeNameContext(), payload);
-                    if (!self.opt_types.contains(name)) {
-                        try self.opt_types.put(name, .{ .name = name, .payload_ty = payload });
-                    }
+                    if (self.opt_types.get(name)) |existing| {
+                        if (!sema_type.sameTypeSyntax(existing.payload_ty, payload)) return error.GeneratedTypeNameCollision;
+                    } else try self.opt_types.put(name, .{ .name = name, .payload_ty = payload });
                 }
             },
             else => {},
@@ -5363,7 +5363,7 @@ const CEmitter = struct {
         const callee_name = calleeIdentName(call.callee.*) orelse return null;
         const fn_info = self.functions.get(callee_name) orelse return null;
         const return_ty = fn_info.return_type orelse return null;
-        if (isVoidType(return_ty) or fn_info.params.len < call.args.len) return null;
+        if (isVoidType(return_ty) or !fn_info.acceptsArgCount(call.args.len)) return null;
 
         var nested_temps = try self.emitSequencedCallArgTemps(call, locals, fn_info);
         defer nested_temps.deinit(self.scratch.allocator());

@@ -128,9 +128,14 @@ pub fn collectSequencedArgTemps(
 
     const target_owner = calleeIdentName(call.callee.*) orelse return error.UnsupportedCEmission;
     for (call.args, 0..) |arg, i| {
-        if (i >= fn_info.params.len) return error.UnsupportedCEmission;
-        const target_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
-        if (!std.meta.eql(target_ty, fn_info.params[i].ty)) return error.UnsupportedCEmission;
+        const target_ty = if (i < fn_info.params.len) blk: {
+            const fixed_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
+            if (!std.meta.eql(fixed_ty, fn_info.params[i].ty)) return error.UnsupportedCEmission;
+            break :blk fixed_ty;
+        } else blk: {
+            if (!fn_info.is_variadic) return error.UnsupportedCEmission;
+            break :blk ctx.expr_source_type(ctx.emit_ctx, arg, locals) orelse return error.UnsupportedCEmission;
+        };
         try temps.append(ctx.scratch, try ctx.emit_arg_temp(ctx.emit_ctx, arg, locals, target_ty));
     }
 
@@ -151,7 +156,7 @@ pub fn emitSequencedCallLocalInit(ctx: TempContext, functions: *const std.String
     if (call.args.len == 0) return false;
 
     const fn_info = sequencedCallFnInfo(functions, call) orelse return false;
-    if (fn_info.params.len < call.args.len) return false;
+    if (!fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try collectSequencedArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.scratch);
@@ -165,7 +170,7 @@ pub fn emitSequencedCallExprStmt(ctx: TempContext, functions: *const std.StringH
     if (call.args.len == 0) return false;
 
     const fn_info = sequencedCallFnInfo(functions, call) orelse return false;
-    if (fn_info.params.len < call.args.len) return false;
+    if (!fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try collectSequencedArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.scratch);
@@ -179,7 +184,7 @@ pub fn emitSequencedCallReturn(ctx: TempContext, functions: *const std.StringHas
     if (call.args.len == 0) return false;
 
     const fn_info = sequencedCallFnInfo(functions, call) orelse return false;
-    if (fn_info.params.len < call.args.len) return false;
+    if (!fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try collectSequencedArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.scratch);
@@ -196,7 +201,7 @@ pub fn emitSequencedCallAssignmentResultTemp(ctx: TempContext, functions: *const
     const target_owner = calleeIdentName(call.callee.*) orelse return error.UnsupportedCEmission;
     const return_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_result, call.callee.*.span, target_owner, null) orelse return error.UnsupportedCEmission;
     if (fn_info.return_type == null or !std.meta.eql(return_ty, fn_info.return_type.?)) return error.UnsupportedCEmission;
-    if (isVoidType(return_ty) or fn_info.params.len < call.args.len) return null;
+    if (isVoidType(return_ty) or !fn_info.acceptsArgCount(call.args.len)) return null;
 
     var temps = try collectSequencedArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.scratch);
@@ -289,7 +294,7 @@ pub fn externNonNullReturnInfo(functions: *const std.StringHashMap(FnInfo), call
     const callee_name = calleeIdentName(call.callee.*) orelse return null;
     const fn_info = functions.get(callee_name) orelse return null;
     const return_ty = fn_info.return_type orelse return null;
-    if (!fn_info.is_extern or !isNonNullPointerType(return_ty) or fn_info.params.len < call.args.len) return null;
+    if (!fn_info.is_extern or !isNonNullPointerType(return_ty) or !fn_info.acceptsArgCount(call.args.len)) return null;
     return fn_info;
 }
 

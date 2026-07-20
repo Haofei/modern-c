@@ -623,6 +623,85 @@ test "explicit C ABI rejects unclassified values and MC ABI permits them" {
     try std.testing.expectEqual(@as(usize, 8), countDiagnosticCode(&reporter, "E_EXTERN_STRUCT_BY_VALUE"));
 }
 
+test "explicit C ABI default-denies unions va_list and unresolved type forms" {
+    const source =
+        \\union Token { number: u32, none }
+        \\overlay union Word { value: u32, bytes: [4]u8 }
+        \\#[c_union]
+        \\struct CWord { value: u32, bytes: [4]u8 }
+        \\struct Error { code: u32 }
+        \\extern "C" fn tagged(value: Token) -> void;
+        \\extern "C" fn overlayed(value: Word) -> void;
+        \\extern "C" fn c_union(value: CWord) -> void;
+        \\extern "C" fn shadowed_builtin(value: Error) -> void;
+        \\extern "C" fn cursor(value: va_list) -> void;
+        \\extern "C" fn cursor_result() -> va_list;
+        \\extern "C" fn bad_member(value: u32.NoSuchType) -> void;
+        \\extern "C" fn bad_literal(value: .coherent) -> void;
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "extern_c_default_deny.mc", source);
+    defer reporter.deinit();
+    try checkSource(source, &reporter);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 8), countDiagnosticCode(&reporter, "E_EXTERN_STRUCT_BY_VALUE"));
+    try std.testing.expectEqual(@as(usize, 2), countDiagnosticCode(&reporter, "E_UNKNOWN_TYPE"));
+}
+
+test "C ABI and variadic functions cannot decay to plain MC function pointers" {
+    const source =
+        \\extern "C" fn c_echo(value: u8) -> u8;
+        \\extern "C" fn c_log(format: cstr, ...) -> i32;
+        \\fn consume(callback: fn(u8) -> u8) -> void {}
+        \\fn rejected() -> void {
+        \\    let first: fn(u8) -> u8 = c_echo;
+        \\    let inferred = c_echo;
+        \\    consume(c_echo);
+        \\    let second: fn(cstr) -> i32 = c_log;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "c_function_pointer_abi.mc", source);
+    defer reporter.deinit();
+    try checkSource(source, &reporter);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 4), countDiagnosticCode(&reporter, "E_FN_POINTER_SIGNATURE_MISMATCH"));
+}
+
+test "C variadic calls accept classified tails and reject aggregate tails" {
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\extern "C" fn log_value(format: cstr, ...) -> i32;
+        \\fn accepted() -> i32 { return log_value("%d", 42); }
+        \\fn rejected(pair: Pair) -> i32 { return log_value("%p", pair); }
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "c_variadic_calls.mc", source);
+    defer reporter.deinit();
+    try checkSource(source, &reporter);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_EXTERN_STRUCT_BY_VALUE"));
+    try std.testing.expectEqual(@as(usize, 0), countDiagnosticCode(&reporter, "E_CALL_ARG_COUNT"));
+}
+
+test "aggregate raw memory operations reject before backend lowering" {
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\fn read(addr: PAddr) -> Pair { unsafe { return raw.load<Pair>(addr); } }
+        \\fn write(addr: PAddr, value: Pair) -> void { unsafe { raw.store<Pair>(addr, value); } }
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "raw_aggregate_rejected.mc", source);
+    defer reporter.deinit();
+    try checkSource(source, &reporter);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 2), countDiagnosticCode(&reporter, "E_RAW_AGGREGATE_UNSUPPORTED"));
+}
+
 test "nullable classification resolves aliases inside the type constructor" {
     const source =
         \\type Word = u32;

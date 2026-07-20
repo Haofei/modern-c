@@ -854,7 +854,7 @@ except G29, which is intentionally Linux-hosted by design.
 | Gap | What | Primary files | Status |
 |-----|------|---------------|--------|
 | G23 | `<call>==x` fails in `return`/`let bool=` (works in `if`) → `UnsupportedCEmission` | `src/lower_c_flow.zig` (+llvm equiv) | **fixed + m0-gated** |
-| G19 | `raw.load/store<T>` of aggregate T → `UnsupportedCEmission` (scalar-only) | `src/lower_c_type.zig`, `lower_c_call.zig` (+llvm) | **fixed + m0-gated** |
+| G19 | `raw.load/store<T>` of aggregate T → unsupported; use `raw.ptr<T>` plus explicit dereference | sema plus both backends | **resolved by defined scalar-only contract** |
 | G24 | reserved words (`ok/err/type/use/open/sat/wrap`) can't be locals → contextual keywords | `src/lexer.zig`, `src/parser.zig` | **fixed + m0-gated** |
 
 #### Batch 2 — the two big features (DONE)
@@ -899,7 +899,7 @@ full-self-hosting guide in §6.
 
 ### Execution log
 - **2026-07-01 — Batch 1 landed** (G19 `6ef4534`, G23 `a3f5305`, G24 `5dbef9e`; fixture fix included).
-  - **G19** — aggregate `raw.load/store<T>` now lower (whole-object typed load/store) on C + LLVM; scalar/MMIO path untouched. `diff-backend`/`c-test` green.
+  - **G19 historical note** — aggregate `raw.load/store<T>` briefly lowered as whole-object typed access. The current contract deliberately rejects it because that path was neither reliably volatile nor fully instrumented; `raw.ptr<T>` remains the supported aggregate mechanism.
   - **G23** — sequenced-comparison operand-type recovery in value contexts (`return`/`let bool=`) for call/`.raw()`/member operands (C backend; LLVM was already correct — types via sema, not AST heuristics). New `enum_raw_compare` fixture.
   - **G24** — `ok`/`err`/`type`/`use`/`open`/`sat`/`wrap` now usable as locals/params/fields (contextual keywords in the parser; lexer table unchanged so keyword semantics preserved). Caveat: `ok(..)`/`err(..)` calls still resolve to the Result ctor by lexeme.
   - Fixture bug caught by full `m0`: the G24 fixture returned 143 but host-suite entry contract needs `return 1` (both backends compute 143 identically — no compiler bug); fixed.

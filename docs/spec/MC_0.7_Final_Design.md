@@ -1534,15 +1534,19 @@ let page: *mut Page = vm.map<Page>(pa)?;
 
 `vm.map` is the *safe* path: it yields an ordinary dereferenceable `*mut T`. A
 kernel running on a direct/identity physical map may instead access a `PAddr`
-through the **strict-unsafe** `raw.load<T>` / `raw.store<T>` primitives, which read
-and write physical memory without producing a CPU pointer. Checked address
+through the **strict-unsafe** `raw.load<T>` / `raw.store<T>` primitives, which perform
+one volatile, instrumented scalar access without producing a CPU pointer. Their payload
+must be a scalar integer or floating type; aggregate payloads are rejected with
+`E_RAW_AGGREGATE_UNSUPPORTED` because a single-access volatile contract has not been
+defined for them. Aggregate code must deliberately obtain `raw.ptr<T>` and then follows
+ordinary pointer load/store semantics. Checked address
 arithmetic on the `PAddr` itself is the `std/addr` library's job — `pa_offset` /
 `pa_diff` / `pa_align_up` funnel each operation through one audited `usize` boundary
 where MC's checked-by-default arithmetic catches overflow (the opaque address class
 forbids raw `+`/ordering directly, `E_ADDRESS_CLASS_OPERATION`, and a direct deref
-with the dedicated `E_PADDR_DEREF`). `raw.load`/
-`raw.store` are the only sanctioned way to *touch* a `PAddr` without `vm.map`; they
-are explicit, audited strict-unsafe operations, never an implicit dereference
+with the dedicated `E_PADDR_DEREF`). `raw.load`/`raw.store` and `raw.ptr` are the
+only sanctioned ways to *touch* a `PAddr` without `vm.map`; they are explicit,
+audited strict-unsafe operations, never an implicit dereference
 (`pa.*` remains a compile error). The DMA ownership profile (section 18.2) builds
 its `CpuBuffer` accessors on exactly this primitive.
 
@@ -2540,6 +2544,12 @@ qualified scalar types include fixed-width integers and enums, `bool`, `f32`/`f6
 raw pointers, `cstr`, address-class scalar handles, and nullable raw pointers.
 Required integer extension rules are part of the ABI signature and must agree at
 definitions, declarations, and call sites.
+
+The plain `fn(...) -> T` pointer type uses the private MC calling convention and does
+not carry a C ABI identity. Explicit C functions and variadic functions therefore do
+not implicitly convert to it. `va_list` is also not a portable by-value boundary type;
+it is restricted to compiler-managed varargs cursors and is rejected as an explicit C
+parameter or return value.
 
 Arrays, slices, structs/unions, tagged value optionals, `Result`, closures, trait
 objects, and unclassified generic wrappers may not cross an explicit C boundary by

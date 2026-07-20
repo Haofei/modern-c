@@ -1,32 +1,30 @@
-// raw.load<T>/raw.store<T> generalize past scalars: an aggregate (struct) T
-// lowers to a whole-object typed load/store `(*(T *)(addr))`, mirroring the
-// `raw.ptr<T>(addr)` + deref path. Scalar T keeps its `mc_raw_load_*` helper
-// lowering unchanged. Both are exercised here so the c-test gate compiles them.
+// Aggregate raw memory access uses an explicit raw pointer. raw.load/raw.store
+// are scalar-only because their contract is one volatile, instrumented access.
 struct Tok {
     kind: u32,
     a: usize,
     b: usize,
 }
 
-// Aggregate load: reads the whole struct value from the raw address.
 fn load_tok(addr: usize) -> Tok {
     unsafe {
-        return raw.load<Tok>(phys(addr));
+        let pointer: *mut Tok = raw.ptr<Tok>(phys(addr));
+        return pointer.*;
     }
 }
 
-// Aggregate store: writes the whole struct value to the raw address.
 fn store_tok(addr: usize, t: Tok) -> void {
     unsafe {
-        raw.store<Tok>(phys(addr), t);
+        let pointer: *mut Tok = raw.ptr<Tok>(phys(addr));
+        pointer.* = t;
     }
 }
 
-// Aggregate round-trip through one raw cell.
 fn copy_tok(src: usize, dst: usize) -> void {
     unsafe {
-        let v: Tok = raw.load<Tok>(phys(src));
-        raw.store<Tok>(phys(dst), v);
+        let source: *mut Tok = raw.ptr<Tok>(phys(src));
+        let target: *mut Tok = raw.ptr<Tok>(phys(dst));
+        target.* = source.*;
     }
 }
 

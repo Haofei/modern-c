@@ -635,7 +635,7 @@ pub fn emitReadCallReturn(ctx: CallEmitContext, expr: ast.Expr, locals: *std.Str
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
 
     const fn_info = if (calleeIdentName(call.callee.*)) |name| ctx.replacement.functions.get(name) orelse return false else return false;
-    if (fn_info.params.len < call.args.len) return false;
+    if (!fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitReadCallArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.emit.scratch);
@@ -671,7 +671,7 @@ pub fn emitReadCallLocalInit(ctx: CallEmitContext, name: []const u8, decl_ty: as
     const call = ast_query.callExpr(initializer) orelse return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
-    if (fn_info.params.len < call.args.len) return false;
+    if (!fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitReadCallArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.emit.scratch);
@@ -685,7 +685,7 @@ pub fn emitReadCallAssignment(ctx: CallEmitContext, assignment: anytype, locals:
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
     const call_return_ty = fn_info.return_type orelse return false;
-    if (lower_c_type.isVoidType(call_return_ty) or fn_info.params.len < call.args.len) return false;
+    if (lower_c_type.isVoidType(call_return_ty) or !fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitReadCallArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.emit.scratch);
@@ -699,7 +699,7 @@ pub fn emitReadCallExprStmt(ctx: CallEmitContext, expr: ast.Expr, locals: *std.S
     const call = ast_query.callExpr(expr) orelse return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
-    if (fn_info.params.len < call.args.len) return false;
+    if (!fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitReadCallArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.emit.scratch);
@@ -810,7 +810,11 @@ fn emitReadCallArgTemps(ctx: CallEmitContext, call: anytype, locals: *std.String
     var temps: std.ArrayList(SequencedArgTemp) = .empty;
     errdefer temps.deinit(ctx.emit.scratch);
     for (call.args, 0..) |arg, i| {
-        try temps.append(ctx.emit.scratch, try emitReadCallArgTemp(ctx, arg, locals, fn_info.params[i].ty));
+        const target_ty = if (i < fn_info.params.len)
+            fn_info.params[i].ty
+        else
+            ctx.call_ctx.expr_source_type(ctx.call_ctx.emit_ctx, arg, locals) orelse return error.UnsupportedCEmission;
+        try temps.append(ctx.emit.scratch, try emitReadCallArgTemp(ctx, arg, locals, target_ty));
     }
     return temps;
 }

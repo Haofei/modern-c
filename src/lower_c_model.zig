@@ -66,9 +66,14 @@ pub const FnInfo = struct {
     params: []const ast.Param,
     return_type: ?ast.TypeExpr,
     is_extern: bool,
+    is_variadic: bool = false,
     // G8: `#[error_from]` conversion `fn(E1) -> E2`, invoked by `?` on the error
     // path when the propagated error type differs from the function's error type.
     error_from: bool = false,
+
+    pub fn acceptsArgCount(self: FnInfo, count: usize) bool {
+        return if (self.is_variadic) count >= self.params.len else count == self.params.len;
+    }
 };
 
 pub const SequencedArgTemp = struct {
@@ -113,6 +118,8 @@ pub const SliceAccess = struct {
 pub const SliceInfo = struct {
     name: []const u8,
     ptr_type: []const u8,
+    element_ty: ast.TypeExpr,
+    mutability: ast.Mutability,
 };
 
 pub const PackedBitsInfo = struct {

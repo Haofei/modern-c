@@ -7,10 +7,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
-
-const typeName = ast_query.typeName;
 
 pub const ArrayLenTextFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8;
 
@@ -42,7 +39,7 @@ pub fn optTypeName(ctx: Context, payload: ast.TypeExpr) ![]const u8 {
 }
 
 pub fn fnPtrTypeName(ctx: Context, node: anytype) ![]const u8 {
-    return signatureTypeName(ctx, "mc_fnptr_", node.ret.*, node.params);
+    return signatureTypeName(ctx, "mc_fnptr", node.ret.*, node.params);
 }
 
 pub fn closureTypeName(ctx: Context, node: anytype) ![]const u8 {
@@ -50,16 +47,15 @@ pub fn closureTypeName(ctx: Context, node: anytype) ![]const u8 {
 }
 
 pub fn closureTypeNameForTypes(ctx: Context, ret_ty: ast.TypeExpr, params: []const ast.TypeExpr) ![]const u8 {
-    return signatureTypeName(ctx, "mc_closure_", ret_ty, params);
+    return signatureTypeName(ctx, "mc_closure", ret_ty, params);
 }
 
 pub fn closureTypeNameForParams(ctx: Context, ret_ty: ast.TypeExpr, params: []const ast.Param) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
-    try buf.appendSlice(ctx.allocator, "mc_closure_");
-    try buf.appendSlice(ctx.allocator, try typeSuffix(ctx, ret_ty));
+    try buf.appendSlice(ctx.allocator, "mc_closure");
+    try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, ret_ty));
     for (params) |param| {
-        try buf.append(ctx.allocator, '_');
-        try buf.appendSlice(ctx.allocator, try typeSuffix(ctx, param.ty));
+        try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, param.ty));
     }
     return buf.toOwnedSlice(ctx.allocator);
 }
@@ -67,45 +63,97 @@ pub fn closureTypeNameForParams(ctx: Context, ret_ty: ast.TypeExpr, params: []co
 fn signatureTypeName(ctx: Context, prefix: []const u8, ret_ty: ast.TypeExpr, params: []const ast.TypeExpr) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
     try buf.appendSlice(ctx.allocator, prefix);
-    try buf.appendSlice(ctx.allocator, try typeSuffix(ctx, ret_ty));
+    try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, ret_ty));
     for (params) |param| {
-        try buf.append(ctx.allocator, '_');
-        try buf.appendSlice(ctx.allocator, try typeSuffix(ctx, param));
+        try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, param));
     }
     return buf.toOwnedSlice(ctx.allocator);
 }
 
 pub fn typeSuffix(ctx: Context, ty: ast.TypeExpr) ![]const u8 {
     const resolved_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, ty);
-    if (typeName(resolved_ty)) |name| {
-        if (ctx.structs.contains(name)) return std.fmt.allocPrint(ctx.allocator, "struct_{s}", .{name});
-        return name;
-    }
     return switch (resolved_ty.kind) {
-        .pointer => |node| std.fmt.allocPrint(ctx.allocator, "ptr_{s}", .{try typeSuffix(ctx, node.child.*)}),
-        .raw_many_pointer => |node| std.fmt.allocPrint(ctx.allocator, "manyptr_{s}", .{try typeSuffix(ctx, node.child.*)}),
-        .slice => |node| std.fmt.allocPrint(ctx.allocator, "slice_{s}", .{try typeSuffix(ctx, node.child.*)}),
-        .array => |node| std.fmt.allocPrint(ctx.allocator, "array_{s}_{s}", .{ try typeSuffix(ctx, node.child.*), try ctx.array_len_text(ctx.len_ctx, node.len) }),
-        .nullable => |child| std.fmt.allocPrint(ctx.allocator, "nullable_{s}", .{try typeSuffix(ctx, child.*)}),
-        .qualified => |node| typeSuffix(ctx, node.child.*),
+        .name => |name| if (ctx.structs.contains(name.text))
+            std.fmt.allocPrint(ctx.allocator, "mc_type_struct_{d}_{s}", .{ name.text.len, name.text })
+        else if (isBuiltinTypeName(name.text))
+            name.text
+        else
+            std.fmt.allocPrint(ctx.allocator, "mc_type_name_{d}_{s}", .{ name.text.len, name.text }),
+        .pointer => |node| framedUnary(ctx, "mc_type_ptr", node.mutability, node.child.*),
+        .raw_many_pointer => |node| framedUnary(ctx, "mc_type_manyptr", node.mutability, node.child.*),
+        .slice => |node| framedUnary(ctx, "mc_type_slice", node.mutability, node.child.*),
+        .array => |node| blk: {
+            var buf: std.ArrayList(u8) = .empty;
+            try buf.appendSlice(ctx.allocator, "mc_type_array");
+            try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, node.child.*));
+            try appendFramed(ctx.allocator, &buf, try ctx.array_len_text(ctx.len_ctx, node.len));
+            break :blk buf.toOwnedSlice(ctx.allocator);
+        },
+        .nullable => |child| framedChild(ctx, "mc_type_nullable", child.*),
+        .qualified => |node| framedUnary(ctx, "mc_type_qualified", node.mutability, node.child.*),
         .generic => |node| {
-            if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {
-                return std.fmt.allocPrint(ctx.allocator, "result_{s}_{s}", .{ try typeSuffix(ctx, node.args[0]), try typeSuffix(ctx, node.args[1]) });
-            }
-            return node.base.text;
+            var buf: std.ArrayList(u8) = .empty;
+            try buf.appendSlice(ctx.allocator, "mc_type_generic");
+            try appendFramed(ctx.allocator, &buf, node.base.text);
+            try buf.print(ctx.allocator, "_{d}", .{node.args.len});
+            for (node.args) |arg| try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, arg));
+            return buf.toOwnedSlice(ctx.allocator);
         },
         .fn_pointer => |node| fnPtrSuffix(ctx, node),
-        else => "unknown",
+        .closure_type => |node| signatureTypeName(ctx, "mc_type_closure", node.ret.*, node.params),
+        .dyn_trait => |node| std.fmt.allocPrint(ctx.allocator, "mc_type_dyn_{s}_{d}_{s}", .{ mutabilityCode(node.mutability), node.trait_name.text.len, node.trait_name.text }),
+        .member => |node| blk: {
+            var buf: std.ArrayList(u8) = .empty;
+            try buf.appendSlice(ctx.allocator, "mc_type_member");
+            try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, node.base.*));
+            try appendFramed(ctx.allocator, &buf, node.field.text);
+            break :blk buf.toOwnedSlice(ctx.allocator);
+        },
+        .enum_literal => |literal| std.fmt.allocPrint(ctx.allocator, "mc_type_enum_{d}_{s}", .{ literal.text.len, literal.text }),
     };
 }
 
 fn fnPtrSuffix(ctx: Context, node: anytype) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
-    try buf.appendSlice(ctx.allocator, "fnptr_");
-    try buf.appendSlice(ctx.allocator, try typeSuffix(ctx, node.ret.*));
-    for (node.params) |param| {
-        try buf.append(ctx.allocator, '_');
-        try buf.appendSlice(ctx.allocator, try typeSuffix(ctx, param));
-    }
+    try buf.appendSlice(ctx.allocator, "mc_type_fnptr");
+    try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, node.ret.*));
+    for (node.params) |param| try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, param));
     return buf.toOwnedSlice(ctx.allocator);
+}
+
+fn framedChild(ctx: Context, prefix: []const u8, child: ast.TypeExpr) ![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    try buf.appendSlice(ctx.allocator, prefix);
+    try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, child));
+    return buf.toOwnedSlice(ctx.allocator);
+}
+
+fn framedUnary(ctx: Context, prefix: []const u8, mutability: ast.Mutability, child: ast.TypeExpr) ![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    try buf.print(ctx.allocator, "{s}_{s}", .{ prefix, mutabilityCode(mutability) });
+    try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, child));
+    return buf.toOwnedSlice(ctx.allocator);
+}
+
+fn appendFramed(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), value: []const u8) !void {
+    try buf.print(allocator, "_{d}_{s}", .{ value.len, value });
+}
+
+fn mutabilityCode(mutability: ast.Mutability) []const u8 {
+    return switch (mutability) {
+        .none => "n",
+        .mut => "m",
+        .@"const" => "c",
+    };
+}
+
+fn isBuiltinTypeName(name: []const u8) bool {
+    const names = [_][]const u8{
+        "void",            "never",    "bool",    "u8",      "u16",    "u32",   "u64",   "u128",                 "usize",
+        "i8",              "i16",      "i32",     "i64",     "i128",   "isize", "f32",   "f64",                  "cstr",
+        "c_void",          "PAddr",    "VAddr",   "DmaAddr", "IrqOff", "Order", "Error", "AmbiguousSerialOrder", "AmbiguousCounterInterval",
+        "ConversionError", "Overflow", "va_list",
+    };
+    for (names) |builtin| if (std.mem.eql(u8, name, builtin)) return true;
+    return false;
 }

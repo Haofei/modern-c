@@ -669,6 +669,8 @@ pub const FunctionInfo = struct {
     params: []const ast.Param,
     return_ty: ?ast.TypeExpr,
     is_extern: bool = false,
+    is_variadic: bool = false,
+    c_abi: bool = false,
     no_lang_trap: bool = false,
     is_const: bool = false,
     // C2: this function is a sleepable op (`#[may_sleep]`) - calling it from an
@@ -817,4 +819,5 @@ pub const TypeMode = enum {
     storage,
     return_type,
     ffi_opaque_pointer,
+    generic_value,
 };

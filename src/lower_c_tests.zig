@@ -29,10 +29,10 @@ test "lower-c value optional pointer derefs lower race-tolerantly" {
     try expectContains(scalar_store, "mc_race_store_u32");
     try expectContains(scalar_store, "mc_race_store_bool");
 
-    const point_load = try cFunctionBody(output.items, "static mc_opt_struct_Point load_point(mc_opt_struct_Point * p)");
+    const point_load = try cFunctionBody(output.items, "static mc_opt_mc_type_struct_5_Point load_point(mc_opt_mc_type_struct_5_Point * p)");
     try expectContains(point_load, "mc_race_load_bool");
     try std.testing.expect(std.mem.count(u8, point_load, "mc_race_load_u32") == 2);
-    const point_store = try cFunctionBody(output.items, "static void store_point(mc_opt_struct_Point * p, mc_opt_struct_Point value)");
+    const point_store = try cFunctionBody(output.items, "static void store_point(mc_opt_mc_type_struct_5_Point * p, mc_opt_mc_type_struct_5_Point value)");
     try std.testing.expect(std.mem.count(u8, point_store, "mc_race_store_u32") == 2);
     try expectContains(point_store, "mc_race_store_bool");
 }
@@ -49,6 +49,60 @@ fn appendCheckedCTest(source_name: []const u8, source: []const u8, output: *std.
     defer parsed.deinit();
 
     try lower_c.appendC(std.testing.allocator, parsed.module, output);
+}
+
+test "lower-c synthesized function-pointer names encode pointer mutability" {
+    const source =
+        \\fn use_const(callback: fn(*const u8) -> void) -> void {}
+        \\fn use_mut(callback: fn(*mut u8) -> void) -> void {}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("c_fnptr_structural_names.mc", source, &output);
+
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "typedef void (*mc_fnptr"));
+    try expectContains(output.items, "mc_type_ptr_c_2_u8");
+    try expectContains(output.items, "mc_type_ptr_m_2_u8");
+}
+
+test "lower-c synthesized array names encode every generic argument in either source order" {
+    const sources = [_][]const u8{
+        \\fn bytes(value: [2]wrap<u8>) -> void {}
+        \\fn words(value: [2]wrap<u16>) -> void {}
+        ,
+        \\fn words(value: [2]wrap<u16>) -> void {}
+        \\fn bytes(value: [2]wrap<u8>) -> void {}
+    };
+    for (sources, 0..) |source, index| {
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        const source_name = if (index == 0) "c_generic_array_names_forward.mc" else "c_generic_array_names_reverse.mc";
+        try appendCTest(source_name, source, &output);
+
+        try expectContains(output.items, "mc_array_mc_type_generic_4_wrap_1_2_u8_2");
+        try expectContains(output.items, "mc_array_mc_type_generic_4_wrap_1_3_u16_2");
+        try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, output.items, "typedef struct mc_array_mc_type_generic"));
+    }
+}
+
+test "lower-c sequences C variadic arguments through typed temporaries" {
+    const source =
+        \\extern "C" fn c_log(format: cstr, ...) -> i32;
+        \\fn call_log(format: cstr, small: i8, single: f32) -> i32 {
+        \\    return c_log(format, small, single);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("c_variadic_sequence.mc", source, &output);
+
+    try expectContains(output.items, "int32_t c_log(char const * format, ...);");
+    const body = try cFunctionBody(output.items, "static int32_t call_log(char const * format, int8_t small, float single)");
+    const format_temp = std.mem.indexOf(u8, body, "char const * mc_tmp") orelse return error.TestUnexpectedResult;
+    const small_temp = std.mem.indexOf(u8, body, "int8_t mc_tmp") orelse return error.TestUnexpectedResult;
+    const single_temp = std.mem.indexOf(u8, body, "float mc_tmp") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(format_temp < small_temp and small_temp < single_temp);
+    try expectContains(body, "return c_log(mc_tmp");
 }
 
 test "lower-c sequences dynamic packed bits fields lexically" {
@@ -5996,7 +6050,7 @@ test "lower-c casts bool closure-call switch subjects" {
     defer output.deinit(std.testing.allocator);
     try lower_c.appendC(std.testing.allocator, module, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "switch ((int)(({ mc_closure_bool_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "switch ((int)(({ mc_closure_4_bool_3_u32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, ".code(mc_tmp") != null);
 }
 
@@ -8030,12 +8084,12 @@ test "lower-c indexed aggregate scalar fields lower race-tolerantly" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_indexed_member_access.mc", source, &output);
 
-    const slice_load_body = try cFunctionBody(output.items, "static uint32_t slice_member_load(mc_slice_mut_struct_Cell cells, uintptr_t i)");
+    const slice_load_body = try cFunctionBody(output.items, "static uint32_t slice_member_load(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i)");
     try expectContains(slice_load_body, "return ((uint32_t)mc_race_load_u32(&(cells.ptr[mc_check_index_usize(i, cells.len)].value)));");
-    const slice_store_body = try cFunctionBody(output.items, "static void slice_member_store(mc_slice_mut_struct_Cell cells, uintptr_t i, uint32_t value)");
+    const slice_store_body = try cFunctionBody(output.items, "static void slice_member_store(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i, uint32_t value)");
     try expectContains(slice_store_body, "mc_race_store_u32(&(cells.ptr[mc_check_index_usize(");
     try expectContains(slice_store_body, ".value), (uint32_t)mc_tmp");
-    const pointer_array_body = try cFunctionBody(output.items, "static uint32_t pointer_array_member_load(mc_array_struct_Cell_4 * pa, uintptr_t i)");
+    const pointer_array_body = try cFunctionBody(output.items, "static uint32_t pointer_array_member_load(mc_array_mc_type_struct_4_Cell_4 * pa, uintptr_t i)");
     try expectContains(pointer_array_body, "return ((uint32_t)mc_race_load_u32(&((*pa).elems[mc_check_index_usize(i, 4)].value)));");
     const local_body = try cFunctionBody(output.items, "static uint32_t local_array_member_load(uintptr_t i)");
     try expectContains(local_body, "return cells.elems[mc_check_index_usize(i, 4)].value;");
@@ -8064,7 +8118,7 @@ test "lower-c indexed aggregate field value copies lower recursively" {
     var slice_load_output: std.ArrayList(u8) = .empty;
     defer slice_load_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_slice_aggregate_field_load.mc", slice_load_source, &slice_load_output);
-    const slice_load_body = try cFunctionBody(slice_load_output.items, "static Inner slice_inner_load(mc_slice_mut_struct_Cell cells, uintptr_t i)");
+    const slice_load_body = try cFunctionBody(slice_load_output.items, "static Inner slice_inner_load(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i)");
     try expectContains(slice_load_body, "uintptr_t mc_idx");
     try expectContains(slice_load_body, "Inner * mc_ptr");
     try expectContains(slice_load_body, "cells.ptr[mc_check_index_usize(mc_idx");
@@ -8085,7 +8139,7 @@ test "lower-c indexed aggregate field value copies lower recursively" {
     var slice_store_output: std.ArrayList(u8) = .empty;
     defer slice_store_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_slice_aggregate_field_store.mc", slice_store_source, &slice_store_output);
-    const slice_store_body = try cFunctionBody(slice_store_output.items, "static void slice_inner_store(mc_slice_mut_struct_Cell cells, uintptr_t i, Inner value)");
+    const slice_store_body = try cFunctionBody(slice_store_output.items, "static void slice_inner_store(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i, Inner value)");
     try expectContains(slice_store_body, "Inner * mc_ptr");
     try expectContains(slice_store_body, "Inner mc_tmp");
     try expectContains(slice_store_body, "cells.ptr[mc_check_index_usize(");
@@ -8106,7 +8160,7 @@ test "lower-c indexed aggregate field value copies lower recursively" {
     var pointer_array_load_output: std.ArrayList(u8) = .empty;
     defer pointer_array_load_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_array_aggregate_field_load.mc", pointer_array_load_source, &pointer_array_load_output);
-    const pointer_array_load_body = try cFunctionBody(pointer_array_load_output.items, "static Inner pointer_array_inner_load(mc_array_struct_Cell_4 * pa, uintptr_t i)");
+    const pointer_array_load_body = try cFunctionBody(pointer_array_load_output.items, "static Inner pointer_array_inner_load(mc_array_mc_type_struct_4_Cell_4 * pa, uintptr_t i)");
     try expectContains(pointer_array_load_body, "Inner * mc_ptr");
     try expectContains(pointer_array_load_body, "(*pa).elems[mc_check_index_usize(mc_idx");
     try expectContains(pointer_array_load_body, "mc_race_load_u32");
@@ -8126,7 +8180,7 @@ test "lower-c indexed aggregate field value copies lower recursively" {
     var pointer_array_store_output: std.ArrayList(u8) = .empty;
     defer pointer_array_store_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_array_aggregate_field_store.mc", pointer_array_store_source, &pointer_array_store_output);
-    const pointer_array_store_body = try cFunctionBody(pointer_array_store_output.items, "static void pointer_array_inner_store(mc_array_struct_Cell_4 * pa, uintptr_t i, Inner value)");
+    const pointer_array_store_body = try cFunctionBody(pointer_array_store_output.items, "static void pointer_array_inner_store(mc_array_mc_type_struct_4_Cell_4 * pa, uintptr_t i, Inner value)");
     try expectContains(pointer_array_store_body, "Inner * mc_ptr");
     try expectContains(pointer_array_store_body, "(*pa).elems[mc_check_index_usize(");
     try expectContains(pointer_array_store_body, "mc_race_store_u32");
@@ -8419,23 +8473,23 @@ test "lower-c nested indexed aggregate field value copies lower recursively" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_nested_indexed_aggregate_field_value_copy.mc", source, &output);
 
-    const slice_load_body = try cFunctionBody(output.items, "static Leaf slice_leaf_load(mc_slice_mut_struct_Cell cells, uintptr_t i)");
+    const slice_load_body = try cFunctionBody(output.items, "static Leaf slice_leaf_load(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i)");
     try expectContains(slice_load_body, "Leaf * mc_ptr");
     try expectContains(slice_load_body, "cells.ptr[mc_check_index_usize(mc_idx");
     try expectContains(slice_load_body, "mc_race_load_u32");
 
-    const slice_store_body = try cFunctionBody(output.items, "static void slice_leaf_store(mc_slice_mut_struct_Cell cells, uintptr_t i, Leaf value)");
+    const slice_store_body = try cFunctionBody(output.items, "static void slice_leaf_store(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i, Leaf value)");
     try expectContains(slice_store_body, "Leaf * mc_ptr");
     try expectContains(slice_store_body, "Leaf mc_tmp");
     try expectContains(slice_store_body, "cells.ptr[mc_check_index_usize(");
     try expectContains(slice_store_body, "mc_race_store_u32");
 
-    const pointer_array_load_body = try cFunctionBody(output.items, "static Leaf pointer_array_leaf_load(mc_array_struct_Cell_4 * pa, uintptr_t i)");
+    const pointer_array_load_body = try cFunctionBody(output.items, "static Leaf pointer_array_leaf_load(mc_array_mc_type_struct_4_Cell_4 * pa, uintptr_t i)");
     try expectContains(pointer_array_load_body, "Leaf * mc_ptr");
     try expectContains(pointer_array_load_body, "(*pa).elems[mc_check_index_usize(mc_idx");
     try expectContains(pointer_array_load_body, "mc_race_load_u32");
 
-    const pointer_array_store_body = try cFunctionBody(output.items, "static void pointer_array_leaf_store(mc_array_struct_Cell_4 * pa, uintptr_t i, Leaf value)");
+    const pointer_array_store_body = try cFunctionBody(output.items, "static void pointer_array_leaf_store(mc_array_mc_type_struct_4_Cell_4 * pa, uintptr_t i, Leaf value)");
     try expectContains(pointer_array_store_body, "Leaf * mc_ptr");
     try expectContains(pointer_array_store_body, "(*pa).elems[mc_check_index_usize(");
     try expectContains(pointer_array_store_body, "mc_race_store_u32");
@@ -8501,14 +8555,14 @@ test "lower-c nested indexed aggregate scalar member chains lower race-tolerantl
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_nested_member_access.mc", source, &output);
 
-    const slice_load_body = try cFunctionBody(output.items, "static uint32_t slice_nested_load(mc_slice_mut_struct_Cell cells, uintptr_t i)");
+    const slice_load_body = try cFunctionBody(output.items, "static uint32_t slice_nested_load(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i)");
     try expectContains(slice_load_body, "return ((uint32_t)mc_race_load_u32(&(cells.ptr[mc_check_index_usize(i, cells.len)].inner.value)));");
-    const slice_store_body = try cFunctionBody(output.items, "static void slice_nested_store(mc_slice_mut_struct_Cell cells, uintptr_t i, uint32_t value)");
+    const slice_store_body = try cFunctionBody(output.items, "static void slice_nested_store(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i, uint32_t value)");
     try expectContains(slice_store_body, "mc_race_store_u32(&(cells.ptr[mc_check_index_usize(");
     try expectContains(slice_store_body, ".inner.value), (uint32_t)mc_tmp");
-    const pointer_array_load_body = try cFunctionBody(output.items, "static uint32_t pointer_array_nested_load(mc_array_struct_Cell_4 * pa, uintptr_t i)");
+    const pointer_array_load_body = try cFunctionBody(output.items, "static uint32_t pointer_array_nested_load(mc_array_mc_type_struct_4_Cell_4 * pa, uintptr_t i)");
     try expectContains(pointer_array_load_body, "return ((uint32_t)mc_race_load_u32(&((*pa).elems[mc_check_index_usize(i, 4)].inner.value)));");
-    const pointer_array_store_body = try cFunctionBody(output.items, "static void pointer_array_nested_store(mc_array_struct_Cell_4 * pa, uintptr_t i, uint32_t value)");
+    const pointer_array_store_body = try cFunctionBody(output.items, "static void pointer_array_nested_store(mc_array_mc_type_struct_4_Cell_4 * pa, uintptr_t i, uint32_t value)");
     try expectContains(pointer_array_store_body, "mc_race_store_u32(&((*pa).elems[mc_check_index_usize(");
     try expectContains(pointer_array_store_body, ".inner.value), (uint32_t)mc_tmp");
     const local_body = try cFunctionBody(output.items, "static uint32_t local_array_nested_load(uintptr_t i)");
@@ -8535,7 +8589,7 @@ test "lower-c aggregate whole-element access lowers recursively" {
     var slice_load_output: std.ArrayList(u8) = .empty;
     defer slice_load_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_slice_aggregate_load.mc", slice_load_source, &slice_load_output);
-    const slice_load_body = try cFunctionBody(slice_load_output.items, "static Cell slice_cell_load(mc_slice_mut_struct_Cell cells, uintptr_t i)");
+    const slice_load_body = try cFunctionBody(slice_load_output.items, "static Cell slice_cell_load(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i)");
     try expectContains(slice_load_body, "uintptr_t mc_idx");
     try expectContains(slice_load_body, "Cell * mc_ptr");
     try expectContains(slice_load_body, "cells.ptr[mc_check_index_usize(mc_idx");
@@ -8553,7 +8607,7 @@ test "lower-c aggregate whole-element access lowers recursively" {
     var slice_store_output: std.ArrayList(u8) = .empty;
     defer slice_store_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_slice_aggregate_store.mc", slice_store_source, &slice_store_output);
-    const slice_store_body = try cFunctionBody(slice_store_output.items, "static void slice_cell_store(mc_slice_mut_struct_Cell cells, uintptr_t i, Cell value)");
+    const slice_store_body = try cFunctionBody(slice_store_output.items, "static void slice_cell_store(mc_slice_mut_mc_type_struct_4_Cell cells, uintptr_t i, Cell value)");
     try expectContains(slice_store_body, "Cell * mc_ptr");
     try expectContains(slice_store_body, "Cell mc_tmp");
     try expectContains(slice_store_body, "cells.ptr[mc_check_index_usize(");
@@ -8571,7 +8625,7 @@ test "lower-c aggregate whole-element access lowers recursively" {
     var pointer_array_output: std.ArrayList(u8) = .empty;
     defer pointer_array_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_array_aggregate_load.mc", pointer_array_source, &pointer_array_output);
-    const pointer_array_body = try cFunctionBody(pointer_array_output.items, "static Cell pointer_array_cell_load(mc_array_struct_Cell_4 * pa, uintptr_t i)");
+    const pointer_array_body = try cFunctionBody(pointer_array_output.items, "static Cell pointer_array_cell_load(mc_array_mc_type_struct_4_Cell_4 * pa, uintptr_t i)");
     try expectContains(pointer_array_body, "uintptr_t mc_idx");
     try expectContains(pointer_array_body, "Cell * mc_ptr");
     try expectContains(pointer_array_body, "(*pa).elems[mc_check_index_usize(mc_idx");
@@ -8589,7 +8643,7 @@ test "lower-c aggregate whole-element access lowers recursively" {
     var pointer_array_store_output: std.ArrayList(u8) = .empty;
     defer pointer_array_store_output.deinit(std.testing.allocator);
     try appendCTest("emit_c_pointer_array_aggregate_store.mc", pointer_array_store_source, &pointer_array_store_output);
-    const pointer_array_store_body = try cFunctionBody(pointer_array_store_output.items, "static void pointer_array_cell_store(mc_array_struct_Cell_4 * pa, uintptr_t i, Cell value)");
+    const pointer_array_store_body = try cFunctionBody(pointer_array_store_output.items, "static void pointer_array_cell_store(mc_array_mc_type_struct_4_Cell_4 * pa, uintptr_t i, Cell value)");
     try expectContains(pointer_array_store_body, "Cell * mc_ptr");
     try expectContains(pointer_array_store_body, "Cell mc_tmp");
     try expectContains(pointer_array_store_body, "(*pa).elems[mc_check_index_usize(");

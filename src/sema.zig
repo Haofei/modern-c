@@ -8,6 +8,7 @@ const error_from = @import("error_from.zig");
 const numeric = @import("numeric.zig");
 const eval = @import("eval.zig");
 const loader = @import("loader.zig");
+const scalar_repr = @import("scalar_repr.zig");
 const sema_move = @import("sema_move.zig");
 
 const sema_model = @import("sema_model.zig");
@@ -869,6 +870,8 @@ pub const Checker = struct {
                         .params = fn_decl.params,
                         .return_ty = fn_decl.return_type,
                         .is_extern = decl.kind == .extern_fn,
+                        .is_variadic = fn_decl.is_variadic,
+                        .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(decl.attrs, "mc_abi")),
                         .no_lang_trap = hasNoLangTrap(decl.attrs),
                         .is_const = fn_decl.is_const,
                         .may_sleep = hasMaySleep(decl.attrs),
@@ -1509,6 +1512,10 @@ pub const Checker = struct {
             }
         }
         if (fn_decl.return_type) |ret_ty| {
+            if (isTypeName(resolveAliasType(ret_ty, ctx), "va_list")) {
+                self.errorCode(ret_ty.span, "E_EXTERN_STRUCT_BY_VALUE", "explicit C ABI functions cannot return va_list by value; keep the cursor local or pass it through a pointer");
+                return;
+            }
             if (externAbiTypeNeedsClassification(ret_ty, ctx)) {
                 self.errorCode(ret_ty.span, "E_EXTERN_STRUCT_BY_VALUE", "explicit C ABI functions cannot return this unclassified value type by value; use an out pointer or mark an MC-only export #[mc_abi]");
             }
@@ -2550,6 +2557,7 @@ pub const Checker = struct {
                 const c_void_conversion_checked = if (local.ty) |ty| self.checkCVoidPointerConversion(ty, expr, ctx) else false;
                 const address_checked = if (local.ty) |ty| self.checkAddressOfInitializer(kind, ty, expr, ctx) else false;
                 const fn_pointer_checked = if (local.ty) |ty| self.checkFunctionPointerInitializer(ty, expr, ctx) else false;
+                const inferred_fn_pointer_checked = local.ty == null and self.checkInferredFunctionPointerInitializer(expr, ctx);
                 const closure_checked = if (local.ty) |ty| self.checkClosureInitializer(ty, expr, ctx) else false;
                 const dyn_checked = if (local.ty) |ty| self.checkDynCoercionInitializer(ty, expr, ctx) else false;
                 const address_class_checked = if (local.ty != null) checkAddressClassConversion(self, expr.span, kind, initializer) else false;
@@ -2557,7 +2565,7 @@ pub const Checker = struct {
                 const union_checked = if (local.ty) |ty| self.checkTaggedUnionConstructorCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
                 const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
                 const secret_checked = if (local.ty) |ty| (kind == .secret and self.checkSecretWrapInitializer(ty, expr, ctx)) else false;
-                if (local.ty == null and untargeted_union_checked) {
+                if (local.ty == null and (untargeted_union_checked or inferred_fn_pointer_checked)) {
                     // The diagnostic was emitted above; constructor calls need an explicit union target.
                 } else if (local.ty != null and !literal_checked and !null_checked and !null_target_checked and !targetless_literal_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(kind, initializer)) {
                     self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
@@ -3040,6 +3048,7 @@ pub const Checker = struct {
                 if (trap_call) self.checkTrapKind(expr.span, node.type_args, node.args);
                 self.checkCallCallee(node.callee.*, ctx);
                 for (node.type_args) |ty| self.checkType(ty, .normal, ctx);
+                self.checkRawMemoryPayload(expr.span, node, ctx);
                 const direct_function = if (!trap_call and node.type_args.len == 0) directCallFunction(node.callee.*, ctx) else null;
                 // Calling a value of function-pointer type (callback, vtable
                 // field, local): check the call against the pointer's signature.
@@ -3141,13 +3150,18 @@ pub const Checker = struct {
                             self.errorCode(expr.span, "E_IRQ_CONTEXT_CALL", "an #[irq_context] function may only call other #[irq_context] functions or non-blocking primitives");
                         }
                     }
-                    if (node.args.len != function.params.len) {
+                    const arity_invalid = if (function.is_variadic)
+                        node.args.len < function.params.len
+                    else
+                        node.args.len != function.params.len;
+                    if (arity_invalid) {
                         self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match function declaration");
                     } else {
                         // section 22: a `comptime` value parameter's argument must
                         // be a compile-time constant; a `comptime T: type`
                         // parameter's argument must name a type (user generics).
-                        for (function.params, node.args) |param, arg| {
+                        for (function.params, 0..) |param, index| {
+                            const arg = node.args[index];
                             if (!param.is_comptime) continue;
                             if (isTypeName(param.ty, "type")) {
                                 if (typeArgName(arg, ctx)) |tn| {
@@ -3181,6 +3195,8 @@ pub const Checker = struct {
                         if (index < function.params.len) {
                             if (function.is_extern) self.checkClosureArgumentDoesNotEscape(function.params[index].ty, arg, ctx, "cannot pass a closure that captures local storage to an extern function");
                             self.checkCallArgument(function.params[index].ty, arg, source, ctx);
+                        } else if (function.is_variadic and !cVariadicTailClassIsClassified(source)) {
+                            self.errorCode(arg.span, "E_EXTERN_STRUCT_BY_VALUE", "C variadic tail arguments must be classified scalar or pointer values");
                         }
                     }
                     if (fnptr_ty) |fpty| {
@@ -3441,8 +3457,10 @@ pub const Checker = struct {
                     self.checkImportVisibility(name.text, name.span);
                 }
             },
-            .enum_literal => {},
-            .member => |node| self.checkType(node.base.*, .normal, ctx),
+            .enum_literal => {
+                if (mode != .generic_value) self.errorCode(ty.span, "E_UNKNOWN_TYPE", "enum literals are values, not runtime types");
+            },
+            .member => self.errorCode(ty.span, "E_UNKNOWN_TYPE", "type members are not supported; this member does not resolve to a declared type"),
             .nullable => |child| self.checkType(child.*, mode, ctx),
             .qualified => |node| self.checkType(node.child.*, mode, ctx),
             .pointer => |node| {
@@ -3486,7 +3504,7 @@ pub const Checker = struct {
                         self.errorCode(node.base.span, "E_GENERIC_TYPE_ARG_COUNT", "generic type has the wrong number of type arguments");
                     }
                 }
-                for (node.args) |arg| self.checkType(arg, .normal, ctx);
+                for (node.args) |arg| self.checkType(arg, if (arg.kind == .enum_literal) .generic_value else .normal, ctx);
                 self.checkGenericTypeArgs(node, ctx);
                 if (isArithmeticDomainTypeName(node.base.text) and node.args.len == 1) {
                     if (!isCheckedUnsigned(classifyTypeCtx(node.args[0], ctx))) {
@@ -5186,12 +5204,20 @@ pub const Checker = struct {
     fn checkFunctionPointerInitializer(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
         if (classifyTypeCtx(target_ty, ctx) != .fn_pointer) return false;
         if (directCallName(expr)) |name| {
-            if (ctx.functions != null and ctx.functions.?.contains(name)) {
+            if (ctx.functions) |functions| if (functions.get(name)) |function| {
+                if (function.c_abi) {
+                    self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "an explicit C ABI function cannot be converted to a plain MC function pointer; call it directly or use an ABI-qualified wrapper");
+                    return true;
+                }
+                if (function.is_variadic) {
+                    self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "a variadic function cannot be converted to a non-variadic function pointer");
+                    return true;
+                }
                 if (!functionMatchesFnPointer(name, target_ty, ctx)) {
                     self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "function signature does not match the expected function-pointer type");
                 }
                 return true;
-            }
+            };
         }
         const source_ty = exprDeclaredType(expr, ctx) orelse return false;
         if (classifyTypeCtx(source_ty, ctx) != .fn_pointer) return false;
@@ -5199,6 +5225,31 @@ pub const Checker = struct {
             self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "function-pointer signature does not match the expected type");
         }
         return true;
+    }
+
+    fn checkInferredFunctionPointerInitializer(self: *Checker, expr: ast.Expr, ctx: Context) bool {
+        const name = directCallName(expr) orelse return false;
+        const functions = ctx.functions orelse return false;
+        const function = functions.get(name) orelse return false;
+        if (function.c_abi) {
+            self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "an explicit C ABI function cannot be inferred as a plain MC function pointer; call it directly or use an ABI-qualified wrapper");
+            return true;
+        }
+        if (function.is_variadic) {
+            self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "a variadic function cannot be inferred as a non-variadic function pointer");
+            return true;
+        }
+        return false;
+    }
+
+    fn checkRawMemoryPayload(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) void {
+        const member = memberExpr(call.callee.*) orelse return;
+        if (!isIdentNamed(member.base.*, "raw")) return;
+        if (!std.mem.eql(u8, member.name.text, "load") and !std.mem.eql(u8, member.name.text, "store")) return;
+        if (call.type_args.len != 1) return;
+        if (!rawMemoryPayloadIsScalar(call.type_args[0], ctx)) {
+            self.errorCode(span, "E_RAW_AGGREGATE_UNSUPPORTED", "raw.load/raw.store currently require a scalar payload; aggregate raw access has no defined single-access volatile contract");
+        }
     }
 
     fn checkClosureInitializer(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
@@ -5433,12 +5484,20 @@ pub const Checker = struct {
         // signatures match structurally).
         if (classifyTypeCtx(target_ty, ctx) == .fn_pointer) {
             if (directCallName(arg)) |name| {
-                if (ctx.functions != null and ctx.functions.?.contains(name)) {
+                if (ctx.functions) |functions| if (functions.get(name)) |function| {
+                    if (function.c_abi) {
+                        self.errorCode(arg.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "an explicit C ABI function cannot be passed as a plain MC function pointer; use an ABI-qualified wrapper");
+                        return;
+                    }
+                    if (function.is_variadic) {
+                        self.errorCode(arg.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "a variadic function cannot be passed as a non-variadic function pointer");
+                        return;
+                    }
                     if (!functionMatchesFnPointer(name, target_ty, ctx)) {
                         self.errorCode(arg.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "function signature does not match the expected function-pointer type");
                     }
                     return;
-                }
+                };
             }
             if (exprDeclaredType(arg, ctx)) |arg_ty| {
                 if (classifyTypeCtx(arg_ty, ctx) == .fn_pointer) {
@@ -7282,16 +7341,13 @@ fn canInitialize(target: TypeClass, initializer: TypeClass) bool {
 
 fn externAbiTypeNeedsClassification(ty: ast.TypeExpr, ctx: Context) bool {
     const resolved = resolveAliasType(ty, ctx);
-    return switch (resolved.kind) {
-        .name => |name| blk: {
-            const structs = ctx.structs orelse break :blk false;
-            break :blk structs.contains(name.text);
-        },
-        .pointer, .raw_many_pointer => false,
-        .fn_pointer, .array, .slice, .closure_type, .dyn_trait => true,
+    return !switch (resolved.kind) {
+        .name => |name| externAbiNamedTypeIsClassified(name.text, ctx),
+        .pointer, .raw_many_pointer => true,
+        .fn_pointer, .array, .slice, .closure_type, .dyn_trait => false,
         .nullable => |child| switch (resolveAliasType(child.*, ctx).kind) {
-            .pointer, .raw_many_pointer => false,
-            else => true,
+            .pointer, .raw_many_pointer => true,
+            else => false,
         },
         .generic => |node| if ((std.mem.eql(u8, node.base.text, "wrap") or
             std.mem.eql(u8, node.base.text, "sat") or
@@ -7299,17 +7355,77 @@ fn externAbiTypeNeedsClassification(ty: ast.TypeExpr, ctx: Context) bool {
             std.mem.eql(u8, node.base.text, "counter") or
             std.mem.eql(u8, node.base.text, "Reg") or
             std.mem.eql(u8, node.base.text, "RegBits")) and node.args.len >= 1)
-            externAbiTypeNeedsClassification(node.args[0], ctx)
+            !externAbiTypeNeedsClassification(node.args[0], ctx)
         else if ((std.mem.eql(u8, node.base.text, "MmioPtr") or
             std.mem.eql(u8, node.base.text, "PhysPtr") or
             std.mem.eql(u8, node.base.text, "UserPtr")) and node.args.len == 1)
-            false
-        else if (std.mem.eql(u8, node.base.text, "DmaBuf") and node.args.len == 2)
-            false
+            true
         else
-            true,
-        .qualified => |node| externAbiTypeNeedsClassification(node.child.*, ctx),
-        .member => false,
+            false,
+        .qualified => |node| !externAbiTypeNeedsClassification(node.child.*, ctx),
+        .member, .enum_literal => false,
+    };
+}
+
+fn externAbiNamedTypeIsClassified(name: []const u8, ctx: Context) bool {
+    if (ctx.structs) |structs| if (structs.contains(name)) return false;
+    if (ctx.tagged_unions) |unions| if (unions.contains(name)) return false;
+    if (ctx.overlay_unions) |unions| if (unions.contains(name)) return false;
+    if (ctx.enums) |enums| if (enums.get(name)) |info| return if (info.repr) |repr| !externAbiTypeNeedsClassification(repr, ctx) else false;
+    if (ctx.packed_bits) |packed_types| if (packed_types.get(name)) |info| return if (info.repr) |repr| !externAbiTypeNeedsClassification(repr, ctx) else false;
+    if (scalar_repr.integer(name) != null) return true;
+    const scalar_names = [_][]const u8{ "void", "never", "bool", "f32", "f64", "cstr", "PAddr", "VAddr", "DmaAddr" };
+    for (scalar_names) |scalar| if (std.mem.eql(u8, name, scalar)) return true;
+    if (std.mem.eql(u8, name, "va_list") or std.mem.eql(u8, name, "c_void") or std.mem.eql(u8, name, "type")) return false;
+    return false;
+}
+
+fn rawMemoryPayloadIsScalar(ty: ast.TypeExpr, ctx: Context) bool {
+    const resolved = resolveAliasType(ty, ctx);
+    const name = switch (resolved.kind) {
+        .name => |ident| ident.text,
+        .qualified => |node| return rawMemoryPayloadIsScalar(node.child.*, ctx),
+        else => return false,
+    };
+    const scalar_names = [_][]const u8{
+        "u8",  "u16", "u32", "u64", "u128", "usize",
+        "i8",  "i16", "i32", "i64", "i128", "isize",
+        "f32", "f64",
+    };
+    for (scalar_names) |scalar| if (std.mem.eql(u8, name, scalar)) return true;
+    return false;
+}
+
+fn cVariadicTailClassIsClassified(class: TypeClass) bool {
+    return switch (class) {
+        .checked_u8,
+        .checked_u16,
+        .checked_u32,
+        .checked_u64,
+        .checked_u128,
+        .checked_usize,
+        .checked_i8,
+        .checked_i16,
+        .checked_i32,
+        .checked_i64,
+        .checked_i128,
+        .checked_isize,
+        .pointer,
+        .raw_many_pointer,
+        .c_void_pointer,
+        .cstr,
+        .nullable_pointer,
+        .nullable_c_void_pointer,
+        .paddr,
+        .vaddr,
+        .dma_addr,
+        .bool,
+        .f32,
+        .f64,
+        .int_literal,
+        .float_literal,
+        .order,
+        => true,
         else => false,
     };
 }

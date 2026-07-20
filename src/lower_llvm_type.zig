@@ -11,6 +11,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const scalar_repr = @import("scalar_repr.zig");
 const ast_query = @import("ast_query.zig");
 
 const typeName = ast_query.typeName;
@@ -74,13 +75,8 @@ pub fn isPayloadDomainGenericName(name: []const u8) bool {
 }
 
 pub fn libraryScalarLlvmType(name: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, name, "Order")) return "i8";
-    if (std.mem.eql(u8, name, "Error")) return "i8";
-    if (std.mem.eql(u8, name, "AmbiguousSerialOrder")) return "i8";
-    if (std.mem.eql(u8, name, "AmbiguousCounterInterval")) return "i8";
-    if (std.mem.eql(u8, name, "ConversionError")) return "i8";
-    if (std.mem.eql(u8, name, "Overflow")) return "i8";
-    return null;
+    const info = scalar_repr.integer(name) orelse return null;
+    return if (scalar_repr.isLibraryInteger(name)) info.llvm_type else null;
 }
 
 pub fn typeNameEql(ty: ast.TypeExpr, expected: []const u8) bool {
@@ -148,13 +144,7 @@ pub fn integerBits(ty: ast.TypeExpr) ?u16 {
         .name => |name| name.text,
         else => return null,
     };
-    if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) return 8;
-    if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) return 16;
-    if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) return 32;
-    if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64")) return 64;
-    if (std.mem.eql(u8, name, "u128") or std.mem.eql(u8, name, "i128")) return 128;
-    if (std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return 64;
-    return null;
+    return if (scalar_repr.integer(name)) |info| info.bits else null;
 }
 
 pub fn isSignedInteger(ty: ast.TypeExpr) bool {
@@ -162,7 +152,7 @@ pub fn isSignedInteger(ty: ast.TypeExpr) bool {
         .name => |name| name.text,
         else => return false,
     };
-    return std.mem.startsWith(u8, name, "i") or std.mem.eql(u8, name, "isize");
+    return if (scalar_repr.integer(name)) |info| info.signed else false;
 }
 
 pub fn isFloatType(ty: ast.TypeExpr) bool {

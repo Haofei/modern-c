@@ -486,6 +486,7 @@ const LlvmEmitter = struct {
     current_debug_span: ?ast.Span = null,
     current_return_ty: ?ast.TypeExpr = null,
     current_function: ?[]const u8 = null,
+    current_params: ?[]const ast.Param = null,
     current_mir_range_target: ?[]const u8 = null,
     source_path: []const u8,
     target_arch: backend_mod.TargetArch,
@@ -665,8 +666,8 @@ const LlvmEmitter = struct {
             });
             break :blk id;
         } else null;
-        const c_abi = fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi"));
-        try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .c_abi = c_abi, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
+        const c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi"));
+        try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .c_abi = c_abi, .is_variadic = fn_decl.is_variadic, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
@@ -1126,6 +1127,27 @@ const LlvmEmitter = struct {
         return if (self.isSignedIntegerType(ty)) "signext " else "zeroext ";
     }
 
+    fn promoteCVariadicArgument(self: *LlvmEmitter, ty: ast.TypeExpr, value: []const u8) !ArgValue {
+        const resolved = self.resolveAliasType(ty);
+        if (typeNameEql(resolved, "f32")) {
+            const promoted = simpleType(ty.span, "f64");
+            return .{ .ty = promoted, .value = try self.castValue(value, ty, promoted) };
+        }
+        if (typeNameEql(resolved, "bool")) {
+            const promoted = simpleType(ty.span, "i32");
+            return .{ .ty = promoted, .value = try self.castValue(value, ty, promoted) };
+        }
+        if (self.integerBitsOf(ty)) |bits| {
+            if (bits < 32) {
+                const promoted = simpleType(ty.span, "i32");
+                return .{ .ty = promoted, .value = try self.castValue(value, ty, promoted) };
+            }
+            return .{ .ty = ty, .value = value };
+        }
+        if (self.isFloatTypeOf(ty) or self.fixedLayoutBitsOf(ty) != null or std.mem.eql(u8, try self.llvmType(ty), "ptr")) return .{ .ty = ty, .value = value };
+        return error.UnsupportedLlvmEmission;
+    }
+
     fn emitFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl, body: ast.Block, attrs: []const ast.Attr) !void {
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
@@ -1135,15 +1157,19 @@ const LlvmEmitter = struct {
         const old_span = self.current_debug_span;
         const old_return_ty = self.current_return_ty;
         const old_function = self.current_function;
+        const old_params = self.current_params;
         self.current_debug_scope = if (self.fn_sigs.get(fn_decl.name.text)) |sig| sig.debug_id else null;
         self.current_debug_span = fn_decl.name.span;
         self.current_return_ty = ret_ty;
         self.current_function = fn_decl.name.text;
+        self.current_params = fn_decl.params;
+        const entry_label = try self.functionEntryLabel();
         defer {
             self.current_debug_scope = old_scope;
             self.current_debug_span = old_span;
             self.current_return_ty = old_return_ty;
             self.current_function = old_function;
+            self.current_params = old_params;
         }
         // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
         // epilogue. The body is a single inline-asm statement that performs the
@@ -1207,9 +1233,9 @@ const LlvmEmitter = struct {
         // The naked path needs no entry-alloca buffering: its body is a single asm stmt.
         if (naked) {
             if (self.current_debug_scope) |scope| {
-                try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, section_str, align_str, scope });
+                try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\n{s}:\n", .{ attr_str, section_str, align_str, scope, entry_label });
             } else {
-                try self.out.print(self.allocator, "){s}{s}{s} {{\nbb_entry:\n", .{ attr_str, section_str, align_str });
+                try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ attr_str, section_str, align_str, entry_label });
             }
             self.temp_index = 0;
             try self.emitAsmStmt(ast_query.nakedAsmStmt(body) orelse return error.UnsupportedLlvmEmission);
@@ -1286,9 +1312,9 @@ const LlvmEmitter = struct {
         self.out = real_out;
         self.entry_allocas = null;
         if (self.current_debug_scope) |scope| {
-            try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, section_str, align_str, scope });
+            try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\n{s}:\n", .{ attr_str, section_str, align_str, scope, entry_label });
         } else {
-            try self.out.print(self.allocator, "){s}{s}{s} {{\nbb_entry:\n", .{ attr_str, section_str, align_str });
+            try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ attr_str, section_str, align_str, entry_label });
         }
         try self.out.appendSlice(self.allocator, alloca_buf.items);
         try self.out.appendSlice(self.allocator, body_buf.items);
@@ -1308,6 +1334,10 @@ const LlvmEmitter = struct {
             const param_ext = if (sig.c_abi) self.cAbiExtension(param.ty) else "";
             try self.out.appendSlice(self.allocator, try self.llvmType(param.ty));
             if (param_ext.len != 0) try self.out.print(self.allocator, " {s}", .{std.mem.trimEnd(u8, param_ext, " ")});
+        }
+        if (fn_decl.is_variadic) {
+            if (fn_decl.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.appendSlice(self.allocator, "...");
         }
         try self.out.appendSlice(self.allocator, ")\n\n");
     }
@@ -7020,7 +7050,11 @@ const LlvmEmitter = struct {
                 break :blk fact_ty;
             } else self.exprType(arg) orelse expected_ty;
             const arg_value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg");
-            try args.append(self.allocator, .{ .ty = arg_ty, .value = arg_value });
+            const lowered_arg = if (i >= sig.params.len and sig.is_variadic and sig.c_abi)
+                try self.promoteCVariadicArgument(arg_ty, arg_value)
+            else
+                ArgValue{ .ty = arg_ty, .value = arg_value };
+            try args.append(self.allocator, lowered_arg);
         }
         const result = try self.nextTemp();
         const ret_ext = if (sig.c_abi) self.cAbiExtension(ret_ast_ty) else "";
@@ -7421,7 +7455,12 @@ const LlvmEmitter = struct {
                 if (!std.meta.eql(fact_ty, sig.params[i].ty)) return error.UnsupportedLlvmEmission;
                 break :blk fact_ty;
             } else self.exprType(arg) orelse return error.UnsupportedLlvmEmission;
-            try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg") });
+            const arg_value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg");
+            const lowered_arg = if (i >= sig.params.len and sig.is_variadic and sig.c_abi)
+                try self.promoteCVariadicArgument(arg_ty, arg_value)
+            else
+                ArgValue{ .ty = arg_ty, .value = arg_value };
+            try args.append(self.allocator, lowered_arg);
         }
         try self.out.print(self.allocator, "  call void @{s}(", .{callee});
         for (args.items, 0..) |arg, i| {
@@ -8606,7 +8645,7 @@ const LlvmEmitter = struct {
         if (typeNameEql(resolved, "bool")) return .{ .name = "bool", .size_bits = 1, .encoding = "DW_ATE_boolean" };
         if (typeNameEql(resolved, "f32")) return .{ .name = "f32", .size_bits = 32, .encoding = "DW_ATE_float" };
         if (typeNameEql(resolved, "f64")) return .{ .name = "f64", .size_bits = 64, .encoding = "DW_ATE_float" };
-        const bits = integerBits(resolved) orelse return null;
+        const bits = self.integerBitsOf(resolved) orelse return null;
         return switch (resolved.kind) {
             .name => |name| .{
                 .name = name.text,
@@ -8707,9 +8746,13 @@ const LlvmEmitter = struct {
     }
 
     fn nextTemp(self: *LlvmEmitter) ![]const u8 {
-        const index = self.temp_index;
-        self.temp_index += 1;
-        return std.fmt.allocPrint(self.scratch.allocator(), "%t{d}", .{index});
+        while (true) {
+            const index = self.temp_index;
+            self.temp_index += 1;
+            const bare = try std.fmt.allocPrint(self.scratch.allocator(), "t{d}", .{index});
+            if (self.currentSourceParamUsesLlvmName(bare)) continue;
+            return std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{bare});
+        }
     }
 
     fn nextBindingPtr(self: *LlvmEmitter, name: []const u8) ![]const u8 {
@@ -8719,9 +8762,28 @@ const LlvmEmitter = struct {
     }
 
     fn nextLabel(self: *LlvmEmitter, prefix: []const u8) ![]const u8 {
-        const index = self.trap_index;
-        self.trap_index += 1;
-        return std.fmt.allocPrint(self.scratch.allocator(), "bb_{s}{d}", .{ prefix, index });
+        while (true) {
+            const index = self.trap_index;
+            self.trap_index += 1;
+            const label = try std.fmt.allocPrint(self.scratch.allocator(), "bb_{s}{d}", .{ prefix, index });
+            if (self.currentSourceParamUsesLlvmName(label)) continue;
+            return label;
+        }
+    }
+
+    fn currentSourceParamUsesLlvmName(self: *LlvmEmitter, name: []const u8) bool {
+        const params = self.current_params orelse return false;
+        for (params) |param| if (std.mem.eql(u8, param.name.text, name)) return true;
+        return false;
+    }
+
+    fn functionEntryLabel(self: *LlvmEmitter) ![]const u8 {
+        if (!self.currentSourceParamUsesLlvmName("bb_entry")) return "bb_entry";
+        var index: usize = 0;
+        while (true) : (index += 1) {
+            const label = try std.fmt.allocPrint(self.scratch.allocator(), "bb_entry_generated_{d}", .{index});
+            if (!self.currentSourceParamUsesLlvmName(label)) return label;
+        }
     }
 
     fn exprType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
@@ -9744,6 +9806,7 @@ const LlvmEmitter = struct {
     fn integerBitsOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?u16 {
         if (self.enumDeclForType(ty)) |enum_decl| return self.integerBitsOf(enumReprType(enum_decl));
         if (self.packedBitsInfoForType(ty)) |info| return self.integerBitsOf(info.repr);
+        if (self.structDeclForType(ty) != null or self.taggedUnionForType(ty) != null or self.overlayInfoForType(ty) != null) return null;
         if (self.domainPayloadType(ty)) |payload_ty| return self.integerBitsOf(payload_ty);
         return integerBits(self.resolveAliasType(ty));
     }

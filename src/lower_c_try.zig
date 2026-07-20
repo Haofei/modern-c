@@ -297,7 +297,7 @@ pub fn emitResultTryCallLocalInit(ctx: TryCallEmitContext, name: []const u8, dec
     const call = callExpr(initializer) orelse return false;
     if (!ctx.call_args_contain_result_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
-    if (fn_info.params.len < call.args.len) return false;
+    if (!fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitResultTryCallArgTemps(ctx, call, locals, fn_info, enclosing_return_ty, .local_init);
     defer temps.deinit(ctx.replacement.scratch);
@@ -310,7 +310,7 @@ pub fn emitNullableTryCallLocalInit(ctx: TryCallEmitContext, name: []const u8, d
     const call = callExpr(initializer) orelse return false;
     if (!try ctx.call_args_contain_nullable_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
-    if (fn_info.params.len < call.args.len) return false;
+    if (!fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitNullableTryCallArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.replacement.scratch);
@@ -324,7 +324,7 @@ pub fn emitResultTryCallAssignment(ctx: TryCallEmitContext, assignment: anytype,
     if (!ctx.call_args_contain_result_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
     const call_return_ty = fn_info.return_type orelse return false;
-    if (lower_c_type.isVoidType(call_return_ty) or fn_info.params.len < call.args.len) return false;
+    if (lower_c_type.isVoidType(call_return_ty) or !fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitResultTryCallArgTemps(ctx, call, locals, fn_info, return_ty, .stmt);
     defer temps.deinit(ctx.replacement.scratch);
@@ -339,7 +339,7 @@ pub fn emitNullableTryCallAssignment(ctx: TryCallEmitContext, assignment: anytyp
     if (!try ctx.call_args_contain_nullable_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
     const call_return_ty = fn_info.return_type orelse return false;
-    if (lower_c_type.isVoidType(call_return_ty) or fn_info.params.len < call.args.len) return false;
+    if (lower_c_type.isVoidType(call_return_ty) or !fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitNullableTryCallArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.replacement.scratch);
@@ -353,7 +353,7 @@ pub fn emitResultTryCallExprStmt(ctx: TryCallEmitContext, expr: ast.Expr, locals
     const call = callExpr(expr) orelse return false;
     if (!ctx.call_args_contain_result_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
-    if (fn_info.params.len < call.args.len) return false;
+    if (!fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitResultTryCallArgTemps(ctx, call, locals, fn_info, return_ty, .stmt);
     defer temps.deinit(ctx.replacement.scratch);
@@ -366,7 +366,7 @@ pub fn emitNullableTryCallExprStmt(ctx: TryCallEmitContext, expr: ast.Expr, loca
     const call = callExpr(expr) orelse return false;
     if (!try ctx.call_args_contain_nullable_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
-    if (fn_info.params.len < call.args.len) return false;
+    if (!fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitNullableTryCallArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.replacement.scratch);
@@ -380,7 +380,7 @@ pub fn emitResultTryCallReturn(ctx: TryCallEmitContext, expr: ast.Expr, locals: 
     if (!ctx.call_args_contain_result_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
 
     const fn_info = if (calleeIdentName(call.callee.*)) |name| ctx.replacement.functions.get(name) orelse return false else return false;
-    if (fn_info.params.len < call.args.len) return false;
+    if (!fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitResultTryCallArgTemps(ctx, call, locals, fn_info, null, .stmt);
     defer temps.deinit(ctx.replacement.scratch);
@@ -394,7 +394,7 @@ pub fn emitNullableTryCallReturn(ctx: TryCallEmitContext, expr: ast.Expr, locals
     if (!try ctx.call_args_contain_nullable_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
 
     const fn_info = if (calleeIdentName(call.callee.*)) |name| ctx.replacement.functions.get(name) orelse return false else return false;
-    if (fn_info.params.len < call.args.len) return false;
+    if (!fn_info.acceptsArgCount(call.args.len)) return false;
 
     var temps = try emitNullableTryCallArgTemps(ctx, call, locals, fn_info);
     defer temps.deinit(ctx.replacement.scratch);
@@ -749,7 +749,11 @@ fn emitResultTryCallArgTemps(ctx: TryCallEmitContext, call: anytype, locals: *st
     var temps: std.ArrayList(SequencedArgTemp) = .empty;
     errdefer temps.deinit(ctx.replacement.scratch);
     for (call.args, 0..) |arg, i| {
-        try temps.append(ctx.replacement.scratch, try emitResultTryCallArgTempWithMode(ctx, arg, locals, fn_info.params[i].ty, return_ty, mode));
+        const target_ty = if (i < fn_info.params.len)
+            fn_info.params[i].ty
+        else
+            ctx.call_ctx.expr_source_type(ctx.call_ctx.emit_ctx, arg, locals) orelse return error.UnsupportedCEmission;
+        try temps.append(ctx.replacement.scratch, try emitResultTryCallArgTempWithMode(ctx, arg, locals, target_ty, return_ty, mode));
     }
     return temps;
 }
@@ -785,7 +789,11 @@ fn emitNullableTryCallArgTemps(ctx: TryCallEmitContext, call: anytype, locals: *
     var temps: std.ArrayList(SequencedArgTemp) = .empty;
     errdefer temps.deinit(ctx.replacement.scratch);
     for (call.args, 0..) |arg, i| {
-        try temps.append(ctx.replacement.scratch, try emitNullableTryCallArgTemp(ctx, arg, locals, fn_info.params[i].ty));
+        const target_ty = if (i < fn_info.params.len)
+            fn_info.params[i].ty
+        else
+            ctx.call_ctx.expr_source_type(ctx.call_ctx.emit_ctx, arg, locals) orelse return error.UnsupportedCEmission;
+        try temps.append(ctx.replacement.scratch, try emitNullableTryCallArgTemp(ctx, arg, locals, target_ty));
     }
     return temps;
 }

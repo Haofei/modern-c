@@ -31,6 +31,11 @@ The current C ABI allowlist covers `void` returns, scalar integers and enums, `b
 pointers. LLVM declarations, definitions, and direct calls carry the target-required
 `signext`/`zeroext` attributes for narrow integer values.
 
+Plain `fn(...) -> T` pointers carry the private MC calling convention. An explicit C
+function or a variadic function cannot be converted to that pointer type. Call such
+functions directly until the language has an ABI-qualified `extern "C" fn(...)` pointer
+type whose convention and parameter attributes are part of type identity.
+
 Unclassified by-value representations are rejected at explicit C ABI and default export
 boundaries with `E_EXTERN_STRUCT_BY_VALUE`. The rejected set includes arrays, slices,
 structs and unions, tagged value optionals, `Result`, closures, trait objects, function
@@ -38,6 +43,11 @@ pointers without a classified nested signature, and unknown generic wrappers. Us
 pointer/out parameter, or use `#[mc_abi]` only for a deliberately same-backend boundary.
 An `extern struct` has C storage layout, but passing it by value remains rejected until
 the selected target's aggregate calling convention is implemented.
+
+`va_list` is compiler-managed cursor state, not a portable by-value C ABI type. It is
+rejected in explicit C parameters and returns. C variadic declarations retain `...`
+through sema and both backends; fixed arguments use the classified signature and tail
+arguments are evaluated left to right and receive C default argument promotions.
 
 ## `c_void`, not MC `void`
 

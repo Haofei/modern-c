@@ -9,8 +9,10 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const scalar_repr = @import("scalar_repr.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
+const sema_type = @import("sema_type.zig");
 
 const typeName = ast_query.typeName;
 const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
@@ -114,12 +116,16 @@ pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast.TypeExp
         },
         .fn_pointer => {
             const name = try ctx.fn_ptr_type_name(ctx.emit_ctx, ty);
-            if (!ctx.fn_ptr_types.contains(name)) try ctx.fn_ptr_types.put(name, ty);
+            if (ctx.fn_ptr_types.get(name)) |existing| {
+                if (!sema_type.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
+            } else try ctx.fn_ptr_types.put(name, ty);
             return out.appendSlice(ctx.scratch, name);
         },
         .closure_type => {
             const name = try ctx.closure_type_name(ctx.emit_ctx, ty);
-            if (!ctx.closure_types.contains(name)) try ctx.closure_types.put(name, ty);
+            if (ctx.closure_types.get(name)) |existing| {
+                if (!sema_type.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
+            } else try ctx.closure_types.put(name, ty);
             return out.appendSlice(ctx.scratch, name);
         },
         // A `*dyn Trait` lowers to its fat-pointer typedef `mc_dyn_Trait`
@@ -173,8 +179,6 @@ pub fn cType(ty: ast.TypeExpr) []const u8 {
     if (std.mem.eql(u8, name, "u128")) return "unsigned __int128";
     if (std.mem.eql(u8, name, "usize")) return "uintptr_t";
     if (isOpaqueAddressTypeName(name)) return "uintptr_t";
-    // IrqOff (§19.1) capability token: a 1-byte witness value.
-    if (std.mem.eql(u8, name, "IrqOff")) return "uint8_t";
     if (std.mem.eql(u8, name, "i8")) return "int8_t";
     if (std.mem.eql(u8, name, "i16")) return "int16_t";
     if (std.mem.eql(u8, name, "i32")) return "int32_t";
@@ -183,13 +187,7 @@ pub fn cType(ty: ast.TypeExpr) []const u8 {
     if (std.mem.eql(u8, name, "isize")) return "intptr_t";
     if (std.mem.eql(u8, name, "f32")) return "float";
     if (std.mem.eql(u8, name, "f64")) return "double";
-    // Library result/order types (sections 5.4, 5.5). Order is a three-way
-    // comparison (-1/0/+1); the ambiguity error types carry no payload.
-    if (std.mem.eql(u8, name, "Order")) return "int8_t";
-    if (std.mem.eql(u8, name, "AmbiguousSerialOrder")) return "uint8_t";
-    if (std.mem.eql(u8, name, "AmbiguousCounterInterval")) return "uint8_t";
-    if (std.mem.eql(u8, name, "ConversionError")) return "uint8_t";
-    if (std.mem.eql(u8, name, "Overflow")) return "uint8_t";
+    if (scalar_repr.integer(name)) |info| return info.c_type;
     if (std.mem.eql(u8, name, "va_list")) return "__builtin_va_list";
     return "void *";
 }
@@ -350,8 +348,6 @@ pub fn primitiveCTypeName(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "u128")) return "unsigned __int128";
     if (std.mem.eql(u8, name, "usize")) return "uintptr_t";
     if (isOpaqueAddressTypeName(name)) return "uintptr_t";
-    // IrqOff (§19.1) capability token: a 1-byte witness value.
-    if (std.mem.eql(u8, name, "IrqOff")) return "uint8_t";
     if (std.mem.eql(u8, name, "i8")) return "int8_t";
     if (std.mem.eql(u8, name, "i16")) return "int16_t";
     if (std.mem.eql(u8, name, "i32")) return "int32_t";
@@ -360,6 +356,7 @@ pub fn primitiveCTypeName(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "isize")) return "intptr_t";
     if (std.mem.eql(u8, name, "f32")) return "float";
     if (std.mem.eql(u8, name, "f64")) return "double";
+    if (scalar_repr.integer(name)) |info| return info.c_type;
     // C-ABI varargs cursor (the `va.*` intrinsics operate on it). Maps to the
     // compiler's native va_list so it is passed/used with the exact target ABI.
     if (std.mem.eql(u8, name, "va_list")) return "__builtin_va_list";

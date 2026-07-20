@@ -139,6 +139,10 @@ test "LLVM explicit C ABI scalar extensions match each target" {
         \\extern "C" fn c_u8(value: u8) -> u8;
         \\extern "C" fn c_u32(value: u32) -> u32;
         \\extern "C" fn c_bool(value: bool) -> bool;
+        \\extern "C" fn c_order(value: Order) -> Order;
+        \\extern "C" fn c_irq(value: IrqOff) -> IrqOff;
+        \\extern "C" fn c_overflow(value: Overflow) -> Overflow;
+        \\extern "C" fn c_conversion(value: ConversionError) -> ConversionError;
         \\extern fn mc_i8(value: i8) -> i8;
         \\export fn c_export(value: i8) -> i8 { return c_i8(value); }
         \\#[mc_abi]
@@ -152,6 +156,10 @@ test "LLVM explicit C ABI scalar extensions match each target" {
     try expectContains(riscv.items, "declare zeroext i8 @c_u8(i8 zeroext)");
     try expectContains(riscv.items, "declare signext i32 @c_u32(i32 signext)");
     try expectContains(riscv.items, "declare zeroext i1 @c_bool(i1 zeroext)");
+    try expectContains(riscv.items, "declare signext i8 @c_order(i8 signext)");
+    try expectContains(riscv.items, "declare zeroext i8 @c_irq(i8 zeroext)");
+    try expectContains(riscv.items, "declare zeroext i8 @c_overflow(i8 zeroext)");
+    try expectContains(riscv.items, "declare zeroext i8 @c_conversion(i8 zeroext)");
     try expectContains(riscv.items, "define signext i8 @c_export(i8 signext %value)");
     try expectContains(riscv.items, "call signext i8 @c_i8(i8 signext %");
     try expectContains(riscv.items, "declare i8 @mc_i8(i8)");
@@ -162,6 +170,8 @@ test "LLVM explicit C ABI scalar extensions match each target" {
     try appendLlvmTargetTest("llvm_c_abi_x86.mc", source, .x86_64, &x86);
     try expectContains(x86.items, "declare signext i8 @c_i8(i8 signext)");
     try expectContains(x86.items, "declare zeroext i8 @c_u8(i8 zeroext)");
+    try expectContains(x86.items, "declare signext i8 @c_order(i8 signext)");
+    try expectContains(x86.items, "declare zeroext i8 @c_overflow(i8 zeroext)");
     try expectContains(x86.items, "declare i32 @c_u32(i32)");
 
     var arm: std.ArrayList(u8) = .empty;
@@ -170,6 +180,62 @@ test "LLVM explicit C ABI scalar extensions match each target" {
     try expectContains(arm.items, "declare i8 @c_i8(i8)");
     try expectContains(arm.items, "declare i8 @c_u8(i8)");
     try expectContains(arm.items, "declare i1 @c_bool(i1)");
+    try expectContains(arm.items, "declare i8 @c_order(i8)");
+    try expectContains(arm.items, "declare i8 @c_overflow(i8)");
+}
+
+test "LLVM C variadic declarations and calls promote tail arguments" {
+    const source =
+        \\extern "C" fn c_log(format: cstr, ...) -> i32;
+        \\fn call_log(format: cstr, small: i8, single: f32, message: cstr, address: PAddr) -> i32 {
+        \\    return c_log(format, small, single, message, address);
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTargetTest("llvm_c_variadic.mc", source, .x86_64, &output);
+
+    try expectContains(output.items, "declare i32 @c_log(ptr, ...)");
+    const body = try llvmFunctionBody(output.items, "define internal i32 @call_log");
+    try expectContains(body, "sext i8 %small to i32");
+    try expectContains(body, "fpext float %single to double");
+    try expectContains(body, "call i32 @c_log(ptr %format, i32 %");
+    try expectContains(body, ", double %");
+    try expectContains(body, ", ptr %message, i64 %address)");
+}
+
+test "LLVM generated locals and blocks avoid source parameter names" {
+    const source =
+        \\fn collisions(t0: u32, t1: u32, bb_entry: u32, bb_switch_end0: u32) -> u32 {
+        \\    if t0 == t1 { return bb_entry; }
+        \\    return bb_switch_end0;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_local_name_collisions.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @collisions");
+    try expectContains(body, "bb_entry_generated_0:");
+    try expectContains(body, "%t2 =");
+    try expectContains(body, "bb_switch_end1:");
+    try expectNotContains(body, "\n  %t0 =");
+    try expectNotContains(body, "\nbb_switch_end0:");
+}
+
+test "LLVM nominal declarations shadow same-named library scalars" {
+    const source =
+        \\struct Error { code: u32 }
+        \\fn identity(value: Error) -> Error { return value; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_shadowed_library_scalar.mc", source, &output);
+    try expectContains(output.items, "define internal { i32 } @identity({ i32 } %value)");
+    try expectNotContains(output.items, "define internal i8 @identity(i8 %value)");
 }
 
 test "LLVM target-typed char literals require MIR facts" {
