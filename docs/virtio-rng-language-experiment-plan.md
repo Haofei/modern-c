@@ -8,14 +8,15 @@ Upstream target: Linux `v7.2-rc4`, commit
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `83a4ba9acbf65b45a2f73e0472b492d26ddc94e5` (`Harden
-virtio-rng language experiment control`), based directly on the upstream commit
-above. The prior M3 evidence was recorded at `14a52a42241f`.
+experiment commit is `488e207ce9523d3c719ad5b05f4b3fd67e32789f` (`Fix
+virtio-rng partial reads and recovery contracts`), based directly on the
+upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
+`14a52a42241f` and `83a4ba9acbf6`, respectively.
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`83a4ba9acbf65b45a2f73e0472b492d26ddc94e5` on
+`488e207ce9523d3c719ad5b05f4b3fd67e32789f` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -48,9 +49,10 @@ Current checkpoint:
   cookies whose contents remain immutable while queued, propagates queue-add
   failure, retries from preallocated work after an error is observed, recovers
   zero/oversize/stale completions, and serializes process transactions against
-  removal. The normal x86-64 gate passes 19/19 KUnit tests and a live
-  read/unbind race with 11,810 matching events. Three-architecture and sanitizer
-  requalification is still required.
+  removal. The normal x86-64 gates pass 20/20 full KUnit tests, 10/10
+  shadow-disabled KUnit tests, shadow-disabled `bs=1/3/7` live reads, and a
+  synchronized blocked-reader unbind with 445 matching shadow events.
+  Three-architecture and sanitizer requalification is still required.
 - Host failure-corpus persistence, full live fault-injection qualification,
   suspend/restore races, selectable Rust/MC control, and later milestones remain
   open.
@@ -143,10 +145,14 @@ The glue performs `begin_submit` before publishing the descriptor. If
 `virtqueue_add_inbuf()` fails it calls `abort_submit`. This closes the failure
 rollback hole while making an early device completion observe DeviceOwned.
 
-The request token is an embedded C cookie containing a device pointer, a `u64`
-generation, and a test-only request identifier. The callback obtains the cookie
-from `virtqueue_get_buf()` and passes its generation to the core. A generation
-is never inferred from mutable current state.
+The request token is an embedded C cookie containing a device pointer, epoch,
+`u64` generation, and test-only request identifier. The callback obtains the
+cookie from `virtqueue_get_buf()` and passes its generation to the core. A
+generation is never inferred from mutable current state. This contract trusts
+the virtqueue to map a used entry to its currently outstanding token. It does
+not claim to identify arbitrary used-ring replay after descriptor/token reuse;
+the local stale injection validates generation rejection, not transport-level
+replay resistance.
 
 Proposed direct-call ABI:
 
@@ -189,11 +195,12 @@ Every function defines and implements this validation order:
 5. apply lifecycle and phase rules;
 6. perform the transition.
 
-Extents, alignment, and non-aliasing are caller preconditions. The shared
-contract also defines:
+Extents, alignment, and non-aliasing are caller preconditions. For `copy`, the
+state object, every output object, the DMA source range, and the destination
+range are pairwise non-overlapping. The shared contract also defines:
 
 - which lock/lifecycle preconditions C must satisfy;
-- whether it is IRQ-callable;
+- whether it is IRQ-callable (`complete` and transactional `abort_submit` are);
 - state and output values on every error;
 - no partial mutation on rejected transitions unless explicitly specified;
 - exact errno mapping;
@@ -259,8 +266,9 @@ directory. Architecture-specific binary objects are never committed as source.
 
 Kconfig provides one controlling implementation choice plus an independent
 shadow option. Shadow mode clones pre-event state, gives each implementation a
-private destination, compares results/state/output, records a bounded event
-trace, and lets only the reference result affect the real device.
+private canary destination, compares results, state, declared output, copied
+bytes, and untouched tails, records a bounded event trace, and publishes only
+the validated reference output to the real destination.
 
 ## 6. Milestones and gates
 
@@ -271,8 +279,11 @@ Deliverables:
 - this plan copied or linked from the Linux experiment branch;
 - versioned ABI header and errno table;
 - executable state-transition specification;
-- threat model: buggy backend, malicious backend, guest-root-triggered races,
-  hot-remove/reset, and non-coherent DMA platform;
+- threat model: buggy or malicious protocol-conforming backend,
+  guest-root-triggered races, hot-remove/reset, and non-coherent DMA platform;
+- trusted transport boundary: the virtqueue maps each used entry to its current
+  outstanding token; arbitrary used-ring identifier replay after token reuse is
+  not claimed by the local generation-cookie defense;
 - explicit statement of what remains trusted in C glue.
 
 Gate: every event has one deterministic state/result definition, including
@@ -344,19 +355,26 @@ the virtqueue and DMA allocation and provides:
 - device/epoch/generation/request cookies that remain immutable while queued;
 - probe failure on initial queue-add failure and deterministic runtime retry;
 - process-context resubmission for zero/oversize/stale completions;
+- fatal-device handling when submission rollback or consumed-completion
+  recovery itself fails;
 - one process mutex covering copy/resubmit and the begin-remove boundary;
 - a documented lock order: process mutex before a core call; core spinlock is
   never held while taking the process mutex;
-- completion-length, stale-generation, and queue-add fault-injection controls.
+- completion-length, stale-generation, and queue-add fault-injection controls;
+- full restore-registration failure unwind for queue, work, and core state;
+- a held-completion synchronization point for deterministic blocked-reader
+  removal tests.
 
 Gate: pointer/state/output cross-product KUnit tests pass for all languages;
 blocked-reader unbind, injected completion errors, queue-add failure, normal,
 KCSAN, and KASAN/UBSAN/lockdep QEMU runs pass with no kernel diagnostics.
 
-Status: the normal x86-64 gate passes 19/19 KUnit tests and a live PCI
-virtio-rng read/unbind race with 11,810 matching protocol events. Fault
-injection, sanitizer configurations, and arm64/riscv64 requalification remain
-open. M4 remains blocked.
+Status: the normal x86-64 gates pass 20/20 full KUnit tests, 10/10
+shadow-disabled KUnit tests, shadow-disabled `bs=1/3/7` live reads, and a live
+PCI virtio-rng test that reached the held-completion synchronization point
+before unbind with 445 matching protocol events. Completion/add fault matrices,
+sanitizer configurations, and arm64/riscv64 requalification remain open. M4
+remains blocked.
 
 ### M4 — selectable controlling core
 

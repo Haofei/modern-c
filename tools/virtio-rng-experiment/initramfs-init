@@ -24,12 +24,41 @@ if ! dd if=/dev/hwrng of=/dev/null bs=64 count=100; then
 fi
 echo "VRNG-LIVE: normal reads passed"
 
+echo "VRNG-LIVE: checking small-block reads"
+for block_size in 1 3 7; do
+	if ! dd if=/dev/hwrng of=/dev/null bs="$block_size" count=257; then
+		echo "VRNG-LIVE: FAIL small-block read bs=$block_size"
+		poweroff -f
+	fi
+done
+echo "VRNG-LIVE: small-block reads passed"
+
 echo "VRNG-LIVE: starting readers for removal race"
+hold_parameter=/sys/module/virtio_rng/parameters/lang_hold_completion
+held_parameter=/sys/module/virtio_rng/parameters/lang_completion_held
+if [ -w "$hold_parameter" ] && [ -r "$held_parameter" ]; then
+	echo 1 > "$hold_parameter"
+fi
 dd if=/dev/hwrng of=/dev/null bs=64 count=1000000 &
 reader_one=$!
 dd if=/dev/hwrng of=/dev/null bs=127 count=1000000 &
 reader_two=$!
-sleep 0.2
+
+if [ -w "$hold_parameter" ] && [ -r "$held_parameter" ]; then
+	attempt=0
+	while [ "$(cat "$held_parameter")" != "1" ] && [ "$attempt" -lt 100 ]; do
+		sleep 0.05
+		attempt=$((attempt + 1))
+	done
+	if [ "$(cat "$held_parameter")" != "1" ]; then
+		echo "VRNG-LIVE: FAIL completion did not reach held state"
+		kill "$reader_one" "$reader_two" 2>/dev/null
+		poweroff -f
+	fi
+	echo "VRNG-LIVE: blocked-reader synchronization reached"
+else
+	sleep 0.2
+fi
 
 for device_path in /sys/bus/virtio/drivers/virtio_rng/virtio*; do
 	if [ -e "$device_path" ]; then
