@@ -42,7 +42,7 @@ git -C /home/zoe/src/linux switch -c vrng-lang-experiment v7.2-rc4
 
 The experiment branch is based on `v7.2-rc4` /
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current implementation commit
-is `488e207ce9523d3c719ad5b05f4b3fd67e32789f`, published as
+is `f4d46332f10641995aea1ad39444727f9c37231a`, published as
 [`Haofei/linux:vrng-lang-experiment`](https://github.com/Haofei/linux/tree/vrng-lang-experiment).
 
 The container is sufficient for compilation and QEMU execution. Performance
@@ -73,10 +73,13 @@ For the ordinary driver path, build the Linux
 `virtio_rng_lang/kunitconfig-no-shadow` fragment and run the same command with
 `no-shadow` as its fourth argument.
 
-The init process checks normal and `bs=1/3/7` reads, then unbinds the virtio
-device while two long-running `/dev/hwrng` readers are active. Shadow mode holds
-one consumed completion and waits for the exported held-state marker before
-unbind, making the blocked-reader condition deterministic. The runner requires
-both readers to terminate, the init process to reach its completion marker, and
-no kernel warning, sanitizer, lockdep, or hung-task diagnostic. Shadow mode also
-requires a nonzero event count with zero C/Rust/MC differences.
+The init process checks normal and `bs=1/3/7` reads, then sets the test-only
+`lang_copy_chunk_limit=3` parameter to force repeated driver-level partial
+copies from one completion. The `bs` cases alone exercise hwrng buffering and
+are not evidence for the driver's partial-copy path. The test then unbinds the
+virtio device while two long-running `/dev/hwrng` readers are active. Shadow
+mode holds one consumed completion and waits for the exported held-state marker
+before unbind, making the blocked-reader condition deterministic. The runner
+requires both readers to terminate, the init process to reach its completion
+marker, and no kernel warning, sanitizer, lockdep, or hung-task diagnostic.
+Shadow mode also requires a nonzero event count with zero C/Rust/MC differences.

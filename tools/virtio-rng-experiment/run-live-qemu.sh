@@ -27,6 +27,7 @@ timeout 180 qemu-system-x86_64 \
 
 grep -q "VRNG-LIVE: normal reads passed" "$log"
 grep -q "VRNG-LIVE: small-block reads passed" "$log"
+grep -q "VRNG-LIVE: driver partial-copy path passed" "$log"
 grep -q "VRNG-LIVE: removal readers terminated" "$log"
 grep -q "VRNG-LIVE: complete" "$log"
 if [ "$mode" = shadow ]; then

@@ -33,6 +33,18 @@ for block_size in 1 3 7; do
 done
 echo "VRNG-LIVE: small-block reads passed"
 
+chunk_limit_parameter=/sys/module/virtio_rng/parameters/lang_copy_chunk_limit
+if [ -w "$chunk_limit_parameter" ]; then
+	echo "VRNG-LIVE: checking driver partial-copy path"
+	echo 3 > "$chunk_limit_parameter"
+	if ! dd if=/dev/hwrng of=/dev/null bs=64 count=32; then
+		echo "VRNG-LIVE: FAIL driver partial-copy read"
+		poweroff -f
+	fi
+	echo 0 > "$chunk_limit_parameter"
+	echo "VRNG-LIVE: driver partial-copy path passed"
+fi
+
 echo "VRNG-LIVE: starting readers for removal race"
 hold_parameter=/sys/module/virtio_rng/parameters/lang_hold_completion
 held_parameter=/sys/module/virtio_rng/parameters/lang_completion_held

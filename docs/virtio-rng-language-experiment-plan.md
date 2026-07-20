@@ -8,15 +8,15 @@ Upstream target: Linux `v7.2-rc4`, commit
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `488e207ce9523d3c719ad5b05f4b3fd67e32789f` (`Fix
-virtio-rng partial reads and recovery contracts`), based directly on the
+experiment commit is `f4d46332f10641995aea1ad39444727f9c37231a` (`Harden
+virtio-rng fatal and copy handling`), based directly on the
 upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
 `14a52a42241f` and `83a4ba9acbf6`, respectively.
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`488e207ce9523d3c719ad5b05f4b3fd67e32789f` on
+`f4d46332f10641995aea1ad39444727f9c37231a` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -49,10 +49,12 @@ Current checkpoint:
   cookies whose contents remain immutable while queued, propagates queue-add
   failure, retries from preallocated work after an error is observed, recovers
   zero/oversize/stale completions, and serializes process transactions against
-  removal. The normal x86-64 gates pass 20/20 full KUnit tests, 10/10
-  shadow-disabled KUnit tests, shadow-disabled `bs=1/3/7` live reads, and a
-  synchronized blocked-reader unbind with 445 matching shadow events.
-  Three-architecture and sanitizer requalification is still required.
+  removal. Fatal errors are persistent across readers, controlling-core copy
+  outputs are validated before publication, and probe/restore ownership state
+  is explicitly unwound and synchronized. The normal x86-64 gates include full
+  and shadow-disabled KUnit, a forced driver-level partial-copy live path, and
+  synchronized blocked-reader unbind. Three-architecture and sanitizer
+  requalification is still required.
 - Host failure-corpus persistence, full live fault-injection qualification,
   suspend/restore races, selectable Rust/MC control, and later milestones remain
   open.
@@ -355,8 +357,8 @@ the virtqueue and DMA allocation and provides:
 - device/epoch/generation/request cookies that remain immutable while queued;
 - probe failure on initial queue-add failure and deterministic runtime retry;
 - process-context resubmission for zero/oversize/stale completions;
-- fatal-device handling when submission rollback or consumed-completion
-  recovery itself fails;
+- persistent fatal-device handling when submission rollback, consumed-
+  completion recovery, or controlling-core output validation fails;
 - one process mutex covering copy/resubmit and the begin-remove boundary;
 - a documented lock order: process mutex before a core call; core spinlock is
   never held while taking the process mutex;
@@ -364,15 +366,19 @@ the virtqueue and DMA allocation and provides:
 - full restore-registration failure unwind for queue, work, and core state;
 - a held-completion synchronization point for deterministic blocked-reader
   removal tests.
+- a test-only copy chunk limit that forces repeated driver-level partial copies
+  from one completion; user-space `dd bs=1/3/7` alone exercises hwrng buffering
+  and is not accepted as evidence for this driver path.
 
 Gate: pointer/state/output cross-product KUnit tests pass for all languages;
 blocked-reader unbind, injected completion errors, queue-add failure, normal,
 KCSAN, and KASAN/UBSAN/lockdep QEMU runs pass with no kernel diagnostics.
 
-Status: the normal x86-64 gates pass 20/20 full KUnit tests, 10/10
-shadow-disabled KUnit tests, shadow-disabled `bs=1/3/7` live reads, and a live
-PCI virtio-rng test that reached the held-completion synchronization point
-before unbind with 445 matching protocol events. Completion/add fault matrices,
+Status: the normal x86-64 gates pass 22/22 full KUnit tests, 11/11
+shadow-disabled KUnit tests, forced driver-level three-byte partial-copy live
+tests in both configurations, and a live PCI virtio-rng test that reached the
+held-completion synchronization point before unbind with 1,213 matching
+protocol events. Completion/add fault matrices,
 sanitizer configurations, and arm64/riscv64 requalification remain open. M4
 remains blocked.
 
