@@ -11,9 +11,11 @@ experiment commit is `14a52a42241f` (`Add C Rust MC virtio-rng language
 experiment`), based directly on the upstream commit above.
 
 Publication status: the compiler changes, experiment plan, and reproducibility
-tools are tracked in the `modern-c` repository. The Linux experiment is a clean
-local commit, but its checkout currently has only Torvalds' kernel.org repository
-as `origin`; publishing that commit requires adding a writable Linux fork remote.
+tools are published in `Haofei/modern-c` at commit `3a06b1ab`. The Linux
+experiment is published at commit `14a52a42241f` on
+`Haofei/linux:vrng-lang-experiment`. The local Linux checkout intentionally
+retains Torvalds' kernel.org repository as `origin`; the fork was pushed by its
+explicit GitHub URL.
 
 Current checkpoint:
 

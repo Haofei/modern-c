@@ -42,7 +42,8 @@ git -C /home/zoe/src/linux switch -c vrng-lang-experiment v7.2-rc4
 
 The experiment branch is based on `v7.2-rc4` /
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current implementation commit
-is `14a52a42241f`.
+is `14a52a42241f`, published as
+[`Haofei/linux:vrng-lang-experiment`](https://github.com/Haofei/linux/tree/vrng-lang-experiment).
 
 The container is sufficient for compilation and QEMU execution. Performance
 numbers must be collected on the host, not inside the container, unless the
