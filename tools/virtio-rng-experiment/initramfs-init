@@ -1,0 +1,45 @@
+#!/bin/busybox sh
+
+/bin/busybox --install -s /bin
+mount -t devtmpfs devtmpfs /dev
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+
+echo "VRNG-LIVE: waiting for /dev/hwrng"
+attempt=0
+while [ ! -c /dev/hwrng ] && [ "$attempt" -lt 100 ]; do
+	sleep 0.05
+	attempt=$((attempt + 1))
+done
+
+if [ ! -c /dev/hwrng ]; then
+	echo "VRNG-LIVE: FAIL /dev/hwrng was not created"
+	poweroff -f
+fi
+
+echo "VRNG-LIVE: starting two readers"
+dd if=/dev/hwrng of=/dev/null bs=64 count=10000 &
+reader_one=$!
+dd if=/dev/hwrng of=/dev/null bs=127 count=5000 &
+reader_two=$!
+wait "$reader_one"
+status_one=$?
+wait "$reader_two"
+status_two=$?
+
+if [ "$status_one" -eq 0 ] && [ "$status_two" -eq 0 ]; then
+	echo "VRNG-LIVE: readers passed"
+else
+	echo "VRNG-LIVE: FAIL reader status $status_one/$status_two"
+fi
+
+for device_path in /sys/bus/virtio/drivers/virtio_rng/virtio*; do
+	if [ -e "$device_path" ]; then
+		device=${device_path##*/}
+		echo "VRNG-LIVE: unbinding $device"
+		echo "$device" > /sys/bus/virtio/drivers/virtio_rng/unbind
+	fi
+done
+
+echo "VRNG-LIVE: complete"
+poweroff -f

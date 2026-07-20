@@ -133,6 +133,38 @@ fn appendLlvmTargetTest(source_name: []const u8, source: []const u8, target: @im
     try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, output, source_name, .{}, false, target, null);
 }
 
+fn appendLlvmLinuxKernelTest(source_name: []const u8, source: []const u8, target: @import("backend.zig").TargetArch, output: *std.ArrayList(u8)) !void {
+    var parsed = try test_support.parseModule(source_name, source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try lower_llvm.appendLlvmCheckedMirProfile(std.testing.allocator, parsed.module, &module_mir, output, source_name, .{}, false, target, true, null);
+}
+
+test "LLVM Linux kernel profile externalizes runtime and emits x86 hardening metadata" {
+    const source = "export fn identity(value: u32) -> u32 { return value; }";
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmLinuxKernelTest("linux_kernel_profile.mc", source, .x86_64, &output);
+
+    try expectContains(output.items, "declare void @mc_trap_IntegerOverflow() noreturn");
+    try expectNotContains(output.items, "define weak void @mc_trap_IntegerOverflow()");
+    try expectNotContains(output.items, "define weak void @mc_ksan_check");
+    try expectContains(output.items, "define i32 @identity(i32 %value) nounwind fn_ret_thunk_extern");
+    try expectContains(output.items, "!\"cf-protection-branch\", i32 1");
+    try expectContains(output.items, "!\"function_return_thunk_extern\", i32 1");
+}
+
+test "LLVM Linux kernel profile emits arm64 BTI hardening metadata" {
+    const source = "export fn identity(value: u32) -> u32 { return value; }";
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmLinuxKernelTest("linux_kernel_arm64.mc", source, .aarch64, &output);
+
+    try expectContains(output.items, "define i32 @identity(i32 %value) nounwind \"branch-target-enforcement\"");
+    try expectContains(output.items, "!\"branch-target-enforcement\", i32 2");
+}
+
 test "LLVM explicit C ABI scalar extensions match each target" {
     const source =
         \\extern "C" fn c_i8(value: i8) -> i8;

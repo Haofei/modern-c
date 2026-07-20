@@ -68,7 +68,7 @@ const usage =
     \\  mcc emit-c <file.mc> [-o <out.c>] [--profile=kernel|hosted] [--checks=all|elide-proven] [--stub-asm] [--remap-prefix=FROM=TO]
     \\  mcc build <file.mc> -o <exe>
     \\  mcc emit-map <file.mc> [-o <out.mcmap>] [--profile=kernel|hosted] [--remap-prefix=FROM=TO]
-    \\  mcc emit-llvm <file.mc> [-o <out.ll>] [--checks=all|elide-proven] [--stub-asm]
+    \\  mcc emit-llvm <file.mc> [-o <out.ll>] [--checks=all|elide-proven] [--stub-asm] [--linux-kernel]
     \\  mcc emit-layout <file.mc> --structs=A,B,C
     \\  mcc emit-c-struct <file.mc> --structs=A,B,C
     \\  mcc fmt <file.mc> [--check]
@@ -114,6 +114,8 @@ const usage =
     \\                         concurrent access (one a write) to the same location without
     \\                         synchronization traps (CSAN-DETECTED). The synchronized
     \\                         mc_race_* accessors stay plain atomics and are clean.
+    \\  --linux-kernel         LLVM IR profile with external runtime hooks, nounwind
+    \\                         functions, and x86 IBT/rethunk metadata.
     \\
     \\machine-readable diagnostics:
     \\  mcc check <file.mc> --json
@@ -317,7 +319,7 @@ fn runMain(init: std.process.Init) !void {
         defer if (remapped_source_path) |p| allocator.free(p);
         try runEmitMap(allocator, path, remapped_source_path orelse path, source, options.profile, options.output_path);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        try runEmitLlvm(allocator, path, source, options.checks, options.stub_asm, options.targetArch(), options.output_path);
+        try runEmitLlvm(allocator, path, source, options.checks, options.stub_asm, options.targetArch(), options.linux_kernel, options.output_path);
     } else if (std.mem.eql(u8, command, "list-tests")) {
         try runListTests(allocator, path, source);
     } else if (is_emit_layout) {
@@ -821,7 +823,7 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, artifact_source_pa
     try writeArtifact(output.items, output_path);
 }
 
-fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
+fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, linux_kernel: bool, output_path: ?[]const u8) !void {
     const optimize = checks.optimize;
     var diag = initReporter(allocator, path, source);
     defer diag.deinit();
@@ -857,7 +859,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    lower_llvm.appendLlvmCheckedMir(allocator, module, &module_mir, &output, path, checks, stub_asm, target_arch, &diag) catch |err| switch (err) {
+    lower_llvm.appendLlvmCheckedMirProfile(allocator, module, &module_mir, &output, path, checks, stub_asm, target_arch, linux_kernel, &diag) catch |err| switch (err) {
         error.UnsupportedLlvmEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "LLVM");
             diag.render();

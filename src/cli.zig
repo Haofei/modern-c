@@ -16,6 +16,7 @@ pub const Options = struct {
     visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in,
     output_path: ?[]const u8 = null,
     stub_asm: bool = false,
+    linux_kernel: bool = false,
     remap_prefix: ?PathRemap = null,
 
     pub const PathRemap = struct {
@@ -30,6 +31,7 @@ pub const Options = struct {
         var saw_arch_flag = false;
         var saw_platform_flag = false;
         var saw_stub_asm_flag = false;
+        var saw_linux_kernel_flag = false;
         var saw_std_dir_flag = false;
         var saw_visibility_flag = false;
         var saw_output_flag = false;
@@ -103,6 +105,9 @@ pub const Options = struct {
             } else if (std.mem.eql(u8, flag, "--stub-asm")) {
                 saw_stub_asm_flag = true;
                 opts.stub_asm = true;
+            } else if (std.mem.eql(u8, flag, "--linux-kernel")) {
+                saw_linux_kernel_flag = true;
+                opts.linux_kernel = true;
             } else if (std.mem.startsWith(u8, flag, "--remap-prefix=")) {
                 saw_remap_prefix_flag = true;
                 if (opts.remap_prefix != null) return error.InvalidArgs;
@@ -119,6 +124,7 @@ pub const Options = struct {
             .saw_arch_flag = saw_arch_flag,
             .saw_platform_flag = saw_platform_flag,
             .saw_stub_asm_flag = saw_stub_asm_flag,
+            .saw_linux_kernel_flag = saw_linux_kernel_flag,
             .saw_std_dir_flag = saw_std_dir_flag,
             .saw_visibility_flag = saw_visibility_flag,
             .saw_output_flag = saw_output_flag,
@@ -204,6 +210,7 @@ pub const Options = struct {
         saw_arch_flag: bool,
         saw_platform_flag: bool,
         saw_stub_asm_flag: bool,
+        saw_linux_kernel_flag: bool,
         saw_std_dir_flag: bool,
         saw_visibility_flag: bool,
         saw_output_flag: bool,
@@ -223,6 +230,8 @@ pub const Options = struct {
         if (seen.saw_profile_flag and !is_c_artifact_command) return invalidOptionForCommand("--profile", command);
         if (seen.saw_checks_flag and !accepts_checks) return invalidOptionForCommand("--checks", command);
         if (seen.saw_stub_asm_flag and !is_emit_command) return invalidOptionForCommand("--stub-asm", command);
+        if (seen.saw_linux_kernel_flag and !std.mem.eql(u8, command, "emit-llvm"))
+            return invalidOptionForCommand("--linux-kernel", command);
         if (seen.saw_arch_flag and !accepts_checks) return invalidOptionForCommand("--arch", command);
         if (seen.saw_platform_flag and !accepts_checks) return invalidOptionForCommand("--platform", command);
         if (seen.saw_std_dir_flag and !isSourceLoadingCommand(command)) return invalidOptionForCommand("--std-dir", command);

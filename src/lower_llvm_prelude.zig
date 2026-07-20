@@ -69,6 +69,33 @@ pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), modul
     try out.appendSlice(allocator, "\n");
 }
 
+/// Linux owns the final trap and sanitizer policy. This profile leaves only
+/// declarations, so an unreferenced hook contributes no hidden object text.
+pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: ast.Module) !void {
+    try out.appendSlice(allocator, "declare void @llvm.trap()\n");
+    const trap_hooks = [_][]const u8{
+        "mc_trap_IntegerOverflow",       "mc_trap_DivideByZero", "mc_trap_InvalidShift",
+        "mc_trap_InvalidRepresentation", "mc_trap_Bounds",       "mc_trap_Assert",
+        "mc_trap_NullUnwrap",            "mc_trap_Unreachable",
+    };
+    for (trap_hooks) |hook| {
+        if (!moduleDefinesHook(module, hook))
+            try out.print(allocator, "declare void @{s}() noreturn\n", .{hook});
+    }
+    try out.appendSlice(allocator,
+        \\declare void @llvm.va_start(ptr)
+        \\declare void @llvm.va_copy(ptr, ptr)
+        \\declare void @llvm.va_end(ptr)
+        \\declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+        \\
+    );
+    for (sanitizer_hooks) |hook| {
+        if (!moduleDefinesHook(module, hook))
+            try out.print(allocator, "declare void @{s}(i64, i64)\n", .{hook});
+    }
+    try out.appendSlice(allocator, "\n");
+}
+
 // A sanitizer shadow-hook symbol gets a weak no-op `define` above, so an MC `extern fn` of the
 // same name must NOT also be `declare`d (a `declare` + a `define` of one symbol is invalid IR).
 pub fn isKsanHook(name: []const u8) bool {

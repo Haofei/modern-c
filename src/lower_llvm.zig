@@ -65,6 +65,7 @@ const charLiteralValue = lower_llvm_op.charLiteralValue;
 // LLVM module prelude emission and target metadata.
 const lower_llvm_prelude = @import("lower_llvm_prelude.zig");
 const emitTrapDecl = lower_llvm_prelude.emitTrapDecl;
+const emitExternalRuntimeDecls = lower_llvm_prelude.emitExternalRuntimeDecls;
 const emitTargetTypeDecls = lower_llvm_prelude.emitTargetTypeDecls;
 const isKsanHook = lower_llvm_prelude.isKsanHook;
 const llvmTargetDataLayout = lower_llvm_prelude.targetDataLayout;
@@ -249,6 +250,10 @@ fn appendLlvmCheckedReport(allocator: std.mem.Allocator, module: ast.Module, out
 }
 
 pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, reporter: ?*diagnostics.Reporter) !void {
+    try appendLlvmCheckedMirProfile(allocator, module, module_mir, out, source_path, checks, stub_asm, target_arch, false, reporter);
+}
+
+pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
     try mir.validateRepresentationFactsForLowering(module_mir.*);
     try mir.validateIntegerFactsForLowering(module_mir.*);
     try mir.validateConstGetFactsForLowering(module_mir.*);
@@ -268,7 +273,10 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
     try out.appendSlice(allocator, "; MC LLVM IR backend v0\n");
     try out.appendSlice(allocator, "; semantic checks: sema + MIR policy/CFG verification\n\n");
     try emitTargetTypeDecls(allocator, out, target_arch);
-    try emitTrapDecl(allocator, out, module);
+    if (linux_kernel)
+        try emitExternalRuntimeDecls(allocator, out, module)
+    else
+        try emitTrapDecl(allocator, out, module);
 
     var ctx = LlvmEmitter{
         .allocator = allocator,
@@ -323,6 +331,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
         .msan = msan,
         .csan = csan,
         .stub_asm = stub_asm,
+        .linux_kernel = linux_kernel,
     };
     defer ctx.deinit();
     for (module.decls) |decl| {
@@ -509,6 +518,7 @@ const LlvmEmitter = struct {
     // cannot encode the target ISA). Default false → asm is emitted verbatim. Mirrors the C
     // backend so llvm-* host-native logic tests behave identically.
     stub_asm: bool = false,
+    linux_kernel: bool = false,
 
     fn deinit(self: *LlvmEmitter) void {
         self.need_uadd.deinit();
@@ -1178,7 +1188,7 @@ const LlvmEmitter = struct {
         const naked = hasNakedAttr(attrs);
         // `#[noinline]`: the LLVM `noinline` function attribute keeps a distinct physical call
         // frame (e.g. a frame-pointer backtrace must walk nested frames). Composes with naked.
-        const attr_str: []const u8 = if (naked and hasNoinlineAttr(attrs))
+        const base_attr_str: []const u8 = if (naked and hasNoinlineAttr(attrs))
             " naked noinline"
         else if (naked)
             " naked"
@@ -1186,6 +1196,14 @@ const LlvmEmitter = struct {
             " noinline"
         else
             "";
+        const attr_str: []const u8 = if (self.linux_kernel and self.target_arch == .x86_64)
+            try std.fmt.allocPrint(self.scratch.allocator(), "{s} nounwind fn_ret_thunk_extern", .{base_attr_str})
+        else if (self.linux_kernel and self.target_arch == .aarch64)
+            try std.fmt.allocPrint(self.scratch.allocator(), "{s} nounwind \"branch-target-enforcement\"", .{base_attr_str})
+        else if (self.linux_kernel)
+            try std.fmt.allocPrint(self.scratch.allocator(), "{s} nounwind", .{base_attr_str})
+        else
+            base_attr_str;
         // `#[section("...")]`: emit an LLVM `section "..."` clause so the symbol lands in the
         // named linker section (bare-metal entry points pinned by the linker script, e.g.
         // OpenSBI's `_start` at 0x80200000 via `KEEP(*(.text.boot))`).
@@ -7009,7 +7027,14 @@ const LlvmEmitter = struct {
             for (sig.params[1..], 0..) |param, i| {
                 try self.out.print(self.allocator, ", {s} %a{d}", .{ try self.llvmType(param.ty), i });
             }
-            try self.out.appendSlice(self.allocator, ") {\nbb_entry:\n");
+            if (self.linux_kernel and self.target_arch == .x86_64)
+                try self.out.appendSlice(self.allocator, ") nounwind fn_ret_thunk_extern {\nbb_entry:\n")
+            else if (self.linux_kernel and self.target_arch == .aarch64)
+                try self.out.appendSlice(self.allocator, ") nounwind \"branch-target-enforcement\" {\nbb_entry:\n")
+            else if (self.linux_kernel)
+                try self.out.appendSlice(self.allocator, ") nounwind {\nbb_entry:\n")
+            else
+                try self.out.appendSlice(self.allocator, ") {\nbb_entry:\n");
             const narrowed = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = ptrtoint ptr %env to {s}\n", .{ narrowed, env_llvm });
             const returns_void = typeNameEql(sig.ret, "void");
@@ -8519,7 +8544,21 @@ const LlvmEmitter = struct {
         if (self.debug_functions.items.len == 0) return;
         const escaped_path = try escapedLlvmString(self.scratch.allocator(), self.source_path);
         try self.out.appendSlice(self.allocator, "\n!llvm.dbg.cu = !{!0}\n");
-        try self.out.appendSlice(self.allocator, "!llvm.module.flags = !{!2, !3}\n");
+        if (self.linux_kernel and self.target_arch == .x86_64) {
+            const ibt_id = self.debug_next_id;
+            const rethunk_id = ibt_id + 1;
+            self.debug_next_id += 2;
+            try self.out.print(self.allocator, "!llvm.module.flags = !{{!2, !3, !{d}, !{d}}}\n", .{ ibt_id, rethunk_id });
+            try self.out.print(self.allocator, "!{d} = !{{i32 8, !\"cf-protection-branch\", i32 1}}\n", .{ibt_id});
+            try self.out.print(self.allocator, "!{d} = !{{i32 4, !\"function_return_thunk_extern\", i32 1}}\n", .{rethunk_id});
+        } else if (self.linux_kernel and self.target_arch == .aarch64) {
+            const bti_id = self.debug_next_id;
+            self.debug_next_id += 1;
+            try self.out.print(self.allocator, "!llvm.module.flags = !{{!2, !3, !{d}}}\n", .{bti_id});
+            try self.out.print(self.allocator, "!{d} = !{{i32 8, !\"branch-target-enforcement\", i32 2}}\n", .{bti_id});
+        } else {
+            try self.out.appendSlice(self.allocator, "!llvm.module.flags = !{!2, !3}\n");
+        }
         try self.out.print(self.allocator, "!0 = distinct !DICompileUnit(language: DW_LANG_C99, file: !1, producer: \"mcc emit-llvm\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)\n", .{});
         try self.out.print(self.allocator, "!1 = !DIFile(filename: \"{s}\", directory: \".\")\n", .{escaped_path});
         try self.out.appendSlice(self.allocator, "!2 = !{i32 2, !\"Debug Info Version\", i32 3}\n");
