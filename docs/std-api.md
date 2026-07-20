@@ -402,15 +402,15 @@ Source: `std/collections/vec.mc`
 
 | Signature | Source |
 |---|---|
-| <code>export fn f32x4_splat(x: f32) -&gt; [4]f32</code> | `std/collections/vec.mc:11` |
-| <code>export fn f32x4_load(base: PAddr) -&gt; [4]f32</code> | `std/collections/vec.mc:15` |
-| <code>export fn f32x4_store(base: PAddr, values: [4]f32) -&gt; void</code> | `std/collections/vec.mc:26` |
-| <code>export fn f32x4_add(a: [4]f32, b: [4]f32) -&gt; [4]f32</code> | `std/collections/vec.mc:35` |
-| <code>export fn f32x4_mul(a: [4]f32, b: [4]f32) -&gt; [4]f32</code> | `std/collections/vec.mc:39` |
-| <code>export fn f32x4_max(a: [4]f32, b: [4]f32) -&gt; [4]f32</code> | `std/collections/vec.mc:48` |
-| <code>export fn f32x4_sum(values: [4]f32) -&gt; f32</code> | `std/collections/vec.mc:57` |
-| <code>export fn f32x4_to_bits(values: [4]f32) -&gt; [4]u32</code> | `std/collections/vec.mc:61` |
-| <code>export fn f32x4_from_bits(values: [4]u32) -&gt; [4]f32</code> | `std/collections/vec.mc:70` |
+| <code>export fn f32x4_splat(x: f32) -&gt; [4]f32</code> | `std/collections/vec.mc:12` |
+| <code>export fn f32x4_load(base: PAddr) -&gt; [4]f32</code> | `std/collections/vec.mc:17` |
+| <code>export fn f32x4_store(base: PAddr, values: [4]f32) -&gt; void</code> | `std/collections/vec.mc:29` |
+| <code>export fn f32x4_add(a: [4]f32, b: [4]f32) -&gt; [4]f32</code> | `std/collections/vec.mc:39` |
+| <code>export fn f32x4_mul(a: [4]f32, b: [4]f32) -&gt; [4]f32</code> | `std/collections/vec.mc:44` |
+| <code>export fn f32x4_max(a: [4]f32, b: [4]f32) -&gt; [4]f32</code> | `std/collections/vec.mc:54` |
+| <code>export fn f32x4_sum(values: [4]f32) -&gt; f32</code> | `std/collections/vec.mc:64` |
+| <code>export fn f32x4_to_bits(values: [4]f32) -&gt; [4]u32</code> | `std/collections/vec.mc:69` |
+| <code>export fn f32x4_from_bits(values: [4]u32) -&gt; [4]f32</code> | `std/collections/vec.mc:79` |
 
 ## `std/core`
 
@@ -858,22 +858,22 @@ Source: `std/task.mc`
 |---|---|
 | <code>trait Future</code> | `std/task.mc:27` |
 | <code>struct SlotFuture</code> | `std/task.mc:44` |
-| <code>struct Join2</code> | `std/task.mc:83` |
-| <code>struct Race2</code> | `std/task.mc:118` |
-| <code>struct Timeout</code> | `std/task.mc:158` |
+| <code>struct Join2</code> | `std/task.mc:84` |
+| <code>struct Race2</code> | `std/task.mc:120` |
+| <code>struct Timeout</code> | `std/task.mc:161` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn slot_future_init(s: *mut SlotFuture, id: u64, done: fn(u64) -&gt; bool, cancel: fn(u64) -&gt; void) -&gt; void</code> | `std/task.mc:51` |
-| <code>export fn slot_future_cancel(s: *mut SlotFuture) -&gt; void</code> | `std/task.mc:75` |
-| <code>export fn join2_init(j: *mut Join2, a: *mut dyn Future, b: *mut dyn Future) -&gt; void</code> | `std/task.mc:90` |
-| <code>export fn race2_init(r: *mut Race2, a: *mut dyn Future, b: *mut dyn Future) -&gt; void</code> | `std/task.mc:124` |
-| <code>export fn race2_winner(r: *Race2) -&gt; i32</code> | `std/task.mc:130` |
-| <code>export fn timeout_init(t: *mut Timeout, inner: *mut dyn Future, budget_ticks: u64) -&gt; void</code> | `std/task.mc:165` |
-| <code>export fn timeout_timed_out(t: *Timeout) -&gt; bool</code> | `std/task.mc:172` |
-| <code>export fn run_to_completion(f: *mut dyn Future, idle: fn() -&gt; void) -&gt; u64</code> | `std/task.mc:207` |
+| <code>export fn slot_future_init(s: *mut SlotFuture, id: u64, done: fn(u64) -&gt; bool, cancel: fn(u64) -&gt; void) -&gt; void</code> | `std/task.mc:52` |
+| <code>export fn slot_future_cancel(s: *mut SlotFuture) -&gt; void</code> | `std/task.mc:76` |
+| <code>export fn join2_init(j: *mut Join2, a: *mut dyn Future, b: *mut dyn Future) -&gt; void</code> | `std/task.mc:92` |
+| <code>export fn race2_init(r: *mut Race2, a: *mut dyn Future, b: *mut dyn Future) -&gt; void</code> | `std/task.mc:127` |
+| <code>export fn race2_winner(r: *Race2) -&gt; i32</code> | `std/task.mc:133` |
+| <code>export fn timeout_init(t: *mut Timeout, inner: *mut dyn Future, budget_ticks: u64) -&gt; void</code> | `std/task.mc:169` |
+| <code>export fn timeout_timed_out(t: *Timeout) -&gt; bool</code> | `std/task.mc:176` |
+| <code>export fn run_to_completion(f: *mut dyn Future, idle: fn() -&gt; void) -&gt; u64</code> | `std/task.mc:212` |
 
 ## `std/time`
 

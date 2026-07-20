@@ -575,7 +575,7 @@ test "explicit trap rejects type arguments before MIR construction" {
     try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_INVALID_TRAP_KIND"));
 }
 
-test "rejects structs and tagged optionals at extern and export ABI boundaries" {
+test "explicit C ABI rejects unclassified values and MC ABI permits them" {
     const source =
         \\extern "C" struct Packet {
         \\    value: u32,
@@ -607,6 +607,11 @@ test "rejects structs and tagged optionals at extern and export ABI boundaries" 
         \\fn internal_roundtrip(plain: Plain) -> Plain {
         \\    return plain;
         \\}
+        \\
+        \\#[mc_abi]
+        \\export fn mc_array_roundtrip(value: [2]u32) -> [2]u32 {
+        \\    return value;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "extern_export_struct_abi.mc", source);
@@ -615,7 +620,7 @@ test "rejects structs and tagged optionals at extern and export ABI boundaries" 
     try checkSource(source, &reporter);
 
     try std.testing.expect(reporter.has_errors);
-    try std.testing.expectEqual(@as(usize, 5), countDiagnosticCode(&reporter, "E_EXTERN_STRUCT_BY_VALUE"));
+    try std.testing.expectEqual(@as(usize, 8), countDiagnosticCode(&reporter, "E_EXTERN_STRUCT_BY_VALUE"));
 }
 
 test "nullable classification resolves aliases inside the type constructor" {

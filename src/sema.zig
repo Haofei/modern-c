@@ -71,6 +71,7 @@ const genericTypeExpectedArgs = sema_builtin.genericTypeExpectedArgs;
 const hasBoundedContext = sema_decl.hasBoundedContext;
 const hasIrqContext = sema_decl.hasIrqContext;
 const hasMaySleep = sema_decl.hasMaySleep;
+const hasNamedAttr = sema_decl.hasNamedAttr;
 const hasNaked = sema_decl.hasNaked;
 const hasNoLangTrap = sema_decl.hasNoLangTrap;
 const isArithmeticBinary = sema_type.isArithmeticBinary;
@@ -973,7 +974,8 @@ pub const Checker = struct {
                 // Bare `extern fn` is an unresolved declaration in the active MC
                 // backend ABI. Only explicit `extern "C"` and exported definitions
                 // cross the stable C ABI boundary.
-                const abi_boundary = (decl.kind == .extern_fn and fn_decl.abi != null) or fn_decl.exported;
+                const mc_abi_export = fn_decl.exported and hasNamedAttr(decl.attrs, "mc_abi");
+                const abi_boundary = (decl.kind == .extern_fn and fn_decl.abi != null) or (fn_decl.exported and !mc_abi_export);
                 const move_abi_boundary = decl.kind == .extern_fn or fn_decl.exported;
                 self.checkFn(fn_decl, abi_boundary, move_abi_boundary, no_lang_trap, irq_context, bounded, is_naked, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases);
                 // T(term)1: bounded-loop / no-unbounded-recursion check for IRQ/atomic
@@ -1503,12 +1505,12 @@ pub const Checker = struct {
     fn checkExternExportStructAbi(self: *Checker, fn_decl: ast.FnDecl, ctx: Context) void {
         for (fn_decl.params) |param| {
             if (externAbiTypeNeedsClassification(param.ty, ctx)) {
-                self.errorCode(param.ty.span, "E_EXTERN_STRUCT_BY_VALUE", "extern/export functions cannot pass structs or tagged optional values by value until target ABI classification is implemented; pass a pointer instead");
+                self.errorCode(param.ty.span, "E_EXTERN_STRUCT_BY_VALUE", "explicit C ABI functions cannot pass this unclassified value type by value; use a pointer or mark an MC-only export #[mc_abi]");
             }
         }
         if (fn_decl.return_type) |ret_ty| {
             if (externAbiTypeNeedsClassification(ret_ty, ctx)) {
-                self.errorCode(ret_ty.span, "E_EXTERN_STRUCT_BY_VALUE", "extern/export functions cannot return structs or tagged optional values by value until target ABI classification is implemented; return through an out pointer instead");
+                self.errorCode(ret_ty.span, "E_EXTERN_STRUCT_BY_VALUE", "explicit C ABI functions cannot return this unclassified value type by value; use an out pointer or mark an MC-only export #[mc_abi]");
             }
         }
     }
@@ -7285,28 +7287,27 @@ fn externAbiTypeNeedsClassification(ty: ast.TypeExpr, ctx: Context) bool {
             const structs = ctx.structs orelse break :blk false;
             break :blk structs.contains(name.text);
         },
-        .pointer, .raw_many_pointer, .fn_pointer => false,
-        .array, .slice, .closure_type, .dyn_trait => false,
+        .pointer, .raw_many_pointer => false,
+        .fn_pointer, .array, .slice, .closure_type, .dyn_trait => true,
         .nullable => |child| switch (resolveAliasType(child.*, ctx).kind) {
-            .pointer, .raw_many_pointer, .fn_pointer => false,
+            .pointer, .raw_many_pointer => false,
             else => true,
         },
-        .generic => |node| {
-            if ((std.mem.eql(u8, node.base.text, "MaybeUninit") or std.mem.eql(u8, node.base.text, "atomic")) and node.args.len == 1) {
-                return externAbiTypeNeedsClassification(node.args[0], ctx);
-            }
-            if (std.mem.eql(u8, node.base.text, "wrap") or
-                std.mem.eql(u8, node.base.text, "sat") or
-                std.mem.eql(u8, node.base.text, "serial") or
-                std.mem.eql(u8, node.base.text, "counter") or
-                std.mem.eql(u8, node.base.text, "Reg") or
-                std.mem.eql(u8, node.base.text, "RegBits") or
-                std.mem.eql(u8, node.base.text, "MmioPtr") or
-                std.mem.eql(u8, node.base.text, "PhysPtr") or
-                std.mem.eql(u8, node.base.text, "UserPtr") or
-                std.mem.eql(u8, node.base.text, "DmaBuf")) return false;
-            return false;
-        },
+        .generic => |node| if ((std.mem.eql(u8, node.base.text, "wrap") or
+            std.mem.eql(u8, node.base.text, "sat") or
+            std.mem.eql(u8, node.base.text, "serial") or
+            std.mem.eql(u8, node.base.text, "counter") or
+            std.mem.eql(u8, node.base.text, "Reg") or
+            std.mem.eql(u8, node.base.text, "RegBits")) and node.args.len >= 1)
+            externAbiTypeNeedsClassification(node.args[0], ctx)
+        else if ((std.mem.eql(u8, node.base.text, "MmioPtr") or
+            std.mem.eql(u8, node.base.text, "PhysPtr") or
+            std.mem.eql(u8, node.base.text, "UserPtr")) and node.args.len == 1)
+            false
+        else if (std.mem.eql(u8, node.base.text, "DmaBuf") and node.args.len == 2)
+            false
+        else
+            true,
         .qualified => |node| externAbiTypeNeedsClassification(node.child.*, ctx),
         .member => false,
         else => false,

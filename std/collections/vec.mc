@@ -8,10 +8,12 @@
 
 import "std/addr.mc";
 
+#[mc_abi]
 export fn f32x4_splat(x: f32) -> [4]f32 {
     return .{ x, x, x, x };
 }
 
+#[mc_abi]
 export fn f32x4_load(base: PAddr) -> [4]f32 {
     unsafe {
         return .{
@@ -23,6 +25,7 @@ export fn f32x4_load(base: PAddr) -> [4]f32 {
     }
 }
 
+#[mc_abi]
 export fn f32x4_store(base: PAddr, values: [4]f32) -> void {
     unsafe {
         raw.store<f32>(base, values[0]);
@@ -32,10 +35,12 @@ export fn f32x4_store(base: PAddr, values: [4]f32) -> void {
     }
 }
 
+#[mc_abi]
 export fn f32x4_add(a: [4]f32, b: [4]f32) -> [4]f32 {
     return .{ a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3] };
 }
 
+#[mc_abi]
 export fn f32x4_mul(a: [4]f32, b: [4]f32) -> [4]f32 {
     return .{ a[0] * b[0], a[1] * b[1], a[2] * b[2], a[3] * b[3] };
 }
@@ -45,6 +50,7 @@ fn f32_max_lane(a: f32, b: f32) -> f32 {
     return b;
 }
 
+#[mc_abi]
 export fn f32x4_max(a: [4]f32, b: [4]f32) -> [4]f32 {
     return .{
         f32_max_lane(a[0], b[0]),
@@ -54,10 +60,12 @@ export fn f32x4_max(a: [4]f32, b: [4]f32) -> [4]f32 {
     };
 }
 
+#[mc_abi]
 export fn f32x4_sum(values: [4]f32) -> f32 {
     return (values[0] + values[1]) + (values[2] + values[3]);
 }
 
+#[mc_abi]
 export fn f32x4_to_bits(values: [4]f32) -> [4]u32 {
     return .{
         bitcast<u32>(values[0]),
@@ -67,6 +75,7 @@ export fn f32x4_to_bits(values: [4]f32) -> [4]u32 {
     };
 }
 
+#[mc_abi]
 export fn f32x4_from_bits(values: [4]u32) -> [4]f32 {
     return .{
         bitcast<f32>(values[0]),

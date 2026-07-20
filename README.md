@@ -125,6 +125,11 @@ The compiler pipeline is:
 source -> AST -> semantic analysis -> HIR -> MIR -> verification -> C or LLVM
 ```
 
+`extern "C" fn` and unmarked `export fn` use a strict, target-classified C ABI
+surface. `#[mc_abi] export fn` is available for same-backend object boundaries and
+is not C ABI stable. See [C ABI and interop](docs/c-abi-interop.md) for the current
+type allowlist and aggregate restrictions.
+
 Inspect each stage from the command line:
 
 ```sh

@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-19, based on the current compiler worktree**.
-Evidence register: **739 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **743 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 The compiler has locally verified behavior across its supported subset. It is not
 ready for an unrestricted production claim because pointer-provenance race
@@ -103,7 +103,11 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Closure typing and closure escape checks are enforced | Closure calls cannot silently use the wrong signature or dangling environment. | `tests/spec/closure_typing.mc`; pushed closure soundness fixes. |
 | Linear move checks cover loop conditions and short-circuit RHS | Move-only resources cannot be conditionally consumed in a way that leaks or double-frees. | `tests/spec/move_linear.mc`; `E_MOVE_BRANCH_MISMATCH` probes. |
 | Aggregate `uninit` reads are tracked | Struct/array `var x: T = uninit` reads no longer compile before definite initialization. | `tests/spec/initialization.mc`; `tests/c_emit/bad/use_before_init_aggregate.mc`. |
-| Extern/export struct and optional ABI hazards fail closed | Explicit C-ABI declarations and exported functions reject named structs and tagged/fat optional values whose C and raw LLVM aggregate conventions can differ. Bare `extern fn` remains the backend-private MC ABI used by generated test/runtime seams. Other aggregate families retain their existing MC ABI behavior pending shared target ABI classification. | `src/sema.zig` `externAbiTypeNeedsClassification`; `tests/c_emit/bad/extern_optional_by_value.mc`; struct aggregate fixtures. |
+| Explicit C ABI aggregate hazards fail closed | `extern "C"` and unmarked `export fn` admit only target-classified scalar/pointer representations. Arrays, slices, structs/unions, tagged optionals, `Result`, closures, trait objects, function pointers, and unknown wrappers are rejected by value. `#[mc_abi] export fn` is an explicit same-backend escape hatch, not a C ABI claim. | `src/sema.zig` `externAbiTypeNeedsClassification`; `src/sema_tests.zig` `explicit C ABI rejects unclassified values and MC ABI permits them`; `tests/c_emit/bad/extern_array_by_value.mc`, optional and struct fixtures; C and LLVM diagnostic gates. |
+| LLVM explicit C ABI narrow integers carry target extension attributes | Definitions, declarations, and direct calls share one target-aware `signext`/`zeroext` classifier. RISC-V 64 widens 32-bit integer ABI values with `signext`; x86-64 extends sub-32-bit values by signedness; AArch64 emits neither extension family for these scalar signatures. Backend-private MC calls do not inherit C attributes. | `src/lower_llvm.zig` `cAbiExtension`; `src/lower_llvm_model.zig` `FnSig.c_abi`; `src/lower_llvm_tests.zig` `LLVM explicit C ABI scalar extensions match each target`; LLVM assembly gates. |
+| C packed-bits literals preserve lexical field evaluation order | Dynamic field expressions are evaluated into boolean temporaries in source order before masks are combined. The generated C no longer relies on unspecified operand order for bitwise OR. | `src/lower_c_aggregate.zig` `emitPackedBitsLiteral`; `src/lower_c_tests.zig` `lower-c sequences dynamic packed bits fields lexically`; C compile gates. |
+| LLVM aggregate writes preserve concrete observable bytes | Aggregate destinations are byte-initialized for their complete allocation size and value fields are stored recursively. Value optionals, arrays, structs, `Result`, wrappers, and tagged-union payloads no longer reintroduce implicit LLVM padding through whole typed stores on the covered paths. | `src/lower_llvm.zig` `emitZeroObjectBytes`, `emitConcreteObjectStore`, `emitPaddingPreservingStore`; `src/lower_llvm_tests.zig` `LLVM aggregate literal storage materializes every allocation byte`; LLVM verifier/optimizer gates. |
+| LLVM layout covers zero-sized aggregates and 128-bit integer fields | Zero-byte initialization is a no-op rather than an emission failure, and shared scalar layout facts include 16-byte `u128`/`i128` storage and alignment for the current qualified targets. | `src/lower_llvm.zig` `emitZeroObjectBytes`; `src/layout.zig` `scalarLayout`; `[0]u8` and padded `u128` aggregate assertions in `src/lower_llvm_tests.zig`. |
 | 128-bit comptime/reflection overflow is guarded | Huge layout/reflection expressions return diagnostics instead of panicking the compiler. | `tests/spec/reflection.mc`; `src/eval_tests.zig` array-size helper tests. |
 | `cstr` is implemented and documented | The normative FFI string type now exists across sema, MIR, C, and LLVM lowering. | `1f5c0274 Implement cstr FFI type`; `7278d844 docs: sync cstr FFI status`. |
 | Async control-flow spec matches implementation | The spec no longer claims completed E3a/E3b/E3c async forms are reserved. | `b4650dab docs: sync async control-flow spec`; `zig build test`. |
@@ -814,7 +818,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Move subplace scope classification uses typed roots | Scope preservation, branch-local cleanup, and loop outer-resource diagnostics no longer decide that a subplace belongs to an outer resource by checking whether the outer state map contains `place.root`. They use structural root-place lookup, so an outer binding stored under a compatibility key is still recognized as its subplace's owner. This is one M1.1 migration, not closure of the move checker. | `src/sema_move.zig` `moveSubplaceRootInOuter`; unit test `move subplace outer-scope classification uses typed roots rather than compatibility keys`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
-| Extern/export struct and optional ABI rejection is inventory-gated | Explicit `extern "C"` declarations and exported functions reject named structs and tagged/fat optional values rather than letting C and LLVM independently choose incompatible conventions. Bare `extern fn` is explicitly the backend-private MC ABI and is not a C interoperability promise. Arrays, slices, `Result`, closures, and other aggregate families retain their existing MC ABI behavior and remain target-classification debt; this row does not claim they are C-interoperable. | `src/sema.zig` `checkExternExportStructAbi` / `externAbiTypeNeedsClassification`; `src/sema_tests.zig` `rejects structs and tagged optionals at extern and export ABI boundaries`; `tests/c_emit/bad/extern_optional_by_value.mc` and `*struct*_by_value.mc`; `tools/toolchain/semantic-facts-inventory.py` `EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT`; full production gate; `git diff --check`. |
+| Explicit C ABI allowlist is inventory-gated | Explicit `extern "C"` declarations and unmarked exports reject every currently unclassified by-value family rather than letting C and LLVM choose independent calling representations. Bare `extern fn` and `#[mc_abi] export fn` are explicitly backend-private and are not C interoperability promises. | `src/sema.zig` `checkExternExportStructAbi` / `externAbiTypeNeedsClassification`; `src/sema_tests.zig` `explicit C ABI rejects unclassified values and MC ABI permits them`; aggregate bad fixtures including `extern_array_by_value.mc`; `tools/toolchain/semantic-facts-inventory.py` `EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT`; full production gate; `git diff --check`. |
 
 | Move CFG joins match typed root places | CFG state matching now treats every non-alias, non-type-only ownership slot with a `MovePlace` as structural state, including roots as well as fields/elements. Branch, loop, short-circuit, and scope helpers therefore cannot report a mismatch solely because the two predecessor maps used different compatibility keys for the same root place. Alias storage and index facts retain their dedicated conservative rules. This is one M1.1 migration, not closure of the move checker. | `src/sema_move.zig` `matchingMoveStateSlot` / `isOwnershipMovePlace`; unit test `move branch joins match roots by typed place rather than compatibility key`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
@@ -1921,24 +1925,19 @@ asserting file/function/line rows survive `llc`; opaque `ptr` + no
 with one known `getelementptr inbounds` exception on the va_list path,
 `src/lower_llvm.zig:1215`).
 
-- **[fixed for structs and optionals, broader ABI classification remains open]
-  Struct and optional C ABI hazards at explicit `extern "C"`/`export` boundaries
-  fail closed.** LLVM still represents internal MC aggregate calls directly, but
-  `Checker.checkExternExportStructAbi` rejects named structs and tagged/fat optional
-  parameters and returns whose C and raw LLVM conventions can differ. Arrays,
-  slices, results, closures, and other aggregate families retain their existing MC
-  ABI behavior and are not claimed as portable C ABI until target classification is
-  implemented. Bare `extern fn` is the internal
-  backend-specific MC ABI rather than a C interoperability boundary. The
-  diagnostic fixtures run on both C and LLVM paths, so the guarded struct and
-  optional forms cannot silently cross a C ABI boundary using LLVM's unclassified
-  aggregate calling convention. Supporting the remaining families requires per-target ABI classification
-  plus cross-compiler call tests for SysV, RISC-V, and AAPCS; it is not a current
-  qualified-subset ABI promise. Evidence: `src/sema.zig`
-  `checkExternExportStructAbi` / `externAbiTypeNeedsClassification`; `src/sema_tests.zig`
-  `rejects structs and tagged optionals at extern and export ABI boundaries`;
-  `tests/c_emit/bad/extern_optional_by_value.mc` and `*struct*_by_value.mc`;
-  `tests/diagnostics/bad-golden.tsv` C/LLVM rows.
+- **[fixed for the current allowlist; aggregate ABI classification remains open]
+  Explicit C ABI boundaries fail closed for unclassified values.** `extern "C"`
+  declarations and unmarked exports reject arrays, slices, structs/unions, tagged
+  optionals, `Result`, closures, trait objects, function pointers, and unknown
+  wrappers by value. LLVM uses target-aware integer extension attributes at C ABI
+  definitions, declarations, and direct calls. Bare `extern fn` and `#[mc_abi]`
+  exports retain a backend-private ABI for same-backend runtime seams; they are not
+  C interoperability claims. Future by-value aggregate support still requires
+  target classifiers and cross-object tests for SysV, RISC-V, and AAPCS. Evidence:
+  `src/sema.zig` `checkExternExportStructAbi` / `externAbiTypeNeedsClassification`;
+  `src/lower_llvm.zig` `cAbiExtension`; `src/sema_tests.zig` `explicit C ABI rejects
+  unclassified values and MC ABI permits them`; aggregate bad fixtures and C/LLVM
+  diagnostic gates.
 - **[retired] Release-mode check elision function filtering.** The original audit
   flagged a possible LLVM/C parity divergence if LLVM matched optimized MIR
   `elided_bounds` by line/column across all functions while C filtered by function.

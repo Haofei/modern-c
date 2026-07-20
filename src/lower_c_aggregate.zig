@@ -425,6 +425,18 @@ pub fn emitPackedBitsLiteral(ctx: EmitContext, fields: []const ast.StructLiteral
     const resolved_target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty);
     const packed_name = typeName(resolved_target_ty) orelse return false;
     const info = ctx.packed_bits.get(packed_name) orelse return false;
+    var temps: std.ArrayList([]const u8) = .empty;
+    defer temps.deinit(ctx.scratch);
+    if (locals) |scope| {
+        if (fields.len != 0) try ctx.out.appendSlice(ctx.allocator, "({ ");
+        for (fields) |field| {
+            const temp = try nextTempName(ctx);
+            try temps.append(ctx.scratch, temp);
+            try ctx.out.print(ctx.allocator, "bool {s} = ", .{temp});
+            try ctx.emit_expr_with_target(ctx.emit_ctx, field.value, scope, ast_query.simpleNameType("bool", field.value.span));
+            try ctx.out.appendSlice(ctx.allocator, "; ");
+        }
+    }
     try ctx.out.print(ctx.allocator, "({s})(", .{packed_name});
     if (fields.len == 0) {
         try ctx.out.print(ctx.allocator, "({s})0", .{packed_name});
@@ -434,10 +446,15 @@ pub fn emitPackedBitsLiteral(ctx: EmitContext, fields: []const ast.StructLiteral
         const packed_field = info.fields.get(field.name.text) orelse return error.UnsupportedCEmission;
         const mask = try packedBitsMaskLiteral(ctx.scratch, info, packed_field.bit_index);
         try ctx.out.appendSlice(ctx.allocator, "(");
-        try ctx.emit_expr_with_target(ctx.emit_ctx, field.value, locals, ast_query.simpleNameType("bool", field.value.span));
+        if (temps.items.len != 0) {
+            try ctx.out.appendSlice(ctx.allocator, temps.items[i]);
+        } else {
+            try ctx.emit_expr_with_target(ctx.emit_ctx, field.value, locals, ast_query.simpleNameType("bool", field.value.span));
+        }
         try ctx.out.print(ctx.allocator, " ? {s} : ({s})0)", .{ mask, packed_name });
     }
     try ctx.out.appendSlice(ctx.allocator, ")");
+    if (temps.items.len != 0) try ctx.out.appendSlice(ctx.allocator, "; })");
     return true;
 }
 

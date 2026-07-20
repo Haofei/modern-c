@@ -8,6 +8,7 @@ const eval = @import("eval.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
 const sema_type = @import("sema_type.zig");
+const sema_decl = @import("sema_decl.zig");
 
 // Pure AST-shape queries shared with sema/mir/lower_c (see `ast_query.zig`); aliased so the
 // existing call sites read unchanged.
@@ -85,6 +86,7 @@ const llvmPreciseAsmConstraints = lower_llvm_text.llvmPreciseAsmConstraints;
 const llvmPreciseAsmTemplate = lower_llvm_text.llvmPreciseAsmTemplate;
 const llvmStringLiteralBytes = lower_llvm_text.llvmStringLiteralBytes;
 const sectionAttr = lower_llvm_text.sectionAttr;
+const hasNamedAttr = sema_decl.hasNamedAttr;
 
 // LLVM backend AST/call-shape queries and small pure lowering helpers.
 const lower_llvm_query = @import("lower_llvm_query.zig");
@@ -663,7 +665,8 @@ const LlvmEmitter = struct {
             });
             break :blk id;
         } else null;
-        try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
+        const c_abi = fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi"));
+        try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .c_abi = c_abi, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
@@ -1114,9 +1117,20 @@ const LlvmEmitter = struct {
         }
     }
 
+    fn cAbiExtension(self: *LlvmEmitter, ty: ast.TypeExpr) []const u8 {
+        if (typeNameEql(self.resolveAliasType(ty), "bool")) return if (self.target_arch == .aarch64) "" else "zeroext ";
+        const bits = self.integerBitsOf(ty) orelse return "";
+        if (bits > 32) return "";
+        if (self.target_arch == .aarch64) return "";
+        if (bits == 32) return if (self.target_arch == .riscv64) "signext " else "";
+        return if (self.isSignedIntegerType(ty)) "signext " else "zeroext ";
+    }
+
     fn emitFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl, body: ast.Block, attrs: []const ast.Attr) !void {
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
+        const fn_sig = self.fn_sigs.get(fn_decl.name.text) orelse return error.UnsupportedLlvmEmission;
+        const ret_ext = if (fn_sig.c_abi) self.cAbiExtension(ret_ty) else "";
         const old_scope = self.current_debug_scope;
         const old_span = self.current_debug_span;
         const old_return_ty = self.current_return_ty;
@@ -1178,10 +1192,11 @@ const LlvmEmitter = struct {
             "internal "
         else
             "";
-        try self.out.print(self.allocator, "define {s}{s} @{s}(", .{ weak_str, ret_llvm, fn_decl.name.text });
+        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ weak_str, ret_ext, ret_llvm, fn_decl.name.text });
         for (fn_decl.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            try self.out.print(self.allocator, "{s} %{s}", .{ try self.llvmType(param.ty), param.name.text });
+            const param_ext = if (fn_sig.c_abi) self.cAbiExtension(param.ty) else "";
+            try self.out.print(self.allocator, "{s} {s}%{s}", .{ try self.llvmType(param.ty), param_ext, param.name.text });
         }
         // C-ABI variadic tail: `define T @f(named..., ...)`. The body's `va.*` intrinsics
         // (llvm.va_start / the va_arg instruction / llvm.va_end) read the extra args.
@@ -1244,7 +1259,12 @@ const LlvmEmitter = struct {
             } else if (self.isAggregateType(param.ty) or self.atomicPayloadType(param.ty) != null) {
                 const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{param.name.text});
                 try self.emitAlloca(ptr, try self.llvmType(param.ty));
-                try self.out.print(self.allocator, "  store {s} %{s}, ptr {s}\n", .{ try self.llvmType(param.ty), param.name.text, ptr });
+                if (self.atomicPayloadType(param.ty) != null) {
+                    try self.out.print(self.allocator, "  store {s} %{s}, ptr {s}\n", .{ try self.llvmType(param.ty), param.name.text, ptr });
+                } else {
+                    const value = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{param.name.text});
+                    try self.emitConcreteObjectStore(ptr, param.ty, value);
+                }
                 try self.local_slots.put(param.name.text, .{ .ty = param.ty, .ptr = ptr });
             } else {
                 const value = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{param.name.text});
@@ -1280,10 +1300,14 @@ const LlvmEmitter = struct {
         // build links; skip the `declare` here to avoid an LLVM declare-vs-define clash.
         if (isKsanHook(fn_decl.name.text)) return;
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
-        try self.out.print(self.allocator, "declare {s} @{s}(", .{ try self.llvmType(ret_ty), fn_decl.name.text });
+        const sig = self.fn_sigs.get(fn_decl.name.text) orelse return error.UnsupportedLlvmEmission;
+        const ret_ext = if (sig.c_abi) self.cAbiExtension(ret_ty) else "";
+        try self.out.print(self.allocator, "declare {s}{s} @{s}(", .{ ret_ext, try self.llvmType(ret_ty), fn_decl.name.text });
         for (fn_decl.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            const param_ext = if (sig.c_abi) self.cAbiExtension(param.ty) else "";
             try self.out.appendSlice(self.allocator, try self.llvmType(param.ty));
+            if (param_ext.len != 0) try self.out.print(self.allocator, " {s}", .{std.mem.trimEnd(u8, param_ext, " ")});
         }
         try self.out.appendSlice(self.allocator, ")\n\n");
     }
@@ -2109,15 +2133,25 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ ty, value, ptr, try self.debugCallSuffix() });
     }
 
+    fn emitAllocaConcreteStore(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr, value: []const u8) !void {
+        try self.emitAlloca(ptr, try self.llvmType(ty));
+        try self.emitConcreteObjectStore(ptr, ty, value);
+    }
+
     fn emitZeroObjectBytes(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr) !void {
         const size = std.math.cast(u64, self.comptimeSizeOf(ty, 0) orelse return error.UnsupportedLlvmEmission) orelse return error.UnsupportedLlvmEmission;
         const alignment = std.math.cast(u64, self.comptimeAlignOf(ty, 0) orelse return error.UnsupportedLlvmEmission) orelse return error.UnsupportedLlvmEmission;
-        if (size == 0 or alignment == 0) return error.UnsupportedLlvmEmission;
+        if (alignment == 0) return error.UnsupportedLlvmEmission;
+        if (size == 0) return;
         try self.out.print(self.allocator, "  call void @llvm.memset.p0.i64(ptr align {d} {s}, i8 0, i64 {d}, i1 false){s}\n", .{ alignment, ptr, size, try self.debugCallSuffix() });
     }
 
     fn emitPaddingPreservingStore(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr, value: []const u8) !void {
         const resolved = self.resolveAliasType(ty);
+        if (self.maybeUninitPayloadType(resolved)) |payload_ty| {
+            try self.emitPaddingPreservingStore(ptr, payload_ty, value);
+            return;
+        }
         switch (resolved.kind) {
             .nullable => |child| {
                 if (self.nullablePayloadIsValueType(child.*)) {
@@ -2166,9 +2200,49 @@ const LlvmEmitter = struct {
                 }
                 return;
             },
+            .generic => |node| {
+                if (self.resultInfo(resolved)) |info| {
+                    const result_llvm = try self.llvmType(resolved);
+                    const tag = try self.nextTemp();
+                    const tag_ptr = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ tag, result_llvm, value });
+                    try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, result_llvm, ptr });
+                    try self.out.print(self.allocator, "  store i1 {s}, ptr {s}{s}\n", .{ tag, tag_ptr, try self.debugCallSuffix() });
+                    const payloads = [_]struct { ty: ast.TypeExpr, index: u8 }{
+                        .{ .ty = info.ok_ty, .index = 1 },
+                        .{ .ty = info.err_ty, .index = 2 },
+                    };
+                    for (payloads) |payload_info| {
+                        const payload = try self.nextTemp();
+                        const payload_ptr = try self.nextTemp();
+                        const payload_llvm = try self.resultPayloadLlvmType(payload_info.ty);
+                        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ payload, result_llvm, value, payload_info.index });
+                        try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ payload_ptr, result_llvm, ptr, payload_info.index });
+                        if (typeNameEql(self.resolveAliasType(payload_info.ty), "void")) {
+                            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ payload_llvm, payload, payload_ptr, try self.debugCallSuffix() });
+                        } else {
+                            try self.emitPaddingPreservingStore(payload_ptr, payload_info.ty, payload);
+                        }
+                    }
+                    return;
+                }
+                if ((std.mem.eql(u8, node.base.text, "Reg") or std.mem.eql(u8, node.base.text, "RegBits") or isPayloadDomainGenericName(node.base.text)) and node.args.len >= 1) {
+                    try self.emitPaddingPreservingStore(ptr, node.args[0], value);
+                    return;
+                }
+            },
             else => {},
         }
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(resolved), value, ptr, try self.debugCallSuffix() });
+    }
+
+    fn emitConcreteObjectStore(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr, value: []const u8) !void {
+        if (!self.isAggregateType(ty)) {
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(ty), value, ptr, try self.debugCallSuffix() });
+            return;
+        }
+        try self.emitZeroObjectBytes(ptr, ty);
+        try self.emitPaddingPreservingStore(ptr, ty, value);
     }
 
     /// Emit a conditional branch where one side leads to a trap-and-unreachable block.
@@ -2255,8 +2329,11 @@ const LlvmEmitter = struct {
             const err_value = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 2\n", .{ err_value, try self.llvmType(operand_ty), value });
             if (convert_fn) |cf| {
+                const convert_sig = self.fn_sigs.get(cf) orelse return error.UnsupportedLlvmEmission;
                 const converted = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} {s}){s}\n", .{ converted, try self.llvmType(return_info.err_ty), cf, try self.llvmType(info.err_ty), err_value, try self.debugCallSuffix() });
+                const ret_ext = if (convert_sig.c_abi) self.cAbiExtension(return_info.err_ty) else "";
+                const arg_ext = if (convert_sig.c_abi) self.cAbiExtension(info.err_ty) else "";
+                try self.out.print(self.allocator, "  {s} = call {s}{s} @{s}({s} {s}{s}){s}\n", .{ converted, ret_ext, try self.llvmType(return_info.err_ty), cf, try self.llvmType(info.err_ty), arg_ext, err_value, try self.debugCallSuffix() });
                 break :blk converted;
             }
             break :blk err_value;
@@ -2350,7 +2427,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, try self.llvmType(subject_ty), subject });
             break :blk payload;
         } else subject;
-        try self.emitAllocaStore(binding_ptr, try self.llvmType(inner_ty), binding_value);
+        try self.emitAllocaConcreteStore(binding_ptr, inner_ty, binding_value);
         try self.local_types.put(binding.text, inner_ty);
         try self.local_slots.put(binding.text, .{ .ty = inner_ty, .ptr = binding_ptr });
 
@@ -2426,7 +2503,7 @@ const LlvmEmitter = struct {
         const binding_ptr = try self.nextBindingPtr(tag_bind.binding.text);
         const payload = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ payload, try self.llvmType(subject_ty), subject, payload_index });
-        try self.emitAllocaStore(binding_ptr, try self.resultPayloadLlvmType(binding_ty), payload);
+        try self.emitAllocaConcreteStore(binding_ptr, binding_ty, payload);
         try self.local_types.put(tag_bind.binding.text, binding_ty);
         try self.local_slots.put(tag_bind.binding.text, .{ .ty = binding_ty, .ptr = binding_ptr });
 
@@ -2558,7 +2635,7 @@ const LlvmEmitter = struct {
                 try self.emitArrayLiteralStores(ptr, resolved_ty, init.kind.array_literal);
             } else {
                 const value = try self.emitExprWithMirRangeTarget(init, ty, name);
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
+                try self.emitConcreteObjectStore(ptr, ty, value);
             }
             return;
         }
@@ -2567,12 +2644,12 @@ const LlvmEmitter = struct {
                 try self.emitStructLiteralStores(ptr, resolved_ty, init.kind.struct_literal);
             } else {
                 const value = try self.emitExprWithMirRangeTarget(init, ty, name);
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
+                try self.emitConcreteObjectStore(ptr, ty, value);
             }
             return;
         }
         const value = try self.emitExprWithMirRangeTarget(init, ty, name);
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
+        try self.emitConcreteObjectStore(ptr, ty, value);
     }
 
     fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast.Expr) !ast.TypeExpr {
@@ -2705,7 +2782,11 @@ const LlvmEmitter = struct {
                 }
                 const llvm_ty = try self.llvmType(slot.ty);
                 const value = try self.emitExprWithMirRangeTarget(value_expr, slot.ty, ident.text);
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, slot.ptr, try self.debugCallSuffix() });
+                if (self.atomicPayloadType(slot.ty) != null) {
+                    try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, slot.ptr, try self.debugCallSuffix() });
+                } else {
+                    try self.emitConcreteObjectStore(slot.ptr, slot.ty, value);
+                }
                 try self.updatePointerProvenanceAssignmentFromMirOrLocalProof(ident.text, slot.ty, value_expr, span);
                 _ = self.local_aggregate_pointer_aliases.remove(ident.text);
                 _ = self.local_pointer_array_aliases.remove(ident.text);
@@ -2799,7 +2880,7 @@ const LlvmEmitter = struct {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const ptr = try self.storageBaseAddress(info.base);
             const value = try self.emitExpr(call.args[0], info.payload_ty);
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(info.payload_ty), value, ptr, try self.debugCallSuffix() });
+            try self.emitConcreteObjectStore(ptr, info.payload_ty, value);
             return true;
         }
         if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_store) {
@@ -2815,7 +2896,7 @@ const LlvmEmitter = struct {
                 // stores lower to a plain (uninstrumented) typed store, matching the C
                 // backend where aggregate stores bypass the mc_raw_store_* helpers.
                 try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}, align {d}{s}\n", .{ llvm_ty, value, ptr, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
+                try self.emitConcreteObjectStore(ptr, info.payload_ty, value);
                 return true;
             }
             // KASAN (D2.1): consult the shadow before the store — a poisoned (freed/
@@ -3050,7 +3131,7 @@ const LlvmEmitter = struct {
                 const ptr = try self.nextTemp();
                 const value = try self.emitExpr(iterable, iterable_ty);
                 try self.emitAlloca(ptr, try self.llvmType(iterable_ty));
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(iterable_ty), value, ptr });
+                try self.emitConcreteObjectStore(ptr, iterable_ty, value);
                 iterable_slot = .{ .ty = iterable_ty, .ptr = ptr };
                 iterable_ptr = ptr;
             },
@@ -3099,7 +3180,7 @@ const LlvmEmitter = struct {
         const element_ptr = try self.emitForElementPtr(iterable, iterable_ty, iterable_ptr, index);
         const element_value = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ element_value, element_llvm, element_ptr });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ element_llvm, element_value, binding_ptr, try self.debugCallSuffix() });
+        try self.emitConcreteObjectStore(binding_ptr, element_ty, element_value);
 
         try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = step_label, .cleanup_start = self.defer_stack.items.len, .label = if (loop.loop_label) |l| l.text else null });
         defer _ = self.loop_stack.pop();
@@ -3198,7 +3279,7 @@ const LlvmEmitter = struct {
         defer self.restoreLocalArrayPointerElementsForLocal(bind.text, &old_local_array_pointer_elements) catch {};
 
         const binding_ptr = try self.nextBindingPtr(bind.text);
-        try self.emitAllocaStore(binding_ptr, try self.llvmType(inner_ty), subject);
+        try self.emitAllocaConcreteStore(binding_ptr, inner_ty, subject);
         try self.local_types.put(bind.text, inner_ty);
         try self.local_slots.put(bind.text, .{ .ty = inner_ty, .ptr = binding_ptr });
         const some_terminated = try self.emitSwitchBody(node.arms[some_i].body, ret_ty);
@@ -3313,7 +3394,7 @@ const LlvmEmitter = struct {
             const binding_ptr = try self.nextBindingPtr(bind.text);
             const payload = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ payload, try self.llvmType(subject_ty), subject, payload_index });
-            try self.emitAllocaStore(binding_ptr, try self.resultPayloadLlvmType(payload_ty), payload);
+            try self.emitAllocaConcreteStore(binding_ptr, payload_ty, payload);
             try self.local_types.put(bind.text, payload_ty);
             try self.local_slots.put(bind.text, .{ .ty = payload_ty, .ptr = binding_ptr });
             return try self.emitSwitchBody(arm.body, ret_ty);
@@ -3328,7 +3409,7 @@ const LlvmEmitter = struct {
         const tag_ptr = try self.nextTemp();
         const tag = try self.nextTemp();
         const union_llvm = try self.llvmType(subject_ty);
-        try self.emitAllocaStore(subject_ptr, union_llvm, subject);
+        try self.emitAllocaConcreteStore(subject_ptr, subject_ty, subject);
         try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, subject_ptr });
         try self.out.print(self.allocator, "  {s} = load i32, ptr {s}{s}\n", .{ tag, tag_ptr, try self.debugCallSuffix() });
 
@@ -3397,7 +3478,7 @@ const LlvmEmitter = struct {
 
             const binding_ptr = try self.nextBindingPtr(binding.binding.text);
             const payload = try self.taggedUnionLoadPayload(subject_ptr, subject_ty, payload_ty);
-            try self.emitAllocaStore(binding_ptr, try self.llvmType(payload_ty), payload);
+            try self.emitAllocaConcreteStore(binding_ptr, payload_ty, payload);
             try self.local_types.put(binding.binding.text, payload_ty);
             try self.local_slots.put(binding.binding.text, .{ .ty = payload_ty, .ptr = binding_ptr });
             return try self.emitSwitchBody(arm.body, ret_ty);
@@ -3817,7 +3898,11 @@ const LlvmEmitter = struct {
             }
             try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} unordered, align {d}{s}\n", .{ llvm_ty, value, ptr, self.llvmAlignOf(ty), try self.debugCallSuffix() });
         } else {
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
+            if (self.isAggregateType(ty)) {
+                try self.emitConcreteObjectStore(ptr, ty, value);
+            } else {
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
+            }
         }
     }
 
@@ -6509,8 +6594,7 @@ const LlvmEmitter = struct {
         if (!self.isAggregateType(ty)) return error.UnsupportedLlvmEmission;
         const value = try self.emitExpr(expr, ty);
         const ptr = try self.nextTemp();
-        const llvm_ty = try self.llvmType(ty);
-        try self.emitAllocaStore(ptr, llvm_ty, value);
+        try self.emitAllocaConcreteStore(ptr, ty, value);
         return ptr;
     }
 
@@ -6900,13 +6984,16 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = ptrtoint ptr %env to {s}\n", .{ narrowed, env_llvm });
             const returns_void = typeNameEql(sig.ret, "void");
             const result = if (returns_void) "" else try self.nextTemp();
+            const ret_ext = if (sig.c_abi) self.cAbiExtension(sig.ret) else "";
+            const env_ext = if (sig.c_abi) self.cAbiExtension(sig.params[0].ty) else "";
             if (returns_void) {
-                try self.out.print(self.allocator, "  call void @{s}({s} {s}", .{ thunk.fname, env_llvm, narrowed });
+                try self.out.print(self.allocator, "  call void @{s}({s} {s}{s}", .{ thunk.fname, env_llvm, env_ext, narrowed });
             } else {
-                try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} {s}", .{ result, ret_llvm, thunk.fname, env_llvm, narrowed });
+                try self.out.print(self.allocator, "  {s} = call {s}{s} @{s}({s} {s}{s}", .{ result, ret_ext, ret_llvm, thunk.fname, env_llvm, env_ext, narrowed });
             }
             for (sig.params[1..], 0..) |param, i| {
-                try self.out.print(self.allocator, ", {s} %a{d}", .{ try self.llvmType(param.ty), i });
+                const param_ext = if (sig.c_abi) self.cAbiExtension(param.ty) else "";
+                try self.out.print(self.allocator, ", {s} {s}%a{d}", .{ try self.llvmType(param.ty), param_ext, i });
             }
             try self.out.appendSlice(self.allocator, ")\n");
             if (returns_void) {
@@ -6936,10 +7023,12 @@ const LlvmEmitter = struct {
             try args.append(self.allocator, .{ .ty = arg_ty, .value = arg_value });
         }
         const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = call {s} @{s}(", .{ result, ret_ty, callee });
+        const ret_ext = if (sig.c_abi) self.cAbiExtension(ret_ast_ty) else "";
+        try self.out.print(self.allocator, "  {s} = call {s}{s} @{s}(", .{ result, ret_ext, ret_ty, callee });
         for (args.items, 0..) |arg, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
+            const arg_ext = if (sig.c_abi) self.cAbiExtension(arg.ty) else "";
+            try self.out.print(self.allocator, "{s} {s}{s}", .{ try self.llvmType(arg.ty), arg_ext, arg.value });
         }
         try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
         return result;
@@ -7337,7 +7426,8 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  call void @{s}(", .{callee});
         for (args.items, 0..) |arg, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
+            const arg_ext = if (sig.c_abi) self.cAbiExtension(arg.ty) else "";
+            try self.out.print(self.allocator, "{s} {s}{s}", .{ try self.llvmType(arg.ty), arg_ext, arg.value });
         }
         try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
     }
@@ -8053,7 +8143,7 @@ const LlvmEmitter = struct {
             if (call.args.len != 1) return error.UnsupportedLlvmEmission;
             const payload = try self.emitExpr(call.args[0], payload_ty);
             const payload_ptr = try self.taggedUnionPayloadPtr(ptr, target_ty, payload_ty);
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(payload_ty), payload, payload_ptr, try self.debugCallSuffix() });
+            try self.emitPaddingPreservingStore(payload_ptr, payload_ty, payload);
         } else if (call.args.len != 0) {
             return error.UnsupportedLlvmEmission;
         }
@@ -8083,7 +8173,7 @@ const LlvmEmitter = struct {
             if (call.args.len != 1) return error.UnsupportedLlvmEmission;
             const payload = try self.emitExpr(call.args[0], payload_ty);
             const payload_ptr = try self.taggedUnionPayloadPtr(ptr, union_ty, payload_ty);
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(payload_ty), payload, payload_ptr, try self.debugCallSuffix() });
+            try self.emitPaddingPreservingStore(payload_ptr, payload_ty, payload);
         } else if (call.args.len != 0) {
             return error.UnsupportedLlvmEmission;
         }

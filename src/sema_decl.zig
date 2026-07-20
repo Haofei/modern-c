@@ -79,7 +79,7 @@ pub fn hasNaked(attrs: []ast.Attr) bool {
     return false;
 }
 
-pub fn hasNamedAttr(attrs: []ast.Attr, name: []const u8) bool {
+pub fn hasNamedAttr(attrs: []const ast.Attr, name: []const u8) bool {
     for (attrs) |attr| switch (attr.kind) {
         .named => |id| if (std.mem.eql(u8, id.text, name)) return true,
         else => {},

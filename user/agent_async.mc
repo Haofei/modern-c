@@ -52,6 +52,7 @@ struct ToolPump {
 }
 
 // Wire the pump to a submit/poll pair (mock or real). Clears the registry.
+#[mc_abi]
 export fn tool_pump_init(p: *mut ToolPump, submit: SubmitFn, poll: PollFn) -> void {
     p.submit = submit;
     p.poll = poll;
@@ -188,6 +189,7 @@ export fn ToolFut_poll(self: *mut ToolFut) -> bool {
 
 // The awaited result: ok(result) on success, err(status) on a broker error (-E_TIMEDOUT, -E_CANCELED,
 // -E_DENIED, a failed submit, ...). The agent matches on it after the await.
+#[mc_abi]
 export fn ToolFut_take_result(self: *mut ToolFut) -> Result<i32, i32> {
     if self.status == 0 {
         return ok(self.result);
@@ -319,6 +321,7 @@ fn net_fetch_async(p: *mut ToolPump, endpoint_id: u64,
 // ToolFut the future holds — siblings' completions are stashed and matched by id, so overlapping tool
 // calls all make progress under this one loop. The `f` here is a `*mut dyn Future`, so it drives the
 // generated `async fn` future as well as a bare ToolFut.
+#[mc_abi]
 export fn pump_run_to_completion(p: *mut ToolPump, f: *mut dyn Future) -> u64 {
     var cycles: u64 = 0;
     while !f.poll() {

@@ -25,7 +25,7 @@ CHANNELS: dict[str, dict[str, list[str]]] = {
         ],
         "tests/spec/bad/move_cfg_arrays_reject.mc": [
             "extern fn reject_move_array_param",
-            "export fn reject_move_array_return",
+            "extern fn reject_move_array_return",
         ],
     },
     "aggregate containment is scoped by owner kind": {
@@ -119,7 +119,7 @@ ANCHORS: dict[str, list[str]] = {
     ],
     "tests/spec/bad/move_cfg_arrays_reject.mc": [
         "struct BadArrayContainer",
-        "export fn reject_move_array_return",
+        "extern fn reject_move_array_return",
         "extern fn reject_move_array_param",
         "global bad_move_array_global",
     ],

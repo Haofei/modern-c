@@ -10,19 +10,34 @@ cheat-sheet plus the error codes you actually hit.
 ```mc
 extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
 extern struct Timespec { tv_sec: i64, tv_nsec: i64 }   // C-ABI struct layout
-export fn mc_entry() -> u32 { … }                       // MC function visible to C
+export fn mc_entry() -> u32 { ... }                     // C-ABI MC export
+#[mc_abi]
+export fn internal_pair(value: [2]u32) -> [2]u32 { ... } // same-backend only
 ```
 
 - **`extern "C" fn …;`** — declare a C function MC may call. Parameter/return types must be
-  ABI types (fixed-width ints, floats, pointers, `c_void` pointers, `extern struct`s).
+  in the compiler's target-classified C ABI allowlist.
 - **`extern fn …;`** — declare an unresolved function using the active MC backend's
   internal ABI. This form is used by generated runtime/test seams and is not C ABI stable.
-- **`export fn …`** — give an MC function external linkage so C (or another TU) can call it.
+- **`export fn …`** — expose an MC definition with the target C ABI. Its signature is
+  checked by the same allowlist as `extern "C"`.
+- **`#[mc_abi] export fn …`** — expose a symbol using the active backend's private MC ABI.
+  Caller and callee must use the same backend, target, and compiler version. This is not a
+  C interoperability surface and C/LLVM representations are not required to match.
 - **`extern struct`** — a struct whose layout matches the C ABI (no MC-chosen reordering).
 
-By-value aggregates whose target calling convention is not yet classified are rejected
-at explicit C ABI and export boundaries with `E_EXTERN_STRUCT_BY_VALUE`. This currently
-includes tagged optionals such as `?u32`; use a pointer or out parameter instead.
+The current C ABI allowlist covers `void` returns, scalar integers and enums, `bool`,
+`f32`/`f64`, raw pointers, C strings, address-class scalar handles, and nullable raw
+pointers. LLVM declarations, definitions, and direct calls carry the target-required
+`signext`/`zeroext` attributes for narrow integer values.
+
+Unclassified by-value representations are rejected at explicit C ABI and default export
+boundaries with `E_EXTERN_STRUCT_BY_VALUE`. The rejected set includes arrays, slices,
+structs and unions, tagged value optionals, `Result`, closures, trait objects, function
+pointers without a classified nested signature, and unknown generic wrappers. Use a
+pointer/out parameter, or use `#[mc_abi]` only for a deliberately same-backend boundary.
+An `extern struct` has C storage layout, but passing it by value remains rejected until
+the selected target's aggregate calling convention is implemented.
 
 ## `c_void`, not MC `void`
 

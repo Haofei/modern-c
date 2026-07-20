@@ -44,6 +44,8 @@ test "LLVM aggregate literal storage materializes every allocation byte" {
         \\struct Padded { small: u8, wide: u64 }
         \\struct Nested { value: Padded }
         \\struct OptionalHolder { value: ?Padded }
+        \\struct Wide { value: u128 }
+        \\union Choice { item: Padded, none }
         \\#[c_union]
         \\struct Storage { small: u8, wide: u64 }
         \\extern fn maybe_padded() -> ?Padded;
@@ -53,6 +55,13 @@ test "LLVM aggregate literal storage materializes every allocation byte" {
         \\fn optional_holder() -> OptionalHolder { return .{ .value = maybe_padded() }; }
         \\fn storage() -> Storage { return .{ .small = 1, .wide = uninit }; }
         \\fn padded_uninit() -> Padded { var value: Padded = uninit; value = .{ .small = 3, .wide = 4 }; return value; }
+        \\extern fn padded_result() -> Result<Padded, u8>;
+        \\extern fn padded_value() -> Padded;
+        \\fn copy_result() -> Result<Padded, u8> { let value = padded_result(); return value; }
+        \\fn choice() -> Choice { return Choice.item(padded_value()); }
+        \\fn padded_member() -> u64 { return padded_value().wide; }
+        \\fn empty() -> [0]u8 { var value: [0]u8 = uninit; return value; }
+        \\fn wide(value: u128) -> Wide { return .{ .value = value }; }
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -77,6 +86,20 @@ test "LLVM aggregate literal storage materializes every allocation byte" {
     try expectContains(storage_body, "store i8");
     const uninit_body = try llvmFunctionBody(output.items, "define internal { i8, i64 } @padded_uninit");
     try std.testing.expect(std.mem.count(u8, uninit_body, "call void @llvm.memset.p0.i64(ptr align 8") >= 2);
+    const result_body = try llvmFunctionBody(output.items, "define internal { i1, { i8, i64 }, i8 } @copy_result");
+    try expectContains(result_body, "call void @llvm.memset.p0.i64(ptr align 8");
+    try expectNotContains(result_body, "store { i1, { i8, i64 }, i8 }");
+    const choice_body = try llvmFunctionBody(output.items, "define internal { i32, [4 x i8], [2 x i64] } @choice");
+    try expectContains(choice_body, "store i8 ");
+    try expectContains(choice_body, "store i64 ");
+    try expectNotContains(choice_body, "store { i8, i64 }");
+    const member_body = try llvmFunctionBody(output.items, "define internal i64 @padded_member");
+    try expectContains(member_body, "call void @llvm.memset.p0.i64(ptr align 8");
+    try expectNotContains(member_body, "store { i8, i64 }");
+    _ = try llvmFunctionBody(output.items, "define internal [0 x i8] @empty");
+    const wide_body = try llvmFunctionBody(output.items, "define internal { i128 } @wide");
+    try expectContains(wide_body, "call void @llvm.memset.p0.i64(ptr align 16");
+    try expectContains(wide_body, "store i128 %value");
 }
 
 test "LLVM struct literal fields evaluate in lexical source order" {
@@ -100,6 +123,53 @@ fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.Arra
     defer parsed.deinit();
 
     try lower_llvm.appendLlvm(std.testing.allocator, parsed.module, output);
+}
+
+fn appendLlvmTargetTest(source_name: []const u8, source: []const u8, target: @import("backend.zig").TargetArch, output: *std.ArrayList(u8)) !void {
+    var parsed = try test_support.parseModule(source_name, source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, output, source_name, .{}, false, target, null);
+}
+
+test "LLVM explicit C ABI scalar extensions match each target" {
+    const source =
+        \\extern "C" fn c_i8(value: i8) -> i8;
+        \\extern "C" fn c_u8(value: u8) -> u8;
+        \\extern "C" fn c_u32(value: u32) -> u32;
+        \\extern "C" fn c_bool(value: bool) -> bool;
+        \\extern fn mc_i8(value: i8) -> i8;
+        \\export fn c_export(value: i8) -> i8 { return c_i8(value); }
+        \\#[mc_abi]
+        \\export fn mc_export(value: i8) -> i8 { return mc_i8(value); }
+    ;
+
+    var riscv: std.ArrayList(u8) = .empty;
+    defer riscv.deinit(std.testing.allocator);
+    try appendLlvmTargetTest("llvm_c_abi_riscv.mc", source, .riscv64, &riscv);
+    try expectContains(riscv.items, "declare signext i8 @c_i8(i8 signext)");
+    try expectContains(riscv.items, "declare zeroext i8 @c_u8(i8 zeroext)");
+    try expectContains(riscv.items, "declare signext i32 @c_u32(i32 signext)");
+    try expectContains(riscv.items, "declare zeroext i1 @c_bool(i1 zeroext)");
+    try expectContains(riscv.items, "define signext i8 @c_export(i8 signext %value)");
+    try expectContains(riscv.items, "call signext i8 @c_i8(i8 signext %");
+    try expectContains(riscv.items, "declare i8 @mc_i8(i8)");
+    try expectContains(riscv.items, "define i8 @mc_export(i8 %value)");
+
+    var x86: std.ArrayList(u8) = .empty;
+    defer x86.deinit(std.testing.allocator);
+    try appendLlvmTargetTest("llvm_c_abi_x86.mc", source, .x86_64, &x86);
+    try expectContains(x86.items, "declare signext i8 @c_i8(i8 signext)");
+    try expectContains(x86.items, "declare zeroext i8 @c_u8(i8 zeroext)");
+    try expectContains(x86.items, "declare i32 @c_u32(i32)");
+
+    var arm: std.ArrayList(u8) = .empty;
+    defer arm.deinit(std.testing.allocator);
+    try appendLlvmTargetTest("llvm_c_abi_arm.mc", source, .aarch64, &arm);
+    try expectContains(arm.items, "declare i8 @c_i8(i8)");
+    try expectContains(arm.items, "declare i8 @c_u8(i8)");
+    try expectContains(arm.items, "declare i1 @c_bool(i1)");
 }
 
 test "LLVM target-typed char literals require MIR facts" {
@@ -6181,7 +6251,7 @@ test "LLVM ordinary global scalar accesses lower to unordered atomics" {
     try expectContains(aggregate_param_write_clears_body, " unordered, align 4");
     try expectNotContains(aggregate_param_write_clears_body, "load i32, ptr %");
 
-    const exported_aggregate_param_body = try llvmFunctionBody(output.items, "define i32 @exported_aggregate_global_param_lowers_atomic");
+    const exported_aggregate_param_body = try llvmFunctionBody(output.items, "define signext i32 @exported_aggregate_global_param_lowers_atomic");
     try expectContains(exported_aggregate_param_body, "load atomic i32, ptr %");
     try expectContains(exported_aggregate_param_body, " unordered, align 4");
     try expectNotContains(exported_aggregate_param_body, "load i32, ptr %");
@@ -7062,13 +7132,13 @@ test "LLVM pointer-member aggregate value copies lower recursively" {
 
     const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_pointer_member_aggregate_copy_stays_plain");
     try expectContains(local_body, "; mir pointer_provenance consumed fn=local_pointer_member_aggregate_copy_stays_plain subject=p provenance=local_storage reason=none");
-    try expectContains(local_body, "store { i32 } %");
+    try expectContains(local_body, "store i32 ");
     try expectContains(local_body, "load { i32 }, ptr %");
     try expectNotContains(local_body, " atomic ");
 
     const local_nested_body = try llvmFunctionBody(output.items, "define internal i32 @local_nested_pointer_member_aggregate_copy_stays_plain");
     try expectContains(local_nested_body, "; mir pointer_provenance consumed fn=local_nested_pointer_member_aggregate_copy_stays_plain subject=p provenance=local_storage reason=none");
-    try expectContains(local_nested_body, "store { i32 } %");
+    try expectContains(local_nested_body, "store i32 ");
     try expectContains(local_nested_body, "load { i32 }, ptr %");
     try expectNotContains(local_nested_body, " atomic ");
 }
@@ -7244,7 +7314,7 @@ test "LLVM aggregate whole-element index access lowers recursively" {
 
     const local_store_body = try llvmFunctionBody(output.items, "define internal i32 @local_pointer_array_cell_store");
     try expectContains(local_store_body, "; mir pointer_provenance consumed fn=local_pointer_array_cell_store subject=pa provenance=local_storage reason=none");
-    try expectContains(local_store_body, "store { i32 }");
+    try expectContains(local_store_body, "store i32 ");
     try expectContains(local_store_body, "load i32, ptr %");
     try expectNotContains(local_store_body, " atomic ");
 }
@@ -7847,7 +7917,7 @@ test "LLVM indexed aggregate field value copies lower recursively" {
     try expectNotContains(local_body, " atomic ");
 
     const local_store_body = try llvmFunctionBody(output.items, "define internal { i32 } @local_array_inner_store");
-    try expectContains(local_store_body, "store { i32 }");
+    try expectContains(local_store_body, "store i32 ");
     try expectContains(local_store_body, "load { i32 }, ptr %");
     try expectNotContains(local_store_body, " atomic ");
 }
@@ -8149,7 +8219,7 @@ test "LLVM nested indexed aggregate field value copies lower recursively" {
     try expectNotContains(local_body, " atomic ");
 
     const local_store_body = try llvmFunctionBody(output.items, "define internal { i32 } @local_array_leaf_store");
-    try expectContains(local_store_body, "store { i32 }");
+    try expectContains(local_store_body, "store i32 ");
     try expectContains(local_store_body, "load { i32 }, ptr %");
     try expectNotContains(local_store_body, " atomic ");
 }
@@ -10917,7 +10987,7 @@ test "LLVM simple aggregate pointer deref value copy lowers field-wise race-tole
     const local_raw_many_store_body = try llvmFunctionBody(local_raw_many_store_output.items, "define internal { i32 } @local_raw_many_zero_aggregate_store");
     try expectContains(local_raw_many_store_body, "; mir pointer_provenance consumed fn=local_raw_many_zero_aggregate_store subject=p provenance=local_storage reason=none");
     try expectContains(local_raw_many_store_body, "; mir pointer_provenance consumed fn=local_raw_many_zero_aggregate_store subject=q provenance=local_storage reason=none");
-    try expectContains(local_raw_many_store_body, "store { i32 }");
+    try expectContains(local_raw_many_store_body, "store i32 ");
     try expectContains(local_raw_many_store_body, "load { i32 }, ptr %cell");
     try expectNotContains(local_raw_many_store_body, " atomic ");
 }
@@ -11632,20 +11702,20 @@ test "LLVM proven-local aggregate pointer deref value copy stays plain" {
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @local_pointer_aggregate_copy");
     try expectContains(body, "; mir pointer_provenance consumed fn=local_pointer_aggregate_copy subject=p provenance=local_storage reason=none");
-    try expectContains(body, "store { i32 }");
+    try expectContains(body, "store i32 ");
     try expectContains(body, "load { i32 }, ptr %");
     try expectNotContains(body, " atomic ");
 
     const array_body = try llvmFunctionBody(output.items, "define internal i32 @local_pointer_array_aggregate_copy");
     try expectContains(array_body, "; mir pointer_provenance consumed fn=local_pointer_array_aggregate_copy subject=p provenance=local_storage reason=none");
-    try expectContains(array_body, "store { [2 x i32] }");
+    try expectContains(array_body, "store i32 ");
     try expectContains(array_body, "load { [2 x i32] }, ptr %");
     try expectNotContains(array_body, " atomic ");
 
     const raw_many_array_body = try llvmFunctionBody(output.items, "define internal i32 @local_raw_many_zero_array_aggregate_copy");
     try expectContains(raw_many_array_body, "; mir pointer_provenance consumed fn=local_raw_many_zero_array_aggregate_copy subject=p provenance=local_storage reason=none");
     try expectContains(raw_many_array_body, "; mir pointer_provenance consumed fn=local_raw_many_zero_array_aggregate_copy subject=q provenance=local_storage reason=none");
-    try expectContains(raw_many_array_body, "store { [2 x i32] }");
+    try expectContains(raw_many_array_body, "store i32 ");
     try expectContains(raw_many_array_body, "load { [2 x i32] }, ptr %");
     try expectNotContains(raw_many_array_body, " atomic ");
 }

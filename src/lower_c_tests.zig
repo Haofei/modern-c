@@ -51,6 +51,24 @@ fn appendCheckedCTest(source_name: []const u8, source: []const u8, output: *std.
     try lower_c.appendC(std.testing.allocator, parsed.module, output);
 }
 
+test "lower-c sequences dynamic packed bits fields lexically" {
+    const source =
+        \\packed bits Flags: u8 { first: bool, second: bool }
+        \\extern fn mark(id: u32) -> bool;
+        \\fn flags() -> Flags { return .{ .second = mark(2), .first = mark(1) }; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("packed_bits_order.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static Flags flags(void)");
+    const second = std.mem.indexOf(u8, body, "mark(") orelse return error.TestUnexpectedResult;
+    const first = std.mem.indexOfPos(u8, body, second + "mark(".len, "mark(") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(second < first);
+    try expectContains(body[second..first], "2");
+    try expectContains(body[first..], "1");
+    try expectContains(body, "bool mc_tmp");
+}
+
 test "lower-c target-typed char literals require MIR facts" {
     const source =
         \\fn char_value() -> u16 { return 'A'; }

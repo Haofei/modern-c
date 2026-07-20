@@ -2534,6 +2534,30 @@ MC can call C ABI functions.
 extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
 ```
 
+An unmarked `export fn` also uses the selected target's C ABI. The compiler accepts
+only signature types for which it has a complete target ABI classification. Current
+qualified scalar types include fixed-width integers and enums, `bool`, `f32`/`f64`,
+raw pointers, `cstr`, address-class scalar handles, and nullable raw pointers.
+Required integer extension rules are part of the ABI signature and must agree at
+definitions, declarations, and call sites.
+
+Arrays, slices, structs/unions, tagged value optionals, `Result`, closures, trait
+objects, and unclassified generic wrappers may not cross an explicit C boundary by
+value. They must use pointers/out parameters until target aggregate classification
+exists. Storage-layout compatibility alone does not establish calling-convention
+compatibility.
+
+Bare `extern fn` uses the active backend's internal MC ABI. An exported definition can
+select the same private convention explicitly:
+
+```mc
+#[mc_abi]
+export fn exchange(value: [2]u32) -> [2]u32 { return value; }
+```
+
+`#[mc_abi]` is a same-backend, same-target, same-compiler contract. It provides external
+linkage but makes no C interoperability or C/LLVM cross-backend ABI promise.
+
 But MC does not inherit C semantics.
 
 `c_void` is the C opaque-object pointee type.

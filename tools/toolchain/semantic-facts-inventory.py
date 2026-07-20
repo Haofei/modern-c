@@ -364,13 +364,13 @@ AGGREGATE_RETURN_CFG_DECISION_AUDIT: dict[str, list[str]] = {
 
 EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT: dict[str, list[str]] = {
     "docs/compiler-production-readiness.md": [
-        "| Extern/export struct and optional ABI hazards fail closed |",
+        "| Explicit C ABI aggregate hazards fail closed |",
         "| `c-abi-aggregate-lowering` | Accepted fail-closed external ABI boundary:",
-        "Struct and optional C ABI hazards at explicit `extern \"C\"`/`export`",
+        "Explicit C ABI boundaries fail closed for unclassified values",
     ],
     "docs/typed-semantic-facts.md": [
         "| `c-abi-aggregate-lowering` |",
-        "Explicit C ABI declarations and exported functions reject named structs and tagged/fat optional values",
+        "Explicit `extern \"C\"` declarations and unmarked exports reject every currently unclassified by-value family",
     ],
     "src/sema.zig": [
         "fn checkExternExportStructAbi(",
@@ -378,7 +378,7 @@ EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT: dict[str, list[str]] = {
         "fn externAbiTypeNeedsClassification(",
     ],
     "src/sema_tests.zig": [
-        "test \"rejects structs and tagged optionals at extern and export ABI boundaries\"",
+        "test \"explicit C ABI rejects unclassified values and MC ABI permits them\"",
         "countDiagnosticCode(&reporter, \"E_EXTERN_STRUCT_BY_VALUE\")",
     ],
     "tests/c_emit/bad/extern_struct_param_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
@@ -386,6 +386,7 @@ EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT: dict[str, list[str]] = {
     "tests/c_emit/bad/export_struct_param_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
     "tests/c_emit/bad/export_struct_return_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
     "tests/c_emit/bad/export_generic_struct_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
+    "tests/c_emit/bad/extern_array_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
     "tests/c_emit/bad/extern_optional_by_value.mc": ["E_EXTERN_STRUCT_BY_VALUE"],
 }
 

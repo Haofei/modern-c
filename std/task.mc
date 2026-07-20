@@ -48,6 +48,7 @@ struct SlotFuture {
     ready: bool,
 }
 
+#[mc_abi]
 export fn slot_future_init(s: *mut SlotFuture, id: u64, done: fn(u64) -> bool, cancel: fn(u64) -> void) -> void {
     s.id = id;
     s.done = done;
@@ -87,6 +88,7 @@ struct Join2 {
     bd: bool,
 }
 
+#[mc_abi]
 export fn join2_init(j: *mut Join2, a: *mut dyn Future, b: *mut dyn Future) -> void {
     j.a = a;
     j.b = b;
@@ -121,6 +123,7 @@ struct Race2 {
     winner: i32,
 }
 
+#[mc_abi]
 export fn race2_init(r: *mut Race2, a: *mut dyn Future, b: *mut dyn Future) -> void {
     r.a = a;
     r.b = b;
@@ -162,6 +165,7 @@ struct Timeout {
     done: bool,
 }
 
+#[mc_abi]
 export fn timeout_init(t: *mut Timeout, inner: *mut dyn Future, budget_ticks: u64) -> void {
     t.inner = inner;
     t.remaining = budget_ticks;
@@ -204,6 +208,7 @@ impl Future for Timeout {
 // so the executor sleeps instead of spinning. Returns the number of idle ticks spent waiting
 // — a smoke-test observable. There is no internal iteration cap: a stuck leaf must be bounded
 // by a `Timeout` combinator, not by a hidden limit here.
+#[mc_abi]
 export fn run_to_completion(f: *mut dyn Future, idle: fn() -> void) -> u64 {
     var ticks: u64 = 0;
     while !f.poll() {

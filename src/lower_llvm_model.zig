@@ -17,6 +17,7 @@ pub const LocalSlotKind = enum {
 pub const FnSig = struct {
     ret: ast.TypeExpr,
     params: []const ast.Param,
+    c_abi: bool = false,
     debug_id: ?usize = null,
     // G8: `#[error_from]` conversion `fn(E1) -> E2`, invoked by `?` on the error
     // path when the propagated error type differs from the function's error type.
