@@ -42,7 +42,7 @@ git -C /home/zoe/src/linux switch -c vrng-lang-experiment v7.2-rc4
 
 The experiment branch is based on `v7.2-rc4` /
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current implementation commit
-is `14a52a42241f`, published as
+is `83a4ba9acbf65b45a2f73e0472b492d26ddc94e5`, published as
 [`Haofei/linux:vrng-lang-experiment`](https://github.com/Haofei/linux/tree/vrng-lang-experiment).
 
 The container is sufficient for compilation and QEMU execution. Performance
@@ -69,6 +69,8 @@ tools/virtio-rng-experiment/run-live-qemu.sh \
   /home/zoe/build/vrng-live-qemu.log
 ```
 
-The init process starts two concurrent `/dev/hwrng` readers, unbinds the
-virtio device to exercise removal, and requires the driver to report a nonzero
-event count with zero C/Rust/MC mismatches.
+The init process first checks normal reads, then unbinds the virtio device while
+two long-running `/dev/hwrng` readers are active. The runner requires both
+readers to terminate, the init process to reach its completion marker, a
+nonzero event count with zero C/Rust/MC differences, and no kernel warning,
+sanitizer, lockdep, or hung-task diagnostic.

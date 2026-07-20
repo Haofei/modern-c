@@ -19,10 +19,16 @@ timeout 180 qemu-system-x86_64 \
 	-object rng-builtin,id=rng0 \
 	-device virtio-rng-pci,rng=rng0 | tee "$log"
 
-grep -q "VRNG-LIVE: readers passed" "$log"
+grep -q "VRNG-LIVE: normal reads passed" "$log"
+grep -q "VRNG-LIVE: removal readers terminated" "$log"
+grep -q "VRNG-LIVE: complete" "$log"
 grep -Eq "language shadow matched all [1-9][0-9]* protocol events" "$log"
 if grep -q "language shadow mismatches=" "$log"; then
 	echo "virtio-rng language shadow reported a mismatch" >&2
+	exit 1
+fi
+if grep -Eq "BUG:|WARNING:|KASAN:|KCSAN:|UBSAN:|kernel BUG|possible circular locking|blocked for more than" "$log"; then
+	echo "virtio-rng live test reported a kernel diagnostic" >&2
 	exit 1
 fi
 

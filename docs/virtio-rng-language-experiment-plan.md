@@ -1,26 +1,29 @@
 # C / Rust / MC virtio-rng experiment plan
 
-Status: M0-M3 implemented and validated; M4 is next, 2026-07-20
+Status: M0-M2 validated; M3 normal-path shadow agreement validated; M3.5 live
+C-core control implemented and awaiting full requalification, 2026-07-20
 
 Upstream target: Linux `v7.2-rc4`, commit
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`, which was both Torvalds `master`
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `14a52a42241f` (`Add C Rust MC virtio-rng language
-experiment`), based directly on the upstream commit above.
+experiment commit is `83a4ba9acbf65b45a2f73e0472b492d26ddc94e5` (`Harden
+virtio-rng language experiment control`), based directly on the upstream commit
+above. The prior M3 evidence was recorded at `14a52a42241f`.
 
-Publication status: the compiler changes, experiment plan, and reproducibility
-tools are published in `Haofei/modern-c` at commit `3a06b1ab`. The Linux
-experiment is published at commit `14a52a42241f` on
-`Haofei/linux:vrng-lang-experiment`. The local Linux checkout intentionally
-retains Torvalds' kernel.org repository as `origin`; the fork was pushed by its
-explicit GitHub URL.
+Publication status: the M3 compiler changes, experiment plan, and
+reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
+The current Linux experiment is published at commit
+`83a4ba9acbf65b45a2f73e0472b492d26ddc94e5` on
+`Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
 
-- P0 is implemented: ABI v1, deterministic errno/transition contract, and an
-  independent executable C specification are in the Linux experiment tree.
+- P0 ABI v1 is implemented and has been tightened after review: every non-null
+  output is initialized first, followed by output-set, state, data-pointer,
+  lifecycle, and phase validation. Pointer extent, alignment, aliasing, locking,
+  IRQ eligibility, and nospec placement are normative in the shared header.
 - M1's C, Rust, and MC candidates match the specification in directed and
   depth-seven BFS exploration at capacity three.
 - M2 passes 12/12 tests on x86-64, arm64, and riscv64 QEMU kernels. The x86-64
@@ -36,13 +39,21 @@ Current checkpoint:
 - The arm64 runtime exposed a missing MC BTI landing pad that object-only builds
   did not detect. The Linux LLVM profile now emits arm64 BTI attributes/module
   metadata, and Kbuild tracks both the `mcc` launcher and `mcc-real`.
-- M3 shadow mode is implemented without giving candidates control of the
-  virtqueue. Normal, KCSAN, and KASAN/UBSAN/lockdep kernels each completed two
-  concurrent `/dev/hwrng` readers and device unbind with 59,774 matching events
-  and zero C/Rust/MC differences. Shadow-specific KUnit passes 15/15 on x86-64,
-  arm64, and riscv64.
-- Host failure-corpus persistence, live fault injection, suspend/restore races,
-  candidate control, and all later milestones remain open.
+- M3's published normal, KCSAN, and KASAN/UBSAN/lockdep runs each reported
+  59,774 matching C/Rust/MC model events. Those runs did not compare model
+  decisions with the original live-driver decisions and are retained only as
+  normal-path cross-language evidence.
+- M3.5 now makes the experimental C core control live completion, copy, and
+  resubmission decisions. Rust and MC remain shadows. The glue uses request
+  cookies whose contents remain immutable while queued, propagates queue-add
+  failure, retries from preallocated work after an error is observed, recovers
+  zero/oversize/stale completions, and serializes process transactions against
+  removal. The normal x86-64 gate passes 19/19 KUnit tests and a live
+  read/unbind race with 11,810 matching events. Three-architecture and sanitizer
+  requalification is still required.
+- Host failure-corpus persistence, full live fault-injection qualification,
+  suspend/restore races, selectable Rust/MC control, and later milestones remain
+  open.
 
 ## 1. Question and scope
 
@@ -169,7 +180,17 @@ int vrng_core_finish_remove(struct vrng_core_state *state);
 int vrng_core_validate(const struct vrng_core_state *state);
 ```
 
-Every function defines:
+Every function defines and implements this validation order:
+
+1. initialize every non-null writable output;
+2. validate that the complete output-pointer set is present;
+3. validate the state pointer and representation;
+4. validate remaining pointer presence;
+5. apply lifecycle and phase rules;
+6. perform the transition.
+
+Extents, alignment, and non-aliasing are caller preconditions. The shared
+contract also defines:
 
 - which lock/lifecycle preconditions C must satisfy;
 - whether it is IRQ-callable;
@@ -300,18 +321,42 @@ Gate: x86-64 KUnit passes under normal, KASAN, UBSAN, and KCSAN-oriented builds.
 
 ### M3 — real driver shadow mode
 
-Add the common C glue beside the production driver. The reference C path alone
-controls the queue. Candidate calls consume cloned state and private output.
+Add the common C glue beside the production driver. The original production C
+path controls the queue and data decisions. Candidate calls consume cloned
+state and private output.
 Tracing is fixed-size and preallocated; IRQ mismatches are rate-limited and
 detailed reporting is deferred to process context.
 
 Gate: sustained `/dev/hwrng` reads produce zero mismatches for each candidate;
 shadow mode adds no sleeping/allocation warning in callback context.
 
-Status: passed on x86-64 QEMU with the built-in RNG backend. The normal, KCSAN,
-and memory/locking sanitizer kernels each mirrored 59,774 events with zero
-mismatches through concurrent reads and driver unbind. The fixed-size mismatch
-record is also covered by deliberate-corruption KUnit testing.
+Status: normal-path language-model agreement passed on x86-64 QEMU with the
+built-in RNG backend. The normal, KCSAN, and memory/locking sanitizer kernels
+each mirrored 59,774 events with zero language-model mismatches. This does not
+establish semantic equivalence with the original live-driver decisions.
+
+### M3.5 — experimental C core controls live logic
+
+The experimental C core controls logical submission, completion, copy, and
+resubmission. Rust and MC consume the same events as shadows. Common C glue owns
+the virtqueue and DMA allocation and provides:
+
+- device/epoch/generation/request cookies that remain immutable while queued;
+- probe failure on initial queue-add failure and deterministic runtime retry;
+- process-context resubmission for zero/oversize/stale completions;
+- one process mutex covering copy/resubmit and the begin-remove boundary;
+- a documented lock order: process mutex before a core call; core spinlock is
+  never held while taking the process mutex;
+- completion-length, stale-generation, and queue-add fault-injection controls.
+
+Gate: pointer/state/output cross-product KUnit tests pass for all languages;
+blocked-reader unbind, injected completion errors, queue-add failure, normal,
+KCSAN, and KASAN/UBSAN/lockdep QEMU runs pass with no kernel diagnostics.
+
+Status: the normal x86-64 gate passes 19/19 KUnit tests and a live PCI
+virtio-rng read/unbind race with 11,810 matching protocol events. Fault
+injection, sanitizer configurations, and arm64/riscv64 requalification remain
+open. M4 remains blocked.
 
 ### M4 — selectable controlling core
 
@@ -440,8 +485,9 @@ Linux commit, MC commit, and dirty-tree status.
 4. Write P0 specification, ABI assertions, and error table before driver code.
 5. Complete M0 on x86-64, then cross-build arm64/riscv64.
 6. Complete host M1 and KUnit M2 before touching the live virtqueue path.
-7. Land shadow M3; retain the production driver as the controlling reference.
-8. Proceed to controlling cores, concurrency, and genuine DMA ownership only as
+7. Land normal-path shadow M3 and record its limited evidence boundary.
+8. Requalify C-controlled M3.5, fault recovery, and blocked-reader removal.
+9. Proceed to selectable cores, concurrency, and genuine DMA ownership only as
    their preceding gates pass.
 
 ## 9. Stop/review conditions

@@ -17,21 +17,19 @@ if [ ! -c /dev/hwrng ]; then
 	poweroff -f
 fi
 
-echo "VRNG-LIVE: starting two readers"
-dd if=/dev/hwrng of=/dev/null bs=64 count=10000 &
-reader_one=$!
-dd if=/dev/hwrng of=/dev/null bs=127 count=5000 &
-reader_two=$!
-wait "$reader_one"
-status_one=$?
-wait "$reader_two"
-status_two=$?
-
-if [ "$status_one" -eq 0 ] && [ "$status_two" -eq 0 ]; then
-	echo "VRNG-LIVE: readers passed"
-else
-	echo "VRNG-LIVE: FAIL reader status $status_one/$status_two"
+echo "VRNG-LIVE: checking normal reads"
+if ! dd if=/dev/hwrng of=/dev/null bs=64 count=100; then
+	echo "VRNG-LIVE: FAIL normal read"
+	poweroff -f
 fi
+echo "VRNG-LIVE: normal reads passed"
+
+echo "VRNG-LIVE: starting readers for removal race"
+dd if=/dev/hwrng of=/dev/null bs=64 count=1000000 &
+reader_one=$!
+dd if=/dev/hwrng of=/dev/null bs=127 count=1000000 &
+reader_two=$!
+sleep 0.2
 
 for device_path in /sys/bus/virtio/drivers/virtio_rng/virtio*; do
 	if [ -e "$device_path" ]; then
@@ -40,6 +38,23 @@ for device_path in /sys/bus/virtio/drivers/virtio_rng/virtio*; do
 		echo "$device" > /sys/bus/virtio/drivers/virtio_rng/unbind
 	fi
 done
+
+attempt=0
+while { kill -0 "$reader_one" 2>/dev/null || kill -0 "$reader_two" 2>/dev/null; } &&
+	[ "$attempt" -lt 100 ]; do
+	sleep 0.05
+	attempt=$((attempt + 1))
+done
+if kill -0 "$reader_one" 2>/dev/null || kill -0 "$reader_two" 2>/dev/null; then
+	echo "VRNG-LIVE: FAIL reader did not terminate after unbind"
+	kill "$reader_one" "$reader_two" 2>/dev/null
+	poweroff -f
+fi
+wait "$reader_one"
+status_one=$?
+wait "$reader_two"
+status_two=$?
+echo "VRNG-LIVE: removal readers terminated $status_one/$status_two"
 
 echo "VRNG-LIVE: complete"
 poweroff -f
