@@ -42,7 +42,7 @@ git -C /home/zoe/src/linux switch -c vrng-lang-experiment v7.2-rc4
 
 The experiment branch is based on `v7.2-rc4` /
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current implementation commit
-is `78e5c974d4a61b2b805fbe17c6e3fc810d2ba669`, published as
+is `2ed40c97aa7a0401ce9ef545af8fc9e1d421ae6f`, published as
 [`Haofei/linux:vrng-lang-experiment`](https://github.com/Haofei/linux/tree/vrng-lang-experiment).
 
 The container is sufficient for compilation and QEMU execution. Performance
@@ -84,6 +84,13 @@ fourth argument to run three deterministic device-level suspend/restore cycles.
 The test selects `pm_test=devices`, invokes the normal suspend entry point, and
 requires `/dev/hwrng` plus live reads to recover after every restore without
 depending on platform S3 wakeup support.
+
+Use `shadow-hotplug` as the fourth argument for transport-level PCI removal and
+re-addition. The runner opens QMP, waits until a reader is blocked behind a held
+completion, deletes the `virtio-rng-pci` device, waits for the guest to observe
+removal, and then adds a fresh device backed by the same QEMU RNG object. The
+guest requires the blocked reader to terminate and live reads to recover before
+continuing to the ordinary synchronized-unbind gate.
 
 The init process checks normal and `bs=1/3/7` reads, then sets the test-only
 `lang_copy_chunk_limit=3` parameter to force repeated driver-level partial

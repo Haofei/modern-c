@@ -7,10 +7,12 @@ mount -t sysfs sysfs /sys
 
 fault_matrix=0
 pm_matrix=0
+transport_matrix=0
 for argument in $(cat /proc/cmdline); do
 	case "$argument" in
 	vrng_live_fault_matrix=1) fault_matrix=1 ;;
 	vrng_live_pm_matrix=1) pm_matrix=1 ;;
+	vrng_live_transport_matrix=1) transport_matrix=1 ;;
 	esac
 done
 
@@ -171,6 +173,97 @@ if [ "$pm_matrix" = "1" ]; then
 		poweroff -f
 	fi
 	echo "VRNG-LIVE: suspend/restore matrix passed"
+fi
+
+if [ "$transport_matrix" = "1" ]; then
+	hold_parameter=/sys/module/virtio_rng/parameters/lang_hold_completion
+	held_parameter=/sys/module/virtio_rng/parameters/lang_completion_held
+	if [ ! -w "$hold_parameter" ] || [ ! -r "$held_parameter" ]; then
+		echo "VRNG-LIVE: FAIL transport test requires completion hold controls"
+		poweroff -f
+	fi
+	transport_device=""
+	for device_path in /sys/bus/virtio/drivers/virtio_rng/virtio*; do
+		if [ -e "$device_path" ]; then
+			transport_device=${device_path##*/}
+			break
+		fi
+	done
+	if [ -z "$transport_device" ]; then
+		echo "VRNG-LIVE: FAIL transport device was not found"
+		poweroff -f
+	fi
+
+	if ! echo 1 > "$hold_parameter"; then
+		echo "VRNG-LIVE: FAIL enabling transport completion hold"
+		poweroff -f
+	fi
+	dd if=/dev/hwrng of=/dev/null bs=64 count=1000000 &
+	transport_reader=$!
+	attempt=0
+	while [ "$(cat "$held_parameter")" != "1" ] &&
+		[ "$attempt" -lt 100 ]; do
+		sleep 0.05
+		attempt=$((attempt + 1))
+	done
+	if [ "$(cat "$held_parameter")" != "1" ]; then
+		echo "VRNG-LIVE: FAIL transport completion did not reach held state"
+		kill "$transport_reader" 2>/dev/null
+		poweroff -f
+	fi
+	echo "VRNG-LIVE: transport hot-unplug ready"
+
+	attempt=0
+	while [ -e "/sys/bus/virtio/devices/$transport_device" ] &&
+		[ "$attempt" -lt 200 ]; do
+		sleep 0.05
+		attempt=$((attempt + 1))
+	done
+	if [ -e "/sys/bus/virtio/devices/$transport_device" ]; then
+		echo "VRNG-LIVE: FAIL transport device was not removed"
+		kill "$transport_reader" 2>/dev/null
+		poweroff -f
+	fi
+	attempt=0
+	while kill -0 "$transport_reader" 2>/dev/null &&
+		[ "$attempt" -lt 100 ]; do
+		sleep 0.05
+		attempt=$((attempt + 1))
+	done
+	if kill -0 "$transport_reader" 2>/dev/null; then
+		echo "VRNG-LIVE: FAIL transport reader did not terminate"
+		kill "$transport_reader" 2>/dev/null
+		poweroff -f
+	fi
+	wait "$transport_reader"
+	transport_status=$?
+	if ! echo 0 > "$hold_parameter"; then
+		echo "VRNG-LIVE: FAIL clearing transport completion hold"
+		poweroff -f
+	fi
+	echo "VRNG-LIVE: transport hot-unplug observed status=$transport_status"
+
+	attempt=0
+	while [ "$attempt" -lt 200 ]; do
+		for device_path in /sys/bus/virtio/drivers/virtio_rng/virtio*; do
+			if [ -e "$device_path" ]; then
+				transport_device=${device_path##*/}
+				break 2
+			fi
+		done
+		sleep 0.05
+		attempt=$((attempt + 1))
+	done
+	if [ "$attempt" -ge 200 ]; then
+		echo "VRNG-LIVE: FAIL transport device was not re-added"
+		poweroff -f
+	fi
+	if ! wait_for_hwrng ||
+		! dd if=/dev/hwrng of=/dev/null bs=64 count=32; then
+		echo "VRNG-LIVE: FAIL read after transport re-add"
+		poweroff -f
+	fi
+	echo "VRNG-LIVE: transport hot-unplug/replug passed"
 fi
 
 echo "VRNG-LIVE: starting readers for removal race"
