@@ -6,9 +6,11 @@ mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 
 fault_matrix=0
+pm_matrix=0
 for argument in $(cat /proc/cmdline); do
 	case "$argument" in
 	vrng_live_fault_matrix=1) fault_matrix=1 ;;
+	vrng_live_pm_matrix=1) pm_matrix=1 ;;
 	esac
 done
 
@@ -53,14 +55,18 @@ exercise_fault()
 	echo "VRNG-LIVE: $name recovered"
 }
 
-echo "VRNG-LIVE: waiting for /dev/hwrng"
-attempt=0
-while [ ! -c /dev/hwrng ] && [ "$attempt" -lt 100 ]; do
-	sleep 0.05
-	attempt=$((attempt + 1))
-done
+wait_for_hwrng()
+{
+	attempt=0
+	while [ ! -c /dev/hwrng ] && [ "$attempt" -lt 100 ]; do
+		sleep 0.05
+		attempt=$((attempt + 1))
+	done
+	[ -c /dev/hwrng ]
+}
 
-if [ ! -c /dev/hwrng ]; then
+echo "VRNG-LIVE: waiting for /dev/hwrng"
+if ! wait_for_hwrng; then
 	echo "VRNG-LIVE: FAIL /dev/hwrng was not created"
 	poweroff -f
 fi
@@ -125,6 +131,46 @@ if [ "$fault_matrix" = "1" ]; then
 	exercise_fault "stale completion" "$stale_parameter" 1 0
 	exercise_fault "queue-add failure" "$fail_add_parameter" 1 0
 	echo "VRNG-LIVE: fault matrix passed"
+fi
+
+if [ "$pm_matrix" = "1" ]; then
+	pm_test=/sys/power/pm_test
+	pm_state=/sys/power/state
+	if [ ! -w "$pm_test" ] || [ ! -w "$pm_state" ]; then
+		echo "VRNG-LIVE: FAIL PM test sysfs is unavailable"
+		poweroff -f
+	fi
+	if ! grep -qw mem "$pm_state"; then
+		echo "VRNG-LIVE: FAIL suspend-to-RAM state is unavailable"
+		poweroff -f
+	fi
+	if ! echo devices > "$pm_test" || ! grep -q '\[devices\]' "$pm_test"; then
+		echo "VRNG-LIVE: FAIL selecting devices PM test level"
+		poweroff -f
+	fi
+
+	cycle=1
+	while [ "$cycle" -le 3 ]; do
+		echo "VRNG-LIVE: suspend/restore cycle $cycle"
+		if ! echo mem > "$pm_state"; then
+			echo "VRNG-LIVE: FAIL suspend/restore cycle $cycle"
+			poweroff -f
+		fi
+		if ! wait_for_hwrng; then
+			echo "VRNG-LIVE: FAIL /dev/hwrng missing after cycle $cycle"
+			poweroff -f
+		fi
+		if ! dd if=/dev/hwrng of=/dev/null bs=64 count=32; then
+			echo "VRNG-LIVE: FAIL read after suspend/restore cycle $cycle"
+			poweroff -f
+		fi
+		cycle=$((cycle + 1))
+	done
+	if ! echo none > "$pm_test" || ! grep -q '\[none\]' "$pm_test"; then
+		echo "VRNG-LIVE: FAIL clearing PM test level"
+		poweroff -f
+	fi
+	echo "VRNG-LIVE: suspend/restore matrix passed"
 fi
 
 echo "VRNG-LIVE: starting readers for removal race"

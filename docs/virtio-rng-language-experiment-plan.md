@@ -1,23 +1,23 @@
 # C / Rust / MC virtio-rng experiment plan
 
 Status: M0-M3 validated; M3.5 C-core control passes the current normal,
-sanitizer, fault, and three-architecture KUnit gates; M4 remains blocked on the
-remaining candidate-control gates, 2026-07-20
+sanitizer, fault, suspend/restore, and three-architecture KUnit gates; M4
+remains blocked on the remaining candidate-control gates, 2026-07-20
 
 Upstream target: Linux `v7.2-rc4`, commit
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`, which was both Torvalds `master`
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `f987bf8c4e5fafff524057a5dfdb324c939c485e` (`docs: record
-virtio-rng M3.5 requalification`), based directly on the
+experiment commit is `78e5c974d4a61b2b805fbe17c6e3fc810d2ba669` (`docs: record
+virtio-rng suspend qualification`), based directly on the
 upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
 `14a52a42241f` and `83a4ba9acbf6`, respectively.
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`f987bf8c4e5fafff524057a5dfdb324c939c485e` on
+`78e5c974d4a61b2b805fbe17c6e3fc810d2ba669` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -59,9 +59,11 @@ Current checkpoint:
   combined KASAN/UBSAN/lockdep/DMA-debug configuration. The full 23-test suite
   passes on x86-64, arm64, and riscv64. A deterministic live matrix recovers
   from zero-length and oversized completions, stale generation, and queue-add
-  failure without a mismatch or kernel diagnostic.
-- Host failure-corpus persistence, suspend/restore and transport hot-unplug
-  races, selectable Rust/MC control, and later milestones remain open.
+  failure without a mismatch or kernel diagnostic. A PM-debug live run also
+  completes three device-level suspend/restore cycles and restores live reads
+  after each cycle before synchronized unbind.
+- Host failure-corpus persistence, PM KCSAN stress, transport hot-unplug races,
+  selectable Rust/MC control, and later milestones remain open.
 
 ## 1. Question and scope
 
@@ -388,9 +390,12 @@ KCSAN, and combined KASAN/UBSAN/lockdep/DMA-debug shadow runs reached the held-
 completion synchronization point before unbind with 1,213, 1,213, and 1,216
 matching protocol events, respectively. The deterministic live fault matrix
 recovered from zero-length and oversized completions, a stale generation, and
-one queue-add failure with 1,243 matching events and no kernel diagnostic. M4
-remains blocked on host failure-corpus persistence, suspend/restore,
-transport-level hot-unplug, and the candidate-control gates below.
+one queue-add failure with 1,243 matching events and no kernel diagnostic. The
+PM-debug live gate completes three device-level suspend/restore cycles,
+restores live reads after each cycle, and then passes synchronized unbind with
+zero mismatches. M4 remains blocked on host failure-corpus persistence, PM
+KCSAN stress, transport-level hot-unplug, and the candidate-control gates
+below.
 
 ### M4 — selectable controlling core
 

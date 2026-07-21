@@ -42,7 +42,7 @@ git -C /home/zoe/src/linux switch -c vrng-lang-experiment v7.2-rc4
 
 The experiment branch is based on `v7.2-rc4` /
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current implementation commit
-is `f987bf8c4e5fafff524057a5dfdb324c939c485e`, published as
+is `78e5c974d4a61b2b805fbe17c6e3fc810d2ba669`, published as
 [`Haofei/linux:vrng-lang-experiment`](https://github.com/Haofei/linux/tree/vrng-lang-experiment).
 
 The container is sufficient for compilation and QEMU execution. Performance
@@ -78,6 +78,12 @@ kernel with `shadow-fault` as the fourth argument. This injects zero-length and
 oversized completions, a stale generation, and one queue-add failure. Every
 injection must be accepted by sysfs, consumed by a live driver transition, and
 followed by a successful read before the test proceeds.
+
+Build the shadow kernel with `CONFIG_PM_DEBUG=y` and use `shadow-pm` as the
+fourth argument to run three deterministic device-level suspend/restore cycles.
+The test selects `pm_test=devices`, invokes the normal suspend entry point, and
+requires `/dev/hwrng` plus live reads to recover after every restore without
+depending on platform S3 wakeup support.
 
 The init process checks normal and `bs=1/3/7` reads, then sets the test-only
 `lang_copy_chunk_limit=3` parameter to force repeated driver-level partial

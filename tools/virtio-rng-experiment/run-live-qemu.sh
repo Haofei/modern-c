@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-kernel=${1:?usage: run-live-qemu.sh KERNEL INITRAMFS [LOG] [shadow|shadow-fault|no-shadow]}
-initramfs=${2:?usage: run-live-qemu.sh KERNEL INITRAMFS [LOG] [shadow|shadow-fault|no-shadow]}
+kernel=${1:?usage: run-live-qemu.sh KERNEL INITRAMFS [LOG] [shadow|shadow-fault|shadow-pm|no-shadow]}
+initramfs=${2:?usage: run-live-qemu.sh KERNEL INITRAMFS [LOG] [shadow|shadow-fault|shadow-pm|no-shadow]}
 log=${3:-vrng-live-qemu.log}
 mode=${4:-shadow}
 kernel_args=""
@@ -10,6 +10,7 @@ kernel_args=""
 case "$mode" in
 	shadow|no-shadow) ;;
 	shadow-fault) kernel_args="vrng_live_fault_matrix=1" ;;
+	shadow-pm) kernel_args="vrng_live_pm_matrix=1 suspend.pm_test_delay=1" ;;
 	*) echo "invalid live-test mode: $mode" >&2; exit 2 ;;
 esac
 
@@ -42,6 +43,9 @@ if [ "$mode" != no-shadow ]; then
 fi
 if [ "$mode" = shadow-fault ]; then
 	grep -q "VRNG-LIVE: fault matrix passed" "$log"
+fi
+if [ "$mode" = shadow-pm ]; then
+	grep -q "VRNG-LIVE: suspend/restore matrix passed" "$log"
 fi
 if grep -Eq "BUG:|WARNING:|KASAN:|KCSAN:|UBSAN:|kernel BUG|possible circular locking|blocked for more than|enqueued on deprecated workqueue" "$log"; then
 	echo "virtio-rng live test reported a kernel diagnostic" >&2
