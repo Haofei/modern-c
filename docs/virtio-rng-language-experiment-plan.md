@@ -66,8 +66,13 @@ Current checkpoint:
   KCSAN. A QMP PCI hot-unplug terminates a blocked reader, removes and re-adds
   the transport, restores live reads, and then passes synchronized unbind with
   zero mismatches.
-- Host failure-corpus persistence, the MC representation-proof gap, selectable
-  Rust/MC control, and later milestones remain open.
+- The host differential gate links the executable specification and the actual
+  C, Rust, and MC implementations, explores 30 unique states to depth seven,
+  and replays committed `.vrng` event corpora. A synthetic C mismatch proves
+  that the shortest failing path is persisted deterministically and reproduces
+  under replay.
+- The MC representation-proof gap, selectable Rust/MC control, and later
+  milestones remain open.
 
 ## 1. Question and scope
 
@@ -400,9 +405,12 @@ restores live reads after each cycle, and then passes synchronized unbind with
 zero mismatches; the same lifecycle matrix also passes under KCSAN. The QMP
 transport gate deletes a PCI device while a reader is blocked, observes the old
 instance close after 1,213 matching events, re-adds the device, restores live
-reads, and closes the new instance after 106 matching events. M4 remains
-blocked on host failure-corpus persistence, the MC representation-proof gap,
-and the candidate-control gates below.
+reads, and closes the new instance after 106 matching events. The host gate
+also explores 30 unique protocol states across the executable specification
+and all three implementations, replays every committed corpus, and proves
+deterministic capture/reproduction with an injected mismatch. M4 remains
+blocked on the MC representation-proof gap and the candidate-control gates
+below.
 
 ### M4 — selectable controlling core
 

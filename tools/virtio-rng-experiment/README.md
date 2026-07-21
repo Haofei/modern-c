@@ -92,6 +92,23 @@ removal, and then adds a fresh device backed by the same QEMU RNG object. The
 guest requires the blocked reader to terminate and live reads to recover before
 continuing to the ordinary synchronized-unbind gate.
 
+## Host differential corpus
+
+Build the MC compiler, then run the host-side BFS and corpus replay against the
+Linux experiment sources:
+
+```sh
+zig build
+tools/virtio-rng-experiment/run-host-differential.sh \
+  /home/zoe/src/linux zig-out/bin/mcc
+```
+
+The harness links the executable specification and the actual C, Rust, and MC
+candidate implementations. A return/output/state/byte mismatch writes the
+shortest discovered event path as a stable `.vrng` corpus. The gate replays all
+committed corpora and uses an injected C result mismatch to prove deterministic
+capture and reproduction.
+
 The init process checks normal and `bs=1/3/7` reads, then sets the test-only
 `lang_copy_chunk_limit=3` parameter to force repeated driver-level partial
 copies from one completion. The `bs` cases alone exercise hwrng buffering and
