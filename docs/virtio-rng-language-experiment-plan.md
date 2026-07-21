@@ -10,15 +10,15 @@ Upstream target: Linux `v7.2-rc4`, commit
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `2ed40c97aa7a0401ce9ef545af8fc9e1d421ae6f` (`docs: record
-virtio-rng lifecycle stress gates`), based directly on the
+experiment commit is `709d8f64825f` (`virtio-rng: certify MC completion as
+no-trap`), based directly on the
 upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
 `14a52a42241f` and `83a4ba9acbf6`, respectively.
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`2ed40c97aa7a0401ce9ef545af8fc9e1d421ae6f` on
+`709d8f64825f` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
