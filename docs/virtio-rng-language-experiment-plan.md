@@ -1,9 +1,10 @@
 # C / Rust / MC virtio-rng experiment plan
 
-Status: M0-M6 validated; selectable C, Rust, and MC control passes the current
+Status: M0-M7 validated; selectable C, Rust, and MC control passes the current
 functional gates, and the retained common-lock publication model passes LKMM,
 KCSAN, lockdep, and memory-sanitizer qualification; the typed DMA variant
-rejects device-owned CPU access; M7 is next, 2026-07-20
+rejects device-owned CPU access; reproducible TAP/JUnit evidence is archived;
+M8 is next, 2026-07-20
 
 Upstream target: Linux `v7.2-rc4`, commit
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`, which was both Torvalds `master`
@@ -18,7 +19,7 @@ upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`e73e619ce4f7` on
+`e50a01b7daef` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -95,6 +96,12 @@ Current checkpoint:
   LLVM, while a device-owned read fails during semantic checking. This proves
   the typed-handle protocol only. Linux allocation/mapping and any raw C alias
   retained outside the adopted capability remain explicitly trusted.
+- M7 records the controller, lifecycle, sanitizer, backend, and architecture
+  evidence in a self-contained bundle with TAP, JUnit XML, JSON environment
+  metadata, copied logs/configs, and per-file SHA-256 hashes. The recorded
+  matrix has 22 passing cases and two explicit environment/configuration skips:
+  x86 KVM is unavailable on the Apple ARM host, and the current x86 i440fx
+  configuration has no `virtio-rng-device` bus. Neither is counted as a pass.
 
 ## 1. Question and scope
 
@@ -515,6 +522,17 @@ Scenarios:
 
 Gate: automated scripts produce TAP/JUnit-style results and retain kernel log,
 QEMU command line, config, compiler versions, and exact commits.
+
+Status: closed with explicit skips. `record-results.py` revalidates every log,
+rejects kernel diagnostics or shadow mismatches, copies logs and configurations,
+hashes each artifact, and emits TAP, JUnit XML, and a versioned JSON manifest.
+The archived `results-m7-v2` bundle contains 22 passing cases: all C/Rust/MC
+x86 TCG normal, fault, PM, hotplug, and `rng-random` runs; Rust/MC KCSAN and
+memory-debug runs; and 24/24 KUnit on x86-64, arm64, and riscv64. It records two
+TAP skips rather than silently narrowing the matrix: x86 KVM is unavailable on
+the Apple ARM host, and `virtio-rng-device` has no bus in the current x86 i440fx
+configuration. The compressed bundle SHA-256 is
+`bd29765c9ff679b6252a31374fa662db3907059a6419a969f8c5b7f81618726d`.
 
 ### M8 — deliberate defect campaign
 

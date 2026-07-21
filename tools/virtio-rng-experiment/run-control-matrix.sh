@@ -4,9 +4,11 @@ set -euo pipefail
 linux=${1:?usage: run-control-matrix.sh LINUX MCC INITRAMFS BUILD_ROOT}
 mcc=${2:?usage: run-control-matrix.sh LINUX MCC INITRAMFS BUILD_ROOT}
 initramfs=${3:?usage: run-control-matrix.sh LINUX MCC INITRAMFS BUILD_ROOT}
-build_root=${4:?usage: run-control-matrix.sh LINUX MCC INITRAMFS BUILD_ROOT}
+build_root=${4:?usage: run-control-matrix.sh LINUX MCC INITRAMFS BUILD_ROOT [RESULTS]}
+results=${5:-$build_root/results}
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 kunitconfig="$linux/drivers/char/hw_random/virtio_rng_lang/.kunitconfig"
+record_args=()
 
 for control in c rust mc; do
 	case "$control" in
@@ -29,12 +31,22 @@ for control in c rust mc; do
 		--timeout=180 \
 		--summary \
 		"virtio-rng-lang-core*"
+	record_args+=(--case "kunit-$control=$build/test.log")
+	record_args+=(--artifact "config-$control=$build/.config")
 
 	kernel="$build/arch/x86/boot/bzImage"
 	for mode in shadow shadow-fault shadow-pm shadow-hotplug; do
 		"$script_dir/run-live-qemu.sh" "$kernel" "$initramfs" \
 			"$build/live-$mode.log" "$mode"
+		record_args+=(--case "$mode-$control=$build/live-$mode.log")
 	done
 done
+
+python3 "$script_dir/record-results.py" \
+	--output "$results" \
+	--linux "$linux" \
+	--modern-c "$(cd "$script_dir/../.." && pwd)" \
+	--qemu-args '-nodefaults -m 2048 -accel kvm -accel tcg -object rng-builtin -device virtio-rng-pci' \
+	"${record_args[@]}"
 
 echo "virtio-rng C/Rust/MC control matrix passed"

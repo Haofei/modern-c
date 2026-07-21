@@ -7,6 +7,9 @@ log=${3:-vrng-live-qemu.log}
 mode=${4:-shadow}
 kernel_args=""
 qmp_args=()
+accel=${VRNG_QEMU_ACCEL:-auto}
+rng_backend=${VRNG_QEMU_RNG_BACKEND:-builtin}
+transport=${VRNG_QEMU_TRANSPORT:-pci}
 controller_pid=""
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
@@ -20,6 +23,22 @@ cleanup()
 	fi
 }
 trap cleanup EXIT
+
+case "$accel" in
+	auto) accel_args=(-accel kvm -accel tcg) ;;
+	kvm|tcg) accel_args=(-accel "$accel") ;;
+	*) echo "invalid QEMU accelerator: $accel" >&2; exit 2 ;;
+esac
+case "$rng_backend" in
+	builtin) rng_args=(-object rng-builtin,id=rng0) ;;
+	random) rng_args=(-object rng-random,id=rng0,filename=/dev/urandom) ;;
+	*) echo "invalid RNG backend: $rng_backend" >&2; exit 2 ;;
+esac
+case "$transport" in
+	pci) device_args=(-device virtio-rng-pci,rng=rng0,id=vrngdev) ;;
+	device) device_args=(-device virtio-rng-device,rng=rng0,id=vrngdev) ;;
+	*) echo "invalid virtio-rng transport: $transport" >&2; exit 2 ;;
+esac
 
 case "$mode" in
 	shadow|no-shadow) ;;
@@ -49,11 +68,10 @@ timeout 180 qemu-system-x86_64 \
 	-append "console=ttyS0 rdinit=/init panic=-1 $kernel_args" \
 	-no-reboot \
 	-nographic \
-	-accel kvm \
-	-accel tcg \
+	"${accel_args[@]}" \
 	-serial stdio \
-	-object rng-builtin,id=rng0 \
-	-device virtio-rng-pci,rng=rng0,id=vrngdev \
+	"${rng_args[@]}" \
+	"${device_args[@]}" \
 	${qmp_args[@]+"${qmp_args[@]}"} | tee "$log"
 qemu_status=${PIPESTATUS[0]}
 set -e
