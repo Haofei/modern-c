@@ -20,11 +20,12 @@ These are still useful as day-to-day references or rationale companions:
 | Language interop | [`c-abi-interop.md`](c-abi-interop.md) | C ABI, symbols, strings, trap ABI, boundary diagnostics. |
 | Backend seam | [`backend-abstraction.md`](backend-abstraction.md) | Where C/LLVM backends plug into `mcc`. |
 | Compiler readiness | [`compiler-production-readiness.md`](compiler-production-readiness.md) | Code-grounded gap assessment + phased roadmap for making `mcc` itself production grade (compiler-side complement to `production-readiness-plan.md`). |
+| Kernel-language comparison | [`kernel-language-comparison-plan.md`](kernel-language-comparison-plan.md) | Evidence plan for narrow, fair C/Rust/MC machine-contract comparisons; consumes compiler qualification without redefining it. |
 | Release/process | [`../SECURITY.md`](../SECURITY.md), [`../STABILITY.md`](../STABILITY.md), [`../CHANGELOG.md`](../CHANGELOG.md), [`release-process.md`](release-process.md) | Security reporting, compatibility expectations, development-line changes, and the release checklist. |
 | Testing | [`test-architecture.md`](test-architecture.md), [`qemu-validation-checklist.md`](qemu-validation-checklist.md) | Fixture contracts, gate layers, manifest discipline, and the local/CI QEMU surrogate checklist. |
 | Unsafe/UB audit | [`unsafe-boundary.md`](unsafe-boundary.md), [`c-ub-matrix.md`](c-ub-matrix.md), [`lowering-coverage.md`](lowering-coverage.md) | Unsafe syntax, C-UB handling, and lowering coverage reports. |
 | Traits/async rationale | [`traits-design.md`](traits-design.md), [`async-plan.md`](async-plan.md) | Design reasoning behind implemented or mostly implemented features. |
-| Agent/kernel direction | [`future-kernel-plan.md`](future-kernel-plan.md), [`production-readiness-plan.md`](production-readiness-plan.md), [`platform-portability-plan.md`](platform-portability-plan.md), [`quickjs-agent-plan.md`](quickjs-agent-plan.md), [`agent-sandbox-milestone.md`](agent-sandbox-milestone.md) | Longer-form rationale, current plans, and milestone history. Prefer `todo.md` for the repo-wide short list. |
+| Agent/kernel direction | [`future-kernel-plan.md`](future-kernel-plan.md), [`production-readiness-plan.md`](production-readiness-plan.md), [`platform-portability-plan.md`](platform-portability-plan.md), [`quickjs-agent-plan.md`](quickjs-agent-plan.md), [`agent-sandbox-milestone.md`](agent-sandbox-milestone.md) | Longer-form rationale, product-readiness plans, and milestone history. Prefer `todo.md` for the repo-wide short list. |
 | Fuzzing backlog | [`mcfuzz-coverage-todo.md`](mcfuzz-coverage-todo.md) | Generator/oracle expansion notes. Some gating statements are historical; see `todo.md` for current gate status. |
 
 ## Historical records

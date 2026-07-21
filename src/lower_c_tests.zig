@@ -353,6 +353,19 @@ fn removeTargetTypeFactAtOffsetForFunction(module_mir: *mir.Module, name: []cons
     return error.TestUnexpectedResult;
 }
 
+fn retargetAggregateConstructionForFunction(module_mir: *mir.Module, name: []const u8, construction: ?mir.AggregateConstructionKind) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        for (function.target_type_facts) |*fact| {
+            if (fact.kind != .struct_literal) continue;
+            fact.aggregate_construction = construction;
+            return;
+        }
+        return error.TestUnexpectedResult;
+    }
+    return error.TestUnexpectedResult;
+}
+
 test "lower-c rejects prebuilt MIR with missing target type facts" {
     const source =
         \\enum E { bad }
@@ -458,6 +471,34 @@ test "lower-c rejects missing aggregate-literal target type facts" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_aggregate_target_type_facts.mc", .{}, false, null));
+}
+
+test "lower-c struct literal construction class is MIR-owned" {
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\packed bits Flags: u8 { ready: bool }
+        \\#[c_union]
+        \\struct CWord { word: u32, byte: u8 }
+        \\fn pair() -> Pair { return .{ .left = 1, .right = 2 }; }
+        \\fn flags() -> Flags { return .{ .ready = true }; }
+        \\fn c_word() -> CWord { return .{ .word = 7, .byte = uninit }; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_aggregate_construction_fact.mc", source);
+    defer parsed.deinit();
+    var valid_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer valid_mir.deinit();
+    var valid_output: std.ArrayList(u8) = .empty;
+    defer valid_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &valid_mir, &valid_output, .kernel, "c_aggregate_construction_fact.mc", .{}, false, null);
+
+    for ([_]?mir.AggregateConstructionKind{ null, .packed_bits }) |stale| {
+        var stale_mir = try mir.build(std.testing.allocator, parsed.module);
+        defer stale_mir.deinit();
+        try retargetAggregateConstructionForFunction(&stale_mir, "pair", stale);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_mir, &output, .kernel, "c_aggregate_construction_fact.mc", .{}, false, null));
+    }
 }
 
 test "lower-c rejects missing float-literal target type facts" {

@@ -118,6 +118,7 @@ pub const Instruction = struct {
     // Target-type instructions retain the complete semantic type separately
     // from their runtime representation.
     target_ty: ?ast.TypeExpr = null,
+    aggregate_construction: ?AggregateConstructionKind = null,
     const_index: ?usize = null,
     target_index: ?usize = null,
     target_owner: ?[]const u8 = null,
@@ -410,10 +411,22 @@ pub const TargetTypeKind = enum {
     expression_result,
 };
 
+/// MIR-owned lowering class for a source struct literal.  The target type says
+/// which value is being built; this fact says which representation-sensitive
+/// constructor family is semantically required.  Backends may consult their
+/// declaration/layout tables to validate the class and emit fields, but not to
+/// select a different family when this fact is absent.
+pub const AggregateConstructionKind = enum {
+    declared_struct,
+    c_union,
+    packed_bits,
+};
+
 pub const TargetTypeFact = struct {
     kind: TargetTypeKind,
     target_ty: ast.TypeExpr,
     result_ty: ValueType,
+    aggregate_construction: ?AggregateConstructionKind = null,
     target_index: ?usize = null,
     target_owner: ?[]const u8 = null,
     source: SourcePoint,

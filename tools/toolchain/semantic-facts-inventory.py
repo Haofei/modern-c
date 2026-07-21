@@ -408,6 +408,42 @@ C_AGGREGATE_GLOBAL_REPRESENTATION_POLICY_AUDIT: dict[str, list[str]] = {
     ],
 }
 
+STRUCT_LITERAL_CONSTRUCTION_FACT_AUDIT: dict[str, list[str]] = {
+    "docs/compiler-production-readiness.md": [
+        "Source struct-literal construction class is MIR-owned",
+    ],
+    "docs/typed-semantic-facts.md": [
+        "source struct literals carry a MIR-owned construction class",
+    ],
+    "src/mir_model.zig": [
+        "pub const AggregateConstructionKind = enum",
+        "aggregate_construction: ?AggregateConstructionKind = null",
+    ],
+    "src/mir.zig": [
+        "fn structLiteralConstructionKind(",
+        "aggregate_construction={s}",
+    ],
+    "src/lower_c_emitter.zig": [
+        "fn validateMirStructLiteralConstruction(",
+        "const construction = try self.validateMirStructLiteralConstruction(fact)",
+    ],
+    "src/lower_llvm.zig": [
+        "fn requireMirStructLiteralConstruction(",
+        "const aggregate = try self.requireMirStructLiteralConstruction(",
+    ],
+    "src/mir_tests.zig": [
+        "aggregate_construction=declared_struct",
+        "aggregate_construction=packed_bits",
+        "aggregate_construction=c_union",
+    ],
+    "src/lower_c_tests.zig": [
+        'test "lower-c struct literal construction class is MIR-owned"',
+    ],
+    "src/lower_llvm_tests.zig": [
+        'test "LLVM struct literal construction class is MIR-owned"',
+    ],
+}
+
 BOUNDS_RANGE_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "| MIR no-overflow range facts |",
@@ -1632,6 +1668,19 @@ def main() -> int:
             checked += 1
             if anchor not in text:
                 missing.append(f"C aggregate-global representation policy audit: {relative}: missing anchor {anchor!r}")
+
+    for relative, anchors in sorted(STRUCT_LITERAL_CONSTRUCTION_FACT_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"struct-literal construction fact audit: {relative}: file missing")
+            continue
+
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"struct-literal construction fact audit: {relative}: missing anchor {anchor!r}")
 
     for relative, anchors in sorted(BOUNDS_RANGE_FACT_FAMILY_AUDIT.items()):
         path = REPO_ROOT / relative

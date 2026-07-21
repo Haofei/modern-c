@@ -8,11 +8,13 @@ mount -t sysfs sysfs /sys
 fault_matrix=0
 pm_matrix=0
 transport_matrix=0
+register_fault_matrix=0
 for argument in $(cat /proc/cmdline); do
 	case "$argument" in
 	vrng_live_fault_matrix=1) fault_matrix=1 ;;
 	vrng_live_pm_matrix=1) pm_matrix=1 ;;
 	vrng_live_transport_matrix=1) transport_matrix=1 ;;
+	vrng_live_register_fault_matrix=1) register_fault_matrix=1 ;;
 	esac
 done
 
@@ -66,6 +68,33 @@ wait_for_hwrng()
 	done
 	[ -c /dev/hwrng ]
 }
+
+if [ "$register_fault_matrix" = "1" ]; then
+	echo "VRNG-LIVE: checking registration-failure degraded state"
+	sleep 0.2
+	register_fault_device=""
+	for device_path in /sys/bus/virtio/drivers/virtio_rng/virtio*; do
+		if [ -e "$device_path" ]; then
+			register_fault_device=${device_path##*/}
+			break
+		fi
+	done
+	if [ -z "$register_fault_device" ]; then
+		echo "VRNG-LIVE: FAIL registration-fault device is not bound"
+		poweroff -f
+	fi
+	if dd if=/dev/hwrng of=/dev/null bs=1 count=1 2>/dev/null; then
+		echo "VRNG-LIVE: FAIL failed registration exposed a readable hwrng"
+		poweroff -f
+	fi
+	echo "$register_fault_device" > /sys/bus/virtio/drivers/virtio_rng/unbind
+	if [ -L "/sys/bus/virtio/devices/$register_fault_device/driver" ]; then
+		echo "VRNG-LIVE: FAIL degraded device remained bound after unbind"
+		poweroff -f
+	fi
+	echo "VRNG-LIVE: registration-failure degraded state passed"
+	poweroff -f
+fi
 
 echo "VRNG-LIVE: waiting for /dev/hwrng"
 if ! wait_for_hwrng; then
@@ -276,7 +305,19 @@ fi
 echo "VRNG-LIVE: starting readers for removal race"
 hold_parameter=/sys/module/virtio_rng/parameters/lang_hold_completion
 held_parameter=/sys/module/virtio_rng/parameters/lang_completion_held
-if [ -w "$hold_parameter" ] && [ -r "$held_parameter" ]; then
+publication_hold_parameter=/sys/module/virtio_rng/parameters/lang_hold_publication
+publication_held_parameter=/sys/module/virtio_rng/parameters/lang_publication_held
+remove_begun_parameter=/sys/module/virtio_rng/parameters/lang_remove_begun
+last_avail_parameter=/sys/module/virtio_rng/parameters/lang_last_remove_data_avail
+last_lifecycle_parameter=/sys/module/virtio_rng/parameters/lang_last_remove_lifecycle
+last_phase_parameter=/sys/module/virtio_rng/parameters/lang_last_remove_phase
+publication_barrier=0
+if [ -w "$publication_hold_parameter" ] &&
+	[ -r "$publication_held_parameter" ] &&
+	[ -r "$remove_begun_parameter" ]; then
+	echo 1 > "$publication_hold_parameter"
+	publication_barrier=1
+elif [ -w "$hold_parameter" ] && [ -r "$held_parameter" ]; then
 	echo 1 > "$hold_parameter"
 fi
 dd if=/dev/hwrng of=/dev/null bs=64 count=1000000 &
@@ -284,7 +325,20 @@ reader_one=$!
 dd if=/dev/hwrng of=/dev/null bs=127 count=1000000 &
 reader_two=$!
 
-if [ -w "$hold_parameter" ] && [ -r "$held_parameter" ]; then
+if [ "$publication_barrier" = "1" ]; then
+	attempt=0
+	while [ "$(cat "$publication_held_parameter")" != "1" ] &&
+		[ "$attempt" -lt 100 ]; do
+		sleep 0.05
+		attempt=$((attempt + 1))
+	done
+	if [ "$(cat "$publication_held_parameter")" != "1" ]; then
+		echo "VRNG-LIVE: FAIL publication did not reach held state"
+		kill "$reader_one" "$reader_two" 2>/dev/null
+		poweroff -f
+	fi
+	echo "VRNG-LIVE: post-core publication synchronization reached"
+elif [ -w "$hold_parameter" ] && [ -r "$held_parameter" ]; then
 	attempt=0
 	while [ "$(cat "$held_parameter")" != "1" ] && [ "$attempt" -lt 100 ]; do
 		sleep 0.05
@@ -300,13 +354,44 @@ else
 	sleep 0.2
 fi
 
-for device_path in /sys/bus/virtio/drivers/virtio_rng/virtio*; do
-	if [ -e "$device_path" ]; then
-		device=${device_path##*/}
-		echo "VRNG-LIVE: unbinding $device"
-		echo "$device" > /sys/bus/virtio/drivers/virtio_rng/unbind
+(
+	for device_path in /sys/bus/virtio/drivers/virtio_rng/virtio*; do
+		if [ -e "$device_path" ]; then
+			device=${device_path##*/}
+			echo "VRNG-LIVE: unbinding $device"
+			echo "$device" > /sys/bus/virtio/drivers/virtio_rng/unbind
+		fi
+	done
+) &
+unbind_pid=$!
+
+if [ "$publication_barrier" = "1" ]; then
+	attempt=0
+	while [ "$(cat "$remove_begun_parameter")" != "1" ] &&
+		[ "$attempt" -lt 100 ]; do
+		sleep 0.05
+		attempt=$((attempt + 1))
+	done
+	if [ "$(cat "$remove_begun_parameter")" != "1" ]; then
+		echo "VRNG-LIVE: FAIL removal did not pass begin_remove"
+		echo 0 > "$publication_hold_parameter"
+		kill "$reader_one" "$reader_two" 2>/dev/null
+		poweroff -f
 	fi
-done
+	echo 0 > "$publication_hold_parameter"
+fi
+
+wait "$unbind_pid"
+
+if [ "$publication_barrier" = "1" ]; then
+	if [ "$(cat "$last_avail_parameter")" != "0" ] ||
+		[ "$(cat "$last_lifecycle_parameter")" != "2" ] ||
+		[ "$(cat "$last_phase_parameter")" != "0" ]; then
+		echo "VRNG-LIVE: FAIL final removal state avail=$(cat "$last_avail_parameter") lifecycle=$(cat "$last_lifecycle_parameter") phase=$(cat "$last_phase_parameter")"
+		poweroff -f
+	fi
+	echo "VRNG-LIVE: teardown publication ordering passed"
+fi
 
 attempt=0
 while { kill -0 "$reader_one" 2>/dev/null || kill -0 "$reader_two" 2>/dev/null; } &&

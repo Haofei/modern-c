@@ -71,6 +71,7 @@ pub const IntegerFact = mir_model.IntegerFact;
 pub const CallTargetKind = mir_model.CallTargetKind;
 pub const CallTargetFact = mir_model.CallTargetFact;
 pub const TargetTypeKind = mir_model.TargetTypeKind;
+pub const AggregateConstructionKind = mir_model.AggregateConstructionKind;
 pub const TargetTypeFact = mir_model.TargetTypeFact;
 
 pub const ResultConstructorFactInfo = struct {
@@ -286,7 +287,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
     for (module.decls) |decl| {
         switch (decl.kind) {
             .enum_decl => |enum_decl| try enums.put(enum_decl.name.text, .{ .is_open = enum_decl.is_open, .cases = enum_decl.cases, .repr = enum_decl.repr }),
-            .struct_decl => |struct_decl| try structs.put(struct_decl.name.text, .{ .fields = struct_decl.fields }),
+            .struct_decl => |struct_decl| try structs.put(struct_decl.name.text, .{ .fields = struct_decl.fields, .is_c_union = struct_decl.is_c_union }),
             .union_decl => |union_decl| try unions.put(union_decl.name.text, .{ .cases = union_decl.cases }),
             .overlay_union_decl => |overlay_union_decl| try structs.put(overlay_union_decl.name.text, .{ .fields = overlay_union_decl.fields }),
             .packed_bits_decl => |decl_packed_bits| try packed_bits.put(decl_packed_bits.name.text, .{ .repr = decl_packed_bits.repr, .fields = decl_packed_bits.fields }),
@@ -540,10 +541,11 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
             const target_index = if (fact.target_index) |index| try std.fmt.allocPrint(allocator, "{}", .{index}) else "none";
             defer if (fact.target_index != null) allocator.free(target_index);
             const target_owner = fact.target_owner orelse "none";
+            const aggregate_construction = if (fact.aggregate_construction) |kind| @tagName(kind) else "none";
             try out.print(
                 allocator,
-                "mir target_type_fact fn={s} kind={s} target_type={s} result_type={s} target_owner={s} target_index={s} recorded=true line={} column={}\n",
-                .{ function.name, @tagName(fact.kind), typeText(fact.target_ty), fact.result_ty.name(), target_owner, target_index, fact.source.line, fact.source.column },
+                "mir target_type_fact fn={s} kind={s} target_type={s} result_type={s} aggregate_construction={s} target_owner={s} target_index={s} recorded=true line={} column={}\n",
+                .{ function.name, @tagName(fact.kind), typeText(fact.target_ty), fact.result_ty.name(), aggregate_construction, target_owner, target_index, fact.source.line, fact.source.column },
             );
         }
         for (function.pointer_provenance_facts) |fact| {
@@ -1131,7 +1133,7 @@ fn targetTypeInstructionSourceMatches(kind: TargetTypeKind, left: Instruction, r
 
 fn targetTypeSyntaxMatches(fact: TargetTypeFact, instruction: Instruction) bool {
     const expected = instruction.target_ty orelse return false;
-    return sema_type.sameTypeSyntax(expected, fact.target_ty);
+    return sema_type.sameTypeSyntax(expected, fact.target_ty) and fact.aggregate_construction == instruction.aggregate_construction;
 }
 
 fn hasStaleTargetTypeFact(function: Function, kind: TargetTypeKind, instruction: Instruction) bool {
@@ -1149,7 +1151,7 @@ fn hasStaleTargetTypeFact(function: Function, kind: TargetTypeKind, instruction:
 fn targetTypeInstructionsSyntaxMatch(left: Instruction, right: Instruction) bool {
     const left_ty = left.target_ty orelse return false;
     const right_ty = right.target_ty orelse return false;
-    return sema_type.sameTypeSyntax(left_ty, right_ty);
+    return sema_type.sameTypeSyntax(left_ty, right_ty) and left.aggregate_construction == right.aggregate_construction;
 }
 
 fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instruction: Instruction) usize {
@@ -6401,7 +6403,16 @@ const FunctionBuilder = struct {
                 return,
             else => return,
         };
+        const aggregate_construction = if (kind == .struct_literal)
+            self.structLiteralConstructionKind(resolved_target_ty) orelse return
+        else
+            null;
         try self.appendTargetTypeFact(kind, target_ty, result_ty, expr.span);
+        if (aggregate_construction) |construction| {
+            const instructions = &self.blocks.items[self.current].instructions;
+            instructions.items[instructions.items.len - 1].aggregate_construction = construction;
+            self.target_type_facts.items[self.target_type_facts.items.len - 1].aggregate_construction = construction;
+        }
         const call_kind: ?CallTargetKind = switch (kind) {
             .bind => .bind,
             .result_ok => .result_ok,
@@ -6424,6 +6435,13 @@ const FunctionBuilder = struct {
             .result_ty = result_ty,
             .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
         });
+    }
+
+    fn structLiteralConstructionKind(self: *FunctionBuilder, target_ty: ast.TypeExpr) ?AggregateConstructionKind {
+        const struct_name = structTypeNameAlias(target_ty, self.aliases) orelse return null;
+        if (self.packed_bits.contains(struct_name)) return .packed_bits;
+        const struct_decl = self.structs.get(struct_name) orelse return null;
+        return if (struct_decl.is_c_union) .c_union else .declared_struct;
     }
 
     fn appendOwnedTargetTypeFact(self: *FunctionBuilder, kind: TargetTypeKind, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span, target_owner: []const u8, target_index: ?usize) !void {

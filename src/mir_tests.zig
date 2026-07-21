@@ -278,6 +278,8 @@ test "MIR owns target types for contextual constructors and literals" {
         \\struct TextSlot { ptr: *const u8, bytes: []const u8 }
         \\struct FloatSlot { small: f32, wide: f64 }
         \\packed bits Flags: u8 { ready: bool }
+        \\#[c_union]
+        \\struct CWord { word: u32, byte: u8 }
         \\union Token { number: i64, eof, ok: u32 }
         \\union Event { mode: E }
         \\global default_error: E = .bad;
@@ -304,6 +306,7 @@ test "MIR owns target types for contextual constructors and literals" {
         \\fn make_text_slot() -> TextSlot { return .{ .ptr = "ptr", .bytes = "bytes" }; }
         \\fn make_array() -> [2]u32 { return .{ 1, 2 }; }
         \\fn make_flags() -> Flags { return .{ .ready = true }; }
+        \\fn make_c_word() -> CWord { return .{ .word = 7, .byte = uninit }; }
         \\fn make_float() -> f32 { return 1.5; }
         \\fn make_float_expr() -> f32 { return 1.7 * 2.3; }
         \\fn make_float_slot() -> FloatSlot { return .{ .small = 1.0, .wide = 2.0 }; }
@@ -379,7 +382,19 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectEqual(mir.TargetTypeKind.string_literal, text_slot_fn.target_type_facts[1].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.string_literal, text_slot_fn.target_type_facts[2].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.array_literal, functionByName(typed_mir, "make_array").?.target_type_facts[0].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, functionByName(typed_mir, "make_flags").?.target_type_facts[0].kind);
+    const flags_fact = functionByName(typed_mir, "make_flags").?.target_type_facts[0];
+    try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, flags_fact.kind);
+    try std.testing.expectEqual(mir.AggregateConstructionKind.packed_bits, flags_fact.aggregate_construction.?);
+    const slot_fact = slot_fn.target_type_facts[0];
+    try std.testing.expectEqual(mir.AggregateConstructionKind.declared_struct, slot_fact.aggregate_construction.?);
+    const c_word_fact = functionByName(typed_mir, "make_c_word").?.target_type_facts[0];
+    try std.testing.expectEqual(mir.AggregateConstructionKind.c_union, c_word_fact.aggregate_construction.?);
+    var construction_dump: std.ArrayList(u8) = .empty;
+    defer construction_dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, module, &construction_dump);
+    try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "fn=make_slot kind=struct_literal target_type=Slot result_type=Slot aggregate_construction=declared_struct") != null);
+    try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "fn=make_flags kind=struct_literal target_type=Flags result_type=Flags aggregate_construction=packed_bits") != null);
+    try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "fn=make_c_word kind=struct_literal target_type=CWord result_type=CWord aggregate_construction=c_union") != null);
     try std.testing.expectEqual(mir.TargetTypeKind.float_literal, functionByName(typed_mir, "default_float").?.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.char_literal, functionByName(typed_mir, "default_char").?.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.float_literal, functionByName(typed_mir, "make_float").?.target_type_facts[0].kind);

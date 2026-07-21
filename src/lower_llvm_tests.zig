@@ -461,6 +461,19 @@ fn retargetPointerMutabilityFactAtOffsetForFunction(module_mir: *mir.Module, nam
     return error.TestUnexpectedResult;
 }
 
+fn retargetAggregateConstructionForFunction(module_mir: *mir.Module, name: []const u8, construction: ?mir.AggregateConstructionKind) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        for (function.target_type_facts) |*fact| {
+            if (fact.kind != .struct_literal) continue;
+            fact.aggregate_construction = construction;
+            return;
+        }
+        return error.TestUnexpectedResult;
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn removeTargetTypeFactAtOffsetForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind, source_offset: usize, source_len: usize) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -593,6 +606,34 @@ test "LLVM rejects missing aggregate-literal target type facts" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_aggregate_target_type_facts.mc", .{}, false, .riscv64, null));
+}
+
+test "LLVM struct literal construction class is MIR-owned" {
+    const source =
+        \\struct Pair { left: u32, right: u32 }
+        \\packed bits Flags: u8 { ready: bool }
+        \\#[c_union]
+        \\struct CWord { word: u32, byte: u8 }
+        \\fn pair() -> Pair { return .{ .left = 1, .right = 2 }; }
+        \\fn flags() -> Flags { return .{ .ready = true }; }
+        \\fn c_word() -> CWord { return .{ .word = 7, .byte = uninit }; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_aggregate_construction_fact.mc", source);
+    defer parsed.deinit();
+    var valid_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer valid_mir.deinit();
+    var valid_output: std.ArrayList(u8) = .empty;
+    defer valid_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &valid_mir, &valid_output, "llvm_aggregate_construction_fact.mc", .{}, false, .riscv64, null);
+
+    for ([_]?mir.AggregateConstructionKind{ null, .packed_bits }) |stale| {
+        var stale_mir = try mir.build(std.testing.allocator, parsed.module);
+        defer stale_mir.deinit();
+        try retargetAggregateConstructionForFunction(&stale_mir, "pair", stale);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_mir, &output, "llvm_aggregate_construction_fact.mc", .{}, false, .riscv64, null));
+    }
 }
 
 test "LLVM rejects missing float-literal target type facts" {

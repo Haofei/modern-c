@@ -4539,8 +4539,11 @@ const CEmitter = struct {
         switch (expr.kind) {
             .array_literal => |items| try lower_c_aggregate.emitArrayLiteral(self.aggregateEmitContext(), items, locals, target),
             .struct_literal => |fields| {
-                if (try lower_c_aggregate.emitPackedBitsLiteral(self.aggregateEmitContext(), fields, locals, target)) return;
-                try lower_c_aggregate.emitStructLiteral(self.aggregateEmitContext(), fields, locals, target);
+                const construction = try self.validateMirStructLiteralConstruction(fact);
+                switch (construction) {
+                    .packed_bits => if (!try lower_c_aggregate.emitPackedBitsLiteral(self.aggregateEmitContext(), fields, locals, target)) return error.UnsupportedCEmission,
+                    .declared_struct, .c_union => try lower_c_aggregate.emitStructLiteral(self.aggregateEmitContext(), fields, locals, target),
+                }
             },
             else => unreachable,
         }
@@ -5555,9 +5558,26 @@ const CEmitter = struct {
         return switch (expr.kind) {
             .grouped => |inner| self.mirAggregateTargetTypeForExpr(inner.*),
             .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else error.UnsupportedCEmission,
-            .struct_literal => if (self.mirTargetTypeFactAt(.struct_literal, expr.span)) |fact| fact.target_ty else error.UnsupportedCEmission,
+            .struct_literal => if (self.mirTargetTypeFactAt(.struct_literal, expr.span)) |fact| blk: {
+                _ = try self.validateMirStructLiteralConstruction(fact);
+                break :blk fact.target_ty;
+            } else error.UnsupportedCEmission,
             else => null,
         };
+    }
+
+    fn validateMirStructLiteralConstruction(self: *CEmitter, fact: mir.TargetTypeFact) !mir.AggregateConstructionKind {
+        const construction = fact.aggregate_construction orelse return error.UnsupportedCEmission;
+        const resolved = self.resolveAliasType(fact.target_ty);
+        const name = typeName(resolved) orelse return error.UnsupportedCEmission;
+        switch (construction) {
+            .packed_bits => if (!self.packed_bits.contains(name)) return error.UnsupportedCEmission,
+            .declared_struct, .c_union => {
+                const decl = self.structs.get(name) orelse return error.UnsupportedCEmission;
+                if (decl.is_c_union != (construction == .c_union)) return error.UnsupportedCEmission;
+            },
+        }
+        return construction;
     }
 
     fn mirFloatLiteralTargetForExpr(self: *CEmitter, expr: ast.Expr) !?ast.TypeExpr {

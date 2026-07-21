@@ -6,9 +6,11 @@ memory_model="$linux/tools/memory-model"
 never_tests=(
 	"litmus-tests/VRNG+data-publish-release-acquire.litmus"
 	"litmus-tests/VRNG+completion-wakeup-lock.litmus"
+	"litmus-tests/VRNG+teardown-drain-before-clear.litmus"
 )
 sometimes_tests=(
 	"litmus-tests/VRNG+data-publish-once.litmus"
+	"litmus-tests/VRNG+teardown-clear-before-drain.litmus"
 )
 
 command -v herd7 >/dev/null || {

@@ -30,7 +30,8 @@ for control in c rust mc; do
 		--summary \
 		"virtio-rng-lang-core*"
 	kernel="$build/arch/x86/boot/bzImage"
-	for mode in shadow shadow-fault shadow-pm shadow-hotplug; do
+	for mode in shadow shadow-fault shadow-register-fault shadow-pm \
+		shadow-hotplug; do
 		"$script_dir/run-live-qemu.sh" "$kernel" "$initramfs" \
 			"$build/live-$mode.log" "$mode"
 	done

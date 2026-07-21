@@ -768,7 +768,7 @@ const LlvmEmitter = struct {
         }
         const semantic_ty = switch (expr.kind) {
             .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission,
-            .struct_literal => if (self.mirTargetTypeFactAt(.struct_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission,
+            .struct_literal => (try self.requireMirStructLiteralConstruction(expr.span, ty)).target_ty,
             .null_literal => if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission,
             else => if (view_narrow_target) |fact| fact.target_ty else ty,
         };
@@ -1453,13 +1453,13 @@ const LlvmEmitter = struct {
                 try self.emitArrayLiteralValue(target_ty, items)
             else
                 error.UnsupportedLlvmEmission,
-            .struct_literal => |fields| if (self.contextualTargetTypeAt(.struct_literal, expr.span, semantic_expected_ty)) |target_ty|
-                if (self.packedBitsInfoForType(target_ty)) |info|
-                    try self.emitPackedBitsLiteralValue(info, fields)
-                else
-                    try self.emitStructLiteralValue(target_ty, fields)
-            else
-                error.UnsupportedLlvmEmission,
+            .struct_literal => |fields| blk: {
+                const aggregate = try self.requireMirStructLiteralConstruction(expr.span, semantic_expected_ty);
+                break :blk switch (aggregate.construction) {
+                    .packed_bits => try self.emitPackedBitsLiteralValue(self.packedBitsInfoForType(aggregate.target_ty) orelse return error.UnsupportedLlvmEmission, fields),
+                    .declared_struct, .c_union => try self.emitStructLiteralValue(aggregate.target_ty, fields),
+                };
+            },
             .binary => |node| try self.emitBinary(node, expected_ty),
             .unary => |node| try self.emitUnary(node, expr.span),
             .cast => |node| try self.emitCast(expr.span, node.value.*),
@@ -2689,6 +2689,7 @@ const LlvmEmitter = struct {
         }
         if (self.structDeclForType(resolved_ty)) |_| {
             if (init.kind == .struct_literal) {
+                _ = try self.requireMirStructLiteralConstruction(init.span, resolved_ty);
                 try self.emitStructLiteralStores(ptr, resolved_ty, init.kind.struct_literal);
             } else {
                 const value = try self.emitExprWithMirRangeTarget(init, ty, name);
@@ -5481,6 +5482,33 @@ const LlvmEmitter = struct {
     fn contextualTargetTypeAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, generated_ty: ast.TypeExpr) ?ast.TypeExpr {
         if (span.line == 0 or span.column == 0) return generated_ty;
         return if (self.mirTargetTypeFactAt(kind, span)) |fact| fact.target_ty else null;
+    }
+
+    const MirStructLiteralConstruction = struct {
+        target_ty: ast.TypeExpr,
+        construction: mir.AggregateConstructionKind,
+    };
+
+    fn requireMirStructLiteralConstruction(self: *LlvmEmitter, span: ast.Span, generated_ty: ast.TypeExpr) !MirStructLiteralConstruction {
+        // Async lowering may create compiler-owned zero-span aggregate nodes.
+        // They have no source-keyed fact; their generated declaration is the
+        // only admitted fallback. Real source literals must carry the fact.
+        const result: MirStructLiteralConstruction = if (span.line == 0 or span.column == 0) blk: {
+            if (self.packedBitsInfoForType(generated_ty) != null) break :blk .{ .target_ty = generated_ty, .construction = .packed_bits };
+            const decl = self.structDeclForType(generated_ty) orelse return error.UnsupportedLlvmEmission;
+            break :blk .{ .target_ty = generated_ty, .construction = if (decl.is_c_union) .c_union else .declared_struct };
+        } else blk: {
+            const fact = self.mirTargetTypeFactAt(.struct_literal, span) orelse return error.UnsupportedLlvmEmission;
+            break :blk .{ .target_ty = fact.target_ty, .construction = fact.aggregate_construction orelse return error.UnsupportedLlvmEmission };
+        };
+        switch (result.construction) {
+            .packed_bits => if (self.packedBitsInfoForType(result.target_ty) == null) return error.UnsupportedLlvmEmission,
+            .declared_struct, .c_union => {
+                const decl = self.structDeclForType(result.target_ty) orelse return error.UnsupportedLlvmEmission;
+                if (decl.is_c_union != (result.construction == .c_union)) return error.UnsupportedLlvmEmission;
+            },
+        }
+        return result;
     }
 
     fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {

@@ -87,6 +87,12 @@ oversized completions, a stale generation, and one queue-add failure. Every
 injection must be accepted by sysfs, consumed by a live driver transition, and
 followed by a successful read before the test proceeds.
 
+Use `shadow-register-fault` to pass the built-in
+`virtio_rng.lang_fail_register_once=1` fault at boot. The guest requires the
+virtio device to remain bound while `/dev/hwrng` returns `ENODEV`, then
+explicitly unbinds it and verifies clean removal. This qualifies the documented
+degraded state of the void `.scan` callback.
+
 Build the shadow kernel with `CONFIG_PM_DEBUG=y` and use `shadow-pm` as the
 fourth argument to run three deterministic device-level suspend/restore cycles.
 The test selects `pm_test=devices`, invokes the normal suspend entry point, and
@@ -124,8 +130,11 @@ are not evidence for the driver's partial-copy path. The script requires both
 parameter writes and their read-backs to succeed before reporting this gate.
 The test then unbinds the
 virtio device while two long-running `/dev/hwrng` readers are active. Shadow
-mode holds one consumed completion and waits for the exported held-state marker
-before unbind, making the blocked-reader condition deterministic. The runner
+mode pauses a callback after its logical completion and before external
+availability publication, starts unbind, waits until removal passes
+``begin_remove``, and then releases the callback. The runner requires the final
+logical state to be ``Dead/Empty`` and the captured external availability to be
+zero. This makes the publication/removal interleaving deterministic. The runner
 requires both readers to terminate, the init process to reach its completion
 marker, and no kernel warning, sanitizer, lockdep, or hung-task diagnostic.
 Shadow mode also requires a nonzero event count with zero C/Rust/MC differences.

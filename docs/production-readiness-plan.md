@@ -8,6 +8,10 @@ edge/appliance kernel for sandboxed agents on a fixed hardware profile.
 
 Related documents:
 
+- `docs/compiler-production-readiness.md` — compiler supported-subset
+  qualification and semantic closure matrices.
+- `docs/kernel-language-comparison-plan.md` — separate evidence plan for narrow,
+  fair C/Rust/MC kernel machine-contract comparisons.
 - `docs/future-kernel-plan.md` — overall capability-native edge agent OS direction.
 - `docs/platform-portability-plan.md` — platform work for RISC-V S-mode, x86_64, and AArch64.
 - `docs/quickjs-agent-plan.md` — QuickJS as a confined U-mode agent.
@@ -15,6 +19,10 @@ Related documents:
 - `docs/todo.md` — consolidated current roadmap.
 - `docs/hardening-todo.md` — historical compiler/kernel hardening campaign record.
 - `docs/test-architecture.md` — test-system direction.
+
+Language-comparison results do not make this appliance production-ready, and
+appliance QEMU gates do not establish that MC is superior to C or Rust. Each
+document retains its own exit criteria.
 
 ## 1. Definition of production
 
