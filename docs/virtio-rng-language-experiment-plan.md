@@ -1,8 +1,8 @@
 # C / Rust / MC virtio-rng experiment plan
 
-Status: M0-M4 validated; selectable C, Rust, and MC control passes the current
-normal, fault, suspend/restore, QMP transport hotplug, and three-architecture
-KUnit gates; M5 is next, 2026-07-20
+Status: M0-M5 validated; selectable C, Rust, and MC control passes the current
+functional gates, and the retained common-lock publication model passes LKMM,
+KCSAN, lockdep, and memory-sanitizer qualification; M6 is next, 2026-07-20
 
 Upstream target: Linux `v7.2-rc4`, commit
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`, which was both Torvalds `master`
@@ -17,7 +17,7 @@ upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`6a918535a33d` on
+`8ac8e5d142e8` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -78,7 +78,14 @@ Current checkpoint:
   Every selection passes 24/24 KUnit tests on x86-64, arm64, and riscv64.
   On x86-64 every selection also passes normal, nonblocking, forced partial-
   copy, zero/oversize/stale/queue-add fault, three-cycle suspend/restore, and
-  QMP hot-unplug/replug live gates with zero mismatches. M5 and later
+  QMP hot-unplug/replug live gates with zero mismatches.
+- M5 retains the common-lock baseline. LKMM proves that release/acquire data
+  publication and completion-lock wakeup ordering prohibit observing a ready
+  publication without its preceding data write. A plain-access negative
+  control permits that outcome, proving the gate is non-vacuous. KCSAN and the
+  combined KASAN/UBSAN/lockdep/DMA-debug kernels pass live qualification with
+  Rust and MC selected as controlling cores; the corresponding C baseline was
+  qualified during M3.5. No lock-free publication claim is made. M6 and later
   milestones remain open.
 
 ## 1. Question and scope
@@ -442,6 +449,15 @@ replacing the lock-protected publication path.
 Gate: litmus tests prohibit the bad outcomes; KCSAN stress finds no race; lockdep
 and DEBUG_ATOMIC_SLEEP remain clean. Results distinguish CPU memory ordering
 from DMA/cache maintenance supplied by virtio and the common glue.
+
+Status: closed for the common-lock design. Herdtools7 7.58 reports `Never` for
+`VRNG+data-publish-release-acquire` and `VRNG+completion-wakeup-lock`, and
+`Sometimes` for the deliberately unsynchronized `VRNG+data-publish-once`
+negative control. The model concerns CPU publication and wakeup ordering only;
+virtio DMA synchronization and cache maintenance remain responsibilities of the
+transport/common C boundary. Live KCSAN and combined
+KASAN/UBSAN/lockdep/DMA-debug runs pass with Rust and MC control, completing the
+selected-controller concurrency matrix together with the prior C baseline.
 
 ### M6 — genuine DMA ownership experiment
 
