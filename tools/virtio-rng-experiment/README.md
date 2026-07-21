@@ -42,7 +42,7 @@ git -C /home/zoe/src/linux switch -c vrng-lang-experiment v7.2-rc4
 
 The experiment branch is based on `v7.2-rc4` /
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current implementation commit
-is `128898a2d1d33bc7dcada5936da11ac7dfd8ee67`, published as
+is `f987bf8c4e5fafff524057a5dfdb324c939c485e`, published as
 [`Haofei/linux:vrng-lang-experiment`](https://github.com/Haofei/linux/tree/vrng-lang-experiment).
 
 The container is sufficient for compilation and QEMU execution. Performance
@@ -72,6 +72,12 @@ tools/virtio-rng-experiment/run-live-qemu.sh \
 For the ordinary driver path, build the Linux
 `virtio_rng_lang/kunitconfig-no-shadow` fragment and run the same command with
 `no-shadow` as its fourth argument.
+
+Run the deterministic completion and queue failure matrix against a shadow
+kernel with `shadow-fault` as the fourth argument. This injects zero-length and
+oversized completions, a stale generation, and one queue-add failure. Every
+injection must be accepted by sysfs, consumed by a live driver transition, and
+followed by a successful read before the test proceeds.
 
 The init process checks normal and `bs=1/3/7` reads, then sets the test-only
 `lang_copy_chunk_limit=3` parameter to force repeated driver-level partial

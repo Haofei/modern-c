@@ -1,22 +1,23 @@
 # C / Rust / MC virtio-rng experiment plan
 
-Status: M0-M2 validated; M3 normal-path shadow agreement validated; M3.5 live
-C-core control implemented and awaiting full requalification, 2026-07-20
+Status: M0-M3 validated; M3.5 C-core control passes the current normal,
+sanitizer, fault, and three-architecture KUnit gates; M4 remains blocked on the
+remaining candidate-control gates, 2026-07-20
 
 Upstream target: Linux `v7.2-rc4`, commit
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`, which was both Torvalds `master`
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `128898a2d1d33bc7dcada5936da11ac7dfd8ee67` (`Validate
-virtio-rng control transitions against spec`), based directly on the
+experiment commit is `f987bf8c4e5fafff524057a5dfdb324c939c485e` (`docs: record
+virtio-rng M3.5 requalification`), based directly on the
 upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
 `14a52a42241f` and `83a4ba9acbf6`, respectively.
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`128898a2d1d33bc7dcada5936da11ac7dfd8ee67` on
+`f987bf8c4e5fafff524057a5dfdb324c939c485e` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -54,11 +55,13 @@ Current checkpoint:
   must exactly match an independent executable-specification state. Probe and
   restore ownership state is explicitly unwound and synchronized. The normal
   x86-64 gates include full and shadow-disabled KUnit, a forced driver-level
-  partial-copy live path, and synchronized blocked-reader unbind. Three-
-  architecture and sanitizer requalification is still required.
-- Host failure-corpus persistence, full live fault-injection qualification,
-  suspend/restore races, selectable Rust/MC control, and later milestones remain
-  open.
+  partial-copy live path, synchronized blocked-reader unbind, KCSAN, and a
+  combined KASAN/UBSAN/lockdep/DMA-debug configuration. The full 23-test suite
+  passes on x86-64, arm64, and riscv64. A deterministic live matrix recovers
+  from zero-length and oversized completions, stale generation, and queue-add
+  failure without a mismatch or kernel diagnostic.
+- Host failure-corpus persistence, suspend/restore and transport hot-unplug
+  races, selectable Rust/MC control, and later milestones remain open.
 
 ## 1. Question and scope
 
@@ -378,13 +381,16 @@ Gate: pointer/state/output cross-product KUnit tests pass for all languages;
 blocked-reader unbind, injected completion errors, queue-add failure, normal,
 KCSAN, and KASAN/UBSAN/lockdep QEMU runs pass with no kernel diagnostics.
 
-Status: the normal x86-64 gates pass 23/23 full KUnit tests, 11/11
-shadow-disabled KUnit tests, forced driver-level three-byte partial-copy live
-tests in both configurations, and a live PCI virtio-rng test that reached the
-held-completion synchronization point before unbind with 1,213 matching
-protocol events. Completion/add fault matrices,
-sanitizer configurations, and arm64/riscv64 requalification remain open. M4
-remains blocked.
+Status: the full suite passes 23/23 KUnit tests on x86-64, arm64, and riscv64;
+the shadow-disabled x86-64 suite passes 11/11. Forced driver-level three-byte
+partial-copy live tests pass in both x86-64 configurations. The normal,
+KCSAN, and combined KASAN/UBSAN/lockdep/DMA-debug shadow runs reached the held-
+completion synchronization point before unbind with 1,213, 1,213, and 1,216
+matching protocol events, respectively. The deterministic live fault matrix
+recovered from zero-length and oversized completions, a stale generation, and
+one queue-add failure with 1,243 matching events and no kernel diagnostic. M4
+remains blocked on host failure-corpus persistence, suspend/restore,
+transport-level hot-unplug, and the candidate-control gates below.
 
 ### M4 — selectable controlling core
 

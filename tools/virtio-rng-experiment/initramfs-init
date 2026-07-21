@@ -5,6 +5,54 @@ mount -t devtmpfs devtmpfs /dev
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 
+fault_matrix=0
+for argument in $(cat /proc/cmdline); do
+	case "$argument" in
+	vrng_live_fault_matrix=1) fault_matrix=1 ;;
+	esac
+done
+
+exercise_fault()
+{
+	name=$1
+	parameter=$2
+	value=$3
+	reset_value=$4
+	attempt=0
+
+	echo "VRNG-LIVE: injecting $name"
+	if ! echo "$value" > "$parameter"; then
+		echo "VRNG-LIVE: FAIL setting $name"
+		poweroff -f
+	fi
+	if [ "$(cat "$parameter")" != "$value" ]; then
+		echo "VRNG-LIVE: FAIL $name readback"
+		poweroff -f
+	fi
+
+	# Drive the hwrng buffer until the next driver transition consumes it.
+	while [ "$(cat "$parameter")" != "$reset_value" ] &&
+		[ "$attempt" -lt 100 ]; do
+		dd if=/dev/hwrng of=/dev/null bs=64 count=1 2>/dev/null || true
+		attempt=$((attempt + 1))
+	done
+	if [ "$(cat "$parameter")" != "$reset_value" ]; then
+		echo "VRNG-LIVE: FAIL $name was not consumed"
+		poweroff -f
+	fi
+
+	# Transient completion and queue errors must leave the device usable.
+	attempt=0
+	while ! dd if=/dev/hwrng of=/dev/null bs=64 count=1 2>/dev/null; do
+		attempt=$((attempt + 1))
+		if [ "$attempt" -ge 20 ]; then
+			echo "VRNG-LIVE: FAIL $name did not recover"
+			poweroff -f
+		fi
+	done
+	echo "VRNG-LIVE: $name recovered"
+}
+
 echo "VRNG-LIVE: waiting for /dev/hwrng"
 attempt=0
 while [ ! -c /dev/hwrng ] && [ "$attempt" -lt 100 ]; do
@@ -57,6 +105,26 @@ if [ -w "$chunk_limit_parameter" ]; then
 		poweroff -f
 	fi
 	echo "VRNG-LIVE: driver partial-copy path passed"
+fi
+
+if [ "$fault_matrix" = "1" ]; then
+	completion_parameter=/sys/module/virtio_rng/parameters/lang_completion_override
+	stale_parameter=/sys/module/virtio_rng/parameters/lang_stale_once
+	fail_add_parameter=/sys/module/virtio_rng/parameters/lang_fail_add_once
+
+	for parameter in "$completion_parameter" "$stale_parameter" \
+		"$fail_add_parameter"; do
+		if [ ! -w "$parameter" ]; then
+			echo "VRNG-LIVE: FAIL missing fault parameter $parameter"
+			poweroff -f
+		fi
+	done
+
+	exercise_fault "zero completion" "$completion_parameter" 0 -1
+	exercise_fault "oversize completion" "$completion_parameter" 4096 -1
+	exercise_fault "stale completion" "$stale_parameter" 1 0
+	exercise_fault "queue-add failure" "$fail_add_parameter" 1 0
+	echo "VRNG-LIVE: fault matrix passed"
 fi
 
 echo "VRNG-LIVE: starting readers for removal race"
