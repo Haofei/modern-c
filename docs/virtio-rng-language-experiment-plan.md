@@ -1,10 +1,11 @@
 # C / Rust / MC virtio-rng experiment plan
 
-Status: M0-M7 validated; selectable C, Rust, and MC control passes the current
+Status: M0-M8 validated; selectable C, Rust, and MC control passes the current
 functional gates, and the retained common-lock publication model passes LKMM,
 KCSAN, lockdep, and memory-sanitizer qualification; the typed DMA variant
 rejects device-owned CPU access; reproducible TAP/JUnit evidence is archived;
-M8 is next, 2026-07-20
+the deliberate-defect campaign is classified and reproducible; M9 is next,
+2026-07-20
 
 Upstream target: Linux `v7.2-rc4`, commit
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`, which was both Torvalds `master`
@@ -19,7 +20,7 @@ upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`e50a01b7daef` on
+`2c91e00c1eae` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -102,6 +103,13 @@ Current checkpoint:
   matrix has 22 passing cases and two explicit environment/configuration skips:
   x86 KVM is unavailable on the Apple ARM host, and the current x86 i440fx
   configuration has no `virtio-rng-device` bus. Neither is counted as a pass.
+- M8 records 13 deliberate-defect cases. Five MC fixtures are rejected at
+  compile time when typestate/effects are declared; explicit wrapping and Rust
+  panic remain expressible and require differential/static policy defenses;
+  completion, stale, and removal defects are covered by runtime gates; missing
+  publication ordering is exposed by LKMM; nospec and non-coherent maintenance
+  remain audited common-C responsibilities. Unmarked external allocation
+  effects and surviving C DMA aliases are not counted as language prevention.
 
 ## 1. Question and scope
 
@@ -554,6 +562,19 @@ Required defects:
 
 Gate: results are reproducible from named commits; “not expressible by the
 language” and “delegated to C glue” are valid, distinct outcomes.
+
+Status: closed. `run-defect-campaign.py` emits TAP, JUnit XML, and a structured
+13-case classification. Compile-time prevention covers device-owned CPU access,
+declared blocking/allocation calls in IRQ context, unbounded IRQ loops, and MC
+trap-capable callbacks. Explicit wrapping arithmetic and Rust `panic!` compile
+as deliberate counterexamples, so their defenses are reported as the
+executable-spec publication firewall and panic-free source policy rather than
+type-system prevention. Fault/hotplug/sanitizer evidence covers zero, oversize,
+stale/double completion and remove-after-reference; LKMM exposes missing
+publication ordering; source qualification pins the common nospec helper.
+Non-coherent cache maintenance and raw aliases stay delegated to the common C
+DMA boundary. The compressed `results-m8-v2` evidence SHA-256 is
+`bf70621001cfcf8d630317b7c8402671f5b3b10c3b6a95afa092dae54d4caf20`.
 
 ### M9 — performance and engineering evaluation
 
