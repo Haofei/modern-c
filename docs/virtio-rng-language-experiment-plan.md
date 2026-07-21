@@ -1,26 +1,24 @@
 # C / Rust / MC virtio-rng experiment plan
 
-Status: M0-M8 validated; selectable C, Rust, and MC control passes the current
-functional gates, and the retained common-lock publication model passes LKMM,
-KCSAN, lockdep, and memory-sanitizer qualification; the typed DMA variant
-rejects device-owned CPU access; reproducible TAP/JUnit evidence is archived;
-the deliberate-defect campaign is classified and reproducible; M9 is next,
-2026-07-20
+Status: M0-M6 completed; selectable C, Rust, and MC control passes the core
+functional gates, the common-lock publication model passes LKMM and sanitizer
+qualification, and the MC typed-DMA variant rejects device-owned CPU access,
+2026-07-21
 
 Upstream target: Linux `v7.2-rc4`, commit
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`, which was both Torvalds `master`
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `6a918535a33d` (`virtio-rng: select the controlling
-language core`), based directly on the
+experiment commit is `e82be712c8a5` (`virtio-rng: trim nonessential experiment
+scaffolding`), based directly on the
 upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
 `14a52a42241f` and `83a4ba9acbf6`, respectively.
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`2c91e00c1eae` on
+`e82be712c8a5` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -88,8 +86,7 @@ Current checkpoint:
   control permits that outcome, proving the gate is non-vacuous. KCSAN and the
   combined KASAN/UBSAN/lockdep/DMA-debug kernels pass live qualification with
   Rust and MC selected as controlling cores; the corresponding C baseline was
-  qualified during M3.5. No lock-free publication claim is made. M7 and later
-  milestones remain open.
+  qualified during M3.5. No lock-free publication claim is made.
 - M6 adds a separate MC typed-DMA qualification variant. An audited adoption
   function creates one `VrngCpuOwnedBuffer`; handoff consumes it and returns a
   `VrngDeviceOwnedBuffer` with no CPU access API; completion reclaim consumes
@@ -97,19 +94,6 @@ Current checkpoint:
   LLVM, while a device-owned read fails during semantic checking. This proves
   the typed-handle protocol only. Linux allocation/mapping and any raw C alias
   retained outside the adopted capability remain explicitly trusted.
-- M7 records the controller, lifecycle, sanitizer, backend, and architecture
-  evidence in a self-contained bundle with TAP, JUnit XML, JSON environment
-  metadata, copied logs/configs, and per-file SHA-256 hashes. The recorded
-  matrix has 22 passing cases and two explicit environment/configuration skips:
-  x86 KVM is unavailable on the Apple ARM host, and the current x86 i440fx
-  configuration has no `virtio-rng-device` bus. Neither is counted as a pass.
-- M8 records 13 deliberate-defect cases. Five MC fixtures are rejected at
-  compile time when typestate/effects are declared; explicit wrapping and Rust
-  panic remain expressible and require differential/static policy defenses;
-  completion, stale, and removal defects are covered by runtime gates; missing
-  publication ordering is exposed by LKMM; nospec and non-coherent maintenance
-  remain audited common-C responsibilities. Unmarked external allocation
-  effects and surviving C DMA aliases are not counted as language prevention.
 
 ## 1. Question and scope
 
@@ -118,8 +102,9 @@ leave expressible when implementing the single-buffer virtio-rng protocol.
 
 M1-M4 compare a **logical buffer and virtqueue protocol state machine**. They do
 not claim language-enforced ownership of the physical DMA allocation: the common
-C glue still allocates, maps, queues, resets, and frees that buffer. Real
-Rust/MC-owned DMA handles are a later, separately reported experiment.
+C glue still allocates, maps, queues, resets, and frees that buffer. M6
+separately qualifies an MC typed handle over an audited adoption boundary; live
+allocation remains C-owned.
 
 The experiment must not use the C implementation as the correctness oracle. A
 small executable specification is the oracle; C, Rust, and MC are three
@@ -504,100 +489,6 @@ the C glue must guarantee that no surviving raw alias accesses the mapped range
 between handoff and reclaim. Rust's live path remains under the common C DMA
 boundary and is not counted as a typed DMA-ownership prevention result.
 
-### M7 — QEMU architecture and lifecycle matrix
-
-Architectures:
-
-- x86-64 with KVM and TCG;
-- arm64 with TCG initially, KVM where host hardware permits;
-- riscv64 with TCG.
-
-Device/backend matrix:
-
-- `virtio-rng-pci` and applicable `virtio-rng-device` transport;
-- `rng-builtin` for reproducibility;
-- `rng-random` for host-backed integration;
-- fixed QEMU byte/period limits recorded in every result.
-
-Scenarios:
-
-- sustained and multi-process reads;
-- QMP hot-unplug/replug;
-- module unload/reload where modular;
-- suspend/restore;
-- delayed, zero, oversize, duplicate, and stale completion injection;
-- completion/remove and read/remove stress.
-
-Gate: automated scripts produce TAP/JUnit-style results and retain kernel log,
-QEMU command line, config, compiler versions, and exact commits.
-
-Status: closed with explicit skips. `record-results.py` revalidates every log,
-rejects kernel diagnostics or shadow mismatches, copies logs and configurations,
-hashes each artifact, and emits TAP, JUnit XML, and a versioned JSON manifest.
-The archived `results-m7-v2` bundle contains 22 passing cases: all C/Rust/MC
-x86 TCG normal, fault, PM, hotplug, and `rng-random` runs; Rust/MC KCSAN and
-memory-debug runs; and 24/24 KUnit on x86-64, arm64, and riscv64. It records two
-TAP skips rather than silently narrowing the matrix: x86 KVM is unavailable on
-the Apple ARM host, and `virtio-rng-device` has no bus in the current x86 i440fx
-configuration. The compressed bundle SHA-256 is
-`bd29765c9ff679b6252a31374fa662db3907059a6419a969f8c5b7f81618726d`.
-
-### M8 — deliberate defect campaign
-
-Maintain one small patch per defect. Record compile result, diagnostic, runtime
-detector, and whether the defect lies outside the language-owned boundary.
-
-Required defects:
-
-- wrapping index/available/generation arithmetic;
-- CPU read while logically and genuinely device-owned;
-- oversized and zero completion;
-- missing acquire/release or lock;
-- blocking/allocation/unbounded loop in callback;
-- MC trap and Rust panic-capable callback path;
-- double/stale completion;
-- remove-after-reference/use-after-free;
-- cacheline sharing and missing non-coherent maintenance;
-- speculative index hardening omission.
-
-Gate: results are reproducible from named commits; “not expressible by the
-language” and “delegated to C glue” are valid, distinct outcomes.
-
-Status: closed. `run-defect-campaign.py` emits TAP, JUnit XML, and a structured
-13-case classification. Compile-time prevention covers device-owned CPU access,
-declared blocking/allocation calls in IRQ context, unbounded IRQ loops, and MC
-trap-capable callbacks. Explicit wrapping arithmetic and Rust `panic!` compile
-as deliberate counterexamples, so their defenses are reported as the
-executable-spec publication firewall and panic-free source policy rather than
-type-system prevention. Fault/hotplug/sanitizer evidence covers zero, oversize,
-stale/double completion and remove-after-reference; LKMM exposes missing
-publication ordering; source qualification pins the common nospec helper.
-Non-coherent cache maintenance and raw aliases stay delegated to the common C
-DMA boundary. The compressed `results-m8-v2` evidence SHA-256 is
-`bf70621001cfcf8d630317b7c8402671f5b3b10c3b6a95afa092dae54d4caf20`.
-
-### M9 — performance and engineering evaluation
-
-Measure both isolated core cost and end-to-end behavior. Pin vCPUs, fix governor
-and QEMU rate limits, warm up, repeat runs, and report distributions rather than
-a single value.
-
-Metrics:
-
-- transition and copy nanoseconds/cycles in a microbenchmark;
-- completion-to-wakeup latency;
-- `/dev/hwrng` throughput and CPU instructions per 64 bytes;
-- branches/misses, maximum stack, `.text/.data`, and runtime dependencies;
-- clean/instrumented build time;
-- unsafe/FFI/glue lines, manual layouts, diagnostic quality, and debugger stack
-  readability.
-
-The initial 95% throughput, 110% callback latency, and 120% text-size figures
-are hypotheses/targets, not pass criteria fixed before baseline variance is
-known.
-
-Gate: raw data, scripts, environment manifest, and statistical summary are
-checked in or archived together.
 
 ## 7. Build and test configurations
 
@@ -607,13 +498,7 @@ Keep separate configs rather than enabling every sanitizer simultaneously:
 2. `kunit`: minimal KUnit/UML or QEMU build;
 3. `memory`: KASAN + UBSAN + DMA API debug;
 4. `concurrency`: KCSAN with an appropriate preemption/SMP setup;
-5. `locking`: PROVE_LOCKING + DEBUG_ATOMIC_SLEEP + debug objects;
-6. `hardening`: stack protector, CFI/KCFI where supported, fortify;
-7. `size`: stable optimization/debug settings for section comparison.
-
-Every result manifest records `.config`, `make` variables, compiler versions,
-QEMU version/arguments, host kernel/CPU, implementation choice, shadow setting,
-Linux commit, MC commit, and dirty-tree status.
+5. `locking`: PROVE_LOCKING + DEBUG_ATOMIC_SLEEP + debug objects.
 
 ## 8. Immediate execution order
 
