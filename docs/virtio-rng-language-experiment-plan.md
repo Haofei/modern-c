@@ -1,8 +1,9 @@
 # C / Rust / MC virtio-rng experiment plan
 
-Status: M0-M5 validated; selectable C, Rust, and MC control passes the current
+Status: M0-M6 validated; selectable C, Rust, and MC control passes the current
 functional gates, and the retained common-lock publication model passes LKMM,
-KCSAN, lockdep, and memory-sanitizer qualification; M6 is next, 2026-07-20
+KCSAN, lockdep, and memory-sanitizer qualification; the typed DMA variant
+rejects device-owned CPU access; M7 is next, 2026-07-20
 
 Upstream target: Linux `v7.2-rc4`, commit
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`, which was both Torvalds `master`
@@ -17,7 +18,7 @@ upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`8ac8e5d142e8` on
+`e73e619ce4f7` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -85,8 +86,15 @@ Current checkpoint:
   control permits that outcome, proving the gate is non-vacuous. KCSAN and the
   combined KASAN/UBSAN/lockdep/DMA-debug kernels pass live qualification with
   Rust and MC selected as controlling cores; the corresponding C baseline was
-  qualified during M3.5. No lock-free publication claim is made. M6 and later
+  qualified during M3.5. No lock-free publication claim is made. M7 and later
   milestones remain open.
+- M6 adds a separate MC typed-DMA qualification variant. An audited adoption
+  function creates one `VrngCpuOwnedBuffer`; handoff consumes it and returns a
+  `VrngDeviceOwnedBuffer` with no CPU access API; completion reclaim consumes
+  that handle and restores CPU access. The positive cycle emits Linux-profile
+  LLVM, while a device-owned read fails during semantic checking. This proves
+  the typed-handle protocol only. Linux allocation/mapping and any raw C alias
+  retained outside the adopted capability remain explicitly trusted.
 
 ## 1. Question and scope
 
@@ -470,6 +478,16 @@ slice is unavailable while the descriptor is device-owned.
 Gate: the intentionally invalid device-owned read fails at compile time in the
 typed variants. If external aliases in C make that guarantee incomplete, report
 the exact trusted boundary rather than counting it as a prevented defect.
+
+Status: closed for the MC typed variant. `vrng_dma_ownership.mc` adopts a
+Linux-allocated buffer into a linear CPU-owned handle, consumes it on device
+handoff, and restores CPU access only after consuming the device-owned handle.
+`vrng_dma_device_owned_read.mc` is rejected during semantic checking with
+`E_NO_IMPLICIT_POINTER_CONVERSION`; the positive module emits Linux-profile
+LLVM. This does not prove exclusive ownership of the underlying allocation:
+the C glue must guarantee that no surviving raw alias accesses the mapped range
+between handoff and reclaim. Rust's live path remains under the common C DMA
+boundary and is not counted as a typed DMA-ownership prevention result.
 
 ### M7 — QEMU architecture and lifecycle matrix
 
