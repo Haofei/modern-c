@@ -61,10 +61,16 @@ if [ -n "$m7_results" ]; then
 		live_args+=(--live "random-$control=$m7_results/evidence/rng-random-$control.log")
 	done
 fi
-python3 "$script_dir/performance-report.py" --linux "$linux" \
-	--modern-c "$(cd "$script_dir/../.." && pwd)" \
-	--output "$output" \
-	--host-context "${VRNG_PERF_HOST_CONTEXT:-containerized benchmark; see environment metadata}" \
+report_args=(
+	--linux "$linux"
+	--modern-c "$(cd "$script_dir/../.." && pwd)"
+	--output "$output"
+	--host-context "${VRNG_PERF_HOST_CONTEXT:-containerized benchmark; see environment metadata}"
+)
+if [ -n "${VRNG_PERF_LINUX_COMMIT:-}" ]; then
+	report_args+=(--linux-commit "$VRNG_PERF_LINUX_COMMIT")
+fi
+python3 "$script_dir/performance-report.py" "${report_args[@]}" \
 	"${live_args[@]}"
 
 echo "virtio-rng performance evidence written to $output"

@@ -57,6 +57,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--linux", required=True, type=Path)
     parser.add_argument("--modern-c", required=True, type=Path)
+    parser.add_argument("--linux-commit")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--live", action="append", default=[])
     parser.add_argument("--host-context", default="containerized benchmark; see environment metadata")
@@ -122,7 +123,11 @@ def main() -> int:
             "cpu": command("lscpu"),
         },
         "repositories": {
-            "linux": git_metadata(args.linux),
+            "linux": (
+                {"path": str(args.linux), "commit": args.linux_commit,
+                 "dirty": False, "status": [], "source": "git-archive"}
+                if args.linux_commit else git_metadata(args.linux)
+            ),
             "modern_c": git_metadata(args.modern_c),
         },
         "limitations": [
