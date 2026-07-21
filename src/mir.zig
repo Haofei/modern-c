@@ -3341,6 +3341,10 @@ const FunctionBuilder = struct {
     local_types: std.StringHashMap(ValueType),
     local_type_exprs: std.StringHashMap(ast.TypeExpr),
     local_mutability: std.StringHashMap(bool),
+    // Bindings introduced by a successful nullable-pointer pattern are
+    // non-null by construction for that arm. Keep the representation fact for
+    // backend admission, but do not invent a runtime trap edge for their use.
+    proven_nonnull_bindings: std.StringHashMap(void),
     // Local function-pointer aliases whose target is an internal helper with a
     // proven pointer-return summary. This is intentionally narrow: unknown
     // locals, indirect stores, and control-flow joins drop the mapping.
@@ -3429,6 +3433,7 @@ const FunctionBuilder = struct {
             .local_types = std.StringHashMap(ValueType).init(allocator),
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
             .local_mutability = std.StringHashMap(bool).init(allocator),
+            .proven_nonnull_bindings = std.StringHashMap(void).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
             .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
             .local_pointer_array_aliases = std.StringHashMap([]const u8).init(allocator),
@@ -3497,6 +3502,7 @@ const FunctionBuilder = struct {
             .local_types = std.StringHashMap(ValueType).init(allocator),
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
             .local_mutability = std.StringHashMap(bool).init(allocator),
+            .proven_nonnull_bindings = std.StringHashMap(void).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
             .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
             .local_pointer_array_aliases = std.StringHashMap([]const u8).init(allocator),
@@ -3547,6 +3553,7 @@ const FunctionBuilder = struct {
         self.local_types.deinit();
         self.local_type_exprs.deinit();
         self.local_mutability.deinit();
+        self.proven_nonnull_bindings.deinit();
         self.local_function_aliases.deinit();
         self.local_aggregate_pointer_aliases.deinit();
         self.local_pointer_array_aliases.deinit();
@@ -3628,6 +3635,8 @@ const FunctionBuilder = struct {
         self.local_type_exprs = std.StringHashMap(ast.TypeExpr).init(self.allocator);
         self.local_mutability.deinit();
         self.local_mutability = std.StringHashMap(bool).init(self.allocator);
+        self.proven_nonnull_bindings.deinit();
+        self.proven_nonnull_bindings = std.StringHashMap(void).init(self.allocator);
         self.local_function_aliases.deinit();
         self.local_function_aliases = std.StringHashMap([]const u8).init(self.allocator);
         self.local_aggregate_pointer_aliases.deinit();
@@ -4087,6 +4096,7 @@ const FunctionBuilder = struct {
         var previous_type_expr: ast.TypeExpr = undefined;
         var had_previous_mutability = false;
         var previous_mutability = false;
+        var had_previous_nonnull = false;
         if (narrowed_binding) |binding| {
             if (self.local_types.get(binding.name)) |old| {
                 had_previous_type = true;
@@ -4104,6 +4114,9 @@ const FunctionBuilder = struct {
             try self.local_types.put(binding.name, binding.ty);
             if (binding.ty_expr) |ty_expr| try self.local_type_exprs.put(binding.name, ty_expr);
             try self.local_mutability.put(binding.name, false);
+            had_previous_nonnull = self.proven_nonnull_bindings.contains(binding.name);
+            _ = self.proven_nonnull_bindings.remove(binding.name);
+            if (binding.ty == .pointer) try self.proven_nonnull_bindings.put(binding.name, {});
         }
         const then_term = try self.buildBlock(node.then_block);
         if (narrowed_binding) |binding| {
@@ -4122,6 +4135,8 @@ const FunctionBuilder = struct {
             } else {
                 _ = self.local_mutability.remove(binding.name);
             }
+            _ = self.proven_nonnull_bindings.remove(binding.name);
+            if (had_previous_nonnull) try self.proven_nonnull_bindings.put(binding.name, {});
         }
         if (!then_term) {
             try self.addSuccessor(self.current, after_id);
@@ -4276,6 +4291,7 @@ const FunctionBuilder = struct {
             var previous_type_expr: ast.TypeExpr = undefined;
             var had_previous_mutability = false;
             var previous_mutability = false;
+            var had_previous_nonnull = false;
             if (narrowed_binding) |binding| {
                 if (self.local_types.get(binding.name)) |old| {
                     had_previous_type = true;
@@ -4293,6 +4309,9 @@ const FunctionBuilder = struct {
                 try self.local_types.put(binding.name, binding.ty);
                 if (binding.ty_expr) |ty_expr| try self.local_type_exprs.put(binding.name, ty_expr);
                 try self.local_mutability.put(binding.name, false);
+                had_previous_nonnull = self.proven_nonnull_bindings.contains(binding.name);
+                _ = self.proven_nonnull_bindings.remove(binding.name);
+                if (binding.ty == .pointer) try self.proven_nonnull_bindings.put(binding.name, {});
             }
             const terminated = switch (arm.body) {
                 .block => |body| try self.buildBlock(body),
@@ -4318,6 +4337,8 @@ const FunctionBuilder = struct {
                 } else {
                     _ = self.local_mutability.remove(binding.name);
                 }
+                _ = self.proven_nonnull_bindings.remove(binding.name);
+                if (had_previous_nonnull) try self.proven_nonnull_bindings.put(binding.name, {});
             }
             if (!terminated) {
                 try self.addSuccessor(self.current, after_id);
@@ -4964,7 +4985,19 @@ const FunctionBuilder = struct {
                 const ty = self.exprType(expr);
                 if (representationCheckKind(ty) != null) {
                     try self.addInstr(.typed_load, exprText(expr), ty, expr.span);
-                    try self.addRuntimeRepresentationCheck(ty, expr.span, exprText(expr));
+                    const ident = switch (expr.kind) {
+                        .ident => |value| value,
+                        else => unreachable,
+                    };
+                    const proven_nonnull = switch (ty) {
+                        .pointer => self.proven_nonnull_bindings.contains(ident.text),
+                        else => false,
+                    };
+                    if (proven_nonnull) {
+                        try self.addInstrWithValue(.representation_check, representationTypeName(ty), ty, expr.span, exprText(expr));
+                    } else {
+                        try self.addRuntimeRepresentationCheck(ty, expr.span, exprText(expr));
+                    }
                 }
                 try self.addInstr(.expr, exprText(expr), ty, expr.span);
             },

@@ -36,9 +36,11 @@ Current checkpoint:
 - M0 is closed: MC's Linux-kernel LLVM profile produces objtool-clean x86 code
   with IBT/return thunks, no `.eh_frame`, and no hidden runtime helpers; arm64
   and RISC-V objects have no undefined symbols.
-- MC's completion call graph satisfies `#[irq_context]`, but `#[no_lang_trap]`
-  currently rejects C-layout `extern struct` field access as a possible
-  `InvalidRepresentation` trap. This is preserved as an explicit language gap.
+- MC's completion call graph satisfies both `#[irq_context]` and
+  `#[no_lang_trap]`. Nullable C-ABI pointers are checked with `if let`; MIR now
+  carries the narrowed binding's nonnull representation proof without a false
+  `InvalidRepresentation` trap edge. Direct unchecked nonnull parameters remain
+  trapping and are covered by the compiler regression.
 - The arm64 runtime exposed a missing MC BTI landing pad that object-only builds
   did not detect. The Linux LLVM profile now emits arm64 BTI attributes/module
   metadata, and Kbuild tracks both the `mcc` launcher and `mcc-real`.
@@ -71,8 +73,7 @@ Current checkpoint:
   and replays committed `.vrng` event corpora. A synthetic C mismatch proves
   that the shortest failing path is persisted deterministically and reproduces
   under replay.
-- The MC representation-proof gap, selectable Rust/MC control, and later
-  milestones remain open.
+- Selectable Rust/MC control and later milestones remain open.
 
 ## 1. Question and scope
 
@@ -409,8 +410,7 @@ reads, and closes the new instance after 106 matching events. The host gate
 also explores 30 unique protocol states across the executable specification
 and all three implementations, replays every committed corpus, and proves
 deterministic capture/reproduction with an injected mismatch. M4 remains
-blocked on the MC representation-proof gap and the candidate-control gates
-below.
+blocked on the candidate-control gates below.
 
 ### M4 — selectable controlling core
 

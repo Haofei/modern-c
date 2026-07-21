@@ -6621,6 +6621,53 @@ test "MIR emits representation checks for nonnull pointer and closed enum call r
     try std.testing.expect(!reporter.has_errors);
 }
 
+test "MIR nullable-pointer narrowing discharges the nonnull trap" {
+    const source =
+        \\extern struct ProbeState {
+        \\    value: u32,
+        \\}
+        \\
+        \\#[no_lang_trap]
+        \\fn narrowed_read(maybe_state: ?*const ProbeState) -> u32 {
+        \\    if let state = maybe_state {
+        \\        return state.value;
+        \\    }
+        \\    return 0;
+        \\}
+        \\
+        \\#[no_lang_trap]
+        \\fn unchecked_read(state: *const ProbeState) -> u32 {
+        \\    return state.value;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_nullable_pointer_narrowing.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const narrowed_fn = functionByName(typed_mir, "narrowed_read").?;
+    const unchecked_fn = functionByName(typed_mir, "unchecked_read").?;
+    try std.testing.expectEqual(@as(usize, 0), countTrapEdges(narrowed_fn, .InvalidRepresentation));
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(unchecked_fn, .InvalidRepresentation));
+    try std.testing.expect(functionHasInstruction(narrowed_fn, .representation_check, "nonnull_pointer"));
+
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var no_lang_count: usize = 0;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_NO_LANG_TRAP_EDGE") != null) no_lang_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), no_lang_count);
+}
+
 test "MIR representation checks emit invalid-representation trap edges" {
     const source =
         \\enum Irq: u8 {
