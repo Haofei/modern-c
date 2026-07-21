@@ -1,24 +1,23 @@
 # C / Rust / MC virtio-rng experiment plan
 
-Status: M0-M3 validated; M3.5 C-core control passes the current normal,
-sanitizer, fault, suspend/restore, QMP transport hotplug, and three-architecture
-KUnit gates; M4 remains blocked on the remaining candidate-control gates,
-2026-07-20
+Status: M0-M4 validated; selectable C, Rust, and MC control passes the current
+normal, fault, suspend/restore, QMP transport hotplug, and three-architecture
+KUnit gates; M5 is next, 2026-07-20
 
 Upstream target: Linux `v7.2-rc4`, commit
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`, which was both Torvalds `master`
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `709d8f64825f` (`virtio-rng: certify MC completion as
-no-trap`), based directly on the
+experiment commit is `6a918535a33d` (`virtio-rng: select the controlling
+language core`), based directly on the
 upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
 `14a52a42241f` and `83a4ba9acbf6`, respectively.
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`709d8f64825f` on
+`6a918535a33d` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -59,7 +58,7 @@ Current checkpoint:
   restore ownership state is explicitly unwound and synchronized. The normal
   x86-64 gates include full and shadow-disabled KUnit, a forced driver-level
   partial-copy live path, synchronized blocked-reader unbind, KCSAN, and a
-  combined KASAN/UBSAN/lockdep/DMA-debug configuration. The full 23-test suite
+  combined KASAN/UBSAN/lockdep/DMA-debug configuration. The full 24-test suite
   passes on x86-64, arm64, and riscv64. A deterministic live matrix recovers
   from zero-length and oversized completions, stale generation, and queue-add
   failure without a mismatch or kernel diagnostic. A PM-debug live run also
@@ -73,7 +72,14 @@ Current checkpoint:
   and replays committed `.vrng` event corpora. A synthetic C mismatch proves
   that the shortest failing path is persisted deterministically and reproduces
   under replay.
-- Selectable Rust/MC control and later milestones remain open.
+- M4 provides a Kconfig C/Rust/MC controller choice. The selected core's
+  return, outputs, post-state, and copied bytes must match the executable
+  specification before publication; the other enabled cores remain shadows.
+  Every selection passes 24/24 KUnit tests on x86-64, arm64, and riscv64.
+  On x86-64 every selection also passes normal, nonblocking, forced partial-
+  copy, zero/oversize/stale/queue-add fault, three-cycle suspend/restore, and
+  QMP hot-unplug/replug live gates with zero mismatches. M5 and later
+  milestones remain open.
 
 ## 1. Question and scope
 
@@ -409,8 +415,7 @@ instance close after 1,213 matching events, re-adds the device, restores live
 reads, and closes the new instance after 106 matching events. The host gate
 also explores 30 unique protocol states across the executable specification
 and all three implementations, replays every committed corpus, and proves
-deterministic capture/reproduction with an injected mismatch. M4 remains
-blocked on the candidate-control gates below.
+deterministic capture/reproduction with an injected mismatch.
 
 ### M4 — selectable controlling core
 
@@ -420,6 +425,12 @@ and every completion error while the candidate controls the device.
 
 Gate: normal reads, partial reads, nonblocking reads, unload/hot-unplug, and
 suspend/restore pass independently for all implementations.
+
+Status: closed. C, Rust, and MC each pass the 24-test KUnit suite on x86-64,
+arm64, and riscv64. Each controller also passes the x86-64 normal, exact
+nonblocking, forced partial-copy, deterministic completion/queue-failure,
+three-cycle PM restore, and QMP PCI hot-unplug/replug gates. The selected
+transition remains fail-closed against the executable specification.
 
 ### M5 — concurrency and memory-order experiment
 
@@ -541,8 +552,10 @@ Linux commit, MC commit, and dirty-tree status.
 6. Complete host M1 and KUnit M2 before touching the live virtqueue path.
 7. Land normal-path shadow M3 and record its limited evidence boundary.
 8. Requalify C-controlled M3.5, fault recovery, and blocked-reader removal.
-9. Proceed to selectable cores, concurrency, and genuine DMA ownership only as
-   their preceding gates pass.
+9. Complete selectable-core M4, then proceed to concurrency and genuine DMA
+   ownership only as their preceding gates pass.
+10. Begin M5 from the unchanged common-lock baseline; add LKMM contracts before
+    changing publication or wakeup ordering.
 
 ## 9. Stop/review conditions
 

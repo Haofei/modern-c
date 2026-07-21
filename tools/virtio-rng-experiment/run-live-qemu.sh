@@ -69,14 +69,15 @@ if [ "$qemu_status" -ne 0 ] || [ "$controller_status" -ne 0 ]; then
 fi
 
 grep -q "VRNG-LIVE: normal reads passed" "$log"
+grep -q "VRNG-LIVE: nonblocking read passed" "$log"
 grep -q "VRNG-LIVE: small-block reads passed" "$log"
 grep -q "VRNG-LIVE: driver partial-copy path passed" "$log"
 grep -q "VRNG-LIVE: removal readers terminated" "$log"
 grep -q "VRNG-LIVE: complete" "$log"
 if [ "$mode" != no-shadow ]; then
 	grep -q "VRNG-LIVE: blocked-reader synchronization reached" "$log"
-	grep -Eq "language shadow matched all [1-9][0-9]* protocol events" "$log"
-	if grep -q "language shadow mismatches=" "$log"; then
+	grep -Eq "language shadow control=(C|Rust|MC) matched all [1-9][0-9]* protocol events" "$log"
+	if grep -Eq "language shadow( control=(C|Rust|MC))? mismatches=" "$log"; then
 		echo "virtio-rng language shadow reported a mismatch" >&2
 		exit 1
 	fi

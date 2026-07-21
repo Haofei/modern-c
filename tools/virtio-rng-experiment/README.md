@@ -42,7 +42,7 @@ git -C /home/zoe/src/linux switch -c vrng-lang-experiment v7.2-rc4
 
 The experiment branch is based on `v7.2-rc4` /
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current implementation commit
-is `2ed40c97aa7a0401ce9ef545af8fc9e1d421ae6f`, published as
+is `6a918535a33d`, published as
 [`Haofei/linux:vrng-lang-experiment`](https://github.com/Haofei/linux/tree/vrng-lang-experiment).
 
 The container is sufficient for compilation and QEMU execution. Performance
@@ -59,6 +59,14 @@ virtio, devtmpfs, and initrd support. Then create the static BusyBox initramfs:
 tools/virtio-rng-experiment/make-initramfs.sh \
   /usr/sbin/busybox /home/zoe/build/vrng-live-initramfs.cpio
 ```
+
+Select exactly one live controller with
+`CONFIG_HW_RANDOM_VIRTIO_LANG_CONTROL_C`,
+`CONFIG_HW_RANDOM_VIRTIO_LANG_CONTROL_RUST`, or
+`CONFIG_HW_RANDOM_VIRTIO_LANG_CONTROL_MC`. Every transition from the selected
+core is checked against the executable specification before publication; the
+other enabled cores remain differential shadows. M4 qualification runs the
+same normal, fault, PM, and hotplug commands for each selection.
 
 Run the real virtio-rng device test:
 

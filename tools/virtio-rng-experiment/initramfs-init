@@ -80,6 +80,13 @@ if ! dd if=/dev/hwrng of=/dev/null bs=64 count=100; then
 fi
 echo "VRNG-LIVE: normal reads passed"
 
+echo "VRNG-LIVE: checking nonblocking read"
+if ! /bin/vrng-nonblock; then
+	echo "VRNG-LIVE: FAIL nonblocking read"
+	poweroff -f
+fi
+echo "VRNG-LIVE: nonblocking read passed"
+
 echo "VRNG-LIVE: checking small-block reads"
 for block_size in 1 3 7; do
 	if ! dd if=/dev/hwrng of=/dev/null bs="$block_size" count=257; then
