@@ -8,15 +8,15 @@ Upstream target: Linux `v7.2-rc4`, commit
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `f4d46332f10641995aea1ad39444727f9c37231a` (`Harden
-virtio-rng fatal and copy handling`), based directly on the
+experiment commit is `128898a2d1d33bc7dcada5936da11ac7dfd8ee67` (`Validate
+virtio-rng control transitions against spec`), based directly on the
 upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
 `14a52a42241f` and `83a4ba9acbf6`, respectively.
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`f4d46332f10641995aea1ad39444727f9c37231a` on
+`128898a2d1d33bc7dcada5936da11ac7dfd8ee67` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -50,11 +50,12 @@ Current checkpoint:
   failure, retries from preallocated work after an error is observed, recovers
   zero/oversize/stale completions, and serializes process transactions against
   removal. Fatal errors are persistent across readers, controlling-core copy
-  outputs are validated before publication, and probe/restore ownership state
-  is explicitly unwound and synchronized. The normal x86-64 gates include full
-  and shadow-disabled KUnit, a forced driver-level partial-copy live path, and
-  synchronized blocked-reader unbind. Three-architecture and sanitizer
-  requalification is still required.
+  outputs are validated before publication, and every controlling transition
+  must exactly match an independent executable-specification state. Probe and
+  restore ownership state is explicitly unwound and synchronized. The normal
+  x86-64 gates include full and shadow-disabled KUnit, a forced driver-level
+  partial-copy live path, and synchronized blocked-reader unbind. Three-
+  architecture and sanitizer requalification is still required.
 - Host failure-corpus persistence, full live fault-injection qualification,
   suspend/restore races, selectable Rust/MC control, and later milestones remain
   open.
@@ -359,6 +360,9 @@ the virtqueue and DMA allocation and provides:
 - process-context resubmission for zero/oversize/stale completions;
 - persistent fatal-device handling when submission rollback, consumed-
   completion recovery, or controlling-core output validation fails;
+- pre-publication comparison of every C controlling return, output, post-state,
+  and copied byte against the executable specification, with positive returns
+  and any divergence converted to persistent `-EPROTO`;
 - one process mutex covering copy/resubmit and the begin-remove boundary;
 - a documented lock order: process mutex before a core call; core spinlock is
   never held while taking the process mutex;
@@ -374,7 +378,7 @@ Gate: pointer/state/output cross-product KUnit tests pass for all languages;
 blocked-reader unbind, injected completion errors, queue-add failure, normal,
 KCSAN, and KASAN/UBSAN/lockdep QEMU runs pass with no kernel diagnostics.
 
-Status: the normal x86-64 gates pass 22/22 full KUnit tests, 11/11
+Status: the normal x86-64 gates pass 23/23 full KUnit tests, 11/11
 shadow-disabled KUnit tests, forced driver-level three-byte partial-copy live
 tests in both configurations, and a live PCI virtio-rng test that reached the
 held-completion synchronization point before unbind with 1,213 matching

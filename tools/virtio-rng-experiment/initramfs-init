@@ -36,12 +36,26 @@ echo "VRNG-LIVE: small-block reads passed"
 chunk_limit_parameter=/sys/module/virtio_rng/parameters/lang_copy_chunk_limit
 if [ -w "$chunk_limit_parameter" ]; then
 	echo "VRNG-LIVE: checking driver partial-copy path"
-	echo 3 > "$chunk_limit_parameter"
+	if ! echo 3 > "$chunk_limit_parameter"; then
+		echo "VRNG-LIVE: FAIL setting driver copy chunk limit"
+		poweroff -f
+	fi
+	if [ "$(cat "$chunk_limit_parameter")" != "3" ]; then
+		echo "VRNG-LIVE: FAIL driver copy chunk limit readback"
+		poweroff -f
+	fi
 	if ! dd if=/dev/hwrng of=/dev/null bs=64 count=32; then
 		echo "VRNG-LIVE: FAIL driver partial-copy read"
 		poweroff -f
 	fi
-	echo 0 > "$chunk_limit_parameter"
+	if ! echo 0 > "$chunk_limit_parameter"; then
+		echo "VRNG-LIVE: FAIL clearing driver copy chunk limit"
+		poweroff -f
+	fi
+	if [ "$(cat "$chunk_limit_parameter")" != "0" ]; then
+		echo "VRNG-LIVE: FAIL cleared copy chunk limit readback"
+		poweroff -f
+	fi
 	echo "VRNG-LIVE: driver partial-copy path passed"
 fi
 
