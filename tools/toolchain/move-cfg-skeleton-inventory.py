@@ -110,9 +110,17 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
     },
     "moveLoopBodyCfg": {
         "required": [
+            "worklist.useLoopBackedgeJoinPolicy(loop_cfg.loop_head);",
             "finalizeLoopBodyCfgExit(self, &loop_cfg, &worklist, outer_state, body_diverges);",
         ],
-        "forbidden": [],
+        "forbidden": ["worklist.suppressJoinDiagnostics();"],
+    },
+    "finalizeLoopBodyCfgExit": {
+        "required": [
+            "reportMoveLocalsLeavingScope(self, exit_state, outer_state",
+            "replaceMoveState(self, outer_state, exit_state);",
+        ],
+        "forbidden": ["reportLoopOuterResourceChanges("],
     },
     "runLoopBodyCfgWorklist": {
         "required": [
@@ -142,6 +150,7 @@ ANCHORS: dict[str, list[str]] = {
         "const MoveCfgJoinPolicy = union(enum)",
         "fn useShortCircuitJoinPolicy",
         "fn useLoopConditionJoinPolicy",
+        "fn useLoopBackedgeJoinPolicy",
         "fn propagateSuccessorsExcept",
         "const LinearMoveCfg = struct",
         "fn linearMoveCfg",
@@ -174,6 +183,8 @@ ANCHORS: dict[str, list[str]] = {
         '.@"switch" => |sw| moveDeferSwitchCfg(self, sw, state, aliases)',
         ".loop => |l| moveDeferLoopCfg(self, l, state, aliases)",
         "condition_visited = true",
+        ".loop_backedge => |loop_head|",
+        "ordinary loop backedge widening is owned by the targeted CFG join",
         "worklist.propagateSuccessorsExcept(self, block, block_state, if (body_visited) loop_cfg.body else null)",
         "reportLoopOuterResourceChanges(self, &entry_state, exit_state)",
         "checkMoveExitEdge(self, block_state, message)",

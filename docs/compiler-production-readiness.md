@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-19, based on the current compiler worktree**.
-Evidence register: **746 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **747 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 Comparative C/Rust/MC claims are governed separately by
 [`kernel-language-comparison-plan.md`](kernel-language-comparison-plan.md). That
@@ -861,6 +861,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Move while-condition joins route through the CFG worklist | The zero-iteration bypass and evaluated-condition RHS now enter the same worklist successor path. `MoveCfgJoinPolicy.loop_condition` retains `reportLoopOuterResourceChanges` as the join policy, preserving `E_MOVE_LOOP_RESOURCE` widening while centralizing state change detection and requeueing in `propagateSuccessor`. The while-condition caller no longer directly widens or manually queues its join. This is one M2.2 routing migration, not closure of non-deferred exit handling or the CFG/place checker. | `src/sema_move.zig` `MoveCfgJoinPolicy.loop_condition`, `MoveStateCfgWorklist.useLoopConditionJoinPolicy`, and `moveWhileConditionCfg`; `tools/toolchain/move-cfg-skeleton-inventory.py` `WORKLIST_ROUTING`; `zig test src/sema_move.zig`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `zig build move-cfg-skeleton-inventory-test`; full production gate; `git diff --check`. |
 
+| Ordinary-loop backedge widening is owned by the targeted CFG join | Ordinary-loop zero-iteration, body-backedge, and `continue` states now converge at `loop_head` under `MoveCfgJoinPolicy.loop_backedge`. Only that target invokes `reportLoopOuterResourceChanges`; other joins in the same loop CFG merge conservatively without duplicate branch diagnostics. `finalizeLoopBodyCfgExit` no longer decides widening: it checks loop-local leaks and transports the terminal CFG state back to the caller. The inventory forbids restoring finalization-time widening, and the focused regression proves the loop-head poison reaches the exit without a second `E_MOVE_LOOP_RESOURCE`. This completes one M2.2 authority migration, not the remaining M2 or M1.1 work. | `src/sema_move.zig` `MoveCfgJoinPolicy.loop_backedge`, `MoveStateCfgWorklist.useLoopBackedgeJoinPolicy`, `finalizeLoopBodyCfgExit`, and unit test `ordinary loop backedge widening is owned by the targeted CFG join`; `tests/spec/move_linear.mc` and `tests/spec/move_place.mc` root, field, element, alias, `break`, and `continue` fixtures; `tools/toolchain/move-cfg-skeleton-inventory.py`; `zig test src/sema_move.zig`; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `python3 tools/toolchain/readiness-ledger-test.py`; move inventories; `git diff --check`. |
+
 | Move deferred-borrow reservation requires a typed place | Deferred-borrow reservation no longer recovers ownership identity from a referent key when `MovePlace` metadata is absent. All admitted direct and alias producers pass the structural place; a key-only legacy alias does not reserve a root borrow. The cleanup-local stale check retains the same typed place, so its compatibility field cannot control the result. This is one M1.1 migration, not closure of deferred-borrow or alias analysis. | `src/sema_move.zig` `markDeferredBorrowReferent` / `markDeferredBorrowAliasReferent`; unit tests `move deferred aliases recover typed places from their state slots` and `move deferred alias reservations reject key-only referents`; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 | Move stale-alias checks fail closed without a typed referent | `aliasSlotReferentMoved` no longer follows `alias_of` through the state map when `alias_place` is missing. Admitted aliases retain a typed referent and use the common structural moved-place query; a legacy key-only alias is conservatively stale, so an omitted fact cannot silently allow a use after its owner moves. The identity inventory forbids reintroducing that state-key recovery inside the stale-alias helper. This is one M1.1 migration, not closure of alias or CFG analysis. | `src/sema_move.zig` `aliasSlotReferentMoved`; unit test `move stale aliases require carried typed referent places`; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
@@ -1064,15 +1066,15 @@ language shapes.
 | Typed facts | T4 pending | Remove or explicitly register all remaining lowering-affecting backend inference. | Start only after every register row has a T3 disposition. |
 | Move checker | M1.2a/M1.2b/M1.2c complete | `MoveState` carries independent facts; no `MoveSlot` field or branch represents index metadata. | M3 is complete; the selected T2 family is closed, so one residual M1.1 or M2 slice is now eligible. |
 | Move checker | M3 complete | Field, deref, element, wildcard, alias, and non-nameable projection boundaries have explicit admission or diagnostic policies. | New projections must enter the inventory with a structural rule or stable diagnostic before implementation. |
-| Move checker | M1.1 and M2 partial, not selected | M1.1 still has named formatted-key compatibility authority to retire. M2 has bounded `if let`, switch, short-circuit, while-condition, ordinary-loop backedge, labeled `break`/`continue`, deferred-loop, `return`, `?`, and normal function/scoped/deferred/loop routes; break and continue diagnostics run at terminal CFG blocks. The remaining M2 routes still retain specialized transfer/diagnostic authority. | Select one named M1.1 authority or M2 routing family; advance it only after the specialized authority no longer decides correctness. |
+| Move checker | M1.1 and M2 partial, no active slice | M1.1 still has named formatted-key compatibility authority to retire. M2 now routes ordinary-loop zero-iteration/backedge ownership widening through a target-specific `MoveStateCfgWorklist` join policy at `loop_head`; finalization only checks loop-local leaks and transports the terminal state. Other named M2 transfers still retain specialized authority. | Per the serial execution order, select a different registered T2 semantic-fact family next; return to one named residual M1.1 or M2 authority only after that T2 slice closes. |
 | Move checker | M4 pending | Remove formatted-key correctness authority from supported paths. | Start only after M1 projection and M2 routing boundaries have been closed. |
 | Provenance | P1-P3 complete for the named matrix | Unknown scalar leaves are conservative; documented direct proofs and current boundary policies are fact-owned or fail closed. | A new pointer-flow class reopens only its affected P3 boundary. |
 | Provenance | P4.1 triggered | There is no active syntax-expansion task. A patch starts only after T2/M1 identifies an unclassified flow. | Register the flow and select MIR proof, conservative lowering, or a diagnostic before either backend supports it. |
 | Provenance | P4.2 queued | Audit that each registered boundary has the same C and LLVM policy. | Close only with positive and absent-proof evidence for every fallback-register row. |
 
-**Implementation order:** the struct-literal T2 family is complete; now select
-one named residual M1.1 authority or M2 routing family, then return to one exact
-T2 family. Pointer work
+**Implementation order:** the ordinary-loop M2.2 authority slice is complete;
+now select one exact registered T2 family, then return to one named residual
+M1.1 authority or M2 routing family. Pointer work
 interrupts the sequence only for a newly observed unclassified flow. These are
 ordered closure units, not three simultaneous tasks or percentage-based backlogs.
 
@@ -1084,15 +1086,16 @@ names its input boundary, expected semantic owner, affected C and LLVM
 consumers, and the tests that will prove missing/stale behavior. This prevents a
 large architectural item from looking active merely because it is unfinished.
 
-**Current selection state: one residual move-authority slice next.** M1.2c and
+**Current selection state: ordinary-loop M2.2 slice complete; one T2 family next.** M1.2c and
 M3 are complete: index metadata exists only in `MoveState.index_facts`, and every
-current move projection has either a structural rule or a stable diagnostic. M1.1
-place-identity retirement and M2 CFG routing remain separate partial closure
-units; neither has a selected slice yet. The last T2 slice made the source
-struct-literal construction class MIR-owned in both backends, including ordinary
-struct, C-union, and packed-bits routing. The next patch must name one residual
-formatted-key correctness decision or one specialized CFG transfer before
-changing move analysis.
+current move projection has either a structural rule or a stable diagnostic.
+Ordinary-loop zero-iteration/backedge widening is now owned by a
+`MoveStateCfgWorklist` join policy scoped to `loop_head`; the old post-worklist
+`finalizeLoopBodyCfgExit -> reportLoopOuterResourceChanges` authority is absent.
+Finalization checks loop-local leaks and writes the terminal CFG state back to
+the caller. Root, field, array-element, alias, `break`, and `continue` fixtures
+retain their established diagnostics. Per the serial plan, the next patch must
+select a different registered T2 semantic-fact family before another move slice.
 
 This is deliberately an implementation gate, not hidden progress: the selected
 family closes only after its MIR artifact, C/LLVM positive cases, and missing/stale
@@ -1101,11 +1104,11 @@ finishes; pointer work remains trigger-driven.
 
 | Order | Eligible unit | Phase | Concrete first deliverable | Slice closes only when |
 |---|---|---|---|---|
-| 1 | Move residual authority | M1.1 or M2.1/M2.2 | Select either one remaining formatted-key correctness decision or one branch, short-circuit, loop, or non-deferred exit transfer for common-worklist routing. | The selected specialized authority no longer decides correctness and equivalent ownership/join/backedge/exit regressions pass. |
-| 2 | Next typed semantic-fact family | T2.1-T2.3 | After that move slice closes, select one different registered expression-result or shape family; either prove its syntax use is mechanics-only or add an MIR fact with both consumers and a missing/stale gate. | The family has artifact coverage, C/LLVM positive coverage, and missing/stale rejection or an explicitly tested conservative/diagnosed policy. |
+| 1 | Next typed semantic-fact family | T2.1-T2.3 | Select one different registered expression-result or shape family; either prove its syntax use is mechanics-only or add an MIR fact with both consumers and a missing/stale gate. | The family has artifact coverage, C/LLVM positive coverage, and missing/stale rejection or an explicitly tested conservative/diagnosed policy. |
+| 2 | Move residual authority | M1.1 or M2.1/M2.2 | After that T2 slice closes, select either one remaining formatted-key correctness decision or one branch, short-circuit, loop, or non-deferred exit transfer for common-worklist routing. | The selected specialized authority no longer decides correctness and equivalent ownership/join/backedge/exit regressions pass. |
 | 3 | Newly exposed pointer-flow boundary | P4.1, triggered only | Register the exact source-to-dereference flow exposed by the selected T2/M2 change and choose MIR proof, race-tolerant lowering, or a diagnostic. | C and LLVM both demonstrate the policy and the absent-proof path. |
 
-The first four rows are ordered work. The fifth is an interruption rule, not
+The first two rows are ordered work. The third is an interruption rule, not
 planned feature expansion. Do not mark any umbrella workstream complete,
 blocked, or percentage-complete from a single bounded slice.
 
@@ -1458,7 +1461,7 @@ through statement-local expression identities.
 | Phase | Status | Goal and deliverable | Evidence and exit condition |
 |---|---|---|---|
 | M1: typed place foundations | **Partial: M1.2 complete; M1.1 residual authority remains** | **Goal:** ownership identity is structural rather than formatted text, and index metadata cannot masquerade as ownership state. **Delivered:** `MovePlace` roots/projections for the current supported local, field, dereference, array-element, wildcard, and alias paths, plus independent index facts. M1.2a completed `MoveState` transport plus parameter producer/read migration; M1.2b migrated local declarations and assignments; M1.2c removed the old pure-index-slot authority. **Remaining:** retire every named formatted-key decision still selecting move correctness. | Reads, moves, assignments, defer borrows, and alias invalidation compare typed places. Compatibility strings may index state but cannot decide correctness; index queries use only independent index facts. |
-| M2: CFG/worklist routing | **Partial and eligible; no transfer selected** | **Goal:** ownership state follows control flow, not statement shape. **Delivered:** bounded routes for `if let`, switch, short-circuit, while-condition, ordinary loop backedges, labeled `break`/`continue`, deferred loops, `return`, `?`, and normal function/scoped/deferred/loop exits; break/continue diagnostics run at terminal blocks. **Remaining:** move each named transfer whose specialized executor still owns a merge, finalization, or diagnostic decision into the common worklist. | Unit and diagnostic tests cover joins, backedges, early exits, and invalidation; specialized executors retire only after equivalent worklist coverage exists. |
+| M2: CFG/worklist routing | **Partial; no active transfer** | **Goal:** ownership state follows control flow, not statement shape. **Delivered:** bounded routes for `if let`, switch, short-circuit, while-condition, ordinary loop backedges and loop-head widening, labeled `break`/`continue`, deferred loops, `return`, `?`, and normal function/scoped/deferred/loop exits; break/continue diagnostics run at terminal blocks. Ordinary-loop finalization no longer owns widening. **Remaining:** move each other named transfer whose specialized executor still owns a merge, finalization, or diagnostic decision into the common worklist. | Unit and diagnostic tests cover joins, backedges, early exits, and invalidation; specialized executors retire only after equivalent worklist coverage exists. |
 | M3: admission boundary | **Complete for the current projection inventory** | **Goal:** unsupported move paths remain explicit rather than accidentally accepted. **Delivered:** a typed-place/CFG rule for each current admitted array/pointer case, or a retained diagnostic for it. | Dynamic/non-local move-array and arbitrary pointer-to-array paths remain fail-closed; a new projection must add its rule and positive/negative coverage before admission. |
 | M4: checker closure | **Queued after residual M1.1 and M2** | **Goal:** the supported `move` subset is controlled entirely by typed places and CFG dataflow. **Deliverable:** prove compatibility keys are index/debug data only and retire obsolete specialized control-flow logic. | The workstream closes when every supported move path uses the common engine and every intentionally unsupported path has a stable diagnostic. |
 
@@ -1543,10 +1546,11 @@ or CFG rewrite.
 
 **Next move action:** M3 is complete for the current projection inventory. Do
 not broaden unsupported projections merely to add fixtures; any new projection
-must first enter the inventory with a structural rule or stable diagnostic. After
-the selected T2 family is now closed, so choose one explicit residual M1.1
-formatted-key authority or M2 transfer family from the inventory; do not describe the entire
-move checker as one undifferentiated pending item.
+must first enter the inventory with a structural rule or stable diagnostic. The
+ordinary-loop M2.2 widening slice is complete; queue one explicit residual M1.1
+formatted-key authority or M2 transfer family from the inventory after the next
+T2 family, rather than describing the entire move checker as one undifferentiated
+pending item.
 
 ### Production-Ready Exit Rule
 

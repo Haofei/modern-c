@@ -30,6 +30,7 @@ const ArrayMoveShape = struct { len: usize, embeds: bool };
 const MoveCfgJoinPolicy = union(enum) {
     generic,
     loop_condition,
+    loop_backedge: sema_model.MoveCfgBlockId,
     short_circuit: struct {
         span: diagnostics.Span,
         deferred: bool,
@@ -115,6 +116,10 @@ const MoveStateCfgWorklist = struct {
         self.join_policy = .loop_condition;
     }
 
+    fn useLoopBackedgeJoinPolicy(self: *MoveStateCfgWorklist, loop_head: sema_model.MoveCfgBlockId) void {
+        self.join_policy = .{ .loop_backedge = loop_head };
+    }
+
     // All real-state CFG joins enter here. Callers may omit a successor when an
     // AST transfer has already run for that block, but cannot reimplement the
     // ownership merge or worklist requeue policy themselves.
@@ -125,6 +130,13 @@ const MoveStateCfgWorklist = struct {
             switch (self.join_policy) {
                 .generic => mergeMoveBranchesImpl(checker, joined, joined, outgoing, self.report_join_diagnostics),
                 .loop_condition => reportLoopOuterResourceChanges(checker, joined, outgoing),
+                .loop_backedge => |loop_head| {
+                    if (to == loop_head) {
+                        reportLoopOuterResourceChanges(checker, joined, outgoing);
+                    } else {
+                        mergeMoveBranchesImpl(checker, joined, joined, outgoing, false);
+                    }
+                },
                 .short_circuit => |policy| mergeShortCircuitMoveStates(checker, joined, outgoing, policy.span, policy.deferred),
             }
             break :blk !moveStatesEqual(joined, &before);
@@ -1625,6 +1637,44 @@ fn sameAliasFact(left: MoveSlot, right: MoveSlot) bool {
     return false;
 }
 
+test "ordinary loop backedge widening is owned by the targeted CFG join" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-loop-backedge.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+
+    var loop_cfg = loopBodyMoveCfg(&checker) orelse return error.TestUnexpectedResult;
+    defer loop_cfg.deinit();
+
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const owner: MovePlace = .{ .root = "owner" };
+    var entry_state = MoveState.init(std.testing.allocator);
+    defer entry_state.deinit();
+    try entry_state.put("owner", .{ .live = true, .span = span, .place = owner });
+
+    var iteration_state = MoveState.init(std.testing.allocator);
+    defer iteration_state.deinit();
+    try iteration_state.put("owner", .{ .live = false, .span = span, .place = owner });
+
+    var worklist = MoveStateCfgWorklist.init(&checker, &loop_cfg.cfg, loop_cfg.entry, &entry_state) orelse return error.TestUnexpectedResult;
+    defer worklist.deinit();
+    worklist.useLoopBackedgeJoinPolicy(loop_cfg.loop_head);
+
+    const initial = worklist.statePtr(loop_cfg.entry) orelse return error.TestUnexpectedResult;
+    worklist.propagateSuccessors(&checker, loop_cfg.entry, initial);
+    worklist.propagateSuccessor(&checker, loop_cfg.loop_head, &iteration_state);
+
+    const widened = worklist.statePtr(loop_cfg.loop_head) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!widened.get("owner").?.live);
+    try std.testing.expectEqual(@as(usize, 1), reporter.diagnostics.items.len);
+    try std.testing.expect(std.mem.startsWith(u8, reporter.diagnostics.items[0].message, "E_MOVE_LOOP_RESOURCE:"));
+
+    // Re-propagating the widened head through the zero-iteration exit is an
+    // ordinary conservative merge, not another loop-backedge diagnostic.
+    worklist.propagateSuccessor(&checker, loop_cfg.exit, widened);
+    worklist.propagateSuccessor(&checker, loop_cfg.exit, &entry_state);
+    try std.testing.expectEqual(@as(usize, 1), reporter.diagnostics.items.len);
+}
+
 test "move branch joins match subplaces by typed place rather than compatibility key" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-join.mc", "");
     defer reporter.deinit();
@@ -2941,7 +2991,7 @@ fn finalizeLoopBodyCfgExit(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, wor
         return;
     };
     reportMoveLocalsLeavingScope(self, exit_state, outer_state, "linear `move` value declared in a loop body is never consumed (must be moved, returned, or freed before the iteration ends)");
-    reportLoopOuterResourceChanges(self, outer_state, exit_state);
+    replaceMoveState(self, outer_state, exit_state);
 }
 
 fn moveLoopBodyCfg(self: *Checker, body: ast.Block, outer_state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
@@ -2950,11 +3000,10 @@ fn moveLoopBodyCfg(self: *Checker, body: ast.Block, outer_state: *MoveState, ali
 
     var worklist = MoveStateCfgWorklist.init(self, &loop_cfg.cfg, loop_cfg.entry, outer_state) orelse return false;
     defer worklist.deinit();
-    // Loop-head widening has its own E_MOVE_LOOP_RESOURCE policy. Merge the
-    // zero-iteration and backedge states conservatively here, then let that
-    // policy report outer ownership changes once rather than also issuing the
-    // generic branch-join diagnostic.
-    worklist.suppressJoinDiagnostics();
+    // The common worklist owns ordinary-loop widening at the loop head. Other
+    // joins in this CFG still merge conservatively without emitting a generic
+    // branch mismatch for the same loop-specific ownership change.
+    worklist.useLoopBackedgeJoinPolicy(loop_cfg.loop_head);
     var body_diverges = false;
     var body_visited = false;
     runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, aliases, &body_diverges, &body_visited);
@@ -4765,7 +4814,6 @@ fn aliasConflictingSlotForStoragePlace(place: MovePlace, state: *const MoveState
     }
     return null;
 }
-
 
 fn aliasSlotReferentMoved(slot: MoveSlot, state: *const MoveState) bool {
     if (slot.divergent_alias) return true;
