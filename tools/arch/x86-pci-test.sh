@@ -6,7 +6,7 @@
 # RISC-V FDT/ECAM discovery). Boots under qemu-system-x86_64 with a virtio-blk-pci device actually
 # present on the bus; the harness greps COM1 for the discovered `vendor=1af4` line and `X86-PCI-OK`.
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; LLC="${LLC:-llc}"; OBJCOPY="${OBJCOPY:-llvm-objcopy}"; QEMU="${QEMU:-qemu-system-x86_64}"
@@ -33,7 +33,7 @@ case "$BACKEND" in
     $CLANG $CF -Wno-switch-bool -c "$WORK/pci.c" -o "$WORK/pci.o"
     ;;
   llvm)
-    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/pci_x86_runtime.mc" -o "$WORK/pci.o" \
+    MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/pci_x86_runtime.mc" -o "$WORK/pci.o" \
       -mtriple=x86_64-unknown-elf \
       -relocation-model=static \
       -code-model=kernel

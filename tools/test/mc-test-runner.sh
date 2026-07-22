@@ -12,7 +12,7 @@
 # Skips (exit 0) when clang/llc is unavailable.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 SRC="${3:?usage: mc-test-runner.sh <mcc> <c|llvm> <file.mc>}"
 CLANG="${CLANG:-clang}"
@@ -41,9 +41,9 @@ fi
 
 # Lower the fixture through the selected backend.
 if [ "$BACKEND" = llvm ]; then
-    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$SRC" -o "$WORK/mod.o" >/dev/null
+    MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$SRC" -o "$WORK/mod.o" >/dev/null
 else
-    MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/mod.o" >/dev/null
+    MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/mod.o" >/dev/null
 fi
 
 # Trap stubs: a failing assert calls mc_trap_Assert -> illegal instruction, killing the

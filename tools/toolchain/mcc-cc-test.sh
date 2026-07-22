@@ -3,7 +3,7 @@
 # verify the exported symbol is present and linkable.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/tests/toolchain/lib.mc"
 SYM="mc_add3"
@@ -14,7 +14,7 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: mcc-cc-test (clang not foun
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/lib.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/lib.o" >/dev/null
 
 # The exported function must be a defined text symbol in the object.
 if command -v nm >/dev/null 2>&1; then

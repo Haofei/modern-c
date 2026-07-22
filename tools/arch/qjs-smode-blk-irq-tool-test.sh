@@ -2,7 +2,7 @@
 # Pure-JS host_fs_read resolved through SYS_POLL from a real S-mode virtio-blk IRQ.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 AGENT_JS_REL="${3:-examples/agents/agent_blk_irq_tool.js}"
 EXPECT="${4:-blk-irq: ok}"

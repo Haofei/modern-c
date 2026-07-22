@@ -14,7 +14,7 @@ failure outside that documented set fails the gate.
 Usage:
     tools/toolchain/spec-llvm-sweep.py [<mcc-binary> [<spec-dir>]]
 
-Defaults: zig-out/bin/mcc, tests/spec.
+Defaults: MCC_UNDER_TEST when set, otherwise zig-out/bin/mcc, tests/spec.
 """
 import glob
 import os
@@ -74,7 +74,7 @@ def forbidden_assumption(ir, source):
 
 
 def main():
-    mcc = sys.argv[1] if len(sys.argv) > 1 else "zig-out/bin/mcc"
+    mcc = sys.argv[1] if len(sys.argv) > 1 else (os.environ.get("MCC_UNDER_TEST") or "zig-out/bin/mcc")
     spec_dir = sys.argv[2] if len(sys.argv) > 2 else "tests/spec"
 
     failures, oos_failures, swept, kept_fns = [], [], 0, 0

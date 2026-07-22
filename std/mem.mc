@@ -161,6 +161,7 @@ export fn mem_set(dst: PAddr, value: u8, len: usize) -> void {
 // slice value optional is write-only today, so the explicit `valid` flag stands in.
 
 // True when two byte slices have the same length and the same bytes.
+#[mc_abi]
 export fn mem_eql(a: []const u8, b: []const u8) -> bool {
     if a.len != b.len {
         return false;
@@ -176,6 +177,7 @@ export fn mem_eql(a: []const u8, b: []const u8) -> bool {
 }
 
 // True when `hay` begins with `prefix` (a prefix longer than `hay` is never a match).
+#[mc_abi]
 export fn mem_starts_with(hay: []const u8, prefix: []const u8) -> bool {
     if prefix.len > hay.len {
         return false;
@@ -191,6 +193,7 @@ export fn mem_starts_with(hay: []const u8, prefix: []const u8) -> bool {
 }
 
 // First index of byte `b` in `hay`, or `null` when absent.
+#[mc_abi]
 export fn mem_index_of_byte(hay: []const u8, b: u8) -> ?usize {
     var i: usize = 0;
     while i < hay.len {
@@ -204,6 +207,7 @@ export fn mem_index_of_byte(hay: []const u8, b: u8) -> ?usize {
 
 // First index of substring `needle` in `hay` (naive O(n*m) scan), or `null` when absent.
 // An empty needle matches at 0; a needle longer than `hay` never matches.
+#[mc_abi]
 export fn mem_index_of(hay: []const u8, needle: []const u8) -> ?usize {
     if needle.len == 0 {
         return 0;

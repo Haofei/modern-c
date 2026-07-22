@@ -17,7 +17,7 @@ implementation and can be rerun from the recorded command.
 
 | Phase | Status | Corpus | Required evidence | Latest evidence |
 |---|---|---|---|---|
-| P0. Contract and harness | In progress | Tiny full-selfhost manifest: hosted C run, negative diagnostic, LLVM object run; subset Stage0/Stage1/Stage2 scaffold | `zig build full-selfhost-p0`; broader selector audit still required before full P0 is green | Initial harness slice PASS on 2026-07-03; true full self-hosting still NOT achieved. |
+| P0. Contract and harness | Green | Tiny full-selfhost manifest: hosted C run, negative diagnostic, LLVM object run; subset Stage0/Stage1/Stage2 scaffold; build/script compiler selector audit | `MCC_UNDER_TEST=zig-out/bin/mcc zig build full-selfhost-p0 cc-test llvm-cc-test selfhost-bootstrap-test test-lint`; selector residual scans | PASS on 2026-07-03; true full self-hosting still NOT achieved. |
 | P1. Production architecture in MC | Not started | Initial multi-file corpus | Parser/sema oracle diff | None. |
 | P2. Full parser parity | Not started | `tests/spec/`, `std/`, selected `kernel/` | Parse oracle diff | None. |
 | P3. Full sema/checker parity | Not started | Positive and negative spec/hardening corpus | Sema oracle diff and hardening gates | None. |
@@ -38,3 +38,6 @@ implementation and can be rerun from the recorded command.
 | 2026-07-03 | P0 | `zig build full-selfhost-stage` | PASS | Stage0/Stage1/Stage2 subset scaffold passed; Stage1/Stage2 emitted C byte-identical. |
 | 2026-07-03 | P0 | `zig build full-selfhost-p0` | PASS | Aggregate P0 gate passed. This is a harness milestone, not true self-hosting. |
 | 2026-07-03 | P0 | `MCC_UNDER_TEST=zig-out/bin/mcc zig build cc-test llvm-cc-test selfhost-bootstrap-test` | PASS | Existing driver and subset bootstrap gates honor the compiler selector. |
+| 2026-07-03 | P0 | `MCC_UNDER_TEST=zig-out/bin/mcc zig build full-selfhost-p0 cc-test llvm-cc-test selfhost-bootstrap-test test-lint` | PASS | Aggregate P0, driver gates, subset bootstrap, and fixture lint pass with the selector set. |
+| 2026-07-03 | P0 | selector residual scans | PASS | No stale `MCC="${1:-zig-out/bin/mcc}"`-style shell defaults, stale Python `MCC` defaults, or unpinned nested `mcc-cc`/`mcc-llvm-cc` calls remain in audited scripts. |
+| 2026-07-03 | P0 | wrapper and direct-script selector smokes | PASS | `zig build cc-test` invoked an `MCC_UNDER_TEST` wrapper; `tools/exec/labeled-break-run.sh` and `mcfuzz.py` honor selector-only invocation; `mc-test-runner.sh` explicit arg overrides a bad selector. |

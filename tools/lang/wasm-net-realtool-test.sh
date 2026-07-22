@@ -9,7 +9,7 @@
 # Usage: tools/lang/wasm-net-realtool-test.sh <mcc> [c|llvm] [guest.c] [expect] [name-base]
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 GUEST_REL="${3:-examples/apps/wasm/wasi_net_real.c}"
 EXPECT="${4:-net-real: ok}"

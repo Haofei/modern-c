@@ -6,7 +6,7 @@
 # dispatching) changes the result and fails the run.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 SRC="tests/exec/nullable_dyn_run.mc"
 EXPECT=4022
 

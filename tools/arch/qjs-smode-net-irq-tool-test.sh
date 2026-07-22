@@ -2,7 +2,7 @@
 # Pure-JS host_net_fetch resolved through SYS_POLL from a real S-mode virtio-net IRQ.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 AGENT_JS_REL="${3:-examples/agents/agent_net_irq_tool.js}"
 EXPECT="${4:-net-irq: ok}"

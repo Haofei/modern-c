@@ -11,7 +11,7 @@
 # Skips (exit 0) when clang/llc is unavailable.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
@@ -38,7 +38,7 @@ rm -f /tmp/modvis_allow.$$
 
 # --- deny: referencing a private item across files must fail with E_PRIVATE_IMPORT ---
 if [ "$BACKEND" = llvm ]; then SCRIPT=mcc-llvm-cc.sh; else SCRIPT=mcc-cc.sh; fi
-deny_out="$(MCC="$MCC" LLC="$LLC" bash "$HERE/tools/toolchain/$SCRIPT" "$HERE/tests/test/modvis_deny.mc" -o /tmp/modvis_deny.$$.o 2>&1 || true)"
+deny_out="$(MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" bash "$HERE/tools/toolchain/$SCRIPT" "$HERE/tests/test/modvis_deny.mc" -o /tmp/modvis_deny.$$.o 2>&1 || true)"
 if printf '%s' "$deny_out" | grep -q "E_PRIVATE_IMPORT"; then
     echo "ok   deny:  modvis_deny.mc cross-file private use -> E_PRIVATE_IMPORT ($BACKEND)"
 else

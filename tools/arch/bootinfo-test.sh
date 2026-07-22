@@ -13,7 +13,7 @@
 #   PLIC     : plic@c000000     "sifive,plic-1.0.0"/"riscv,plic0" base 0x0c000000
 #   virtio   : 8 nodes virtio_mmio@10001000..@10008000; first-in-tree base 0x10008000
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; LLC="${LLC:-llc}"; QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"

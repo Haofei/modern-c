@@ -3,7 +3,7 @@
 # then linked against the existing C host driver.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 shift || true
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -71,7 +71,7 @@ for name in "${TESTS[@]}"; do
     WORK="$(mktemp -d)"
     trap 'rm -rf "$WORK"' EXIT
 
-    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/$fixture" -o "$WORK/mod.o" >/dev/null
+    MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/$fixture" -o "$WORK/mod.o" >/dev/null
 
     case "$mode" in
         entry)

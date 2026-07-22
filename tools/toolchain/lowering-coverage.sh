@@ -32,7 +32,7 @@ SRC_ROOT="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while
 FUZZ_N="${FUZZ_N:-60}"          # number of mcfuzz programs to fold into the corpus
 OUTDIR="${OUTDIR:-$SRC_ROOT/zig-out/lowering-cov}"
 BASELINE="${LOWERING_COV_BASELINE:-$SRC_ROOT/tools/toolchain/lowering-coverage-baseline.tsv}"
-MCC="zig-out/bin/mcc"
+MCC="${MCC_UNDER_TEST:-zig-out/bin/mcc}"
 
 case "$OUTDIR" in
     /*) ;;

@@ -14,7 +14,7 @@
 # reached — the generated subset cannot trap). Each seed is independent: fans out across cores.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
@@ -56,7 +56,7 @@ C
     if ! "$MCC" emit-c "$W/p.mc" 2>/dev/null | "$CLANG" -std=c11 -w -c -x c - -o "$W/c.o" 2>/dev/null; then
         echo "FAIL: move-fuzz seed=$seed — C backend emit/compile failed ($repro)"; return 1
     fi
-    if ! MCC="$MCC" LLC="$LLC" bash "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$W/p.mc" -o "$W/l.o" >/dev/null 2>&1; then
+    if ! MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" bash "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$W/p.mc" -o "$W/l.o" >/dev/null 2>&1; then
         echo "FAIL: move-fuzz seed=$seed — LLVM backend emit/compile failed ($repro)"; return 1
     fi
     if ! "$CLANG" $LINK_FLAGS_STR -w "$W/d.c" "$W/c.o" -o "$W/c.bin" >/dev/null 2>&1; then

@@ -7,7 +7,7 @@
 # runs a full program end-to-end with a real argv.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/tests/toolchain/argv_user.mc"
 RT="$HERE/tools/toolchain/hosted_args_rt.c"
@@ -17,7 +17,7 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: argv-test (clang not found)
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/argv.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$WORK/argv.o" >/dev/null
 
 # The shim provides main(); link it with the MC object. libc supplies strlen.
 "$CLANG" -std=c11 -Wall -Wextra -Werror "$RT" "$WORK/argv.o" -o "$WORK/prog"

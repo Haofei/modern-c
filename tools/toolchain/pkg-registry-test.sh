@@ -17,7 +17,7 @@
 #                    against the vendored dependency (needs clang; that step self-skips without).
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 REGTOOL="$HERE/tools/toolchain/mcc-registry.sh"
 FIX="$HERE/tests/toolchain/pkg"
@@ -137,7 +137,7 @@ fi
 
 # 7. build the installed tree (needs clang; self-skip without).
 if command -v "$CLANG" >/dev/null 2>&1; then
-    MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$APP/app.mc" -o "$W/app.o" >/dev/null \
+    MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$APP/app.mc" -o "$W/app.o" >/dev/null \
         || fail "the installed package tree did not build"
     echo "PASS: pkg-registry-test — safe publish/resolve/install, constraint-consistent lock/frozen behavior, traversal/symlink rejection, and installed-tree build"
 else

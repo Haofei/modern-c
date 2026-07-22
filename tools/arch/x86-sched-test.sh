@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"; LLC="${LLC:-llc}"
@@ -11,10 +11,10 @@ case "$(uname -m)" in x86_64|amd64) ;; *) echo "SKIP: $TEST_NAME (host not x86-6
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 case "$BACKEND" in
     c)
-        MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/tests/x86/sched_x86_demo.mc" -o "$WORK/sched.o" -Wno-switch-bool >/dev/null
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/tests/x86/sched_x86_demo.mc" -o "$WORK/sched.o" -Wno-switch-bool >/dev/null
         ;;
     llvm)
-        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/sched_x86_demo.mc" -o "$WORK/sched.o" \
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/sched_x86_demo.mc" -o "$WORK/sched.o" \
             -mtriple=x86_64-unknown-linux-gnu \
             -relocation-model=pic
         "$CLANG" -std=c11 -O1 -Wall -Wextra -Wno-unused-parameter -x c -c /dev/null -o "$WORK/llvm-support.o"
@@ -30,10 +30,10 @@ esac
 # context_runtime.c is deleted.
 case "$BACKEND" in
     c)
-        MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/kernel/arch/x86_64/context_runtime.mc" -o "$WORK/ctx.o" -Wno-switch-bool >/dev/null
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/kernel/arch/x86_64/context_runtime.mc" -o "$WORK/ctx.o" -Wno-switch-bool >/dev/null
         ;;
     llvm)
-        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/kernel/arch/x86_64/context_runtime.mc" -o "$WORK/ctx.o" \
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/kernel/arch/x86_64/context_runtime.mc" -o "$WORK/ctx.o" \
             -mtriple=x86_64-unknown-linux-gnu \
             -relocation-model=pic
         ;;

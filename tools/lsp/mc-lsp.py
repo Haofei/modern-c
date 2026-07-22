@@ -52,7 +52,7 @@ VERSION_RE = re.compile(r'^\s*\.version\s*=\s*"([^"]+)"\s*,?\s*$')
 
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BUILD_ZIG_ZON = os.path.join(HERE, "build.zig.zon")
-MCC = os.environ.get("MCC", "mcc")
+MCC = os.environ.get("MCC_UNDER_TEST") or os.environ.get("MCC") or "mcc"
 if not os.path.isabs(MCC) and os.sep in MCC:
     MCC = os.path.abspath(MCC)
 DIAGNOSTIC_DEBOUNCE_MS = int(os.environ.get("MC_LSP_DIAGNOSTIC_DEBOUNCE_MS", "150"))

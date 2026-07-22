@@ -20,7 +20,7 @@
 # is absent — same policy as the other backend-equivalence gates.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/tests/toolchain/mcmap_demo.mc"
 CLANG="${CLANG:-clang}"
@@ -57,7 +57,7 @@ if ! command -v "$CLANG" >/dev/null 2>&1 || ! command -v "$LLC" >/dev/null 2>&1 
 fi
 
 # C object.
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$W/c.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$W/c.o" >/dev/null
 # LLVM object.
 "$MCC" emit-llvm "$SRC" > "$W/m.ll" 2>/dev/null
 "$LLC" -filetype=obj "$W/m.ll" -o "$W/l.o"

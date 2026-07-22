@@ -16,7 +16,7 @@
 set -u
 
 MODE="${1:-verify}"
-MCC="${MCC:-zig-out/bin/mcc}"
+MCC="${MCC_UNDER_TEST:-${MCC:-zig-out/bin/mcc}}"
 SNAP_DIR="${SNAP_DIR:-.refactor-baseline}"
 CUR="$SNAP_DIR/current.txt"
 BASE="$SNAP_DIR/baseline.txt"

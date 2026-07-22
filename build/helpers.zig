@@ -68,8 +68,33 @@ fn timed(b: *std.Build, name: []const u8, argv: []const []const u8) []const []co
     return out;
 }
 
+fn applyCompilerSelector(b: *std.Build, argv: []const []const u8) []const []const u8 {
+    const selected = b.graph.environ_map.get("MCC_UNDER_TEST") orelse return argv;
+    if (selected.len == 0) return argv;
+
+    // Full-selfhost P0: build-registered gates pass "zig-out/bin/mcc" as an
+    // explicit script argument. Rewrite that exact compiler slot so
+    // `MCC_UNDER_TEST=... zig build <gate>` actually exercises the selected
+    // compiler without changing each gate registration.
+    var changed = false;
+    for (argv) |arg| {
+        if (std.mem.eql(u8, arg, "zig-out/bin/mcc")) {
+            changed = true;
+            break;
+        }
+    }
+    if (!changed) return argv;
+
+    const out = b.allocator.alloc([]const u8, argv.len) catch @panic("OOM");
+    for (argv, 0..) |arg, i| {
+        out[i] = if (std.mem.eql(u8, arg, "zig-out/bin/mcc")) selected else arg;
+    }
+    return out;
+}
+
 pub fn addScriptTestOpts(ctx: *Ctx, name: []const u8, desc: []const u8, argv: []const []const u8, opts: ScriptOpts) *Run {
-    const cmd = ctx.b.addSystemCommand(timed(ctx.b, name, argv));
+    const selected_argv = applyCompilerSelector(ctx.b, argv);
+    const cmd = ctx.b.addSystemCommand(timed(ctx.b, name, selected_argv));
     if (opts.install) cmd.step.dependOn(ctx.install);
     if (opts.inherit_stdio) cmd.stdio = .inherit;
     const step = ctx.b.step(name, desc);
@@ -82,7 +107,8 @@ pub fn addScriptTestOpts(ctx: *Ctx, name: []const u8, desc: []const u8, argv: []
 /// public step of its own — e.g. the strict `demo-test`/`kernel-test` variants
 /// that only exist as tier dependencies. `key` is the lookup name used by tiers.
 pub fn addRawCmd(ctx: *Ctx, key: []const u8, argv: []const []const u8) *Run {
-    const cmd = ctx.b.addSystemCommand(timed(ctx.b, key, argv));
+    const selected_argv = applyCompilerSelector(ctx.b, argv);
+    const cmd = ctx.b.addSystemCommand(timed(ctx.b, key, selected_argv));
     cmd.step.dependOn(ctx.install);
     ctx.register(key, &cmd.step);
     return cmd;

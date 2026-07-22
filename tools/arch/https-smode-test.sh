@@ -26,7 +26,7 @@
 # Skips (exit 0) when the riscv toolchain / QEMU / python3 ssl is unavailable.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 CLANG="${CLANG:-clang}"
 LLD="${LLD:-ld.lld}"

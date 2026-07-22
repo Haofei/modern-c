@@ -4,7 +4,7 @@
 # transitively through mcc-cc and that symbols from all files are present.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 APP="$HERE/tests/toolchain/app.mc"
 CLANG="${CLANG:-clang}"
@@ -13,7 +13,7 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: import-test (clang not foun
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$APP" -o "$WORK/app.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$APP" -o "$WORK/app.o" >/dev/null
 
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>

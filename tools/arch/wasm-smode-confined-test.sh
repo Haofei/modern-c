@@ -10,7 +10,7 @@
 # Usage: tools/arch/wasm-smode-confined-test.sh <mcc> [c|llvm] [guest.c] [expect] [name-base] [wasi|qjs]
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 GUEST_REL="${3:-examples/apps/wasm/wasi_hello.c}"  # a stock wasm32-wasi program
 EXPECT="${4:-WASI-HELLO=ok}"                       # the guest's printf marker

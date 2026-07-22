@@ -8,7 +8,7 @@
 # qemu-system-aarch64 'virt'; reports over the PL011 UART; the harness asserts HELLO-FROM-EL0 AND
 # EFAULT-OK AND USER-EXIT.
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; LLC="${LLC:-llc}"; QEMU="${QEMU:-qemu-system-aarch64}"
@@ -37,7 +37,7 @@ case "$BACKEND" in
         "$CLANG" "${CFLAGS[@]}" -Wno-switch-bool -c "$WORK/user.c" -o "$WORK/user.o"
         ;;
     llvm)
-        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/user_arm_runtime.mc" -o "$WORK/user.o" \
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/user_arm_runtime.mc" -o "$WORK/user.o" \
             -mtriple=aarch64-unknown-elf \
             -relocation-model=static \
             -code-model=small \

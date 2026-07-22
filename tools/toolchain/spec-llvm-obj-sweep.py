@@ -13,7 +13,7 @@ an object-output gate for the valid spec corpus.
 Usage:
     tools/toolchain/spec-llvm-obj-sweep.py [<mcc-binary> [<spec-dir> [<out-dir>]]]
 
-Defaults: zig-out/bin/mcc, tests/spec, zig-out/llvm-spec-obj-sweep.
+Defaults: MCC_UNDER_TEST when set, otherwise zig-out/bin/mcc, tests/spec, zig-out/llvm-spec-obj-sweep.
 """
 import glob
 import os
@@ -78,7 +78,7 @@ def forbidden_assumption(ir, source):
 
 
 def main():
-    mcc = sys.argv[1] if len(sys.argv) > 1 else "zig-out/bin/mcc"
+    mcc = sys.argv[1] if len(sys.argv) > 1 else (os.environ.get("MCC_UNDER_TEST") or "zig-out/bin/mcc")
     spec_dir = sys.argv[2] if len(sys.argv) > 2 else "tests/spec"
     out_dir = sys.argv[3] if len(sys.argv) > 3 else "zig-out/llvm-spec-obj-sweep"
 

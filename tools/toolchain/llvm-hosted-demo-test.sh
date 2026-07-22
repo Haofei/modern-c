@@ -4,7 +4,7 @@
 # stubs, then verify the stdin/stdout f32 round trip.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
@@ -16,7 +16,7 @@ command -v python3 >/dev/null 2>&1 || { echo "SKIP: llvm-hosted-demo-test (pytho
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/demo/hosted/elementwise.mc" -o "$WORK/kernel.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/demo/hosted/elementwise.mc" -o "$WORK/kernel.o" >/dev/null
 
 cat >"$WORK/driver.c" <<'CEOF'
 #include <stdint.h>

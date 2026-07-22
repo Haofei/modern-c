@@ -10,7 +10,7 @@ cannot satisfy the gate by emitting placeholder C that happens to compile.
 Usage:
     tools/toolchain/spec-emit-sweep.py [<mcc-binary> [<spec-dir>]]
 
-Defaults: zig-out/bin/mcc, tests/spec. Exit status is non-zero if any valid
+Defaults: MCC_UNDER_TEST when set, otherwise zig-out/bin/mcc, tests/spec. Exit status is non-zero if any valid
 fixture fails to emit or compile.
 """
 import sys, os, re, glob, subprocess, tempfile, concurrent.futures
@@ -99,7 +99,7 @@ def sweep_one(mcc, path):
 
 
 def main():
-    mcc = sys.argv[1] if len(sys.argv) > 1 else "zig-out/bin/mcc"
+    mcc = sys.argv[1] if len(sys.argv) > 1 else (os.environ.get("MCC_UNDER_TEST") or "zig-out/bin/mcc")
     spec_dir = sys.argv[2] if len(sys.argv) > 2 else "tests/spec"
 
     fixtures = sorted(glob.glob(os.path.join(spec_dir, "*.mc")))

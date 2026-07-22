@@ -18,7 +18,7 @@
 # Skips (exit 0) when clang is unavailable, like the scripts it replaces.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 NAME="${2:?usage: host-harness.sh <mcc> <test-name>}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 MANIFEST="$HERE/tools/lib/host-tests.tsv"
@@ -50,7 +50,7 @@ if [ -n "${SANITIZE:-}" ]; then
 fi
 
 # 1. MC fixture -> object. mcc_flags (e.g. -Wno-switch-bool) flow to the fixture's C compile.
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/$fixture" -o "$WORK/mod.o" $mcc_flags ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/$fixture" -o "$WORK/mod.o" $mcc_flags ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} >/dev/null
 
 # 2. the C driver: generated for the trivial single-call case, or a bespoke file.
 case "$mode" in

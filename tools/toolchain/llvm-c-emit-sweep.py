@@ -10,7 +10,7 @@ build gate rather than an ad-hoc shell audit.
 Usage:
     tools/toolchain/llvm-c-emit-sweep.py [<mcc-binary> [<fixture-glob>]]
 
-Defaults: zig-out/bin/mcc, tests/c_emit/*.mc.
+Defaults: MCC_UNDER_TEST when set, otherwise zig-out/bin/mcc, tests/c_emit/*.mc.
 """
 import concurrent.futures
 import glob
@@ -64,7 +64,7 @@ def sweep_one(mcc, path):
 
 
 def main():
-    mcc = sys.argv[1] if len(sys.argv) > 1 else "zig-out/bin/mcc"
+    mcc = sys.argv[1] if len(sys.argv) > 1 else (os.environ.get("MCC_UNDER_TEST") or "zig-out/bin/mcc")
     pattern = sys.argv[2] if len(sys.argv) > 2 else "tests/c_emit/*.mc"
 
     fixtures = sorted(glob.glob(pattern))

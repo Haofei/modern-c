@@ -8,7 +8,7 @@
 #
 # Usage: tools/lang/wasm-watchdog-test.sh <mcc> [c|llvm]
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 exec env WD_TICKS="${WD_TICKS:-20}" bash "$HERE/tools/lang/wasm-confined-test.sh" \

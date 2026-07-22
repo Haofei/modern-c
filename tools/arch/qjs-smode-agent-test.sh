@@ -17,7 +17,7 @@
 # Usage: tools/arch/qjs-smode-agent-test.sh <path-to-mcc> [c|llvm] [agent.js] [expect-substring] [name]
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 AGENT_JS_REL="${3:-examples/agents/agent.js}"
 EXPECT="${4:-agent: done}"

@@ -9,7 +9,7 @@ proves the covered broad fixture surface survives LLVM object lowering.
 Usage:
     tools/toolchain/llvm-c-obj-sweep.py [<mcc-binary> [<fixture-glob> [<out-dir>]]]
 
-Defaults: zig-out/bin/mcc, tests/c_emit/*.mc, zig-out/llvm-c-obj-sweep.
+Defaults: MCC_UNDER_TEST when set, otherwise zig-out/bin/mcc, tests/c_emit/*.mc, zig-out/llvm-c-obj-sweep.
 """
 import glob
 import os
@@ -22,7 +22,7 @@ def first_error(stderr):
 
 
 def main():
-    mcc = sys.argv[1] if len(sys.argv) > 1 else "zig-out/bin/mcc"
+    mcc = sys.argv[1] if len(sys.argv) > 1 else (os.environ.get("MCC_UNDER_TEST") or "zig-out/bin/mcc")
     pattern = sys.argv[2] if len(sys.argv) > 2 else "tests/c_emit/*.mc"
     out_dir = sys.argv[3] if len(sys.argv) > 3 else "zig-out/llvm-c-obj-sweep"
 
@@ -50,7 +50,7 @@ def main():
         # (Same fix as spec-llvm-obj-sweep.py.)
         compile_obj = subprocess.run(
             ["tools/toolchain/mcc-llvm-cc.sh", path, "-o", out_path, "-mtriple=x86_64-unknown-none"],
-            env={**os.environ, "MCC": mcc},
+            env={**os.environ, "MCC_UNDER_TEST": mcc, "MCC": mcc},
             capture_output=True,
             text=True,
         )

@@ -7,7 +7,7 @@
 # Usage: tools/lang/qjs-confined-test.sh <path-to-mcc> [c|llvm]
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 BACKEND="${2:-c}"
 AGENT_REL="${3:-examples/apps/qjs_agent.c}"  # the confined agent front-end
 EXPECT_JS="${4:-JS=7}"                        # the JS-result marker proving evaluation

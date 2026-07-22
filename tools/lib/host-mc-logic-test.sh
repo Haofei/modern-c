@@ -47,10 +47,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 case "$BACKEND" in
     c)
-        MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$DRIVER" -o "$WORK/mod.o" >/dev/null
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$DRIVER" -o "$WORK/mod.o" >/dev/null
         ;;
     llvm)
-        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$DRIVER" -o "$WORK/mod.o" >/dev/null
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$DRIVER" -o "$WORK/mod.o" >/dev/null
         ;;
     *)
         echo "unknown backend: $BACKEND" >&2

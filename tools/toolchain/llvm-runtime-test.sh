@@ -4,7 +4,7 @@
 # mcc-llvm-cc, link them into one C driver, and run the checks.
 set -euo pipefail
 
-MCC="${1:-zig-out/bin/mcc}"
+MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: llvm-runtime-test (clang not found)"; exit 0; }
@@ -13,9 +13,9 @@ command -v llc >/dev/null 2>&1 || { echo "SKIP: llvm-runtime-test (llc not found
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/toolchain/stack_user.mc" -o "$WORK/stack.o" >/dev/null
-MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/toolchain/sync_user.mc" -o "$WORK/sync.o" >/dev/null
-MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/c_emit/fn_pointer.mc" -o "$WORK/fnptr.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/toolchain/stack_user.mc" -o "$WORK/stack.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/toolchain/sync_user.mc" -o "$WORK/sync.o" >/dev/null
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/c_emit/fn_pointer.mc" -o "$WORK/fnptr.o" >/dev/null
 
 cat >"$WORK/driver.c" <<'CEOF'
 #include <stdint.h>

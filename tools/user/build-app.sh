@@ -18,7 +18,7 @@ export LLD="${LLD:-ld.lld}"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-MCC="${MCC:-$HERE/zig-out/bin/mcc}"
+MCC="${MCC_UNDER_TEST:-${MCC:-$HERE/zig-out/bin/mcc}}"
 
 # RISC-V freestanding target for the APP — the boot-lib compile helpers consume this `CFLAGS`.
 # Apps are built with the F/D float extension (rv64imafdc, lp64d ABI) because JS numbers (and
