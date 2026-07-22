@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-19, based on the current compiler worktree**.
-Evidence register: **748 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **749 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 Comparative C/Rust/MC claims are governed separately by
 [`kernel-language-comparison-plan.md`](kernel-language-comparison-plan.md). That
@@ -758,7 +758,9 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Move checker immediate root dereferences carry typed referents | Immediate full dereference of a direct root address, such as `(&resource).*`, now retains the same root `MovePlace` as a named direct alias before the legacy `borrowedMoveRoot` fallback. Root dereference consumption therefore reaches the typed referent branch of the common consumer; unsupported immediate forms retain the fallback boundary. | `src/sema_move.zig` `immediateFullDerefMoveReferent` and `directAliasReferentPlace`; `tests/spec/move_linear.mc` immediate-full-deref cases; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `python3 tools/toolchain/readiness-ledger-test.py`; `zig build move-place-identity-inventory-test move-cfg-skeleton-inventory-test move-unsupported-inventory-test`; `git diff --check`. |
 
-| Deferred cleanup loops use the common loop-head CFG | A supported `defer { while/for ... }` cleanup loop now uses one explicit entry/head/body/exit CFG. The deferred condition and body are source-analyzed once, while the shared worklist joins the zero-iteration exit with the body backedge and reports outer-resource changes once from the final exit state. Cleanup-block scope finalization remains active for body locals. `break` and `continue` inside a defer remain an intentional `E_DEFER_CONTROL_FLOW` semantic boundary; they are not treated as accepted loop exits. | `src/sema_move.zig` `moveDeferLoopCfg` and `loopBodyMoveCfg`; `tests/spec/move_place.mc` `accept_defer_block_loop_consumed_cleanup_local`, `reject_defer_block_loop_consume`, and `reject_defer_block_loop_borrow`; `tests/spec/defer_cleanup.mc` deferred control-flow diagnostics; `tools/toolchain/move-cfg-skeleton-inventory.py`; `zig test src/sema_move.zig`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `python3 tools/toolchain/readiness-ledger-test.py`; `zig build move-place-identity-inventory-test move-cfg-skeleton-inventory-test move-unsupported-inventory-test`; `git diff --check`. |
+| Deferred cleanup loops use the common loop-head CFG | A supported `defer { while/for ... }` cleanup loop uses one explicit entry/head/body/exit CFG. The deferred condition and body are source-analyzed once, while the shared worklist transports the zero-iteration exit and body backedge. The later authority migration recorded below moved condition/body widening into the loop-head join itself. Cleanup-block scope finalization remains active for body locals. `break` and `continue` inside a defer remain an intentional `E_DEFER_CONTROL_FLOW` semantic boundary; they are not treated as accepted loop exits. | `src/sema_move.zig` `moveDeferLoopCfg` and `loopBodyMoveCfg`; `tests/spec/move_place.mc` `accept_defer_block_loop_consumed_cleanup_local`, `reject_defer_block_loop_consume`, and `reject_defer_block_loop_borrow`; `tests/spec/defer_cleanup.mc` deferred control-flow diagnostics; `tools/toolchain/move-cfg-skeleton-inventory.py`; `zig test src/sema_move.zig`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; full production gate; `git diff --check`. |
+
+| Deferred cleanup loop widening is owned by the targeted CFG join | `moveDeferLoopCfg` no longer suppresses generic join diagnostics and then invokes `reportLoopOuterResourceChanges` after the worklist. Its condition state explicitly rejoins the entry state at `loop_head`, and its body backedge reaches the same target-specific `MoveCfgJoinPolicy.loop_backedge`; non-target joins remain conservative without duplicate branch diagnostics. Exit handling only transports the already widened state. New condition-consume and condition-borrow fixtures complement the existing body and cleanup-local cases, and the inventory forbids restoring post-worklist widening. This completes M2.3 authority for the admitted deferred-loop subset, not all M2 routing. | `src/sema_move.zig` `MoveStateCfgWorklist.joinStateAt` / `moveDeferLoopCfg`; `tests/spec/move_place.mc` deferred-loop body, condition, borrow, and cleanup-local fixtures; `tools/toolchain/move-cfg-skeleton-inventory.py`; `zig test src/sema_move.zig`; spec semantic-code and inline-location tests; `zig build test c-test llvm-test diff-backend`; semantic/readiness/move inventories; `git diff --check`. |
 
 | Slice expression result types are MIR-owned in both backends | A slice expression now requires its MIR `expression_result` fact in C and LLVM before emission. Both backends independently recover the base shape only to reject a stale fact; neither derives the result slice type when the fact is absent. The existing MIR producer records the result for admitted slice expressions, and exact source-offset tests retarget only the slice fact to prove that malformed prebuilt MIR cannot fall back to backend-local result inference. | `src/mir.zig` `addExpressionResultFact`; `src/lower_c_emitter.zig` `emitSliceExpr` / `exprSourceTypeForEmission`; `src/lower_llvm.zig` `emitSlice` / `exprType`; `src/lower_c_tests.zig` and `src/lower_llvm_tests.zig` `compound expressions require complete MIR result facts`; focused C/LLVM tests; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `python3 tools/toolchain/readiness-ledger-test.py`; `git diff --check`. |
 
@@ -1068,15 +1070,15 @@ language shapes.
 | Typed facts | T4 pending | Remove or explicitly register all remaining lowering-affecting backend inference. | Start only after every register row has a T3 disposition. |
 | Move checker | M1.2a/M1.2b/M1.2c complete | `MoveState` carries independent facts; no `MoveSlot` field or branch represents index metadata. | M3 is complete; the selected T2 family is closed, so one residual M1.1 or M2 slice is now eligible. |
 | Move checker | M3 complete | Field, deref, element, wildcard, alias, and non-nameable projection boundaries have explicit admission or diagnostic policies. | New projections must enter the inventory with a structural rule or stable diagnostic before implementation. |
-| Move checker | M1.1 and M2 partial, no active slice | M1.1 still has named formatted-key compatibility authority to retire. M2 now routes ordinary-loop zero-iteration/backedge ownership widening through a target-specific `MoveStateCfgWorklist` join policy at `loop_head`; finalization only checks loop-local leaks and transports the terminal state. Other named M2 transfers still retain specialized authority. | Per the serial execution order, select a different registered T2 semantic-fact family next; return to one named residual M1.1 or M2 authority only after that T2 slice closes. |
+| Move checker | M1.1 and M2 partial, no active slice | M1.1 still has named formatted-key compatibility authority to retire. Ordinary and deferred loop zero-iteration/condition/backedge widening now use the target-specific `MoveStateCfgWorklist` policy at `loop_head`; their exit paths only transport terminal state. Other named M2 transfers still retain specialized authority. | Per the serial execution order, select a different registered T2 semantic-fact family next; return to one named residual M1.1 or M2 authority only after that T2 slice closes. |
 | Move checker | M4 pending | Remove formatted-key correctness authority from supported paths. | Start only after M1 projection and M2 routing boundaries have been closed. |
 | Provenance | P1-P3 complete for the named matrix | Unknown scalar leaves are conservative; documented direct proofs and current boundary policies are fact-owned or fail closed. | A new pointer-flow class reopens only its affected P3 boundary. |
 | Provenance | P4.1 triggered | There is no active syntax-expansion task. A patch starts only after T2/M1 identifies an unclassified flow. | Register the flow and select MIR proof, conservative lowering, or a diagnostic before either backend supports it. |
 | Provenance | P4.2 queued | Audit that each registered boundary has the same C and LLVM policy. | Close only with positive and absent-proof evidence for every fallback-register row. |
 
-**Implementation order:** the comparison-literal T2 authority slice is complete;
-now select one named residual M1.1 authority or M2 routing family, then return to
-one exact registered T2 family. Pointer work
+**Implementation order:** the deferred-loop M2.3 authority slice is complete;
+now select one exact registered T2 family, then return to one named residual
+M1.1 authority or M2 routing family. Pointer work
 interrupts the sequence only for a newly observed unclassified flow. These are
 ordered closure units, not three simultaneous tasks or percentage-based backlogs.
 
@@ -1088,7 +1090,7 @@ names its input boundary, expected semantic owner, affected C and LLVM
 consumers, and the tests that will prove missing/stale behavior. This prevents a
 large architectural item from looking active merely because it is unfinished.
 
-**Current selection state: comparison-literal T2 slice complete; one move-authority slice next.** M1.2c and
+**Current selection state: deferred-loop M2.3 slice complete; one T2 family next.** M1.2c and
 M3 are complete: index metadata exists only in `MoveState.index_facts`, and every
 current move projection has either a structural rule or a stable diagnostic.
 Ordinary-loop zero-iteration/backedge widening is now owned by a
@@ -1099,7 +1101,10 @@ the caller. Root, field, array-element, alias, `break`, and `continue` fixtures
 retain their established diagnostics. The subsequent T2 slice removed C's
 default-`u32` reconstruction for sequenced comparison literals; C and LLVM now
 have symmetric positive, missing, and stale `expression_result` evidence. Per
-the serial plan, the next patch must select one residual M1.1 or M2 authority.
+the serial plan, the next patch must select one different registered T2 family.
+The intervening move slice transferred deferred-loop condition and body widening
+to the same targeted `loop_head` join policy; its exit now only writes back the
+terminal CFG state.
 
 This is deliberately an implementation gate, not hidden progress: the selected
 family closes only after its MIR artifact, C/LLVM positive cases, and missing/stale
@@ -1108,8 +1113,8 @@ finishes; pointer work remains trigger-driven.
 
 | Order | Eligible unit | Phase | Concrete first deliverable | Slice closes only when |
 |---|---|---|---|---|
-| 1 | Move residual authority | M1.1 or M2.1/M2.2 | Select either one remaining formatted-key correctness decision or one branch, short-circuit, loop, or non-deferred exit transfer for common-worklist routing. | The selected specialized authority no longer decides correctness and equivalent ownership/join/backedge/exit regressions pass. |
-| 2 | Next typed semantic-fact family | T2.1-T2.3 | After that move slice closes, select one different registered expression-result or shape family; either prove its syntax use is mechanics-only or add an MIR fact with both consumers and a missing/stale gate. | The family has artifact coverage, C/LLVM positive coverage, and missing/stale rejection or an explicitly tested conservative/diagnosed policy. |
+| 1 | Next typed semantic-fact family | T2.1-T2.3 | Select one different registered expression-result or shape family; either prove its syntax use is mechanics-only or add an MIR fact with both consumers and a missing/stale gate. | The family has artifact coverage, C/LLVM positive coverage, and missing/stale rejection or an explicitly tested conservative/diagnosed policy. |
+| 2 | Move residual authority | M1.1 or M2.1/M2.2 | After that T2 slice closes, select either one remaining formatted-key correctness decision or one branch, short-circuit, loop, or non-deferred exit transfer for common-worklist routing. | The selected specialized authority no longer decides correctness and equivalent ownership/join/backedge/exit regressions pass. |
 | 3 | Newly exposed pointer-flow boundary | P4.1, triggered only | Register the exact source-to-dereference flow exposed by the selected T2/M2 change and choose MIR proof, race-tolerant lowering, or a diagnostic. | C and LLVM both demonstrate the policy and the absent-proof path. |
 
 The first two rows are ordered work. The third is an interruption rule, not
@@ -1165,13 +1170,14 @@ slice becomes active only after its required family or boundary is selected.
 
 | Workstream | Current phase | Concrete current objective | What advances it | What does *not* advance it |
 |---|---|---|---|---|
-| Typed semantic facts / typed MIR | **T2.1-T2.3 - comparison-literal slice complete; queued** | Sequenced comparison literal operand typing now consumes the same `expression_result` fact in C and LLVM, with missing/stale admission evidence. No new typed-fact family is active during the next move-authority slice. | Preserve the producer/consumer/admission inventory; select the next exact family only after the move slice closes. | Treating this bounded literal consumer migration as closure of broader expression typing. |
-| CFG/place move checker | **M1.1/M2 - partial and eligible; no slice selected** | Keep the completed M3 projection boundary and ordinary-loop widening route closed; name one remaining formatted-key correctness decision or one branch, loop, short-circuit, or exit transfer for structural/common-worklist routing. | The selected identity or transfer no longer depends on its compatibility key or specialized executor and has equivalent regressions. | Broadening a projection without first updating its rule or diagnostic inventory. |
+| Typed semantic facts / typed MIR | **T2.1 eligible; no slice selected** | The comparison-literal slice remains closed. Select one different registered expression-result or shape family with its producer, both consumers, and absent/stale policy. | Complete its MIR artifact, C/LLVM positive, and missing/stale evidence before returning to move work. | Treating the previous bounded literal consumer migration as closure of broader expression typing. |
+| CFG/place move checker | **M1.1/M2 - partial; deferred-loop slice complete and queued** | Keep the completed M3 projection boundary and ordinary/deferred loop-head widening routes closed. After the next T2 slice, name one remaining formatted-key correctness decision or specialized transfer. | The selected identity or transfer no longer depends on its compatibility key or specialized executor and has equivalent regressions. | Broadening a projection without first updating its rule or diagnostic inventory. |
 | Pointer-provenance race lowering | **P4 - triggered only** | Keep the current conservative boundary matrix closed; act only when T2 or move work exposes a new pointer-flow boundary. | A named new boundary with a chosen MIR proof, conservative lowering, or diagnostic in both backends. | Expanding positive-provenance recognition merely because another syntax spelling exists. |
 
 The current serial order is deliberate: M1.2 and M3 closed the known move-state
-and projection boundaries; T2 supplies the next semantic-authority migration;
-M2 follows with one remaining CFG transfer; P4 reopens only for a newly exposed
+and projection boundaries; the deferred-loop M2.3 authority slice just closed,
+so T2 supplies the next semantic-authority migration before another move slice;
+P4 reopens only for a newly exposed
 pointer flow. This is why the pointer workstream can be open without being the
 current implementation slice.
 
@@ -1507,7 +1513,7 @@ enough if the string remains the deciding identity.
 | M3.2: projection admission (complete) | M3 | Every inventory row has exact overlap behavior or an explicit diagnostic boundary. | Positive and conflicting-place tests cover admitted rows; dynamic/non-local move-array and arbitrary pointer-to-array cases remain fail-closed. |
 | M2.1: branch and short-circuit joins | M2, partial | `if let`, multi-arm `switch`, and short-circuit RHS paths have bounded common-worklist routing. Finish only after every remaining named branch/short-circuit transfer has no direct merge or manual join enqueue. | Join diagnostics and accepted paths no longer depend on statement-specific state merging. |
 | M2.2: loop/backedge/exit routing | M2, partial | Ordinary loop backedges, labeled `break`/`continue`, while-condition widening, `return`, `?`, and normal function/scoped/deferred/loop exits queue through worklists; break/continue diagnostics execute at terminal worklist blocks. Remaining non-deferred exit and loop transfers still retain dedicated diagnostic or state authority. | Specialized executors are removed only after equivalent worklist regressions exist. |
-| M2.3: deferred-loop routing (complete) | M2 | A supported cleanup loop has explicit condition/head/body/exit blocks, a worklist backedge, and cleanup-local finalization. `break`/`continue` inside `defer` remain the existing `E_DEFER_CONTROL_FLOW` boundary rather than admitted exits. | Positive zero-or-many cleanup-local coverage, `E_MOVE_LOOP_RESOURCE` diagnostics for outer consume/borrow, retained deferred-control-flow diagnostics, and the CFG inventory prove no statement-walker fallthrough. |
+| M2.3: deferred-loop routing and widening authority (complete) | M2 | A supported cleanup loop has explicit entry/head/body/exit blocks. Condition-first and body-backedge ownership changes join through the target-specific worklist policy at `loop_head`; exit only writes back terminal state. `break`/`continue` inside `defer` remain the existing `E_DEFER_CONTROL_FLOW` boundary rather than admitted exits. | Positive zero-or-many cleanup-local coverage, body and condition `E_MOVE_LOOP_RESOURCE` diagnostics for outer consume/borrow, retained deferred-control-flow diagnostics, and the CFG inventory forbid post-worklist widening authority. |
 | M4.1: compatibility retirement | M4 | String keys are indexing/debug compatibility only; they cannot decide move correctness. | Inventory and tests show every supported path reaches the typed-place/CFG engine. |
 
 Current status: the checker is still primarily AST/state-map based, but direct ownership

@@ -47,11 +47,6 @@ const MoveStateCfgWorklist = struct {
     cfg: *const sema_model.MoveCfg,
     states: []?MoveState,
     queued: []bool,
-    // A deferred cleanup loop widens its zero-iteration/backedge states and
-    // reports the resulting outer-resource change as E_MOVE_LOOP_RESOURCE.
-    // Its internal CFG joins must still merge conservatively, but must not also
-    // produce ordinary branch diagnostics for that same widening.
-    report_join_diagnostics: bool = true,
     join_policy: MoveCfgJoinPolicy = .generic,
     queue: std.ArrayListUnmanaged(sema_model.MoveCfgBlockId) = .empty,
 
@@ -104,10 +99,6 @@ const MoveStateCfgWorklist = struct {
         return null;
     }
 
-    fn suppressJoinDiagnostics(self: *MoveStateCfgWorklist) void {
-        self.report_join_diagnostics = false;
-    }
-
     fn useShortCircuitJoinPolicy(self: *MoveStateCfgWorklist, span: diagnostics.Span, deferred: bool) void {
         self.join_policy = .{ .short_circuit = .{ .span = span, .deferred = deferred } };
     }
@@ -120,15 +111,15 @@ const MoveStateCfgWorklist = struct {
         self.join_policy = .{ .loop_backedge = loop_head };
     }
 
-    // All real-state CFG joins enter here. Callers may omit a successor when an
-    // AST transfer has already run for that block, but cannot reimplement the
-    // ownership merge or worklist requeue policy themselves.
-    fn propagateSuccessor(self: *MoveStateCfgWorklist, checker: *Checker, to: sema_model.MoveCfgBlockId, outgoing: *const MoveState) void {
+    // All real-state CFG joins enter here. A transfer may join a state back into
+    // its current block (for example, a deferred loop condition at loop_head),
+    // while edge propagation remains the normal caller-facing route.
+    fn joinStateAt(self: *MoveStateCfgWorklist, checker: *Checker, to: sema_model.MoveCfgBlockId, outgoing: *const MoveState) void {
         const changed = if (self.states[to]) |*joined| blk: {
             var before = cloneMoveState(checker, joined);
             defer before.deinit();
             switch (self.join_policy) {
-                .generic => mergeMoveBranchesImpl(checker, joined, joined, outgoing, self.report_join_diagnostics),
+                .generic => mergeMoveBranchesImpl(checker, joined, joined, outgoing, true),
                 .loop_condition => reportLoopOuterResourceChanges(checker, joined, outgoing),
                 .loop_backedge => |loop_head| {
                     if (to == loop_head) {
@@ -145,6 +136,10 @@ const MoveStateCfgWorklist = struct {
             break :blk true;
         };
         if (changed) self.enqueue(checker, to);
+    }
+
+    fn propagateSuccessor(self: *MoveStateCfgWorklist, checker: *Checker, to: sema_model.MoveCfgBlockId, outgoing: *const MoveState) void {
+        self.joinStateAt(checker, to, outgoing);
     }
 
     fn propagateSuccessorsExcept(self: *MoveStateCfgWorklist, checker: *Checker, from: sema_model.MoveCfgBlockId, outgoing: *const MoveState, excluded: ?sema_model.MoveCfgBlockId) void {
@@ -5237,7 +5232,7 @@ fn moveDeferLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: 
 
     var worklist = MoveStateCfgWorklist.init(self, &loop_cfg.cfg, loop_cfg.entry, state) orelse return;
     defer worklist.deinit();
-    worklist.suppressJoinDiagnostics();
+    worklist.useLoopBackedgeJoinPolicy(loop_cfg.loop_head);
     var condition_visited = false;
     var body_visited = false;
     while (worklist.pop()) |block| {
@@ -5247,9 +5242,19 @@ fn moveDeferLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: 
         } else if (block == loop_cfg.loop_head) {
             if (!condition_visited) {
                 condition_visited = true;
-                if (loop.iterable) |iter| moveDefer(self, iter, block_state, aliases);
+                var condition_state = cloneMoveState(self, block_state);
+                defer condition_state.deinit();
+                if (loop.iterable) |iter| moveDefer(self, iter, &condition_state, aliases);
+                // A cleanup-loop condition executes before the first body and
+                // may execute repeatedly. Join it against the entry state at
+                // loop_head so the common loop policy owns that widening too.
+                worklist.joinStateAt(self, loop_cfg.loop_head, &condition_state);
             }
-            worklist.propagateSuccessorsExcept(self, block, block_state, if (body_visited) loop_cfg.body else null);
+            const joined_head = worklist.statePtr(loop_cfg.loop_head) orelse {
+                self.oom = true;
+                return;
+            };
+            worklist.propagateSuccessorsExcept(self, block, joined_head, if (body_visited) loop_cfg.body else null);
         } else if (block == loop_cfg.body) {
             body_visited = true;
             moveDeferBlock(self, loop.body, block_state, aliases);
@@ -5257,14 +5262,9 @@ fn moveDeferLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: 
         }
     }
     if (worklist.statePtr(loop_cfg.exit)) |exit_state| {
-        var entry_state = cloneMoveState(self, state);
-        defer entry_state.deinit();
-        reportLoopOuterResourceChanges(self, &entry_state, exit_state);
-        // The loop widener is the authority for outer resources changed by a
-        // deferred cleanup loop. Keep its conservative result for later source
-        // statements; otherwise a borrow reserved on a zero-or-many iteration
-        // path is forgotten as soon as this helper returns.
-        replaceMoveState(self, state, &entry_state);
+        // Widening already happened at loop_head. Preserve that terminal CFG
+        // state for later source statements without re-deciding correctness.
+        replaceMoveState(self, state, exit_state);
     }
 }
 

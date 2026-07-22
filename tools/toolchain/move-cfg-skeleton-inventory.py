@@ -108,6 +108,17 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
         "required": ["for (branch.arm_exits) |exit_block|"],
         "forbidden": [],
     },
+    "moveDeferLoopCfg": {
+        "required": [
+            "worklist.useLoopBackedgeJoinPolicy(loop_cfg.loop_head);",
+            "worklist.joinStateAt(self, loop_cfg.loop_head, &condition_state);",
+            "replaceMoveState(self, state, exit_state);",
+        ],
+        "forbidden": [
+            "worklist.suppressJoinDiagnostics();",
+            "reportLoopOuterResourceChanges(",
+        ],
+    },
     "moveLoopBodyCfg": {
         "required": [
             "worklist.useLoopBackedgeJoinPolicy(loop_cfg.loop_head);",
@@ -151,6 +162,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn useShortCircuitJoinPolicy",
         "fn useLoopConditionJoinPolicy",
         "fn useLoopBackedgeJoinPolicy",
+        "fn joinStateAt",
         "fn propagateSuccessorsExcept",
         "const LinearMoveCfg = struct",
         "fn linearMoveCfg",
@@ -185,11 +197,14 @@ ANCHORS: dict[str, list[str]] = {
         "condition_visited = true",
         ".loop_backedge => |loop_head|",
         "ordinary loop backedge widening is owned by the targeted CFG join",
-        "worklist.propagateSuccessorsExcept(self, block, block_state, if (body_visited) loop_cfg.body else null)",
-        "reportLoopOuterResourceChanges(self, &entry_state, exit_state)",
+        "worklist.propagateSuccessorsExcept(self, block, block_state, if (body_visited.*) loop_cfg.body else null)",
         "checkMoveExitEdge(self, block_state, message)",
         "checkLoopExitLeaks(self, block_state, null)",
         "worklist.propagateSuccessors(self, block_id, block_state)",
+    ],
+    "tests/spec/move_place.mc": [
+        "reject_defer_block_loop_condition_consume",
+        "reject_defer_block_loop_condition_borrow",
     ],
     "docs/compiler-production-readiness.md": [
         "Move checker CFG skeleton is explicit",

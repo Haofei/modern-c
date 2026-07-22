@@ -433,6 +433,29 @@ fn reject_defer_block_loop_borrow(flag: bool) -> u32 {
     return 0;
 }
 
+// Rejected: the cleanup-loop condition is evaluated before the first body and
+// may be evaluated repeatedly, so its consume joins the entry state at the CFG
+// loop head rather than being diagnosed by a post-loop source walk.
+fn reject_defer_block_loop_condition_consume() -> u32 {
+    let r: Res = mkres(1); // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    defer {
+        while consume(r) != 0 {
+        }
+    };
+    return 0;
+}
+
+// The same condition-first widening applies to a deferred borrow.
+fn reject_defer_block_loop_condition_borrow() -> u32 {
+    let r: Res = mkres(1); // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    defer {
+        while peek(&r) != 0 {
+        }
+    };
+    unsafe { forget_unchecked(r); } // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return 0;
+}
+
 // Accepted: cleanup-loop locals are scoped to each iteration and may be
 // consumed before the iteration ends. The loop itself remains zero-or-many.
 fn accept_defer_block_loop_consumed_cleanup_local(flag: bool) -> u32 {
