@@ -1993,6 +1993,40 @@ test "lower-c compound expressions require complete MIR result facts" {
     }
 }
 
+test "lower-c grouped expressions consume their own MIR result facts" {
+    const source =
+        \\fn grouped_result(value: u16) -> u16 {
+        \\    return (value) + 1;
+        \\}
+    ;
+    const grouped_text = "(value)";
+    const grouped_offset = std.mem.indexOf(u8, source, grouped_text) orelse return error.TestUnexpectedResult;
+
+    var parsed = try test_support.parseCheckedModule("c_grouped_expression_result.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_grouped_expression_result.mc", .{}, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "grouped_result") != null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeFactAtOffsetForFunction(&missing, "grouped_result", .expression_result, grouped_offset, grouped_text.len);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_grouped_expression_result.mc", .{}, false, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactAtOffsetForFunction(&stale, "grouped_result", .expression_result, grouped_offset, grouped_text.len, "u32");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_grouped_expression_result.mc", .{}, false, null));
+}
+
 test "lower-c indexes direct fixed-array call results through MIR return types" {
     const source =
         \\fn make_matrix() -> [2][2]u32 { return .{ .{ 1, 2 }, .{ 3, 4 } }; }

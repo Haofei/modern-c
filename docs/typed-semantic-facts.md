@@ -240,6 +240,20 @@ representation. A stale complete fact is therefore classified before C or LLVM
 lowering; the backends preserve their existing unsupported-emission error
 surface while no longer decide whether the fact is stale.
 
+### Grouped expression result authority
+
+User-source grouped expressions carry their own span-identified
+`expression_result` row. C's `operandEmitType` and LLVM's `exprType` consume
+that outer fact; recursive inspection of the inner expression is only a
+stale-fact check. Compiler-generated zero-span groupings retain the bounded
+construction-derived fallback because they cannot be keyed to source facts.
+The MIR, C, and LLVM regressions remove or retarget exactly the `(value)` row,
+so neither backend can restore outer result typing from the grouped AST.
+
+This is a bounded closure inside `c-expression-type-inference` and
+`llvm-expression-type-inference`, not closure of block expressions or broader
+computed-expression typing.
+
 ### Semantic inference family register
 
 This register is the Phase 1 gate for backend semantic inference. Each row names

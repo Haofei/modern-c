@@ -2655,6 +2655,37 @@ test "MIR owns span-identified result types for compound expressions" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns grouped expression result types" {
+    const source =
+        \\fn grouped_result(value: u16) -> u16 {
+        \\    return (value) + 1;
+        \\}
+    ;
+    const grouped_text = "(value)";
+    const grouped_offset = std.mem.indexOf(u8, source, grouped_text) orelse return error.TestUnexpectedResult;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_grouped_expression_result.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "grouped_result").?;
+    var found = false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .expression_result or fact.source.offset != grouped_offset or fact.source.len != grouped_text.len) continue;
+        try std.testing.expectEqualStrings("u16", fact.target_ty.kind.name.text);
+        found = true;
+    }
+    try std.testing.expect(found);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns direct address dereference result types" {
     const source =
         \\fn read_local() -> u32 {

@@ -25,6 +25,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn arrayTypeForExpr(",
             "MIR owns the result type of a member or index expression.",
             "Source literal result types are MIR-owned.",
+            "A user-source grouping has its own complete MIR result fact.",
         ],
         "src/lower_c_emitter.zig": [
             "fn indirectCallCalleeType(",
@@ -153,6 +154,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
         "src/lower_llvm.zig": [
             "fn exprType(",
             "fn derefPointeeType(",
+            "Source groupings have their own MIR-owned result type.",
             "self.mirCallTargetKindAt(call.callee.*.span) == .declassify",
             "self.mirCallTargetKindAt(span) == .bind",
             "fn physCallTargetType(",

@@ -2134,6 +2134,34 @@ test "move pointer-return aliases require carried typed referent places" {
     try std.testing.expect(carriedAliasReferent(.{ .live = false, .span = span, .alias_of = "compat:owner" }) == null);
 }
 
+test "move full dereference aliases require carried typed referent places" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+
+    const carried = carriedFullDerefAliasReferent(.{
+        .live = false,
+        .span = span,
+        .alias_of = "unrelated:compatibility:key",
+        .alias_place = root,
+        .full_deref_alias = true,
+    }) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(carried.place.?.eql(root));
+    try std.testing.expect(carried.full_deref);
+
+    try std.testing.expect(carriedFullDerefAliasReferent(.{
+        .live = false,
+        .span = span,
+        .alias_of = "owner",
+        .full_deref_alias = true,
+    }) == null);
+    try std.testing.expect(carriedFullDerefAliasReferent(.{
+        .live = false,
+        .span = span,
+        .alias_of = "owner",
+        .alias_place = root,
+    }) == null);
+}
+
 test "move deferred aliases recover typed places from their state slots" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-defer-alias-place.mc", "");
     defer reporter.deinit();
@@ -2593,6 +2621,12 @@ fn carriedAliasReferent(slot: MoveSlot) ?AliasReferent {
     return .{ .key = key, .place = place, .full_deref = slot.full_deref_alias };
 }
 
+fn carriedFullDerefAliasReferent(slot: MoveSlot) ?AliasReferent {
+    if (!slot.full_deref_alias) return null;
+    const referent = carriedAliasReferent(slot) orelse return null;
+    return .{ .key = referent.key, .place = referent.place, .full_deref = true };
+}
+
 fn carriedAliasReferentForExpr(expr: ast.Expr, state: *const MoveState) ?AliasReferent {
     return switch (expr.kind) {
         .ident => |id| blk: {
@@ -2713,10 +2747,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
             if (inner.*.kind == .ident) {
                 const id = inner.*.kind.ident;
                 if (aliasBindingMoveSlotForIdent(id.text, state)) |slot| {
-                    if (slot.full_deref_alias) {
-                        const referent = slot.alias_of orelse unreachable;
-                        full_alias_referent = .{ .key = referent, .place = slot.alias_place, .full_deref = true };
-                    }
+                    if (carriedFullDerefAliasReferent(slot)) |referent| full_alias_referent = referent;
                 }
             }
             if (full_alias_referent) |referent| {

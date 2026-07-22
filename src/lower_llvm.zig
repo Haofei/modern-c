@@ -8868,7 +8868,13 @@ const LlvmEmitter = struct {
             .float_literal => null,
             .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else null,
             .block => if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null,
-            .grouped => |inner| self.exprType(inner.*),
+            // Source groupings have their own MIR-owned result type. The
+            // inner query is a stale-fact check only; generated zero-span
+            // groupings retain the construction-derived fallback.
+            .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
+                self.exprType(inner.*)
+            else
+                self.requireExpressionResultType(expr, self.exprType(inner.*)),
             .call => |call| if (self.mirTargetTypeFactAt(.qualified_union_result, expr.span)) |fact|
                 fact.target_ty
             else if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias)

@@ -267,7 +267,14 @@ pub fn resultTypeFromSourceExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?
 pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     switch (expr.kind) {
         .ident => |ident| return sourceTypeForIdent(ctx, ident.text, locals),
-        .grouped => |inner| return operandEmitType(ctx, inner.*, locals),
+        .grouped => |inner| {
+            // A user-source grouping has its own complete MIR result fact.
+            // Recover the inner type only to reject a stale fact; it must not
+            // remain the semantic authority for the grouped expression.
+            const inferred = operandEmitType(ctx, inner.*, locals) orelse return null;
+            if (expr.span.line == 0 and expr.span.column == 0) return inferred;
+            return requireExpressionResultType(ctx, expr, inferred);
+        },
         .member => |node| {
             // Source members have an exact, validated MIR result fact. Do not
             // reconstruct their type by walking the base declaration in C.

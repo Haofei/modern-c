@@ -20,6 +20,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn aliasWildcardPlaceInfo",
         "fn directAliasReferentPlace",
         "fn carriedAliasReferent",
+        "fn carriedFullDerefAliasReferent",
         "fn carriedAliasReferentForExpr",
         "fn markEscapedBorrowForCarriedAlias",
         "fn hasUntypedBorrowAlias",
@@ -131,6 +132,9 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
         ("fn immediateFullDerefMoveReferent", "fn consumeTrackedMoveBinding"): [
             "trackedMoveReferentPlaceForKey",
             "spine.borrowedMoveRoot",
+        ],
+        ("pub fn moveConsume", "pub fn moveBorrow"): [
+            "slot.alias_of orelse unreachable",
         ],
         ("fn consumeTrackedMoveReferent", "// An alias can retain a typed root place"): [
             "consumeTrackedMoveBinding",
