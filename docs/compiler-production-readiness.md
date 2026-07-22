@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-19, based on the current compiler worktree**.
-Evidence register: **747 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **748 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 Comparative C/Rust/MC claims are governed separately by
 [`kernel-language-comparison-plan.md`](kernel-language-comparison-plan.md). That
@@ -853,6 +853,8 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Source slice result typing is fact-only | C `sliceReturnTypeForExpr` / `exprSourceTypeForEmission` and LLVM `exprType` consume the complete MIR `expression_result` for every real source slice instead of deriving the result from the base. Compiler-generated `0:0` nodes retain explicit base-derived fallbacks. C slice construction and LLVM `emitSlice` still inspect the base only for address, length, and ABI/GEP emission mechanics; the slice result type remains MIR-owned. Missing facts fail MIR admission and retargeted facts fail lowering before either backend can rediscover a slice type. This completes the bounded source projection-result subfamily: member, dereference, index, and slice. | `src/mir.zig` `typeExprForExpr` / `addExpressionResultFact`; `src/lower_c_infer.zig` `sliceReturnTypeForExpr`; `src/lower_c_emitter.zig` `exprSourceTypeForEmission` / `emitSliceExpr`; `src/lower_llvm.zig` `exprType` / `emitSlice`; `src/lower_c_tests.zig` / `src/lower_llvm_tests.zig` slice missing/stale fact suites; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
 | Source integer and boolean literal result typing is fact-only | Every real function-body source integer or boolean literal now carries a complete MIR `expression_result` fact. Inferred-local C and LLVM lowering consume that literal fact and compare it with the owned `inferred_local` fact; neither backend synthesizes `u32` or `bool` to decide or validate the local type. Missing literal-result facts fail MIR admission, and retargeted facts are stale before either backend can rediscover the literal type. Generated zero-span booleans retain their explicit backend fallback because no source fact can name them. | `src/mir.zig` `addExpressionResultFact` / `expressionResultTypeExpr`; `src/lower_c_emitter.zig` `literalExpressionResultType`; `src/lower_llvm.zig` `exprType`; `src/mir_tests.zig` `MIR owns inferred local literal types`; `src/lower_c_tests.zig` / `src/lower_llvm_tests.zig` inferred-local literal missing/stale suites; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `git diff --check`. |
 
+| Sequenced comparison literal operand types are fact-only | C's sequenced comparison classifier no longer synthesizes `bool` or default `u32` for a real source literal. It consumes the literal's complete MIR `expression_result`, then applies the existing sibling-width rule for contextual numeric comparison emission. LLVM already consumes the same fact through `exprType`. A wide direct-call comparison has symmetric C/LLVM positive, missing, and retargeted-literal tests; absent facts fail admission and stale facts fail checked lowering. This closes one bounded `c-expression-type-inference` slice, not the broader family. | `src/lower_c_infer.zig` `conditionOperandTypeForEmission`; `src/lower_c_tests.zig` / `src/lower_llvm_tests.zig` `sequenced comparison literals require MIR result types`; `tools/toolchain/semantic-facts-inventory.py`; `zig build test c-test llvm-test diff-backend`; `python3 tools/toolchain/semantic-facts-inventory.py`; `python3 tools/toolchain/readiness-ledger-test.py`; `git diff --check`. |
+
 | Move place construction matches typed roots before compatibility keys | `placeKeyAndType` no longer assumes a source identifier's text is also the `MoveState` map key. It first resolves the exact root `MovePlace` stored in a slot, then falls back to key-only slots only for metadata that has no place, such as index facts. A regression stores `owner` under `compat:owner` and proves the resulting `PlaceKeyTy` retains the structural root and recorded type. | `src/sema_move.zig` `bindingMoveSlotForIdent` / `placeKeyAndType`; unit test `move place construction resolves typed roots before compatibility keys`; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
 | Move short-circuit joins route through the CFG worklist | Short-circuit RHS transfer no longer directly calls `mergeShortCircuitMoveStates` or manually queues the join block. `MoveStateCfgWorklist` owns successor propagation, state change detection, and requeueing; a short-circuit join policy preserves the existing distinct ordinary/deferred diagnostics while keeping that policy inside the common join entry point. While-condition loop widening retains its separate loop policy. This is one M2 routing migration, not closure of the CFG/place checker. | `src/sema_move.zig` `MoveCfgJoinPolicy`, `MoveStateCfgWorklist.useShortCircuitJoinPolicy`, `moveConsumeShortCircuitRhs`, and `moveDeferShortCircuitRhs`; `tools/toolchain/move-cfg-skeleton-inventory.py` `SHORT_CIRCUIT_WORKLIST_ROUTING`; `zig test src/sema_move.zig`; `zig test src/spec_tests.zig --test-filter "tests/spec fixtures produce declared semantic error codes"`; `zig build move-cfg-skeleton-inventory-test`; full production gate; `git diff --check`. |
@@ -1061,7 +1063,7 @@ language shapes.
 | Workstream | Phase state | Meaning now | Required transition |
 |---|---|---|---|
 | Typed facts | T1 complete | The inference inventory and fact-admission gates exist. | No transition; new lowering families must enter the register. |
-| Typed facts | T2.1 eligible, no active slice | Function-address, bounded data-address including const globals, target-typed char-literal, source member-expression result typing, source integer/boolean literal result typing, and source struct-literal construction class are complete. The next typed-fact patch must select one different registered family after the current move-authority slice. | Record the exact decision, producer, C/LLVM consumers, and absent/stale policy; then complete its artifact, C/LLVM positive, and missing/stale-fact evidence. |
+| Typed facts | T2.1-T2.3 comparison-literal slice complete | Function-address, bounded data-address including const globals, target-typed char literals, source member-expression results, source integer/boolean literals including sequenced comparison operands, and source struct-literal construction class are complete bounded slices. | Per the serial execution order, select one residual M1.1 or M2 move-authority slice next; choose another T2 family only after it closes. |
 | Typed facts | T3 queued | The remaining registered fallbacks need a final MIR-owned, conservative, or diagnostic disposition. | Start only after the current T2 family is closed end to end. |
 | Typed facts | T4 pending | Remove or explicitly register all remaining lowering-affecting backend inference. | Start only after every register row has a T3 disposition. |
 | Move checker | M1.2a/M1.2b/M1.2c complete | `MoveState` carries independent facts; no `MoveSlot` field or branch represents index metadata. | M3 is complete; the selected T2 family is closed, so one residual M1.1 or M2 slice is now eligible. |
@@ -1072,9 +1074,9 @@ language shapes.
 | Provenance | P4.1 triggered | There is no active syntax-expansion task. A patch starts only after T2/M1 identifies an unclassified flow. | Register the flow and select MIR proof, conservative lowering, or a diagnostic before either backend supports it. |
 | Provenance | P4.2 queued | Audit that each registered boundary has the same C and LLVM policy. | Close only with positive and absent-proof evidence for every fallback-register row. |
 
-**Implementation order:** the ordinary-loop M2.2 authority slice is complete;
-now select one exact registered T2 family, then return to one named residual
-M1.1 authority or M2 routing family. Pointer work
+**Implementation order:** the comparison-literal T2 authority slice is complete;
+now select one named residual M1.1 authority or M2 routing family, then return to
+one exact registered T2 family. Pointer work
 interrupts the sequence only for a newly observed unclassified flow. These are
 ordered closure units, not three simultaneous tasks or percentage-based backlogs.
 
@@ -1086,7 +1088,7 @@ names its input boundary, expected semantic owner, affected C and LLVM
 consumers, and the tests that will prove missing/stale behavior. This prevents a
 large architectural item from looking active merely because it is unfinished.
 
-**Current selection state: ordinary-loop M2.2 slice complete; one T2 family next.** M1.2c and
+**Current selection state: comparison-literal T2 slice complete; one move-authority slice next.** M1.2c and
 M3 are complete: index metadata exists only in `MoveState.index_facts`, and every
 current move projection has either a structural rule or a stable diagnostic.
 Ordinary-loop zero-iteration/backedge widening is now owned by a
@@ -1094,8 +1096,10 @@ Ordinary-loop zero-iteration/backedge widening is now owned by a
 `finalizeLoopBodyCfgExit -> reportLoopOuterResourceChanges` authority is absent.
 Finalization checks loop-local leaks and writes the terminal CFG state back to
 the caller. Root, field, array-element, alias, `break`, and `continue` fixtures
-retain their established diagnostics. Per the serial plan, the next patch must
-select a different registered T2 semantic-fact family before another move slice.
+retain their established diagnostics. The subsequent T2 slice removed C's
+default-`u32` reconstruction for sequenced comparison literals; C and LLVM now
+have symmetric positive, missing, and stale `expression_result` evidence. Per
+the serial plan, the next patch must select one residual M1.1 or M2 authority.
 
 This is deliberately an implementation gate, not hidden progress: the selected
 family closes only after its MIR artifact, C/LLVM positive cases, and missing/stale
@@ -1104,8 +1108,8 @@ finishes; pointer work remains trigger-driven.
 
 | Order | Eligible unit | Phase | Concrete first deliverable | Slice closes only when |
 |---|---|---|---|---|
-| 1 | Next typed semantic-fact family | T2.1-T2.3 | Select one different registered expression-result or shape family; either prove its syntax use is mechanics-only or add an MIR fact with both consumers and a missing/stale gate. | The family has artifact coverage, C/LLVM positive coverage, and missing/stale rejection or an explicitly tested conservative/diagnosed policy. |
-| 2 | Move residual authority | M1.1 or M2.1/M2.2 | After that T2 slice closes, select either one remaining formatted-key correctness decision or one branch, short-circuit, loop, or non-deferred exit transfer for common-worklist routing. | The selected specialized authority no longer decides correctness and equivalent ownership/join/backedge/exit regressions pass. |
+| 1 | Move residual authority | M1.1 or M2.1/M2.2 | Select either one remaining formatted-key correctness decision or one branch, short-circuit, loop, or non-deferred exit transfer for common-worklist routing. | The selected specialized authority no longer decides correctness and equivalent ownership/join/backedge/exit regressions pass. |
+| 2 | Next typed semantic-fact family | T2.1-T2.3 | After that move slice closes, select one different registered expression-result or shape family; either prove its syntax use is mechanics-only or add an MIR fact with both consumers and a missing/stale gate. | The family has artifact coverage, C/LLVM positive coverage, and missing/stale rejection or an explicitly tested conservative/diagnosed policy. |
 | 3 | Newly exposed pointer-flow boundary | P4.1, triggered only | Register the exact source-to-dereference flow exposed by the selected T2/M2 change and choose MIR proof, race-tolerant lowering, or a diagnostic. | C and LLVM both demonstrate the policy and the absent-proof path. |
 
 The first two rows are ordered work. The third is an interruption rule, not
@@ -1161,8 +1165,8 @@ slice becomes active only after its required family or boundary is selected.
 
 | Workstream | Current phase | Concrete current objective | What advances it | What does *not* advance it |
 |---|---|---|---|---|
-| Typed semantic facts / typed MIR | **T2.1-T2.3 - last slice complete; queued** | Source struct-literal construction class is now MIR-owned for ordinary structs, `#[c_union]`, and packed-bits. No new typed-fact family is active during the next move-authority slice. | Preserve the producer/consumer/admission inventory; select the next exact family only after the move slice closes. | Treating this bounded constructor class as closure of aggregate ABI/layout or all expression typing. |
-| CFG/place move checker | **M1.1/M2 - partial and eligible; no slice selected** | Keep the completed M3 projection boundary closed; name one remaining formatted-key correctness decision or one branch, loop, short-circuit, or exit transfer for structural/common-worklist routing. | The selected identity or transfer no longer depends on its compatibility key or specialized executor and has equivalent regressions. | Broadening a projection without first updating its rule or diagnostic inventory. |
+| Typed semantic facts / typed MIR | **T2.1-T2.3 - comparison-literal slice complete; queued** | Sequenced comparison literal operand typing now consumes the same `expression_result` fact in C and LLVM, with missing/stale admission evidence. No new typed-fact family is active during the next move-authority slice. | Preserve the producer/consumer/admission inventory; select the next exact family only after the move slice closes. | Treating this bounded literal consumer migration as closure of broader expression typing. |
+| CFG/place move checker | **M1.1/M2 - partial and eligible; no slice selected** | Keep the completed M3 projection boundary and ordinary-loop widening route closed; name one remaining formatted-key correctness decision or one branch, loop, short-circuit, or exit transfer for structural/common-worklist routing. | The selected identity or transfer no longer depends on its compatibility key or specialized executor and has equivalent regressions. | Broadening a projection without first updating its rule or diagnostic inventory. |
 | Pointer-provenance race lowering | **P4 - triggered only** | Keep the current conservative boundary matrix closed; act only when T2 or move work exposes a new pointer-flow boundary. | A named new boundary with a chosen MIR proof, conservative lowering, or diagnostic in both backends. | Expanding positive-provenance recognition merely because another syntax spelling exists. |
 
 The current serial order is deliberate: M1.2 and M3 closed the known move-state
@@ -1280,7 +1284,7 @@ accepted conservative fallback with a missing-fact test.
 | Phase | Status | Goal and deliverable | Evidence and exit condition |
 |---|---|---|---|
 | T1: inventory and admission gates | **Complete** | **Goal:** every known lowering-affecting semantic inference has an owner. **Deliverable:** fact producers, artifact printers, validation, and the finite inference register. | Inventory checks and missing/stale-fact admission tests protect the current subset; new families must be registered before backend consumption. |
-| T2: bounded fact migrations | **Workstream active; no concrete family slice selected** | **Goal:** retire one registered backend inference family at a time. **Deliverable:** MIR identity/type/payload facts plus C and LLVM consumers for the selected family. Direct calls, builtins, storage reads, inferred locals, bounded address places including const globals, target-typed char literals, source integer/boolean literals, source struct-literal construction class, MMIO, varargs, and traps are completed examples. | A migration is complete only with producer tests, fact dumps, C/LLVM positive tests, and missing/stale-fact rejection. |
+| T2: bounded fact migrations | **Workstream active; last bounded slice complete** | **Goal:** retire one registered backend inference family at a time. **Deliverable:** MIR identity/type/payload facts plus C and LLVM consumers for the selected family. Direct calls, builtins, storage reads, inferred locals, bounded address places including const globals, target-typed char literals, source integer/boolean literals including sequenced comparison operands, source struct-literal construction class, MMIO, varargs, and traps are completed examples. | A migration is complete only with producer tests, fact dumps, C/LLVM positive tests, and missing/stale-fact rejection. |
 | T3: legacy inference dispositions | **Waiting for the T2/M2 cycle** | **Goal:** no registered family remains an indefinite cleanup item. **Deliverable:** for each of the seven registered families, a final classification: MIR-owned, conservative fallback, or diagnosed unsupported boundary. | The inventory records the classification and tests enforce the fallback/diagnostic where migration is not yet justified. |
 | T4: semantic-authority closure | **Pending after T3** | **Goal:** lowering has one semantic authority. **Deliverable:** retire unregistered backend AST inference and leave only explicitly accepted mechanics-only AST use. | No lowering-affecting type, provenance, representation, call-target, or safety decision may rely on unregistered backend inference. |
 
@@ -1298,9 +1302,9 @@ slice; it is not “add facts wherever a test happens to fail.”
 
 | Unit | Phase | Required result | Exit evidence |
 |---|---|---|---|
-| T2.1: select one family | T2 | **Last completed bounded family:** source struct-literal construction class. MIR now distinguishes ordinary declared structs, C unions, and packed-bits independently of backend declaration-table route selection. Select one different registered family only after the current move-authority slice, then name its producer, consumers, and missing/stale policy. | The selection names an exact source family and semantic decision; it does not claim a migration is complete. |
-| T2.2: migrate the family | T2 | Emit an identity/type/payload fact in MIR and make both backends consume it. The struct-literal family is complete: MIR emits `AggregateConstructionKind`, and both backends dispatch source construction from it while using declarations only for validation/layout. | MIR artifact test plus C and LLVM positive tests. |
-| T2.3: fail-closed admission | T2 | Missing, stale, or retargeted prebuilt facts cannot cause backend rediscovery. The struct-literal family is complete: C and LLVM reject a removed or retargeted construction payload through their checked-MIR error surface. | C and LLVM missing/stale-fact rejection or conservative fallback tests. |
+| T2.1: select one family | T2 | **Last completed bounded family:** sequenced comparison literal operand typing within `c-expression-type-inference`. Its producer is the existing MIR `expression_result`; C's condition classifier and LLVM `exprType` are the consumers. Select one different registered family only after the next move-authority slice. | The selection names an exact source family and semantic decision; it does not claim broader expression inference complete. |
+| T2.2: migrate the family | T2 | The existing literal `expression_result` is consumed directly by C's sequenced comparison operand classifier; LLVM already consumes it through `exprType`. C no longer synthesizes default `u32`/`bool` semantic types for these source literals. | MIR artifact ownership plus C and LLVM positive tests. |
+| T2.3: fail-closed admission | T2 | Missing sequenced-comparison literal facts fail checked-MIR admission and retargeted facts fail C/LLVM lowering before either backend can rediscover the literal type. | C and LLVM missing/stale-fact rejection or conservative fallback tests. |
 | T3.1: classify every register row | T3 | Mark each remaining family MIR-owned, conservative fallback, or diagnosed unsupported. | Inventory gate verifies the classification and named implementation anchor. |
 | T4.1: semantic-authority audit | T4 | Remove or explicitly register every lowering-affecting AST inference. | No unregistered type, provenance, representation, call-target, ABI, or safety inference remains. |
 

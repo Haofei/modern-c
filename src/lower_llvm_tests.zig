@@ -3149,6 +3149,37 @@ test "LLVM inferred local literals require MIR types" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_literal_result, &stale_literal_result_output, "llvm_inferred_local_literal_types.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM sequenced comparison literals require MIR result types" {
+    const source =
+        \\fn wide() -> u64 { return 9; }
+        \\fn compare() -> bool { return wide() == 7; }
+    ;
+    var parsed = try test_support.parseCheckedModule("llvm_condition_literal_result.mc", source);
+    defer parsed.deinit();
+    const literal_offset = std.mem.indexOf(u8, source, "7") orelse return error.TestUnexpectedResult;
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_condition_literal_result.mc", .{}, false, .riscv64, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "icmp eq i64") != null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeFactAtOffsetForFunction(&missing, "compare", .expression_result, literal_offset, 1);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_condition_literal_result.mc", .{}, false, .riscv64, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactAtOffsetForFunction(&stale, "compare", .expression_result, literal_offset, 1, "bool");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_condition_literal_result.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM inferred local unary expressions require MIR types" {
     const source =
         \\fn unary(value: i64, enabled: bool) -> i64 {

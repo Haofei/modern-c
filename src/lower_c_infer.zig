@@ -18,7 +18,6 @@ const FnInfo = lower_c_model.FnInfo;
 const GlobalInfo = lower_c_model.GlobalInfo;
 const LocalInfo = lower_c_model.LocalInfo;
 const calleeIdentName = ast_query.calleeIdentName;
-const simpleNameType = ast_query.simpleNameType;
 const exprIsNumericLiteral = lower_c_expr.exprIsNumericLiteral;
 const isNumericValueBinaryOp = lower_c_expr.isNumericValueBinaryOp;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
@@ -501,8 +500,10 @@ fn numericExpressionResultType(ctx: TypeQueryContext, expr: ast.Expr, inferred: 
 pub fn conditionOperandTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return switch (expr.kind) {
         .ident => |ident| sourceTypeForIdent(ctx, ident.text, locals),
-        .bool_literal => simpleNameType("bool", expr.span),
-        .int_literal => simpleNameType("u32", expr.span),
+        // Source literal result types are MIR-owned. In particular, a numeric
+        // comparison literal may be contextually widened to its sibling's
+        // storage type; C must not recreate a default u32 decision here.
+        .bool_literal, .int_literal => ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span),
         .call => ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals),
         .grouped => |inner| conditionOperandTypeForEmission(ctx, inner.*, locals),
         .unary => |node| conditionOperandTypeForEmission(ctx, node.expr.*, locals),
