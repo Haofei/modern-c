@@ -16,6 +16,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn removeAliasSlotForStoragePlace",
         "fn bindingMoveSlotForIdent",
         "fn bindingMoveSlotForIdent(name: []const u8, state: *const MoveState)",
+        "fn removeBindingSlotForPlace",
         "fn aliasBindingMoveSlotForIdent",
         "fn aliasPlaceInfo",
         "fn aliasWildcardPlaceInfo",
@@ -70,6 +71,16 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "state.remove(key)": 0,
         "state.getPtr(target_info.key)": 0,
         "state.remove(target_info.key)": 0,
+        # The remaining direct MoveState key reads are assertions in the
+        # embedded unit tests. Production consumers use typed-place scans;
+        # changing either count forces an audit rather than silently adding a
+        # new compatibility-key authority.
+        "state.get(": 8,
+        "state.getPtr(": 0,
+        "state.contains(": 1,
+        "block_state.get(": 0,
+        "block_state.getPtr(": 0,
+        "block_state.contains(": 0,
         "outer.contains(aliasReferentRoot(referent))": 0,
         # M1.2c keeps array-index metadata exclusively in MoveState.index_facts.
         "slot.const_index": 0,
@@ -89,6 +100,23 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
     "src/sema_move.zig": {
         ("fn aliasWildcardPlaceInfo", "fn aliasPlaceBaseType"): [
             "const base = aliasPlaceKey(self, ix.base.*, state) orelse return null;",
+        ],
+        ("fn matchingMoveStateSlot", "fn moveStateSlotMatches"): [
+            "state.get(",
+            "state.getPtr(",
+            "state.contains(",
+            "state.remove(",
+        ],
+        ("fn bindingMoveSlotPtrForIdent", "fn ownershipMoveSlotPtrForPlace"): [
+            "state.get(",
+            "state.getPtr(",
+            "state.contains(",
+        ],
+        (".assignment => |a| {", "// `defer <expr>` runs at scope end"): [
+            "state.contains(id.text)",
+            "state.get(id.text)",
+            "state.getPtr(id.text)",
+            "state.remove(id.text)",
         ],
         ("pub fn moveDefer", "fn cleanupLocalAliasReferent"): [
             "markDeferredBorrowReferent(self, referent, deferredAliasBorrowPlace",

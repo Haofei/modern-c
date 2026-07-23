@@ -944,7 +944,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                     // `live=false, alias_of=...`). Overwrite/defer-reserve checks below
                     // only concern linear resources, not aliases (an alias is never `live`
                     // or `deferred`), and re-binding an alias must NOT flip it live.
-                    const had_slot = state.contains(id.text);
+                    const had_binding = bindingMoveSlotForIdent(id.text, state) != null;
                     const has_index_binding = state.index_bindings.contains(id.text);
                     const binding_slot = bindingMoveSlotPtrForIdent(id.text, state);
                     const was_alias = if (binding_slot) |slot| slot.alias_of != null else false;
@@ -962,7 +962,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                     moveConsume(self, a.value, state, aliases);
                     markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
                     if (has_index_binding) updateIndependentIndexFact(self, id.text, a.value, state);
-                    if (was_alias or target_can_store_alias or !had_slot) {
+                    if (was_alias or target_can_store_alias or !had_binding) {
                         // Re-derive the alias from the RHS: `p = &t2` keeps `p` a borrow
                         // (live=false) now aliasing `t2`, so it does not leak at exit and
                         // its stale-after-move tracking follows the NEW referent. If the RHS
@@ -971,7 +971,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                         // phantom-leak false positive this fixes.
                         if (aliasReferentForExpr(self, a.value, state, aliases)) |referent| {
                             if (trackedAliasReferent(referent, state)) |tracked_referent| {
-                                if (state.getPtr(id.text)) |slot| {
+                                if (bindingMoveSlotPtrForIdent(id.text, state)) |slot| {
                                     slot.alias_of = tracked_referent.key;
                                     slot.alias_place = tracked_referent.place;
                                     slot.live = false;
@@ -982,12 +982,12 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                                     };
                                 }
                             } else {
-                                _ = state.remove(id.text);
+                                _ = removeAliasSlotForStoragePlace(.{ .root = id.text }, state);
                             }
-                        } else if (state.contains(id.text)) {
-                            _ = state.remove(id.text);
+                        } else {
+                            _ = removeAliasSlotForStoragePlace(.{ .root = id.text }, state);
                         }
-                    } else if (state.getPtr(id.text)) |slot| {
+                    } else if (bindingMoveSlotPtrForIdent(id.text, state)) |slot| {
                         if (slot.type_only) {
                             slot.live = false;
                             slot.alias_of = null;
@@ -1180,12 +1180,12 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *co
             if (!else_div) worklist.propagateSuccessors(self, block, block_state);
         } else if (block == branch.then_exit) {
             if (then_bound_name) |name| {
-                if (block_state.getPtr(name)) |slot| {
+                if (bindingMoveSlotPtrForIdent(name, block_state)) |slot| {
                     if (slot.live and !slot.deferred) {
                         self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in an if-let branch is never consumed (must be moved, returned, or freed)");
                     }
                 }
-                _ = block_state.remove(name);
+                _ = removeBindingSlotForPlace(.{ .root = name }, block_state);
             }
             finalizeBranchLocals(self, block_state, state, true);
             worklist.propagateSuccessors(self, block, block_state);
@@ -1254,10 +1254,10 @@ fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *
                 };
                 const index = exit_index orelse continue;
                 if (bound_names[index]) |name| {
-                    if (block_state.getPtr(name)) |slot| if (slot.live and !slot.deferred) {
+                    if (bindingMoveSlotPtrForIdent(name, block_state)) |slot| if (slot.live and !slot.deferred) {
                         self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in a switch arm is never consumed (must be moved, returned, or freed)");
                     };
-                    _ = block_state.remove(name);
+                    _ = removeBindingSlotForPlace(.{ .root = name }, block_state);
                 }
                 finalizeBranchLocals(self, block_state, state, true);
                 worklist.propagateSuccessors(self, block, block_state);
@@ -1589,29 +1589,23 @@ fn mergeMoveBranchesImpl(
 // paths. Untyped legacy aliases and index facts retain their separate metadata
 // rules.
 fn matchingMoveStateSlot(state: *const MoveState, key: []const u8, slot: MoveSlot) ?MoveSlot {
-    if (isOwnershipMovePlace(slot, key)) {
-        const place = slot.place.?;
+    _ = key;
+    if (slot.place) |place| {
         var it = state.iterator();
         while (it.next()) |entry| {
-            if (!isOwnershipMovePlace(entry.value_ptr.*, entry.key_ptr.*)) continue;
             const candidate = entry.value_ptr.*;
-            if (candidate.place.?.eql(place)) return candidate;
+            const candidate_place = candidate.place orelse continue;
+            if (!candidate_place.eql(place)) continue;
+            if ((slot.alias_of != null) != (candidate.alias_of != null)) continue;
+            if (slot.type_only != candidate.type_only) continue;
+            return candidate;
         }
         return null;
     }
-    if (slot.alias_of != null) {
-        if (slot.place) |storage_place| {
-            var it = state.iterator();
-            while (it.next()) |entry| {
-                const candidate = entry.value_ptr.*;
-                if (candidate.alias_of == null) continue;
-                const candidate_place = candidate.place orelse continue;
-                if (candidate_place.eql(storage_place)) return candidate;
-            }
-            return null;
-        }
-    }
-    return state.get(key);
+    // Production ownership, alias, and type-only producers all carry a place.
+    // A key-only legacy slot cannot establish CFG identity; treating it as
+    // unmatched is the conservative join policy.
+    return null;
 }
 
 fn moveStateSlotMatches(state: *const MoveState, key: []const u8, slot: MoveSlot) bool {
@@ -2396,9 +2390,6 @@ fn aliasBindingMoveSlotForIdent(name: []const u8, state: *const MoveState) ?Move
 
 fn bindingMoveSlotPtrForIdent(name: []const u8, state: *MoveState) ?*MoveSlot {
     const expected: MovePlace = .{ .root = name };
-    if (state.getPtr(name)) |slot| {
-        if (slot.place) |place| if (place.eql(expected)) return slot;
-    }
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr;
@@ -2406,6 +2397,15 @@ fn bindingMoveSlotPtrForIdent(name: []const u8, state: *MoveState) ?*MoveSlot {
         if (place.eql(expected)) return slot;
     }
     return null;
+}
+
+fn removeBindingSlotForPlace(place: MovePlace, state: *MoveState) bool {
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const stored = entry.value_ptr.place orelse continue;
+        if (stored.eql(place)) return state.remove(entry.key_ptr.*);
+    }
+    return false;
 }
 
 fn ownershipMoveSlotPtrForPlace(place: MovePlace, state: *MoveState) ?*MoveSlot {
