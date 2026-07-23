@@ -347,6 +347,48 @@ family from backend authority must reduce the count.
 | `llvm-pointer-provenance-consumption` | Backend AST inference budget | The remaining LLVM local-only proof is migrated to MIR facts or explicitly accepted as a local emission proof, not semantic inference. |
 | `llvm-expression-type-inference` | Backend AST inference budget | LLVM expression type decisions that affect lowering are provided by typed facts/MIR or rejected when absent. |
 
+### T3 final backend inference dispositions
+
+T3 closes the classification question for the finite seven-family backend
+budget. It does not declare every family MIR-owned or freeze future migration.
+It requires every residual path to have one auditable terminal behavior today:
+consume a fact, lower conservatively, use a documented target-only policy, or
+diagnose unsupported input. No row may remain an unclassified cleanup item.
+
+| Family | Final disposition | Enforced boundary |
+|---|---|---|
+| `c-expression-type-inference` | `conservative-or-diagnosed` | Migrated source shapes require MIR facts; unrecognized or unsupported expression shapes return no type or reject emission instead of inventing one. |
+| `c-type-shape-classification` | `accepted-target-policy` | The named C aggregate/global and race-helper matrices decide internal C representation mechanics; unknown shapes reject or recurse conservatively and do not define source/external ABI. |
+| `c-abi-aggregate-lowering` | `diagnosed-unsupported` | Explicit C ABI/export by-value aggregates without target classification produce `E_EXTERN_STRUCT_BY_VALUE`; internal construction remains target mechanics around resolved layout. |
+| `c-direct-global-race-helpers` | `accepted-target-policy` | Only the documented scalar-width and recursive aggregate helper matrix is admitted; unsupported leaves fail emission. |
+| `c-pointer-provenance-consumption` | `conservative-fallback` | Missing positive provenance selects race-tolerant scalar/recursive aggregate lowering or rejects an unsupported leaf. |
+| `llvm-pointer-provenance-consumption` | `conservative-fallback` | Missing positive provenance selects unordered atomic scalar/recursive aggregate lowering or rejects an unsupported leaf; alias maps cannot create provenance. |
+| `llvm-expression-type-inference` | `conservative-or-diagnosed` | Migrated source shapes require MIR facts; unknown or unsupported shapes return no type or reject emission. |
+
+`semantic-facts-inventory.py` requires the disposition keys to match the budget
+exactly and anchors every row. Adding an eighth family therefore requires an
+explicit policy in the same patch; removing one requires reducing both sets.
+
+### T4 backend semantic-authority audit
+
+The production backend source surface is now an exact inventory, excluding
+test-only modules. Each C/LLVM lowering module has one top-level authority
+class. Adding or renaming a backend module without classifying it fails the
+semantic-facts inventory.
+
+| Authority class | Meaning | Modules |
+|---|---|---|
+| Registered semantic family | The module contains one or more residual semantic decisions governed by the seven-family budget and its final T3 disposition. It may also consume facts or perform mechanics. | `ast_query`; C aggregate/emitter/expression/global/inference/info/layout/shape/target/type modules; LLVM main/lookup/query/shape modules. |
+| MIR/fact consumer | Lowering selection is entered through the registered MIR identities, types, provenance, range, bounds, or representation facts anchored by the family inventory. AST access validates spelling, arity, layout, or emission operands after selection. | C entry/access/arithmetic/atomic/builtin/call/collect/conversion/domain/memory/MMIO/reflection/special/switch/try modules; LLVM atomic/reflection modules. |
+| Mechanics-only | The module encodes names, text, target syntax, CFG emission, aliases, attributes, runtime declarations, already-selected operations, or backend data models. It is not allowed to introduce a new lowering-affecting semantic classification without moving to a registered family or MIR/fact consumer class. | Remaining inventoried C/LLVM backend modules. |
+
+This is a supported-subset authority audit, not a proof derived automatically
+from Zig semantics. The exact-file gate prevents an unseen backend surface; the
+family anchors, retired-classifier counts, missing/stale tests, and review of
+the mechanics-only list constrain decisions inside those files. A new semantic
+decision in an existing mechanics module must reclassify that module and update
+the relevant family inventory in the same change.
+
 ### Scalar pointer deref default audit
 
 This audit gates the current default for ordinary scalar pointer dereferences:

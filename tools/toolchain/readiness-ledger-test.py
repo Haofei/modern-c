@@ -40,7 +40,7 @@ def main() -> int:
         return fail(f"header says {evidence} evidence entries, table contains {len(rows)}")
     if active != 0:
         return fail(f"header says {active} active slices; update the table and this guard together")
-    if open_workstreams != 3:
+    if open_workstreams != 2:
         return fail(f"header says {open_workstreams} open workstreams; update the closure matrices and this guard together")
 
     print(f"PASS: readiness-ledger-test - {evidence} evidence entries, {open_workstreams} open workstreams")

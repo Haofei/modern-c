@@ -242,6 +242,114 @@ BACKEND_AST_INFERENCE_BUDGET: dict[str, object] = {
     ],
 }
 
+# T3 is a disposition gate, not a claim that every backend query disappeared.
+# Every family in the finite backend budget must have one explicit terminal
+# policy. A family may later migrate to MIR, but it may not regress to an
+# unclassified cleanup item in the meantime.
+BACKEND_AST_INFERENCE_DISPOSITIONS: dict[str, str] = {
+    "c-expression-type-inference": "conservative-or-diagnosed",
+    "c-type-shape-classification": "accepted-target-policy",
+    "c-abi-aggregate-lowering": "diagnosed-unsupported",
+    "c-direct-global-race-helpers": "accepted-target-policy",
+    "c-pointer-provenance-consumption": "conservative-fallback",
+    "llvm-pointer-provenance-consumption": "conservative-fallback",
+    "llvm-expression-type-inference": "conservative-or-diagnosed",
+}
+
+T3_DISPOSITION_AUDIT: dict[str, list[str]] = {
+    "docs/typed-semantic-facts.md": [
+        "### T3 final backend inference dispositions",
+        "| `c-expression-type-inference` | `conservative-or-diagnosed` |",
+        "| `c-type-shape-classification` | `accepted-target-policy` |",
+        "| `c-abi-aggregate-lowering` | `diagnosed-unsupported` |",
+        "| `c-direct-global-race-helpers` | `accepted-target-policy` |",
+        "| `c-pointer-provenance-consumption` | `conservative-fallback` |",
+        "| `llvm-pointer-provenance-consumption` | `conservative-fallback` |",
+        "| `llvm-expression-type-inference` | `conservative-or-diagnosed` |",
+    ],
+    "docs/compiler-production-readiness.md": [
+        "T3 final backend-inference dispositions are inventory-gated",
+    ],
+}
+
+# T4 file-surface audit. This is intentionally an exact inventory of production
+# backend modules (tests are excluded). Adding a backend module must classify it
+# in the same patch; overlapping semantic decisions within a registered module
+# remain governed by the seven-family budget and the detailed anchors above.
+T4_BACKEND_FILE_AUTHORITY: dict[str, list[str]] = {
+    "registered-semantic-family": [
+        "src/ast_query.zig",
+        "src/lower_c_aggregate.zig",
+        "src/lower_c_emitter.zig",
+        "src/lower_c_expr.zig",
+        "src/lower_c_global.zig",
+        "src/lower_c_infer.zig",
+        "src/lower_c_info.zig",
+        "src/lower_c_layout.zig",
+        "src/lower_c_shape.zig",
+        "src/lower_c_target.zig",
+        "src/lower_c_type.zig",
+        "src/lower_llvm.zig",
+        "src/lower_llvm_lookup.zig",
+        "src/lower_llvm_query.zig",
+        "src/lower_llvm_shape.zig",
+    ],
+    "mir-fact-consumer": [
+        "src/lower_c.zig",
+        "src/lower_c_access.zig",
+        "src/lower_c_arith.zig",
+        "src/lower_c_atomic.zig",
+        "src/lower_c_builtin.zig",
+        "src/lower_c_builtin_emit.zig",
+        "src/lower_c_call.zig",
+        "src/lower_c_collect.zig",
+        "src/lower_c_convert.zig",
+        "src/lower_c_domain.zig",
+        "src/lower_c_memory.zig",
+        "src/lower_c_mmio.zig",
+        "src/lower_c_reflect.zig",
+        "src/lower_c_special.zig",
+        "src/lower_c_switch.zig",
+        "src/lower_c_try.zig",
+        "src/lower_llvm_atomic.zig",
+        "src/lower_llvm_reflect.zig",
+    ],
+    "mechanics-only": [
+        "src/lower_c_alias.zig",
+        "src/lower_c_asm.zig",
+        "src/lower_c_attr.zig",
+        "src/lower_c_const.zig",
+        "src/lower_c_defs.zig",
+        "src/lower_c_dispatch.zig",
+        "src/lower_c_flow.zig",
+        "src/lower_c_inspect.zig",
+        "src/lower_c_map.zig",
+        "src/lower_c_model.zig",
+        "src/lower_c_names.zig",
+        "src/lower_c_op.zig",
+        "src/lower_c_overlay.zig",
+        "src/lower_c_runtime.zig",
+        "src/lower_llvm_alias.zig",
+        "src/lower_llvm_model.zig",
+        "src/lower_llvm_op.zig",
+        "src/lower_llvm_prelude.zig",
+        "src/lower_llvm_text.zig",
+        "src/lower_llvm_type.zig",
+    ],
+}
+
+T4_AUTHORITY_AUDIT: dict[str, list[str]] = {
+    "docs/typed-semantic-facts.md": [
+        "### T4 backend semantic-authority audit",
+        "| Registered semantic family |",
+        "| MIR/fact consumer |",
+        "| Mechanics-only |",
+    ],
+    "docs/compiler-production-readiness.md": [
+        "T4 backend source surface is exact and classified",
+    ],
+}
+
 SCALAR_DEREF_DEFAULT_AUDIT: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "### Scalar pointer deref default audit",
@@ -1581,6 +1689,54 @@ def main() -> int:
         checked += 1
         if family not in SEMANTIC_INFERENCE_FAMILIES:
             missing.append(f"backend AST-inference budget: unknown family {family!r}")
+
+    checked += 1
+    if set(budget_families) != set(BACKEND_AST_INFERENCE_DISPOSITIONS):
+        missing.append("T3 disposition audit: disposition keys do not exactly match the backend AST-inference budget")
+
+    for relative, anchors in sorted(T3_DISPOSITION_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"T3 disposition audit: {relative}: file missing")
+            continue
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"T3 disposition audit: {relative}: missing anchor {anchor!r}")
+
+    backend_files = {"src/ast_query.zig"}
+    source_dir = REPO_ROOT / "src"
+    backend_files.update(
+        path.relative_to(REPO_ROOT).as_posix()
+        for pattern in ("lower_c.zig", "lower_c_*.zig", "lower_llvm.zig", "lower_llvm_*.zig")
+        for path in source_dir.glob(pattern)
+        if not path.name.endswith("_tests.zig")
+    )
+    classified_files = {relative for files in T4_BACKEND_FILE_AUTHORITY.values() for relative in files}
+    checked += 1
+    if backend_files != classified_files:
+        missing.append(
+            "T4 backend authority audit: exact file set differs; "
+            f"unclassified={sorted(backend_files - classified_files)!r}, "
+            f"stale={sorted(classified_files - backend_files)!r}"
+        )
+    classified_entries = [relative for files in T4_BACKEND_FILE_AUTHORITY.values() for relative in files]
+    checked += 1
+    if len(classified_entries) != len(classified_files):
+        missing.append("T4 backend authority audit: a backend file has multiple top-level classifications")
+    for relative, anchors in sorted(T4_AUTHORITY_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"T4 backend authority audit: {relative}: file missing")
+            continue
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"T4 backend authority audit: {relative}: missing anchor {anchor!r}")
 
     budget_docs = BACKEND_AST_INFERENCE_BUDGET["docs/typed-semantic-facts.md"]
     assert isinstance(budget_docs, list)

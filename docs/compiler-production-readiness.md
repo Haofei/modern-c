@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-22, based on the current compiler worktree**.
-Evidence register: **757 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **759 bounded implementation or regression entries, 0 active slices, 2 open architectural workstreams**.
 
 Comparative C/Rust/MC claims are governed separately by
 [`kernel-language-comparison-plan.md`](kernel-language-comparison-plan.md). That
@@ -923,6 +923,10 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Move type-name lookup uses structural ownership roots | The `exprMoveTypeName` decision used by trivial-drop checking no longer obtains a resource type from `state.get(source_spelling)`. It locates a non-alias ownership slot whose root `MovePlace` matches the source binding. A mismatched compatibility key cannot hide the type, and a same-spelled entry carrying another structural root cannot invent it. This is one M1.1 consumer migration, not checker closure. | `src/sema_move.zig` `ownershipBindingMoveSlotForIdent` / `exprMoveTypeName`; unit test `move type-name lookup uses structural ownership roots rather than map keys`; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
+| T3 final backend-inference dispositions are inventory-gated | Every family in the finite seven-row backend AST-inference budget now has an explicit terminal current policy: conservative fallback, diagnosed unsupported, or accepted target-only mechanics. The inventory requires exact key equality between the budget and disposition map and anchors all seven documented rows, so no residual family can remain an indefinite unclassified cleanup item. This closes T3 classification, not T4 semantic-authority audit and not general backend inference removal. | `tools/toolchain/semantic-facts-inventory.py` `BACKEND_AST_INFERENCE_DISPOSITIONS` / `T3_DISPOSITION_AUDIT`; `docs/typed-semantic-facts.md` `T3 final backend inference dispositions`; `python3 tools/toolchain/semantic-facts-inventory.py`; full production gate; `git diff --check`. |
+
+| T4 backend source surface is exact and classified | Every production `lower_c*`, `lower_llvm*`, and shared `ast_query` module is assigned exactly one top-level authority class: registered semantic family, MIR/fact consumer, or mechanics-only. The inventory discovers the files independently and fails on an unclassified/stale/duplicate entry. Combined with the seven-family dispositions and existing exact retired-classifier/missing-fact gates, this closes the supported-subset semantic-authority file audit; it does not claim that a script can infer semantic intent from arbitrary future Zig code. | `tools/toolchain/semantic-facts-inventory.py` `T4_BACKEND_FILE_AUTHORITY` / `T4_AUTHORITY_AUDIT`; `docs/typed-semantic-facts.md` `T4 backend semantic-authority audit`; `python3 tools/toolchain/semantic-facts-inventory.py`; full production gate; `git diff --check`. |
+
 | Assignment overwrite checks use structural binding roots | Assignment retains its compatibility-key presence check for const/symbolic index metadata and legacy-slot cleanup, while its resource-overwrite, deferred-reservation, and alias-category decisions now use the structural binding root. This preserves the dynamic-index fail-closed branch while preventing a compatibility key from selecting the ownership state used for diagnostics. This is one M1.2/M3 binding-slot separation step, not full assignment migration. | `src/sema_move.zig` assignment identifier branch / `bindingMoveSlotPtrForIdent`; `zig build test`; full production gate; `git diff --check`. |
 
 | Independent move index-fact transport model exists | `MoveIndexFact` / `MoveIndexFacts` establish a separate representation for constant and symbolic array-index metadata, with explicit clone, equality, invalidation, and conservative CFG join semantics. A join retains a fact only when every incoming path proves the exact same value. `MoveState` now carries this store alongside ownership slots through CFG worklists, loop snapshots, pending exits, replace, and equality; later producer migrations must use this state rather than add another store. | `src/sema_model.zig` `MoveIndexFact` / `MoveIndexFacts` / `MoveState`; `src/sema_move.zig` `cloneMoveState` / `replaceMoveState` / `mergeMoveBranchesImpl`; model and move-state transport tests; full production gate; `git diff --check`. |
@@ -1012,7 +1016,7 @@ counts never advance these sequences by themselves.
 
 | Workstream | Final goal | Ordered phase sequence | Current position | What may start next |
 |---|---|---|---|---|
-| Typed semantic facts / typed MIR | One MIR-owned semantic decision is consumed consistently by C and LLVM, with no unregistered lowering inference. | `T1 inventory` -> repeat `T2.1 select` -> `T2.2 migrate` -> `T2.3 admit` for each registered family -> `T3 classify remaining families` -> `T4 eliminate/register all inference`. | T1 complete; **T2.1 eligible, no active slice**. | Name exactly one family and its producer, consumers, and absent/stale policy; only then start T2.2. |
+| Typed semantic facts / typed MIR | One MIR-owned semantic decision is consumed consistently by C and LLVM, with no unregistered lowering inference. | `T1 inventory` -> repeat bounded `T2` migrations -> `T3 classify remaining families` -> `T4 eliminate/register all inference`. | T1 and T3 complete; bounded T2 migrations remain valid, and **T4.1 is current**. | Audit backend semantic decisions against the seven-family disposition register; remove or register every uncovered authority. |
 | CFG/place move checker | Structural places and CFG transfer/join, rather than compatibility keys or statement shape, decide every supported move result. | Complete M1.2a/M1.2b/M1.2c index-fact route and M3 projection route; finish the residual M1.1 place-identity migrations and M2.1/M2.2 CFG transfers; then `M4 retire compatibility-key authority`. M1.1 and M2 may be interleaved only when the selected path's dependencies are explicit. | M1.2 and M3 complete; **M1.1 and M2 partial, no active slice**. | After the selected T2 family closes, select one named residual M1.1 authority or one CFG transfer family; retain explicit diagnostics for unsupported projections. |
 | Pointer-provenance race lowering | Every pointer dereference has a declared MIR proof, conservative race-tolerant default, or diagnostic policy in both backends. | `P1 conservative default` -> `P2 direct MIR proofs` -> `P3 admitted-flow policy` -> repeat `P4.1 register/decide exposed boundary` -> `P4.2 audit complete register`. | P1-P3 complete for the named matrix; P4.1 is triggered only. | A T2 or move change must expose a named unclassified source-to-dereference flow. Do not create a speculative pointer slice. |
 
@@ -1082,8 +1086,8 @@ language shapes.
 |---|---|---|---|
 | Typed facts | T1 complete | The inference inventory and fact-admission gates exist. | No transition; new lowering families must enter the register. |
 | Typed facts | T2.1-T2.3 boolean-expression category slice complete | Function-address, bounded data-address including const globals, target-typed char literals, source member/grouped-expression and grouped-call category results, source block-expression results, source boolean expression results including comparison/logical operators, and source struct-literal construction class are complete bounded slices. | The intervening move type-name M1.1 slice is closed; select one different exact T2 family next. |
-| Typed facts | T3 queued | The remaining registered fallbacks need a final MIR-owned, conservative, or diagnostic disposition. | Start only after the current T2 family is closed end to end. |
-| Typed facts | T4 pending | Remove or explicitly register all remaining lowering-affecting backend inference. | Start only after every register row has a T3 disposition. |
+| Typed facts | T3 complete | Every family in the finite seven-row backend budget has a final conservative, diagnosed, or accepted-target-policy disposition, enforced by exact inventory equality. | No transition; a new budget family must add its disposition in the same patch. |
+| Typed facts | T4 complete | Every production backend module is exactly classified as a registered semantic-family surface, MIR/fact consumer, or mechanics-only; new modules fail the inventory until classified. | Keep the exact file surface, seven-family dispositions, and retired-classifier/missing-fact gates closed. |
 | Move checker | M1.2a/M1.2b/M1.2c complete | `MoveState` carries independent facts; no `MoveSlot` field or branch represents index metadata. | M3 is complete; the selected T2 family is closed, so one residual M1.1 or M2 slice is now eligible. |
 | Move checker | M3 complete | Field, deref, element, wildcard, alias, and non-nameable projection boundaries have explicit admission or diagnostic policies. | New projections must enter the inventory with a structural rule or stable diagnostic before implementation. |
 | Move checker | M1.1 and M2 partial, no active slice | Named full-dereference, deferred/stale-alias, and move type-name consumers now use structural places; other M1.1 compatibility authority remains. Ordinary and deferred loop zero-iteration/condition/backedge widening use the target-specific `MoveStateCfgWorklist` policy at `loop_head`; other named M2 transfers still retain specialized authority. | Per the serial execution order, select a different registered T2 semantic-fact family next; return to one named residual M1.1 or M2 authority only after that T2 slice closes. |
@@ -1092,9 +1096,9 @@ language shapes.
 | Provenance | P4.1 triggered | There is no active syntax-expansion task. A patch starts only after T2/M1 identifies an unclassified flow. | Register the flow and select MIR proof, conservative lowering, or a diagnostic before either backend supports it. |
 | Provenance | P4.2 queued | Audit that each registered boundary has the same C and LLVM policy. | Close only with positive and absent-proof evidence for every fallback-register row. |
 
-**Implementation order:** the boolean-expression category T2 slice and the subsequent
-move type-name M1.1 slice are complete; now select one exact registered
-T2 family, then return to one named residual M1.1 authority or M2 routing family. Pointer work
+**Implementation order:** the boolean-expression category T2 slice, move
+type-name M1.1 slice, T3 disposition gate, and T4 semantic-authority audit are
+complete. Now return to one named residual M1.1 authority or M2 routing family. Pointer work
 interrupts the sequence only for a newly observed unclassified flow. These are
 ordered closure units, not three simultaneous tasks or percentage-based backlogs.
 
@@ -1106,7 +1110,7 @@ names its input boundary, expected semantic owner, affected C and LLVM
 consumers, and the tests that will prove missing/stale behavior. This prevents a
 large architectural item from looking active merely because it is unfinished.
 
-**Current selection state: boolean-expression category T2 and move type-name M1.1 slices complete; one T2 family next.** M1.2c and
+**Current selection state: typed semantic authority T1-T4 complete for the supported subset; one residual M1.1 or M2 slice next.** M1.2c and
 M3 are complete: index metadata exists only in `MoveState.index_facts`, and every
 current move projection has either a structural rule or a stable diagnostic.
 Ordinary-loop zero-iteration/backedge widening is now owned by a
@@ -1118,18 +1122,18 @@ retain their established diagnostics. The latest T2 slice requires
 user-source boolean result categories to come from MIR in both backends; AST
 operators only validate the fact. The intervening M1.1 slice makes trivial-drop
 type-name lookup select the source binding by structural ownership root rather
-than a compatibility-map key. Per the serial plan,
-the next patch must select one different registered T2 family.
+than a compatibility-map key. T3 now gives every registered backend-inference
+family a terminal current policy. T4 inventories every production backend file
+under that register, MIR/fact consumption, or mechanics-only lowering.
 
-This is deliberately an implementation gate, not hidden progress: the selected
-family closes only after its MIR artifact, C/LLVM positive cases, and missing/stale
-admission cases exist. M2 CFG routing stays queued until that complete T2 slice
-finishes; pointer work remains trigger-driven.
+This is deliberately an implementation gate, not hidden progress: T4 is closed
+by the exact backend file-surface audit. The next selected move slice must retire
+one named identity or control-flow authority; pointer work remains trigger-driven.
 
 | Order | Eligible unit | Phase | Concrete first deliverable | Slice closes only when |
 |---|---|---|---|---|
-| 1 | Next typed semantic-fact family | T2.1-T2.3 | Select one different registered expression-result or shape family; either prove its syntax use is mechanics-only or add an MIR fact with both consumers and a missing/stale gate. | The family has artifact coverage, C/LLVM positive coverage, and missing/stale rejection or an explicitly tested conservative/diagnosed policy. |
-| 2 | Move residual authority | M1.1 or M2.1/M2.2 | After that T2 slice closes, select either one remaining formatted-key correctness decision or one branch, short-circuit, loop, or non-deferred exit transfer for common-worklist routing. | The selected specialized authority no longer decides correctness and equivalent ownership/join/backedge/exit regressions pass. |
+| 1 | Semantic-authority audit | T4.1 | Inventory every C/LLVM backend source file and classify its lowering decisions as MIR/fact-owned, one of the seven registered fallback families, or mechanics-only. | The gate rejects an unclassified backend file/authority and the audit records all accepted mechanics-only surfaces. |
+| 2 | Move residual authority | M1.1 or M2.1/M2.2 | After T4 closes, select either one remaining formatted-key correctness decision or one branch, short-circuit, loop, or non-deferred exit transfer for common-worklist routing. | The selected specialized authority no longer decides correctness and equivalent ownership/join/backedge/exit regressions pass. |
 | 3 | Newly exposed pointer-flow boundary | P4.1, triggered only | Register the exact source-to-dereference flow exposed by the selected T2/M2 change and choose MIR proof, race-tolerant lowering, or a diagnostic. | C and LLVM both demonstrate the policy and the absent-proof path. |
 
 The first two rows are ordered work. The third is an interruption rule, not
@@ -1178,20 +1182,22 @@ unbounded syntax-coverage queue: a new slice is valid only when it closes a
 named conservative boundary or records a project policy decision with matching
 C/LLVM evidence.
 
-**Open-workstream dashboard.** These are three architectural programs, not
-three single tickets. A workstream advances only through the named phases below.
+**Workstream dashboard.** These are three architectural programs, not
+three single tickets; typed semantic authority is now closed for the supported
+subset while the other two remain open. A workstream advances only through the named phases below.
 The dashboard identifies the eligible current phase; a concrete implementation
 slice becomes active only after its required family or boundary is selected.
 
 | Workstream | Current phase | Concrete current objective | What advances it | What does *not* advance it |
 |---|---|---|---|---|
-| Typed semantic facts / typed MIR | **T2.1 eligible; no slice selected** | The boolean-expression category slice remains closed. Select one different registered expression-result or shape family with its producer, both consumers, and absent/stale policy. | Complete its MIR artifact, C/LLVM positive, and missing/stale evidence before returning to move work. | Treating boolean category migration as closure of broader expression typing. |
+| Typed semantic facts / typed MIR | **T1-T4 complete for the supported subset** | T3 dispositions and the exact T4 backend source-surface classification are inventory-gated. | Keep the fact families, seven-family fallback budget, file classification, and missing/stale gates synchronized. | Treating closure of the supported subset as a general fully typed-MIR or unrestricted-language claim. |
 | CFG/place move checker | **M1.1/M2 - partial; move type-name consumer slice complete and queued** | Keep the completed M3 projection boundary, loop-head widening routes, and structural type-name/referent paths closed. After the next T2 slice, name one remaining formatted-key correctness decision or specialized transfer. | The selected identity or transfer no longer depends on its compatibility key or specialized executor and has equivalent regressions. | Broadening a projection without first updating its rule or diagnostic inventory. |
 | Pointer-provenance race lowering | **P4 - triggered only** | Keep the current conservative boundary matrix closed; act only when T2 or move work exposes a new pointer-flow boundary. | A named new boundary with a chosen MIR proof, conservative lowering, or diagnostic in both backends. | Expanding positive-provenance recognition merely because another syntax spelling exists. |
 
 The current serial order is deliberate: M1.2 and M3 closed the known move-state
-and projection boundaries; the boolean-expression category T2 and move
-type-name M1.1 slices just closed, so T2 again supplies the next semantic-authority migration before another move slice;
+and projection boundaries; the boolean-expression category T2, move type-name
+M1.1, T3 disposition, and T4 source-audit slices just closed, so one residual
+move authority supplies the next closure slice;
 P4 reopens only for a newly exposed
 pointer flow. This is why the pointer workstream can be open without being the
 current implementation slice.
@@ -1306,8 +1312,8 @@ accepted conservative fallback with a missing-fact test.
 |---|---|---|---|
 | T1: inventory and admission gates | **Complete** | **Goal:** every known lowering-affecting semantic inference has an owner. **Deliverable:** fact producers, artifact printers, validation, and the finite inference register. | Inventory checks and missing/stale-fact admission tests protect the current subset; new families must be registered before backend consumption. |
 | T2: bounded fact migrations | **Workstream active; last bounded slice complete** | **Goal:** retire one registered backend inference family at a time. **Deliverable:** MIR identity/type/payload facts plus C and LLVM consumers for the selected family. Direct calls, builtins, storage reads, inferred locals, bounded address places including const globals, grouped expression results, target-typed char literals, source integer/boolean literals including sequenced comparison operands, source struct-literal construction class, MMIO, varargs, and traps are completed examples. | A migration is complete only with producer tests, fact dumps, C/LLVM positive tests, and missing/stale-fact rejection. |
-| T3: legacy inference dispositions | **Waiting for the T2/M2 cycle** | **Goal:** no registered family remains an indefinite cleanup item. **Deliverable:** for each of the seven registered families, a final classification: MIR-owned, conservative fallback, or diagnosed unsupported boundary. | The inventory records the classification and tests enforce the fallback/diagnostic where migration is not yet justified. |
-| T4: semantic-authority closure | **Pending after T3** | **Goal:** lowering has one semantic authority. **Deliverable:** retire unregistered backend AST inference and leave only explicitly accepted mechanics-only AST use. | No lowering-affecting type, provenance, representation, call-target, or safety decision may rely on unregistered backend inference. |
+| T3: legacy inference dispositions | **Complete** | **Goal met:** no registered family remains an indefinite cleanup item. Every one of the seven budget families is classified as conservative fallback, diagnosed unsupported, or accepted target policy. | `BACKEND_AST_INFERENCE_DISPOSITIONS` exactly matches the budget and the documentation anchors every policy row. |
+| T4: semantic-authority closure | **Complete for the supported subset** | Every production backend module is classified under MIR/fact consumption, a registered final-disposition semantic family, or mechanics-only lowering. | The exact source-file inventory rejects an unseen backend surface; detailed family anchors and missing/stale/retired-classifier gates govern semantic decisions inside registered modules. |
 
 Closure matrix:
 
@@ -1326,8 +1332,8 @@ slice; it is not “add facts wherever a test happens to fail.”
 | T2.1: select one family | T2 | **Last completed bounded family:** boolean literal, comparison/logical binary, and logical-negation result categories within `c-expression-type-inference` / `llvm-expression-type-inference`. Their producer is the existing MIR `expression_result`; C and LLVM consume it before boolean emission. The subsequent move type-name M1.1 slice is also closed, so select one different registered family next. | The selection names an exact source family and semantic decision; it does not claim broader expression inference complete. |
 | T2.2: migrate the family | T2 | Boolean literal, comparison/logical binary, and logical-negation result categories consume `expression_result` in C and LLVM; the AST operation is only a stale-fact check, with a zero-span generated-node fallback. | MIR artifact ownership plus C and LLVM positive tests. |
 | T2.3: fail-closed admission | T2 | Missing boolean expression-result facts fail checked-MIR admission and retargeted facts fail C/LLVM lowering before operator spelling can recreate the boolean category. | C and LLVM missing/stale-fact rejection or conservative fallback tests. |
-| T3.1: classify every register row | T3 | Mark each remaining family MIR-owned, conservative fallback, or diagnosed unsupported. | Inventory gate verifies the classification and named implementation anchor. |
-| T4.1: semantic-authority audit | T4 | Remove or explicitly register every lowering-affecting AST inference. | No unregistered type, provenance, representation, call-target, ABI, or safety inference remains. |
+| T3.1: classify every register row | T3 | **Complete:** all seven backend-budget families have a final current disposition and exact inventory equality. | Inventory gate verifies the classification and named implementation anchor. |
+| T4.1: semantic-authority audit | T4 | **Complete for the supported subset:** every production backend file has exactly one top-level authority class. | Inventory rejects unclassified, stale, or multiply classified backend modules. |
 
 **Registered-family disposition.** This is the canonical T3 work queue. The
 seven-row budget is not a completion percentage: a row remains open until its
