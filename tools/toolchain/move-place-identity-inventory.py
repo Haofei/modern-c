@@ -15,6 +15,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn aliasSlotPtrForStoragePlace",
         "fn removeAliasSlotForStoragePlace",
         "fn bindingMoveSlotForIdent",
+        "fn bindingMoveSlotForIdent(name: []const u8, state: *const MoveState)",
         "fn aliasBindingMoveSlotForIdent",
         "fn aliasPlaceInfo",
         "fn aliasWildcardPlaceInfo",
@@ -126,6 +127,30 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
             "trackedMoveReferentPlaceForKey",
             "spine.",
             "markEscapedBorrowForReferentKey",
+        ],
+        ("fn hasUntypedBorrowAlias", "fn markEscapedBorrowForCarriedAlias"): [
+            "state.get(",
+            "state.getPtr(",
+            "state.contains(",
+        ],
+        ("fn aliasPlaceBaseType", "// Borrow: check the move bindings"): [
+            "state.get(",
+            "state.getPtr(",
+            "state.contains(",
+        ],
+        ("fn aliasStoragePlaceForExpr", "fn fullDerefMoveSubplace"): [
+            "state.get(",
+            "state.getPtr(",
+            "state.contains(",
+        ],
+        ("fn recordDeferredIdentAssignmentAlias", "fn moveDeferStmt"): [
+            "state.get(",
+            "state.getPtr(",
+            "state.remove(name.text)",
+        ],
+        ("fn recordTypeOnlyPlaceRoot", "// End of move-checker implementation."): [
+            "state.get(name.text)",
+            "state.getPtr(name.text)",
         ],
         ("fn integerCastBorrowedMoveRootPlace", "fn markEscapedBorrowForPlace"): [
             "castToIntegerMoveRoot",

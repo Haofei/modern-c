@@ -2034,6 +2034,23 @@ test "move place construction resolves typed roots before compatibility keys" {
     try std.testing.expect(sema_type.sameTypeSyntax(resolved.ty, ty));
 }
 
+test "move alias base typing uses structural binding roots rather than map keys" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "holder" };
+    const ty = ast_query.simpleNameType("Holder", span);
+    const holder = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "holder", .span = span } } };
+    var state = MoveState.init(std.testing.allocator);
+    defer state.deinit();
+
+    try state.put("compat:holder", .{ .live = false, .span = span, .place = root, .ty = ty, .type_only = true });
+    const resolved = aliasPlaceBaseType(holder, &state) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(sema_type.sameTypeSyntax(resolved, ty));
+
+    state.clearRetainingCapacity();
+    try state.put("holder", .{ .live = false, .span = span, .place = .{ .root = "other" }, .ty = ty, .type_only = true });
+    try std.testing.expect(aliasPlaceBaseType(holder, &state) == null);
+}
+
 test "move expression typing uses structural ownership roots rather than map keys" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-expression-root.mc", "");
     defer reporter.deinit();
@@ -2274,11 +2291,11 @@ test "move escaped borrows use typed roots rather than compatibility keys" {
     const recovered = borrowedMoveRootPlace(&checker, alias_borrow, &state) orelse return error.TestUnexpectedResult;
     try std.testing.expect(recovered.eql(field));
 
-    // A key-only legacy alias is still rejected explicitly, but it cannot be
-    // mistaken for the typed alias above.
+    // A key-only legacy alias is still rejected explicitly, but its map key
+    // cannot decide which source expression triggers the conservative guard.
     var legacy_target = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "legacy", .span = span } } };
     const legacy_borrow = ast.Expr{ .span = span, .kind = .{ .address_of = &legacy_target } };
-    try state.put("legacy", .{ .live = false, .span = span, .alias_of = "stale:owner" });
+    try state.put("unrelated:legacy:key", .{ .live = false, .span = span, .alias_of = "stale:owner" });
     try std.testing.expect(borrowedMoveRootPlace(&checker, legacy_borrow, &state) == null);
     try std.testing.expect(hasUntypedBorrowAlias(legacy_borrow, &state));
 }
@@ -2482,9 +2499,10 @@ fn markEscapedBorrowForPlace(place: MovePlace, escape_span: diagnostics.Span, st
     }
 }
 
-// A key-only escape candidate must never recover its owner by formatted text.
-// Its producer lost the typed place required for ownership tracking, so reject
-// the store/call boundary instead of accepting a potentially dangling borrow.
+// A key-only legacy alias must never recover its owner or binding identity from
+// formatted text. Production alias producers carry both places. If an incomplete
+// slot nevertheless reaches this defensive boundary, reject any named address
+// escape conservatively rather than making the slot's map key authoritative.
 fn hasUntypedBorrowAlias(expr: ast.Expr, state: *const MoveState) bool {
     const target = switch (expr.kind) {
         .address_of => |inner| inner.*,
@@ -2492,12 +2510,16 @@ fn hasUntypedBorrowAlias(expr: ast.Expr, state: *const MoveState) bool {
         .grouped => |inner| return hasUntypedBorrowAlias(inner.*, state),
         else => return false,
     };
-    const id = switch (target.kind) {
-        .ident => |value| value,
+    switch (target.kind) {
+        .ident => {},
         else => return false,
-    };
-    const slot = state.get(id.text) orelse return false;
-    return slot.alias_of != null and slot.alias_place == null;
+    }
+    var it = state.iterator();
+    while (it.next()) |entry| {
+        const slot = entry.value_ptr.*;
+        if (slot.alias_of != null and (slot.place == null or slot.alias_place == null)) return true;
+    }
+    return false;
 }
 
 // A named alias reaches this escape path with the source place it carried at
@@ -2597,7 +2619,7 @@ fn aliasStoragePlaceForExpr(self: *Checker, expr: ast.Expr, state: *const MoveSt
     switch (expr.kind) {
         .grouped => |inner| return aliasStoragePlaceForExpr(self, inner.*, state),
         .ident => |id| {
-            const slot = state.get(id.text) orelse return null;
+            const slot = bindingMoveSlotForIdent(id.text, state) orelse return null;
             return slot.place;
         },
         else => {},
@@ -3233,8 +3255,7 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const MoveState) 
         .ident => |id| {
             const slot = bindingMoveSlotForIdent(id.text, state) orelse return null;
             const ty = slot.ty orelse return null;
-            const place: MovePlace = slot.place orelse .{ .root = id.text };
-            return .{ .key = id.text, .place = place, .ty = ty };
+            return .{ .key = id.text, .place = slot.place.?, .ty = ty };
         },
         .member => |m| {
             const base = placeKeyAndType(self, m.base.*, state) orelse return null;
@@ -3297,11 +3318,6 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const MoveState) 
 // place before falling back to key-only metadata such as index facts.
 fn bindingMoveSlotForIdent(name: []const u8, state: *const MoveState) ?MoveSlot {
     const expected: MovePlace = .{ .root = name };
-    if (state.get(name)) |slot| {
-        if (slot.place) |place| {
-            if (place.eql(expected)) return slot;
-        } else return slot;
-    }
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -4935,7 +4951,7 @@ fn aliasPlaceBaseType(expr: ast.Expr, state: *const MoveState) ?ast.TypeExpr {
     switch (expr.kind) {
         .grouped => |inner| return aliasPlaceBaseType(inner.*, state),
         .ident => |id| {
-            const slot = state.get(id.text) orelse return null;
+            const slot = bindingMoveSlotForIdent(id.text, state) orelse return null;
             if (!slot.type_only) return null;
             return slot.ty;
         },
@@ -5224,7 +5240,7 @@ fn cleanupLocalAliasReferent(self: *Checker, init: ast.Expr, state: *const MoveS
 fn recordDeferredIdentAssignmentAlias(self: *Checker, name: ast.Ident, value: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     if (aliasReferentForExpr(self, value, state, aliases)) |referent| {
         if (trackedAliasReferent(referent, state)) |tracked_referent| {
-            if (state.getPtr(name.text)) |slot| {
+            if (bindingMoveSlotPtrForIdent(name.text, state)) |slot| {
                 slot.alias_of = tracked_referent.key;
                 slot.alias_place = tracked_referent.place;
                 slot.live = false;
@@ -5237,9 +5253,9 @@ fn recordDeferredIdentAssignmentAlias(self: *Checker, name: ast.Ident, value: as
             return;
         }
     }
-    if (state.getPtr(name.text)) |slot| {
+    if (bindingMoveSlotPtrForIdent(name.text, state)) |slot| {
         if (slot.alias_of != null) {
-            _ = state.remove(name.text);
+            _ = removeAliasSlotForStoragePlace(.{ .root = name.text }, state);
         }
     }
 }
@@ -5432,10 +5448,14 @@ fn trackDeferredCleanupLocal(self: *Checker, decl: ast.LocalDecl, state: *MoveSt
 
 fn recordTypeOnlyPlaceRoot(self: *Checker, name: ast.Ident, maybe_ty: ?ast.TypeExpr, state: *MoveState, cleanup_local: bool) void {
     const ty = maybe_ty orelse return;
-    if (state.get(name.text)) |slot| {
+    if (bindingMoveSlotPtrForIdent(name.text, state)) |slot| {
         if (slot.alias_of != null or (slot.live and !slot.type_only)) return;
+        slot.* = .{ .live = false, .span = name.span, .place = .{ .root = name.text }, .ty = ty, .type_only = true, .cleanup_local = cleanup_local };
+        return;
     }
     state.put(name.text, .{ .live = false, .span = name.span, .place = .{ .root = name.text }, .ty = ty, .type_only = true, .cleanup_local = cleanup_local }) catch {
         self.oom = true;
     };
 }
+
+// End of move-checker implementation.
