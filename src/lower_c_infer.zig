@@ -63,7 +63,11 @@ pub fn sliceReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
             const inferred = sliceTypeForBase(ctx, base_ty, node.base.*.span) orelse break :blk null;
             break :blk requireExpressionResultType(ctx, expr, inferred);
         },
-        .grouped => |inner| sliceReturnTypeForExpr(ctx, inner.*, locals),
+        .grouped => |inner| blk: {
+            const inferred = sliceReturnTypeForExpr(ctx, inner.*, locals) orelse break :blk null;
+            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+            break :blk requireExpressionResultType(ctx, expr, inferred);
+        },
         else => null,
     };
 }
@@ -71,7 +75,11 @@ pub fn sliceReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
 pub fn sliceReturnTypeForIndexBase(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |call| sliceReturnTypeForCall(ctx, call),
-        .grouped => |inner| sliceReturnTypeForIndexBase(ctx, inner.*),
+        .grouped => |inner| blk: {
+            const inferred = sliceReturnTypeForIndexBase(ctx, inner.*) orelse break :blk null;
+            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+            break :blk requireExpressionResultType(ctx, expr, inferred);
+        },
         else => null,
     };
 }
@@ -91,7 +99,11 @@ pub fn arrayReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeEx
             const ret_ty = callReturnType(ctx, node) orelse break :blk null;
             break :blk if (ret_ty.kind == .array) ret_ty else null;
         },
-        .grouped => |inner| arrayReturnTypeForExpr(ctx, inner.*),
+        .grouped => |inner| blk: {
+            const inferred = arrayReturnTypeForExpr(ctx, inner.*) orelse break :blk null;
+            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+            break :blk requireExpressionResultType(ctx, expr, inferred);
+        },
         else => null,
     };
 }
@@ -103,7 +115,11 @@ pub fn enumReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExp
             const enum_name = typeName(ret_ty) orelse break :blk null;
             break :blk if (ctx.enums.contains(enum_name)) ret_ty else null;
         },
-        .grouped => |inner| enumReturnTypeForExpr(ctx, inner.*),
+        .grouped => |inner| blk: {
+            const inferred = enumReturnTypeForExpr(ctx, inner.*) orelse break :blk null;
+            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+            break :blk requireExpressionResultType(ctx, expr, inferred);
+        },
         else => null,
     };
 }
@@ -115,7 +131,12 @@ pub fn enumNameForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Stri
     return switch (expr.kind) {
         .ident => |ident| enumNameForIdentValue(ctx, ident.text, locals),
         .call, .cast => enumNameForValueExpr(ctx, expr, locals),
-        .grouped => |inner| enumNameForExpr(ctx, inner.*, locals),
+        .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
+            enumNameForExpr(ctx, inner.*, locals)
+        else if (ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span)) |ty|
+            enumNameForType(ctx, ty)
+        else
+            null,
         else => null,
     };
 }
@@ -129,7 +150,12 @@ pub fn enumNameForValueExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std
         .call => |node| enumNameForCallValue(ctx, node),
         .cast => |node| enumNameForType(ctx, node.ty.*),
         .member => |node| enumNameForVariantPath(ctx, node, locals),
-        .grouped => |inner| enumNameForValueExpr(ctx, inner.*, locals),
+        .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
+            enumNameForValueExpr(ctx, inner.*, locals)
+        else if (ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span)) |ty|
+            enumNameForType(ctx, ty)
+        else
+            null,
         else => null,
     };
 }
@@ -171,7 +197,12 @@ pub fn exprIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
         .ident => |ident| identIsBoolForEmission(ctx, ident.text, locals),
         .call => if (ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals)) |ty| isBoolType(ty) else false,
         .index, .member => operandIsBoolForEmission(ctx, expr, locals),
-        .grouped => |inner| exprIsBoolForEmission(ctx, inner.*, locals),
+        .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
+            exprIsBoolForEmission(ctx, inner.*, locals)
+        else if (ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span)) |ty|
+            isBoolType(resolveAliasType(ctx, ty))
+        else
+            false,
         .binary => |node| binaryOpProducesBool(node.op),
         .unary => |node| node.op == .logical_not,
         else => false,
@@ -208,7 +239,11 @@ pub fn nullableReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.Typ
             const ret_ty = callReturnType(ctx, node) orelse break :blk null;
             break :blk if (resolveAliasType(ctx, ret_ty).kind == .nullable) ret_ty else null;
         },
-        .grouped => |inner| nullableReturnTypeForExpr(ctx, inner.*),
+        .grouped => |inner| blk: {
+            const inferred = nullableReturnTypeForExpr(ctx, inner.*) orelse break :blk null;
+            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+            break :blk requireExpressionResultType(ctx, expr, inferred);
+        },
         else => null,
     };
 }
@@ -223,7 +258,11 @@ pub fn taggedUnionReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.
             const type_name = typeName(resolveAliasType(ctx, ret_ty)) orelse break :blk null;
             break :blk if (ctx.tagged_unions.contains(type_name)) ret_ty else null;
         },
-        .grouped => |inner| taggedUnionReturnTypeForExpr(ctx, inner.*),
+        .grouped => |inner| blk: {
+            const inferred = taggedUnionReturnTypeForExpr(ctx, inner.*) orelse break :blk null;
+            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+            break :blk requireExpressionResultType(ctx, expr, inferred);
+        },
         else => null,
     };
 }
@@ -232,7 +271,11 @@ pub fn taggedUnionTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
     const ty = switch (expr.kind) {
         .call => taggedUnionReturnTypeForExpr(ctx, expr) orelse return null,
         .cast => |node| node.ty.*,
-        .grouped => |inner| return taggedUnionTypeForExpr(ctx, inner.*, locals),
+        .grouped => |inner| {
+            const inferred = taggedUnionTypeForExpr(ctx, inner.*, locals) orelse return null;
+            if (expr.span.line == 0 and expr.span.column == 0) return inferred;
+            return requireExpressionResultType(ctx, expr, inferred);
+        },
         else => operandEmitType(ctx, expr, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, expr, locals) orelse return null,
     };
     const type_name = typeName(resolveAliasType(ctx, ty)) orelse return null;
@@ -253,7 +296,11 @@ pub fn resultTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: *std.Str
             break :blk info.result_ty;
         },
         .call => |node| resultReturnTypeForCall(ctx, node),
-        .grouped => |inner| resultTypeForExpr(ctx, inner.*, locals),
+        .grouped => |inner| blk: {
+            const inferred = resultTypeForExpr(ctx, inner.*, locals) orelse break :blk null;
+            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+            break :blk requireExpressionResultType(ctx, expr, inferred);
+        },
         else => null,
     };
 }
@@ -333,7 +380,13 @@ pub fn arrayTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
             const resolved = resolveAliasType(ctx, resolved_source_ty);
             return if (resolved.kind == .array) resolved else null;
         },
-        .grouped => |inner| return arrayTypeForExpr(ctx, inner.*, locals),
+        .grouped => |inner| {
+            const inferred = arrayTypeForExpr(ctx, inner.*, locals) orelse return null;
+            if (expr.span.line == 0 and expr.span.column == 0) return inferred;
+            const fact = requireExpressionResultType(ctx, expr, inferred) orelse return null;
+            const resolved = resolveAliasType(ctx, fact);
+            return if (resolved.kind == .array) resolved else null;
+        },
         // MIR owns the result type of a member or index expression. In
         // particular, a nested array result must not be reconstructed by
         // walking the struct declaration or the previous array expression.
@@ -364,7 +417,12 @@ pub fn exprIsPointer(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.String
             const result_ty = operandEmitType(ctx, expr, locals) orelse break :blk false;
             break :blk resolveAliasType(ctx, result_ty).kind == .pointer;
         },
-        .grouped => |inner| exprIsPointer(ctx, inner.*, locals),
+        .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
+            exprIsPointer(ctx, inner.*, locals)
+        else if (ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span)) |ty|
+            resolveAliasType(ctx, ty).kind == .pointer
+        else
+            false,
         else => false,
     };
 }
@@ -379,7 +437,10 @@ pub fn derefPointeeType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
         .call => |node| pointeeTypeFromPointerLike(ctx, ctx.mir_target_type(ctx.source_ctx, .raw_many_offset_result, node.callee.*.span) orelse callReturnType(ctx, node) orelse return null),
         .cast => |node| pointeeTypeFromPointerLike(ctx, node.ty.*),
         .member, .index => pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null),
-        .grouped => |inner| derefPointeeType(ctx, inner.*, locals),
+        .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
+            derefPointeeType(ctx, inner.*, locals)
+        else
+            pointeeTypeFromPointerLike(ctx, ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return null),
         else => null,
     };
 }
@@ -411,7 +472,10 @@ pub fn structTypeNameForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
             const ty = operandEmitType(ctx, expr, locals) orelse break :blk null;
             break :blk structNameFromType(ctx, ty);
         },
-        .grouped => |inner| structTypeNameForExpr(ctx, inner.*, locals),
+        .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
+            structTypeNameForExpr(ctx, inner.*, locals)
+        else
+            structNameFromType(ctx, ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return null),
         else => null,
     };
 }
@@ -512,7 +576,11 @@ pub fn conditionOperandTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, lo
         // storage type; C must not recreate a default u32 decision here.
         .bool_literal, .int_literal => ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span),
         .call => ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals),
-        .grouped => |inner| conditionOperandTypeForEmission(ctx, inner.*, locals),
+        .grouped => |inner| blk: {
+            const inferred = conditionOperandTypeForEmission(ctx, inner.*, locals) orelse break :blk null;
+            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+            break :blk requireExpressionResultType(ctx, expr, inferred);
+        },
         .unary => |node| conditionOperandTypeForEmission(ctx, node.expr.*, locals),
         .binary => numericExprTypeForEmission(ctx, expr, locals),
         .index => operandEmitType(ctx, expr, locals),

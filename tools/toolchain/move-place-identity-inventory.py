@@ -92,6 +92,8 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
         ("pub fn moveDefer", "fn cleanupLocalAliasReferent"): [
             "markDeferredBorrowReferent(self, referent, deferredAliasBorrowPlace",
             "markDeferredBorrowReferent(self, referent.key",
+            "if (slot.alias_of) |referent| markDeferredBorrowAliasReferent",
+            ".{ .key = referent, .place = slot.alias_place",
         ],
         ("fn markDeferredBorrowReferent", "fn markDeferredBorrowAliasReferent"): [
             "state.get(",

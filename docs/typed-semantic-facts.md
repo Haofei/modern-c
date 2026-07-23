@@ -254,6 +254,13 @@ This is a bounded closure inside `c-expression-type-inference` and
 `llvm-expression-type-inference`, not closure of block expressions or broader
 computed-expression typing.
 
+The same rule now covers grouped direct calls and C's grouped result-category
+queries for arrays, slices, enums, tagged unions, `Result`, nullable values,
+pointers, structs, booleans, and condition operands. Their inner call or type
+classification may reject a stale outer fact but cannot supply the result when
+the outer source fact is absent. Exact `(make())` MIR/C/LLVM tests protect this
+boundary; zero-span generated expressions remain the only fallback.
+
 ### Semantic inference family register
 
 This register is the Phase 1 gate for backend semantic inference. Each row names

@@ -5052,8 +5052,8 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *co
     switch (expr.kind) {
         .ident => |id| {
             if (bindingMoveSlotPtrForIdent(id.text, state)) |slot| {
-                if (slot.alias_of) |referent| {
-                    markDeferredBorrowAliasReferent(self, .{ .key = referent, .place = slot.alias_place, .full_deref = slot.full_deref_alias }, expr.span, state);
+                if (slot.alias_of != null) {
+                    if (carriedAliasReferent(slot.*)) |referent| markDeferredBorrowAliasReferent(self, referent, expr.span, state);
                 } else if (slot.cleanup_local) {
                     consumeTrackedMoveBinding(self, id.text, expr.span, state);
                 } else if (!slot.live) {
@@ -5092,7 +5092,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *co
         .member => |m| {
             moveBorrow(self, m.base.*, state, aliases);
             if (aggregateFieldAliasSlot(self, expr, state)) |slot| {
-                if (slot.alias_of) |referent| markDeferredBorrowAliasReferent(self, .{ .key = referent, .place = slot.alias_place, .full_deref = slot.full_deref_alias }, expr.span, state);
+                if (carriedAliasReferent(slot)) |referent| markDeferredBorrowAliasReferent(self, referent, expr.span, state);
                 return;
             }
             // `defer free(p.field)`: reserve the move field for lexical cleanup so it is
@@ -5111,7 +5111,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *co
             moveBorrow(self, ix.base.*, state, aliases);
             moveConsume(self, ix.index.*, state, aliases);
             if (aliasPlaceSlot(self, expr, state)) |slot| {
-                if (slot.alias_of) |referent| markDeferredBorrowAliasReferent(self, .{ .key = referent, .place = slot.alias_place, .full_deref = slot.full_deref_alias }, expr.span, state);
+                if (carriedAliasReferent(slot)) |referent| markDeferredBorrowAliasReferent(self, referent, expr.span, state);
                 return;
             }
             // `defer free(arr[0])`: reserve a tracked constant-index element place for

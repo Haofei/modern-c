@@ -3557,7 +3557,13 @@ const CEmitter = struct {
         return switch (expr.kind) {
             .call => self.nullableReturnTypeForExpr(expr),
             .cast => if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else null,
-            .grouped => |inner| self.nullableTypeForExpr(inner.*, locals),
+            .grouped => |inner| blk: {
+                const inferred = self.nullableTypeForExpr(inner.*, locals) orelse break :blk null;
+                if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+                const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse break :blk null;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
+                break :blk fact.target_ty;
+            },
             else => self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals),
         };
     }
@@ -7490,7 +7496,13 @@ const CEmitter = struct {
     fn callReturnTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         return switch (expr.kind) {
             .call => |node| self.callReturnTypeForCall(node, locals),
-            .grouped => |inner| self.callReturnTypeForExpr(inner.*, locals),
+            .grouped => |inner| blk: {
+                const inferred = self.callReturnTypeForExpr(inner.*, locals) orelse break :blk null;
+                if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+                const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse break :blk null;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
+                break :blk fact.target_ty;
+            },
             else => null,
         };
     }
@@ -7640,7 +7652,13 @@ const CEmitter = struct {
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
                 self.sliceTypeForBase(self.exprSourceTypeForEmission(node.base.*, locals) orelse return null, node.base.*.span),
-            .grouped => |inner| self.exprSourceTypeForEmission(inner.*, locals),
+            .grouped => |inner| blk: {
+                const inferred = self.exprSourceTypeForEmission(inner.*, locals) orelse break :blk null;
+                if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+                const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse break :blk null;
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
+                break :blk fact.target_ty;
+            },
             .binary => |node| self.binarySourceTypeForEmission(expr, node, locals),
             .unary => |node| blk: {
                 if (node.op != .neg) break :blk null;
