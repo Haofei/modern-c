@@ -42,7 +42,7 @@ git -C /home/zoe/src/linux switch -c vrng-lang-experiment v7.2-rc4
 
 The experiment branch is based on `v7.2-rc4` /
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current implementation commit
-is `e82be712c8a5`, published as
+is `2ecc560220c6`, published as
 [`Haofei/linux:vrng-lang-experiment`](https://github.com/Haofei/linux/tree/vrng-lang-experiment).
 
 The container is sufficient for compilation and QEMU execution. Performance
@@ -138,3 +138,37 @@ zero. This makes the publication/removal interleaving deterministic. The runner
 requires both readers to terminate, the init process to reach its completion
 marker, and no kernel warning, sanitizer, lockdep, or hung-task diagnostic.
 Shadow mode also requires a nonzero event count with zero C/Rust/MC differences.
+
+Run the symmetric MC/Rust DMA typestate compile-pass/compile-fail gate:
+
+```sh
+tools/virtio-rng-experiment/run-dma-ownership.sh \
+  /home/zoe/src/linux zig-out/bin/mcc
+```
+
+Run the first kernel-contract mutation matrix. It proves that raw C and raw-FFI
+Rust accept the deliberate device-owned CPU access while Rust-safe and
+MC-contract reject it. It also checks stable MC rejection for IRQ sleep,
+unbounded IRQ flow, callback language traps, move/resource misuse, RCU and
+callback lifetime escape, unguarded lock data, stack/borrow escape, direct or
+misordered MMIO, address-space conversion, and DMA-address dereference. The
+ordinary spec suite supplies the accepted controls for the mixed fixtures:
+
+```sh
+tools/virtio-rng-experiment/run-contract-mutations.sh \
+  /home/zoe/src/linux zig-out/bin/mcc
+```
+
+Capture reproducible source/object/TCB-marker metrics and a protocol-core
+microbenchmark:
+
+```sh
+tools/virtio-rng-experiment/run-comparison-metrics.sh \
+  /home/zoe/src/linux zig-out/bin/mcc /tmp/vrng-comparison-metrics.tsv
+```
+
+The command writes a sibling `*-benchmark.tsv` report for the same optimized
+`begin_submit`/`complete`/`copy` cycle in each core. It is a controlled
+transition-throughput measurement, not a whole-driver, IRQ-latency, reviewer-
+time, or production-performance claim. Set `VRNG_BENCHMARK_ITERATIONS` to
+override the default one million iterations.

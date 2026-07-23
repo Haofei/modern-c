@@ -408,6 +408,7 @@ pub fn register(ctx: *h.Ctx) void {
     // move-pointer-pointee-boundary-inventory-test keeps pointer-pointee move-resource accept/reject policy explicit.
     m0_step.dependOn(ctx.cmd("move-pointer-pointee-boundary-inventory-test"));
     m0_step.dependOn(ctx.cmd("move-projection-inventory-test"));
+    m0_step.dependOn(ctx.cmd("kernel-contract-inventory-test"));
     // std-api-docs-test keeps the generated stdlib API index in sync with std/**/*.mc exports.
     m0_step.dependOn(ctx.cmd("std-api-docs-test"));
     // vendoring-test keeps third_party provenance and CVE/advisory process docs present.
@@ -936,6 +937,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("move-dynamic-place-policy-inventory-test"));
     fast_step.dependOn(ctx.cmd("move-pointer-pointee-boundary-inventory-test"));
     fast_step.dependOn(ctx.cmd("move-projection-inventory-test"));
+    fast_step.dependOn(ctx.cmd("kernel-contract-inventory-test"));
     fast_step.dependOn(ctx.cmd("std-api-docs-test"));
     fast_step.dependOn(ctx.cmd("vendoring-test"));
     fast_step.dependOn(ctx.cmd("third-party-licenses-test"));
@@ -991,6 +993,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("move-dynamic-place-policy-inventory-test")); // stable dynamic indexes stay distinct from unknown wildcards
     c0_step.dependOn(ctx.cmd("move-pointer-pointee-boundary-inventory-test")); // pointer-pointee move-resource accept/reject policy stays explicit
     c0_step.dependOn(ctx.cmd("move-projection-inventory-test")); // projection admission map stays explicit
+    c0_step.dependOn(ctx.cmd("kernel-contract-inventory-test")); // bounded region/effect/FFI profile stays explicit
     c0_step.dependOn(ctx.cmd("std-api-docs-test")); // generated stdlib API index stays current
     c0_step.dependOn(ctx.cmd("vendoring-test")); // third_party provenance and CVE/advisory process stay documented
     c0_step.dependOn(ctx.cmd("third-party-licenses-test")); // aggregated third-party license manifest stays complete

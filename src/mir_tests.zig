@@ -44,6 +44,30 @@ fn functionByNameMut(module: *mir.Module, name: []const u8) ?*mir.Function {
     return null;
 }
 
+test "MIR dump exposes bounded FFI parameter contracts" {
+    const source =
+        \\extern "C" fn dma_submit(cpu: [*]mut u8, dma: DmaAddr, len: usize) -> i32;
+        \\extern fn inspect(bytes: []const u8, optional: ?*const u8) -> void;
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_ffi_contracts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDump(std.testing.allocator, module, &dump);
+
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=dma_submit return=i32 no_lang_trap=false irq_context=false extern=true c_abi=true params=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "fn=dma_submit index=0 name=cpu kind=raw_many_pointer nonnull=true access=read_write extent=extern_contract alignment=type provenance=extern_unknown stable_until=call_return") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "fn=dma_submit index=1 name=dma kind=address address_class=dma conversion=explicit") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "fn=inspect index=0 name=bytes kind=slice nonnull=when_nonempty access=read extent=slice_length") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "fn=inspect index=1 name=optional kind=pointer nonnull=false access=read") != null);
+}
+
 fn functionHasInstruction(function: mir.Function, kind: mir.Instruction.Kind, detail: []const u8) bool {
     for (function.blocks) |block| {
         for (block.instructions) |instruction| {

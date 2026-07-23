@@ -2,7 +2,7 @@
 
 Status: **production-qualified supported subset, not an unrestricted production language**.
 Current assessment: **updated 2026-07-22, based on the current compiler worktree**.
-Evidence register: **769 bounded implementation or regression entries, 0 active slices, 0 open architectural workstreams**.
+Evidence register: **773 bounded implementation or regression entries, 0 active slices, 0 open architectural workstreams**.
 
 Comparative C/Rust/MC claims are governed separately by
 [`kernel-language-comparison-plan.md`](kernel-language-comparison-plan.md). That
@@ -61,13 +61,15 @@ The practical rule is:
 > typed semantic facts or MIR-owned state. When the fact is missing, lowering
 > must be conservative or the source must be rejected with a diagnostic.
 
-Longer-term designs such as `shared<T>`, restricted lifetime/region checking,
+Longer-term designs such as `shared<T>`, a general lifetime/region checker,
 `unsafe fn`, trait-qualified method namespaces, a true module graph, and
 bounded structural reflection are part of the broader production-readiness
-track. They are listed in the design-risk readiness table below. The three
-workstreams below remain the current compiler-implementation blockers for the
-supported subset; the design-risk table defines additional decisions required
-before a broad language/product production claim.
+track. The supported kernel profile now closes a restricted stack/Guard/RCU/
+Registration token boundary and emits bounded extern parameter contract
+metadata; it does not claim general lifetime inference. The three compiler
+qualification workstreams below are closed for the supported subset; the
+design-risk table defines additional decisions required before an unrestricted
+language/product production claim.
 
 ### Current Guarantee
 
@@ -979,11 +981,19 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Torn aggregate race semantics are explicit | Ordinary aggregate races use a non-coherent fieldwise model: a read may synthesize cross-field combinations never stored as one value, and no representation-coherence guarantee follows. Later use is a consequence of the erroneous race and may trap or have target-defined machine effects, while backends remain forbidden from deriving consistency, valid-tag, nonnull, range, or alias assumptions from the aggregate source type. Coherent snapshots require atomics or an explicit synchronization/versioning protocol. | `docs/spec/MC_0.7_Final_Design.md` section 19 aggregate-race rule; C/LLVM fieldwise aggregate lowering regressions; optimizer-assumption sweeps; `zig build test llvm-test llvm-obj-test llvm-sweep llvm-c-sweep`; `git diff --check`. |
 
+| Restricted Guard/RCU/Registration regions are capability-checked | Stack escape checks and linear capability tokens form the bounded kernel region model. A pointer derived by borrowing a lock guard, RCU read token, or callback registration carries that token's structural move place; consuming the token invalidates the pointer, and leaking the token is rejected. This is not general lifetime inference. | `tests/spec/local_address_escape.mc`; `tests/spec/lock_guards_data.mc` `reject_guarded_pointer_after_release`; `tests/spec/kernel_region_tokens.mc`; `E_LOCAL_ADDRESS_ESCAPE`, `E_BORROW_ESCAPES_SCOPE`, `E_USE_AFTER_MOVE`, `E_RESOURCE_LEAK`; `docs/kernel-region-and-ffi-contracts.md`; `tools/toolchain/kernel-contract-inventory.py`; `zig build test kernel-contract-inventory-test`. |
+
+| Extern pointer and address obligations are exposed as MIR metadata | Every extern pointer, raw-many pointer, slice, DMA address, physical address, and virtual address parameter produces a machine-readable `mir ffi_param_contract` record. The record exposes nullability, access mode, extent/alignment source, conservative extern provenance, call-return stability, and address class without inventing validity or optimizer assumptions. The dump consumes `Function.ffi_param_contracts`; it does not rescan AST parameters. | `src/mir_model.zig` `FfiParamContract` and `Function.ffi_param_contracts/is_extern/c_abi`; `src/mir.zig` `buildFfiParamContracts`; `src/mir_tests.zig` `MIR dump exposes bounded FFI parameter contracts`; `docs/kernel-region-and-ffi-contracts.md`; `zig test src/mir_tests.zig`. |
+
+| Symmetric DMA typestate and mutation evidence is executable | The virtio-rng M6 fixture now has matched MC and Rust owning-handle variants. Both reject CPU access in `DeviceOwned`; the raw C and raw-FFI Rust controls compile the same deliberate access. The mutation runner also proves MC rejects IRQ sleep, unbounded IRQ control flow, and callback language traps with stable diagnostics. | Linux `vrng_dma_ownership.{mc,rs}` and negative peers; `tools/virtio-rng-experiment/run-dma-ownership.sh`; `tools/virtio-rng-experiment/run-contract-mutations.sh`; committed C/Rust/MC mutation fixtures; `docs/kernel-language-comparison-plan.md`. |
+
+| Comparison source/object/TCB-marker and core-throughput metrics are reproducible | One runner compiles the C, Rust-raw, and MC-raw protocol cores plus matched Rust-safe and MC-contract DMA fixtures, records source LOC, explicitly defined trusted-marker counts, and optimized object bytes, then times the same valid three-transition cycle for every protocol core. It labels component scopes separately and reports the current material MC microbenchmark regression instead of promoting it into a performance claim. Whole-driver tail/IRQ/stack cost and reviewer time remain unmeasured. | `tools/virtio-rng-experiment/run-comparison-metrics.sh`; `tools/virtio-rng-experiment/host/vrng-host.c` `benchmark`; `tools/virtio-rng-experiment/README.md`; host execution; `docs/kernel-language-comparison-plan.md` K2-K4 remain unclaimed. |
+
 ### Bounded Workstream Status
 
-This is the authoritative execution dashboard for the three open compiler
-workstreams. It states what is left, what can be implemented next, and what
-closes a phase. It is not a fourth workstream or an unbounded test queue.
+This is the authoritative maintenance dashboard for the three closed compiler
+qualification workstreams. It states what reopens a row and what evidence must
+accompany an admitted extension.
 
 `Current` means the next eligible implementation slice, not uncommitted work.
 The header's `0 active slices` remains correct until a patch is being implemented
@@ -992,7 +1002,7 @@ or formatted-key inference and its listed evidence is gated.
 
 ### Canonical Execution Dashboard
 
-This is the authoritative plan for the three open compiler workstreams. It
+This is the authoritative plan for the three compiler qualification workstreams. It
 separates an umbrella's final objective, its current phase, and the condition
 that permits the next phase to start. A completed regression slice is evidence
 only unless it meets the exit condition of the phase it belongs to.
@@ -1023,42 +1033,40 @@ they must not introduce a conflicting next action.
 
 | Workstream | Final compiler property | Completed boundary | Current phase | Next bounded action | Whole-workstream exit |
 |---|---|---|---|---|---|
-| Typed semantic facts / typed MIR | C and LLVM consume the same MIR-owned type, call-target, provenance, representation, ABI, and safety decisions. AST is used only for admitted emission mechanics. | T1 inventory/admission is complete. Earlier T2 slices migrated the listed direct-call, builtin, storage, integer/default, target-typed char, bounds/range, representation, varargs, trap, member/index, function-address, bounded data-address, source-projection, and source integer/boolean literal-result decisions. | **Eligible: T2.1 select one exact registered family.** | Record one family, its exact decision, MIR producer, C consumer, LLVM consumer, and missing/stale policy; then complete T2.2 and T2.3 for that same family. | T3 assigns every legacy family a MIR-owned, conservative, or diagnostic disposition. T4 proves no lowering-affecting backend inference is unregistered. |
+| Typed semantic facts / typed MIR | C and LLVM consume the same MIR-owned type, call-target, provenance, representation, ABI, and safety decisions. AST is used only for admitted emission mechanics. | T1-T4 are complete for the supported subset, including the seven-family disposition register and exact production-backend audit. | **Complete; maintenance only.** | Register a new semantic family before admitting it; provide producer, both consumers, and missing/stale policy in the same change. | Reopen only if the exact inventory finds an unclassified lowering authority. |
 | CFG/place move checker | Every supported move decision is made by structural `MovePlace` identity plus CFG transfer/join state; compatibility strings are indexes/debug data only. | M1 place identity/index separation, M2 CFG routing, M3 projection admission, and M4 authority audit are complete for the supported subset. | **Complete for the supported subset.** | Keep exact specialized-transfer counts, typed-place identity gates, and projection diagnostics closed. | Reopen only when a new statement/projection family is admitted. |
 | Pointer-provenance race lowering | No C or LLVM lowering path turns an MC race into optimizer UB; positive local/global provenance comes only from MIR facts. | P1 conservative scalar default, P2 direct MIR proofs, P3 admitted-flow policy, and P4 complete-register parity are closed for the current matrix. | **Complete for the current admitted matrix; triggered on new flow.** | A newly admitted source-to-dereference flow must register and choose MIR proof, race-tolerant default, or diagnosed unsupported in both backends. | Every current row has positive/absent-proof parity; a new row reopens only itself. |
 
 ### Locked Phase Sequences
 
-The following sequences are the only definitions of phase order for the three
-open workstreams. A phase can be called complete only when its own exit evidence
+The following sequences are the definitions of phase order for the three
+qualification workstreams. A phase can be called complete only when its own exit evidence
 exists; a workstream can be called complete only when every phase in its sequence
 is complete or has an explicitly accepted limitation. Evidence rows and test
 counts never advance these sequences by themselves.
 
 | Workstream | Final goal | Ordered phase sequence | Current position | What may start next |
 |---|---|---|---|---|
-| Typed semantic facts / typed MIR | One MIR-owned semantic decision is consumed consistently by C and LLVM, with no unregistered lowering inference. | `T1 inventory` -> repeat bounded `T2` migrations -> `T3 classify remaining families` -> `T4 eliminate/register all inference`. | T1 and T3 complete; bounded T2 migrations remain valid, and **T4.1 is current**. | Audit backend semantic decisions against the seven-family disposition register; remove or register every uncovered authority. |
+| Typed semantic facts / typed MIR | One MIR-owned semantic decision is consumed consistently by C and LLVM, with no unregistered lowering inference. | `T1 inventory` -> repeat bounded `T2` migrations -> `T3 classify remaining families` -> `T4 eliminate/register all inference`. | **T1-T4 complete for the supported subset.** | Preserve the exact audit; a new family restarts its local T2/T3/T4 admission. |
 | CFG/place move checker | Structural places and CFG transfer/join, rather than compatibility keys or statement shape, decide every supported move result. | M1-M4 are complete for the supported statement/projection inventory. | **Complete for the supported subset.** | Preserve inventories and add any new statement/projection to them before implementation. |
 | Pointer-provenance race lowering | Every pointer dereference has a declared MIR proof, conservative race-tolerant default, or diagnostic policy in both backends. | `P1 conservative default` -> `P2 direct MIR proofs` -> `P3 admitted-flow policy` -> `P4.1 register` -> `P4.2 parity audit`. | **P1-P4 complete for the current matrix.** | A newly admitted unclassified source-to-dereference flow reopens its row; do not create speculative positive-provenance syntax. |
 
-**Global selection rule:** execute one complete `T2.1 -> T2.2 -> T2.3` family
-now. Pointer work may interrupt only for the triggered P4.1 condition above.
-M2 routing and M4 authority audit are now complete. Pointer P4 remains
-mandatory for move-checker closure and is not erased by completing M1.2 or M3.
-This is a serial implementation order for bounded patches, not three simultaneous
-active tasks.
+**Global maintenance rule:** no closure slice is active. A newly admitted
+semantic, statement/projection, or pointer-flow family reopens only its local
+T/M/P row and must complete the corresponding producer/consumer, worklist, or
+parity evidence before admission.
 
 **Remaining implementation map:**
 
 | Workstream | Ordered remaining phases | What starts it | What closes it |
 |---|---|---|---|
-| Typed semantic facts / typed MIR | T2.1 select one registered family -> T2.2 make MIR own its identity/type/payload -> T2.3 prove missing/stale facts cannot be rediscovered -> T3 classify every remaining register row -> T4 remove or explicitly register every lowering-affecting backend inference. | T2.1 selects the next family. | Every lowering-affecting decision is MIR-owned, or has a registered conservative/diagnostic policy with tests. |
+| Typed semantic facts / typed MIR | **T1-T4 complete for the supported subset.** New families repeat the bounded T2 producer/consumer/admission sequence and enter the T3/T4 inventories. | Only a proposed new lowering-affecting decision. | The new family is MIR-owned or has a registered conservative/diagnostic policy with tests. |
 | CFG/place move checker | **M1-M4 complete for the supported subset.** | No active move slice. | Every supported move path is decided by typed places and CFG transfer/join; unsupported projections have stable diagnostics. |
 | Pointer-provenance race lowering | **P1-P4 complete for the current matrix.** Newly exposed flows repeat P4.1 registration and P4.2 C/LLVM parity locally. | Only an admitted language change exposes a named, unclassified source-to-dereference flow. | Every pointer-flow boundary has an explicit MIR, conservative, or diagnostic policy, with matching C/LLVM evidence. |
 
 ### Phase Gate Tracker
 
-This is the actionable phase checklist for the three open workstreams. A row is
+This is the actionable phase checklist for the three qualification workstreams. A row is
 not started merely because its umbrella is open. It starts only at the stated
 entry condition, and it is complete only when its exit evidence exists.
 
@@ -1148,30 +1156,26 @@ family a terminal current policy. T4 inventories every production backend file
 under that register, MIR/fact consumption, or mechanics-only lowering.
 
 This is deliberately an implementation gate, not hidden progress: T4 is closed
-by the exact backend file-surface audit. The next selected move slice must retire
-one named identity or control-flow authority; pointer work remains trigger-driven.
+by the exact backend file-surface audit. Move and pointer work are trigger-driven
+when an admitted feature adds a new statement, projection, or pointer-flow row.
 
 | Order | Eligible unit | Phase | Concrete first deliverable | Slice closes only when |
 |---|---|---|---|---|
-| 1 | Semantic-authority audit | T4.1 | Inventory every C/LLVM backend source file and classify its lowering decisions as MIR/fact-owned, one of the seven registered fallback families, or mechanics-only. | The gate rejects an unclassified backend file/authority and the audit records all accepted mechanics-only surfaces. |
-| 2 | Move authority maintenance | M1-M4 | No active slice; keep exact identity, CFG-transfer, and projection inventories closed. | A new statement/projection must add its structural and worklist policy before admission. |
-| 3 | Newly exposed pointer-flow boundary | P4.1, triggered only | Register the exact source-to-dereference flow exposed by the selected T2/M2 change and choose MIR proof, race-tolerant lowering, or a diagnostic. | C and LLVM both demonstrate the policy and the absent-proof path. |
+| 1 | New semantic family | T2/T3/T4, triggered only | Register its decision, MIR producer, both consumers, and missing/stale policy. | Exact authority inventory and positive/negative backend evidence pass. |
+| 2 | New move statement/projection | M1-M4, triggered only | Add its structural identity, common-worklist transfer, and admission/diagnostic row. | Identity, CFG, and projection inventories pass. |
+| 3 | Newly exposed pointer-flow boundary | P4.1, triggered only | Register the source-to-dereference flow and choose MIR proof, race-tolerant lowering, or a diagnostic. | C and LLVM both demonstrate the policy and absent-proof path. |
 
-The first two rows are ordered work. The third is an interruption rule, not
-planned feature expansion. Do not mark any umbrella workstream complete,
-blocked, or percentage-complete from a single bounded slice.
+All rows are reopen conditions, not an active feature queue.
 
 | Historical bounded slice | Current disposition | Reopen condition |
 |---|---|---|
 | MIR aggregate-return pointer-field facts | **Completed bounded policy.** MIR owns the documented direct and bounded-CFG aggregate-return cases; unsupported aggregate shapes, ambiguous writes, escaping returns, non-transparent joins, and path overflow remain conservative rather than creating backend-local provenance. This row is P3 history, not active implementation. | Reopen only when T2 or M1 exposes a new aggregate-return pointer flow. Register it under P3/P4 first, then choose MIR proof, race-tolerant lowering, or a stable diagnostic before extending either backend. |
 
-### Open Architectural Workstreams
+### Qualification Workstream Closure Matrices
 
-These are **not three small TODOs**. Each item has a finite closure matrix below.
-The umbrella count drops only when every remaining matrix row is either completed
-or explicitly accepted as a limitation by project decision. Adding a regression
-fixture or another expression identity case is evidence-only unless it closes a
-named matrix row.
+These matrices record the finite boundary that closed each qualification
+workstream. A newly admitted family reopens only its affected row; a regression
+fixture alone does not broaden the supported subset.
 
 The workstreams are intentionally architectural because they remove duplicated
 semantic authority. A narrow slice is useful only when it moves one of these
@@ -1647,11 +1651,11 @@ history, but should not introduce a competing priority list.
 
 | Order | Priority | Item | Why it comes here | Next action | Closure condition |
 |---|---|---|---|---|---|
-| 1 | P0 | Typed semantic fact table / typed MIR | This is the foundation for most other closures: backends, async, move checking, ABI, and provenance cannot be made robust while each layer re-derives facts from AST shape. | Continue migrating backend-local type/provenance/representation decisions behind MIR or typed facts, one bounded family at a time. | Backends consume typed HIR/MIR facts for type, ABI, representation, call target, ownership, effects, and provenance, or each fallback is explicitly fail-closed and tested. |
-| 2 | P0 | CFG/place-based move checker | `move` is part of the safety contract. The checker must stop relying on lexical/string-key compatibility before move-resource acceptance can be trusted broadly. | Finish typed-place migration, then route statement families through the CFG/worklist engine. | Compatibility string-key state is no longer the correctness authority; typed places and CFG joins decide move state for the supported subset. |
-| 3 | P0 | Broader pointer-provenance race lowering / shared memory model ergonomics | This defines whether accepted racy or shared-memory programs preserve MC's "not LLVM UB" contract. It depends on typed-fact authority and is trigger-driven while its current boundary matrix remains closed. | When T2 or move work exposes an unclassified pointer flow, close that named gap or replace the inference burden with explicit `shared<T>` / `atomic<T>` / `volatile<T>` semantics. | Either the provenance/race-lowering closure matrix is complete, or the typed shared-memory model is shipped with migration tests and documentation. |
-| 4 | P0 | General temporal memory safety boundary | MC must explicitly decide whether dangling slices/views, `defer free` escapes, closure captures, async captures, and arena-scoped values are diagnosed or outside the production profile. | Choose restricted lifetime checking, unsafe-boundary diagnostics, or documented non-goals for each high-value escape class. | The production profile either implements the selected lifetime layer or documents unsupported cases with diagnostics/unsafe boundaries where applicable. |
-| 5 | P0 | `unsafe_contract` optimizer semantics | Contracts can silently change the optimizer's assumptions. The compiler must choose one model before broad production claims. | Pick check-elision only, whole-program unsafe optimizer assumption, or compiler-verified proof, then align spec and lowering. | Spec text, lowering rules, and tests prove contract violations cannot create a subtler optimizer contract than the chosen model. |
+| 1 | P0 | Typed semantic fact table / typed MIR | **Closed for the supported subset.** T1-T4 classify every production backend surface as fact consumer, registered conservative/diagnostic family, or mechanics-only. | Preserve the exact inventory; a new lowering decision must register before admission. | Reopen only for a newly admitted semantic family. |
+| 2 | P0 | CFG/place-based move checker | **Closed for the supported subset.** Structural places and the common worklist own admitted move results. | Preserve identity, CFG, and projection inventories. | Reopen only for a newly admitted statement/projection family. |
+| 3 | P0 | Broader pointer-provenance race lowering / shared memory model ergonomics | **Closed for the current admitted matrix.** Every pointer flow has a MIR proof, race-tolerant default, or diagnostic. | Trigger P4 registration only when a new flow is admitted. | C/LLVM parity remains exact for every registered row. |
+| 4 | P0 | Temporal memory safety boundary | **Closed as a restricted kernel profile, not general memory safety.** Stack/closure escape checks plus Guard/RCU/Registration/DMA linear tokens cover the selected high-value regions; broader async/arena/module/device inference is outside the profile unless adapted through a token or unsafe boundary. | Preserve the matrix in `kernel-region-and-ffi-contracts.md`; add a row before admitting a new lifetime form. | Every admitted region has a diagnostic/token rule and test; unsupported general inference is explicitly not claimed. |
+| 5 | P0 | `unsafe_contract` optimizer semantics | **Closed for the supported subset.** Contracts are region-scoped unspecified behavior; contract-only assumptions cannot persist after the region. | Preserve MIR region verification, post-region tests, and LLVM assumption sweeps. | Spec, MIR, C, and LLVM retain the region-scoped model with no persistent contract-derived metadata. |
 | 6 | P1 | Async expansion before typed IR | Async lowering should not grow while capture, liveness, move, borrow-across-await, and effect facts are not owned by typed IR. | Freeze new async surface area except correctness fixes, or rebase async lowering on typed facts/MIR. | New async syntax is blocked, or typed async lowering owns capture/liveness/effect validation with diagnostics for unsupported suspension cases. |
 | 7 | P1 | Module graph and separate compilation | Stable identities and interface boundaries determine whether the compiler can scale beyond whole-program compilation. | Decide whether broad production readiness requires `ModuleId`/`DeclId`/`TypeId`, interface hashes, and separate compilation. | Implement stable module/declaration/type ownership and interface boundaries, or document whole-program compilation as the production-profile constraint. |
 | 8 | P1 | Trait method namespace and coherence | Trait expansion is not composable without trait-qualified method identity and a coherent impl rule. | Either freeze trait scope or implement qualified disambiguation and coherence based on owning the trait or type. | Trait method collisions are resolved by explicit identity, or the limitation is documented as outside the production profile. |

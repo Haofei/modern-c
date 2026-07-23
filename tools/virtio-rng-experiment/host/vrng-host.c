@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "vrng_core_spec.h"
 
@@ -461,6 +462,62 @@ static int parse_injection(const char *argument,
 	return 0;
 }
 
+static uint64_t elapsed_nanoseconds(const struct timespec *start,
+				    const struct timespec *finish)
+{
+	return (uint64_t)(finish->tv_sec - start->tv_sec) * UINT64_C(1000000000) +
+	       (uint64_t)(finish->tv_nsec - start->tv_nsec);
+}
+
+static int benchmark(u64 iterations)
+{
+	u8 dma[64], destination[64];
+	u32 candidate_index, index;
+	volatile u64 checksum = 0;
+
+	if (!iterations)
+		return 1;
+	for (index = 0; index < sizeof(dma); index++)
+		dma[index] = (u8)index;
+	printf("implementation\titerations\tevents\tnanoseconds\tns_per_event\tevents_per_second\n");
+	for (candidate_index = 0; candidate_index <
+	     sizeof(candidates) / sizeof(candidates[0]); candidate_index++) {
+		const struct vrng_host_ops *ops = &candidates[candidate_index];
+		struct vrng_core_state state = {};
+		struct timespec start, finish;
+		u64 iteration, generation;
+		u64 nanoseconds, events;
+		u32 copied, need_resubmit;
+
+		if (ops->init(&state, sizeof(dma), 0))
+			return 1;
+		if (clock_gettime(CLOCK_MONOTONIC, &start))
+			return 1;
+		for (iteration = 0; iteration < iterations; iteration++) {
+			if (ops->begin_submit(&state, &generation) ||
+			    ops->complete(&state, generation, sizeof(dma),
+					  &need_resubmit) ||
+			    ops->copy(&state, dma, destination, sizeof(destination),
+				      &copied, &need_resubmit) ||
+			    copied != sizeof(dma))
+				return 1;
+			checksum += destination[iteration % sizeof(destination)] +
+				    generation + need_resubmit;
+		}
+		if (clock_gettime(CLOCK_MONOTONIC, &finish))
+			return 1;
+		nanoseconds = elapsed_nanoseconds(&start, &finish);
+		events = iterations * 3;
+		if (!nanoseconds || events / 3 != iterations)
+			return 1;
+		printf("%s\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64
+		       "\t%.3f\t%.0f\n", ops->name, iterations, events,
+		       nanoseconds, (double)nanoseconds / (double)events,
+		       (double)events * 1000000000.0 / (double)nanoseconds);
+	}
+	return checksum ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
 	struct vrng_host_injection injection = {};
@@ -470,10 +527,17 @@ int main(int argc, char **argv)
 	if (argc != 3 && argc != 5) {
 		fprintf(stderr,
 			"usage: vrng-host enumerate CORPUS_DIR [--inject candidate:event]\n"
-			"       vrng-host replay CORPUS [--inject candidate:event]\n");
+			"       vrng-host replay CORPUS [--inject candidate:event]\n"
+			"       vrng-host benchmark ITERATIONS\n");
 		return 1;
 	}
 	target = argv[2];
+	if (!strcmp(argv[1], "benchmark")) {
+		char *end;
+		u64 iterations = strtoull(target, &end, 10);
+
+		return *end ? 1 : benchmark(iterations);
+	}
 	if (argc == 5 && (strcmp(argv[3], "--inject") ||
 			  parse_injection(argv[4], &injection)))
 		return 1;

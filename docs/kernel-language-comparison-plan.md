@@ -1,6 +1,9 @@
 # Kernel language comparison plan: C, Rust, and MC
 
-Status: **research and evidence plan; no language-superiority claim yet**.
+Status: **K1 evidence complete for the bounded virtio-rng contract scenario.
+K2 has reproducible cost and protocol-core performance measurements but is not
+satisfied: the current MC core has a material microbenchmark regression and the
+TCB/reviewer/full-driver comparison is incomplete. K3-K4 remain unclaimed**.
 
 This document defines the evidence required to support a narrow claim:
 
@@ -21,6 +24,9 @@ readiness. Those remain owned by:
 The canonical T/M/P phase status lives only in
 `compiler-production-readiness.md`. This document consumes those closure results;
 it must not maintain a competing completion count.
+
+The current bounded developer measurements and their negative K2 conclusion are
+recorded in [`virtio-rng-comparison-evidence.md`](virtio-rng-comparison-evidence.md).
 
 ## 1. Claim boundary
 
@@ -94,21 +100,24 @@ Comparison work may begin on already closed fact families. A broad MC-contract
 claim requires the typed-fact T2 dispositions and the T3/T4 semantic-authority
 audit to satisfy the exit rule in `compiler-production-readiness.md`.
 
-Useful product surfaces, after the underlying authority exists, are:
+The current product surfaces are:
 
 ```text
-mcc dump-facts
-mcc verify-semantic-authority
-mcc compare-backend-facts
+mcc facts
+mcc lower-mir
+mcc verify
+python3 tools/toolchain/semantic-facts-inventory.py
 ```
 
-These commands are proposed interfaces, not current completion claims.
+Together they expose facts, verify MIR admission, and gate C/LLVM authority
+parity; no second set of alias command names is needed.
 
 ### 2.2 Place/CFG move authority
 
 Existing `MovePlace`, projection admission, conservative overlap, and bounded
-CFG/worklist routes are foundations, not a general borrow checker. Comparative
-linear-capability claims require:
+CFG/worklist routes are qualified foundations, not a general borrow checker.
+The following requirements are complete for the supported statement/projection
+inventory:
 
 - the residual M1.1 formatted-key correctness authority to be retired;
 - remaining M2 specialized transfer/merge authority to move to the common
@@ -147,9 +156,10 @@ Rust comparison, MC must implement or explicitly scope high-value escape cases:
   registration lifetimes;
 - optimizer semantics of `#[unsafe_contract]`.
 
-A restricted kernel region model is preferred over claiming general lifetime
-inference without evidence. Candidate region kinds include `Stack`, `Guard`,
-`Rcu`, `Device`, `Module`, `Registration`, and `Static`.
+A restricted kernel region model is implemented for Stack plus linear Guard,
+RCU, Registration, and DMA tokens. Module/device/arena and general inferred
+lifetimes remain outside the qualified profile. The exact boundary is in
+[`kernel-region-and-ffi-contracts.md`](kernel-region-and-ffi-contracts.md).
 
 ## 3. MC-contract capabilities to qualify
 
@@ -361,7 +371,7 @@ ready for unrestricted Linux driver development.
 
 ## 10. Execution order
 
-### P0: preserve claim integrity
+### P0: preserve claim integrity — complete for the supported subset
 
 1. Keep the compiler readiness T/M/P matrices canonical and closed for every
    feature used by an experiment.
@@ -376,16 +386,30 @@ ready for unrestricted Linux driver development.
 
 ### P1: qualify differentiated mechanisms
 
-6. Complete symmetric MC and Rust DMA typestate variants.
-7. Extend and qualify compositional IRQ/atomic/sleep effects.
-8. Qualify lock/RCU/callback registration lifetimes for one driver.
-9. Emit and consume machine-checkable FFI contract metadata.
+6. Complete symmetric MC and Rust DMA typestate variants. **Complete.**
+7. Extend and qualify compositional IRQ/atomic/sleep effects. **Complete for the
+   current strict IRQ/may-sleep/bounded/no-trap lattice.**
+8. Qualify lock/RCU/callback registration lifetimes for one driver. **Complete
+   as linear capability-token fixtures; external dispatch remains trusted.**
+9. Emit and consume machine-checkable FFI contract metadata. **Complete for
+   bounded pointer/slice/address parameter records; arbitrary validity formulas
+   remain explicit extern obligations.**
 
 ### P2: produce comparative evidence
 
 10. Run the five-implementation matrix on full driver lifecycles.
-11. Run the mutation taxonomy with teeth and false-positive controls.
+11. Run the mutation taxonomy with teeth and false-positive controls. **The
+    executable bounded slice covers DMA owner access, IRQ sleep/boundedness,
+    callback trap freedom, move/resource misuse, restricted RCU/callback/guard
+    and stack regions, MMIO ordering/access, and address classes. Missing atomic
+    barriers and whole-driver temporal faults remain runtime/model-checking
+    cases rather than claimed compile-time detections.**
 12. Capture TCB, reviewer-cost, build, codegen, stack, and runtime metrics.
+    **Source/object/trusted-marker and optimized protocol-core throughput are
+    reproducible now. The result is deliberately not promoted to K2: reviewer
+    time, stack/tail/IRQ cost, and full-driver performance remain unmeasured,
+    and the current MC microbenchmark is materially slower than C and Rust on
+    the development host.**
 13. Repeat under sanitizers, LKMM, hot-unplug, PM, and real-hardware soak.
 14. Obtain an independent reproduction and audit.
 

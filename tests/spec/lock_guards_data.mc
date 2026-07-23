@@ -107,6 +107,17 @@ fn reject_use_after_release() -> u32 {
     return p.*;
 }
 
+// A data pointer derived from the guard carries the guard's move place.  It may
+// not be used after unlock consumes that registration/lock lifetime token.
+fn reject_guarded_pointer_after_release() -> u32 {
+    var m: Guarded<u32> = Guarded.make(u32, 3);
+    var g: Guard<u32> = Guarded.lock(u32, &m);
+    let p: *mut u32 = Guard.get(u32, &g);
+    Guard.unlock(u32, g);
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return p.*;
+}
+
 // --- rejected: the guard is linear — forgetting to release leaks the resource ---
 
 fn reject_forget_release() -> u32 {

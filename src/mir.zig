@@ -73,6 +73,7 @@ pub const CallTargetFact = mir_model.CallTargetFact;
 pub const TargetTypeKind = mir_model.TargetTypeKind;
 pub const AggregateConstructionKind = mir_model.AggregateConstructionKind;
 pub const TargetTypeFact = mir_model.TargetTypeFact;
+pub const FfiParamContract = mir_model.FfiParamContract;
 
 pub const ResultConstructorFactInfo = struct {
     target_kind: TargetTypeKind,
@@ -384,6 +385,10 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
                     try functions.append(allocator, .{
                         .name = fn_decl.name.text,
                         .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases) else .void,
+                        .param_count = fn_decl.params.len,
+                        .is_extern = true,
+                        .c_abi = fn_decl.abi != null,
+                        .ffi_param_contracts = try buildFfiParamContracts(allocator, fn_decl.params),
                         .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
                         .irq_context = hasAttr(decl.attrs, "irq_context"),
                         .blocks = try allocator.alloc(Block, 0),
@@ -416,6 +421,76 @@ pub fn appendDump(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
     return appendDumpOpt(allocator, module, out, .{});
 }
 
+fn buildFfiParamContracts(
+    allocator: std.mem.Allocator,
+    params: []const ast.Param,
+) ![]FfiParamContract {
+    var facts: std.ArrayList(FfiParamContract) = .empty;
+    errdefer facts.deinit(allocator);
+    for (params, 0..) |param, index| {
+        var ty = param.ty;
+        var nullable = false;
+        while (true) {
+            switch (ty.kind) {
+                .qualified => |qualified| ty = qualified.child.*,
+                .nullable => |child| {
+                    nullable = true;
+                    ty = child.*;
+                },
+                else => break,
+            }
+        }
+        const fact: ?FfiParamContract = switch (ty.kind) {
+            .pointer => |pointer| .{
+                .index = index,
+                .name = param.name.text,
+                .kind = .pointer,
+                .nullability = if (nullable) .nullable else .nonnull,
+                .access = if (pointer.mutability == .mut) .read_write else .read,
+                .extent = .extern_contract,
+            },
+            .raw_many_pointer => |pointer| .{
+                .index = index,
+                .name = param.name.text,
+                .kind = .raw_many_pointer,
+                .nullability = if (nullable) .nullable else .nonnull,
+                .access = if (pointer.mutability == .mut) .read_write else .read,
+                .extent = .extern_contract,
+            },
+            .slice => |slice| .{
+                .index = index,
+                .name = param.name.text,
+                .kind = .slice,
+                .nullability = .when_nonempty,
+                .access = if (slice.mutability == .mut) .read_write else .read,
+                .extent = .slice_length,
+            },
+            .name => |name| blk: {
+                const address_class: AddressClass = if (std.mem.eql(u8, name.text, "DmaAddr"))
+                    .dma_addr
+                else if (std.mem.eql(u8, name.text, "PAddr"))
+                    .paddr
+                else if (std.mem.eql(u8, name.text, "VAddr"))
+                    .vaddr
+                else
+                    break :blk null;
+                break :blk .{
+                    .index = index,
+                    .name = param.name.text,
+                    .kind = .address,
+                    .nullability = .not_applicable,
+                    .access = .not_applicable,
+                    .extent = .not_applicable,
+                    .address_class = address_class,
+                };
+            },
+            else => null,
+        };
+        if (fact) |contract| try facts.append(allocator, contract);
+    }
+    return facts.toOwnedSlice(allocator);
+}
+
 pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), options: BuildOptions) !void {
     var mir = try buildOpt(allocator, module, options);
     defer mir.deinit();
@@ -423,9 +498,28 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
     for (mir.functions) |function| {
         try out.print(
             allocator,
-            "mir function name={s} return={s} no_lang_trap={} irq_context={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} const_get_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
-            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.const_get_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
+            "mir function name={s} return={s} no_lang_trap={} irq_context={} extern={} c_abi={} params={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} const_get_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
+            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.is_extern, function.c_abi, function.param_count, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.const_get_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
         );
+        for (function.ffi_param_contracts) |fact| {
+            if (fact.kind == .address) {
+                const address_class = switch (fact.address_class.?) {
+                    .dma_addr => "dma",
+                    .paddr => "physical",
+                    .vaddr => "virtual",
+                    else => unreachable,
+                };
+                try out.print(allocator, "mir ffi_param_contract fn={s} index={} name={s} kind=address address_class={s} conversion=explicit\n", .{ function.name, fact.index, fact.name, address_class });
+            } else {
+                const nonnull = switch (fact.nullability) {
+                    .nonnull => "true",
+                    .nullable => "false",
+                    .when_nonempty => "when_nonempty",
+                    .not_applicable => unreachable,
+                };
+                try out.print(allocator, "mir ffi_param_contract fn={s} index={} name={s} kind={s} nonnull={s} access={s} extent={s} alignment=type provenance=extern_unknown stable_until=call_return\n", .{ function.name, fact.index, fact.name, @tagName(fact.kind), nonnull, @tagName(fact.access), @tagName(fact.extent) });
+            }
+        }
         for (function.contract_regions) |region| {
             try out.print(
                 allocator,
@@ -3301,6 +3395,8 @@ const FunctionBuilder = struct {
     name: []const u8,
     return_ty: ValueType,
     return_type_expr: ?ast.TypeExpr,
+    param_count: usize = 0,
+    c_abi: bool = false,
     no_lang_trap: bool,
     irq_context: bool,
     naked: bool = false,
@@ -3396,6 +3492,8 @@ const FunctionBuilder = struct {
             .name = fn_decl.name.text,
             .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, enums, structs, packed_bits, aliases) else .void,
             .return_type_expr = fn_decl.return_type,
+            .param_count = fn_decl.params.len,
+            .c_abi = fn_decl.abi != null,
             .no_lang_trap = hasAttr(attrs, "no_lang_trap"),
             .irq_context = hasAttr(attrs, "irq_context"),
             .naked = hasAttr(attrs, "naked"),
@@ -3469,6 +3567,8 @@ const FunctionBuilder = struct {
             .name = name,
             .return_ty = .void,
             .return_type_expr = null,
+            .param_count = 0,
+            .c_abi = false,
             .no_lang_trap = false,
             .irq_context = false,
             .summaries = summaries,
@@ -3663,6 +3763,8 @@ const FunctionBuilder = struct {
         return .{
             .name = self.name,
             .return_ty = self.return_ty,
+            .param_count = self.param_count,
+            .c_abi = self.c_abi,
             .no_lang_trap = self.no_lang_trap,
             .irq_context = self.irq_context,
             .blocks = try blocks.toOwnedSlice(self.allocator),
@@ -9327,6 +9429,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.const_get_facts.len != 0) allocator.free(function.const_get_facts);
     if (function.call_target_facts.len != 0) allocator.free(function.call_target_facts);
     if (function.target_type_facts.len != 0) allocator.free(function.target_type_facts);
+    if (function.ffi_param_contracts.len != 0) allocator.free(function.ffi_param_contracts);
     for (function.generated_type_expr_nodes) |node| allocator.destroy(node);
     if (function.generated_type_expr_nodes.len != 0) allocator.free(function.generated_type_expr_nodes);
     for (function.generated_type_expr_args) |args| allocator.free(args);

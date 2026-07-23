@@ -502,9 +502,30 @@ pub const Block = struct {
     terminator: Terminator,
 };
 
+pub const FfiParamContract = struct {
+    pub const Kind = enum { pointer, raw_many_pointer, slice, address };
+    pub const Nullability = enum { nonnull, nullable, when_nonempty, not_applicable };
+    pub const Access = enum { read, read_write, not_applicable };
+    pub const Extent = enum { extern_contract, slice_length, not_applicable };
+
+    index: usize,
+    name: []const u8,
+    kind: Kind,
+    nullability: Nullability,
+    access: Access,
+    extent: Extent,
+    address_class: ?AddressClass = null,
+};
+
 pub const Function = struct {
     name: []const u8,
     return_ty: ValueType,
+    // Signature obligations are produced once as typed MIR facts. Consumers
+    // must not reconstruct them by rescanning source declarations.
+    param_count: usize = 0,
+    is_extern: bool = false,
+    c_abi: bool = false,
+    ffi_param_contracts: []FfiParamContract = &.{},
     no_lang_trap: bool,
     irq_context: bool,
     blocks: []Block,
@@ -549,6 +570,7 @@ pub const Module = struct {
             if (function.const_get_facts.len != 0) self.allocator.free(function.const_get_facts);
             if (function.call_target_facts.len != 0) self.allocator.free(function.call_target_facts);
             if (function.target_type_facts.len != 0) self.allocator.free(function.target_type_facts);
+            if (function.ffi_param_contracts.len != 0) self.allocator.free(function.ffi_param_contracts);
             for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);
             if (function.generated_type_expr_nodes.len != 0) self.allocator.free(function.generated_type_expr_nodes);
             for (function.generated_type_expr_args) |args| self.allocator.free(args);
