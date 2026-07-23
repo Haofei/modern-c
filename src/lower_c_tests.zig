@@ -2061,6 +2061,21 @@ test "lower-c grouped direct calls consume the outer MIR result fact" {
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_grouped_call_result.mc", .{}, false, null));
 }
 
+test "lower-c diagnoses source block expressions instead of inferring their result" {
+    const source =
+        \\fn block_result() -> u32 {
+        \\    return { 1 + 2; };
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_block_expression_policy.mc", source);
+    defer parsed.deinit();
+    var typed_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer typed_mir.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &typed_mir, &output, .kernel, "c_block_expression_policy.mc", .{}, false, null));
+}
+
 test "lower-c indexes direct fixed-array call results through MIR return types" {
     const source =
         \\fn make_matrix() -> [2][2]u32 { return .{ .{ 1, 2 }, .{ 3, 4 } }; }

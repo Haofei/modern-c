@@ -2715,6 +2715,34 @@ test "MIR owns grouped direct-call result types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns source block expression result types" {
+    const source =
+        \\fn block_result() -> u32 { return { 1 + 2; }; }
+    ;
+    const block_text = "{ 1 + 2; }";
+    const block_offset = std.mem.indexOf(u8, source, block_text) orelse return error.TestUnexpectedResult;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_block_expression_policy.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "block_result").?;
+    var found = false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .expression_result or fact.source.offset != block_offset or fact.source.len != block_text.len) continue;
+        try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+        found = true;
+    }
+    try std.testing.expect(found);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns direct address dereference result types" {
     const source =
         \\fn read_local() -> u32 {

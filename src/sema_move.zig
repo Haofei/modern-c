@@ -2113,7 +2113,9 @@ test "move stale aliases require carried typed referent places" {
     defer state.deinit();
 
     try state.put("compat:owner", .{ .live = false, .span = span, .place = root });
-    try std.testing.expect(aliasSlotReferentMoved(.{ .live = false, .span = span, .alias_of = "compat:owner", .alias_place = root }, &state));
+    // The textual referent intentionally does not name the state entry. Stale
+    // alias detection must follow the carried place instead.
+    try std.testing.expect(aliasSlotReferentMoved(.{ .live = false, .span = span, .alias_of = "unrelated:compatibility:key", .alias_place = root }, &state));
 
     try std.testing.expect(aliasSlotReferentMoved(.{ .live = false, .span = span, .alias_of = "compat:owner" }, &state));
 }
@@ -4843,9 +4845,8 @@ fn aliasConflictingSlotForStoragePlace(place: MovePlace, state: *const MoveState
 
 fn aliasSlotReferentMoved(slot: MoveSlot, state: *const MoveState) bool {
     if (slot.divergent_alias) return true;
-    _ = slot.alias_of orelse return false;
-    if (slot.alias_place) |typed| return referentPlaceMoved(typed, state);
-    return true;
+    const referent = carriedAliasReferent(slot) orelse return slot.alias_of != null;
+    return referentPlaceMoved(referent.place.?, state);
 }
 
 fn referentPlaceMoved(place: MovePlace, state: *const MoveState) bool {

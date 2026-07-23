@@ -2241,6 +2241,38 @@ test "LLVM grouped direct calls consume the outer MIR result fact" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_grouped_call_result.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM block expressions consume MIR result facts" {
+    const source =
+        \\fn block_result() -> u32 {
+        \\    return { 1 + 2; };
+        \\}
+    ;
+    const block_text = "{ 1 + 2; }";
+    const block_offset = std.mem.indexOf(u8, source, block_text) orelse return error.TestUnexpectedResult;
+    var parsed = try test_support.parseCheckedModule("llvm_block_expression_policy.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_block_expression_policy.mc", .{}, false, .riscv64, null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeFactAtOffsetForFunction(&missing, "block_result", .expression_result, block_offset, block_text.len);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_block_expression_policy.mc", .{}, false, .riscv64, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactAtOffsetForFunction(&stale, "block_result", .expression_result, block_offset, block_text.len, "u64");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_block_expression_policy.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM nested array member and index results require MIR expression facts" {
     const source =
         \\struct MatrixHolder { rows: [2][2]u32 }

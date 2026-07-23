@@ -251,8 +251,8 @@ The MIR, C, and LLVM regressions remove or retarget exactly the `(value)` row,
 so neither backend can restore outer result typing from the grouped AST.
 
 This is a bounded closure inside `c-expression-type-inference` and
-`llvm-expression-type-inference`, not closure of block expressions or broader
-computed-expression typing.
+`llvm-expression-type-inference`, not closure of broader computed-expression
+typing.
 
 The same rule now covers grouped direct calls and C's grouped result-category
 queries for arrays, slices, enums, tagged unions, `Result`, nullable values,
@@ -260,6 +260,17 @@ pointers, structs, booleans, and condition operands. Their inner call or type
 classification may reject a stale outer fact but cannot supply the result when
 the outer source fact is absent. Exact `(make())` MIR/C/LLVM tests protect this
 boundary; zero-span generated expressions remain the only fallback.
+
+### Source block expression policy
+
+User-source block expressions also carry a span-identified
+`expression_result` row. LLVM's admitted block-expression lowering consumes
+that row and rejects a missing or stale fact. The C backend does not currently
+admit block expressions as values: it returns its stable
+`UnsupportedCEmission` diagnostic instead of recursively inferring a result
+type. This is an explicit T2 disposition, not backend parity for syntax support:
+the semantic owner is MIR wherever the syntax is admitted, while an unsupported
+consumer must diagnose rather than guess.
 
 ### Semantic inference family register
 
