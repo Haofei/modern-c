@@ -142,6 +142,15 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
     },
 }
 
+# M2/M4 retirement counts. The remaining occurrences outside the common
+# worklist are helper definitions and embedded unit-test calls. Any new direct
+# statement-family merge changes the count and must be routed/audited.
+SPECIALIZED_TRANSFER_EXACT_COUNTS: dict[str, int] = {
+    "mergeMoveBranches(": 6,
+    "mergeShortCircuitMoveStates(": 5,
+    "reportLoopOuterResourceChanges(": 6,
+}
+
 ANCHORS: dict[str, list[str]] = {
     "src/sema_model.zig": [
         "pub const MoveCfgBlockKind = enum",
@@ -150,6 +159,7 @@ ANCHORS: dict[str, list[str]] = {
         "pub const MoveCfg = struct",
         "pub const MoveCfgWorklist = struct",
         "pub fn propagateSuccessors",
+        "entry_places: std.ArrayListUnmanaged(MovePlace)",
     ],
     "src/sema_tests.zig": [
         "move CFG skeleton joins branch states through worklist",
@@ -186,6 +196,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn moveDeferIfLetCfg",
         "fn moveDeferSwitchCfg",
         "fn moveDeferLoopCfg",
+        "fn loopFrameHasEntryPlace",
         "fn preserveOuterScopedMoveState",
         "linearMoveCfg(self, .exit)",
         "linearMoveCfg(self, .branch_join)",
@@ -320,6 +331,13 @@ def main() -> int:
             routing_errors = worklist_routing_errors(text)
             checked += sum(len(policy["required"]) + len(policy["forbidden"]) for policy in WORKLIST_ROUTING.values())
             missing.extend(routing_errors)
+            for needle, expected in sorted(SPECIALIZED_TRANSFER_EXACT_COUNTS.items()):
+                checked += 1
+                actual = text.count(needle)
+                if actual != expected:
+                    missing.append(
+                        f"src/sema_move.zig: expected {expected} M2/M4 occurrences of {needle!r}, found {actual}"
+                    )
 
     if missing:
         print("FAIL: move CFG skeleton inventory drift", file=sys.stderr)

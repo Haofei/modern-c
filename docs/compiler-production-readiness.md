@@ -1,17 +1,18 @@
 # Production readiness: the MC compiler (`mcc`)
 
-Status: **qualified subset, not generally production-ready**.
+Status: **production-qualified supported subset, not an unrestricted production language**.
 Current assessment: **updated 2026-07-22, based on the current compiler worktree**.
-Evidence register: **765 bounded implementation or regression entries, 0 active slices, 2 open architectural workstreams**.
+Evidence register: **769 bounded implementation or regression entries, 0 active slices, 0 open architectural workstreams**.
 
 Comparative C/Rust/MC claims are governed separately by
 [`kernel-language-comparison-plan.md`](kernel-language-comparison-plan.md). That
 plan consumes this ledger's qualification state and cannot override it.
 
-The compiler has locally verified behavior across its supported subset. It is not
-ready for an unrestricted production claim because pointer-provenance race
-lowering, typed-MIR ownership of semantic facts, and CFG/place-based move analysis
-still have open architectural closure boundaries.
+The compiler has locally verified and closed the three qualification matrices
+for its supported subset: typed semantic authority, CFG/place move analysis,
+and pointer-provenance race lowering. This does not justify an unrestricted
+production claim: the separately tracked lifetime, optimizer-contract,
+toolchain, release, hardware, and ecosystem risks remain explicit boundaries.
 
 The evidence count is an audit register, not a completion percentage. The three
 closure matrices below, rather than the evidence count, define the exit criteria
@@ -939,6 +940,14 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | M1.1 compatibility-key correctness authority is closed | Production move consumers no longer call `MoveState.get/getPtr/contains` to select ownership, alias, binding, type-only, invalidation, or CFG-join correctness. Remaining direct reads are exact-counted assertions inside embedded unit tests; production removals use a map key only after a typed-place scan identifies the entry. Compatibility strings remain storage/debug indexes, while `MovePlace` and conservative unmatched policy decide the supported subset. This closes M1.1, not M2 CFG routing, M4 checker closure, or general lifetime safety. | `src/sema_move.zig` typed-place helper families; `tools/toolchain/move-place-identity-inventory.py` exact direct-read counts and block guards; complete move-place unit/spec inventory; full production gate; `git diff --check`. |
 
+| Loop entry/local classification uses structural places | `LoopMoveFrame` now snapshots entry `MovePlace`s rather than compatibility-map names. `checkLoopExitLeaks` compares an exit slot against that structural set, so an outer owner under a different key is not misreported as loop-local, while a genuine loop-local place still produces exactly one leak diagnostic. Key-only legacy slots remain conservative locals. This closes the loop-frame membership edge of M1.1 and supplies an M2 terminal-edge regression. | `src/sema_model.zig` `LoopMoveFrame.entry_places`; `src/sema_move.zig` `loopFrameHasEntryPlace` / `checkLoopExitLeaks`; unit test `loop early-exit local classification uses entry places rather than keys`; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
+
+| M2 CFG/worklist routing is closed for the supported statement inventory | `if let`, switch, short-circuit, while-condition, ordinary/deferred loop backedges, labeled `break`/`continue`, `return`, `?`, and normal function/scoped/deferred/loop exits all transport real `MoveState` through the common worklist and execute exit diagnostics at terminal CFG blocks. Loop entry membership is structural. Exact specialized-transfer counts permit only the common join-policy calls, helper definitions, terminal loop-edge check, and embedded tests; a new direct statement-specific merge fails inventory. | `src/sema_move.zig` CFG/worklist routes; `src/sema_model.zig` `MoveCfg` / `MoveCfgWorklist` / `LoopMoveFrame.entry_places`; `tools/toolchain/move-cfg-skeleton-inventory.py` `WORKLIST_ROUTING` / `SPECIALIZED_TRANSFER_EXACT_COUNTS`; CFG and loop exit unit/spec tests; full production gate; `git diff --check`. |
+
+| M4 move-checker authority is closed for the supported subset | M1 makes `MovePlace` and independent index facts the identity authority; M2 makes the common CFG worklist the transfer/join authority; M3 requires every admitted projection to have a structural rule or stable diagnostic. M4 inventories the remaining helper/test call counts and rejects restoration of compatibility-key or statement-specific merge authority. This is bounded checker qualification, not a general borrow/lifetime proof. | `tools/toolchain/move-place-identity-inventory.py`; `tools/toolchain/move-cfg-skeleton-inventory.py`; move projection/unsupported/dynamic/pointee inventories; complete move unit/spec gates; `docs/compiler-production-readiness.md` M1-M4 matrices; full production gate; `git diff --check`. |
+
+| P4.2 C/LLVM provenance policy parity is closed | The complete current fallback register now has an umbrella audit covering unknown scalar dereferences, escapes, higher-order/exported returns, aggregate-return shapes outside the bounded CFG producer, and unsupported scalar/aggregate leaves. Every row has the same MIR-positive, race-tolerant absent-proof, or diagnosed-unsupported disposition in C and LLVM, anchored to paired suites. A newly admitted pointer-flow family reopens only its affected P3/P4 row. | `docs/typed-semantic-facts.md` `P4 C/LLVM provenance policy parity`; `tools/toolchain/semantic-facts-inventory.py` `P4_PROVENANCE_POLICY_PARITY_AUDIT` plus scalar/escape/return/aggregate audits; paired C/LLVM tests; `python3 tools/toolchain/semantic-facts-inventory.py`; full production gate; `git diff --check`. |
+
 | Assignment overwrite checks use structural binding roots | Assignment retains its compatibility-key presence check for const/symbolic index metadata and legacy-slot cleanup, while its resource-overwrite, deferred-reservation, and alias-category decisions now use the structural binding root. This preserves the dynamic-index fail-closed branch while preventing a compatibility key from selecting the ownership state used for diagnostics. This is one M1.2/M3 binding-slot separation step, not full assignment migration. | `src/sema_move.zig` assignment identifier branch / `bindingMoveSlotPtrForIdent`; `zig build test`; full production gate; `git diff --check`. |
 
 | Independent move index-fact transport model exists | `MoveIndexFact` / `MoveIndexFacts` establish a separate representation for constant and symbolic array-index metadata, with explicit clone, equality, invalidation, and conservative CFG join semantics. A join retains a fact only when every incoming path proves the exact same value. `MoveState` now carries this store alongside ownership slots through CFG worklists, loop snapshots, pending exits, replace, and equality; later producer migrations must use this state rather than add another store. | `src/sema_model.zig` `MoveIndexFact` / `MoveIndexFacts` / `MoveState`; `src/sema_move.zig` `cloneMoveState` / `replaceMoveState` / `mergeMoveBranchesImpl`; model and move-state transport tests; full production gate; `git diff --check`. |
@@ -1015,8 +1024,8 @@ they must not introduce a conflicting next action.
 | Workstream | Final compiler property | Completed boundary | Current phase | Next bounded action | Whole-workstream exit |
 |---|---|---|---|---|---|
 | Typed semantic facts / typed MIR | C and LLVM consume the same MIR-owned type, call-target, provenance, representation, ABI, and safety decisions. AST is used only for admitted emission mechanics. | T1 inventory/admission is complete. Earlier T2 slices migrated the listed direct-call, builtin, storage, integer/default, target-typed char, bounds/range, representation, varargs, trap, member/index, function-address, bounded data-address, source-projection, and source integer/boolean literal-result decisions. | **Eligible: T2.1 select one exact registered family.** | Record one family, its exact decision, MIR producer, C consumer, LLVM consumer, and missing/stale policy; then complete T2.2 and T2.3 for that same family. | T3 assigns every legacy family a MIR-owned, conservative, or diagnostic disposition. T4 proves no lowering-affecting backend inference is unregistered. |
-| CFG/place move checker | Every supported move decision is made by structural `MovePlace` identity plus CFG transfer/join state; compatibility strings are indexes/debug data only. | M1 place identity/index separation and M3 projection admission are complete. M2 CFG routing is partial, with bounded branch/loop/deferred routes and worklist terminal states for normal function, scoped-block, deferred-cleanup, normal loop, `break`, and `continue` exits. | **Partial; M2 is current.** | Do not broaden projections. Select one remaining branch/short-circuit/loop/non-deferred-exit transfer and remove that specialized authority with join and diagnostic regressions. | M2 closes, then M4 proves common CFG authority for the supported subset. |
-| Pointer-provenance race lowering | No C or LLVM lowering path turns an MC race into optimizer UB; positive local/global provenance comes only from MIR facts. | P1 conservative scalar default, P2 direct MIR proofs, and P3 policy for the currently admitted pointer-flow matrix are complete. | **Triggered only: P4.1 boundary register.** | When T2 or move work exposes a named unclassified source-to-dereference flow, register it and choose exactly one policy: MIR proof, race-tolerant default, or diagnosed unsupported. | P4.2 verifies C/LLVM policy parity, including absent-proof paths, for every registered flow. |
+| CFG/place move checker | Every supported move decision is made by structural `MovePlace` identity plus CFG transfer/join state; compatibility strings are indexes/debug data only. | M1 place identity/index separation, M2 CFG routing, M3 projection admission, and M4 authority audit are complete for the supported subset. | **Complete for the supported subset.** | Keep exact specialized-transfer counts, typed-place identity gates, and projection diagnostics closed. | Reopen only when a new statement/projection family is admitted. |
+| Pointer-provenance race lowering | No C or LLVM lowering path turns an MC race into optimizer UB; positive local/global provenance comes only from MIR facts. | P1 conservative scalar default, P2 direct MIR proofs, P3 admitted-flow policy, and P4 complete-register parity are closed for the current matrix. | **Complete for the current admitted matrix; triggered on new flow.** | A newly admitted source-to-dereference flow must register and choose MIR proof, race-tolerant default, or diagnosed unsupported in both backends. | Every current row has positive/absent-proof parity; a new row reopens only itself. |
 
 ### Locked Phase Sequences
 
@@ -1029,12 +1038,12 @@ counts never advance these sequences by themselves.
 | Workstream | Final goal | Ordered phase sequence | Current position | What may start next |
 |---|---|---|---|---|
 | Typed semantic facts / typed MIR | One MIR-owned semantic decision is consumed consistently by C and LLVM, with no unregistered lowering inference. | `T1 inventory` -> repeat bounded `T2` migrations -> `T3 classify remaining families` -> `T4 eliminate/register all inference`. | T1 and T3 complete; bounded T2 migrations remain valid, and **T4.1 is current**. | Audit backend semantic decisions against the seven-family disposition register; remove or register every uncovered authority. |
-| CFG/place move checker | Structural places and CFG transfer/join, rather than compatibility keys or statement shape, decide every supported move result. | M1 place identity/index-fact routes and M3 projection route are complete; finish M2.1/M2.2 CFG transfers, then close M4 common-engine authority. | **M1 and M3 complete; M2 partial and current.** | Select one named CFG transfer family; retain explicit diagnostics for unsupported projections. |
-| Pointer-provenance race lowering | Every pointer dereference has a declared MIR proof, conservative race-tolerant default, or diagnostic policy in both backends. | `P1 conservative default` -> `P2 direct MIR proofs` -> `P3 admitted-flow policy` -> repeat `P4.1 register/decide exposed boundary` -> `P4.2 audit complete register`. | P1-P3 complete for the named matrix; P4.1 is triggered only. | A T2 or move change must expose a named unclassified source-to-dereference flow. Do not create a speculative pointer slice. |
+| CFG/place move checker | Structural places and CFG transfer/join, rather than compatibility keys or statement shape, decide every supported move result. | M1-M4 are complete for the supported statement/projection inventory. | **Complete for the supported subset.** | Preserve inventories and add any new statement/projection to them before implementation. |
+| Pointer-provenance race lowering | Every pointer dereference has a declared MIR proof, conservative race-tolerant default, or diagnostic policy in both backends. | `P1 conservative default` -> `P2 direct MIR proofs` -> `P3 admitted-flow policy` -> `P4.1 register` -> `P4.2 parity audit`. | **P1-P4 complete for the current matrix.** | A newly admitted unclassified source-to-dereference flow reopens its row; do not create speculative positive-provenance syntax. |
 
 **Global selection rule:** execute one complete `T2.1 -> T2.2 -> T2.3` family
 now. Pointer work may interrupt only for the triggered P4.1 condition above.
-Then select one named M2 routing transfer. M4 remains
+M2 routing and M4 authority audit are now complete. Pointer P4 remains
 mandatory for move-checker closure and is not erased by completing M1.2 or M3.
 This is a serial implementation order for bounded patches, not three simultaneous
 active tasks.
@@ -1044,8 +1053,8 @@ active tasks.
 | Workstream | Ordered remaining phases | What starts it | What closes it |
 |---|---|---|---|
 | Typed semantic facts / typed MIR | T2.1 select one registered family -> T2.2 make MIR own its identity/type/payload -> T2.3 prove missing/stale facts cannot be rediscovered -> T3 classify every remaining register row -> T4 remove or explicitly register every lowering-affecting backend inference. | T2.1 selects the next family. | Every lowering-affecting decision is MIR-owned, or has a registered conservative/diagnostic policy with tests. |
-| CFG/place move checker | **M1 complete** -> finish M2.1/M2.2 branch/exit transfers through the common worklist -> M4 close common-engine authority. M3 is complete. | Choose one named M2 transfer. | Every supported move path is decided by typed places and CFG transfer/join; unsupported projections have stable diagnostics. |
-| Pointer-provenance race lowering | P4.1 register and decide each newly exposed flow -> P4.2 audit C/LLVM parity for the complete fallback register. P1-P3 remain closed for the currently named matrix. | Only a T2 or M1 change exposes a named, unclassified source-to-dereference flow. | Every pointer-flow boundary has an explicit MIR, conservative, or diagnostic policy, with matching C/LLVM evidence. |
+| CFG/place move checker | **M1-M4 complete for the supported subset.** | No active move slice. | Every supported move path is decided by typed places and CFG transfer/join; unsupported projections have stable diagnostics. |
+| Pointer-provenance race lowering | **P1-P4 complete for the current matrix.** Newly exposed flows repeat P4.1 registration and P4.2 C/LLVM parity locally. | Only an admitted language change exposes a named, unclassified source-to-dereference flow. | Every pointer-flow boundary has an explicit MIR, conservative, or diagnostic policy, with matching C/LLVM evidence. |
 
 ### Phase Gate Tracker
 
@@ -1064,10 +1073,10 @@ entry condition, and it is complete only when its exit evidence exists.
 | Move checker | M1.2c retire pure index slots | **Complete:** `MoveSlot.const_index` / `symbolic_index` and the pure-index-slot compatibility path are retired. | No further M1.2c action. | Inventory and tests show ownership decisions never inspect index metadata and index queries never inspect ownership slots. | Restoring the old fields as a fallback for unsupported paths. |
 | Move checker | M3 projection audit | **Complete:** M1.2c completed and every current projection row has been inventoried and validated. | No further M3 action unless a new projection family is proposed. | The inventory, fixtures, and stable unsupported boundaries agree. | Broadening a projection merely because it has a fixture. |
 | Move checker | M1.1 place identity | **Complete:** no production direct `MoveState.get/getPtr/contains` selects ownership, alias, invalidation, or join correctness; exact inventory counts pin the test-only reads. | No further M1.1 action. | Typed-place and conflicting-key regressions plus exact inventory remain green. | Restoring a key lookup as a correctness fallback. |
-| Move checker | M2.1/M2.2 CFG | Projection rules are available for the routed path and no unresolved M1.1 authority is required by it. | Move one named branch, short-circuit, loop, or non-deferred exit transfer into the common CFG/worklist authority. | The former specialized executor no longer decides correctness and equivalent join/backedge/exit regressions pass. | Adding another statement-specific merge. |
+| Move checker | M2.1/M2.2 CFG | **Complete:** supported branch, short-circuit, loop, deferred, and exit transfers route through the common worklist; exact counts gate residual helpers/tests. | No active transfer. | Worklist routing, join/backedge/exit regressions, and specialized-transfer counts remain green. | Adding another statement-specific merge. |
 | Move checker | M4 close | Residual M1.1 identity authorities and M2 CFG transfers are closed; M3 continues to cover every admitted projection. | Retire compatibility-key correctness authority from the supported subset. | Inventory and tests show typed places plus CFG transfer/join decide every supported move result. | Claiming general lifetime or borrow checking. |
 | Provenance | P4.1 decide boundary | A T2 or M1 change exposes one named, unclassified source-to-dereference flow. | Choose exactly one policy: MIR positive proof, race-tolerant lowering, or diagnosed unsupported form. | C and LLVM prove that policy and the absent-proof path. | Proactively adding pointer syntax forms without a newly exposed boundary. |
-| Provenance | P4.2 close register | Every currently known P4.1 boundary has a policy. | Audit the complete fallback register for matching C/LLVM behavior. | Each row has positive or conservative evidence in both backends; no unnamed backend provenance decision remains. | Replacing conservative policy with backend-local inference. |
+| Provenance | P4.2 close register | **Complete for the current matrix:** every known boundary has matching C/LLVM positive or conservative/diagnosed evidence. | No active action. | Umbrella audit plus paired evidence remain green. | Replacing conservative policy with backend-local inference. |
 
 Phase-state vocabulary:
 
@@ -1102,15 +1111,15 @@ language shapes.
 | Typed facts | T4 complete | Every production backend module is exactly classified as a registered semantic-family surface, MIR/fact consumer, or mechanics-only; new modules fail the inventory until classified. | Keep the exact file surface, seven-family dispositions, and retired-classifier/missing-fact gates closed. |
 | Move checker | M1 complete | `MoveState` carries independent index facts, all supported bindings/projections carry `MovePlace`, and compatibility keys are storage/debug indexes only. | No transition; exact identity inventory prevents restoration of direct key authority. |
 | Move checker | M3 complete | Field, deref, element, wildcard, alias, and non-nameable projection boundaries have explicit admission or diagnostic policies. | New projections must enter the inventory with a structural rule or stable diagnostic before implementation. |
-| Move checker | M2 partial, current | M1 compatibility-key authority is closed. Ordinary and deferred loop zero-iteration/condition/backedge widening use the target-specific `MoveStateCfgWorklist` policy at `loop_head`; named residual transfers still retain specialized authority. | Select one named M2 branch/exit transfer now that M1 and typed semantic authority are closed. |
-| Move checker | M4 pending | Remove formatted-key correctness authority from supported paths. | Start only after M1 projection and M2 routing boundaries have been closed. |
+| Move checker | M2 complete | Supported branch, short-circuit, ordinary/deferred loop, labeled early-exit, return/try, and normal scope-exit transfers route through `MoveStateCfgWorklist`; terminal diagnostics consume terminal CFG state. | No transition; new statement families must enter the CFG inventory. |
+| Move checker | M4 complete | M1 structural identity, M2 common dataflow, and M3 projection admission jointly control the supported subset; exact counts reject restored specialized merge authority. | Reopen only for a newly admitted move statement/projection family. |
 | Provenance | P1-P3 complete for the named matrix | Unknown scalar leaves are conservative; documented direct proofs and current boundary policies are fact-owned or fail closed. | A new pointer-flow class reopens only its affected P3 boundary. |
-| Provenance | P4.1 triggered | There is no active syntax-expansion task. A patch starts only after T2/M1 identifies an unclassified flow. | Register the flow and select MIR proof, conservative lowering, or a diagnostic before either backend supports it. |
-| Provenance | P4.2 queued | Audit that each registered boundary has the same C and LLVM policy. | Close only with positive and absent-proof evidence for every fallback-register row. |
+| Provenance | P4.1 triggered on new flow | There is no current unclassified flow. A patch starts only when an admitted language change exposes one. | Register the flow and select MIR proof, conservative lowering, or a diagnostic before either backend supports it. |
+| Provenance | P4.2 complete | Every registered current boundary has the same C and LLVM policy with positive and absent-proof evidence. | Reopen only for the new P4.1 row. |
 
 **Implementation order:** the boolean-expression category T2 slice, move
 type-name M1.1 slice, T3 disposition gate, and T4 semantic-authority audit are
-complete. Now select one named M2 routing family. Pointer work
+complete. Pointer work
 interrupts the sequence only for a newly observed unclassified flow. These are
 ordered closure units, not three simultaneous tasks or percentage-based backlogs.
 
@@ -1122,7 +1131,7 @@ names its input boundary, expected semantic owner, affected C and LLVM
 consumers, and the tests that will prove missing/stale behavior. This prevents a
 large architectural item from looking active merely because it is unfinished.
 
-**Current selection state: typed semantic authority T1-T4 and move M1/M3 complete; one M2 CFG slice next.** M1.2c and
+**Current selection state: all three compiler qualification matrices are complete for the supported subset; no active closure slice.** M1.2c and
 M3 are complete: index metadata exists only in `MoveState.index_facts`, and every
 current move projection has either a structural rule or a stable diagnostic.
 Ordinary-loop zero-iteration/backedge widening is now owned by a
@@ -1145,7 +1154,7 @@ one named identity or control-flow authority; pointer work remains trigger-drive
 | Order | Eligible unit | Phase | Concrete first deliverable | Slice closes only when |
 |---|---|---|---|---|
 | 1 | Semantic-authority audit | T4.1 | Inventory every C/LLVM backend source file and classify its lowering decisions as MIR/fact-owned, one of the seven registered fallback families, or mechanics-only. | The gate rejects an unclassified backend file/authority and the audit records all accepted mechanics-only surfaces. |
-| 2 | Move residual authority | M2.1/M2.2 | With T4 and M1 closed, select one branch, short-circuit, loop, or non-deferred exit transfer for common-worklist routing. | The selected specialized authority no longer decides correctness and equivalent ownership/join/backedge/exit regressions pass. |
+| 2 | Move authority maintenance | M1-M4 | No active slice; keep exact identity, CFG-transfer, and projection inventories closed. | A new statement/projection must add its structural and worklist policy before admission. |
 | 3 | Newly exposed pointer-flow boundary | P4.1, triggered only | Register the exact source-to-dereference flow exposed by the selected T2/M2 change and choose MIR proof, race-tolerant lowering, or a diagnostic. | C and LLVM both demonstrate the policy and the absent-proof path. |
 
 The first two rows are ordered work. The third is an interruption rule, not
@@ -1195,24 +1204,24 @@ named conservative boundary or records a project policy decision with matching
 C/LLVM evidence.
 
 **Workstream dashboard.** These are three architectural programs, not
-three single tickets; typed semantic authority is now closed for the supported
-subset while the other two remain open. A workstream advances only through the named phases below.
+three single tickets. All three are closed for the supported subset/current
+pointer matrix and reopen only at their documented admission boundaries. A workstream advances only through the named phases below.
 The dashboard identifies the eligible current phase; a concrete implementation
 slice becomes active only after its required family or boundary is selected.
 
 | Workstream | Current phase | Concrete current objective | What advances it | What does *not* advance it |
 |---|---|---|---|---|
 | Typed semantic facts / typed MIR | **T1-T4 complete for the supported subset** | T3 dispositions and the exact T4 backend source-surface classification are inventory-gated. | Keep the fact families, seven-family fallback budget, file classification, and missing/stale gates synchronized. | Treating closure of the supported subset as a general fully typed-MIR or unrestricted-language claim. |
-| CFG/place move checker | **M1/M3 complete; M2 partial and current** | Keep the typed-place identity and projection boundaries closed. Name one remaining specialized branch, short-circuit, loop, or exit transfer. | The selected transfer no longer depends on its specialized executor and has equivalent common-worklist regressions. | Broadening a projection or restoring compatibility-key authority. |
-| Pointer-provenance race lowering | **P4 - triggered only** | Keep the current conservative boundary matrix closed; act only when T2 or move work exposes a new pointer-flow boundary. | A named new boundary with a chosen MIR proof, conservative lowering, or diagnostic in both backends. | Expanding positive-provenance recognition merely because another syntax spelling exists. |
+| CFG/place move checker | **M1-M4 complete for the supported subset** | Keep typed-place identity, common-worklist routing, projection diagnostics, and specialized-transfer counts closed. | Admit a new statement/projection only with inventory and equivalent regressions. | Broadening a projection or restoring compatibility-key/specialized-merge authority. |
+| Pointer-provenance race lowering | **P1-P4 complete for the current matrix; triggered on new flow** | Keep the current conservative boundary and parity matrix closed. | A newly admitted boundary with a chosen MIR proof, conservative lowering, or diagnostic in both backends. | Expanding positive-provenance recognition merely because another syntax spelling exists. |
 
 The current serial order is deliberate: M1.2 and M3 closed the known move-state
 and projection boundaries; the boolean-expression category T2, move type-name
 M1.1, T3 disposition, and T4 source-audit slices just closed, so one residual
 move authority supplies the next closure slice;
 P4 reopens only for a newly exposed
-pointer flow. This is why the pointer workstream can be open without being the
-current implementation slice.
+pointer flow. There is no current unclassified boundary or active compiler
+closure slice.
 
 #### Broader Pointer-Provenance Race Lowering
 
@@ -1233,7 +1242,7 @@ not depend on backend-local guessing.
 | P1: conservative default | **Complete, invariant** | **Goal:** an unproven scalar pointer access can never inherit C/LLVM race UB. **Deliverable:** central dereference lowering defaults to race-tolerant code or a diagnostic. | C/LLVM tests cover unknown and missing proof paths. This remains an invariant for every later access path. |
 | P2: direct MIR provenance | **Complete for the documented producer set** | **Goal:** common proven-local/global paths retain efficient lowering without backend guessing. **Deliverable:** MIR facts for direct locals, copies, covered aggregate fields/elements, direct returns, and supported aggregate-return summaries. | Each producer has fact-dump, C/LLVM consumer, and missing/stale-fact tests. A new producer cannot enter this phase without all three. |
 | P3: admitted pointer-flow policy | **Complete for the current matrix; reopens per new boundary** | **Goal:** every currently admitted escaped, higher-order, returned, or aggregate-CFG flow has one declared policy. **Deliverable:** a closure-matrix decision per boundary: MIR fact, conservative race lowering, or diagnosed unsupported form. | C/LLVM tests cover the chosen policy, including absence of a positive proof. Callback/function-pointer returns and exported ambiguity remain deliberately conservative. A newly admitted flow reopens P3 for that boundary only. |
-| P4: policy closure | **Triggered only; not currently active** | **Goal:** no backend silently decides provenance outside the declared model. **Deliverable:** an inventory-gated fallback register and a final disposition for every matrix row. **Start rule:** T2 or move work must first expose one named unclassified flow. | The workstream closes only when every row is implemented or accepted as a documented limitation with a regression test. |
+| P4: policy closure | **Complete for the current matrix; triggered on new flow** | No backend silently decides provenance outside the declared model. The inventory-gated fallback register and C/LLVM parity audit cover every current row. | A new admitted flow reopens only its row and must supply positive plus absent-proof evidence in both backends. |
 
 Closure matrix:
 
@@ -1504,9 +1513,9 @@ through statement-local expression identities.
 | Phase | Status | Goal and deliverable | Evidence and exit condition |
 |---|---|---|---|
 | M1: typed place foundations | **Complete for the supported subset** | Ownership identity is structural rather than formatted text, and index metadata cannot masquerade as ownership state. `MovePlace` covers the admitted local, field, dereference, array-element, wildcard, and alias paths; independent index facts carry constant/symbolic metadata. Production correctness consumers have no direct key lookup fallback. | Reads, moves, assignments, defer borrows, invalidation, and CFG matching compare typed places. Compatibility strings index storage/debug only; index queries use independent facts. |
-| M2: CFG/worklist routing | **Partial; no active transfer** | **Goal:** ownership state follows control flow, not statement shape. **Delivered:** bounded routes for `if let`, switch, short-circuit, while-condition, ordinary loop backedges and loop-head widening, labeled `break`/`continue`, deferred loops, `return`, `?`, and normal function/scoped/deferred/loop exits; break/continue diagnostics run at terminal blocks. Ordinary-loop finalization no longer owns widening. **Remaining:** move each other named transfer whose specialized executor still owns a merge, finalization, or diagnostic decision into the common worklist. | Unit and diagnostic tests cover joins, backedges, early exits, and invalidation; specialized executors retire only after equivalent worklist coverage exists. |
+| M2: CFG/worklist routing | **Complete for the supported statement inventory** | Ownership state follows common worklist control flow for `if let`, switch, short-circuit, while-condition, ordinary loop backedges and loop-head widening, labeled `break`/`continue`, deferred loops, `return`, `?`, and normal function/scoped/deferred/loop exits; break/continue diagnostics run at terminal blocks. Ordinary-loop finalization no longer owns widening. | Unit and diagnostic tests cover joins, backedges, early exits, and invalidation; exact specialized-transfer counts reject a new direct statement-specific merge. |
 | M3: admission boundary | **Complete for the current projection inventory** | **Goal:** unsupported move paths remain explicit rather than accidentally accepted. **Delivered:** a typed-place/CFG rule for each current admitted array/pointer case, or a retained diagnostic for it. | Dynamic/non-local move-array and arbitrary pointer-to-array paths remain fail-closed; a new projection must add its rule and positive/negative coverage before admission. |
-| M4: checker closure | **Queued after M2** | **Goal:** the supported `move` subset is controlled entirely by typed places and CFG dataflow. M1 already proves compatibility keys are index/debug data only; M4 retires obsolete specialized control-flow logic. | The workstream closes when every supported move path uses the common engine and every intentionally unsupported path has a stable diagnostic. |
+| M4: checker closure | **Complete for the supported subset** | The supported `move` subset is controlled by typed places, independent index facts, common CFG dataflow, and explicit projection admission. Compatibility keys are index/debug data only; residual helper/test calls are exact-counted. | Reopen only when a new move statement or projection family enters the admission inventory. |
 
 Closure matrix:
 
@@ -1584,15 +1593,13 @@ indexes remain wildcard projections. Pointer-mediated moves now have an explicit
 boundary: full aliases to tracked places carry `MovePlace`, while arbitrary
 pointer-to-array dynamic pointees fail closed. Stale-alias, typed-referent,
 deferred-borrow, read-side alias, and unsupported-channel rows above are
-regression coverage. M1 now closes typed-place correctness authority; they do
-not close the remaining CFG rewrite.
+regression coverage. Together with the exact CFG transfer inventory, M1-M4 are
+closed for the supported subset.
 
-**Next move action:** M3 is complete for the current projection inventory. Do
-not broaden unsupported projections merely to add fixtures; any new projection
-must first enter the inventory with a structural rule or stable diagnostic. The
-ordinary/deferred-loop widening and M1 typed-place authority are complete;
-queue one explicit M2 transfer family from the CFG inventory, rather than describing the entire move checker as one undifferentiated
-pending item.
+**Next move action:** none for the current admitted inventory. Do not broaden
+unsupported projections or statement families merely to add fixtures; any new
+case must first enter the structural-place/diagnostic and CFG-transfer
+inventories. Such an admission reopens only its affected M1-M4 row.
 
 ### Production-Ready Exit Rule
 

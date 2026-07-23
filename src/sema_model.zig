@@ -474,7 +474,7 @@ pub const LoopMoveFrame = struct {
     // route a labeled break/continue to the same loop edge as semantic checking
     // and backend lowering.
     label: ?[]const u8 = null,
-    entry_names: std.StringHashMap(void),
+    entry_places: std.ArrayListUnmanaged(MovePlace),
     entry_state: MoveState,
     invalidated_index_facts: std.StringHashMap(void),
     invalidated_alias_places: std.ArrayListUnmanaged(MovePlace) = .empty,
@@ -485,7 +485,7 @@ pub const LoopMoveFrame = struct {
     pending_exits: std.ArrayListUnmanaged(LoopMoveExitState) = .empty,
 
     pub fn deinit(self: *LoopMoveFrame) void {
-        self.entry_names.deinit();
+        self.entry_places.deinit(self.allocator);
         self.entry_state.deinit();
         self.invalidated_index_facts.deinit();
         self.invalidated_alias_places.deinit(self.allocator);

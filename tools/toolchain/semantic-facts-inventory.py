@@ -350,6 +350,30 @@ T4_AUTHORITY_AUDIT: dict[str, list[str]] = {
     ],
 }
 
+P4_PROVENANCE_POLICY_PARITY_AUDIT: dict[str, list[str]] = {
+    "docs/typed-semantic-facts.md": [
+        "### P4 C/LLVM provenance policy parity",
+        "| Unknown scalar dereference |",
+        "| Escaped pointer |",
+        "| Higher-order/exported return |",
+        "| Aggregate return outside bounded CFG |",
+        "| Unsupported scalar/aggregate leaf |",
+    ],
+    "docs/compiler-production-readiness.md": [
+        "P4.2 C/LLVM provenance policy parity is closed",
+    ],
+    "src/lower_c_tests.zig": [
+        "lower-c escaped pointer provenance lowers conservatively",
+        "lower-c consumes MIR facts for direct internal global pointer returns",
+        "lower-c aggregate-return nested call control fails closed",
+    ],
+    "src/lower_llvm_tests.zig": [
+        "LLVM escaped pointer provenance lowers conservatively",
+        "LLVM consumes MIR facts for direct internal global pointer returns",
+        "LLVM aggregate-return nested call control fails closed",
+    ],
+}
+
 SCALAR_DEREF_DEFAULT_AUDIT: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "### Scalar pointer deref default audit",
@@ -1737,6 +1761,18 @@ def main() -> int:
             checked += 1
             if anchor not in text:
                 missing.append(f"T4 backend authority audit: {relative}: missing anchor {anchor!r}")
+
+    for relative, anchors in sorted(P4_PROVENANCE_POLICY_PARITY_AUDIT.items()):
+        path = REPO_ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            missing.append(f"P4 provenance policy parity audit: {relative}: file missing")
+            continue
+        for anchor in anchors:
+            checked += 1
+            if anchor not in text:
+                missing.append(f"P4 provenance policy parity audit: {relative}: missing anchor {anchor!r}")
 
     budget_docs = BACKEND_AST_INFERENCE_BUDGET["docs/typed-semantic-facts.md"]
     assert isinstance(budget_docs, list)

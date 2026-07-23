@@ -1105,7 +1105,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
     var frame = LoopMoveFrame{
         .allocator = self.reporter.allocator,
         .label = if (loop.loop_label) |label| label.text else null,
-        .entry_names = std.StringHashMap(void).init(self.reporter.allocator),
+        .entry_places = .empty,
         .entry_state = cloneMoveState(self, state),
         .invalidated_index_facts = std.StringHashMap(void).init(self.reporter.allocator),
         .invalidated_alias_places = .empty,
@@ -1114,7 +1114,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
     };
     var snap_it = state.iterator();
     while (snap_it.next()) |entry| {
-        frame.entry_names.put(entry.key_ptr.*, {}) catch {
+        if (entry.value_ptr.place) |place| frame.entry_places.append(self.reporter.allocator, place) catch {
             self.oom = true;
         };
     }
@@ -1348,7 +1348,7 @@ pub fn checkLoopExitLeaks(self: *Checker, state: *MoveState, target: ?ast.Ident)
     // merges back (producing spurious branch-mismatch / use-after-move downstream).
     var it = state.iterator();
     while (it.next()) |entry| {
-        if (entry.value_ptr.live and !entry.value_ptr.deferred and !frame.entry_names.contains(entry.key_ptr.*)) {
+        if (entry.value_ptr.live and !entry.value_ptr.deferred and !loopFrameHasEntryPlace(frame, entry.value_ptr.place)) {
             self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value declared in a loop body is never consumed before this `break`/`continue` exits the iteration");
         }
     }
@@ -1356,6 +1356,12 @@ pub fn checkLoopExitLeaks(self: *Checker, state: *MoveState, target: ?ast.Ident)
     defer entry_state.deinit();
     reportLoopOuterResourceChanges(self, &entry_state, state);
     recordLoopEarlyExitInvalidations(self, frame, state);
+}
+
+fn loopFrameHasEntryPlace(frame: *const LoopMoveFrame, maybe_place: ?MovePlace) bool {
+    const place = maybe_place orelse return false;
+    for (frame.entry_places.items) |entry_place| if (entry_place.eql(place)) return true;
+    return false;
 }
 
 fn moveLoopExitEdgeCfg(self: *Checker, state: *const MoveState, target: ?ast.Ident, kind: LoopMoveExitKind) void {
@@ -1798,6 +1804,38 @@ test "move CFG boundary state handlers match ownership subplaces by typed place"
     try std.testing.expect(!after_scope.index_bindings.contains("inner_index"));
 }
 
+test "loop early-exit local classification uses entry places rather than keys" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-loop-entry-place.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+    defer checker.move_loop_stack.deinit(std.testing.allocator);
+
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const owner: MovePlace = .{ .root = "owner" };
+    const local: MovePlace = .{ .root = "local" };
+    var entry_state = MoveState.init(std.testing.allocator);
+    try entry_state.put("compat:entry-owner", .{ .live = true, .span = span, .place = owner });
+    var frame = LoopMoveFrame{
+        .allocator = std.testing.allocator,
+        .entry_places = .empty,
+        .entry_state = entry_state,
+        .invalidated_index_facts = std.StringHashMap(void).init(std.testing.allocator),
+    };
+    try frame.entry_places.append(std.testing.allocator, owner);
+    try checker.move_loop_stack.append(std.testing.allocator, frame);
+
+    var exit_state = MoveState.init(std.testing.allocator);
+    defer exit_state.deinit();
+    try exit_state.put("different:owner-key", .{ .live = true, .span = span, .place = owner });
+    try exit_state.put("compat:loop-local", .{ .live = true, .span = span, .place = local });
+    checkLoopExitLeaks(&checker, &exit_state, null);
+
+    try std.testing.expectEqual(@as(usize, 1), reporter.diagnostics.items.len);
+    try std.testing.expect(std.mem.startsWith(u8, reporter.diagnostics.items[0].message, "E_RESOURCE_LEAK:"));
+    var popped = checker.move_loop_stack.pop().?;
+    popped.deinit();
+}
+
 test "move CFG alias facts match typed referent places" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-cfg-alias.mc", "");
     defer reporter.deinit();
@@ -1853,7 +1891,7 @@ test "loop early-exit alias invalidation uses typed storage places" {
     });
     var frame = LoopMoveFrame{
         .allocator = std.testing.allocator,
-        .entry_names = std.StringHashMap(void).init(std.testing.allocator),
+        .entry_places = .empty,
         .entry_state = entry_state,
         .invalidated_index_facts = std.StringHashMap(void).init(std.testing.allocator),
         .invalidated_alias_places = .empty,
@@ -1896,7 +1934,7 @@ test "loop early-exit alias invalidation uses typed storage places" {
     try legacy_entry.put("legacy:entry", .{ .live = false, .span = span, .alias_of = "owner.resource" });
     var legacy_frame = LoopMoveFrame{
         .allocator = std.testing.allocator,
-        .entry_names = std.StringHashMap(void).init(std.testing.allocator),
+        .entry_places = .empty,
         .entry_state = legacy_entry,
         .invalidated_index_facts = std.StringHashMap(void).init(std.testing.allocator),
         .invalidated_alias_places = .empty,

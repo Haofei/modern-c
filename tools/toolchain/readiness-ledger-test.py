@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PATH = ROOT / "docs/compiler-production-readiness.md"
 HEADER = re.compile(
     r"^Evidence register: \*\*(\d+) bounded implementation or regression entries, "
-    r"(\d+) active slices, (\d+) open architectural workstreams\*\*\.\s*$"
+    r"(\d+) active slices, (\d+) open architectural workstreams?\*\*\.\s*$"
 )
 
 
@@ -40,7 +40,7 @@ def main() -> int:
         return fail(f"header says {evidence} evidence entries, table contains {len(rows)}")
     if active != 0:
         return fail(f"header says {active} active slices; update the table and this guard together")
-    if open_workstreams != 2:
+    if open_workstreams != 0:
         return fail(f"header says {open_workstreams} open workstreams; update the closure matrices and this guard together")
 
     print(f"PASS: readiness-ledger-test - {evidence} evidence entries, {open_workstreams} open workstreams")

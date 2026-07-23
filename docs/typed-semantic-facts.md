@@ -389,6 +389,26 @@ the mechanics-only list constrain decisions inside those files. A new semantic
 decision in an existing mechanics module must reclassify that module and update
 the relevant family inventory in the same change.
 
+### P4 C/LLVM provenance policy parity
+
+The complete current provenance fallback register has the same C and LLVM
+policy. Positive facts may select ordinary lowering only for the documented
+MIR/local/raw/MMIO proof sets. Removing or invalidating a fact selects the
+conservative path or the same diagnosed unsupported boundary in both backends.
+
+| Boundary | C policy | LLVM policy | Paired evidence |
+|---|---|---|---|
+| Unknown scalar dereference | Race-tolerant `mc_race_*`/atomic helper lowering; unsupported widths reject. | Unordered atomic scalar lowering; atomic-ineligible widths reject. | Scalar pointer deref default audit and exact central-helper counts. |
+| Escaped pointer | Call/address escape invalidates positive provenance before the next dereference. | Same invalidation and conservative next dereference. | `escaped pointer provenance lowers conservatively` suites. |
+| Higher-order/exported return | Callback/function-pointer and exported ambiguity do not create positive provenance. | Same conservative return policy. | Returned pointer facts audit and direct-positive/missing-fact pairs. |
+| Aggregate return outside bounded CFG | No summary/fact is produced; scalar leaves remain race-tolerant. | Same absent-summary/fact behavior. | Aggregate-return unsupported CFG matrix and C/LLVM fail-closed suites. |
+| Unsupported scalar/aggregate leaf | Emission rejects instead of using a plain racy C access. | Emission rejects instead of using a non-atomic racy LLVM access. | Scalar/aggregate leaf failure matrix. |
+
+`semantic-facts-inventory.py` anchors this parity table together with the
+existing scalar, escape, return, and aggregate-CFG audits. A newly admitted
+pointer flow must add its positive and absent-proof evidence to both backends;
+that flow alone reopens P3/P4.
+
 ### Scalar pointer deref default audit
 
 This audit gates the current default for ordinary scalar pointer dereferences:

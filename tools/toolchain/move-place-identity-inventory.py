@@ -33,6 +33,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn aliasReferentTargetsOuter",
         "fn sameDeferredBorrowFact",
         "fn recordLoopEarlyExitInvalidations",
+        "fn loopFrameHasEntryPlace",
         "fn recordInvalidatedAliasPlace",
         "const pp = placeKeyAndType(self, expr, state) orelse return null;",
         "const base = placeKeyAndType(self, ix.base.*, state) orelse return null;",
@@ -44,6 +45,7 @@ ANCHORS: dict[str, list[str]] = {
     "src/sema_model.zig": [
         "pub const MoveSlot = struct",
         "pub const MoveIndexFact = union(enum)",
+        "entry_places: std.ArrayListUnmanaged(MovePlace)",
     ],
     "docs/compiler-production-readiness.md": [
         "Move checker alias assignment updates use typed storage places",
