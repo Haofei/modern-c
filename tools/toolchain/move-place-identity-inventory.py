@@ -157,6 +157,10 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
         ("pub fn exprIsMoveTyped", "pub fn exprIsTrivialDrop"): [
             "state.contains(id.text)",
         ],
+        ("pub fn exprMoveTypeName", "// T1.2: if `name`'s slot"): [
+            "state.get(id.text)",
+            "state.contains(id.text)",
+        ],
     },
 }
 

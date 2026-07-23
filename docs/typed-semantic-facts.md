@@ -272,6 +272,16 @@ type. This is an explicit T2 disposition, not backend parity for syntax support:
 the semantic owner is MIR wherever the syntax is admitted, while an unsupported
 consumer must diagnose rather than guess.
 
+### Boolean expression result authority
+
+Source boolean literals, comparison/logical binaries, and logical negation use
+their complete MIR `expression_result` row when C decides whether boolean
+emission is required. The AST operator remains a stale-fact sanity check, not
+the authority. LLVM consumes the same result row through `exprType`. Generated
+zero-span nodes retain their construction-derived category because they cannot
+be matched to source facts. Exact comparison-result MIR/C/LLVM removal and
+retargeting tests gate this bounded T2 slice.
+
 ### Semantic inference family register
 
 This register is the Phase 1 gate for backend semantic inference. Each row names

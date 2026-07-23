@@ -2060,6 +2060,33 @@ test "move expression typing uses structural ownership roots rather than map key
     try std.testing.expect(!exprIsMoveTyped(&checker, owner, &state, &aliases));
 }
 
+test "move type-name lookup uses structural ownership roots rather than map keys" {
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-type-name-root.mc", "");
+    defer reporter.deinit();
+    var checker = Checker.init(&reporter);
+
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const root: MovePlace = .{ .root = "owner" };
+    const owner = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "owner", .span = span } } };
+    const ty = ast_query.simpleNameType("Resource", span);
+    var move_types = std.StringHashMap(void).init(std.testing.allocator);
+    defer move_types.deinit();
+    try move_types.put("Resource", {});
+    checker.move_types = &move_types;
+    defer checker.move_types = null;
+    var state = MoveState.init(std.testing.allocator);
+    defer state.deinit();
+    var aliases = std.StringHashMap(ast.TypeExpr).init(std.testing.allocator);
+    defer aliases.deinit();
+
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = root, .ty = ty });
+    try std.testing.expectEqualStrings("Resource", exprMoveTypeName(&checker, owner, &state, &aliases).?);
+
+    state.clearRetainingCapacity();
+    try state.put("owner", .{ .live = false, .span = span, .place = .{ .root = "other" }, .ty = ty });
+    try std.testing.expect(exprMoveTypeName(&checker, owner, &state, &aliases) == null);
+}
+
 test "move subplace outer-scope classification uses typed roots rather than compatibility keys" {
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
     const root: MovePlace = .{ .root = "owner" };
@@ -4227,7 +4254,7 @@ pub fn exprIsTrivialDrop(self: *Checker, expr: ast.Expr, state: *const MoveState
 
 pub fn exprMoveTypeName(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
     switch (expr.kind) {
-        .ident => |id| if (state.get(id.text)) |slot| {
+        .ident => |id| if (ownershipBindingMoveSlotForIdent(id.text, state)) |slot| {
             if (slot.ty) |t| return self.moveTypeNameOf(t, aliases);
         },
         .grouped => |inner| return exprMoveTypeName(self, inner.*, state, aliases),

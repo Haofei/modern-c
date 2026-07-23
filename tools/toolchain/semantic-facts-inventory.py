@@ -25,6 +25,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn arrayTypeForExpr(",
             "MIR owns the result type of a member or index expression.",
             "Source literal result types are MIR-owned.",
+            "User-source boolean-producing expressions have complete MIR result",
             "A user-source grouping has its own complete MIR result fact.",
         ],
         "src/lower_c_emitter.zig": [

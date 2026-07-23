@@ -193,7 +193,10 @@ fn enumNameForCallValue(ctx: TypeQueryContext, node: anytype) ?[]const u8 {
 
 pub fn exprIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
     return switch (expr.kind) {
-        .bool_literal => true,
+        // User-source boolean-producing expressions have complete MIR result
+        // facts. Syntax identifies the operation, but it must not independently
+        // authorize boolean lowering when that fact is absent.
+        .bool_literal => sourceExpressionResultIsBool(ctx, expr, true),
         .ident => |ident| identIsBoolForEmission(ctx, ident.text, locals),
         .call => if (ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals)) |ty| isBoolType(ty) else false,
         .index, .member => operandIsBoolForEmission(ctx, expr, locals),
@@ -203,10 +206,16 @@ pub fn exprIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
             isBoolType(resolveAliasType(ctx, ty))
         else
             false,
-        .binary => |node| binaryOpProducesBool(node.op),
-        .unary => |node| node.op == .logical_not,
+        .binary => |node| sourceExpressionResultIsBool(ctx, expr, binaryOpProducesBool(node.op)),
+        .unary => |node| sourceExpressionResultIsBool(ctx, expr, node.op == .logical_not),
         else => false,
     };
+}
+
+fn sourceExpressionResultIsBool(ctx: TypeQueryContext, expr: ast.Expr, generated_fallback: bool) bool {
+    if (expr.span.line == 0 or expr.span.column == 0) return generated_fallback;
+    const ty = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return false;
+    return isBoolType(resolveAliasType(ctx, ty));
 }
 
 fn identIsBoolForEmission(ctx: TypeQueryContext, name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) bool {

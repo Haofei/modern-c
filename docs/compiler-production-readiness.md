@@ -2,7 +2,7 @@
 
 Status: **qualified subset, not generally production-ready**.
 Current assessment: **updated 2026-07-22, based on the current compiler worktree**.
-Evidence register: **755 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
+Evidence register: **757 bounded implementation or regression entries, 0 active slices, 3 open architectural workstreams**.
 
 Comparative C/Rust/MC claims are governed separately by
 [`kernel-language-comparison-plan.md`](kernel-language-comparison-plan.md). That
@@ -919,6 +919,10 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Stale alias movedness consumes the carried typed referent | `aliasSlotReferentMoved` now obtains the referent through `carriedAliasReferent`; a deliberately unrelated textual `alias_of` value cannot select the owner inspected for movedness. An alias missing typed referent evidence remains conservatively stale, while a non-alias remains non-stale. This is one M1.1 consumer migration, not closure of alias classification or the compatibility map. | `src/sema_move.zig` `carriedAliasReferent` / `aliasSlotReferentMoved`; unit test `move stale aliases require carried typed referent places`; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
 
+| Boolean expression result categories are MIR-owned | C no longer lets boolean literal syntax, comparison/logical operator spelling, or logical negation independently authorize boolean emission. User-source expressions require a complete MIR `expression_result`; LLVM consumes the same row, while generated zero-span nodes retain a bounded construction fallback. Exact comparison-result removal and retargeting fail before emission. This is one T2 expression-family slice, not closure of broader expression inference. | `src/lower_c_infer.zig` `sourceExpressionResultIsBool` / `exprIsBoolForEmission`; `src/mir_tests.zig` `MIR owns source boolean expression result types`; `src/lower_c_tests.zig` / `src/lower_llvm_tests.zig` `boolean expressions require MIR result types`; `tools/toolchain/semantic-facts-inventory.py`; focused tests; full production gate; `git diff --check`. |
+
+| Move type-name lookup uses structural ownership roots | The `exprMoveTypeName` decision used by trivial-drop checking no longer obtains a resource type from `state.get(source_spelling)`. It locates a non-alias ownership slot whose root `MovePlace` matches the source binding. A mismatched compatibility key cannot hide the type, and a same-spelled entry carrying another structural root cannot invent it. This is one M1.1 consumer migration, not checker closure. | `src/sema_move.zig` `ownershipBindingMoveSlotForIdent` / `exprMoveTypeName`; unit test `move type-name lookup uses structural ownership roots rather than map keys`; `tools/toolchain/move-place-identity-inventory.py`; `zig test src/sema_move.zig`; full production gate; `git diff --check`. |
+
 | Assignment overwrite checks use structural binding roots | Assignment retains its compatibility-key presence check for const/symbolic index metadata and legacy-slot cleanup, while its resource-overwrite, deferred-reservation, and alias-category decisions now use the structural binding root. This preserves the dynamic-index fail-closed branch while preventing a compatibility key from selecting the ownership state used for diagnostics. This is one M1.2/M3 binding-slot separation step, not full assignment migration. | `src/sema_move.zig` assignment identifier branch / `bindingMoveSlotPtrForIdent`; `zig build test`; full production gate; `git diff --check`. |
 
 | Independent move index-fact transport model exists | `MoveIndexFact` / `MoveIndexFacts` establish a separate representation for constant and symbolic array-index metadata, with explicit clone, equality, invalidation, and conservative CFG join semantics. A join retains a fact only when every incoming path proves the exact same value. `MoveState` now carries this store alongside ownership slots through CFG worklists, loop snapshots, pending exits, replace, and equality; later producer migrations must use this state rather than add another store. | `src/sema_model.zig` `MoveIndexFact` / `MoveIndexFacts` / `MoveState`; `src/sema_move.zig` `cloneMoveState` / `replaceMoveState` / `mergeMoveBranchesImpl`; model and move-state transport tests; full production gate; `git diff --check`. |
@@ -1077,19 +1081,19 @@ language shapes.
 | Workstream | Phase state | Meaning now | Required transition |
 |---|---|---|---|
 | Typed facts | T1 complete | The inference inventory and fact-admission gates exist. | No transition; new lowering families must enter the register. |
-| Typed facts | T2.1-T2.3 block-expression policy slice complete | Function-address, bounded data-address including const globals, target-typed char literals, source member/grouped-expression and grouped-call category results, source block-expression results, source integer/boolean literals including sequenced comparison operands, and source struct-literal construction class are complete bounded slices. | The intervening stale-alias movedness M1.1 slice is closed; select one different exact T2 family next. |
+| Typed facts | T2.1-T2.3 boolean-expression category slice complete | Function-address, bounded data-address including const globals, target-typed char literals, source member/grouped-expression and grouped-call category results, source block-expression results, source boolean expression results including comparison/logical operators, and source struct-literal construction class are complete bounded slices. | The intervening move type-name M1.1 slice is closed; select one different exact T2 family next. |
 | Typed facts | T3 queued | The remaining registered fallbacks need a final MIR-owned, conservative, or diagnostic disposition. | Start only after the current T2 family is closed end to end. |
 | Typed facts | T4 pending | Remove or explicitly register all remaining lowering-affecting backend inference. | Start only after every register row has a T3 disposition. |
 | Move checker | M1.2a/M1.2b/M1.2c complete | `MoveState` carries independent facts; no `MoveSlot` field or branch represents index metadata. | M3 is complete; the selected T2 family is closed, so one residual M1.1 or M2 slice is now eligible. |
 | Move checker | M3 complete | Field, deref, element, wildcard, alias, and non-nameable projection boundaries have explicit admission or diagnostic policies. | New projections must enter the inventory with a structural rule or stable diagnostic before implementation. |
-| Move checker | M1.1 and M2 partial, no active slice | Named full-dereference, deferred-alias, and stale-alias movedness consumers now use carried typed referents; other M1.1 compatibility authority remains. Ordinary and deferred loop zero-iteration/condition/backedge widening use the target-specific `MoveStateCfgWorklist` policy at `loop_head`; other named M2 transfers still retain specialized authority. | Per the serial execution order, select a different registered T2 semantic-fact family next; return to one named residual M1.1 or M2 authority only after that T2 slice closes. |
+| Move checker | M1.1 and M2 partial, no active slice | Named full-dereference, deferred/stale-alias, and move type-name consumers now use structural places; other M1.1 compatibility authority remains. Ordinary and deferred loop zero-iteration/condition/backedge widening use the target-specific `MoveStateCfgWorklist` policy at `loop_head`; other named M2 transfers still retain specialized authority. | Per the serial execution order, select a different registered T2 semantic-fact family next; return to one named residual M1.1 or M2 authority only after that T2 slice closes. |
 | Move checker | M4 pending | Remove formatted-key correctness authority from supported paths. | Start only after M1 projection and M2 routing boundaries have been closed. |
 | Provenance | P1-P3 complete for the named matrix | Unknown scalar leaves are conservative; documented direct proofs and current boundary policies are fact-owned or fail closed. | A new pointer-flow class reopens only its affected P3 boundary. |
 | Provenance | P4.1 triggered | There is no active syntax-expansion task. A patch starts only after T2/M1 identifies an unclassified flow. | Register the flow and select MIR proof, conservative lowering, or a diagnostic before either backend supports it. |
 | Provenance | P4.2 queued | Audit that each registered boundary has the same C and LLVM policy. | Close only with positive and absent-proof evidence for every fallback-register row. |
 
-**Implementation order:** the block-expression policy T2 slice and the subsequent
-stale-alias movedness M1.1 slice are complete; now select one exact registered
+**Implementation order:** the boolean-expression category T2 slice and the subsequent
+move type-name M1.1 slice are complete; now select one exact registered
 T2 family, then return to one named residual M1.1 authority or M2 routing family. Pointer work
 interrupts the sequence only for a newly observed unclassified flow. These are
 ordered closure units, not three simultaneous tasks or percentage-based backlogs.
@@ -1102,7 +1106,7 @@ names its input boundary, expected semantic owner, affected C and LLVM
 consumers, and the tests that will prove missing/stale behavior. This prevents a
 large architectural item from looking active merely because it is unfinished.
 
-**Current selection state: block-expression policy T2 and stale-alias movedness M1.1 slices complete; one T2 family next.** M1.2c and
+**Current selection state: boolean-expression category T2 and move type-name M1.1 slices complete; one T2 family next.** M1.2c and
 M3 are complete: index metadata exists only in `MoveState.index_facts`, and every
 current move projection has either a structural rule or a stable diagnostic.
 Ordinary-loop zero-iteration/backedge widening is now owned by a
@@ -1110,12 +1114,11 @@ Ordinary-loop zero-iteration/backedge widening is now owned by a
 `finalizeLoopBodyCfgExit -> reportLoopOuterResourceChanges` authority is absent.
 Finalization checks loop-local leaks and writes the terminal CFG state back to
 the caller. Root, field, array-element, alias, `break`, and `continue` fixtures
-retain their established diagnostics. The latest T2 slice assigns source
-block-expression result authority to MIR, requires LLVM's admitted path to
-consume that fact, and keeps C fail-closed at its diagnosed unsupported
-boundary. The intervening M1.1 slice routes stale alias movedness through the
-carried typed referent; a compatibility key can no longer select the inspected
-owner. Per the serial plan,
+retain their established diagnostics. The latest T2 slice requires
+user-source boolean result categories to come from MIR in both backends; AST
+operators only validate the fact. The intervening M1.1 slice makes trivial-drop
+type-name lookup select the source binding by structural ownership root rather
+than a compatibility-map key. Per the serial plan,
 the next patch must select one different registered T2 family.
 
 This is deliberately an implementation gate, not hidden progress: the selected
@@ -1182,13 +1185,13 @@ slice becomes active only after its required family or boundary is selected.
 
 | Workstream | Current phase | Concrete current objective | What advances it | What does *not* advance it |
 |---|---|---|---|---|
-| Typed semantic facts / typed MIR | **T2.1 eligible; no slice selected** | The block-expression policy slice remains closed. Select one different registered expression-result or shape family with its producer, both consumers, and absent/stale policy. | Complete its MIR artifact, C/LLVM positive, and missing/stale evidence before returning to move work. | Treating the block-expression disposition as closure of broader expression typing. |
-| CFG/place move checker | **M1.1/M2 - partial; stale-alias movedness consumer slice complete and queued** | Keep the completed M3 projection boundary, loop-head widening routes, and carried full-dereference/deferred/stale referent paths closed. After the next T2 slice, name one remaining formatted-key correctness decision or specialized transfer. | The selected identity or transfer no longer depends on its compatibility key or specialized executor and has equivalent regressions. | Broadening a projection without first updating its rule or diagnostic inventory. |
+| Typed semantic facts / typed MIR | **T2.1 eligible; no slice selected** | The boolean-expression category slice remains closed. Select one different registered expression-result or shape family with its producer, both consumers, and absent/stale policy. | Complete its MIR artifact, C/LLVM positive, and missing/stale evidence before returning to move work. | Treating boolean category migration as closure of broader expression typing. |
+| CFG/place move checker | **M1.1/M2 - partial; move type-name consumer slice complete and queued** | Keep the completed M3 projection boundary, loop-head widening routes, and structural type-name/referent paths closed. After the next T2 slice, name one remaining formatted-key correctness decision or specialized transfer. | The selected identity or transfer no longer depends on its compatibility key or specialized executor and has equivalent regressions. | Broadening a projection without first updating its rule or diagnostic inventory. |
 | Pointer-provenance race lowering | **P4 - triggered only** | Keep the current conservative boundary matrix closed; act only when T2 or move work exposes a new pointer-flow boundary. | A named new boundary with a chosen MIR proof, conservative lowering, or diagnostic in both backends. | Expanding positive-provenance recognition merely because another syntax spelling exists. |
 
 The current serial order is deliberate: M1.2 and M3 closed the known move-state
-and projection boundaries; the block-expression policy T2 and stale-alias
-movedness M1.1 slices just closed, so T2 again supplies the next semantic-authority migration before another move slice;
+and projection boundaries; the boolean-expression category T2 and move
+type-name M1.1 slices just closed, so T2 again supplies the next semantic-authority migration before another move slice;
 P4 reopens only for a newly exposed
 pointer flow. This is why the pointer workstream can be open without being the
 current implementation slice.
@@ -1320,9 +1323,9 @@ slice; it is not “add facts wherever a test happens to fail.”
 
 | Unit | Phase | Required result | Exit evidence |
 |---|---|---|---|
-| T2.1: select one family | T2 | **Last completed bounded family:** source block-expression result typing within `c-expression-type-inference` / `llvm-expression-type-inference`. Its producer is the existing MIR `expression_result`; LLVM is the admitted consumer and C has an explicit diagnosed-unsupported disposition. The subsequent stale-alias movedness M1.1 slice is also closed, so select one different registered family next. | The selection names an exact source family and semantic decision; it does not claim broader expression inference complete or equal syntax support in both backends. |
-| T2.2: migrate the family | T2 | The outer grouping's `expression_result` is consumed by C call, array, slice, enum, tagged-union, Result, nullable, pointer, struct, boolean, and condition classifiers and by LLVM `exprType`; recursive inner typing remains only a stale-fact check, with a zero-span generated-node fallback. | MIR artifact ownership plus C and LLVM positive tests. |
-| T2.3: fail-closed admission | T2 | Missing grouped direct-call facts fail checked-MIR admission and retargeted facts fail C/LLVM lowering before either backend can strip grouping syntax and rediscover the result type. | C and LLVM missing/stale-fact rejection or conservative fallback tests. |
+| T2.1: select one family | T2 | **Last completed bounded family:** boolean literal, comparison/logical binary, and logical-negation result categories within `c-expression-type-inference` / `llvm-expression-type-inference`. Their producer is the existing MIR `expression_result`; C and LLVM consume it before boolean emission. The subsequent move type-name M1.1 slice is also closed, so select one different registered family next. | The selection names an exact source family and semantic decision; it does not claim broader expression inference complete. |
+| T2.2: migrate the family | T2 | Boolean literal, comparison/logical binary, and logical-negation result categories consume `expression_result` in C and LLVM; the AST operation is only a stale-fact check, with a zero-span generated-node fallback. | MIR artifact ownership plus C and LLVM positive tests. |
+| T2.3: fail-closed admission | T2 | Missing boolean expression-result facts fail checked-MIR admission and retargeted facts fail C/LLVM lowering before operator spelling can recreate the boolean category. | C and LLVM missing/stale-fact rejection or conservative fallback tests. |
 | T3.1: classify every register row | T3 | Mark each remaining family MIR-owned, conservative fallback, or diagnosed unsupported. | Inventory gate verifies the classification and named implementation anchor. |
 | T4.1: semantic-authority audit | T4 | Remove or explicitly register every lowering-affecting AST inference. | No unregistered type, provenance, representation, call-target, ABI, or safety inference remains. |
 

@@ -2743,6 +2743,34 @@ test "MIR owns source block expression result types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns source boolean expression result types" {
+    const source =
+        \\fn compare(left: u32, right: u32) -> bool { return !(left < right); }
+    ;
+    const comparison_text = "left < right";
+    const comparison_offset = std.mem.indexOf(u8, source, comparison_text) orelse return error.TestUnexpectedResult;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_boolean_expression_result.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "compare").?;
+    var found = false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .expression_result or fact.source.offset != comparison_offset or fact.source.len != comparison_text.len) continue;
+        try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
+        found = true;
+    }
+    try std.testing.expect(found);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns direct address dereference result types" {
     const source =
         \\fn read_local() -> u32 {
