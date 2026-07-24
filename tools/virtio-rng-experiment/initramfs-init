@@ -69,6 +69,29 @@ wait_for_hwrng()
 	[ -c /dev/hwrng ]
 }
 
+check_driver_lifecycle_teardown()
+{
+	stage_parameter=/sys/module/virtio_rng/parameters/lang_last_driver_stage
+	avail_parameter=/sys/module/virtio_rng/parameters/lang_last_driver_avail
+	events_parameter=/sys/module/virtio_rng/parameters/lang_last_driver_events
+	mismatches_parameter=/sys/module/virtio_rng/parameters/lang_last_driver_mismatches
+
+	# The ordinary non-shadow configuration intentionally has no model.
+	if [ ! -r "$stage_parameter" ]; then
+		return
+	fi
+	stage=$(cat "$stage_parameter")
+	avail=$(cat "$avail_parameter")
+	events=$(cat "$events_parameter")
+	mismatches=$(cat "$mismatches_parameter")
+	if [ "$stage" != "4" ] || [ "$avail" != "0" ] ||
+		[ "$mismatches" != "0" ] || [ "$events" -le 0 ]; then
+		echo "VRNG-LIVE: FAIL driver lifecycle teardown stage=$stage avail=$avail events=$events mismatches=$mismatches"
+		poweroff -f
+	fi
+	echo "VRNG-LIVE: driver lifecycle teardown passed events=$events"
+}
+
 if [ "$register_fault_matrix" = "1" ]; then
 	echo "VRNG-LIVE: checking registration-failure degraded state"
 	sleep 0.2
@@ -92,6 +115,7 @@ if [ "$register_fault_matrix" = "1" ]; then
 		echo "VRNG-LIVE: FAIL degraded device remained bound after unbind"
 		poweroff -f
 	fi
+	check_driver_lifecycle_teardown
 	echo "VRNG-LIVE: registration-failure degraded state passed"
 	poweroff -f
 fi
@@ -382,6 +406,7 @@ if [ "$publication_barrier" = "1" ]; then
 fi
 
 wait "$unbind_pid"
+check_driver_lifecycle_teardown
 
 if [ "$publication_barrier" = "1" ]; then
 	if [ "$(cat "$last_avail_parameter")" != "0" ] ||

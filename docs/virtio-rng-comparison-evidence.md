@@ -96,6 +96,26 @@ the next lifecycle-policy slice; it is not evidence for five independently
 owned complete drivers. The clean x86-64 QEMU KUnit configuration executes
 30/30 passing tests, including all four new lifecycle/differential cases.
 
+The live lifecycle gate exposes a read-only snapshot only after callbacks have
+been drained and teardown has completed. The guest requires the selected
+lifecycle to be `Dead`, external availability to be zero, the lifecycle event
+count to be nonzero, and the mismatch count to be zero. C, Rust, and MC live
+controllers each pass:
+
+| Live mode | Required outcome |
+|---|---|
+| normal | synchronized post-core/pre-publication removal; 1,217 protocol and 368 lifecycle events |
+| completion/queue fault | zero-length, oversized, stale-generation, and queue-add recovery |
+| registration failure | documented bound degraded state followed by explicit clean unbind |
+| PM | three device-level suspend/restore cycles and final clean unbind |
+| hotplug | QMP PCI removal/re-add, read recovery, and final clean unbind |
+
+The normal gate is also repeated for all three controllers under strict KCSAN
+and under the combined KASAN/UBSAN/lockdep/DEBUG_ATOMIC_SLEEP/DMA-API-debug
+configuration. Every run executes 30/30 KUnit tests, records 1,217 protocol and
+368 lifecycle events, reaches `Dead` with zero availability and mismatches, and
+reports no sanitizer, race, locking, atomic-sleep, or DMA-API diagnostic.
+
 Reproduce the snapshot with:
 
 ```sh

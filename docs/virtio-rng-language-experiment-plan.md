@@ -2,24 +2,27 @@
 
 Status: M0-M5 completed and teardown-requalified; symmetric MC/Rust M6
 typed-DMA compile-time qualification and the first kernel-contract mutation
-matrix are complete; M7 five-candidate lifecycle-policy comparison is
-implemented and x86-64 KUnit/host-qualified, 2026-07-24
+matrix are complete; M7 five-candidate lifecycle-policy comparison is host,
+x86-64 KUnit, live lifecycle, strict-KCSAN, and combined-sanitizer qualified,
+2026-07-24
 
 Upstream target: Linux `v7.2-rc4`, commit
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`, which was both Torvalds `master`
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `051c15fb80a0` (`virtio-rng: compare full driver lifecycle
-policy`); the teardown implementation commit is `2ecc560220c6` (`virtio-rng:
-close teardown publication lifecycle gaps`), based directly on the upstream
-commit above. The prior M3 and initial M3.5 evidence was recorded at
+experiment commit is `3a53f0ede65a` (`virtio-rng: expose lifecycle teardown
+evidence`); the M7 policy commit is `051c15fb80a0` (`virtio-rng: compare full
+driver lifecycle policy`) and the teardown implementation commit is
+`2ecc560220c6` (`virtio-rng: close teardown publication lifecycle gaps`), based
+directly on the upstream commit above. The prior M3 and initial M3.5 evidence
+was recorded at
 `14a52a42241f` and `83a4ba9acbf6`, respectively.
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`051c15fb80a0` on
+`3a53f0ede65a` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -31,12 +34,16 @@ Current checkpoint:
   availability only after callback drain, preserves the first logical teardown
   error without skipping physical cleanup, retains an explicit removable
   degraded state after registration failure, and uses shadow-aware unwind for
-  initial request failure. M4 and M5 are requalified: the expanded 26-test
-  x86-64 KUnit suite passes with each controlling core; all controllers pass
-  normal, fault, registration-failure, PM, and QMP hotplug live qualification;
-  strict KCSAN and combined KASAN/UBSAN/lockdep/DEBUG_ATOMIC_SLEEP/DMA-API-debug
-  reruns are clean. The host differential, symmetric DMA, 16-row mutation,
-  compiler sanitizer, and all five teardown/publication LKMM models pass.
+  initial request failure. M4 and M5 are requalified: the 26-test repair suite
+  passed with each controlling core, and the M7-expanded x86-64 suite now
+  passes 30/30 for every controller. All controllers pass normal, fault,
+  registration-failure, PM, and QMP hotplug live qualification while asserting
+  final driver lifecycle ``Dead``, zero external availability, a nonzero event
+  count, and zero mismatches. Strict KCSAN and combined
+  KASAN/UBSAN/lockdep/DEBUG_ATOMIC_SLEEP/DMA-API-debug repeat the synchronized
+  live teardown for all three controllers without diagnostics. The host
+  differential, symmetric DMA, 16-row mutation, compiler sanitizer, and all
+  five teardown/publication LKMM models pass.
 
 - P0 ABI v1 is implemented and has been tightened after review: every non-null
   output is initialized first, followed by output-set, state, data-pointer,
@@ -118,7 +125,15 @@ Current checkpoint:
   enumerates 31 reachable states and performs 1,550 result/outcome/post-state
   comparisons; an injected C final-clear mutation proves the gate is
   non-vacuous. Physical hwrng calls, reset, callback synchronization,
-  virtqueue deletion, allocation, and stores remain common C effects.
+  virtqueue deletion, allocation, and stores remain common C effects. A
+  read-only post-drain snapshot makes the final selected lifecycle stage,
+  external availability, event count, and mismatch count guest-observable.
+  The C, Rust, and MC live controllers each pass normal, completion/queue
+  fault, registration-failure, three-cycle PM, and QMP hot-unplug/replug
+  modes. The normal synchronized-unbind path records 1,217 protocol and 368
+  lifecycle events, ends in ``Dead`` with zero availability and mismatches,
+  and passes for every controller under strict KCSAN and combined
+  KASAN/UBSAN/lockdep/DEBUG_ATOMIC_SLEEP/DMA-API-debug.
 
 ## 1. Question and scope
 
@@ -554,14 +569,22 @@ deliberate final-clear mutation must be detected, and KUnit must exercise the
 normal path, registration failure, invalid ordering, and the deterministic
 post-completion/pre-publication removal window.
 
-Status: implemented and x86-64 KUnit/host-qualified. The host gate reaches 31
-unique states and performs 1,550 comparisons across all five candidates. The
-expanded x86-64 suite passes 30/30 tests, including the normal lifecycle,
+Status: implemented and host/KUnit/live/sanitizer-qualified on x86-64. The
+host gate reaches 31 unique states and performs 1,550 comparisons across all
+five candidates. The expanded x86-64 suite passes 30/30 tests, including the
+normal lifecycle,
 registration-failure, invalid-ordering, post-completion/pre-publication
 removal, and shadow integration cases. The typed Rust candidate decodes the C
 ABI into a closed `Stage`, booleans, and `Option<u32>`; the MC contract
 candidate uses a closed `ContractStage` and is accepted with both
 `#[irq_context]` and `#[no_lang_trap]` on the callback-reachable call graph.
+Every C, Rust, and MC live controller passes normal, fault,
+registration-failure, three-cycle PM, and QMP hot-unplug/replug modes. Final
+unbind is checked from inside the guest and must report `Dead`, zero external
+availability, nonzero lifecycle events, and zero mismatches. The normal path
+records 1,217 protocol and 368 lifecycle events for each controller; strict
+KCSAN and combined KASAN/UBSAN/lockdep/DEBUG_ATOMIC_SLEEP/DMA-API-debug reruns
+repeat the path with 30/30 KUnit tests and no diagnostic.
 This is a lifecycle-policy comparison, not a claim that five complete drivers
 own Linux allocation, DMA, or transport objects.
 

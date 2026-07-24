@@ -74,6 +74,8 @@ fi
 
 if [ "$mode" = shadow-register-fault ]; then
 	grep -q "VRNG-LIVE: registration-failure degraded state passed" "$log"
+	grep -Eq "VRNG-LIVE: driver lifecycle teardown passed events=[1-9][0-9]*" "$log"
+	grep -Eq "language shadow control=(C|Rust|MC) matched all [1-9][0-9]* protocol and [1-9][0-9]* driver lifecycle events" "$log"
 	if grep -Eq "BUG:|WARNING:|KASAN:|KCSAN:|UBSAN:|kernel BUG|possible circular locking|blocked for more than" "$log"; then
 		echo "virtio-rng registration-fault test reported a kernel diagnostic" >&2
 		exit 1
@@ -91,7 +93,8 @@ grep -q "VRNG-LIVE: complete" "$log"
 if [ "$mode" != no-shadow ]; then
 	grep -Eq "VRNG-LIVE: (blocked-reader|post-core publication) synchronization reached" "$log"
 	grep -q "VRNG-LIVE: teardown publication ordering passed" "$log"
-	grep -Eq "language shadow control=(C|Rust|MC) matched all [1-9][0-9]* protocol events" "$log"
+	grep -Eq "VRNG-LIVE: driver lifecycle teardown passed events=[1-9][0-9]*" "$log"
+	grep -Eq "language shadow control=(C|Rust|MC) matched all [1-9][0-9]* protocol and [1-9][0-9]* driver lifecycle events" "$log"
 	if grep -Eq "language shadow( control=(C|Rust|MC))? mismatches=" "$log"; then
 		echo "virtio-rng language shadow reported a mismatch" >&2
 		exit 1
