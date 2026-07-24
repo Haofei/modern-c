@@ -1527,6 +1527,16 @@ const LlvmEmitter = struct {
         }
         if (self.local_types.contains(ident.text)) return try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{ident.text});
         if (self.global_types.get(ident.text)) |ty| {
+            // Immutable `const` storage cannot participate in a data race.
+            // Loading it through the mutable-global race path emits an
+            // unnecessary unordered atomic, which also prevents LLVM from
+            // folding state-machine constants and inlining their users. Keep
+            // the emitted global initializer authoritative and use an ordinary
+            // load; LLVM can fold it without backend-side value rediscovery.
+            if (self.global_is_const.get(ident.text) orelse false) {
+                const const_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
+                return try self.emitOrdinaryLoad(ty, const_ptr, false);
+            }
             const global_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
             try self.emitOrdinaryShadowHook(global_ptr, ty, .load_pre);
             return try self.emitOrdinaryLoad(ty, global_ptr, true);

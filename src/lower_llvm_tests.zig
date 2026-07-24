@@ -11072,6 +11072,24 @@ test "LLVM ordinary bool global accesses use byte-sized atomics" {
     try expectNotContains(store_body, "store atomic i1");
 }
 
+test "LLVM immutable scalar global value reads avoid atomic traffic" {
+    const source =
+        \\const LIMIT: u32 = 7;
+        \\
+        \\fn read_limit() -> u32 {
+        \\    return LIMIT;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("immutable_scalar_global.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @read_limit");
+    try expectContains(body, "load i32, ptr @LIMIT");
+    try expectNotContains(body, "load atomic");
+}
+
 test "LLVM wide-scalar global race lowering fails closed" {
     // A u128 global scalar access would need `load atomic i128`, which lowers to an
     // `__atomic_load_16` libcall the freestanding kernel cannot link. Spec §I.13:

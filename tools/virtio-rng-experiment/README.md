@@ -41,8 +41,8 @@ git -C /home/zoe/src/linux switch -c vrng-lang-experiment v7.2-rc4
 ```
 
 The experiment branch is based on `v7.2-rc4` /
-`1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current qualification commit
-is `33950062b7bc` (implementation commit `2ecc560220c6`), published as
+`1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current experiment commit is
+`880472cea170` (teardown implementation commit `2ecc560220c6`), published as
 [`Haofei/linux:vrng-lang-experiment`](https://github.com/Haofei/linux/tree/vrng-lang-experiment).
 
 The container is sufficient for compilation and QEMU execution. Performance
@@ -178,7 +178,12 @@ tools/virtio-rng-experiment/run-comparison-metrics.sh \
 ```
 
 The command writes a sibling `*-benchmark.tsv` report for the same optimized
-`begin_submit`/`complete`/`copy` cycle in each core. It is a controlled
-transition-throughput measurement, not a whole-driver, IRQ-latency, reviewer-
-time, or production-performance claim. Set `VRNG_BENCHMARK_ITERATIONS` to
-override the default one million iterations.
+`begin_submit`/`complete`/`copy` cycle in each core. It rotates controller order
+across seven samples and reports the median, then rejects MC if its median
+per-event cost exceeds either C or Rust by more than 1.25 times. Object sizes
+exclude debug sections for all implementations. It is a controlled transition-
+throughput measurement, not a whole-driver, IRQ-latency, reviewer-time, or
+production-performance claim. Set `VRNG_BENCHMARK_ITERATIONS` to override the
+default one million iterations, `VRNG_BENCHMARK_SAMPLES` to an odd value up to
+31, or `VRNG_BENCHMARK_MAX_MC_RATIO` to change the registered limit (`0`
+disables only the performance rejection).

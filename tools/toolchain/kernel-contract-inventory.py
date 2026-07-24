@@ -48,7 +48,7 @@ REQUIRED = {
         "facts may not persist",
     ),
     "docs/virtio-rng-comparison-evidence.md": (
-        "negative evidence for K2",
+        "resolves the bounded protocol-core performance blocker",
         "K2 remains unsatisfied",
         "run-contract-mutations.sh",
     ),

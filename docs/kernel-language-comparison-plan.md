@@ -2,8 +2,9 @@
 
 Status: **K1 evidence complete for the bounded virtio-rng contract scenario.
 K2 has reproducible cost and protocol-core performance measurements but is not
-satisfied: the current MC core has a material microbenchmark regression and the
-TCB/reviewer/full-driver comparison is incomplete. K3-K4 remain unclaimed**.
+satisfied: the bounded MC microbenchmark is now within the predeclared material-
+regression limit, but the TCB/reviewer/full-driver comparison is incomplete.
+K3-K4 remain unclaimed**.
 
 This document defines the evidence required to support a narrow claim:
 
@@ -407,9 +408,10 @@ ready for unrestricted Linux driver development.
 12. Capture TCB, reviewer-cost, build, codegen, stack, and runtime metrics.
     **Source/object/trusted-marker and optimized protocol-core throughput are
     reproducible now. The result is deliberately not promoted to K2: reviewer
-    time, stack/tail/IRQ cost, and full-driver performance remain unmeasured,
-    and the current MC microbenchmark is materially slower than C and Rust on
-    the development host.**
+    time, stack/tail/IRQ cost, and full-driver performance remain unmeasured.
+    The rotated-median MC microbenchmark is within the predeclared 1.25-times
+    material-regression limit relative to both C and Rust on the development
+    host.**
 13. Repeat under sanitizers, LKMM, hot-unplug, PM, and real-hardware soak.
 14. Obtain an independent reproduction and audit.
 

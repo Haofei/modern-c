@@ -49,6 +49,13 @@ rustc --edition=2021 --crate-type lib -C opt-level=2 --emit=obj \
 	--linux-kernel -o "$tmp/mc-contract.ll"
 clang -O2 -c -x ir "$tmp/mc-contract.ll" -o "$tmp/mc-contract.o"
 
+# MC LLVM carries source-level debug metadata by default, while these C and
+# Rust commands do not. Compare deployable code/data rather than charging only
+# MC for debug sections.
+llvm_strip=${LLVM_STRIP:-llvm-strip}
+"$llvm_strip" --strip-debug "$tmp/c-core.o" "$tmp/rust-raw.o" \
+	"$tmp/mc-raw.o" "$tmp/rust-safe.o" "$tmp/mc-contract.o"
+
 rustc --edition=2021 --crate-name vrng_rust_benchmark --crate-type staticlib \
 	-C opt-level=2 -C panic=abort --extern kernel="$tmp/libkernel.rlib" \
 	"$rust_raw" -o "$tmp/libvrng-rust-benchmark.a"
@@ -79,4 +86,21 @@ printf 'MC contract\tDMA ownership fixture\t%s\t%s\t%s\tunsafe blocks plus exter
 cat "$report"
 "$tmp/vrng-host" benchmark "${VRNG_BENCHMARK_ITERATIONS:-1000000}" \
 	| tee "$benchmark_report"
+max_ratio=${VRNG_BENCHMARK_MAX_MC_RATIO:-1.25}
+if [ "$max_ratio" != 0 ]; then
+	awk -F '\t' -v max_ratio="$max_ratio" '
+		$1 == "c" { c = $8 }
+		$1 == "rust" { rust = $8 }
+		$1 == "mc" { mc = $8 }
+		END {
+			if (!c || !rust || !mc)
+				exit 2
+			if (mc > c * max_ratio || mc > rust * max_ratio) {
+				printf "MC median regression: %.3f ns/event; C %.3f; Rust %.3f; limit %.2fx\n",
+					mc, c, rust, max_ratio > "/dev/stderr"
+				exit 1
+			}
+		}
+	' "$benchmark_report"
+fi
 echo "virtio-rng comparison metrics captured (source/object/TCB markers and protocol-core throughput)"

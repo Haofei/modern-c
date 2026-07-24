@@ -9,16 +9,16 @@ Upstream target: Linux `v7.2-rc4`, commit
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `33950062b7bc` (`virtio-rng: record teardown
-requalification`); its implementation commit is `2ecc560220c6` (`virtio-rng:
-close teardown publication lifecycle gaps`), based directly on the upstream
-commit above. The prior M3 and initial M3.5 evidence was recorded at
-`14a52a42241f` and `83a4ba9acbf6`, respectively.
+experiment commit is `880472cea170` (`virtio-rng: use bulk copy in MC core`);
+the teardown implementation commit is `2ecc560220c6` (`virtio-rng: close
+teardown publication lifecycle gaps`), based directly on the upstream commit
+above. The prior M3 and initial M3.5 evidence was recorded at `14a52a42241f`
+and `83a4ba9acbf6`, respectively.
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`33950062b7bc` on
+`880472cea170` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:

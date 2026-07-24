@@ -469,51 +469,107 @@ static uint64_t elapsed_nanoseconds(const struct timespec *start,
 	       (uint64_t)(finish->tv_nsec - start->tv_nsec);
 }
 
+#define VRNG_BENCHMARK_MAX_SAMPLES 31
+
+static void sort_nanoseconds(u64 *values, u32 count)
+{
+	u32 index;
+
+	for (index = 1; index < count; index++) {
+		u64 value = values[index];
+		u32 position = index;
+
+		while (position && values[position - 1] > value) {
+			values[position] = values[position - 1];
+			position--;
+		}
+		values[position] = value;
+	}
+}
+
 static int benchmark(u64 iterations)
 {
 	u8 dma[64], destination[64];
-	u32 candidate_index, index;
+	u64 nanoseconds[sizeof(candidates) / sizeof(candidates[0])]
+		       [VRNG_BENCHMARK_MAX_SAMPLES];
+	const char *samples_text = getenv("VRNG_BENCHMARK_SAMPLES");
+	u32 candidate_count = sizeof(candidates) / sizeof(candidates[0]);
+	u32 candidate_index, index, offset, sample;
+	u32 samples = 7;
 	volatile u64 checksum = 0;
 
 	if (!iterations)
 		return 1;
+	if (samples_text) {
+		char *end;
+		unsigned long parsed = strtoul(samples_text, &end, 10);
+
+		if (*end || !parsed || parsed > VRNG_BENCHMARK_MAX_SAMPLES ||
+		    !(parsed & 1))
+			return 1;
+		samples = parsed;
+	}
 	for (index = 0; index < sizeof(dma); index++)
 		dma[index] = (u8)index;
-	printf("implementation\titerations\tevents\tnanoseconds\tns_per_event\tevents_per_second\n");
-	for (candidate_index = 0; candidate_index <
-	     sizeof(candidates) / sizeof(candidates[0]); candidate_index++) {
-		const struct vrng_host_ops *ops = &candidates[candidate_index];
-		struct vrng_core_state state = {};
-		struct timespec start, finish;
-		u64 iteration, generation;
-		u64 nanoseconds, events;
-		u32 copied, need_resubmit;
+	for (sample = 0; sample < samples; sample++) {
+		/*
+		 * Rotate execution order so no implementation always receives the
+		 * coldest or warmest position. The reported median rejects isolated
+		 * scheduler and frequency-transition noise.
+		 */
+		for (offset = 0; offset < candidate_count; offset++) {
+			struct vrng_core_state state = {};
+			struct timespec start, finish;
+			const struct vrng_host_ops *ops;
+			u64 iteration, generation;
+			u32 copied, need_resubmit;
 
-		if (ops->init(&state, sizeof(dma), 0))
-			return 1;
-		if (clock_gettime(CLOCK_MONOTONIC, &start))
-			return 1;
-		for (iteration = 0; iteration < iterations; iteration++) {
-			if (ops->begin_submit(&state, &generation) ||
-			    ops->complete(&state, generation, sizeof(dma),
-					  &need_resubmit) ||
-			    ops->copy(&state, dma, destination, sizeof(destination),
-				      &copied, &need_resubmit) ||
-			    copied != sizeof(dma))
+			candidate_index = (sample + offset) % candidate_count;
+			ops = &candidates[candidate_index];
+			if (ops->init(&state, sizeof(dma), 0))
 				return 1;
-			checksum += destination[iteration % sizeof(destination)] +
-				    generation + need_resubmit;
+			if (clock_gettime(CLOCK_MONOTONIC, &start))
+				return 1;
+			for (iteration = 0; iteration < iterations; iteration++) {
+				if (ops->begin_submit(&state, &generation) ||
+				    ops->complete(&state, generation, sizeof(dma),
+						  &need_resubmit) ||
+				    ops->copy(&state, dma, destination,
+					      sizeof(destination), &copied,
+					      &need_resubmit) ||
+				    copied != sizeof(dma))
+					return 1;
+				checksum +=
+					destination[iteration % sizeof(destination)] +
+					generation + need_resubmit;
+			}
+			if (clock_gettime(CLOCK_MONOTONIC, &finish))
+				return 1;
+			nanoseconds[candidate_index][sample] =
+				elapsed_nanoseconds(&start, &finish);
 		}
-		if (clock_gettime(CLOCK_MONOTONIC, &finish))
+	}
+	printf("implementation\titerations\tevents\tsamples\tmedian_nanoseconds"
+	       "\tmin_nanoseconds\tmax_nanoseconds\tns_per_event"
+	       "\tevents_per_second\n");
+	for (candidate_index = 0; candidate_index < candidate_count;
+	     candidate_index++) {
+		u64 events = iterations * 3;
+		u64 median;
+
+		if (!events || events / 3 != iterations)
 			return 1;
-		nanoseconds = elapsed_nanoseconds(&start, &finish);
-		events = iterations * 3;
-		if (!nanoseconds || events / 3 != iterations)
+		sort_nanoseconds(nanoseconds[candidate_index], samples);
+		median = nanoseconds[candidate_index][samples / 2];
+		if (!median)
 			return 1;
-		printf("%s\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64
-		       "\t%.3f\t%.0f\n", ops->name, iterations, events,
-		       nanoseconds, (double)nanoseconds / (double)events,
-		       (double)events * 1000000000.0 / (double)nanoseconds);
+		printf("%s\t%" PRIu64 "\t%" PRIu64 "\t%u\t%" PRIu64
+		       "\t%" PRIu64 "\t%" PRIu64 "\t%.3f\t%.0f\n",
+		       candidates[candidate_index].name, iterations, events,
+		       samples, median, nanoseconds[candidate_index][0],
+		       nanoseconds[candidate_index][samples - 1],
+		       (double)median / (double)events,
+		       (double)events * 1000000000.0 / (double)median);
 	}
 	return checksum ? 0 : 1;
 }

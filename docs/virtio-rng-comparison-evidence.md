@@ -1,6 +1,6 @@
 # Virtio-rng comparison evidence snapshot
 
-Date: 2026-07-22
+Date: 2026-07-23
 
 Scope: bounded protocol core plus DMA typestate fixtures. This is a developer
 reproduction, not an independent audit or a complete-driver performance study.
@@ -15,10 +15,13 @@ zig: 0.16.0
 mcc: 0.7.0-dev
 ```
 
-The runner builds all protocol objects with optimization enabled. The benchmark
-executes one million valid `begin_submit`/`complete`/`copy` cycles per core in
-one process and reports three events per cycle. Results vary with host load and
-must be regenerated before publication.
+The runner builds all protocol objects with optimization enabled and strips
+debug sections before comparing object bytes. The benchmark executes seven
+rotated samples of one million valid `begin_submit`/`complete`/`copy` cycles per
+core in one process and reports three events per cycle. Rotation prevents one
+implementation from always occupying the coldest or warmest position; the
+reported value is the median. Results still vary with host load and must be
+regenerated before publication.
 
 ## Source, trust-marker, and object snapshot
 
@@ -26,9 +29,9 @@ must be regenerated before publication.
 |---|---|---:|---:|---:|
 | C baseline | protocol core | 190 | 23 | 3,192 |
 | Rust raw FFI | protocol core | 308 | 25 | 3,632 |
-| MC raw | protocol core | 313 | 5 | 10,216 |
+| MC raw | protocol core | 312 | 3 | 4,352 |
 | Rust safe typestate | DMA fixture | 51 | 7 | 336 |
-| MC contract | DMA fixture | 48 | 6 | 808 |
+| MC contract | DMA fixture | 48 | 6 | 336 |
 
 “Trusted markers” is a mechanically defined source count, not a proof-weighted
 TCB size: C counts raw pointer declarations/accesses; Rust counts `unsafe`;
@@ -39,15 +42,21 @@ not be combined into a language-wide percentage.
 
 | Core | Events | ns/event | Events/second |
 |---|---:|---:|---:|
-| C | 3,000,000 | 8.968 | 111,507,583 |
-| Rust | 3,000,000 | 16.723 | 59,799,075 |
-| MC | 3,000,000 | 26.806 | 37,305,545 |
+| C | 3,000,000 | 3.524 | 283,795,289 |
+| Rust | 3,000,000 | 4.497 | 222,386,953 |
+| MC | 3,000,000 | 3.963 | 252,312,868 |
 
-This run is negative evidence for K2: MC was about 2.99 times slower per event
-than C and about 1.60 times slower than Rust in this microbenchmark. It would be
-incorrect to claim “no material runtime regression.” The result identifies an
-optimization/code-generation task; it says nothing yet about device throughput,
-tail latency, IRQ latency, or the cost of common C glue.
+The previous single-sample result exposed a byte-at-a-time MC copy path and an
+unfair object-size comparison that charged only MC for debug metadata. The MC
+core now uses one explicit ABI-audited `memcpy`, and immutable scalar `const`
+value reads lower directly rather than through unordered atomic loads. In the
+rotated median run MC is 1.12 times C's per-event cost and 0.88 times Rust's,
+inside the runner's predeclared 1.25-times material-regression limit for both
+comparators.
+
+This resolves the bounded protocol-core performance blocker; it does not
+establish device throughput, tail latency, IRQ latency, stack cost, reviewer
+cost, or the cost of common C glue.
 
 ## Mutation snapshot
 
@@ -71,7 +80,7 @@ tools/virtio-rng-experiment/run-comparison-metrics.sh \
   ../linux-vrng-fix zig-out/bin/mcc /tmp/vrng-comparison-metrics.tsv
 ```
 
-K2 remains unsatisfied until the performance regression is resolved and
-whole-driver runtime/stack costs plus a review-cost method are measured. K3 and
-K4 additionally require the idiomatic Rust-safe complete-driver comparison,
-real-hardware qualification, and independent reproduction.
+K2 remains unsatisfied because whole-driver runtime/stack costs and a
+review-cost method are still unmeasured. K3 and K4 additionally require the
+idiomatic Rust-safe complete-driver comparison, real-hardware qualification,
+and independent reproduction.
