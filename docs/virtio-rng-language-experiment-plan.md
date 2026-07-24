@@ -8,10 +8,10 @@ x86-64 KUnit, live lifecycle, strict-KCSAN, and combined-sanitizer qualified,
 
 Upstream target: Linux `v7.2-rc4`, commit
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`, which was both Torvalds `master`
-and the latest mainline tag when the environment was created. The working
-checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
+and the latest mainline tag when the environment was created. The external
+Linux checkout path is supplied as `LINUX_REPO`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `3a53f0ede65a` (`virtio-rng: expose lifecycle teardown
+experiment commit is `54cb893645a9` (`virtio-rng: publish coherent teardown
 evidence`); the M7 policy commit is `051c15fb80a0` (`virtio-rng: compare full
 driver lifecycle policy`) and the teardown implementation commit is
 `2ecc560220c6` (`virtio-rng: close teardown publication lifecycle gaps`), based
@@ -21,8 +21,8 @@ was recorded at
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
-The current Linux experiment is published at commit
-`3a53f0ede65a` on
+The current Linux experiment is qualified locally at commit
+`54cb893645a9` and is published on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -44,6 +44,15 @@ Current checkpoint:
   live teardown for all three controllers without diagnostics. The host
   differential, symmetric DMA, 16-row mutation, compiler sanitizer, and all
   five teardown/publication LKMM models pass.
+
+- The teardown evidence interface is one mutex-protected formatted record
+  containing a monotonic sequence, per-probe device cookie, teardown error,
+  final stage/availability, and full-width event/mismatch counters. Probe does
+  not erase the last completed record. The QMP gate checks the removed device's
+  record before replacement probe, a teardown-error injection proves the
+  oracle observes matched logical failures, and a two-device live gate checks
+  distinct removal sequences and cookies. The same driver object compiles in a
+  32-bit x86 C-only shadow configuration.
 
 - P0 ABI v1 is implemented and has been tightened after review: every non-null
   output is initialized first, followed by output-set, state, data-pointer,
@@ -126,8 +135,10 @@ Current checkpoint:
   comparisons; an injected C final-clear mutation proves the gate is
   non-vacuous. Physical hwrng calls, reset, callback synchronization,
   virtqueue deletion, allocation, and stores remain common C effects. A
-  read-only post-drain snapshot makes the final selected lifecycle stage,
-  external availability, event count, and mismatch count guest-observable.
+  read-only post-drain record makes the removal sequence, device cookie,
+  teardown error, final selected lifecycle stage, external availability,
+  full-width event count, and mismatch count guest-observable as one coherent
+  read.
   The C, Rust, and MC live controllers each pass normal, completion/queue
   fault, registration-failure, three-cycle PM, and QMP hot-unplug/replug
   modes. The normal synchronized-unbind path records 1,217 protocol and 368

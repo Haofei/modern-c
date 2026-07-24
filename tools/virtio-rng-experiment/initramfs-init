@@ -9,12 +9,16 @@ fault_matrix=0
 pm_matrix=0
 transport_matrix=0
 register_fault_matrix=0
+teardown_fault_matrix=0
+multidev_matrix=0
 for argument in $(cat /proc/cmdline); do
 	case "$argument" in
 	vrng_live_fault_matrix=1) fault_matrix=1 ;;
 	vrng_live_pm_matrix=1) pm_matrix=1 ;;
 	vrng_live_transport_matrix=1) transport_matrix=1 ;;
 	vrng_live_register_fault_matrix=1) register_fault_matrix=1 ;;
+	vrng_live_teardown_fault_matrix=1) teardown_fault_matrix=1 ;;
+	vrng_live_multidev_matrix=1) multidev_matrix=1 ;;
 	esac
 done
 
@@ -71,28 +75,71 @@ wait_for_hwrng()
 
 check_driver_lifecycle_teardown()
 {
-	stage_parameter=/sys/module/virtio_rng/parameters/lang_last_driver_stage
-	avail_parameter=/sys/module/virtio_rng/parameters/lang_last_driver_avail
-	events_parameter=/sys/module/virtio_rng/parameters/lang_last_driver_events
-	mismatches_parameter=/sys/module/virtio_rng/parameters/lang_last_driver_mismatches
+	minimum_sequence=${1:-0}
+	expected_error=${2:-zero}
+	record_parameter=/sys/module/virtio_rng/parameters/lang_last_driver_record
 
 	# The ordinary non-shadow configuration intentionally has no model.
-	if [ ! -r "$stage_parameter" ]; then
+	if [ ! -r "$record_parameter" ]; then
 		return
 	fi
-	stage=$(cat "$stage_parameter")
-	avail=$(cat "$avail_parameter")
-	events=$(cat "$events_parameter")
-	mismatches=$(cat "$mismatches_parameter")
-	if [ "$stage" != "4" ] || [ "$avail" != "0" ] ||
-		[ "$mismatches" != "0" ] || [ "$events" -le 0 ]; then
-		echo "VRNG-LIVE: FAIL driver lifecycle teardown stage=$stage avail=$avail events=$events mismatches=$mismatches"
+	sequence=""
+	device=""
+	error=""
+	stage=""
+	avail=""
+	events=""
+	mismatches=""
+	for field in $(cat "$record_parameter"); do
+		case "$field" in
+		sequence=*) sequence=${field#sequence=} ;;
+		device=*) device=${field#device=} ;;
+		error=*) error=${field#error=} ;;
+		stage=*) stage=${field#stage=} ;;
+		avail=*) avail=${field#avail=} ;;
+		events=*) events=${field#events=} ;;
+		mismatches=*) mismatches=${field#mismatches=} ;;
+		esac
+	done
+	error_ok=0
+	if [ "$expected_error" = "zero" ] && [ "$error" = "0" ]; then
+		error_ok=1
+	elif [ "$expected_error" = "nonzero" ] && [ -n "$error" ] &&
+		[ "$error" -ne 0 ]; then
+		error_ok=1
+	fi
+	if [ -z "$sequence" ] || [ -z "$device" ] || [ -z "$error" ] ||
+		[ -z "$stage" ] || [ -z "$avail" ] || [ -z "$events" ] ||
+		[ -z "$mismatches" ] ||
+		[ "$sequence" -le "$minimum_sequence" ] ||
+		[ "$device" -le 0 ] || [ "$error_ok" != "1" ] ||
+		[ "$stage" != "4" ] ||
+		[ "$avail" != "0" ] || [ "$mismatches" != "0" ] ||
+		[ "$events" -le 0 ]; then
+		echo "VRNG-LIVE: FAIL driver lifecycle teardown sequence=$sequence device=$device error=$error stage=$stage avail=$avail events=$events mismatches=$mismatches"
 		poweroff -f
 	fi
-	echo "VRNG-LIVE: driver lifecycle teardown passed events=$events"
+	echo "VRNG-LIFECYCLE: sequence=$sequence device=$device error=$error stage=$stage avail=$avail events=$events mismatches=$mismatches"
+	echo "VRNG-LIVE: driver lifecycle teardown passed sequence=$sequence events=$events"
+}
+
+driver_lifecycle_sequence()
+{
+	record_parameter=/sys/module/virtio_rng/parameters/lang_last_driver_record
+	if [ ! -r "$record_parameter" ]; then
+		echo 0
+		return
+	fi
+	for field in $(cat "$record_parameter"); do
+		case "$field" in
+		sequence=*) echo "${field#sequence=}"; return ;;
+		esac
+	done
+	echo 0
 }
 
 if [ "$register_fault_matrix" = "1" ]; then
+	register_teardown_sequence=$(driver_lifecycle_sequence)
 	echo "VRNG-LIVE: checking registration-failure degraded state"
 	sleep 0.2
 	register_fault_device=""
@@ -115,7 +162,7 @@ if [ "$register_fault_matrix" = "1" ]; then
 		echo "VRNG-LIVE: FAIL degraded device remained bound after unbind"
 		poweroff -f
 	fi
-	check_driver_lifecycle_teardown
+	check_driver_lifecycle_teardown "$register_teardown_sequence"
 	echo "VRNG-LIVE: registration-failure degraded state passed"
 	poweroff -f
 fi
@@ -253,6 +300,7 @@ if [ "$transport_matrix" = "1" ]; then
 		echo "VRNG-LIVE: FAIL transport device was not found"
 		poweroff -f
 	fi
+	transport_teardown_sequence=$(driver_lifecycle_sequence)
 
 	if ! echo 1 > "$hold_parameter"; then
 		echo "VRNG-LIVE: FAIL enabling transport completion hold"
@@ -302,6 +350,8 @@ if [ "$transport_matrix" = "1" ]; then
 		poweroff -f
 	fi
 	echo "VRNG-LIVE: transport hot-unplug observed status=$transport_status"
+	check_driver_lifecycle_teardown "$transport_teardown_sequence"
+	echo "VRNG-LIVE: transport hot-unplug teardown checked"
 
 	attempt=0
 	while [ "$attempt" -lt 200 ]; do
@@ -324,6 +374,43 @@ if [ "$transport_matrix" = "1" ]; then
 		poweroff -f
 	fi
 	echo "VRNG-LIVE: transport hot-unplug/replug passed"
+fi
+
+first_removed_cookie=""
+if [ "$multidev_matrix" = "1" ]; then
+	multidev_count=0
+	multidev_first=""
+	for device_path in /sys/bus/virtio/drivers/virtio_rng/virtio*; do
+		if [ -e "$device_path" ]; then
+			multidev_count=$((multidev_count + 1))
+			if [ -z "$multidev_first" ]; then
+				multidev_first=${device_path##*/}
+			fi
+		fi
+	done
+	if [ "$multidev_count" -lt 2 ]; then
+		echo "VRNG-LIVE: FAIL multi-device test found $multidev_count devices"
+		poweroff -f
+	fi
+	multidev_sequence=$(driver_lifecycle_sequence)
+	echo "$multidev_first" > /sys/bus/virtio/drivers/virtio_rng/unbind
+	check_driver_lifecycle_teardown "$multidev_sequence"
+	first_removed_cookie=$device
+	if ! wait_for_hwrng ||
+		! dd if=/dev/hwrng of=/dev/null bs=64 count=32; then
+		echo "VRNG-LIVE: FAIL surviving multi-device hwrng is unusable"
+		poweroff -f
+	fi
+	echo "VRNG-LIVE: first multi-device teardown checked device=$first_removed_cookie"
+fi
+
+if [ "$teardown_fault_matrix" = "1" ]; then
+	teardown_fault_parameter=/sys/module/virtio_rng/parameters/lang_fail_teardown_once
+	if [ ! -w "$teardown_fault_parameter" ] ||
+		! echo 1 > "$teardown_fault_parameter"; then
+		echo "VRNG-LIVE: FAIL arming teardown error injection"
+		poweroff -f
+	fi
 fi
 
 echo "VRNG-LIVE: starting readers for removal race"
@@ -378,6 +465,7 @@ else
 	sleep 0.2
 fi
 
+final_teardown_sequence=$(driver_lifecycle_sequence)
 (
 	for device_path in /sys/bus/virtio/drivers/virtio_rng/virtio*; do
 		if [ -e "$device_path" ]; then
@@ -406,7 +494,19 @@ if [ "$publication_barrier" = "1" ]; then
 fi
 
 wait "$unbind_pid"
-check_driver_lifecycle_teardown
+if [ "$teardown_fault_matrix" = "1" ]; then
+	check_driver_lifecycle_teardown "$final_teardown_sequence" nonzero
+	echo "VRNG-LIVE: teardown error oracle detected injected failure"
+else
+	check_driver_lifecycle_teardown "$final_teardown_sequence"
+fi
+if [ "$multidev_matrix" = "1" ]; then
+	if [ "$device" = "$first_removed_cookie" ]; then
+		echo "VRNG-LIVE: FAIL multi-device records reused device cookie=$device"
+		poweroff -f
+	fi
+	echo "VRNG-LIVE: second multi-device teardown checked device=$device"
+fi
 
 if [ "$publication_barrier" = "1" ]; then
 	if [ "$(cat "$last_avail_parameter")" != "0" ] ||

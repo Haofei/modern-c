@@ -608,3 +608,29 @@ test "foldComptimeExpr resolves named const globals via scope.globals" {
     try scope.bind("MAX", .{ .int = 10 });
     try std.testing.expectEqual(@as(i128, 20), foldComptimeExpr(&scope, expr.*).value.int);
 }
+
+test "foldComptimeExpr represents and composes the upper u128 range" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var scope = ComptimeScope.init(std.testing.allocator);
+    defer scope.deinit();
+    try std.testing.expectEqual(
+        std.math.maxInt(u128),
+        foldComptimeExpr(&scope, (try testInt(a, "340282366920938463463374607431768211455")).*).value.uint,
+    );
+    const high_expr = try testBinary(a, .shl, try testInt(a, "1"), try testInt(a, "127"));
+    const high = foldComptimeExpr(&scope, high_expr.*).value;
+    try std.testing.expectEqual(@as(u128, 1) << 127, high.uint);
+
+    var globals = std.StringHashMap(ComptimeValue).init(std.testing.allocator);
+    defer globals.deinit();
+    try globals.put("HIGH", high);
+    scope.globals = &globals;
+    try scope.bindTypeInfo("HIGH", testType("u128"));
+
+    const below = try testBinary(a, .sub, try testIdent(a, "HIGH"), try testInt(a, "1"));
+    const maximum = try testBinary(a, .add, try testIdent(a, "HIGH"), below);
+    try std.testing.expectEqual(std.math.maxInt(u128), foldComptimeExpr(&scope, maximum.*).value.uint);
+}

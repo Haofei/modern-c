@@ -1,4 +1,5 @@
 # name	fixture	mode	spec	mcc_flags	description
+numeric-literal-boundaries-test	tests/exec/numeric_literal_boundaries_run.mc	entry	numeric_literal_boundaries_run		full-range u64/u128 constants, separated floats, folded inf/nan, and signed zero execute identically on C and LLVM
 fb-test	tests/qemu/arch/fb_demo.mc	entry	fb_run	-Wno-switch-bool	linear framebuffer device: set/get independent 32-bit pixels by coordinate
 fdt-test	tests/qemu/arch/fdt_demo.mc	entry	fdt_run	-Wno-switch-bool	device-tree (FDT) header parsing: magic validation + totalsize/version
 plugin-test	tests/qemu/arch/plugin_demo.mc	entry	plugin_run	-Wno-switch-bool -Wno-unused-parameter	pluggable boot flow: platform devices -> bus probe/attach (closure providers) -> registry of device-class endpoints -> service discovery by class; NoDriver/Unavailable typed

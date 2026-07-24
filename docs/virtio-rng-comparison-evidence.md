@@ -96,11 +96,14 @@ the next lifecycle-policy slice; it is not evidence for five independently
 owned complete drivers. The clean x86-64 QEMU KUnit configuration executes
 30/30 passing tests, including all four new lifecycle/differential cases.
 
-The live lifecycle gate exposes a read-only snapshot only after callbacks have
-been drained and teardown has completed. The guest requires the selected
-lifecycle to be `Dead`, external availability to be zero, the lifecycle event
-count to be nonzero, and the mismatch count to be zero. C, Rust, and MC live
-controllers each pass:
+The live lifecycle gate exposes one mutex-protected formatted record only after
+callbacks have been drained and teardown has completed. The record contains a
+monotonic removal sequence, per-probe device cookie, explicit teardown error,
+final lifecycle/availability, and full-width event/mismatch counters; a later
+probe does not erase it. The guest requires ordinary teardown error to be zero,
+the selected lifecycle to be `Dead`, external availability to be zero, the
+lifecycle event count to be nonzero, and the mismatch count to be zero. C,
+Rust, and MC live controllers each pass:
 
 | Live mode | Required outcome |
 |---|---|
@@ -108,13 +111,18 @@ controllers each pass:
 | completion/queue fault | zero-length, oversized, stale-generation, and queue-add recovery |
 | registration failure | documented bound degraded state followed by explicit clean unbind |
 | PM | three device-level suspend/restore cycles and final clean unbind |
-| hotplug | QMP PCI removal/re-add, read recovery, and final clean unbind |
+| hotplug | QMP PCI removal, removed-device record check before re-add, read recovery, and final clean unbind |
+| teardown error | injected nonzero error survives physical cleanup and is rejected by the ordinary-success oracle |
+| two device | separate removals publish increasing sequences and distinct device cookies while the survivor remains readable |
 
 The normal gate is also repeated for all three controllers under strict KCSAN
 and under the combined KASAN/UBSAN/lockdep/DEBUG_ATOMIC_SLEEP/DMA-API-debug
 configuration. Every run executes 30/30 KUnit tests, records 1,217 protocol and
 368 lifecycle events, reaches `Dead` with zero availability and mismatches, and
-reports no sanitizer, race, locking, atomic-sleep, or DMA-API diagnostic.
+reports no sanitizer, race, locking, atomic-sleep, or DMA-API diagnostic
+matching the runner's fatal signature set. A C-only shadow object build under
+an i386 configuration qualifies the full-width formatted evidence interface on
+a 32-bit kernel target.
 
 Reproduce the snapshot with:
 

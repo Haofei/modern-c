@@ -86,6 +86,7 @@ pub fn comptimeUsizeValueWithReflect(expr: ast.Expr, funcs: ?*const std.StringHa
     return switch (eval.foldComptimeExpr(&scope, expr)) {
         .value => |v| switch (v) {
             .int => |n| if (n >= 0 and n <= std.math.maxInt(usize)) @intCast(n) else null,
+            .uint => |n| if (n <= std.math.maxInt(usize)) @intCast(n) else null,
             .void, .boolean, .float, .tag, .bytes, .array, .@"struct" => null,
         },
         else => null,

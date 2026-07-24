@@ -265,6 +265,11 @@ pub const ComptimeStructField = struct {
 pub const ComptimeValue = union(enum) {
     void,
     int: i128,
+    // Values above i128.max remain first-class comptime integers instead of
+    // degrading to `.unknown`. Together the two arms cover every MC i128/u128
+    // scalar value; the declared type/domain continues to live in semantic
+    // facts and the comptime scope's width/domain maps.
+    uint: u128,
     // A comptime floating-point value (section 22). Folded in f64 regardless of the
     // declared f32/f64 width; a narrowing to f32 is applied by an explicit `as f32`.
     float: f64,
@@ -280,9 +285,28 @@ pub const ComptimeValue = union(enum) {
     @"struct": []const ComptimeStructField,
 };
 
+fn comptimeIntegerLiteral(raw: []const u8) ?ComptimeValue {
+    const magnitude = numeric.parseIntegerLiteral(raw) orelse return null;
+    if (magnitude <= std.math.maxInt(i128)) return .{ .int = @intCast(magnitude) };
+    return .{ .uint = magnitude };
+}
+
+fn comptimeUnsignedValue(value: u128) ComptimeValue {
+    if (value <= std.math.maxInt(i128)) return .{ .int = @intCast(value) };
+    return .{ .uint = value };
+}
+
+fn comptimeNonnegative(value: ComptimeValue) ?u128 {
+    return switch (value) {
+        .int => |n| if (n >= 0) @intCast(n) else null,
+        .uint => |n| n,
+        else => null,
+    };
+}
+
 pub fn cloneComptimeValue(allocator: std.mem.Allocator, value: ComptimeValue) !ComptimeValue {
     return switch (value) {
-        .void, .int, .float, .boolean, .tag => value,
+        .void, .int, .uint, .float, .boolean, .tag => value,
         .bytes => |b| .{ .bytes = try allocator.dupe(u8, b) },
         .array => |items| blk: {
             const copy = try allocator.alloc(ComptimeValue, items.len);
@@ -318,7 +342,7 @@ pub fn cloneComptimeValue(allocator: std.mem.Allocator, value: ComptimeValue) !C
 
 pub fn freeComptimeValue(allocator: std.mem.Allocator, value: ComptimeValue) void {
     switch (value) {
-        .void, .int, .float, .boolean, .tag => {},
+        .void, .int, .uint, .float, .boolean, .tag => {},
         .bytes => |b| allocator.free(b),
         .array => |items| {
             for (items) |item| freeComptimeValue(allocator, item);
@@ -588,6 +612,7 @@ fn comptimeCastValue(value: ComptimeValue, ty: ast.TypeExpr) ?ComptimeValue {
     if (std.mem.eql(u8, tname, "f64") or std.mem.eql(u8, tname, "f32")) {
         const f: f64 = switch (value) {
             .int => |n| @floatFromInt(n),
+            .uint => |n| @floatFromInt(n),
             .float => |x| x,
             else => return null,
         };
@@ -595,17 +620,19 @@ fn comptimeCastValue(value: ComptimeValue, ty: ast.TypeExpr) ?ComptimeValue {
         return .{ .float = f };
     }
     // Integer target: a float source truncates toward zero (C `(int)f` semantics).
-    const v = switch (value) {
-        .int => |n| n,
+    const int_info = comptimeIntType(ty) orelse return null;
+    const raw_bits: u128 = switch (value) {
+        .int => |n| @bitCast(n),
+        .uint => |n| n,
         .float => |x| blk: {
             const t = @trunc(x);
             if (!std.math.isFinite(t) or t >= 1.7e38 or t <= -1.7e38) return null;
-            break :blk @as(i128, @intFromFloat(t));
+            break :blk @bitCast(@as(i128, @intFromFloat(t)));
         },
         else => return null,
     };
-    const int_info = comptimeIntType(ty) orelse return null;
-    return if (comptimeIntFromBits(@bitCast(v), int_info)) |n| .{ .int = n } else null;
+    if (!int_info.signed and int_info.bits == 128) return comptimeUnsignedValue(raw_bits);
+    return if (comptimeIntFromBits(raw_bits, int_info)) |n| .{ .int = n } else null;
 }
 
 // The declared integer width of a comptime expression, resolved through bound
@@ -813,7 +840,7 @@ pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFol
         // `null` is intentionally NOT folded: MC optionals are pointer-only (`?*T`), which
         // have no comptime value, and folding `null` to a sentinel would mis-bake a
         // `const p: ?*T = null` global. A comptime `?T` is therefore out of scope (§22).
-        .int_literal => |literal| .{ .value = .{ .int = parseInt(literal) catch return .unknown } },
+        .int_literal => |literal| .{ .value = comptimeIntegerLiteral(literal) orelse return .unknown },
         .float_literal => |literal| .{ .value = .{ .float = parseFloat(literal) catch return .unknown } },
         .char_literal => |literal| .{ .value = .{ .int = @intCast(parseCharLiteral(literal) orelse return .unknown) } },
         // A bare string literal is NOT folded to a value: it is a `*const u8`/`[]const u8`
@@ -955,6 +982,7 @@ fn foldComptimeBitcast(scope: *const ComptimeScope, call: anytype) ComptimeFold 
     if (std.mem.eql(u8, tname, "f64")) {
         const bits: u64 = switch (operand) {
             .int => |n| @truncate(@as(u128, @bitCast(n))),
+            .uint => |n| @truncate(n),
             .float => |f| return .{ .value = .{ .float = f } },
             else => return .unknown,
         };
@@ -967,6 +995,11 @@ fn foldComptimeBitcast(scope: *const ComptimeScope, call: anytype) ComptimeFold 
                 const f32v: f32 = @bitCast(bits);
                 return .{ .value = .{ .float = @floatCast(f32v) } };
             },
+            .uint => |n| {
+                const bits: u32 = @truncate(n);
+                const f32v: f32 = @bitCast(bits);
+                return .{ .value = .{ .float = @floatCast(f32v) } };
+            },
             .float => |f| return .{ .value = .{ .float = @floatCast(@as(f32, @floatCast(f))) } },
             else => return .unknown,
         }
@@ -975,6 +1008,10 @@ fn foldComptimeBitcast(scope: *const ComptimeScope, call: anytype) ComptimeFold 
     switch (operand) {
         .int => |n| {
             return if (comptimeIntFromBits(@bitCast(n), int_info)) |v| .{ .value = .{ .int = v } } else .unknown;
+        },
+        .uint => |n| {
+            if (!int_info.signed and int_info.bits == 128) return .{ .value = comptimeUnsignedValue(n) };
+            return if (comptimeIntFromBits(n, int_info)) |v| .{ .value = .{ .int = v } } else .unknown;
         },
         .float => |f| {
             if (int_info.bits == 64) {
@@ -1056,6 +1093,7 @@ fn foldComptimeIndex(scope: *const ComptimeScope, base_expr: ast.Expr, index_exp
     const index = switch (foldComptimeExpr(scope, index_expr)) {
         .value => |v| switch (v) {
             .int => |n| n,
+            .uint => |n| if (n <= std.math.maxInt(i128)) @as(i128, @intCast(n)) else return .trap,
             else => return .unknown,
         },
         .trap => return .trap,
@@ -1204,7 +1242,7 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                 switch (foldComptimeExpr(scope, expr)) {
                     .value => |value| switch (value) {
                         .boolean => |ok| if (!ok) return .trap,
-                        .void, .int, .float, .tag, .bytes, .array, .@"struct" => return .unknown,
+                        .void, .int, .uint, .float, .tag, .bytes, .array, .@"struct" => return .unknown,
                     },
                     .trap => return .trap,
                     .unknown => return .unknown,
@@ -1347,6 +1385,12 @@ fn comptimeValueEql(a: ComptimeValue, b: ComptimeValue) bool {
         },
         .int => |av| switch (b) {
             .int => |bv| av == bv,
+            .uint => |bv| av >= 0 and @as(u128, @intCast(av)) == bv,
+            else => false,
+        },
+        .uint => |av| switch (b) {
+            .int => |bv| bv >= 0 and av == @as(u128, @intCast(bv)),
+            .uint => |bv| av == bv,
             else => false,
         },
         .float => |av| switch (b) {
@@ -1491,6 +1535,7 @@ fn foldComptimeUpdatePath(scope: *ComptimeScope, current: ComptimeValue, path: [
             const idx = switch (foldComptimeExpr(scope, index_expr)) {
                 .value => |x| switch (x) {
                     .int => |n| n,
+                    .uint => |n| if (n <= std.math.maxInt(i128)) @as(i128, @intCast(n)) else return .trap,
                     else => return .unknown,
                 },
                 .trap => return .trap,
@@ -1515,7 +1560,7 @@ fn foldComptimeWhile(scope: *ComptimeScope, loop: ast.Loop) BodyFlow {
         const keep_going = switch (foldComptimeExpr(scope, cond)) {
             .value => |v| switch (v) {
                 .boolean => |b| b,
-                .void, .int, .float, .tag, .bytes, .array, .@"struct" => return .unknown,
+                .void, .int, .uint, .float, .tag, .bytes, .array, .@"struct" => return .unknown,
             },
             .trap => return .trap,
             .unknown => return .unknown,
@@ -1567,6 +1612,12 @@ fn foldComptimeUnary(scope: *const ComptimeScope, op: ast.UnaryOp, operand_expr:
     return switch (op) {
         .neg => switch (operand) {
             .int => |v| .{ .value = .{ .int = std.math.negate(v) catch return .unknown } },
+            .uint => |v| if (v == (@as(u128, 1) << 127))
+                .{ .value = .{ .int = std.math.minInt(i128) } }
+            else if (v <= std.math.maxInt(i128))
+                .{ .value = .{ .int = -@as(i128, @intCast(v)) } }
+            else
+                .unknown,
             .float => |v| .{ .value = .{ .float = -v } },
             .void, .boolean, .tag, .bytes, .array, .@"struct" => .unknown,
         },
@@ -1578,14 +1629,45 @@ fn foldComptimeUnary(scope: *const ComptimeScope, op: ast.UnaryOp, operand_expr:
             .int => |v| if (comptimeExprWidth(scope, operand_expr)) |bits| blk: {
                 const mask: u128 = if (bits >= 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(bits)) - 1;
                 const masked: u128 = (~@as(u128, @bitCast(v))) & mask;
-                break :blk if (std.math.cast(i128, masked)) |n| .{ .value = .{ .int = n } } else .unknown;
+                break :blk .{ .value = comptimeUnsignedValue(masked) };
+            } else .unknown,
+            .uint => |v| if (comptimeExprWidth(scope, operand_expr)) |bits| blk: {
+                const mask: u128 = if (bits >= 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(bits)) - 1;
+                break :blk .{ .value = comptimeUnsignedValue((~v) & mask) };
             } else .unknown,
             .void, .float, .boolean, .tag, .bytes, .array, .@"struct" => .unknown,
         },
         .logical_not => switch (operand) {
             .boolean => |v| .{ .value = .{ .boolean = !v } },
-            .void, .int, .float, .tag, .bytes, .array, .@"struct" => .unknown,
+            .void, .int, .uint, .float, .tag, .bytes, .array, .@"struct" => .unknown,
         },
+    };
+}
+
+fn foldWideUnsignedBinary(op: ast.BinaryOp, left: ComptimeValue, right: ComptimeValue) ComptimeFold {
+    const l = comptimeNonnegative(left) orelse return .unknown;
+    const r = comptimeNonnegative(right) orelse return .unknown;
+    return switch (op) {
+        .lt => .{ .value = .{ .boolean = l < r } },
+        .le => .{ .value = .{ .boolean = l <= r } },
+        .gt => .{ .value = .{ .boolean = l > r } },
+        .ge => .{ .value = .{ .boolean = l >= r } },
+        .add => .{ .value = comptimeUnsignedValue(std.math.add(u128, l, r) catch return .unknown) },
+        .sub => if (l < r) .unknown else .{ .value = comptimeUnsignedValue(l - r) },
+        .mul => .{ .value = comptimeUnsignedValue(std.math.mul(u128, l, r) catch return .unknown) },
+        .div => if (r == 0) .trap else .{ .value = comptimeUnsignedValue(l / r) },
+        .mod => if (r == 0) .trap else .{ .value = comptimeUnsignedValue(l % r) },
+        .bit_and => .{ .value = comptimeUnsignedValue(l & r) },
+        .bit_or => .{ .value = comptimeUnsignedValue(l | r) },
+        .bit_xor => .{ .value = comptimeUnsignedValue(l ^ r) },
+        .shl => if (r >= 128) .trap else blk: {
+            const shifted = @shlWithOverflow(l, @as(u7, @intCast(r)));
+            break :blk if (shifted[1] != 0) .unknown else .{ .value = comptimeUnsignedValue(shifted[0]) };
+        },
+        .shr => if (r >= 128) .trap else .{ .value = comptimeUnsignedValue(l >> @as(u7, @intCast(r))) },
+        .eq => .{ .value = .{ .boolean = l == r } },
+        .ne => .{ .value = .{ .boolean = l != r } },
+        .logical_and, .logical_or => unreachable,
     };
 }
 
@@ -1601,14 +1683,14 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
                     if (op == .logical_and and !b) return .{ .value = .{ .boolean = false } };
                     if (op == .logical_or and b) return .{ .value = .{ .boolean = true } };
                 },
-                .void, .int, .float, .tag, .bytes, .array, .@"struct" => return .unknown,
+                .void, .int, .uint, .float, .tag, .bytes, .array, .@"struct" => return .unknown,
             },
             .unknown => return .unknown,
         }
         return switch (foldComptimeExpr(scope, right_expr)) {
             .value => |v| switch (v) {
                 .boolean => |b| .{ .value = .{ .boolean = b } },
-                .void, .int, .float, .tag, .bytes, .array, .@"struct" => .unknown,
+                .void, .int, .uint, .float, .tag, .bytes, .array, .@"struct" => .unknown,
             },
             .trap => .trap,
             .unknown => .unknown,
@@ -1632,6 +1714,12 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         const equal = switch (left) {
             .int => |l| switch (right) {
                 .int => |r| l == r,
+                .uint => |r| l >= 0 and @as(u128, @intCast(l)) == r,
+                else => return .unknown,
+            },
+            .uint => |l| switch (right) {
+                .int => |r| r >= 0 and l == @as(u128, @intCast(r)),
+                .uint => |r| l == r,
                 else => return .unknown,
             },
             .float => |l| switch (right) {
@@ -1691,6 +1779,8 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         };
     }
 
+    if (left == .uint or right == .uint) return foldWideUnsignedBinary(op, left, right);
+
     const l = switch (left) {
         .int => |v| v,
         else => return .unknown,
@@ -1722,7 +1812,10 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         .bit_and => .{ .value = .{ .int = l & r } },
         .bit_or => .{ .value = .{ .int = l | r } },
         .bit_xor => .{ .value = .{ .int = l ^ r } },
-        .shl => if (r < 0 or r >= 128) .trap else blk: {
+        .shl => if (r < 0 or r >= 128) .trap else if (l >= 0) blk: {
+            const shifted = @shlWithOverflow(@as(u128, @intCast(l)), @as(u7, @intCast(r)));
+            break :blk if (shifted[1] != 0) .unknown else .{ .value = comptimeUnsignedValue(shifted[0]) };
+        } else blk: {
             const shifted = @shlWithOverflow(l, @as(u7, @intCast(r)));
             break :blk if (shifted[1] != 0) .unknown else .{ .value = .{ .int = shifted[0] } };
         },

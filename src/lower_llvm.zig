@@ -885,7 +885,8 @@ const LlvmEmitter = struct {
                         },
                         else => break :blk error.UnsupportedLlvmEmission,
                     };
-                    break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(semantic_ty))});
+                    const negated = try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{literal});
+                    break :blk try normalizedFloatLiteral(self.scratch.allocator(), negated, self.isF32TypeOf(semantic_ty));
                 }
                 if (self.integerBitsOf(semantic_ty) != null) {
                     const literal = switch ((node.expr.*).kind) {
@@ -1011,6 +1012,7 @@ const LlvmEmitter = struct {
         const resolved = self.resolveAliasType(target_ty);
         return switch (value) {
             .int => |n| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
+            .uint => |n| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
             .boolean => |b| if (b) "1" else "0",
             .tag => |tag| blk: {
                 const enum_decl = self.enumDeclForType(resolved) orelse return error.UnsupportedLlvmEmission;

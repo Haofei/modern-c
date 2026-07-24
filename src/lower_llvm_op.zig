@@ -64,9 +64,18 @@ pub fn normalizedFloatLiteral(allocator: std.mem.Allocator, literal: []const u8,
         if (ch != '_') try cleaned.append(allocator, ch);
     }
     const text = try cleaned.toOwnedSlice(allocator);
-    if (!f32_target) return text;
-    const parsed = std.fmt.parseFloat(f32, text) catch return text;
-    const widened: f64 = parsed;
+    const parsed: f64 = if (std.mem.eql(u8, text, "inf"))
+        std.math.inf(f64)
+    else if (std.mem.eql(u8, text, "-inf"))
+        -std.math.inf(f64)
+    else if (std.mem.eql(u8, text, "nan"))
+        std.math.nan(f64)
+    else if (std.mem.eql(u8, text, "-nan"))
+        -std.math.nan(f64)
+    else
+        std.fmt.parseFloat(f64, text) catch return text;
+    if (!f32_target and std.math.isFinite(parsed)) return text;
+    const widened: f64 = if (f32_target) @floatCast(@as(f32, @floatCast(parsed))) else parsed;
     const bits: u64 = @bitCast(widened);
     return std.fmt.allocPrint(allocator, "0x{X:0>16}", .{bits});
 }

@@ -47,7 +47,6 @@ jobs:
       - name: Preflight the QEMU toolchain (fail fast with a clear report)
         run: zig build preflight
       - name: Run full milestone gate without skips
-        if: github.event_name == 'push'
         shell: bash
         # MC_REQUIRE_TOOLS=1 makes a missing tool FAIL at the gate (not silently SKIP), instead of
         # relying on the implicit CI env var. The grep is then belt-and-suspenders.
@@ -62,10 +61,6 @@ jobs:
           # read from build/tiers.zig, and the verifier also proves each name is an
           # m0 dependency, so CI cannot silently drift away from the tier.
           python3 tools/ci/pass-gates.py assert --tier ci-m0-pass --log m0.log
-      - name: Run pull-request qualification gate
-        if: github.event_name == 'pull_request'
-        run: zig build fast
-
   docker:
     # Keeps the cross-platform dev image (Dockerfile / docker-compose.yml) honest: the image
     # must build and the host-only inner-loop gate must pass inside it. The dev image GUARANTEES

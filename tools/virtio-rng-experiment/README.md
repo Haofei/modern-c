@@ -1,7 +1,13 @@
 # virtio-rng language experiment environment
 
-The host Linux checkout lives outside this repository at `/home/zoe/src/linux`.
-This keeps a multi-gigabyte upstream Git repository out of the MC worktree.
+The host Linux checkout lives outside this repository. Set the paths once; all
+examples below use them rather than relying on a developer-specific home:
+
+```sh
+export MC_REPO=${MC_REPO:-"$PWD"}
+export LINUX_REPO=${LINUX_REPO:-"$MC_REPO/../linux-vrng-fix"}
+export VRNG_BUILD=${VRNG_BUILD:-"$MC_REPO/../vrng-build"}
+```
 
 Install the Arch host dependencies:
 
@@ -12,7 +18,7 @@ tools/virtio-rng-experiment/install-arch.sh
 Check the host afterwards:
 
 ```sh
-tools/virtio-rng-experiment/check-environment.sh /home/zoe/src/linux
+tools/virtio-rng-experiment/check-environment.sh "$LINUX_REPO"
 ```
 
 If root access is unavailable, build the reproducible toolchain container:
@@ -27,8 +33,8 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp \
   --device /dev/kvm \
-  -v /home/zoe/src/linux:/work/linux \
-  -v /home/zoe/modern-c:/work/modern-c \
+  -v "$LINUX_REPO":/work/linux \
+  -v "$MC_REPO":/work/modern-c \
   vrng-kernel-dev:arch
 ```
 
@@ -36,13 +42,13 @@ The initial upstream checkout was created with:
 
 ```sh
 git clone https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git \
-  /home/zoe/src/linux
-git -C /home/zoe/src/linux switch -c vrng-lang-experiment v7.2-rc4
+  "$LINUX_REPO"
+git -C "$LINUX_REPO" switch -c vrng-lang-experiment v7.2-rc4
 ```
 
 The experiment branch is based on `v7.2-rc4` /
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current experiment commit is
-`3a53f0ede65a` (M7 policy commit `051c15fb80a0`, teardown implementation commit
+`54cb893645a9` (M7 policy commit `051c15fb80a0`, teardown implementation commit
 `2ecc560220c6`), published as
 [`Haofei/linux:vrng-lang-experiment`](https://github.com/Haofei/linux/tree/vrng-lang-experiment).
 
@@ -58,7 +64,7 @@ virtio, devtmpfs, and initrd support. Then create the static BusyBox initramfs:
 
 ```sh
 tools/virtio-rng-experiment/make-initramfs.sh \
-  /usr/sbin/busybox /home/zoe/build/vrng-live-initramfs.cpio
+  /usr/sbin/busybox "$VRNG_BUILD/vrng-live-initramfs.cpio"
 ```
 
 Select exactly one live controller with
@@ -73,9 +79,9 @@ Run the real virtio-rng device test:
 
 ```sh
 tools/virtio-rng-experiment/run-live-qemu.sh \
-  /home/zoe/build/kunit-vrng-shadow/arch/x86/boot/bzImage \
-  /home/zoe/build/vrng-live-initramfs.cpio \
-  /home/zoe/build/vrng-live-qemu.log
+  "$VRNG_BUILD/kunit-vrng-shadow/arch/x86/boot/bzImage" \
+  "$VRNG_BUILD/vrng-live-initramfs.cpio" \
+  "$VRNG_BUILD/vrng-live-qemu.log"
 ```
 
 For the ordinary driver path, build the Linux
@@ -103,22 +109,54 @@ depending on platform S3 wakeup support.
 Use `shadow-hotplug` as the fourth argument for transport-level PCI removal and
 re-addition. The runner opens QMP, waits until a reader is blocked behind a held
 completion, deletes the `virtio-rng-pci` device, waits for the guest to observe
-removal, and then adds a fresh device backed by the same QEMU RNG object. The
-guest requires the blocked reader to terminate and live reads to recover before
-continuing to the ordinary synchronized-unbind gate. The kernel configuration
-must include `CONFIG_HOTPLUG_PCI=y` and `CONFIG_HOTPLUG_PCI_ACPI=y`; the
-control-matrix runner adds both options explicitly.
+removal, and refuses to add the replacement until the guest has checked the
+removed device's sequenced teardown record. The guest then requires live reads
+to recover before continuing to the ordinary synchronized-unbind gate. The
+kernel configuration must include `CONFIG_HOTPLUG_PCI=y` and
+`CONFIG_HOTPLUG_PCI_ACPI=y`; the control-matrix runner adds both options
+explicitly.
+
+Use `shadow-teardown-fault` to inject a nonzero logical teardown result after
+physical cleanup. The guest requires the structured record to retain that error
+while still reporting `Dead`, zero availability, and zero differential
+mismatches. Use `shadow-multidev` to boot two independent virtio-rng devices,
+remove them separately, and require monotonic record sequences plus distinct
+device cookies. Both modes qualify the evidence interface itself rather than
+only the ordinary driver behavior.
 
 The 2026-07-24 M7 lifecycle requalification runs the expanded 30-test x86-64
 KUnit suite for C, Rust, and MC control. Each controller passes the normal,
 completion/queue fault, registration-failure, three-cycle PM, and QMP
-hotplug/replug live modes. After every final unbind, the guest requires the
-selected driver lifecycle to be `Dead`, external availability to be zero, the
-event count to be nonzero, and the mismatch count to be zero. The normal path
-records 1,217 protocol and 368 driver-lifecycle events. Strict KCSAN and combined
-KASAN/UBSAN/lockdep/DEBUG_ATOMIC_SLEEP/DMA-API-debug builds also pass for all
-three controllers with the same 30/30 KUnit and final lifecycle assertions and
-no diagnostic.
+hotplug/replug live modes. The evidence-hardening follow-up additionally
+qualifies explicit teardown-error injection and two-device record identity.
+After every checked unbind, the guest requires the selected driver lifecycle to
+be `Dead`, external availability to be zero, the event count to be nonzero, and
+the mismatch count to be zero; ordinary teardown also requires `error=0`. The
+normal path records 1,217 protocol and 368 driver-lifecycle events. Strict KCSAN
+and combined KASAN/UBSAN/lockdep/DEBUG_ATOMIC_SLEEP/DMA-API-debug builds also
+pass for all three controllers with the same 30/30 KUnit and final lifecycle
+assertions and no diagnostic matching the runner's documented fatal signature
+set.
+
+Record every qualification run as a machine-readable manifest. The generator
+binds the two Git revisions, Linux base, config/kernel/initramfs hashes, tool
+versions, exact commands, source-tree cleanliness/diff fingerprints, log
+hashes, structured lifecycle records, and matched event summaries:
+
+```sh
+python3 tools/virtio-rng-experiment/qualification-manifest.py \
+  --linux "$LINUX_REPO" \
+  --config "$VRNG_BUILD/kunit-vrng-shadow/.config" \
+  --kernel "$VRNG_BUILD/kunit-vrng-shadow/arch/x86/boot/bzImage" \
+  --initramfs "$VRNG_BUILD/vrng-live-initramfs.cpio" \
+  --logs "$VRNG_BUILD/live-logs" \
+  --command 'tools/virtio-rng-experiment/run-control-matrix.sh ...' \
+  --output "$VRNG_BUILD/qualification-manifest.json"
+```
+
+CI should retain the manifest and referenced logs as immutable workflow
+artifacts. A prose pass count without this binding is not independently
+auditable evidence.
 
 ## Host differential corpus
 
@@ -128,7 +166,7 @@ Linux experiment sources:
 ```sh
 zig build
 tools/virtio-rng-experiment/run-host-differential.sh \
-  /home/zoe/src/linux zig-out/bin/mcc
+  "$LINUX_REPO" zig-out/bin/mcc
 ```
 
 The harness links the executable specification and the actual C, Rust, and MC
@@ -161,7 +199,7 @@ Run the symmetric MC/Rust DMA typestate compile-pass/compile-fail gate:
 
 ```sh
 tools/virtio-rng-experiment/run-dma-ownership.sh \
-  /home/zoe/src/linux zig-out/bin/mcc
+  "$LINUX_REPO" zig-out/bin/mcc
 ```
 
 Run the first kernel-contract mutation matrix. It proves that raw C and raw-FFI
@@ -174,7 +212,7 @@ ordinary spec suite supplies the accepted controls for the mixed fixtures:
 
 ```sh
 tools/virtio-rng-experiment/run-contract-mutations.sh \
-  /home/zoe/src/linux zig-out/bin/mcc
+  "$LINUX_REPO" zig-out/bin/mcc
 ```
 
 Capture reproducible source/object/TCB-marker metrics and a protocol-core
@@ -182,7 +220,7 @@ microbenchmark:
 
 ```sh
 tools/virtio-rng-experiment/run-comparison-metrics.sh \
-  /home/zoe/src/linux zig-out/bin/mcc /tmp/vrng-comparison-metrics.tsv
+  "$LINUX_REPO" zig-out/bin/mcc "$VRNG_BUILD/vrng-comparison-metrics.tsv"
 ```
 
 The command writes a sibling `*-benchmark.tsv` report for the same optimized

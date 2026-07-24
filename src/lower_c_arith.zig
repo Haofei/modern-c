@@ -582,8 +582,8 @@ pub fn emitCheckedUnaryWithTarget(ctx: Context, node: anytype, locals: ?*std.Str
     const suffix = signedTypeSuffix(target_name) orelse return false;
 
     if (node.expr.kind == .int_literal) {
-        try ctx.out.print(ctx.allocator, "(({s})-", .{try ctx.c_type(ctx.emit_ctx, target)});
-        try appendCIntLiteral(ctx.allocator, ctx.out, node.expr.kind.int_literal);
+        try ctx.out.print(ctx.allocator, "(({s})", .{try ctx.c_type(ctx.emit_ctx, target)});
+        try lower_c_const.appendCNegatedIntLiteral(ctx.allocator, ctx.out, node.expr.kind.int_literal);
         try ctx.out.appendSlice(ctx.allocator, ")");
         return true;
     }

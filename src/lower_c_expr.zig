@@ -55,6 +55,10 @@ pub fn emitUnaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashM
         try ctx.out.appendSlice(ctx.allocator, "(-9223372036854775807LL - 1)");
         return;
     }
+    if (node.op == .neg and lower_c_const.negatedLiteralIsI128Min(node.expr.*)) {
+        try lower_c_const.appendCNegatedIntLiteral(ctx.allocator, ctx.out, node.expr.kind.int_literal);
+        return;
+    }
     if (node.op == .neg and !ctx.expr_resolves_to_float(ctx.emit_ctx, node.expr.*, locals)) {
         const resolved = lower_c_alias.resolveAliasType(ctx.type_aliases, result_ty);
         if (!ast_query.isWrapType(resolved) and !ast_query.isSatType(resolved)) {

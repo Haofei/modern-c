@@ -100,6 +100,8 @@ const emitStaticCInitializer = lower_c_const.emitStaticCInitializer;
 const staticCInitializer = lower_c_const.staticCInitializer;
 const appendCIntLiteral = lower_c_const.appendCIntLiteral;
 const appendCFloatLiteral = lower_c_const.appendCFloatLiteral;
+const appendCFloatValue = lower_c_const.appendCFloatValue;
+const appendCSignedIntValue = lower_c_const.appendCSignedIntValue;
 const constIntValue = lower_c_const.constIntValue;
 const constBinaryProvenNoOverflow = lower_c_const.constBinaryProvenNoOverflow;
 const constArrayLenValue = lower_c_const.constArrayLenValue;
@@ -658,12 +660,22 @@ const CEmitter = struct {
         return switch (value) {
             // Values above the signed-64 range need an unsigned suffix, or C
             // reads the decimal literal as implicitly unsigned (a warning).
-            .int => |n| if (n > std.math.maxInt(i64))
-                try std.fmt.allocPrint(self.scratch.allocator(), "{d}ULL", .{n})
-            else
-                try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
+            .int => |n| blk: {
+                var text: std.ArrayList(u8) = .empty;
+                try appendCSignedIntValue(self.scratch.allocator(), &text, n);
+                break :blk try text.toOwnedSlice(self.scratch.allocator());
+            },
+            .uint => |n| blk: {
+                var text: std.ArrayList(u8) = .empty;
+                try lower_c_const.appendCIntValue(self.scratch.allocator(), &text, n);
+                break :blk try text.toOwnedSlice(self.scratch.allocator());
+            },
             .boolean => |b| if (b) "1" else "0",
-            .float => |f| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{f}),
+            .float => |f| blk: {
+                var text: std.ArrayList(u8) = .empty;
+                try appendCFloatValue(self.scratch.allocator(), &text, f, false);
+                break :blk try text.toOwnedSlice(self.scratch.allocator());
+            },
             // Aggregate / byte-string const globals are not lowered to a C scalar here.
             .void, .tag, .bytes, .array, .@"struct" => null,
         };
@@ -754,6 +766,7 @@ const CEmitter = struct {
         const resolved = self.resolveAliasType(target_ty);
         switch (value) {
             .int => |n| try self.emitComptimeIntInitializer(n),
+            .uint => |n| try lower_c_const.appendCIntValue(self.allocator, self.out, n),
             .boolean => |b| try self.out.appendSlice(self.allocator, if (b) "1" else "0"),
             .tag => |tag| {
                 const enum_name = self.enumNameForType(resolved) orelse return error.UnsupportedCEmission;
@@ -761,7 +774,10 @@ const CEmitter = struct {
             },
             .array => |items| try self.emitComptimeArrayInitializer(items, resolved),
             .@"struct" => |fields| try self.emitComptimeStructInitializer(fields, resolved),
-            .float => |f| try self.out.print(self.allocator, "{d}", .{f}),
+            .float => |f| try appendCFloatValue(self.allocator, self.out, f, switch (resolved.kind) {
+                .name => |name| std.mem.eql(u8, name.text, "f32"),
+                else => false,
+            }),
             // A byte-string ComptimeValue baked as a C initializer is not yet supported.
             .void, .bytes => return error.UnsupportedCEmission,
         }
@@ -790,11 +806,7 @@ const CEmitter = struct {
     }
 
     fn emitComptimeIntInitializer(self: *CEmitter, n: i128) !void {
-        if (n > std.math.maxInt(i64)) {
-            try self.out.print(self.allocator, "{d}ULL", .{n});
-        } else {
-            try self.out.print(self.allocator, "{d}", .{n});
-        }
+        try appendCSignedIntValue(self.allocator, self.out, n);
     }
 
     fn nextTempName(self: *CEmitter) ![]const u8 {

@@ -86,6 +86,7 @@ def main() -> None:
         client.execute("device_del", {"id": "vrngdev"})
         client.wait_for_device_deleted("vrngdev")
         wait_for_marker(log_path, "VRNG-LIVE: transport hot-unplug observed")
+        wait_for_marker(log_path, "VRNG-LIVE: transport hot-unplug teardown checked")
         client.execute(
             "device_add",
             {"driver": "virtio-rng-pci", "rng": "rng0", "id": "vrngdev"},

@@ -70,26 +70,30 @@ pub fn emitStaticCInitializer(allocator: std.mem.Allocator, out: *std.ArrayList(
         .unary => |node| {
             if (node.op != .neg) return false;
             if (!isNegativeStaticCOperand(node.expr.*)) return false;
-            try out.appendSlice(allocator, "-");
-            return try emitStaticNegativeOperand(allocator, out, node.expr.*);
+            return try emitStaticNegativeOperand(allocator, out, node.expr.*, true);
         },
         else => return false,
     }
 }
 
-fn emitStaticNegativeOperand(allocator: std.mem.Allocator, out: *std.ArrayList(u8), expr: ast.Expr) !bool {
+fn emitStaticNegativeOperand(allocator: std.mem.Allocator, out: *std.ArrayList(u8), expr: ast.Expr, negated: bool) !bool {
     switch (expr.kind) {
         .int_literal => |literal| {
-            try appendCIntLiteral(allocator, out, literal);
+            if (negated)
+                try appendCNegatedIntLiteral(allocator, out, literal)
+            else
+                try appendCIntLiteral(allocator, out, literal);
             return true;
         },
         .float_literal => |literal| {
+            if (negated) try out.append(allocator, '-');
             try appendCFloatLiteral(allocator, out, literal, false);
             return true;
         },
         .grouped => |inner| {
+            if (negated) try out.append(allocator, '-');
             try out.appendSlice(allocator, "(");
-            if (!try emitStaticNegativeOperand(allocator, out, inner.*)) return false;
+            if (!try emitStaticNegativeOperand(allocator, out, inner.*, false)) return false;
             try out.appendSlice(allocator, ")");
             return true;
         },
@@ -111,9 +115,54 @@ pub fn staticCInitializer(expr: ast.Expr, static_initializers: anytype, function
 }
 
 pub fn appendCIntLiteral(allocator: std.mem.Allocator, out: *std.ArrayList(u8), literal: []const u8) !void {
-    for (literal) |ch| {
-        if (ch != '_') try out.append(allocator, ch);
+    const value = numeric.parseIntegerLiteral(literal) orelse return error.UnsupportedCEmission;
+    if (value <= std.math.maxInt(i64)) {
+        try out.print(allocator, "{d}", .{value});
+        return;
     }
+    if (value <= std.math.maxInt(u64)) {
+        try out.print(allocator, "((uint64_t)0x{X:0>16}ULL)", .{@as(u64, @intCast(value))});
+        return;
+    }
+    const high: u64 = @truncate(value >> 64);
+    const low: u64 = @truncate(value);
+    const c_type = if (value <= std.math.maxInt(i128)) "__int128" else "unsigned __int128";
+    try out.print(
+        allocator,
+        "(({s})((((unsigned __int128)0x{X:0>16}ULL) << 64) | ((unsigned __int128)0x{X:0>16}ULL)))",
+        .{ c_type, high, low },
+    );
+}
+
+pub fn appendCIntValue(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: u128) !void {
+    var text: [39]u8 = undefined;
+    const literal = try std.fmt.bufPrint(&text, "{d}", .{value});
+    try appendCIntLiteral(allocator, out, literal);
+}
+
+pub fn appendCNegatedIntLiteral(allocator: std.mem.Allocator, out: *std.ArrayList(u8), literal: []const u8) !void {
+    const magnitude = numeric.parseIntegerLiteral(literal) orelse return error.UnsupportedCEmission;
+    if (magnitude == (@as(u128, 1) << 127)) {
+        try out.appendSlice(allocator, "(-");
+        try appendCIntValue(allocator, out, magnitude - 1);
+        try out.appendSlice(allocator, " - 1)");
+        return;
+    }
+    try out.appendSlice(allocator, "-");
+    try appendCIntValue(allocator, out, magnitude);
+}
+
+pub fn appendCSignedIntValue(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: i128) !void {
+    if (value >= 0) return appendCIntValue(allocator, out, @intCast(value));
+    const magnitude: u128 = @as(u128, @intCast(-(value + 1))) + 1;
+    if (magnitude == (@as(u128, 1) << 127)) {
+        try out.appendSlice(allocator, "(-");
+        try appendCIntValue(allocator, out, magnitude - 1);
+        try out.appendSlice(allocator, " - 1)");
+        return;
+    }
+    try out.append(allocator, '-');
+    try appendCIntValue(allocator, out, magnitude);
 }
 
 pub fn cFloatSpecialText(literal: []const u8, as_f32: bool) ?[]const u8 {
@@ -127,14 +176,43 @@ pub fn appendCFloatLiteral(allocator: std.mem.Allocator, out: *std.ArrayList(u8)
         try out.appendSlice(allocator, text);
         return;
     }
-    try out.appendSlice(allocator, literal);
+    for (literal) |ch| {
+        if (ch != '_') try out.append(allocator, ch);
+    }
     if (as_f32) try out.appendSlice(allocator, "f");
+}
+
+pub fn appendCFloatValue(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: f64, as_f32: bool) !void {
+    const narrowed: f64 = if (as_f32) @floatCast(@as(f32, @floatCast(value))) else value;
+    if (std.math.isNan(narrowed)) {
+        try out.appendSlice(allocator, if (as_f32) "__builtin_nanf(\"\")" else "__builtin_nan(\"\")");
+        return;
+    }
+    if (std.math.isInf(narrowed)) {
+        if (narrowed < 0) try out.append(allocator, '-');
+        try out.appendSlice(allocator, if (as_f32) "__builtin_inff()" else "__builtin_inf()");
+        return;
+    }
+    if (narrowed == 0 and std.math.signbit(narrowed)) {
+        try out.appendSlice(allocator, if (as_f32) "-0.0f" else "-0.0");
+        return;
+    }
+    try out.print(allocator, "{d}", .{narrowed});
+    if (as_f32) try out.append(allocator, 'f');
 }
 
 pub fn negatedLiteralIsI64Min(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .int_literal => |literal| literalMagnitudeIsI64Min(literal),
         .grouped => |inner| negatedLiteralIsI64Min(inner.*),
+        else => false,
+    };
+}
+
+pub fn negatedLiteralIsI128Min(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .int_literal => |literal| (numeric.parseIntegerLiteral(literal) orelse return false) == (@as(u128, 1) << 127),
+        .grouped => |inner| negatedLiteralIsI128Min(inner.*),
         else => false,
     };
 }
