@@ -41,8 +41,8 @@ git -C /home/zoe/src/linux switch -c vrng-lang-experiment v7.2-rc4
 ```
 
 The experiment branch is based on `v7.2-rc4` /
-`1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current implementation commit
-is `2ecc560220c6`, published as
+`1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current qualification commit
+is `33950062b7bc` (implementation commit `2ecc560220c6`), published as
 [`Haofei/linux:vrng-lang-experiment`](https://github.com/Haofei/linux/tree/vrng-lang-experiment).
 
 The container is sufficient for compilation and QEMU execution. Performance
@@ -104,7 +104,17 @@ re-addition. The runner opens QMP, waits until a reader is blocked behind a held
 completion, deletes the `virtio-rng-pci` device, waits for the guest to observe
 removal, and then adds a fresh device backed by the same QEMU RNG object. The
 guest requires the blocked reader to terminate and live reads to recover before
-continuing to the ordinary synchronized-unbind gate.
+continuing to the ordinary synchronized-unbind gate. The kernel configuration
+must include `CONFIG_HOTPLUG_PCI=y` and `CONFIG_HOTPLUG_PCI_ACPI=y`; the
+control-matrix runner adds both options explicitly.
+
+The 2026-07-23 teardown requalification runs the expanded 26-test x86-64 KUnit
+suite for C, Rust, and MC control. Each controller passes the normal,
+completion/queue fault, registration-failure, three-cycle PM, and QMP
+hotplug/replug live modes. Strict KCSAN and combined
+KASAN/UBSAN/lockdep/DEBUG_ATOMIC_SLEEP/DMA-API-debug builds also pass for all
+three controllers, with no diagnostic; the C sanitizer runs additionally
+cover completion/queue and registration-failure injection.
 
 ## Host differential corpus
 

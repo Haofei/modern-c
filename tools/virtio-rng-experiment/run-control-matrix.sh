@@ -22,6 +22,8 @@ for control in c rust mc; do
 		--kunitconfig="$kunitconfig" \
 		--kconfig_add="$symbol" \
 		--kconfig_add=CONFIG_PM_DEBUG=y \
+		--kconfig_add=CONFIG_HOTPLUG_PCI=y \
+		--kconfig_add=CONFIG_HOTPLUG_PCI_ACPI=y \
 		--make_options LLVM=1 \
 		--make_options "MCC=$mcc" \
 		--arch=x86_64 \

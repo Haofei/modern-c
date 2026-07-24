@@ -1,7 +1,6 @@
 # C / Rust / MC virtio-rng experiment plan
 
-Status: M0-M3.5 completed; M4 and M5 implementation repairs are complete and
-await the recorded rerun matrix; symmetric MC/Rust M6 typed-DMA compile-time
+Status: M0-M5 completed and teardown-requalified; symmetric MC/Rust M6 typed-DMA compile-time
 qualification and the first kernel-contract mutation matrix are complete,
 2026-07-23
 
@@ -10,15 +9,16 @@ Upstream target: Linux `v7.2-rc4`, commit
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `2ecc560220c6` (`virtio-rng: close teardown publication
-lifecycle gaps`), based directly on the
-upstream commit above. The prior M3 and initial M3.5 evidence was recorded at
+experiment commit is `33950062b7bc` (`virtio-rng: record teardown
+requalification`); its implementation commit is `2ecc560220c6` (`virtio-rng:
+close teardown publication lifecycle gaps`), based directly on the upstream
+commit above. The prior M3 and initial M3.5 evidence was recorded at
 `14a52a42241f` and `83a4ba9acbf6`, respectively.
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`2ecc560220c6` on
+`33950062b7bc` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -30,10 +30,12 @@ Current checkpoint:
   availability only after callback drain, preserves the first logical teardown
   error without skipping physical cleanup, retains an explicit removable
   degraded state after registration failure, and uses shadow-aware unwind for
-  initial request failure. M4 and M5 remain reopened until the updated KUnit,
-  live fault, and sanitizer gates are rerun. The host differential, symmetric
-  DMA, 16-row mutation, compiler sanitizer, and all five teardown/publication
-  LKMM models pass; the interrupted kernel build is not counted as evidence.
+  initial request failure. M4 and M5 are requalified: the expanded 26-test
+  x86-64 KUnit suite passes with each controlling core; all controllers pass
+  normal, fault, registration-failure, PM, and QMP hotplug live qualification;
+  strict KCSAN and combined KASAN/UBSAN/lockdep/DEBUG_ATOMIC_SLEEP/DMA-API-debug
+  reruns are clean. The host differential, symmetric DMA, 16-row mutation,
+  compiler sanitizer, and all five teardown/publication LKMM models pass.
 
 - P0 ABI v1 is implemented and has been tightened after review: every non-null
   output is initialized first, followed by output-set, state, data-pointer,
@@ -88,7 +90,8 @@ Current checkpoint:
 - M4 provides a Kconfig C/Rust/MC controller choice. The selected core's
   return, outputs, post-state, and copied bytes must match the executable
   specification before publication; the other enabled cores remain shadows.
-  Every selection passes 24/24 KUnit tests on x86-64, arm64, and riscv64.
+  Every selection passed 24/24 KUnit tests on x86-64, arm64, and riscv64 before
+  the teardown review and now passes the expanded 26/26 x86-64 repair suite.
   On x86-64 every selection also passes normal, nonblocking, forced partial-
   copy, zero/oversize/stale/queue-add fault, three-cycle suspend/restore, and
   QMP hot-unplug/replug live gates with zero mismatches.
@@ -452,12 +455,13 @@ and every completion error while the candidate controls the device.
 Gate: normal reads, partial reads, nonblocking reads, unload/hot-unplug, and
 suspend/restore pass independently for all implementations.
 
-Status: reopened for teardown requalification. C, Rust, and MC previously
-passed the 24-test KUnit suite on x86-64,
-arm64, and riscv64. Each controller also passes the x86-64 normal, exact
-nonblocking, forced partial-copy, deterministic completion/queue-failure,
-three-cycle PM restore, and QMP PCI hot-unplug/replug gates. The selected
-transition remains fail-closed against the executable specification.
+Status: completed and teardown-requalified. C, Rust, and MC passed the 24-test
+KUnit suite on x86-64, arm64, and riscv64 before the teardown review. Each
+controller now passes the expanded 26/26 x86-64 repair suite plus the normal,
+exact nonblocking, forced partial-copy, deterministic completion/queue-failure,
+registration-failure, three-cycle PM restore, and QMP PCI hot-unplug/replug
+live gates. The selected transition remains fail-closed against the executable
+specification.
 
 ### M5 — concurrency and memory-order experiment
 
@@ -470,19 +474,24 @@ Gate: litmus tests prohibit the bad outcomes; KCSAN stress finds no race; lockde
 and DEBUG_ATOMIC_SLEEP remain clean. Results distinguish CPU memory ordering
 from DMA/cache maintenance supplied by virtio and the common glue.
 
-Status: reopened for teardown publication requalification. Herdtools7 7.58
-previously reported `Never` for
+Status: completed and teardown-publication-requalified. Herdtools7 7.58 reports
+`Never` for
 `VRNG+data-publish-release-acquire` and `VRNG+completion-wakeup-lock`, and
 `Sometimes` for the deliberately unsynchronized `VRNG+data-publish-once`
 negative control. The model concerns CPU publication and wakeup ordering only;
 virtio DMA synchronization and cache maintenance remain responsibilities of the
-transport/common C boundary. Live KCSAN and combined
-KASAN/UBSAN/lockdep/DMA-debug runs pass with Rust and MC control, completing the
-selected-controller concurrency matrix together with the prior C baseline.
-The revised gate additionally requires `Never` for callback-drain-before-final-
+transport/common C boundary. Strict KCSAN KUnit and live runs pass with C,
+Rust, and MC control; C additionally passes deterministic completion,
+queue-add, and registration-failure injection. Combined
+KASAN/UBSAN/lockdep/DEBUG_ATOMIC_SLEEP/DMA-API-debug KUnit and live runs pass
+with all three controlling cores, with the same additional C fault coverage,
+and report no sanitizer, data-race, lockdep, atomic-sleep, or DMA-API
+diagnostic. The revised gate additionally requires `Never` for
+callback-drain-before-final-
 clear teardown, `Sometimes` for the former clear-before-drain negative control,
 and a deterministic post-core/pre-publication removal test with final
-`Dead/Empty` logical state and zero external availability.
+`Dead/Empty` logical state and zero external availability; all three
+controllers pass that deterministic test.
 
 ### M6 — genuine DMA ownership experiment
 
