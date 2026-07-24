@@ -42,7 +42,7 @@ git -C /home/zoe/src/linux switch -c vrng-lang-experiment v7.2-rc4
 
 The experiment branch is based on `v7.2-rc4` /
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`. Its current experiment commit is
-`880472cea170` (teardown implementation commit `2ecc560220c6`), published as
+`051c15fb80a0` (teardown implementation commit `2ecc560220c6`), published as
 [`Haofei/linux:vrng-lang-experiment`](https://github.com/Haofei/linux/tree/vrng-lang-experiment).
 
 The container is sufficient for compilation and QEMU execution. Performance
@@ -128,10 +128,14 @@ tools/virtio-rng-experiment/run-host-differential.sh \
 ```
 
 The harness links the executable specification and the actual C, Rust, and MC
-candidate implementations. A return/output/state/byte mismatch writes the
-shortest discovered event path as a stable `.vrng` corpus. The gate replays all
-committed corpora and uses an injected C result mismatch to prove deterministic
-capture and reproduction.
+protocol candidates. A return/output/state/byte mismatch writes the shortest
+discovered event path as a stable `.vrng` corpus. It also compares the driver
+lifecycle specification with C, Rust-raw, Rust-safe-value, MC-raw, and
+MC-contract implementations across every reachable state/event pair.
+Registration failure, callback publication during removal, drain-before-final-
+clear, and unregister-once are part of this second model. The gate replays all
+committed protocol corpora and injects both a protocol mismatch and a lifecycle
+final-clear mismatch to prove that both comparators fail deterministically.
 
 The init process checks normal and `bs=1/3/7` reads, then sets the test-only
 `lang_copy_chunk_limit=3` parameter to force repeated driver-level partial

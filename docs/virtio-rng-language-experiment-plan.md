@@ -1,24 +1,25 @@
 # C / Rust / MC virtio-rng experiment plan
 
-Status: M0-M5 completed and teardown-requalified; symmetric MC/Rust M6 typed-DMA compile-time
-qualification and the first kernel-contract mutation matrix are complete,
-2026-07-23
+Status: M0-M5 completed and teardown-requalified; symmetric MC/Rust M6
+typed-DMA compile-time qualification and the first kernel-contract mutation
+matrix are complete; M7 five-candidate lifecycle-policy comparison is
+implemented and x86-64 KUnit/host-qualified, 2026-07-24
 
 Upstream target: Linux `v7.2-rc4`, commit
 `1590cf0329716306e948a8fc29f1d3ee87d3989f`, which was both Torvalds `master`
 and the latest mainline tag when the environment was created. The working
 checkout is `/home/zoe/src/linux`, on branch `vrng-lang-experiment`;
 experimental commits belong there, not in this repository. The current Linux
-experiment commit is `880472cea170` (`virtio-rng: use bulk copy in MC core`);
-the teardown implementation commit is `2ecc560220c6` (`virtio-rng: close
-teardown publication lifecycle gaps`), based directly on the upstream commit
-above. The prior M3 and initial M3.5 evidence was recorded at `14a52a42241f`
-and `83a4ba9acbf6`, respectively.
+experiment commit is `051c15fb80a0` (`virtio-rng: compare full driver lifecycle
+policy`); the teardown implementation commit is `2ecc560220c6` (`virtio-rng:
+close teardown publication lifecycle gaps`), based directly on the upstream
+commit above. The prior M3 and initial M3.5 evidence was recorded at
+`14a52a42241f` and `83a4ba9acbf6`, respectively.
 
 Publication status: the M3 compiler changes, experiment plan, and
 reproducibility tools were published in `Haofei/modern-c` at commit `3a06b1ab`.
 The current Linux experiment is published at commit
-`880472cea170` on
+`051c15fb80a0` on
 `Haofei/linux:vrng-lang-experiment`.
 
 Current checkpoint:
@@ -108,6 +109,16 @@ Current checkpoint:
   handle and restores CPU access. Both positive cycles compile and both
   device-owned reads fail at compile time. Linux allocation/mapping and any raw
   C alias retained outside either adopted capability remain explicitly trusted.
+- M7 expands the comparison beyond the pure buffer protocol into common driver
+  lifecycle policy. One ABI and an independent executable specification drive
+  five candidates: C, Rust raw FFI, Rust safe-value, MC raw, and MC typed-
+  contract. The model covers initialization, registration success/failure,
+  callback completion, external publication, begin-remove/unregister-once,
+  callback drain, final external clear, and finish-remove. The host gate
+  enumerates 31 reachable states and performs 1,550 result/outcome/post-state
+  comparisons; an injected C final-clear mutation proves the gate is
+  non-vacuous. Physical hwrng calls, reset, callback synchronization,
+  virtqueue deletion, allocation, and stores remain common C effects.
 
 ## 1. Question and scope
 
@@ -517,6 +528,42 @@ exclusive ownership of the underlying allocation: the C glue must guarantee
 that no surviving raw alias accesses the mapped range between handoff and
 reclaim. Neither typed fixture broadens the live common-C DMA boundary.
 
+### M7 — five-candidate driver lifecycle policy
+
+Move the highest-risk sequencing decisions found by static review out of
+implicit common-C control flow and into a second shared ABI:
+
+```text
+independent lifecycle specification
+  -> C
+  -> Rust raw FFI
+  -> Rust safe-value state
+  -> MC raw
+  -> MC typed-contract state
+```
+
+The selected candidate decides whether each logical transition is legal and
+whether unregister is required. Common C always retains and completes physical
+cleanup; a logical verification failure is recorded and propagated where the
+Linux callback can return an error. All candidate outcomes and full post-states
+must match the specification before common C performs the corresponding
+publication or advances teardown.
+
+Gate: host enumeration must compare every reachable state/event pair, a
+deliberate final-clear mutation must be detected, and KUnit must exercise the
+normal path, registration failure, invalid ordering, and the deterministic
+post-completion/pre-publication removal window.
+
+Status: implemented and x86-64 KUnit/host-qualified. The host gate reaches 31
+unique states and performs 1,550 comparisons across all five candidates. The
+expanded x86-64 suite passes 30/30 tests, including the normal lifecycle,
+registration-failure, invalid-ordering, post-completion/pre-publication
+removal, and shadow integration cases. The typed Rust candidate decodes the C
+ABI into a closed `Stage`, booleans, and `Option<u32>`; the MC contract
+candidate uses a closed `ContractStage` and is accepted with both
+`#[irq_context]` and `#[no_lang_trap]` on the callback-reachable call graph.
+This is a lifecycle-policy comparison, not a claim that five complete drivers
+own Linux allocation, DMA, or transport objects.
 
 ## 7. Build and test configurations
 

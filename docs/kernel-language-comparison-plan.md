@@ -1,10 +1,11 @@
 # Kernel language comparison plan: C, Rust, and MC
 
 Status: **K1 evidence complete for the bounded virtio-rng contract scenario.
-K2 has reproducible cost and protocol-core performance measurements but is not
-satisfied: the bounded MC microbenchmark is now within the predeclared material-
-regression limit, but the TCB/reviewer/full-driver comparison is incomplete.
-K3-K4 remain unclaimed**.
+The five-candidate lifecycle-policy slice is also implemented and x86-64
+KUnit/host-qualified. K2 has reproducible cost and protocol-core performance
+measurements but is not satisfied: the bounded MC microbenchmark is within the
+predeclared material-regression limit, but the TCB/reviewer/full-driver
+comparison is incomplete. K3-K4 remain unclaimed**.
 
 This document defines the evidence required to support a narrow claim:
 

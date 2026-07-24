@@ -1,9 +1,10 @@
 # Virtio-rng comparison evidence snapshot
 
-Date: 2026-07-23
+Date: 2026-07-24
 
-Scope: bounded protocol core plus DMA typestate fixtures. This is a developer
-reproduction, not an independent audit or a complete-driver performance study.
+Scope: bounded protocol core, DMA typestate fixtures, and driver lifecycle
+policy. This is a developer reproduction, not an independent audit or a
+complete-driver performance study.
 
 ## Environment
 
@@ -67,6 +68,34 @@ restricted region, lock, MMIO, and address-class mutations enumerated by the
 runner. The ordinary specification suite checks accepted controls in the mixed
 fixtures, preventing a compiler that rejects every program from passing.
 
+## Five-candidate lifecycle snapshot
+
+The lifecycle ABI compares five implementations against a separate executable
+specification:
+
+| Candidate | Representation |
+|---|---|
+| C | direct ABI state |
+| Rust raw FFI | direct ABI state through raw pointers |
+| Rust safe-value | decoded closed stage, booleans, and optional pending length |
+| MC raw | direct ABI state |
+| MC contract | closed stage plus typed logical fields |
+
+The modeled boundary includes registration success/failure, callback
+completion, publication, unregister-once, callback drain, final external clear,
+and logical death. Host BFS reaches 31 unique states and performs 1,550
+candidate comparisons. It includes invalid event ordering and the removal
+window in which a callback completes logically before removal begins and
+publishes before callback drain. Final clear is legal only after drain. An
+injected mutation that changes the C final-clear result is detected with exit
+status 2.
+
+Linux allocation, hwrng calls, device reset, callback synchronization,
+virtqueue deletion, and the actual external store remain common C. This closes
+the next lifecycle-policy slice; it is not evidence for five independently
+owned complete drivers. The clean x86-64 QEMU KUnit configuration executes
+30/30 passing tests, including all four new lifecycle/differential cases.
+
 Reproduce the snapshot with:
 
 ```sh
@@ -81,6 +110,6 @@ tools/virtio-rng-experiment/run-comparison-metrics.sh \
 ```
 
 K2 remains unsatisfied because whole-driver runtime/stack costs and a
-review-cost method are still unmeasured. K3 and K4 additionally require the
-idiomatic Rust-safe complete-driver comparison, real-hardware qualification,
-and independent reproduction.
+review-cost method are still unmeasured. K3 and K4 additionally require
+language-owned Linux resource lifetimes beyond this policy boundary,
+real-hardware qualification, and independent reproduction.
