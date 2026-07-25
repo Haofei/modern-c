@@ -46,6 +46,30 @@ grep -q "dependency 'baselib' version mismatch" "$WORK/bad_deps.out" || {
     exit 1
 }
 
+# Manifest-controlled entry/output paths must remain within the package root.
+ESCAPE_ENTRY="$WORK/escape-entry"
+cp -R "$PKG" "$ESCAPE_ENTRY"
+sed 's|^entry = .*|entry = ../outside.mc|' "$ESCAPE_ENTRY/mcpkg.txt" >"$ESCAPE_ENTRY/mcpkg.txt.new"
+mv "$ESCAPE_ENTRY/mcpkg.txt.new" "$ESCAPE_ENTRY/mcpkg.txt"
+printf 'fn outside() -> void {}\n' >"$WORK/outside.mc"
+if MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" build "$ESCAPE_ENTRY" >/dev/null 2>&1; then
+    echo "FAIL: pkg-test — manifest entry escaped the package root"
+    exit 1
+fi
+
+ESCAPE_OUTPUT="$WORK/escape-output"
+cp -R "$PKG" "$ESCAPE_OUTPUT"
+sed 's|^output = .*|output = ../outside.o|' "$ESCAPE_OUTPUT/mcpkg.txt" >"$ESCAPE_OUTPUT/mcpkg.txt.new"
+mv "$ESCAPE_OUTPUT/mcpkg.txt.new" "$ESCAPE_OUTPUT/mcpkg.txt"
+if MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" build "$ESCAPE_OUTPUT" >/dev/null 2>&1; then
+    echo "FAIL: pkg-test — manifest output escaped the package root"
+    exit 1
+fi
+[ ! -e "$WORK/outside.o" ] || {
+    echo "FAIL: pkg-test — escaped manifest output wrote outside the package"
+    exit 1
+}
+
 # `build` must produce the object from the entry + its imports.
 MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" build "$PKG" >/dev/null
 cp "$PKG/demo.o" "$WORK/demo.o"

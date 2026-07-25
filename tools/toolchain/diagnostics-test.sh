@@ -318,6 +318,50 @@ assert_contains "$symlink_output" "root_symlink_import.mc:1:1: error: E_IMPORT_O
 assert_contains "$symlink_output" "$OUTSIDE" "symlink outside-sandbox resolved target"
 assert_not_contains "$symlink_output" "parsed 2 top-level declarations" "symlink outside-sandbox import acceptance"
 
+# On POSIX a backslash is an ordinary filename byte, not a component separator. A sibling
+# whose name begins with the sandbox root plus `\` must remain outside.
+POSIX_ROOT="$WORK/project"
+POSIX_ESCAPE="$WORK/project\\escape"
+mkdir -p "$POSIX_ROOT" "$POSIX_ESCAPE"
+cat >"$POSIX_ESCAPE/evil.mc" <<'MC'
+export fn escaped_sibling() -> u32 { return 99; }
+MC
+POSIX_ESCAPE_MC="${POSIX_ESCAPE//\\/\\\\}"
+cat >"$POSIX_ROOT/root_backslash_sibling.mc" <<MC
+import "$POSIX_ESCAPE_MC/evil.mc";
+export fn main() -> u32 { return escaped_sibling(); }
+MC
+backslash_sandbox_output=""
+if backslash_sandbox_output=$("$MCC" check "$POSIX_ROOT/root_backslash_sibling.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — POSIX backslash sibling bypassed the import sandbox"
+    exit 1
+fi
+assert_contains "$backslash_sandbox_output" "E_IMPORT_OUTSIDE_SANDBOX" "POSIX backslash sibling rejection"
+
+# Import discovery consumes the same decoded string value as the language.
+cat >"$POSIX_ROOT/dir\\module.mc" <<'MC'
+fn decoded_import_value() -> u32 { return 41; }
+MC
+cat >"$POSIX_ROOT/root_decoded_import.mc" <<'MC'
+import "dir\\module.mc";
+export fn decoded_import() -> u32 { return decoded_import_value(); }
+MC
+"$MCC" check "$POSIX_ROOT/root_decoded_import.mc" >/dev/null 2>&1 || {
+    echo "FAIL: diagnostics-test — escaped-backslash import was not decoded exactly once"
+    exit 1
+}
+
+cat >"$POSIX_ROOT/root_invalid_escape.mc" <<'MC'
+import "bad\q.mc";
+export fn invalid_escape() -> u32 { return 0; }
+MC
+invalid_escape_output=""
+if invalid_escape_output=$("$MCC" check "$POSIX_ROOT/root_invalid_escape.mc" 2>&1); then
+    echo "FAIL: diagnostics-test — invalid import escape unexpectedly succeeded"
+    exit 1
+fi
+assert_contains "$invalid_escape_output" "E_LEX_INVALID_ESCAPE_SEQUENCE" "import lexer diagnostic propagation"
+
 cat >"$WORK/root_import.mc" <<'MC'
 import "lib.mc";
 

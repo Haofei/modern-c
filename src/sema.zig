@@ -5416,8 +5416,11 @@ pub const Checker = struct {
     }
 
     fn traitConforms(self: *Checker, trait_name: []const u8, type_name: []const u8) bool {
-        var buf: [256]u8 = undefined;
-        const key = std.fmt.bufPrint(&buf, "{s}\x00{s}", .{ trait_name, type_name }) catch return false;
+        const key = std.fmt.allocPrint(self.reporter.allocator, "{s}\x00{s}", .{ trait_name, type_name }) catch {
+            self.oom = true;
+            return false;
+        };
+        defer self.reporter.allocator.free(key);
         return self.trait_conformances.contains(key);
     }
 

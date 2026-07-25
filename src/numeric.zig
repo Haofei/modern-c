@@ -98,8 +98,6 @@ pub fn integerSuffix(raw: []const u8) ?IntegerSuffix {
 /// Parse and validate an MC integer literal. Separators are accepted only
 /// between digits; a final `_<integer-type>` is retained as a semantic suffix.
 pub fn parseIntegerLiteralParts(raw: []const u8) ?ParsedIntegerLiteral {
-    var cleaned: [128]u8 = undefined;
-    if (raw.len > cleaned.len) return null;
     const digit_start: usize = if (std.mem.startsWith(u8, raw, "0x") or std.mem.startsWith(u8, raw, "0X")) 2 else 0;
     const radix: u8 = if (digit_start == 2) 16 else 10;
     if (raw.len == digit_start) return null;
@@ -118,26 +116,25 @@ pub fn parseIntegerLiteralParts(raw: []const u8) ?ParsedIntegerLiteral {
     }
     if (digit_end == digit_start) return null;
 
-    var len: usize = 0;
     var previous_separator = false;
-    for (raw[0..digit_end], 0..) |ch, index| {
-        if (index < digit_start) {
-            cleaned[len] = ch;
-            len += 1;
-            continue;
-        }
+    var magnitude: u128 = 0;
+    for (raw[digit_start..digit_end], digit_start..) |ch, index| {
         if (ch == '_') {
             if (index == digit_start or index + 1 == digit_end or previous_separator) return null;
             previous_separator = true;
             continue;
         }
-        const valid_digit = if (radix == 16) std.ascii.isHex(ch) else std.ascii.isDigit(ch);
-        if (!valid_digit) return null;
+        const digit: u8 = switch (ch) {
+            '0'...'9' => ch - '0',
+            'a'...'f' => ch - 'a' + 10,
+            'A'...'F' => ch - 'A' + 10,
+            else => return null,
+        };
+        if (digit >= radix) return null;
         previous_separator = false;
-        cleaned[len] = ch;
-        len += 1;
+        magnitude = std.math.mul(u128, magnitude, radix) catch return null;
+        magnitude = std.math.add(u128, magnitude, digit) catch return null;
     }
-    const magnitude = std.fmt.parseInt(u128, cleaned[0..len], 0) catch return null;
     return .{ .magnitude = magnitude, .suffix = suffix };
 }
 
@@ -217,4 +214,12 @@ test "integer literal parser separates suffixes and validates separators" {
         "1__2", "1_", "0x_1", "0x1_", "0x1__2", "1__u8", "1_u7",
     };
     for (invalid) |literal| try std.testing.expect(parseIntegerLiteralParts(literal) == null);
+
+    const long_zeroes =
+        "0000000000000000000000000000000000000000000000000000000000000000" ++
+        "0000000000000000000000000000000000000000000000000000000000000000" ++
+        "0000000000000000000000000000000000000000000000000000000000000001_u8";
+    const long = parseIntegerLiteralParts(long_zeroes).?;
+    try std.testing.expectEqual(@as(u128, 1), long.magnitude);
+    try std.testing.expectEqual(IntegerSuffix.u8, long.suffix.?);
 }

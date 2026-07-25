@@ -1,8 +1,8 @@
 # Production readiness: the MC compiler (`mcc`)
 
-Status: **production-qualified supported subset, not an unrestricted production language**.
-Current assessment: **updated 2026-07-24, based on the current compiler worktree**.
-Evidence register: **776 bounded implementation or regression entries, 0 active slices, 0 open architectural workstreams**.
+Status: **internally qualification-gated supported subset, not an unrestricted or externally audited production language**.
+Current assessment: **updated 2026-07-25, evaluated per checked-out revision and pinned toolchain**.
+Evidence register: **777 bounded implementation or regression entries, 0 active slices, 0 open architectural workstreams**.
 
 Comparative C/Rust/MC claims are governed separately by
 [`kernel-language-comparison-plan.md`](kernel-language-comparison-plan.md). That
@@ -105,6 +105,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 | Parser nesting is bounded | Deep input now produces a diagnostic instead of a compiler crash. | `E_NESTING_TOO_DEEP`; direct deep-paren probe rejects cleanly. |
 | Parser recovery reports multiple parse errors across scoped bodies | Top-level declarations, block statements, module/impl/trait members, and aggregate fields now resync inside the enclosing syntax body; parse-failed modules still abort before sema, avoiding misleading semantic follow-on errors. | `7d705b12 Improve parser declaration recovery`; `tests/spec/parser_statement_recovery.mc`; `tests/spec/parser_declaration_recovery.mc`; direct `mcc check` emits multiple parse diagnostics without orphan-brace noise. |
 | Missing imports and cross-file diagnostics are actionable | Users see the failing import path or imported file/line instead of root-file noise or raw Zig traces. | `E_IMPORT_NOT_FOUND` probe; imported `lib.mc` diagnostic points at `lib.mc`. |
+| Suffixed integers, import/package boundaries, and developer-tool paths fail closed at adversarial edges | Explicit widening casts preserve the suffix-selected operation width; POSIX backslashes cannot cross import containment; import strings share language decoding and lexer diagnostics; registry checksums and package entry/output paths are mandatory and contained; long literal/trait names no longer inherit local scratch-buffer limits; LSP URIs decode once and generic commas do not change the active argument. | `tests/spec/arithmetic_checked.mc`; `tests/c_emit/typed_integer_literals.mc`, `trait_long_conformance_key.mc`; `src/path_policy.zig`, `string_literal.zig`; `diagnostics-test`, `pkg-test`, `pkg-registry-test`, `lsp-test`, C/LLVM gates. |
 | Expected diagnostic failures no longer print Zig error-return traces | Normal user errors no longer look like compiler ICEs. | Unknown identifier probe prints only the MC diagnostic. |
 | Monomorphization has limits and generic body prechecks | Polymorphic recursion and invalid instantiated operators fail loudly instead of hanging or reaching backend emission. | `E_MONOMORPHIZATION_LIMIT`; `38eff033 Validate generic instantiation operators in sema`. |
 | Closure typing and closure escape checks are enforced | Closure calls cannot silently use the wrong signature or dangling environment. | `tests/spec/closure_typing.mc`; pushed closure soundness fixes. |

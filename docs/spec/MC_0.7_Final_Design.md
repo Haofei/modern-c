@@ -366,6 +366,31 @@ To construct modulo values from out-of-range literals:
 let z = wrap<u8>.from_mod(300);  // OK, explicit modulo
 ```
 
+Integer literals may instead carry one explicit fixed-width suffix:
+
+```ebnf
+integer_suffix =
+    "_u8" | "_u16" | "_u32" | "_u64" | "_u128" | "_usize"
+  | "_i8" | "_i16" | "_i32" | "_i64" | "_i128" | "_isize" ;
+```
+
+The suffix is part of the literal's semantic type, not merely a conversion hint:
+
+```mc
+let mask = 0x20_u8;                    // type u8
+let sum = 1_u16 + 2_u16;               // operation type u16
+let widened = (1_u8 + 2_u8) as u16;    // u8 addition, then u16 cast
+let bad = (255_u8 + 1_u8) as u16;      // traps in the u8 addition
+```
+
+Digit separators may occur only between digits. The underscore beginning a suffix is
+therefore unambiguous; `1__2`, `1_`, `1__u8`, and unknown suffixes are invalid. Unary `-`
+preserves the signed suffix width (`-1_i8` is `i8`); applying it to an unsigned suffixed
+literal is rejected. An enclosing cast or contextual destination never changes the operation
+width already fixed by a suffix. `usize` and `isize` suffixes use the selected target's pointer
+width. Out-of-range suffixed literals and checked operations are diagnosed or trap before
+backend lowering, identically for C and LLVM.
+
 ---
 
 # 4. `void` and `never`

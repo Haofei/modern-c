@@ -135,6 +135,45 @@ if bash "$REGTOOL" install "$VENDOR_LINK" --registry "$REG" >/dev/null 2>&1; the
 fi
 [ -f "$W/outside/sentinel" ] || fail "symlinked vendor install changed an outside sentinel"
 
+# A later dependency failure cannot partially replace the live vendor tree or write a lock.
+TXN_APP="$W/transaction-app"
+cp -R "$FIX/app" "$TXN_APP"
+printf 'missingdep = =9.9.9\n' >> "$TXN_APP/mcpkg.txt"
+mkdir -p "$TXN_APP/mc_packages/keep"
+printf 'live\n' > "$TXN_APP/mc_packages/keep/sentinel"
+if bash "$REGTOOL" install "$TXN_APP" --registry "$REG" >/dev/null 2>&1; then
+    fail "transaction test unexpectedly resolved a missing later dependency"
+fi
+[ "$(cat "$TXN_APP/mc_packages/keep/sentinel")" = live ] ||
+    fail "failed install partially replaced the live vendor tree"
+[ ! -e "$TXN_APP/mcpkg.lock" ] || fail "failed install committed a lockfile"
+
+# Registry metadata is mandatory even on a first install with no prior lockfile.
+CHECKSUM_PATH="$REG/pkgs/mathlib/1.2.0/.checksum"
+GOOD_CHECKSUM="$(cat "$CHECKSUM_PATH")"
+CHECKSUM_APP="$W/checksum-app"
+for mode in missing empty malformed uppercase multiline symlink; do
+    cp -R "$FIX/app" "$CHECKSUM_APP"
+    case "$mode" in
+        missing) rm -f "$CHECKSUM_PATH" ;;
+        empty) : > "$CHECKSUM_PATH" ;;
+        malformed) printf 'not-a-sha256\n' > "$CHECKSUM_PATH" ;;
+        uppercase) printf '%s\n' "$GOOD_CHECKSUM" | tr '[:lower:]' '[:upper:]' > "$CHECKSUM_PATH" ;;
+        multiline) printf '%s\n%s\n' "$GOOD_CHECKSUM" "$GOOD_CHECKSUM" > "$CHECKSUM_PATH" ;;
+        symlink)
+            rm -f "$CHECKSUM_PATH"
+            printf '%s\n' "$GOOD_CHECKSUM" > "$W/checksum-target"
+            ln -s "$W/checksum-target" "$CHECKSUM_PATH"
+            ;;
+    esac
+    if bash "$REGTOOL" install "$CHECKSUM_APP" --registry "$REG" >/dev/null 2>&1; then
+        fail "fresh install accepted a $mode registry checksum"
+    fi
+    rm -rf "$CHECKSUM_APP"
+    rm -f "$CHECKSUM_PATH"
+    printf '%s\n' "$GOOD_CHECKSUM" > "$CHECKSUM_PATH"
+done
+
 # 7. build the installed tree (needs clang; self-skip without).
 if command -v "$CLANG" >/dev/null 2>&1; then
     MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$APP/app.mc" -o "$W/app.o" >/dev/null \

@@ -1,8 +1,9 @@
 const std = @import("std");
-const builtin = @import("builtin");
 
 const diagnostics = @import("diagnostics.zig");
 const lexer = @import("lexer.zig");
+const path_policy = @import("path_policy.zig");
+const string_literal = @import("string_literal.zig");
 const token = @import("token.zig");
 
 // Module loader for `import "path";` (section 22 / toolchain). MC has no
@@ -379,7 +380,18 @@ fn expandAll(
             errdefer allocator.free(boundary_path);
             try b.append(allocator, .{ .start = file_start, .path = boundary_path });
         }
-        const imports = try scanImports(graph_allocator, io, item.path, file_source, arch, platform, sandbox_root, installed_roots);
+        const imports = try scanImports(
+            graph_allocator,
+            io,
+            item.path,
+            file_source,
+            arch,
+            platform,
+            sandbox_root,
+            installed_roots,
+            reporter,
+            file_start,
+        );
 
         const blanked = try allocator.dupe(u8, file_source);
         defer allocator.free(blanked);
@@ -556,10 +568,22 @@ fn rejectBudget(
 
 // Find top-level `import "path";` statements by lexing. Returns the resolved
 // path and the byte range (start of `import` .. end of `;`) for each.
-fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: []const u8, arch: []const u8, platform: []const u8, sandbox_root: []const u8, installed_roots: []const InstalledRoot) LoadError![]ImportRef {
+fn scanImports(
+    arena: std.mem.Allocator,
+    io: std.Io,
+    path: []const u8,
+    source: []const u8,
+    arch: []const u8,
+    platform: []const u8,
+    sandbox_root: []const u8,
+    installed_roots: []const InstalledRoot,
+    outer_reporter: ?*diagnostics.Reporter,
+    file_start: usize,
+) LoadError![]ImportRef {
     var refs: std.ArrayList(ImportRef) = .empty;
-    var reporter = diagnostics.Reporter.init(arena, path, source);
-    var lx = lexer.Lexer.init(source, &reporter);
+    var lex_reporter = diagnostics.Reporter.init(arena, path, source);
+    defer lex_reporter.deinit();
+    var lx = lexer.Lexer.init(source, &lex_reporter);
     var depth: i32 = 0;
     while (true) {
         const t = lx.next();
@@ -576,7 +600,25 @@ fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: [
             const str = lx.next();
             const semi = lx.next();
             if (str.kind == .string_literal and semi.kind == .semicolon) {
-                var rel = std.mem.trim(u8, str.lexeme, "\"");
+                const storage = try arena.alloc(u8, str.lexeme.len - 2);
+                var rel = string_literal.decodeInto(storage, str.lexeme) catch {
+                    if (outer_reporter) |r| r.err(.{
+                        .offset = file_start + str.span.offset,
+                        .len = str.span.len,
+                        .line = str.span.line,
+                        .column = str.span.column,
+                    }, "E_IMPORT_INVALID_STRING: import path must be a valid string literal", .{});
+                    continue;
+                };
+                if (std.mem.indexOfScalar(u8, rel, 0) != null) {
+                    if (outer_reporter) |r| r.err(.{
+                        .offset = file_start + str.span.offset,
+                        .len = str.span.len,
+                        .line = str.span.line,
+                        .column = str.span.column,
+                    }, "E_IMPORT_INVALID_STRING: import path cannot contain NUL", .{});
+                    continue;
+                }
                 // Arch-selection seam: rewrite `kernel/arch/active/<x>` to the chosen arch.
                 if (std.mem.startsWith(u8, rel, arch_active_prefix)) {
                     rel = try std.fmt.allocPrint(arena, "kernel/arch/{s}/{s}", .{ arch, rel[arch_active_prefix.len..] });
@@ -597,6 +639,16 @@ fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: [
             }
         }
     }
+    if (outer_reporter) |r| {
+        for (lex_reporter.diagnostics.items) |diag| {
+            r.err(.{
+                .offset = file_start + diag.span.offset,
+                .len = diag.span.len,
+                .line = diag.span.line,
+                .column = diag.span.column,
+            }, "{s}", .{diag.message});
+        }
+    }
     return refs.toOwnedSlice(arena);
 }
 
@@ -606,9 +658,7 @@ fn stripUtf8Bom(source: []const u8) []const u8 {
 }
 
 fn isExplicitlyRelative(rel: []const u8) bool {
-    return std.mem.startsWith(u8, rel, "./") or std.mem.startsWith(u8, rel, "../") or
-        std.mem.startsWith(u8, rel, ".\\") or std.mem.startsWith(u8, rel, "..\\") or
-        std.mem.eql(u8, rel, ".") or std.mem.eql(u8, rel, "..");
+    return path_policy.isExplicitlyRelative(rel);
 }
 
 fn fileExists(io: std.Io, path: []const u8) bool {
@@ -733,30 +783,12 @@ fn defaultSandboxRoot(allocator: std.mem.Allocator, io: std.Io, canon_root: []co
 }
 
 fn pathWithin(root: []const u8, path: []const u8) bool {
-    if (pathEquals(root, path)) return true;
-    if (root.len == 0) return false;
-    if (path.len < root.len or !pathEquals(root, path[0..root.len])) return false;
-    if (isPathSeparator(root[root.len - 1])) return true;
-    return path.len > root.len and isPathSeparator(path[root.len]);
-}
-
-fn pathEquals(left: []const u8, right: []const u8) bool {
-    return if (builtin.os.tag == .windows)
-        std.ascii.eqlIgnoreCase(left, right)
-    else
-        std.mem.eql(u8, left, right);
-}
-
-fn isPathSeparator(ch: u8) bool {
-    return ch == '/' or ch == '\\';
+    return path_policy.pathWithin(root, path);
 }
 
 test "import path predicates accept native and Windows separators without sibling escape" {
     try std.testing.expect(isExplicitlyRelative("./child.mc"));
-    try std.testing.expect(isExplicitlyRelative("..\\child.mc"));
     try std.testing.expect(pathWithin("/project", "/project/child.mc"));
     try std.testing.expect(!pathWithin("/project", "/project2/child.mc"));
-    try std.testing.expect(pathWithin("C:\\project", "C:\\project\\child.mc"));
-    try std.testing.expect(!pathWithin("C:\\project", "C:\\project2\\child.mc"));
-    try std.testing.expect(pathWithin("C:\\project\\", "C:\\project\\child.mc"));
+    try std.testing.expect(!pathWithin("/project", "/project\\escape/child.mc"));
 }

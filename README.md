@@ -309,6 +309,10 @@ graph. Workspace symbols also discover unopened `.mc` files under the workspace
 root. Completion and formatting remain intentionally simpler than mature IDE
 toolchains.
 
+The formatter preserves every payload-bearing line inside a multiline block comment
+byte-for-byte. A complete inline block comment still permits indentation and trailing-space
+normalization, but code/comment internal spacing on that line is intentionally conservative.
+
 ## Current Boundaries
 
 MC is not generally production-ready. Three compiler architecture workstreams

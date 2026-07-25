@@ -136,7 +136,9 @@ def write_message(stream, payload):
 def uri_to_path(uri):
     parsed = urllib.parse.urlparse(uri)
     if parsed.scheme == "file":
-        path = urllib.request.url2pathname(urllib.parse.unquote(parsed.path))
+        # url2pathname performs the percent decoding itself. Decoding beforehand turns a
+        # literal `%20` filename (`%2520` in a URI) into a space and can change components.
+        path = urllib.request.url2pathname(parsed.path)
         if parsed.netloc and parsed.netloc not in ("", "localhost"):
             path = f"//{parsed.netloc}{path}"
         if os.name == "nt" and re.match(r"^/[A-Za-z]:", path):
@@ -940,6 +942,33 @@ def _callee_before(source, open_index):
     return source[start:end]
 
 
+def _generic_call_close(source, open_index):
+    if open_index == 0 or source[open_index] != "<":
+        return None
+    previous = open_index - 1
+    while previous >= 0 and source[previous].isspace():
+        previous -= 1
+    if previous < 0 or not (source[previous].isalnum() or source[previous] in "_>"):
+        return None
+    depth = 1
+    index = open_index + 1
+    while index < len(source):
+        char = source[index]
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth -= 1
+            if depth == 0:
+                after = index + 1
+                while after < len(source) and source[after].isspace():
+                    after += 1
+                return index if after < len(source) and source[after] == "(" else None
+        elif char in ";{}" or (char == "\n" and depth == 1):
+            return None
+        index += 1
+    return None
+
+
 def _active_call(text, position):
     prefix = _masked_source_prefix(text, position)
     if prefix is None:
@@ -947,6 +976,14 @@ def _active_call(text, position):
     matching = {")": "(", "]": "[", "}": "{"}
     stack = []
     for index, char in enumerate(prefix):
+        if stack and stack[-1]["kind"] == "<" and index == stack[-1]["close"]:
+            stack.pop()
+            continue
+        if char == "<":
+            generic_close = _generic_call_close(prefix, index)
+            if generic_close is not None:
+                stack.append({"kind": "<", "close": generic_close, "callee": "", "commas": 0})
+                continue
         if char in "([{":
             stack.append({"kind": char,
                           "callee": _callee_before(prefix, index) if char == "(" else "",
@@ -1414,7 +1451,11 @@ def main():
     global MCC
     args = sys.argv[1:]
     if "--mcc" in args:
-        MCC = args[args.index("--mcc") + 1]
+        index = args.index("--mcc")
+        if index + 1 >= len(args) or args[index + 1].startswith("--"):
+            print("mc-lsp: --mcc requires a compiler path", file=sys.stderr)
+            return 2
+        MCC = args[index + 1]
         if not os.path.isabs(MCC) and os.sep in MCC:
             MCC = os.path.abspath(MCC)
 
@@ -1675,4 +1716,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main() or 0)

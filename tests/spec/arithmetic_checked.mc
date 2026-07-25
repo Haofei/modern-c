@@ -51,6 +51,23 @@ fn right_shift_invalid_count(x: u32, n: u32) -> u32 {
     return x >> n;
 }
 
+fn suffixed_add_overflow_before_widen() -> u16 {
+    return (255_u8 + 1_u8) as u16;
+}
+
+fn suffixed_add_before_widen_ok() -> u16 {
+    return (1_u8 + 2_u8) as u16;
+}
+
+fn inferred_negated_suffix() -> i8 {
+    let x = -1_i8;
+    return x;
+}
+
+fn convert_negated_suffix() -> i16 {
+    return i16.from(-1_i8);
+}
+
 // EXPECT: run add_overflow_u32(4294967295) traps .IntegerOverflow.
 // EXPECT: run sub_underflow_u32(0) traps .IntegerOverflow.
 // EXPECT: run mul_overflow_u32(2147483648) traps .IntegerOverflow.
@@ -62,6 +79,7 @@ fn right_shift_invalid_count(x: u32, n: u32) -> u32 {
 // EXPECT: run left_shift_invalid_count(1, 32) traps .InvalidShift.
 // EXPECT: run left_shift_overflow(0x8000_0000, 1) traps .IntegerOverflow.
 // EXPECT: run right_shift_invalid_count(1, 32) traps .InvalidShift.
+// EXPECT: run suffixed_add_overflow_before_widen() traps .IntegerOverflow before widening.
 // EXPECT: lower-c for checked + uses an overflow helper/check, not plain wrapping arithmetic alone.
 
 fn reject_unsigned_negation(x: u32) -> u32 {

@@ -40,6 +40,28 @@ def test_protocol_helpers():
     if active != ("pair", 1):
         raise SystemExit(f"FAIL: lsp-test — token-aware multiline call scan failed: {active}")
 
+    generic_call = "outer(make<A, list<B>>(), second"
+    generic_active = module._active_call(
+        generic_call,
+        {"line": 0, "character": len(generic_call)},
+    )
+    if generic_active != ("outer", 1):
+        raise SystemExit(f"FAIL: lsp-test — generic commas changed outer argument index: {generic_active}")
+    comparison_call = "outer(a < b, second"
+    comparison_active = module._active_call(
+        comparison_call,
+        {"line": 0, "character": len(comparison_call)},
+    )
+    if comparison_active != ("outer", 1):
+        raise SystemExit(f"FAIL: lsp-test — comparison was mistaken for generic syntax: {comparison_active}")
+
+    encoded_uri = "file:///tmp/a%2520b.mc"
+    if module.uri_to_path(encoded_uri) != "/tmp/a%20b.mc":
+        raise SystemExit("FAIL: lsp-test — file URI was percent-decoded more than once")
+    encoded_separator = "file:///tmp/a%252Fb.mc"
+    if module.uri_to_path(encoded_separator) != "/tmp/a%2Fb.mc":
+        raise SystemExit("FAIL: lsp-test — encoded literal separator became a path separator")
+
     payload = b'{"jsonrpc":"2.0","method":"test"}'
     framed = io.BytesIO(f"Content-Length: {len(payload)}\r\n\r\n".encode("ascii") + payload)
     if module.read_message(framed).get("method") != "test":
@@ -56,6 +78,17 @@ def test_protocol_helpers():
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             continue
         raise SystemExit(f"FAIL: lsp-test — malformed JSON-RPC frame was accepted: {frame!r}")
+
+    missing_mcc = subprocess.run(
+        [sys.executable, SERVER, "--mcc"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    if missing_mcc.returncode != 2 or "--mcc requires" not in missing_mcc.stderr:
+        raise SystemExit(f"FAIL: lsp-test — missing --mcc value was not rejected cleanly: {missing_mcc}")
 
 BAD = (
     "#[no_lang_trap]\n"

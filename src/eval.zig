@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const numeric = @import("numeric.zig");
+const string_literal = @import("string_literal.zig");
 
 pub const Trap = enum {
     IntegerOverflow,
@@ -180,9 +181,42 @@ const Evaluator = struct {
             .ident => |ident| .{ .value = self.bindings.get(ident.text) orelse return error.UnknownIdentifier },
             .int_literal => |literal| .{ .value = .{ .value = try parseInt(literal), .ty = expected_ty } },
             .grouped => |inner| try self.evalExpr(inner.*, expected_ty),
-            .unary => |node| try self.evalUnary(node, expected_ty),
-            .binary => |node| try self.evalBinary(node, expected_ty),
+            .unary => |node| try self.evalUnary(node, self.explicitExprType(expr) orelse expected_ty),
+            .binary => |node| try self.evalBinary(node, self.explicitExprType(expr) orelse expected_ty),
+            .cast => |node| try self.evalCast(node),
             else => error.UnsupportedRunTrapFixture,
+        };
+    }
+
+    fn explicitExprType(self: *Evaluator, expr: ast.Expr) ?IntInfo {
+        return switch (expr.kind) {
+            .ident => |ident| (self.bindings.get(ident.text) orelse return null).ty,
+            .int_literal => |literal| blk: {
+                const parsed = numeric.parseIntegerLiteralParts(literal) orelse break :blk null;
+                const suffix = parsed.suffix orelse break :blk null;
+                const ty = ast.TypeExpr{
+                    .span = expr.span,
+                    .kind = .{ .name = .{ .text = suffix.typeName(), .span = expr.span } },
+                };
+                break :blk intInfo(ty) catch null;
+            },
+            .grouped => |inner| self.explicitExprType(inner.*),
+            .unary => |node| self.explicitExprType(node.expr.*),
+            .binary => |node| self.explicitExprType(node.left.*) orelse self.explicitExprType(node.right.*),
+            .cast => |node| intInfo(node.ty.*) catch null,
+            else => null,
+        };
+    }
+
+    fn evalCast(self: *Evaluator, node: anytype) EvalError!EvalResult {
+        const target_ty = try intInfo(node.ty.*);
+        const source_ty = self.explicitExprType(node.value.*) orelse target_ty;
+        return switch (try self.evalExpr(node.value.*, source_ty)) {
+            .trap => |trap| .{ .trap = trap },
+            .value => |binding| if (target_ty.contains(binding.value))
+                .{ .value = .{ .value = binding.value, .ty = target_ty } }
+            else
+                .{ .trap = .IntegerOverflow },
         };
     }
 
@@ -2456,15 +2490,8 @@ fn intInfo(ty: ast.TypeExpr) EvalError!IntInfo {
 }
 
 fn parseInt(raw: []const u8) EvalError!i128 {
-    var cleaned: [128]u8 = undefined;
-    if (raw.len > cleaned.len) return error.InvalidIntegerLiteral;
-    var len: usize = 0;
-    for (raw) |ch| {
-        if (ch == '_') continue;
-        cleaned[len] = ch;
-        len += 1;
-    }
-    return std.fmt.parseInt(i128, cleaned[0..len], 0) catch error.InvalidIntegerLiteral;
+    const magnitude = numeric.parseIntegerLiteral(raw) orelse return error.InvalidIntegerLiteral;
+    return std.math.cast(i128, magnitude) orelse error.InvalidIntegerLiteral;
 }
 
 fn parseFloat(raw: []const u8) EvalError!f64 {
@@ -2488,31 +2515,8 @@ fn parseFloat(raw: []const u8) EvalError!f64 {
 // raw bytes, allocated in `scope`. Returns null on a malformed/unsupported escape.
 fn decodeStringLiteral(scope: *const ComptimeScope, literal: []const u8) ?[]const u8 {
     if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return null;
-    const body = literal[1 .. literal.len - 1];
-    var out = scope.alloc(u8, body.len) catch return null;
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i < body.len) : (i += 1) {
-        if (body[i] != '\\') {
-            out[n] = body[i];
-            n += 1;
-            continue;
-        }
-        i += 1;
-        if (i >= body.len) return null;
-        out[n] = switch (body[i]) {
-            '\\' => '\\',
-            '\'' => '\'',
-            '"' => '"',
-            '0' => 0,
-            'n' => '\n',
-            'r' => '\r',
-            't' => '\t',
-            else => return null,
-        };
-        n += 1;
-    }
-    return out[0..n];
+    const out = scope.alloc(u8, literal.len - 2) catch return null;
+    return string_literal.decodeInto(out, literal) catch null;
 }
 
 fn parseRunTrapArgs(allocator: std.mem.Allocator, raw_args: []const u8) EvalError![]i128 {

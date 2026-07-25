@@ -293,7 +293,13 @@ pub fn format(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
     var inside_block_comment = false;
     while (it.next()) |raw| {
         line_no += 1;
-        if (lineTouchesBlockComment(raw, &inside_block_comment)) {
+        const started_inside_block_comment = inside_block_comment;
+        const touches_block_comment = lineTouchesBlockComment(raw, &inside_block_comment);
+        // Preserve payload-bearing lines of a multiline comment byte-for-byte. A complete
+        // inline comment can still use the ordinary line path: appendNormalizedContent keeps
+        // the comment/code spelling opaque while indentation and trailing whitespace become
+        // canonical.
+        if (touches_block_comment and (started_inside_block_comment or inside_block_comment)) {
             if (pending_blank) {
                 try out.append(allocator, '\n');
                 pending_blank = false;

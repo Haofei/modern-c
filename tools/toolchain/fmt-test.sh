@@ -98,4 +98,15 @@ if ! cmp -s "$W/comment.want" "$W/comment.payload"; then
     echo "FAIL: fmt-test — multiline block-comment payload changed"; diff "$W/comment.want" "$W/comment.payload"; exit 1
 fi
 
+printf '%s\n' \
+    'fn inline_comment() -> void {' \
+    '          value();   /* exact comment payload */      ' \
+    '}' >"$W/inline-comment.mc"
+"$MCC" fmt "$W/inline-comment.mc" >"$W/inline-comment.fmt"
+if ! grep -Fxq '    value();   /* exact comment payload */' "$W/inline-comment.fmt"; then
+    echo "FAIL: fmt-test — inline block comment prevented indentation/trailing-space normalization"
+    cat "$W/inline-comment.fmt"
+    exit 1
+fi
+
 echo "PASS: fmt-test — fmt is token-preserving and idempotent across $checked modules; --check passes formatted / fails misindented input"

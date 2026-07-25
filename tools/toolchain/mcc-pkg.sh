@@ -40,6 +40,39 @@ field_in() {
 }
 field() { field_in "$MANIFEST" "$1"; }
 
+validate_package_file_path() {
+    local label="$1" value="$2" component
+    [ -n "$value" ] || { echo "mcc-pkg: manifest missing '$label'" >&2; exit 1; }
+    case "$value" in
+        /*|\\*|[A-Za-z]:/*|[A-Za-z]:\\*) echo "mcc-pkg: manifest '$label' must be package-relative" >&2; exit 1 ;;
+    esac
+    IFS='/' read -r -a components <<< "$value"
+    for component in "${components[@]}"; do
+        case "$component" in
+            ""|"."|"..") echo "mcc-pkg: manifest '$label' contains an unsafe path component" >&2; exit 1 ;;
+        esac
+    done
+}
+
+contained_package_file() {
+    local label="$1" value="$2" require_existing="$3"
+    validate_package_file_path "$label" "$value"
+    local candidate="$MANIFEST_DIR/$value" parent
+    parent="$(dirname "$candidate")"
+    [ -d "$parent" ] || { echo "mcc-pkg: manifest '$label' parent does not exist" >&2; exit 1; }
+    [ ! -L "$candidate" ] || { echo "mcc-pkg: manifest '$label' cannot be a symlink" >&2; exit 1; }
+    parent="$(cd "$parent" && pwd -P)"
+    case "$parent" in
+        "$MANIFEST_DIR"|"$MANIFEST_DIR"/*) ;;
+        *) echo "mcc-pkg: manifest '$label' escapes the package root" >&2; exit 1 ;;
+    esac
+    if [ "$require_existing" = 1 ] && [ ! -f "$candidate" ]; then
+        echo "mcc-pkg: manifest '$label' does not name a regular file" >&2
+        exit 1
+    fi
+    printf '%s/%s\n' "$parent" "$(basename "$candidate")"
+}
+
 # Emit `name path version` for each `[deps]` entry (`name = path@version`).
 deps_of() {
     awk '
@@ -113,12 +146,10 @@ case "$cmd" in
         fi
         ;;
     build)
-        [ -n "$PKG_ENTRY" ] || { echo "mcc-pkg: manifest missing 'entry'" >&2; exit 1; }
-        [ -n "$PKG_OUTPUT" ] || { echo "mcc-pkg: manifest missing 'output'" >&2; exit 1; }
         # Resolve + version-check dependencies before building (fails fast).
         resolve_deps >/dev/null
-        ENTRY="$MANIFEST_DIR/$PKG_ENTRY"
-        OUT="$MANIFEST_DIR/$PKG_OUTPUT"
+        ENTRY="$(contained_package_file entry "$PKG_ENTRY" 1)"
+        OUT="$(contained_package_file output "$PKG_OUTPUT" 0)"
         DRIVER="${MCC_PKG_CC:-$HERE/tools/toolchain/mcc-cc.sh}"
         MCC_UNDER_TEST="$MCC" MCC="$MCC" "$DRIVER" "$ENTRY" -o "$OUT" >/dev/null
         echo "mcc-pkg: built ${PKG_NAME:-package} -> $OUT"

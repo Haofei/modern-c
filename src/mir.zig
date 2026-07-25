@@ -51,6 +51,12 @@ fn integerLiteralTypeExpr(literal: []const u8, span: ast.Span) ast.TypeExpr {
     return ast_query.simpleNameType("u32", span);
 }
 
+fn suffixedIntegerLiteralTypeExpr(literal: []const u8, span: ast.Span) ?ast.TypeExpr {
+    const parsed = numeric.parseIntegerLiteralParts(literal) orelse return null;
+    const suffix = parsed.suffix orelse return null;
+    return ast_query.simpleNameType(suffix.typeName(), span);
+}
+
 const mir_model = @import("mir_model.zig");
 const mir_operator = @import("mir_operator.zig");
 const mir_representation = @import("mir_representation.zig");
@@ -4488,7 +4494,7 @@ const FunctionBuilder = struct {
             .unary => |node| if (node.op == .logical_not)
                 ast_query.simpleNameType("bool", initializer.span)
             else
-                self.typeExprForExpr(node.expr.*),
+                try self.inferredLocalTypeExpr(node.expr.*),
             .binary => |node| if (mirIsComparisonBinary(node.op) or mirIsLogicalBinary(node.op))
                 ast_query.simpleNameType("bool", initializer.span)
             else if (mirIsArithmeticBinary(node.op) or mirIsBitwiseBinary(node.op))
@@ -8847,7 +8853,8 @@ const FunctionBuilder = struct {
             .int_literal => |literal| integerLiteralTypeExpr(literal, expr.span),
             .grouped => |inner| self.conversionSourceTypeExpr(inner.*),
             .unary => |node| if (node.op == .neg and node.expr.kind == .int_literal)
-                ast_query.simpleNameType("i32", expr.span)
+                suffixedIntegerLiteralTypeExpr(node.expr.kind.int_literal, expr.span) orelse
+                    ast_query.simpleNameType("i32", expr.span)
             else
                 self.conversionSourceTypeExpr(node.expr.*),
             .binary => |node| self.typeExprForExpr(node.left.*) orelse
@@ -8862,7 +8869,8 @@ const FunctionBuilder = struct {
     fn explicitCastSourceTypeExpr(self: *FunctionBuilder, expr: ast.Expr, target_ty: ast.TypeExpr) !ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
-            .int_literal, .float_literal, .string_literal, .char_literal, .enum_literal, .null_literal, .array_literal, .struct_literal => target_ty,
+            .int_literal => |literal| suffixedIntegerLiteralTypeExpr(literal, expr.span) orelse target_ty,
+            .float_literal, .string_literal, .char_literal, .enum_literal, .null_literal, .array_literal, .struct_literal => target_ty,
             .bool_literal => ast_query.simpleNameType("bool", expr.span),
             .grouped => |inner| self.explicitCastSourceTypeExpr(inner.*, target_ty),
             .unary => |node| if (node.op == .logical_not)
