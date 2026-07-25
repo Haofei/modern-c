@@ -51,3 +51,39 @@ test "explicit visibility mangles private collisions without pub opt-in" {
     try expectPrivateMangle(.legacy_pub_opt_in, "helper", "helper");
     try expectPrivateMangle(.explicit_public, "helper__mcp0", "helper__mcp1");
 }
+
+test "private mangling rewrites declaration-level value references" {
+    const file_a =
+        \\const N: usize = 4;
+        \\struct A { bytes: [N]u8 }
+    ;
+    const file_b =
+        \\const N: usize = 8;
+        \\struct B { bytes: [N]u8 }
+    ;
+    const source = file_a ++ file_b;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "private_decl_a.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    var module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    module.visibility_mode = .explicit_public;
+    const boundaries = [_]loader.FileBoundary{
+        .{ .start = 0, .path = "private_decl_a.mc" },
+        .{ .start = file_a.len, .path = "private_decl_b.mc" },
+    };
+    const transformed = try mangle_private.transform(arena.allocator(), module, &boundaries);
+
+    var lengths: [2]?[]const u8 = .{ null, null };
+    var index: usize = 0;
+    for (transformed.decls) |decl| {
+        if (decl.kind != .struct_decl) continue;
+        const len = decl.kind.struct_decl.fields[0].ty.kind.array.len;
+        lengths[index] = len.kind.ident.text;
+        index += 1;
+    }
+    try std.testing.expectEqualStrings("N__mcp0", lengths[0].?);
+    try std.testing.expectEqualStrings("N__mcp1", lengths[1].?);
+}

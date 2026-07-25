@@ -90,6 +90,38 @@ def test_protocol_helpers():
     if missing_mcc.returncode != 2 or "--mcc requires" not in missing_mcc.stderr:
         raise SystemExit(f"FAIL: lsp-test — missing --mcc value was not rejected cleanly: {missing_mcc}")
 
+    if module.invalid_request_params({
+        "method": "textDocument/hover", "params": {},
+    }) is None:
+        raise SystemExit("FAIL: lsp-test — malformed hover parameters were accepted")
+    if module.is_valid_identifier("a-b") or module.is_valid_identifier("fn"):
+        raise SystemExit("FAIL: lsp-test — rename accepted invalid or keyword replacement text")
+
+    with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as outside:
+        with open(os.path.join(workspace, "good.mc"), "w", encoding="utf-8") as source:
+            source.write("fn workspace_good() -> u32 { return 1; }\n")
+        outside_source = os.path.join(outside, "secret.mc")
+        with open(outside_source, "w", encoding="utf-8") as source:
+            source.write("fn outside_secret() -> u32 { return 2; }\n")
+        os.symlink(outside_source, os.path.join(workspace, "leak.mc"))
+        os.mkfifo(os.path.join(workspace, "blocked.mc"))
+        with open(os.path.join(workspace, "large.mc"), "wb") as source:
+            source.write(b"x" * 128)
+        old_file_limit = module.MAX_WORKSPACE_SOURCE_BYTES
+        old_total_limit = module.MAX_WORKSPACE_TOTAL_BYTES
+        module.MAX_WORKSPACE_SOURCE_BYTES = 64
+        module.MAX_WORKSPACE_TOTAL_BYTES = 128
+        try:
+            scanned = module.workspace_sources({}, [workspace])
+        finally:
+            module.MAX_WORKSPACE_SOURCE_BYTES = old_file_limit
+            module.MAX_WORKSPACE_TOTAL_BYTES = old_total_limit
+        scanned_text = "\n".join(scanned.values())
+        if "workspace_good" not in scanned_text:
+            raise SystemExit("FAIL: lsp-test — bounded workspace scan skipped a regular source")
+        if "outside_secret" in scanned_text or any("large.mc" in uri for uri in scanned):
+            raise SystemExit("FAIL: lsp-test — workspace scan followed a symlink or read an oversized file")
+
 BAD = (
     "#[no_lang_trap]\n"
     "fn reads_variable_index(a: [4]u32, i: usize) -> u32 {\n"
@@ -353,6 +385,18 @@ def main():
         assert caps.get("documentSymbolProvider"), f"expected documentSymbol capability, got {caps}"
         triggers = caps.get("completionProvider", {}).get("triggerCharacters", [])
         assert "." in triggers, f"expected dot completion trigger, got {triggers}"
+
+        # A structurally valid JSON-RPC request with bad params must receive
+        # InvalidParams without terminating the server; a later request still works.
+        proc.stdin.write(frame({"jsonrpc": "2.0", "id": 44, "method": "textDocument/hover",
+                                "params": {}}))
+        proc.stdin.flush()
+        invalid = read_message(proc.stdout)
+        if invalid.get("id") != 44 or invalid.get("error", {}).get("code") != -32602:
+            raise SystemExit(f"FAIL: lsp-test — malformed request did not return InvalidParams: {invalid}")
+        alive = request(proc, 45, "workspace/symbol", {"query": "nothing"})
+        if alive != []:
+            raise SystemExit(f"FAIL: lsp-test — server did not remain usable after InvalidParams: {alive}")
 
         proc.stdin.write(frame({"jsonrpc": "2.0", "method": "initialized", "params": {}}))
 

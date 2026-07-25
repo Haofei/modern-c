@@ -298,6 +298,33 @@ test "loader enforces exact graph-wide import budgets" {
     ));
 }
 
+test "loader rejects decoded import paths containing NUL" {
+    // DIAGNOSTIC_UNIT: E_IMPORT_INVALID_STRING
+    const root_path = "tests/spec_support/qualified_forward_root.mc";
+    const source = "import \"bad\\0path.mc\";\n";
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, root_path, source);
+    defer reporter.deinit();
+
+    const combined = try loader.loadCombinedSourceWithBoundariesReport(
+        std.testing.allocator,
+        std.testing.io,
+        root_path,
+        source,
+        null,
+        null,
+        null,
+        &reporter,
+    );
+    defer std.testing.allocator.free(combined);
+
+    try std.testing.expect(reporter.has_errors);
+    var found = false;
+    for (reporter.diagnostics.items) |diagnostic| {
+        if (std.mem.indexOf(u8, diagnostic.message, "E_IMPORT_INVALID_STRING") != null) found = true;
+    }
+    try std.testing.expect(found);
+}
+
 test "loader handles cycles wide DAGs and deep chains iteratively" {
     const cycle_path = "tests/spec_support/import_cycle_a.mc";
     const cycle_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, cycle_path, std.testing.allocator, .limited(1 << 20));

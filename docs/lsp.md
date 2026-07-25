@@ -77,4 +77,9 @@ obsolete checks are terminated, imported-file diagnostics retain their source
 URI, and stale imported diagnostics are explicitly cleared. Symbol spans include
 their source path, so definition, references, and rename operate across the current
 import graph. Workspace symbol search also discovers unopened `.mc` files under
-the roots supplied by the client, up to the server's 10,000-document safety limit.
+the physical roots supplied by the client. It rejects symlinks and non-regular
+files and is bounded by `MC_LSP_MAX_WORKSPACE_SOURCE_BYTES` (4 MiB per file),
+`MC_LSP_MAX_WORKSPACE_TOTAL_BYTES` (64 MiB), `MC_LSP_MAX_WORKSPACE_SOURCES`
+(10,000 files), and `MC_LSP_MAX_WORKSPACE_SCAN_SECONDS` (5 seconds).
+Malformed request parameters return JSON-RPC `InvalidParams` without terminating
+the server; rename replacement text must be a non-keyword MC identifier.

@@ -41,6 +41,19 @@ if bash "$REGTOOL" publish "$FIX/mathlib-1.0.0" --registry "$REG" >/dev/null 2>&
     fail "re-publishing an existing version should be refused"
 fi
 
+# Publication and installation locks fail closed instead of allowing a lost
+# index update or overlapping vendor/lock commits.
+mkdir "$REG/.publish.lock"
+if bash "$REGTOOL" publish "$FIX/mathlib-1.2.0" --registry "$REG" >/dev/null 2>&1; then
+    fail "publish ignored the registry transaction lock"
+fi
+rmdir "$REG/.publish.lock"
+mkdir "$APP/.mcpkg.install.lock"
+if bash "$REGTOOL" install "$APP" --registry "$REG" >/dev/null 2>&1; then
+    fail "install ignored the package transaction lock"
+fi
+rmdir "$APP/.mcpkg.install.lock"
+
 # 2. resolve (version policy)
 [ "$(bash "$REGTOOL" resolve mathlib '^1.0.0' --registry "$REG")" = "1.1.0" ] || fail "^1.0.0 should resolve to 1.1.0"
 [ "$(bash "$REGTOOL" resolve mathlib '=1.0.0' --registry "$REG")" = "1.0.0" ] || fail "=1.0.0 should resolve to 1.0.0"

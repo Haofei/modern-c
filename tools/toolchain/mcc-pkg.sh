@@ -70,6 +70,10 @@ contained_package_file() {
         echo "mcc-pkg: manifest '$label' does not name a regular file" >&2
         exit 1
     fi
+    if [ "$require_existing" = 0 ] && [ -e "$candidate" ] && [ ! -f "$candidate" ]; then
+        echo "mcc-pkg: manifest '$label' output must be a regular file path" >&2
+        exit 1
+    fi
     printf '%s/%s\n' "$parent" "$(basename "$candidate")"
 }
 
@@ -94,7 +98,7 @@ PKG_NAME="$(field name)"
 PKG_VERSION="$(field version)"
 PKG_ENTRY="$(field entry)"
 PKG_OUTPUT="$(field output)"
-MANIFEST_DIR="$(cd "$(dirname "$MANIFEST")" && pwd)"
+MANIFEST_DIR="$(cd "$(dirname "$MANIFEST")" && pwd -P)"
 
 # Resolve every declared dependency transitively: locate each manifest and verify
 # its requested version. Fails on a missing dep or a version mismatch.
@@ -151,7 +155,14 @@ case "$cmd" in
         ENTRY="$(contained_package_file entry "$PKG_ENTRY" 1)"
         OUT="$(contained_package_file output "$PKG_OUTPUT" 0)"
         DRIVER="${MCC_PKG_CC:-$HERE/tools/toolchain/mcc-cc.sh}"
-        MCC_UNDER_TEST="$MCC" MCC="$MCC" "$DRIVER" "$ENTRY" -o "$OUT" >/dev/null
+        output_tmp="$(mktemp "$(dirname "$OUT")/.mcc-output.XXXXXX")"
+        cleanup_output() { rm -f -- "$output_tmp"; }
+        trap cleanup_output EXIT INT TERM
+        MCC_UNDER_TEST="$MCC" MCC="$MCC" "$DRIVER" "$ENTRY" -o "$output_tmp" >/dev/null
+        # Replace the directory entry atomically. Compiling directly to OUT
+        # would modify an outside inode if OUT were an existing hardlink.
+        mv -f -- "$output_tmp" "$OUT"
+        trap - EXIT INT TERM
         echo "mcc-pkg: built ${PKG_NAME:-package} -> $OUT"
         ;;
     *)

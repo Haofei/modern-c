@@ -202,21 +202,95 @@ const Walker = struct {
 
     fn walkDecl(self: *Walker, decl: *ast.Decl) anyerror!void {
         switch (decl.kind) {
-            .fn_decl => |*f| {
+            .fn_decl, .extern_fn => |*f| {
                 const m = self.mark();
                 for (f.params) |*p| {
                     try self.walkType(&p.ty);
                     try self.push(p.name.text);
                 }
+                // Contracts may name parameters, so visit declaration attributes
+                // only after the parameter shadow set is established.
+                for (decl.attrs) |*attr| try self.walkAttr(attr);
                 if (f.return_type) |*rt| try self.walkType(rt);
                 if (f.body) |*body| try self.walkBlock(body);
                 self.restore(m);
             },
             .global_decl => |*g| {
+                for (decl.attrs) |*attr| try self.walkAttr(attr);
                 if (g.ty) |*t| try self.walkType(t);
                 if (g.init) |*e| try self.walkExpr(e);
             },
-            else => {},
+            .type_alias => |*alias| {
+                for (decl.attrs) |*attr| try self.walkAttr(attr);
+                try self.walkType(&alias.ty);
+            },
+            .struct_decl => |*s| {
+                for (decl.attrs) |*attr| try self.walkAttr(attr);
+                for (s.fields) |*field| try self.walkType(&field.ty);
+            },
+            .enum_decl => |*e| {
+                for (decl.attrs) |*attr| try self.walkAttr(attr);
+                if (e.repr) |*repr| try self.walkType(repr);
+                for (e.cases) |*case| if (case.value) |*value| try self.walkExpr(value);
+            },
+            .union_decl => |*u| {
+                for (decl.attrs) |*attr| try self.walkAttr(attr);
+                for (u.cases) |*case| {
+                    if (case.ty) |*ty| try self.walkType(ty);
+                }
+            },
+            .packed_bits_decl => |*p| {
+                for (decl.attrs) |*attr| try self.walkAttr(attr);
+                try self.walkType(&p.repr);
+                for (p.fields) |*field| try self.walkType(&field.ty);
+            },
+            .overlay_union_decl => |*u| {
+                for (decl.attrs) |*attr| try self.walkAttr(attr);
+                for (u.fields) |*field| try self.walkType(&field.ty);
+            },
+            .trait_decl => |*t| {
+                for (decl.attrs) |*attr| try self.walkAttr(attr);
+                for (t.methods) |*method| {
+                    const m = self.mark();
+                    for (method.params) |*param| {
+                        try self.walkType(&param.ty);
+                        try self.push(param.name.text);
+                    }
+                    for (method.attrs) |*attr| try self.walkAttr(attr);
+                    if (method.return_type) |*ret| try self.walkType(ret);
+                    self.restore(m);
+                }
+            },
+            .impl_trait => |*impl| {
+                for (decl.attrs) |*attr| try self.walkAttr(attr);
+                for (impl.methods) |*method| {
+                    const m = self.mark();
+                    for (method.params) |*param| {
+                        try self.walkType(&param.ty);
+                        try self.push(param.name.text);
+                    }
+                    for (method.attrs) |*attr| try self.walkAttr(attr);
+                    if (method.return_type) |*ret| try self.walkType(ret);
+                    self.restore(m);
+                }
+            },
+            .opaque_decl => for (decl.attrs) |*attr| try self.walkAttr(attr),
+        }
+    }
+
+    fn walkAttr(self: *Walker, attr: *ast.Attr) anyerror!void {
+        switch (attr.kind) {
+            .unsafe_contract => |*contract| for (contract.args) |*arg| try self.walkExpr(arg),
+            .no_lang_trap,
+            .naked,
+            .@"noinline",
+            .weak,
+            .backend_name,
+            .origin,
+            .section,
+            .@"align",
+            .named,
+            => {},
         }
     }
 
@@ -246,7 +320,7 @@ const Walker = struct {
             .if_let => |*il| {
                 try self.walkExpr(&il.value);
                 const m = self.mark();
-                self.pushPattern(il.pattern) catch {};
+                try self.pushPattern(il.pattern);
                 try self.walkBlock(&il.then_block);
                 self.restore(m);
                 if (il.else_block) |*eb| try self.walkBlock(eb);
@@ -255,7 +329,7 @@ const Walker = struct {
                 try self.walkExpr(&sw.subject);
                 for (sw.arms) |*arm| {
                     const m = self.mark();
-                    for (arm.patterns) |pat| self.pushPattern(pat) catch {};
+                    for (arm.patterns) |pat| try self.pushPattern(pat);
                     switch (arm.body) {
                         .block => |*bl| try self.walkBlock(bl),
                         .expr => |*e| try self.walkExpr(e),
@@ -265,9 +339,13 @@ const Walker = struct {
             },
             .unsafe_block, .comptime_block, .block => |*bl| try self.walkBlock(bl),
             .contract_block => |*cb| try self.walkBlock(&cb.block),
-            // `asm` inputs are a `[]const` slice (immutable) and reference registers/locals,
-            // never a top-level value name we would rewrite — nothing to do.
-            .asm_stmt => {},
+            .asm_stmt => |*asm_stmt| {
+                for (@constCast(asm_stmt.outputs)) |*output| try self.walkType(&output.ty);
+                for (@constCast(asm_stmt.inputs)) |*input| {
+                    try self.walkExpr(&input.value);
+                    try self.walkType(&input.ty);
+                }
+            },
             .@"return" => |*maybe| {
                 if (maybe.*) |*e| try self.walkExpr(e);
             },

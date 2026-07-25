@@ -4489,7 +4489,9 @@ fn markBorrowEscapeCapturedCallArg(self: *Checker, arg: ast.Expr, escape_span: d
 }
 
 fn typeCanCarryBorrowInStoredValue(ty: ast.TypeExpr, ctx: Context, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
-    if (depth > 64) return false;
+    // Unknown after budget exhaustion must be treated as borrow-carrying:
+    // returning false would let a deeply nested stored borrow escape.
+    if (depth > 64) return true;
     switch (ty.kind) {
         .name => |name| {
             if (aliases.get(name.text)) |target| {

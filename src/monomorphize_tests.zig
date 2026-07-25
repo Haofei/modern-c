@@ -83,6 +83,41 @@ test "monomorphize detects comptime parameter in block array length" {
     try testing.expect(saw_specialized);
 }
 
+test "monomorphize discovers generic instances used only by type aliases and extern signatures" {
+    const source =
+        \\struct Box<T> { value: T }
+        \\type U32Box = Box<u32>;
+        \\extern fn accept_box(value: Box<u64>) -> void;
+    ;
+    var reporter = diagnostics.Reporter.init(testing.allocator, "generic_decl_contexts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    try testing.expect(!reporter.has_errors);
+
+    const specialized = try monomorphize.transformReport(arena.allocator(), module, &reporter);
+    try testing.expect(!reporter.has_errors);
+    var saw_u32 = false;
+    var saw_u64 = false;
+    var alias_rewritten = false;
+    var extern_rewritten = false;
+    for (specialized.decls) |decl| switch (decl.kind) {
+        .struct_decl => |sd| {
+            if (std.mem.eql(u8, sd.name.text, "Box__u32")) saw_u32 = true;
+            if (std.mem.eql(u8, sd.name.text, "Box__u64")) saw_u64 = true;
+        },
+        .type_alias => |alias| alias_rewritten =
+            std.mem.eql(u8, alias.ty.kind.name.text, "Box__u32"),
+        .extern_fn => |extern_fn| extern_rewritten =
+            std.mem.eql(u8, extern_fn.params[0].ty.kind.name.text, "Box__u64"),
+        else => {},
+    };
+    try testing.expect(saw_u32 and saw_u64);
+    try testing.expect(alias_rewritten and extern_rewritten);
+}
+
 test "monomorphize keeps delimiter-colliding generic instances distinct" {
     const source =
         \\struct A__B { value: u32 }

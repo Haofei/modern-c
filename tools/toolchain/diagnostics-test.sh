@@ -39,12 +39,10 @@ assert_occurrences() {
     local expected="$3"
     local label="$4"
     local actual
-    actual=$(HAYSTACK="$haystack" NEEDLE="$needle" python3 - <<'PY'
-import os
-
-print(os.environ["HAYSTACK"].count(os.environ["NEEDLE"]))
-PY
-)
+    # Feed potentially large compiler output over stdin instead of exporting it
+    # into the process environment, whose ARG_MAX is platform-dependent.
+    actual=$(printf '%s' "$haystack" | NEEDLE="$needle" python3 -c \
+        'import os, sys; print(sys.stdin.read().count(os.environ["NEEDLE"]))')
     if [ "$actual" != "$expected" ]; then
         echo "FAIL: diagnostics-test — unexpected occurrence count for $label"
         echo "expected $expected occurrence(s) of: $needle"

@@ -10,7 +10,8 @@ CLANG="${CLANG:-clang}"
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: pkg-test (clang not found)"; exit 0; }
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"; rm -f "$PKG/demo.o"' EXIT
+OUTSIDE_HARDLINK="$HERE/.pkg-hardlink-outside.$$"
+trap 'rm -rf "$WORK"; rm -f "$PKG/demo.o" "$OUTSIDE_HARDLINK"' EXIT
 
 # `info` must report the manifest fields.
 MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" info "$PKG" | grep -q "package: demo" || {
@@ -67,6 +68,29 @@ if MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" build "$E
 fi
 [ ! -e "$WORK/outside.o" ] || {
     echo "FAIL: pkg-test — escaped manifest output wrote outside the package"
+    exit 1
+}
+
+# Existing hardlinks must be replaced, not compiled through to their shared
+# outside inode.
+printf 'outside sentinel\n' >"$OUTSIDE_HARDLINK"
+ln "$OUTSIDE_HARDLINK" "$PKG/demo.o"
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" build "$PKG" >/dev/null
+[ "$(cat "$OUTSIDE_HARDLINK")" = "outside sentinel" ] || {
+    echo "FAIL: pkg-test — package build modified an outside hardlinked inode"
+    exit 1
+}
+[ "$(ls -i "$OUTSIDE_HARDLINK" | awk '{print $1}')" != \
+   "$(ls -i "$PKG/demo.o" | awk '{print $1}')" ] || {
+    echo "FAIL: pkg-test — package output still shares the outside inode"
+    exit 1
+}
+
+# A package reached through a symlinked root is compared by its physical root
+# and remains buildable without weakening containment.
+ln -s "$PKG" "$WORK/linkpkg"
+MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" build "$WORK/linkpkg" >/dev/null || {
+    echo "FAIL: pkg-test — physical package containment rejected a symlinked root"
     exit 1
 }
 

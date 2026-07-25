@@ -118,11 +118,13 @@ const TypeGenericInfo = struct {
 
 const GenericStructInfo = struct {
     decl: ast.StructDecl,
+    attrs: []ast.Attr = &.{},
     is_pub: bool = false,
 };
 
 const GenericUnionInfo = struct {
     decl: ast.UnionDecl,
+    attrs: []ast.Attr = &.{},
     is_pub: bool = false,
 };
 
@@ -147,6 +149,7 @@ const StructInstance = struct {
     decl: ast.StructDecl,
     subst: Subst,
     mangled: []const u8,
+    attrs: []ast.Attr = &.{},
     is_pub: bool = false,
     depth: usize = 0,
     origin: ?*const InstantiationOrigin = null,
@@ -158,6 +161,7 @@ const UnionInstance = struct {
     decl: ast.UnionDecl,
     subst: Subst,
     mangled: []const u8,
+    attrs: []ast.Attr = &.{},
     is_pub: bool = false,
     depth: usize = 0,
     origin: ?*const InstantiationOrigin = null,
@@ -266,7 +270,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                 }
             },
             .struct_decl => |sd| {
-                if (sd.type_params.len > 0) try generic_structs.put(sd.name.text, .{ .decl = sd, .is_pub = decl.is_pub });
+                if (sd.type_params.len > 0) try generic_structs.put(sd.name.text, .{ .decl = sd, .attrs = decl.attrs, .is_pub = decl.is_pub });
                 try collectFieldTypes(arena, &field_types, sd.name.text, sd.fields);
             },
             .packed_bits_decl => |pb| {
@@ -276,7 +280,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                 try collectFieldTypes(arena, &field_types, ou.name.text, ou.fields);
             },
             .union_decl => |u| {
-                if (u.type_params.len > 0) try generic_unions.put(u.name.text, .{ .decl = u, .is_pub = decl.is_pub });
+                if (u.type_params.len > 0) try generic_unions.put(u.name.text, .{ .decl = u, .attrs = decl.attrs, .is_pub = decl.is_pub });
                 try collectUnionCaseTypes(arena, &field_types, u);
             },
             // Record integer module consts (folded against earlier ones), so they can be
@@ -335,20 +339,23 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
         switch (decl.kind) {
             .fn_decl => |fn_decl| {
                 if (type_generic.contains(fn_decl.name.text)) continue; // dropped; replaced by instances
-                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .is_pub = decl.is_pub, .kind = .{ .fn_decl = try cloneFnDeclCtx(&ctx, fn_decl) } });
+                try out.append(arena, .{ .span = decl.span, .attrs = try cloneAttrs(&ctx, decl.attrs), .is_pub = decl.is_pub, .kind = .{ .fn_decl = try cloneFnDeclCtx(&ctx, fn_decl) } });
+            },
+            .extern_fn => |fn_decl| {
+                try out.append(arena, .{ .span = decl.span, .attrs = try cloneAttrs(&ctx, decl.attrs), .is_pub = decl.is_pub, .kind = .{ .extern_fn = try cloneFnDeclSignatureCtx(&ctx, fn_decl) } });
             },
             .struct_decl => |sd| {
                 if (sd.type_params.len > 0) continue; // generic; replaced by instances
-                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .is_pub = decl.is_pub, .kind = .{ .struct_decl = try cloneStructDeclCtx(&ctx, sd) } });
+                try out.append(arena, .{ .span = decl.span, .attrs = try cloneAttrs(&ctx, decl.attrs), .is_pub = decl.is_pub, .kind = .{ .struct_decl = try cloneStructDeclCtx(&ctx, sd) } });
             },
             .union_decl => |u| {
                 if (u.type_params.len > 0) continue; // generic; replaced by instances
-                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .is_pub = decl.is_pub, .kind = .{ .union_decl = try cloneUnionDeclCtx(&ctx, u) } });
+                try out.append(arena, .{ .span = decl.span, .attrs = try cloneAttrs(&ctx, decl.attrs), .is_pub = decl.is_pub, .kind = .{ .union_decl = try cloneUnionDeclCtx(&ctx, u) } });
             },
             .global_decl => |g| {
                 const ty = if (g.ty) |t| try cloneType(&ctx, t) else null;
                 const init = if (g.init) |init_expr| try cloneExprCtx(&ctx, init_expr) else null;
-                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .is_pub = decl.is_pub, .kind = .{ .global_decl = .{
+                try out.append(arena, .{ .span = decl.span, .attrs = try cloneAttrs(&ctx, decl.attrs), .is_pub = decl.is_pub, .kind = .{ .global_decl = .{
                     .name = g.name,
                     .ty = ty,
                     .init = init,
@@ -357,7 +364,66 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                     .exported = g.exported,
                 } } });
             },
-            else => try out.append(arena, decl),
+            .type_alias => |alias| try out.append(arena, .{
+                .span = decl.span,
+                .attrs = try cloneAttrs(&ctx, decl.attrs),
+                .is_pub = decl.is_pub,
+                .kind = .{ .type_alias = .{ .name = alias.name, .ty = try cloneType(&ctx, alias.ty) } },
+            }),
+            .enum_decl => |enum_decl| {
+                var cases = try arena.alloc(ast.EnumCase, enum_decl.cases.len);
+                for (enum_decl.cases, 0..) |case, i| {
+                    cases[i] = .{ .name = case.name, .value = if (case.value) |value| try cloneExprCtx(&ctx, value) else null };
+                }
+                try out.append(arena, .{
+                    .span = decl.span,
+                    .attrs = try cloneAttrs(&ctx, decl.attrs),
+                    .is_pub = decl.is_pub,
+                    .kind = .{ .enum_decl = .{
+                        .name = enum_decl.name,
+                        .repr = if (enum_decl.repr) |repr| try cloneType(&ctx, repr) else null,
+                        .cases = cases,
+                        .is_open = enum_decl.is_open,
+                    } },
+                });
+            },
+            .packed_bits_decl => |packed_decl| try out.append(arena, .{
+                .span = decl.span,
+                .attrs = try cloneAttrs(&ctx, decl.attrs),
+                .is_pub = decl.is_pub,
+                .kind = .{ .packed_bits_decl = .{
+                    .name = packed_decl.name,
+                    .repr = try cloneType(&ctx, packed_decl.repr),
+                    .fields = try cloneFields(&ctx, packed_decl.fields),
+                } },
+            }),
+            .overlay_union_decl => |overlay| try out.append(arena, .{
+                .span = decl.span,
+                .attrs = try cloneAttrs(&ctx, decl.attrs),
+                .is_pub = decl.is_pub,
+                .kind = .{ .overlay_union_decl = .{
+                    .name = overlay.name,
+                    .fields = try cloneFields(&ctx, overlay.fields),
+                } },
+            }),
+            .trait_decl => |trait_decl| try out.append(arena, .{
+                .span = decl.span,
+                .attrs = try cloneAttrs(&ctx, decl.attrs),
+                .is_pub = decl.is_pub,
+                .kind = .{ .trait_decl = try cloneTraitDecl(&ctx, trait_decl) },
+            }),
+            .impl_trait => |impl| try out.append(arena, .{
+                .span = decl.span,
+                .attrs = try cloneAttrs(&ctx, decl.attrs),
+                .is_pub = decl.is_pub,
+                .kind = .{ .impl_trait = try cloneImplTrait(&ctx, impl) },
+            }),
+            .opaque_decl => try out.append(arena, .{
+                .span = decl.span,
+                .attrs = try cloneAttrs(&ctx, decl.attrs),
+                .is_pub = decl.is_pub,
+                .kind = decl.kind,
+            }),
         }
     }
     if (rewriter.oom) return error.OutOfMemory;
@@ -387,7 +453,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
             // `unreachable`-only body so the call resolves but the real body (which would
             // reference a missing `Type__method`) cannot spill a deep-body cascade.
             if (inst.bound_failed or inst.limit_failed) spec.body = try unreachableBody(arena, inst.decl.name.span);
-            try out.append(arena, .{ .span = inst.decl.name.span, .attrs = inst.attrs, .is_pub = inst.is_pub, .kind = .{ .fn_decl = spec } });
+            try out.append(arena, .{ .span = inst.decl.name.span, .attrs = try cloneAttrs(&spec_ctx, inst.attrs), .is_pub = inst.is_pub, .kind = .{ .fn_decl = spec } });
         }
     }
     if (rewriter.oom) return error.OutOfMemory;
@@ -417,7 +483,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                 spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
                 spec.type_params = &.{};
                 if (inst.limit_failed) spec.fields = &.{};
-                try out.append(arena, .{ .span = inst.decl.name.span, .attrs = &.{}, .is_pub = inst.is_pub, .kind = .{ .struct_decl = spec } });
+                try out.append(arena, .{ .span = inst.decl.name.span, .attrs = try cloneAttrs(&sctx, inst.attrs), .is_pub = inst.is_pub, .kind = .{ .struct_decl = spec } });
             }
             while (ui < union_list.items.len) : (ui += 1) {
                 const inst = union_list.items[ui];
@@ -436,7 +502,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                 spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
                 spec.type_params = &.{};
                 if (inst.limit_failed) spec.cases = &.{};
-                try out.append(arena, .{ .span = inst.decl.name.span, .attrs = &.{}, .is_pub = inst.is_pub, .kind = .{ .union_decl = spec } });
+                try out.append(arena, .{ .span = inst.decl.name.span, .attrs = try cloneAttrs(&uctx, inst.attrs), .is_pub = inst.is_pub, .kind = .{ .union_decl = spec } });
             }
         }
     }
@@ -1251,7 +1317,7 @@ fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, info: GenericStruct
             rw.oom = true;
             return key.name;
         };
-        si.* = .{ .decl = sd, .subst = key.subst, .mangled = key.name, .is_pub = info.is_pub, .depth = depth, .origin = origin, .limit_failed = limit_failed };
+        si.* = .{ .decl = sd, .subst = key.subst, .mangled = key.name, .attrs = info.attrs, .is_pub = info.is_pub, .depth = depth, .origin = origin, .limit_failed = limit_failed };
         rw.struct_instances.put(key.semantic, si) catch {
             rw.oom = true;
         };
@@ -1275,7 +1341,7 @@ fn rewriteGenericUnion(ctx: *const CloneCtx, rw: *Rewriter, info: GenericUnionIn
             rw.oom = true;
             return key.name;
         };
-        ui.* = .{ .decl = ud, .subst = key.subst, .mangled = key.name, .is_pub = info.is_pub, .depth = depth, .origin = origin, .limit_failed = limit_failed };
+        ui.* = .{ .decl = ud, .subst = key.subst, .mangled = key.name, .attrs = info.attrs, .is_pub = info.is_pub, .depth = depth, .origin = origin, .limit_failed = limit_failed };
         rw.union_instances.put(key.semantic, ui) catch {
             rw.oom = true;
         };
@@ -1287,11 +1353,70 @@ fn rewriteGenericUnion(ctx: *const CloneCtx, rw: *Rewriter, info: GenericUnionIn
 }
 
 fn cloneStructDeclCtx(ctx: *const CloneCtx, sd: ast.StructDecl) anyerror!ast.StructDecl {
-    var fields = try ctx.arena.alloc(ast.Field, sd.fields.len);
-    for (sd.fields, 0..) |field, i| {
+    const fields = try cloneFields(ctx, sd.fields);
+    return .{ .name = sd.name, .semantic_identity = sd.semantic_identity orelse sd.name, .abi = sd.abi, .fields = fields, .type_params = sd.type_params, .is_move = sd.is_move, .is_opaque = sd.is_opaque, .is_c_union = sd.is_c_union };
+}
+
+fn cloneFields(ctx: *const CloneCtx, input: []const ast.Field) anyerror![]ast.Field {
+    var fields = try ctx.arena.alloc(ast.Field, input.len);
+    for (input, 0..) |field, i| {
         fields[i] = .{ .name = field.name, .ty = try cloneType(ctx, field.ty), .offset = field.offset };
     }
-    return .{ .name = sd.name, .semantic_identity = sd.semantic_identity orelse sd.name, .abi = sd.abi, .fields = fields, .type_params = sd.type_params, .is_move = sd.is_move, .is_opaque = sd.is_opaque, .is_c_union = sd.is_c_union };
+    return fields;
+}
+
+fn cloneAttrs(ctx: *const CloneCtx, input: []const ast.Attr) anyerror![]ast.Attr {
+    var attrs = try ctx.arena.alloc(ast.Attr, input.len);
+    for (input, 0..) |attr, i| {
+        attrs[i] = .{
+            .span = attr.span,
+            .kind = switch (attr.kind) {
+                .unsafe_contract => |contract| .{ .unsafe_contract = .{
+                    .name = contract.name,
+                    .args = try cloneExprSlice(ctx, contract.args),
+                } },
+                else => attr.kind,
+            },
+        };
+    }
+    return attrs;
+}
+
+fn cloneParams(ctx: *const CloneCtx, input: []const ast.Param) anyerror![]ast.Param {
+    var params = try ctx.arena.alloc(ast.Param, input.len);
+    for (input, 0..) |param, i| {
+        params[i] = .{ .name = param.name, .ty = try cloneType(ctx, param.ty), .is_comptime = param.is_comptime };
+    }
+    return params;
+}
+
+fn cloneTraitDecl(ctx: *const CloneCtx, trait_decl: ast.TraitDecl) anyerror!ast.TraitDecl {
+    var methods = try ctx.arena.alloc(ast.TraitMethodSig, trait_decl.methods.len);
+    for (trait_decl.methods, 0..) |method, i| {
+        methods[i] = .{
+            .name = method.name,
+            .params = try cloneParams(ctx, method.params),
+            .return_type = if (method.return_type) |ret| try cloneType(ctx, ret) else null,
+            .self_mode = method.self_mode,
+            .attrs = try cloneAttrs(ctx, method.attrs),
+        };
+    }
+    return .{ .name = trait_decl.name, .methods = methods };
+}
+
+fn cloneImplTrait(ctx: *const CloneCtx, impl: ast.ImplTrait) anyerror!ast.ImplTrait {
+    var methods = try ctx.arena.alloc(ast.ImplTraitMethod, impl.methods.len);
+    for (impl.methods, 0..) |method, i| {
+        methods[i] = .{
+            .name = method.name,
+            .mangled = method.mangled,
+            .self_mode = method.self_mode,
+            .attrs = try cloneAttrs(ctx, method.attrs),
+            .params = try cloneParams(ctx, method.params),
+            .return_type = if (method.return_type) |ret| try cloneType(ctx, ret) else null,
+        };
+    }
+    return .{ .trait_name = impl.trait_name, .type_name = impl.type_name, .methods = methods };
 }
 
 fn cloneUnionDeclCtx(ctx: *const CloneCtx, ud: ast.UnionDecl) anyerror!ast.UnionDecl {

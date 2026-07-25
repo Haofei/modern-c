@@ -1187,7 +1187,10 @@ pub const Checker = struct {
     }
 
     fn typeEmbedsMoveByValueDepth(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
-        if (depth >= 64) return false;
+        // Exhaustion is a safety boundary, not evidence that the type is copyable.
+        // The parser admits deeper type syntax, so conservatively classify an
+        // unresolvable shape as move-bearing and let the caller reject it.
+        if (depth >= 64) return true;
         switch (ty.kind) {
             .name => |n| {
                 if (self.isMoveTypeName(ty, aliases)) return true;
@@ -1222,7 +1225,9 @@ pub const Checker = struct {
     }
 
     fn typeIsMoveArrayDepth(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
-        if (depth >= 64) return false;
+        // Keep the move-array admission boundary fail closed when semantic
+        // classification exhausts its independent traversal budget.
+        if (depth >= 64) return true;
         switch (ty.kind) {
             .name => |n| {
                 const target = aliases.get(n.text) orelse return false;

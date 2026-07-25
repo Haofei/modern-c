@@ -101,6 +101,41 @@ test "trait orphan ownership keeps double-underscore type names exact" {
     try std.testing.expect(hasDiagnosticCode(&reporter, "E_ORPHAN_IMPL"));
 }
 
+test "move type query depth exhaustion fails closed" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+    try source.appendSlice(std.testing.allocator, "move struct Token { id: u32 }\nstruct Box { token: ");
+    for (0..65) |_| try source.appendSlice(std.testing.allocator, "[1]");
+    try source.appendSlice(std.testing.allocator, "Token }\n");
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "deep_move.mc", source.items);
+    defer reporter.deinit();
+    try checkSource(source.items, &reporter);
+    try std.testing.expect(hasDiagnosticCode(&reporter, "E_MOVE_ARRAY_UNSUPPORTED") or
+        hasDiagnosticCode(&reporter, "E_MOVE_FIELD_IN_NONMOVE"));
+}
+
+test "move alias query depth exhaustion fails closed" {
+    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var aliases = std.StringHashMap(ast.TypeExpr).init(std.testing.allocator);
+    defer aliases.deinit();
+    var previous: []const u8 = "Token";
+    var final_name: []const u8 = previous;
+    for (0..66) |i| {
+        const name = try std.fmt.allocPrint(arena.allocator(), "A{d}", .{i});
+        try aliases.put(name, .{ .span = span, .kind = .{ .name = .{ .text = previous, .span = span } } });
+        previous = name;
+        final_name = name;
+    }
+    const queried = ast.TypeExpr{ .span = span, .kind = .{ .name = .{ .text = final_name, .span = span } } };
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "deep_move_alias.mc", "");
+    defer reporter.deinit();
+    var checker = sema.Checker.init(&reporter);
+    try std.testing.expect(checker.typeEmbedsMoveByValue(queried, &aliases));
+}
+
 test "move CFG skeleton joins branch states through worklist" {
     var cfg = sema_model.MoveCfg.init(std.testing.allocator);
     defer cfg.deinit();

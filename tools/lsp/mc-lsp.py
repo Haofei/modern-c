@@ -33,9 +33,11 @@ import json
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import threading
+import time
 import pathlib
 import urllib.parse
 import urllib.request
@@ -62,6 +64,10 @@ WRITE_LOCK = threading.RLock()
 MAX_MESSAGE_SIZE = int(os.environ.get("MC_LSP_MAX_MESSAGE_SIZE", str(16 * 1024 * 1024)))
 MAX_HEADER_COUNT = 64
 MAX_HEADER_LINE = 8192
+MAX_WORKSPACE_SOURCE_BYTES = int(os.environ.get("MC_LSP_MAX_WORKSPACE_SOURCE_BYTES", str(4 * 1024 * 1024)))
+MAX_WORKSPACE_TOTAL_BYTES = int(os.environ.get("MC_LSP_MAX_WORKSPACE_TOTAL_BYTES", str(64 * 1024 * 1024)))
+MAX_WORKSPACE_SOURCES = int(os.environ.get("MC_LSP_MAX_WORKSPACE_SOURCES", "10000"))
+MAX_WORKSPACE_SCAN_SECONDS = max(float(os.environ.get("MC_LSP_MAX_WORKSPACE_SCAN_SECONDS", "5")), 0.1)
 
 
 def log(*a):
@@ -700,7 +706,15 @@ def document_highlight(uri, text, position):
             if location["uri"] == uri]
 
 
+def is_valid_identifier(name):
+    return (isinstance(name, str)
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is not None
+            and name not in MC_KEYWORDS)
+
+
 def do_rename(uri, text, position, new_name):
+    if not is_valid_identifier(new_name):
+        return None
     locations = _occurrences(get_index(uri, text), text.split("\n"), uri, position, True)
     if not locations:
         return None
@@ -754,25 +768,51 @@ def semantic_tokens(uri, text):
 def workspace_sources(docs, roots):
     sources = dict(docs)
     skipped = {".git", ".zig-cache", "zig-out", "zig-pkg", "mc_packages"}
+    total_bytes = 0
+    deadline = time.monotonic() + MAX_WORKSPACE_SCAN_SECONDS
     for root in roots:
-        if not os.path.isdir(root):
+        root_real = os.path.realpath(root)
+        if not os.path.isdir(root_real):
             continue
-        for directory, dirnames, filenames in os.walk(root):
+        for directory, dirnames, filenames in os.walk(root_real, followlinks=False):
+            if time.monotonic() >= deadline:
+                return sources
             dirnames[:] = [name for name in dirnames if name not in skipped]
             for filename in filenames:
+                if time.monotonic() >= deadline or len(sources) >= MAX_WORKSPACE_SOURCES:
+                    return sources
                 if not filename.endswith(".mc"):
                     continue
                 path = os.path.join(directory, filename)
-                uri = path_to_uri(path)
+                try:
+                    lst = os.lstat(path)
+                    if not stat.S_ISREG(lst.st_mode) or stat.S_ISLNK(lst.st_mode):
+                        continue
+                    real_path = os.path.realpath(path)
+                    if os.path.commonpath((root_real, real_path)) != root_real:
+                        continue
+                    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+                    fd = os.open(path, flags)
+                    try:
+                        opened = os.fstat(fd)
+                        if not stat.S_ISREG(opened.st_mode) or opened.st_size > MAX_WORKSPACE_SOURCE_BYTES:
+                            continue
+                        if total_bytes + opened.st_size > MAX_WORKSPACE_TOTAL_BYTES:
+                            return sources
+                        with os.fdopen(fd, "rb", closefd=False) as source:
+                            raw = source.read(MAX_WORKSPACE_SOURCE_BYTES + 1)
+                        if len(raw) > MAX_WORKSPACE_SOURCE_BYTES:
+                            continue
+                        text = raw.decode("utf-8")
+                    finally:
+                        os.close(fd)
+                except (OSError, UnicodeDecodeError, ValueError):
+                    continue
+                uri = path_to_uri(real_path)
                 if uri in sources:
                     continue
-                try:
-                    with open(path, encoding="utf-8") as source:
-                        sources[uri] = source.read()
-                except OSError:
-                    continue
-                if len(sources) >= 10_000:
-                    return sources
+                sources[uri] = text
+                total_bytes += len(raw)
     return sources
 
 
@@ -1447,6 +1487,87 @@ def publish(out, uri, text):
 
 
 # ---- server loop ---------------------------------------------------------------------------
+def invalid_request_params(msg):
+    if not isinstance(msg, dict):
+        return "JSON-RPC message must be an object"
+    method = msg.get("method")
+    params = msg.get("params", {})
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        return "params must be an object"
+
+    text_document_methods = {
+        "textDocument/didOpen", "textDocument/didChange", "textDocument/didSave",
+        "textDocument/didClose", "textDocument/formatting", "textDocument/documentSymbol",
+        "textDocument/hover", "textDocument/definition", "textDocument/references",
+        "textDocument/documentHighlight", "textDocument/rename",
+        "textDocument/semanticTokens/full", "textDocument/completion",
+        "textDocument/signatureHelp", "textDocument/diagnostic",
+        "textDocument/prepareCallHierarchy",
+    }
+    if method in text_document_methods:
+        document = params.get("textDocument")
+        if not isinstance(document, dict) or not isinstance(document.get("uri"), str):
+            return "params.textDocument.uri must be a string"
+
+    position_methods = {
+        "textDocument/hover", "textDocument/definition", "textDocument/references",
+        "textDocument/documentHighlight", "textDocument/rename",
+        "textDocument/completion", "textDocument/signatureHelp",
+        "textDocument/prepareCallHierarchy",
+    }
+    if method in position_methods:
+        position = params.get("position")
+        if (not isinstance(position, dict)
+                or not isinstance(position.get("line"), int)
+                or not isinstance(position.get("character"), int)
+                or position["line"] < 0 or position["character"] < 0):
+            return "params.position must contain nonnegative integer line and character"
+
+    if method == "textDocument/didOpen":
+        if not isinstance(params["textDocument"].get("text"), str):
+            return "params.textDocument.text must be a string"
+    elif method == "textDocument/didChange":
+        changes = params.get("contentChanges")
+        if (not isinstance(changes, list)
+                or any(not isinstance(change, dict) or not isinstance(change.get("text"), str)
+                       for change in changes)):
+            return "params.contentChanges must be an array of full-text changes"
+    elif method == "textDocument/rename":
+        if not is_valid_identifier(params.get("newName")):
+            return "params.newName must be a non-keyword MC identifier"
+    elif method == "textDocument/references":
+        context = params.get("context", {})
+        if not isinstance(context, dict):
+            return "params.context must be an object"
+    elif method == "workspace/symbol":
+        if not isinstance(params.get("query", ""), str):
+            return "params.query must be a string"
+    elif method == "initialize":
+        folders = params.get("workspaceFolders") or []
+        if (not isinstance(folders, list)
+                or any(not isinstance(folder, dict)
+                       or not isinstance(folder.get("uri"), str)
+                       for folder in folders)):
+            return "params.workspaceFolders must contain URI objects"
+        for key in ("rootUri", "rootPath"):
+            if params.get(key) is not None and not isinstance(params[key], str):
+                return f"params.{key} must be a string or null"
+    elif method in {"callHierarchy/incomingCalls", "callHierarchy/outgoingCalls"}:
+        item = params.get("item")
+        if not isinstance(item, dict) or not isinstance(item.get("uri"), str):
+            return "params.item.uri must be a string"
+        selection = item.get("selectionRange")
+        start = selection.get("start") if isinstance(selection, dict) else None
+        if (not isinstance(start, dict)
+                or not isinstance(start.get("line"), int)
+                or not isinstance(start.get("character"), int)
+                or start["line"] < 0 or start["character"] < 0):
+            return "params.item.selectionRange.start must be a valid position"
+    return None
+
+
 def main():
     global MCC
     args = sys.argv[1:]
@@ -1552,8 +1673,20 @@ def main():
             break
         if msg is None:
             break
+        invalid_params = invalid_request_params(msg)
+        if not isinstance(msg, dict):
+            log("invalid JSON-RPC message:", invalid_params)
+            continue
         method = msg.get("method")
         mid = msg.get("id")
+        if invalid_params is not None:
+            log("invalid request parameters for", method, ":", invalid_params)
+            if mid is not None:
+                write_message(stdout, {
+                    "jsonrpc": "2.0", "id": mid,
+                    "error": {"code": -32602, "message": invalid_params},
+                })
+            continue
 
         if method == "initialize":
             params = msg.get("params", {})
