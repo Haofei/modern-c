@@ -27,5 +27,5 @@ for path in build.zig build.zig.zon src tests selfhost third_party editors .gith
 done
 [ ! -e "$OUT/.git" ] || { echo "FAIL: source-package-test - package unexpectedly contains .git"; exit 1; }
 
-( cd "$OUT" && zig build test && zig build release-metadata-test )
+( cd "$OUT" && zig build test release-metadata-test )
 echo "PASS: source-package-test - fetched source package is Git-independent and passes unit/release metadata gates"

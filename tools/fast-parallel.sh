@@ -7,7 +7,9 @@
 # contention. It is for local wall-time reduction; `zig build fast` remains the
 # deterministic truth for the tier.
 #
-# Usage: tools/fast-parallel.sh [jobs]
+# Usage:
+#   tools/fast-parallel.sh [jobs]          # 40-seed development confidence
+#   tools/fast-parallel.sh --full [jobs]   # complete 300-seed fast-tier coverage
 set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,14 +18,29 @@ cd "$ROOT"
 # shellcheck source=tools/lib/test-env.sh
 . "$ROOT/tools/lib/test-env.sh"
 
-OUTER_JOBS="${1:-$(mc_host_jobs)}"
+FULL=0
+if [ "${1:-}" = "--full" ]; then
+    FULL=1
+    shift
+fi
+HOST_JOBS="$(mc_host_jobs)"
+OUTER_JOBS="${1:-$HOST_JOBS}"
+case "$OUTER_JOBS" in
+    ''|*[!0-9]*|0) echo "usage: tools/fast-parallel.sh [--full] [positive-jobs]" >&2; exit 2 ;;
+esac
 # Aggregate `fast` launches many fuzz/diff gates at once. Leave single-gate
 # defaults alone, but cap nested worker pools for this aggregate runner unless
 # the caller explicitly chose a value.
-export JOBS="${JOBS:-${MC_FAST_INNER_JOBS:-1}}"
+INNER_DEFAULT="$(mc_inner_jobs "$OUTER_JOBS" "$HOST_JOBS")"
+export JOBS="${JOBS:-${MC_FAST_INNER_JOBS:-$INNER_DEFAULT}}"
 # Keep the local parallel confidence pass bounded. Canonical `zig build fast`
 # and CI still use each gate's own default count unless COUNT is set there too.
-export COUNT="${COUNT:-${MC_FAST_FUZZ_COUNT:-40}}"
+# --full preserves the canonical 300-seed default while still parallelizing gates.
+if [ "$FULL" -eq 1 ]; then
+    export COUNT="${COUNT:-${MC_FAST_FULL_FUZZ_COUNT:-300}}"
+else
+    export COUNT="${COUNT:-${MC_FAST_FUZZ_COUNT:-40}}"
+fi
 
 OUT=".wamr-cache/fastp-logs"
 rm -rf "$OUT"
@@ -55,8 +72,8 @@ if [ -s "$TIMES" ]; then
         ORDERED+=("$gate")
     done < <(
         for g in "${GATES[@]}"; do
-            ms=$(awk -F'\t' -v g="$g" '$1==g{print $2; exit}' "$TIMES")
-            printf '%s\t%s\n' "${ms:-999999}" "$g"
+            ms=$(awk -F'\t' -v g="$g" '$1==g{value=$2} END{print value}' "$TIMES")
+            printf '%s\t%s\n' "${ms:-0}" "$g"
         done | sort -t$'\t' -k1 -nr | cut -f2)
     GATES=("${ORDERED[@]}")
 fi

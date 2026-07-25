@@ -8,14 +8,24 @@
 # pass/fail at a fraction of the wall time. Use it for fast local milestone runs; `zig build m0`
 # remains the canonical (deterministic, serial) gate.
 #
-# Usage: tools/m0-parallel.sh [jobs]      (jobs default: nproc)
+# Usage: tools/m0-parallel.sh [jobs]      (jobs default: host CPU count)
 set -euo pipefail
 cd "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # shellcheck source=tools/lib/test-env.sh
 . "tools/lib/test-env.sh"
 
-J="${1:-$(mc_host_jobs)}"
+HOST_JOBS="$(mc_host_jobs)"
+J="${1:-$HOST_JOBS}"
+case "$J" in
+    ''|*[!0-9]*|0) echo "usage: tools/m0-parallel.sh [positive-jobs]" >&2; exit 2 ;;
+esac
+
+# Gate processes are the outer parallelism. Bound nested fuzz/compiler worker
+# pools to their fair share of the same CPU budget instead of allowing every
+# gate to independently consume all host CPUs.
+INNER_DEFAULT="$(mc_inner_jobs "$J" "$HOST_JOBS")"
+export JOBS="${JOBS:-${MC_M0_INNER_JOBS:-$INNER_DEFAULT}}"
 OUT=".wamr-cache/m0p-logs"; rm -rf "$OUT"; mkdir -p "$OUT"
 
 # Build the compiler ONCE up front so the parallel gate processes don't race to build/install it.
@@ -41,16 +51,26 @@ if [ -s "$TIMES" ]; then
         ORDERED+=("$gate")
     done < <(
         for g in "${GATES[@]}"; do
-            ms=$(awk -F'\t' -v g="$g" '$1==g{print $2; exit}' "$TIMES"); printf '%s\t%s\n' "${ms:-999999}" "$g"
+            ms=$(awk -F'\t' -v g="$g" '$1==g{value=$2} END{print value}' "$TIMES")
+            printf '%s\t%s\n' "${ms:-0}" "$g"
         done | sort -t$'\t' -k1 -nr | cut -f2)
     GATES=("${ORDERED[@]}")
 fi
-echo "[m0-parallel] ${#GATES[@]} gates, -P $J $( [ -s "$TIMES" ] && echo '(LPT-ordered)' )"
+echo "[m0-parallel] ${#GATES[@]} gates, outer -P $J, inner JOBS=$JOBS, COUNT=${COUNT:-300} $( [ -s "$TIMES" ] && echo '(LPT-ordered)' )"
 
 S=$(date +%s)
 printf '%s\n' "${GATES[@]}" | xargs -P "$J" -I{} bash -c '
     g="$1"
-    if zig build "$g" >".wamr-cache/m0p-logs/$g.log" 2>&1; then echo "PASS $g"; else echo "FAIL $g"; fi
+    log=".wamr-cache/m0p-logs/$g.log"
+    if zig build "$g" >"$log" 2>&1; then
+        if [ "${MC_REQUIRE_TOOLS:-0}" = 1 ] && grep -q "^SKIP:" "$log"; then
+            echo "FAIL $g"
+        else
+            echo "PASS $g"
+        fi
+    else
+        echo "FAIL $g"
+    fi
 ' _ {} | tee "$OUT/summary.txt"
 E=$(date +%s)
 
@@ -70,10 +90,12 @@ real_fail=0
 if [ "${#FAILED[@]}" -gt 0 ]; then
     echo "[m0-parallel] re-verifying ${#FAILED[@]} failed gate(s) serially (contention filter) ..."
     for g in "${FAILED[@]}"; do
-        if zig build "$g" >"$OUT/$g.retry.log" 2>&1; then
+        retry_log="$OUT/$g.retry.log"
+        if zig build "$g" >"$retry_log" 2>&1 &&
+            { [ "${MC_REQUIRE_TOOLS:-0}" != 1 ] || ! grep -q '^SKIP:' "$retry_log"; }; then
             echo "  recovered (contention): $g"
         else
-            echo "  REAL FAILURE: $g  (see $OUT/$g.retry.log)"
+            echo "  REAL FAILURE: $g  (see $retry_log)"
             real_fail=$((real_fail + 1))
         fi
     done

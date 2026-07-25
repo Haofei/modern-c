@@ -411,6 +411,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("kernel-contract-inventory-test"));
     m0_step.dependOn(ctx.cmd("qmp-ordering-test"));
     m0_step.dependOn(ctx.cmd("numeric-comptime-matrix-test"));
+    m0_step.dependOn(ctx.cmd("parallel-runner-test"));
     // std-api-docs-test keeps the generated stdlib API index in sync with std/**/*.mc exports.
     m0_step.dependOn(ctx.cmd("std-api-docs-test"));
     // vendoring-test keeps third_party provenance and CVE/advisory process docs present.
@@ -923,8 +924,9 @@ pub fn register(ctx: *h.Ctx) void {
     // finite-float bit equality, and corpus replay). It deliberately omits the
     // QEMU boot tests and the env-fragile
     // gates (LLVM-IR sweeps needing `llvm-as`, the ASan/UBSan sanitizer passes, and
-    // the riscv-assembler paths) — run `m0` for those. Pair it with `-j`
-    // oversubscription (e.g. `zig build fast -j28`).
+    // the riscv-assembler paths) — run `m0` for those. For process-level
+    // parallelism without nested-worker oversubscription, use
+    // `tools/fast-parallel.sh --full`.
     const fast_step = b.step("fast", "Inner-loop gate: host-only unit + spec-coverage tests, emit-C sweep, C/LLVM differential, and the fuzz family — no QEMU");
     fast_step.dependOn(ctx.cmd("test"));
     fast_step.dependOn(ctx.cmd("test-lint"));
@@ -942,6 +944,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("kernel-contract-inventory-test"));
     fast_step.dependOn(ctx.cmd("qmp-ordering-test"));
     fast_step.dependOn(ctx.cmd("numeric-comptime-matrix-test"));
+    fast_step.dependOn(ctx.cmd("parallel-runner-test"));
     fast_step.dependOn(ctx.cmd("std-api-docs-test"));
     fast_step.dependOn(ctx.cmd("vendoring-test"));
     fast_step.dependOn(ctx.cmd("third-party-licenses-test"));
@@ -1000,6 +1003,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("kernel-contract-inventory-test")); // bounded region/effect/FFI profile stays explicit
     c0_step.dependOn(ctx.cmd("qmp-ordering-test")); // lifecycle qualification transport preserves asynchronous events
     c0_step.dependOn(ctx.cmd("numeric-comptime-matrix-test")); // every fixed-width arithmetic domain keeps its comptime semantics
+    c0_step.dependOn(ctx.cmd("parallel-runner-test")); // full-tier acceleration retains the exact gate inventory and CPU budget
     c0_step.dependOn(ctx.cmd("std-api-docs-test")); // generated stdlib API index stays current
     c0_step.dependOn(ctx.cmd("vendoring-test")); // third_party provenance and CVE/advisory process stay documented
     c0_step.dependOn(ctx.cmd("third-party-licenses-test")); // aggregated third-party license manifest stays complete

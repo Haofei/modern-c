@@ -28,6 +28,20 @@ mc_host_jobs() {
     echo 4
 }
 
+# Divide a fixed host CPU budget between an outer gate scheduler and the worker
+# pool inside each gate. This prevents N concurrently scheduled fuzz gates from
+# each spawning N compiler workers (N² runnable processes under load).
+mc_inner_jobs() {
+    local outer_jobs="$1"
+    local host_jobs="${2:-$(mc_host_jobs)}"
+    case "$outer_jobs:$host_jobs" in
+        *[!0-9:]*|0:*|*:0) return 1 ;;
+    esac
+    local inner_jobs=$((host_jobs / outer_jobs))
+    [ "$inner_jobs" -ge 1 ] || inner_jobs=1
+    printf '%s\n' "$inner_jobs"
+}
+
 mc_link_flags() {
     if [ "$(uname -s)" = "Linux" ]; then
         printf '%s' "-no-pie"

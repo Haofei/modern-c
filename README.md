@@ -191,6 +191,20 @@ MC_REQUIRE_TOOLS=1 MC_LLVM_MAJOR=18 zig build m0
 generation, optimizer compatibility, differential execution, fuzz oracles,
 package and release tooling, host-driver tests, and the QEMU kernel matrix.
 
+The canonical Zig aggregate executes side-effecting `Run` gates serially. For
+the same complete gate inventory with process-level parallelism, bounded nested
+worker pools, longest-first scheduling, and serial rechecks of contention
+failures, use:
+
+```sh
+tools/fast-parallel.sh --full       # complete host-only fast inventory, 300 fuzz seeds
+MC_REQUIRE_TOOLS=1 tools/m0-parallel.sh  # complete m0 inventory; skips are failures
+```
+
+Both runners derive their gate lists directly from `build/tiers.zig`; they do
+not maintain a smaller duplicate list. The non-`--full` fast runner deliberately
+uses 40 fuzz seeds for edit-loop feedback.
+
 For an edit loop, the repository can select focused gates from changed files:
 
 ```sh
