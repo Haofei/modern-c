@@ -201,6 +201,24 @@ pub fn appendCFloatValue(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
     if (as_f32) try out.append(allocator, 'f');
 }
 
+pub fn appendCComptimeFloat(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    value: eval.ComptimeFloat,
+    as_f32: bool,
+) !void {
+    if (as_f32 or value.width == 32) {
+        const bits: u32 = @bitCast(value.asF32());
+        try out.print(allocator, "__builtin_bit_cast(float, ((uint32_t)0x{X:0>8}U))", .{bits});
+        return;
+    }
+    try out.print(
+        allocator,
+        "__builtin_bit_cast(double, ((uint64_t)0x{X:0>16}ULL))",
+        .{value.bits},
+    );
+}
+
 pub fn negatedLiteralIsI64Min(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .int_literal => |literal| literalMagnitudeIsI64Min(literal),
@@ -209,11 +227,11 @@ pub fn negatedLiteralIsI64Min(expr: ast.Expr) bool {
     };
 }
 
-pub fn negatedLiteralIsI128Min(expr: ast.Expr) bool {
+pub fn negatedI128MinLiteral(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
-        .int_literal => |literal| (numeric.parseIntegerLiteral(literal) orelse return false) == (@as(u128, 1) << 127),
-        .grouped => |inner| negatedLiteralIsI128Min(inner.*),
-        else => false,
+        .int_literal => |literal| if ((numeric.parseIntegerLiteral(literal) orelse return null) == (@as(u128, 1) << 127)) literal else null,
+        .grouped => |inner| negatedI128MinLiteral(inner.*),
+        else => null,
     };
 }
 

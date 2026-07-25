@@ -339,6 +339,7 @@ pub const Checker = struct {
     // Declared integer widths of named const globals, used by width-sensitive
     // comptime folds such as `~CONST_U32`.
     const_global_widths: ?*const std.StringHashMap(u16) = null,
+    const_global_domains: ?*const std.StringHashMap(eval.DomainWidth) = null,
     // Functions that declare at least one `comptime` parameter (section 22),
     // keyed by name, so call sites can re-check their comptime assertions with
     // the parameters bound to the call's constant arguments.
@@ -524,15 +525,22 @@ pub const Checker = struct {
 
         var const_globals = std.StringHashMap(eval.ComptimeValue).init(self.reporter.allocator);
         defer eval.deinitConstGlobals(self.reporter.allocator, &const_globals);
+        var const_global_domains = std.StringHashMap(eval.DomainWidth).init(self.reporter.allocator);
+        defer const_global_domains.deinit();
         eval.collectConstGlobalsWithOptions(self.reporter.allocator, module, &const_fns, &const_globals, .{
             .reflect = sema_reflect.comptimeReflectThunk,
             .reflect_ctx = &reflect_env,
+            .domains = &const_global_domains,
         }) catch {
             self.oom = true;
         };
         self.const_globals = &const_globals;
+        self.const_global_domains = &const_global_domains;
         reflect_env.const_globals = &const_globals;
-        defer self.const_globals = null;
+        defer {
+            self.const_globals = null;
+            self.const_global_domains = null;
+        }
 
         var const_global_widths = std.StringHashMap(u16).init(self.reporter.allocator);
         defer const_global_widths.deinit();
@@ -1355,6 +1363,7 @@ pub const Checker = struct {
     fn seedComptimeScope(self: *Checker, scope: *eval.ComptimeScope) void {
         scope.funcs = self.const_fns;
         scope.globals = self.const_globals;
+        scope.global_domains = self.const_global_domains;
         if (self.reflect_env) |env| {
             scope.reflect = sema_reflect.comptimeReflectThunk;
             scope.reflect_ctx = @constCast(env);

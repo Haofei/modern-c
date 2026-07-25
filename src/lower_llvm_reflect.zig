@@ -44,6 +44,7 @@ pub const ReflectEnv = struct {
     const_fns: *const std.StringHashMap(ast.FnDecl),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
     const_global_widths: *const std.StringHashMap(u16),
+    const_global_domains: *const std.StringHashMap(eval.DomainWidth),
 };
 
 pub fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
@@ -98,6 +99,7 @@ pub fn arrayLenValue(env: *const ReflectEnv, expr: ast.Expr) ?u64 {
 pub fn seedConstFoldScope(env: *const ReflectEnv, scope: *eval.ComptimeScope) bool {
     scope.funcs = env.const_fns;
     scope.globals = env.const_globals;
+    scope.global_domains = env.const_global_domains;
     scope.reflect = comptimeReflectThunk;
     scope.reflect_ctx = @constCast(env);
     var widths = env.const_global_widths.iterator();

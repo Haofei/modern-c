@@ -60,6 +60,8 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTestOpts(ctx, "vendoring-test", "Check vendored dependency provenance and CVE process docs", &.{ "python3", "tools/toolchain/vendoring-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "third-party-licenses-test", "Check the aggregated third-party license manifest", &.{ "python3", "tools/toolchain/third-party-licenses-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "readiness-ledger-test", "Check the production-readiness ledger count and umbrella contract", &.{ "python3", "tools/toolchain/readiness-ledger-test.py" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "qmp-ordering-test", "Verify QMP command responses and asynchronous events are never discarded under legal reorderings", &.{ "python3", "tools/virtio-rng-experiment/test_qmp_hotplug.py" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "numeric-comptime-matrix-test", "Check width/domain arithmetic boundaries across every fixed integer width", &.{ "python3", "tools/toolchain/numeric-comptime-matrix.py", "zig-out/bin/mcc" }, .{ .install = true });
 
     _ = h.addScriptTest(ctx, "mcc-cli-test", "Validate mcc help/version/usage exit behavior and stdout/stderr channels", &.{ "bash", "tools/toolchain/mcc-cli-test.sh", "zig-out/bin/mcc" });
 

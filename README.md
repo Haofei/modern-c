@@ -294,13 +294,13 @@ toolchains.
 
 ## Current Boundaries
 
-MC is not generally production-ready. The three open compiler architecture
-workstreams are:
+MC is not generally production-ready. Three compiler architecture workstreams
+are closed only for the currently admitted supported subset and reopen when a
+new semantic/projection/pointer-flow family is admitted:
 
-1. complete pointer-provenance handling for race-tolerant lowering;
-2. make typed semantic facts and typed MIR the sole authority consumed by both
-   backends;
-3. complete CFG/place-based move ownership analysis.
+1. pointer-provenance handling for race-tolerant lowering;
+2. typed semantic facts and typed MIR as backend semantic authority;
+3. CFG/place-based move ownership analysis.
 
 Other deliberate or current limitations include:
 

@@ -519,9 +519,9 @@ def main() -> None:
         "timeout-minutes: 60",
         "actions/cache@",
         "ZIG_GLOBAL_CACHE_DIR",
-        "Run pull-request qualification gate",
-        "if: github.event_name == 'pull_request'",
-        "if: github.event_name == 'push'",
+        "Run full milestone gate without skips",
+        "MC_REQUIRE_TOOLS=1 zig build m0",
+        "python3 tools/ci/pass-gates.py assert --tier ci-m0-pass --log m0.log",
     ):
         require_contains(".github/workflows/ci.yml", needle)
     require_contains(".github/workflows/ci.yml", f"runs-on: {EXPECTED_UBUNTU_RUNNER}")

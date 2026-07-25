@@ -100,7 +100,7 @@ const emitStaticCInitializer = lower_c_const.emitStaticCInitializer;
 const staticCInitializer = lower_c_const.staticCInitializer;
 const appendCIntLiteral = lower_c_const.appendCIntLiteral;
 const appendCFloatLiteral = lower_c_const.appendCFloatLiteral;
-const appendCFloatValue = lower_c_const.appendCFloatValue;
+const appendCComptimeFloat = lower_c_const.appendCComptimeFloat;
 const appendCSignedIntValue = lower_c_const.appendCSignedIntValue;
 const constIntValue = lower_c_const.constIntValue;
 const constBinaryProvenNoOverflow = lower_c_const.constBinaryProvenNoOverflow;
@@ -241,6 +241,7 @@ const CEmitter = struct {
     const_fns: std.StringHashMap(ast.FnDecl),
     const_globals: std.StringHashMap(eval.ComptimeValue),
     const_global_widths: std.StringHashMap(u16),
+    const_global_domains: std.StringHashMap(eval.DomainWidth),
     structs: std.StringHashMap(ast.StructDecl),
     mmio_structs: std.StringHashMap(MmioStruct),
     packed_bits: std.StringHashMap(PackedBitsInfo),
@@ -332,6 +333,7 @@ const CEmitter = struct {
             .const_fns = std.StringHashMap(ast.FnDecl).init(allocator),
             .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
             .const_global_widths = std.StringHashMap(u16).init(allocator),
+            .const_global_domains = std.StringHashMap(eval.DomainWidth).init(allocator),
             .structs = std.StringHashMap(ast.StructDecl).init(allocator),
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
             .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
@@ -405,6 +407,7 @@ const CEmitter = struct {
 
     fn deinitDeclCollections(self: *CEmitter) void {
         self.const_global_widths.deinit();
+        self.const_global_domains.deinit();
         self.const_fns.deinit();
         eval.deinitConstGlobals(self.allocator, &self.const_globals);
         self.static_initializers.deinit();
@@ -480,6 +483,7 @@ const CEmitter = struct {
         try eval.collectConstGlobalsWithOptions(self.allocator, module, &self.const_fns, &self.const_globals, .{
             .reflect = lower_c_reflect.comptimeReflectThunk,
             .reflect_ctx = &reflect_env,
+            .domains = &self.const_global_domains,
         });
         try self.collectConstGlobalWidths(module);
     }
@@ -673,7 +677,7 @@ const CEmitter = struct {
             .boolean => |b| if (b) "1" else "0",
             .float => |f| blk: {
                 var text: std.ArrayList(u8) = .empty;
-                try appendCFloatValue(self.scratch.allocator(), &text, f, false);
+                try appendCComptimeFloat(self.scratch.allocator(), &text, f, f.width == 32);
                 break :blk try text.toOwnedSlice(self.scratch.allocator());
             },
             // Aggregate / byte-string const globals are not lowered to a C scalar here.
@@ -716,6 +720,7 @@ const CEmitter = struct {
     fn seedConstFoldScope(self: *CEmitter, scope: *eval.ComptimeScope, reflect_env: *ReflectEnv) bool {
         scope.funcs = &self.const_fns;
         scope.globals = &self.const_globals;
+        scope.global_domains = &self.const_global_domains;
         scope.reflect = lower_c_reflect.comptimeReflectThunk;
         scope.reflect_ctx = reflect_env;
         var widths = self.const_global_widths.iterator();
@@ -774,7 +779,7 @@ const CEmitter = struct {
             },
             .array => |items| try self.emitComptimeArrayInitializer(items, resolved),
             .@"struct" => |fields| try self.emitComptimeStructInitializer(fields, resolved),
-            .float => |f| try appendCFloatValue(self.allocator, self.out, f, switch (resolved.kind) {
+            .float => |f| try appendCComptimeFloat(self.allocator, self.out, f, switch (resolved.kind) {
                 .name => |name| std.mem.eql(u8, name.text, "f32"),
                 else => false,
             }),

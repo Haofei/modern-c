@@ -10,6 +10,18 @@ const mir = @import("mir.zig");
 const parser = @import("parser.zig");
 const test_support = @import("test_support.zig");
 
+test "lower-c grouped i128 minimum never reads an inactive AST union arm" {
+    const source =
+        \\fn grouped_i128_minimum() -> i128 {
+        \\    return -(((170141183460469231731687303715884105728)));
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("grouped_i128_minimum.mc", source, &output);
+    try expectContains(output.items, "grouped_i128_minimum");
+}
+
 test "lower-c value optional pointer derefs lower race-tolerantly" {
     const source =
         \\struct Point { x: u32, y: u32 }

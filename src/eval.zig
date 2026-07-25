@@ -262,6 +262,33 @@ pub const ComptimeStructField = struct {
     value: ComptimeValue,
 };
 
+pub const ComptimeFloat = struct {
+    bits: u64,
+    width: u8,
+
+    pub fn fromF32(value: f32) ComptimeFloat {
+        return .{ .bits = @as(u32, @bitCast(value)), .width = 32 };
+    }
+
+    pub fn fromF64(value: f64) ComptimeFloat {
+        return .{ .bits = @bitCast(value), .width = 64 };
+    }
+
+    pub fn asF32(self: ComptimeFloat) f32 {
+        return if (self.width == 32)
+            @bitCast(@as(u32, @truncate(self.bits)))
+        else
+            @floatCast(@as(f64, @bitCast(self.bits)));
+    }
+
+    pub fn asF64(self: ComptimeFloat) f64 {
+        return if (self.width == 32)
+            @floatCast(@as(f32, @bitCast(@as(u32, @truncate(self.bits)))))
+        else
+            @bitCast(self.bits);
+    }
+};
+
 pub const ComptimeValue = union(enum) {
     void,
     int: i128,
@@ -270,9 +297,9 @@ pub const ComptimeValue = union(enum) {
     // scalar value; the declared type/domain continues to live in semantic
     // facts and the comptime scope's width/domain maps.
     uint: u128,
-    // A comptime floating-point value (section 22). Folded in f64 regardless of the
-    // declared f32/f64 width; a narrowing to f32 is applied by an explicit `as f32`.
-    float: f64,
+    // Width and raw bits are part of the value. This forces f32 rounding after
+    // every f32 operation and preserves signed zero and NaN sign/payload.
+    float: ComptimeFloat,
     boolean: bool,
     tag: []const u8,
     // A comptime byte string — the decoded bytes of a string literal. Backed by the
@@ -363,7 +390,7 @@ pub fn deinitConstGlobals(allocator: std.mem.Allocator, globals: *std.StringHash
 
 pub const ComptimeFold = union(enum) {
     value: ComptimeValue,
-    trap, // a provable trap during const eval (divide-by-zero, invalid shift)
+    trap, // a provable trap during const eval (integer divide-by-zero, invalid shift)
     unknown, // not a compile-time constant; sema must not diagnose it
 };
 
@@ -417,6 +444,9 @@ pub const ComptimeScope = struct {
     // Named compile-time constants (`const NAME: T = …` globals), resolved when
     // an identifier is not a local binding.
     globals: ?*const std.StringHashMap(ComptimeValue) = null,
+    // Complete arithmetic-domain metadata for named globals. Values alone cannot
+    // distinguish checked<T>, wrap<T>, and sat<T>.
+    global_domains: ?*const std.StringHashMap(DomainWidth) = null,
     // Optional reflection resolver (section 22): folds `sizeof(T)`/`alignof(T)`/
     // `field_offset(T, .f)` calls to an integer using the front end's layout
     // model. Returns null for non-reflection calls or types it cannot lay out.
@@ -517,7 +547,12 @@ pub const DomainWidth = struct { domain: ComptimeDomain, bits: u16, signed: bool
 const ComptimeIntType = struct { bits: u16, signed: bool };
 
 fn comptimeIntType(ty: ast.TypeExpr) ?ComptimeIntType {
-    const name = switch (ty.kind) {
+    const scalar_ty = switch (ty.kind) {
+        .generic => |g| if ((std.mem.eql(u8, g.base.text, "wrap") or std.mem.eql(u8, g.base.text, "sat")) and g.args.len == 1) g.args[0] else return null,
+        .qualified => |q| q.child.*,
+        else => ty,
+    };
+    const name = switch (scalar_ty.kind) {
         .name => |n| n.text,
         else => return null,
     };
@@ -604,20 +639,33 @@ pub fn parseCharLiteral(literal: []const u8) ?u128 {
 // for non-integer values or non-integer (width-unknown) targets, so those casts
 // simply stay unfolded rather than producing a wrong constant.
 fn comptimeCastValue(value: ComptimeValue, ty: ast.TypeExpr) ?ComptimeValue {
-    const tname = switch (ty.kind) {
+    const scalar_ty = switch (ty.kind) {
+        .generic => |g| if ((std.mem.eql(u8, g.base.text, "wrap") or std.mem.eql(u8, g.base.text, "sat")) and g.args.len == 1) g.args[0] else return null,
+        .qualified => |q| q.child.*,
+        else => ty,
+    };
+    const tname = switch (scalar_ty.kind) {
         .name => |n| n.text,
         else => return null,
     };
     // Float targets: int→float widening, float→f32 narrowing, float→f64 identity.
     if (std.mem.eql(u8, tname, "f64") or std.mem.eql(u8, tname, "f32")) {
+        if (std.mem.eql(u8, tname, "f32")) {
+            const f: f32 = switch (value) {
+                .int => |n| @floatFromInt(n),
+                .uint => |n| @floatFromInt(n),
+                .float => |x| x.asF32(),
+                else => return null,
+            };
+            return .{ .float = ComptimeFloat.fromF32(f) };
+        }
         const f: f64 = switch (value) {
             .int => |n| @floatFromInt(n),
             .uint => |n| @floatFromInt(n),
-            .float => |x| x,
+            .float => |x| x.asF64(),
             else => return null,
         };
-        if (std.mem.eql(u8, tname, "f32")) return .{ .float = @floatCast(@as(f32, @floatCast(f))) };
-        return .{ .float = f };
+        return .{ .float = ComptimeFloat.fromF64(f) };
     }
     // Integer target: a float source truncates toward zero (C `(int)f` semantics).
     const int_info = comptimeIntType(ty) orelse return null;
@@ -625,7 +673,7 @@ fn comptimeCastValue(value: ComptimeValue, ty: ast.TypeExpr) ?ComptimeValue {
         .int => |n| @bitCast(n),
         .uint => |n| n,
         .float => |x| blk: {
-            const t = @trunc(x);
+            const t = @trunc(x.asF64());
             if (!std.math.isFinite(t) or t >= 1.7e38 or t <= -1.7e38) return null;
             break :blk @bitCast(@as(i128, @intFromFloat(t)));
         },
@@ -655,7 +703,7 @@ fn comptimeExprWidth(scope: *const ComptimeScope, expr: ast.Expr) ?u16 {
 // overflow folding.
 fn comptimeExprDomainWidth(scope: *const ComptimeScope, expr: ast.Expr) ?DomainWidth {
     return switch (expr.kind) {
-        .ident => |id| scope.domains.get(id.text),
+        .ident => |id| scope.domains.get(id.text) orelse if (scope.global_domains) |domains| domains.get(id.text) else null,
         .grouped => |inner| comptimeExprDomainWidth(scope, inner.*),
         .unary => |node| comptimeExprDomainWidth(scope, node.expr.*),
         .binary => |node| comptimeExprDomainWidth(scope, node.left.*) orelse comptimeExprDomainWidth(scope, node.right.*),
@@ -677,6 +725,7 @@ fn domainArith(dw: ?DomainWidth, raw: i128) ComptimeFold {
 pub const CollectConstGlobalsOptions = struct {
     reflect: ?ReflectFn = null,
     reflect_ctx: ?*anyopaque = null,
+    domains: ?*std.StringHashMap(DomainWidth) = null,
 };
 
 pub fn collectConstGlobalsWithOptions(
@@ -704,11 +753,17 @@ pub fn collectConstGlobalsWithOptions(
         if (!global.is_const) continue;
         const init_expr = global.init orelse continue;
         switch (foldComptimeExpr(&scope, init_expr)) {
-            .value => |v| {
+            .value => |folded_value| {
+                const v = if (global.ty) |ty| comptimeCastValue(folded_value, ty) orelse folded_value else folded_value;
                 const cloned = try cloneComptimeValue(allocator, v);
                 errdefer freeComptimeValue(allocator, cloned);
                 try out.put(global.name.text, cloned);
-                if (global.ty) |ty| try scope.bindTypeInfo(global.name.text, ty);
+                if (global.ty) |ty| {
+                    try scope.bindTypeInfo(global.name.text, ty);
+                    if (options.domains) |domains| {
+                        if (comptimeTypeDomainWidth(ty)) |dw| try domains.put(global.name.text, dw);
+                    }
+                }
             },
             else => {},
         }
@@ -841,7 +896,7 @@ pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFol
         // have no comptime value, and folding `null` to a sentinel would mis-bake a
         // `const p: ?*T = null` global. A comptime `?T` is therefore out of scope (§22).
         .int_literal => |literal| .{ .value = comptimeIntegerLiteral(literal) orelse return .unknown },
-        .float_literal => |literal| .{ .value = .{ .float = parseFloat(literal) catch return .unknown } },
+        .float_literal => |literal| .{ .value = .{ .float = ComptimeFloat.fromF64(parseFloat(literal) catch return .unknown) } },
         .char_literal => |literal| .{ .value = .{ .int = @intCast(parseCharLiteral(literal) orelse return .unknown) } },
         // A bare string literal is NOT folded to a value: it is a `*const u8`/`[]const u8`
         // pointer that must bake as a pointer (not a byte value) in a global initializer.
@@ -983,31 +1038,31 @@ fn foldComptimeBitcast(scope: *const ComptimeScope, call: anytype) ComptimeFold 
         const bits: u64 = switch (operand) {
             .int => |n| @truncate(@as(u128, @bitCast(n))),
             .uint => |n| @truncate(n),
-            .float => |f| return .{ .value = .{ .float = f } },
+            .float => |f| return .{ .value = .{ .float = ComptimeFloat.fromF64(f.asF64()) } },
             else => return .unknown,
         };
-        return .{ .value = .{ .float = @bitCast(bits) } };
+        return .{ .value = .{ .float = .{ .bits = bits, .width = 64 } } };
     }
     if (std.mem.eql(u8, tname, "f32")) {
         switch (operand) {
             .int => |n| {
                 const bits: u32 = @truncate(@as(u128, @bitCast(n)));
-                const f32v: f32 = @bitCast(bits);
-                return .{ .value = .{ .float = @floatCast(f32v) } };
+                return .{ .value = .{ .float = .{ .bits = bits, .width = 32 } } };
             },
             .uint => |n| {
                 const bits: u32 = @truncate(n);
-                const f32v: f32 = @bitCast(bits);
-                return .{ .value = .{ .float = @floatCast(f32v) } };
+                return .{ .value = .{ .float = .{ .bits = bits, .width = 32 } } };
             },
-            .float => |f| return .{ .value = .{ .float = @floatCast(@as(f32, @floatCast(f))) } },
+            .float => |f| return .{ .value = .{ .float = ComptimeFloat.fromF32(f.asF32()) } },
             else => return .unknown,
         }
     }
     const int_info = comptimeIntType(target) orelse return .unknown;
     switch (operand) {
         .int => |n| {
-            return if (comptimeIntFromBits(@bitCast(n), int_info)) |v| .{ .value = .{ .int = v } } else .unknown;
+            const raw: u128 = @bitCast(n);
+            if (!int_info.signed and int_info.bits == 128) return .{ .value = comptimeUnsignedValue(raw) };
+            return if (comptimeIntFromBits(raw, int_info)) |v| .{ .value = .{ .int = v } } else .unknown;
         },
         .uint => |n| {
             if (!int_info.signed and int_info.bits == 128) return .{ .value = comptimeUnsignedValue(n) };
@@ -1015,12 +1070,14 @@ fn foldComptimeBitcast(scope: *const ComptimeScope, call: anytype) ComptimeFold 
         },
         .float => |f| {
             if (int_info.bits == 64) {
-                const raw: u128 = @as(u64, @bitCast(f));
+                const raw: u128 = if (f.width == 64) f.bits else @as(u64, @bitCast(f.asF64()));
                 return if (comptimeIntFromBits(raw, int_info)) |v| .{ .value = .{ .int = v } } else .unknown;
             }
             if (int_info.bits == 32) {
-                const f32v: f32 = @floatCast(f);
-                const raw: u128 = @as(u32, @bitCast(f32v));
+                const raw: u128 = if (f.width == 32)
+                    @as(u32, @truncate(f.bits))
+                else
+                    @as(u32, @bitCast(f.asF32()));
                 return if (comptimeIntFromBits(raw, int_info)) |v| .{ .value = .{ .int = v } } else .unknown;
             }
             return .unknown;
@@ -1120,7 +1177,7 @@ fn foldComptimeIndex(scope: *const ComptimeScope, base_expr: ast.Expr, index_exp
 // Evaluate a call to a `const fn` with constant arguments (section 22). Returns
 // `.unknown` for non-const callees, unbound arguments, fuel exhaustion, or any
 // body construct outside the supported subset — none of which is a provable
-// trap. A divide-by-zero / invalid shift inside the body propagates as `.trap`.
+// trap. An integer divide-by-zero / invalid shift inside the body propagates as `.trap`.
 fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
     const funcs = scope.funcs orelse return .unknown;
     if (scope.call_depth >= comptime_call_fuel) return .unknown;
@@ -1138,6 +1195,7 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
     defer callee_scope.deinit();
     callee_scope.funcs = scope.funcs;
     callee_scope.globals = scope.globals;
+    callee_scope.global_domains = scope.global_domains;
     callee_scope.reflect = scope.reflect;
     callee_scope.reflect_ctx = scope.reflect_ctx;
     callee_scope.call_depth = scope.call_depth + 1;
@@ -1150,11 +1208,12 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
             };
             continue;
         }
-        const value = switch (foldComptimeExpr(scope, arg)) {
+        var value = switch (foldComptimeExpr(scope, arg)) {
             .value => |v| v,
             .trap => return .trap,
             .unknown => return .unknown,
         };
+        value = comptimeCastValue(value, param.ty) orelse value;
         callee_scope.bind(param.name.text, value) catch {
             scope.recordOom();
             return .unknown;
@@ -1179,7 +1238,7 @@ const BodyFlow = union(enum) {
     returned: ComptimeFold, // hit a `return` (a value or a const-eval trap)
     broke, // hit `break`
     continued, // hit `continue`
-    trap, // a const-eval trap (divide-by-zero, invalid shift)
+    trap, // a const-eval trap (integer divide-by-zero, invalid shift)
     unknown, // a construct outside the supported subset — bail without diagnosing
 };
 
@@ -1219,7 +1278,8 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                     continue;
                 }
                 switch (foldComptimeExpr(scope, init_expr)) {
-                    .value => |value| {
+                    .value => |folded_value| {
+                        const value = if (local.ty) |lty| comptimeCastValue(folded_value, lty) orelse folded_value else folded_value;
                         scope.bind(local.names[0].text, value) catch return .unknown;
                         if (local.ty) |lty| scope.bindTypeInfo(local.names[0].text, lty) catch return .unknown;
                     },
@@ -1394,7 +1454,7 @@ fn comptimeValueEql(a: ComptimeValue, b: ComptimeValue) bool {
             else => false,
         },
         .float => |av| switch (b) {
-            .float => |bv| av == bv,
+            .float => |bv| av.asF64() == bv.asF64(),
             else => false,
         },
         .bytes => |av| switch (b) {
@@ -1611,14 +1671,12 @@ fn foldComptimeUnary(scope: *const ComptimeScope, op: ast.UnaryOp, operand_expr:
     };
     return switch (op) {
         .neg => switch (operand) {
-            .int => |v| .{ .value = .{ .int = std.math.negate(v) catch return .unknown } },
-            .uint => |v| if (v == (@as(u128, 1) << 127))
-                .{ .value = .{ .int = std.math.minInt(i128) } }
-            else if (v <= std.math.maxInt(i128))
-                .{ .value = .{ .int = -@as(i128, @intCast(v)) } }
-            else
-                .unknown,
-            .float => |v| .{ .value = .{ .float = -v } },
+            .int => |v| foldComptimeIntegerNeg(comptimeExprDomainWidth(scope, operand_expr), v),
+            .uint => |v| foldComptimeUnsignedNeg(comptimeExprDomainWidth(scope, operand_expr), v),
+            .float => |v| .{ .value = .{ .float = .{
+                .bits = v.bits ^ if (v.width == 32) @as(u64, 1) << 31 else @as(u64, 1) << 63,
+                .width = v.width,
+            } } },
             .void, .boolean, .tag, .bytes, .array, .@"struct" => .unknown,
         },
         .bit_not => switch (operand) {
@@ -1644,31 +1702,146 @@ fn foldComptimeUnary(scope: *const ComptimeScope, op: ast.UnaryOp, operand_expr:
     };
 }
 
-fn foldWideUnsignedBinary(op: ast.BinaryOp, left: ComptimeValue, right: ComptimeValue) ComptimeFold {
+fn foldComptimeIntegerNeg(dw: ?DomainWidth, value: i128) ComptimeFold {
+    const d = dw orelse return .{ .value = .{ .int = std.math.negate(value) catch return .unknown } };
+    if (!d.signed) return foldComptimeUnsignedNeg(d, @bitCast(value));
+    const min: i128 = if (d.bits == 128) std.math.minInt(i128) else -(@as(i128, 1) << @intCast(d.bits - 1));
+    const max: i128 = if (d.bits == 128) std.math.maxInt(i128) else (@as(i128, 1) << @intCast(d.bits - 1)) - 1;
+    if (value == min) return switch (d.domain) {
+        .checked => .trap,
+        .wrap => .{ .value = .{ .int = min } },
+        .sat => .{ .value = .{ .int = max } },
+    };
+    return .{ .value = .{ .int = -value } };
+}
+
+fn foldComptimeUnsignedNeg(dw: ?DomainWidth, value: u128) ComptimeFold {
+    const d = dw orelse {
+        if (value == (@as(u128, 1) << 127)) return .{ .value = .{ .int = std.math.minInt(i128) } };
+        if (value <= std.math.maxInt(i128)) return .{ .value = .{ .int = -@as(i128, @intCast(value)) } };
+        return .unknown;
+    };
+    if (d.domain == .checked) return if (value == 0) .{ .value = .{ .int = 0 } } else .trap;
+    if (d.domain == .sat) return .{ .value = .{ .int = 0 } };
+    const mask: u128 = if (d.bits == 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(d.bits)) - 1;
+    return .{ .value = comptimeUnsignedValue((0 -% value) & mask) };
+}
+
+fn foldWideUnsignedBinary(op: ast.BinaryOp, left: ComptimeValue, right: ComptimeValue, dw: ?DomainWidth) ComptimeFold {
     const l = comptimeNonnegative(left) orelse return .unknown;
     const r = comptimeNonnegative(right) orelse return .unknown;
+    const domain = if (dw) |d| d.domain else ComptimeDomain.checked;
+    const bits: u16 = if (dw) |d| d.bits else 128;
+    const mask: u128 = if (bits == 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(bits)) - 1;
     return switch (op) {
         .lt => .{ .value = .{ .boolean = l < r } },
         .le => .{ .value = .{ .boolean = l <= r } },
         .gt => .{ .value = .{ .boolean = l > r } },
         .ge => .{ .value = .{ .boolean = l >= r } },
-        .add => .{ .value = comptimeUnsignedValue(std.math.add(u128, l, r) catch return .unknown) },
-        .sub => if (l < r) .unknown else .{ .value = comptimeUnsignedValue(l - r) },
-        .mul => .{ .value = comptimeUnsignedValue(std.math.mul(u128, l, r) catch return .unknown) },
+        .add => blk: {
+            const result = @addWithOverflow(l, r);
+            const overflow = result[1] != 0 or result[0] > mask;
+            break :blk if (!overflow)
+                .{ .value = comptimeUnsignedValue(result[0] & mask) }
+            else switch (domain) {
+                .checked => .trap,
+                .wrap => .{ .value = comptimeUnsignedValue(result[0] & mask) },
+                .sat => .{ .value = comptimeUnsignedValue(mask) },
+            };
+        },
+        .sub => if (l >= r)
+            .{ .value = comptimeUnsignedValue((l - r) & mask) }
+        else switch (domain) {
+            .checked => .trap,
+            .wrap => .{ .value = comptimeUnsignedValue((l -% r) & mask) },
+            .sat => .{ .value = .{ .int = 0 } },
+        },
+        .mul => blk: {
+            const result = @mulWithOverflow(l, r);
+            const overflow = result[1] != 0 or result[0] > mask;
+            break :blk if (!overflow)
+                .{ .value = comptimeUnsignedValue(result[0] & mask) }
+            else switch (domain) {
+                .checked => .trap,
+                .wrap => .{ .value = comptimeUnsignedValue(result[0] & mask) },
+                .sat => .{ .value = comptimeUnsignedValue(mask) },
+            };
+        },
         .div => if (r == 0) .trap else .{ .value = comptimeUnsignedValue(l / r) },
         .mod => if (r == 0) .trap else .{ .value = comptimeUnsignedValue(l % r) },
         .bit_and => .{ .value = comptimeUnsignedValue(l & r) },
         .bit_or => .{ .value = comptimeUnsignedValue(l | r) },
         .bit_xor => .{ .value = comptimeUnsignedValue(l ^ r) },
-        .shl => if (r >= 128) .trap else blk: {
+        .shl => if (r >= bits) .trap else blk: {
             const shifted = @shlWithOverflow(l, @as(u7, @intCast(r)));
-            break :blk if (shifted[1] != 0) .unknown else .{ .value = comptimeUnsignedValue(shifted[0]) };
+            const overflow = shifted[1] != 0 or (shifted[0] & ~mask) != 0;
+            break :blk if (!overflow)
+                .{ .value = comptimeUnsignedValue(shifted[0] & mask) }
+            else switch (domain) {
+                .checked => .trap,
+                .wrap => .{ .value = comptimeUnsignedValue(shifted[0] & mask) },
+                .sat => .{ .value = comptimeUnsignedValue(mask) },
+            };
         },
-        .shr => if (r >= 128) .trap else .{ .value = comptimeUnsignedValue(l >> @as(u7, @intCast(r))) },
+        .shr => if (r >= bits) .trap else .{ .value = comptimeUnsignedValue(l >> @as(u7, @intCast(r))) },
         .eq => .{ .value = .{ .boolean = l == r } },
         .ne => .{ .value = .{ .boolean = l != r } },
         .logical_and, .logical_or => unreachable,
     };
+}
+
+fn signedOverflowResult(dw: ?DomainWidth, wrapped: i128, overflowed: bool, saturate_to_max: bool) ComptimeFold {
+    if (!overflowed) return domainArith(dw, wrapped);
+    const d = dw orelse return .unknown;
+    return switch (d.domain) {
+        .checked => .trap,
+        .wrap => .{ .value = .{ .int = wrapped } },
+        .sat => .{ .value = .{ .int = if (saturate_to_max) std.math.maxInt(i128) else std.math.minInt(i128) } },
+    };
+}
+
+fn foldSignedShift(op: ast.BinaryOp, value: i128, count: i128, dw: ?DomainWidth) ComptimeFold {
+    const bits: u16 = if (dw) |d| d.bits else 128;
+    if (count < 0 or count >= bits) return .trap;
+    const amount: u7 = @intCast(count);
+    if (op == .shr) {
+        const shifted = value >> amount;
+        return domainArith(dw, shifted);
+    }
+    const d = dw orelse {
+        if (value >= 0) {
+            const shifted = @shlWithOverflow(@as(u128, @intCast(value)), amount);
+            return if (shifted[1] != 0) .unknown else .{ .value = comptimeUnsignedValue(shifted[0]) };
+        }
+        const shifted = @shlWithOverflow(value, amount);
+        return if (shifted[1] != 0) .unknown else .{ .value = .{ .int = shifted[0] } };
+    };
+    if (d.domain == .wrap) {
+        const mask: u128 = if (bits == 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(bits)) - 1;
+        const raw = (@as(u128, @bitCast(value)) << amount) & mask;
+        if (d.signed) return if (comptimeIntFromBits(raw, .{ .bits = bits, .signed = true })) |n|
+            .{ .value = .{ .int = n } }
+        else
+            .unknown;
+        return .{ .value = comptimeUnsignedValue(raw) };
+    }
+    if (value < 0) return if (d.domain == .sat)
+        .{ .value = .{ .int = if (d.signed) -(@as(i128, 1) << @intCast(bits - 1)) else 0 } }
+    else
+        .trap;
+    const shifted = @shlWithOverflow(@as(u128, @intCast(value)), amount);
+    const max: u128 = if (d.signed)
+        (@as(u128, 1) << @intCast(bits - 1)) - 1
+    else if (bits == 128)
+        ~@as(u128, 0)
+    else
+        (@as(u128, 1) << @intCast(bits)) - 1;
+    if (shifted[1] != 0 or shifted[0] > max) return switch (d.domain) {
+        .checked => .trap,
+        .sat => .{ .value = comptimeUnsignedValue(max) },
+        .wrap => unreachable,
+    };
+    return .{ .value = comptimeUnsignedValue(shifted[0]) };
 }
 
 fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: ast.Expr, right_expr: ast.Expr) ComptimeFold {
@@ -1723,7 +1896,7 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
                 else => return .unknown,
             },
             .float => |l| switch (right) {
-                .float => |r| l == r,
+                .float => |r| l.asF64() == r.asF64(),
                 else => return .unknown,
             },
             .boolean => |l| switch (right) {
@@ -1754,9 +1927,9 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         return .{ .value = .{ .boolean = if (op == .eq) equal else !equal } };
     }
 
-    // Floating-point ordering/arithmetic (both operands float). Folded in f64;
-    // section 22 forbids overflow/divide traps in comptime floats (IEEE inf/NaN
-    // would never occur for the constant subset programs use here).
+    // Floating-point ordering/arithmetic. f32 rounds after every operation;
+    // division by zero follows IEEE and produces infinity/NaN rather than a
+    // language trap, matching runtime lowering.
     if (left == .float or right == .float) {
         const lf = switch (left) {
             .float => |v| v,
@@ -1766,20 +1939,35 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
             .float => |v| v,
             else => return .unknown,
         };
+        const as_f32 = lf.width == 32 or rf.width == 32;
         return switch (op) {
-            .lt => .{ .value = .{ .boolean = lf < rf } },
-            .le => .{ .value = .{ .boolean = lf <= rf } },
-            .gt => .{ .value = .{ .boolean = lf > rf } },
-            .ge => .{ .value = .{ .boolean = lf >= rf } },
-            .add => .{ .value = .{ .float = lf + rf } },
-            .sub => .{ .value = .{ .float = lf - rf } },
-            .mul => .{ .value = .{ .float = lf * rf } },
-            .div => if (rf == 0) .trap else .{ .value = .{ .float = lf / rf } },
+            .lt => .{ .value = .{ .boolean = lf.asF64() < rf.asF64() } },
+            .le => .{ .value = .{ .boolean = lf.asF64() <= rf.asF64() } },
+            .gt => .{ .value = .{ .boolean = lf.asF64() > rf.asF64() } },
+            .ge => .{ .value = .{ .boolean = lf.asF64() >= rf.asF64() } },
+            .add => .{ .value = .{ .float = if (as_f32)
+                ComptimeFloat.fromF32(lf.asF32() + rf.asF32())
+            else
+                ComptimeFloat.fromF64(lf.asF64() + rf.asF64()) } },
+            .sub => .{ .value = .{ .float = if (as_f32)
+                ComptimeFloat.fromF32(lf.asF32() - rf.asF32())
+            else
+                ComptimeFloat.fromF64(lf.asF64() - rf.asF64()) } },
+            .mul => .{ .value = .{ .float = if (as_f32)
+                ComptimeFloat.fromF32(lf.asF32() * rf.asF32())
+            else
+                ComptimeFloat.fromF64(lf.asF64() * rf.asF64()) } },
+            .div => .{ .value = .{ .float = if (as_f32)
+                ComptimeFloat.fromF32(lf.asF32() / rf.asF32())
+            else
+                ComptimeFloat.fromF64(lf.asF64() / rf.asF64()) } },
             else => .unknown, // mod/bitwise/shift not defined on floats
         };
     }
 
-    if (left == .uint or right == .uint) return foldWideUnsignedBinary(op, left, right);
+    const dw = comptimeExprDomainWidth(scope, left_expr) orelse comptimeExprDomainWidth(scope, right_expr);
+    if (left == .uint or right == .uint or (dw != null and !dw.?.signed))
+        return foldWideUnsignedBinary(op, left, right, dw);
 
     const l = switch (left) {
         .int => |v| v,
@@ -1794,8 +1982,6 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
     // operands' declared types make it known. `add`/`sub`/`mul`/`div`/`mod` then trap on a
     // checked overflow, mask for `wrap<uN>`, or clamp for `sat<uN>` — as the runtime would.
     // Plain literals (no domain) keep the prior untyped-i128 behavior.
-    const dw = comptimeExprDomainWidth(scope, left_expr) orelse comptimeExprDomainWidth(scope, right_expr);
-
     return switch (op) {
         .lt => .{ .value = .{ .boolean = l < r } },
         .le => .{ .value = .{ .boolean = l <= r } },
@@ -1804,22 +1990,39 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         // i128 is only the evaluation domain — overflowing it (as opposed to a
         // declared target type) is outside the scalar model, so fold to unknown
         // rather than risk a false trap or a compiler panic.
-        .add => domainArith(dw, std.math.add(i128, l, r) catch return .unknown),
-        .sub => domainArith(dw, std.math.sub(i128, l, r) catch return .unknown),
-        .mul => domainArith(dw, std.math.mul(i128, l, r) catch return .unknown),
-        .div => if (r == 0) .trap else domainArith(dw, std.math.divTrunc(i128, l, r) catch return .unknown),
-        .mod => if (r == 0) .trap else domainArith(dw, @rem(l, r)),
+        .add => if (dw != null and dw.?.bits == 128) blk: {
+            const result = @addWithOverflow(l, r);
+            break :blk signedOverflowResult(dw, result[0], result[1] != 0, l >= 0 and r >= 0);
+        } else domainArith(dw, std.math.add(i128, l, r) catch return .unknown),
+        .sub => if (dw != null and dw.?.bits == 128) blk: {
+            const result = @subWithOverflow(l, r);
+            break :blk signedOverflowResult(dw, result[0], result[1] != 0, l >= 0 and r < 0);
+        } else domainArith(dw, std.math.sub(i128, l, r) catch return .unknown),
+        .mul => if (dw != null and dw.?.bits == 128) blk: {
+            const result = @mulWithOverflow(l, r);
+            break :blk signedOverflowResult(dw, result[0], result[1] != 0, (l < 0) == (r < 0));
+        } else domainArith(dw, std.math.mul(i128, l, r) catch return .unknown),
+        .div => if (r == 0) .trap else if (dw != null and dw.?.bits == 128 and l == std.math.minInt(i128) and r == -1)
+            switch (dw.?.domain) {
+                .checked => .trap,
+                .wrap => .{ .value = .{ .int = std.math.minInt(i128) } },
+                .sat => .{ .value = .{ .int = std.math.maxInt(i128) } },
+            }
+        else
+            domainArith(dw, std.math.divTrunc(i128, l, r) catch return .unknown),
+        .mod => if (r == 0)
+            .trap
+        else if (l == std.math.minInt(i128) and r == -1)
+            if (dw) |d| switch (d.domain) {
+                .checked => .trap,
+                .wrap, .sat => .{ .value = .{ .int = 0 } },
+            } else .unknown
+        else
+            domainArith(dw, @rem(l, r)),
         .bit_and => .{ .value = .{ .int = l & r } },
         .bit_or => .{ .value = .{ .int = l | r } },
         .bit_xor => .{ .value = .{ .int = l ^ r } },
-        .shl => if (r < 0 or r >= 128) .trap else if (l >= 0) blk: {
-            const shifted = @shlWithOverflow(@as(u128, @intCast(l)), @as(u7, @intCast(r)));
-            break :blk if (shifted[1] != 0) .unknown else .{ .value = comptimeUnsignedValue(shifted[0]) };
-        } else blk: {
-            const shifted = @shlWithOverflow(l, @as(u7, @intCast(r)));
-            break :blk if (shifted[1] != 0) .unknown else .{ .value = .{ .int = shifted[0] } };
-        },
-        .shr => if (r < 0 or r >= 128) .trap else .{ .value = .{ .int = l >> @as(u7, @intCast(r)) } },
+        .shl, .shr => foldSignedShift(op, l, r, dw),
         .eq, .ne, .logical_and, .logical_or => unreachable,
     };
 }
@@ -1983,7 +2186,10 @@ test "foldComptimeBitcast handles 128-bit signed and unrepresentable unsigned va
     try std.testing.expectEqual(@as(i128, -1), foldComptimeExpr(&scope, signed_128).value.int);
 
     const unsigned_128 = try testBitcastExpr(allocator, "u128", minus_one);
-    try std.testing.expectEqual(@as(std.meta.Tag(ComptimeFold), .unknown), std.meta.activeTag(foldComptimeExpr(&scope, unsigned_128)));
+    try std.testing.expectEqual(
+        std.math.maxInt(u128),
+        foldComptimeExpr(&scope, unsigned_128).value.uint,
+    );
 
     const min_i128_bits = ast.Expr{ .span = test_zero_span, .kind = .{ .int_literal = "-170141183460469231731687303715884105728" } };
     const high_unsigned = try testBitcastExpr(allocator, "u128", min_i128_bits);

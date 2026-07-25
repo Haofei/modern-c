@@ -4,6 +4,7 @@ import json
 import socket
 import sys
 import time
+from collections import deque
 from pathlib import Path
 
 
@@ -37,6 +38,9 @@ class QmpClient:
         self.socket.settimeout(TIMEOUT_SECONDS)
         self.socket.connect(str(path))
         self.reader = self.socket.makefile("r", encoding="utf-8")
+        self.next_id = 1
+        self.events: deque[dict] = deque()
+        self.responses: dict[object, dict] = {}
         greeting = self._read()
         if "QMP" not in greeting:
             raise RuntimeError(f"invalid QMP greeting: {greeting}")
@@ -48,26 +52,41 @@ class QmpClient:
             raise RuntimeError("QMP connection closed")
         return json.loads(line)
 
+    def _dispatch(self, message: dict) -> None:
+        if "event" in message:
+            self.events.append(message)
+            return
+        if "id" not in message:
+            raise RuntimeError(f"QMP response has no command id: {message}")
+        self.responses[message["id"]] = message
+
     def execute(self, command: str, arguments: dict | None = None) -> None:
-        request = {"execute": command}
+        command_id = self.next_id
+        self.next_id += 1
+        request = {"execute": command, "id": command_id}
         if arguments:
             request["arguments"] = arguments
         self.socket.sendall((json.dumps(request) + "\n").encode())
         while True:
-            response = self._read()
+            response = self.responses.pop(command_id, None)
+            if response is None:
+                self._dispatch(self._read())
+                continue
             if "error" in response:
                 raise RuntimeError(f"QMP {command} failed: {response['error']}")
             if "return" in response:
                 return
+            raise RuntimeError(f"invalid QMP response for {command}: {response}")
 
     def wait_for_device_deleted(self, device: str) -> None:
         while True:
-            response = self._read()
-            if response.get("event") != "DEVICE_DELETED":
-                continue
-            data = response.get("data", {})
-            if data.get("device") == device:
-                return
+            for index, response in enumerate(self.events):
+                if response.get("event") != "DEVICE_DELETED":
+                    continue
+                if response.get("data", {}).get("device") == device:
+                    del self.events[index]
+                    return
+            self._dispatch(self._read())
 
     def close(self) -> None:
         self.reader.close()

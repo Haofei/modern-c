@@ -112,6 +112,10 @@ completion, deletes the `virtio-rng-pci` device, waits for the guest to observe
 removal, and refuses to add the replacement until the guest has checked the
 removed device's sequenced teardown record. The guest then requires live reads
 to recover before continuing to the ordinary synchronized-unbind gate. The
+QMP controller correlates every response by command ID and queues asynchronous
+events, so a `DEVICE_DELETED` event arriving before the `device_del` response
+cannot be consumed and lost; `zig build qmp-ordering-test` covers both legal
+orders plus unrelated responses/events.
 kernel configuration must include `CONFIG_HOTPLUG_PCI=y` and
 `CONFIG_HOTPLUG_PCI_ACPI=y`; the control-matrix runner adds both options
 explicitly.

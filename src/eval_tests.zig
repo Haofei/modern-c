@@ -95,7 +95,10 @@ test "foldComptimeExpr guards full-width integer bitcasts" {
     try std.testing.expectEqual(@as(i128, -1), foldComptimeExpr(&scope, signed_128).value.int);
 
     const unsigned_128 = try testBitcastCall(a, "u128", minus_one);
-    try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, unsigned_128)) == .unknown);
+    try std.testing.expectEqual(
+        std.math.maxInt(u128),
+        foldComptimeExpr(&scope, unsigned_128).value.uint,
+    );
 }
 
 test "ComptimeScope records width metadata allocation failure" {

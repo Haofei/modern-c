@@ -292,6 +292,7 @@ pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Mod
         .const_fns = std.StringHashMap(ast.FnDecl).init(allocator),
         .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
         .const_global_widths = std.StringHashMap(u16).init(allocator),
+        .const_global_domains = std.StringHashMap(eval.DomainWidth).init(allocator),
         .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
         .enum_types = std.StringHashMap(ast.EnumDecl).init(allocator),
         .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
@@ -349,6 +350,7 @@ pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Mod
     try eval.collectConstGlobalsWithOptions(allocator, module, &ctx.const_fns, &ctx.const_globals, .{
         .reflect = lower_llvm_reflect.comptimeReflectThunk,
         .reflect_ctx = &reflect_env,
+        .domains = &ctx.const_global_domains,
     });
     try ctx.collectConstGlobalWidths(module);
     for (module.decls) |decl| {
@@ -434,6 +436,7 @@ const LlvmEmitter = struct {
     const_fns: std.StringHashMap(ast.FnDecl) = undefined,
     const_globals: std.StringHashMap(eval.ComptimeValue) = undefined,
     const_global_widths: std.StringHashMap(u16) = undefined,
+    const_global_domains: std.StringHashMap(eval.DomainWidth) = undefined,
     type_aliases: std.StringHashMap(ast.TypeExpr) = undefined,
     enum_types: std.StringHashMap(ast.EnumDecl) = undefined,
     packed_bits: std.StringHashMap(PackedBitsInfo) = undefined,
@@ -529,6 +532,7 @@ const LlvmEmitter = struct {
         self.need_smul.deinit();
         self.const_fns.deinit();
         self.const_global_widths.deinit();
+        self.const_global_domains.deinit();
         eval.deinitConstGlobals(self.allocator, &self.const_globals);
         self.type_aliases.deinit();
         self.enum_types.deinit();
@@ -1005,6 +1009,7 @@ const LlvmEmitter = struct {
             .const_fns = &self.const_fns,
             .const_globals = &self.const_globals,
             .const_global_widths = &self.const_global_widths,
+            .const_global_domains = &self.const_global_domains,
         };
     }
 
@@ -1052,7 +1057,7 @@ const LlvmEmitter = struct {
                     .name => |n| n.text,
                     else => "",
                 };
-                const fv: f64 = if (std.mem.eql(u8, tname, "f32")) @floatCast(@as(f32, @floatCast(f))) else f;
+                const fv: f64 = if (std.mem.eql(u8, tname, "f32")) @floatCast(f.asF32()) else f.asF64();
                 break :blk try std.fmt.allocPrint(self.scratch.allocator(), "0x{X:0>16}", .{@as(u64, @bitCast(fv))});
             },
             .void, .bytes => error.UnsupportedLlvmEmission,
