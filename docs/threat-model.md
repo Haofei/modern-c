@@ -69,7 +69,7 @@ failure modes we accept. It is the frame for the security-hardening work in §4.
 | Hostile network frame corrupts socket state | bounds-checked frame parser + IPv4/TCP checksum validation (`tcp_tx.mc`) | larger hostile-packet corpus |
 | Agent exfiltrates via network | net broker egress allowlist (`NetCap.allowed`) + budget; denied attempts audited (`NET_DENY_TAG`) | persistent policy load/revocation (§4.2) |
 | Cross-transport confusion in broker | endpoint transport-kind tag checked before dispatch (`net_broker.mc`) | — |
-| Runaway CPU (DoS) | WAMR instruction fuel; cooperative scheduler + timer watchdog kill; preemption-decision layer (`proc_preempt_*`) | full timer-driven preemption (§3.1 #1) |
+| Runaway CPU (DoS) | WAMR instruction fuel; timer watchdog kill; timer-driven process preemption (`proc_preempt_*`, gated by `agent-preempt-test`) | uniform per-agent CPU-budget policy and accounting |
 | Memory exhaustion (DoS) | confined arena + fixed pools with overflow-safe fit checks | typed `NoMem` on broker/device paths (§3.1 #5); per-agent memory budget enforcement everywhere |
 | Agent crash takes down kernel | fault-confinement: agent faults are contained to its AS | per-agent crash cleanup/reap (§3.1 #4) |
 | Agent forges/suppresses audit | audit written kernel-side (`ipc_trace`/`cap_audit`), agent cannot reach it | persist-across-reboot (§4.3) |
@@ -119,14 +119,16 @@ public vulnerability intake, not a claim that runtime containment absorbs the bu
 - **G3 Fail-closed:** on hostile or malformed input the kernel returns a typed error
   (EFAULT/EINVAL/BadSegment/TooLarge) rather than trapping or corrupting state. (Largely
   enforced; the remaining `unreachable`-on-exhaustion paths are tracked.)
-- **G4 Deterministic bound on agent CPU:** an agent cannot run unbounded (fuel +
-  watchdog today; preemptive timeslice in progress).
+- **G4 Deterministic bound on agent CPU:** an agent cannot run unbounded (fuel,
+  watchdog, and timer-driven process preemption are gated); uniform per-agent
+  budget policy and accounting remain incomplete.
 - **G5 Audit truth:** allow/deny + effects are recorded kernel-side beyond agent reach.
 
 ## 8. Accepted failure modes (non-goals, for now)
 
 - **Availability under a determined local DoS is best-effort**, not guaranteed, until
-  full preemption + uniform per-agent memory/CPU budgets land. A misbehaving agent may
+  uniform per-agent memory/CPU budgets land. Timer-driven process preemption has landed,
+  but a misbehaving agent may
   currently degrade throughput (it cannot escape isolation or forge authority).
 - **A TCB bug (WAMR/QuickJS/BearSSL/compiler/toolchain) can break any guarantee** —
   these are trusted inputs. Defense is vendoring/CVE discipline, pinned tools/actions,

@@ -66,6 +66,10 @@ test "foldComptimeExpr folds the comptime scalar subset" {
     const div = try testBinary(a, .div, try testInt(a, "1"), try testInt(a, "0"));
     try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, div.*)) == .trap);
 
+    // Explicit integer suffixes carry their checked width into comptime arithmetic.
+    const typed_overflow = try testBinary(a, .add, try testInt(a, "255_u8"), try testInt(a, "1_u8"));
+    try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, typed_overflow.*)) == .trap);
+
     // unknown identifier -> unknown (no diagnostic)
     try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, (try testIdent(a, "runtime")).*)) == .unknown);
 

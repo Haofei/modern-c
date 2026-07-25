@@ -63,6 +63,13 @@ if ! grep -Fq "source_path=\"$REMAPPED_PATH\"" "$MAP_OUT"; then
     exit 1
 fi
 
+"$MCC" emit-c "$SRC" --remap-prefix="$RAW_ROOT/=$LOGICAL_ROOT" >"$WORK/trailing.c"
+if ! grep -Fq "#line 1 \"$REMAPPED_PATH\"" "$WORK/trailing.c"; then
+    echo "FAIL: path-remap-test — trailing-separator remap prefix rejected a valid child"
+    grep -Fn '#line' "$WORK/trailing.c" || true
+    exit 1
+fi
+
 SIBLING_ROOT="$WORK/raw-root-sibling"
 SIBLING_SRC="$SIBLING_ROOT/main.mc"
 mkdir -p "$SIBLING_ROOT"

@@ -20,6 +20,47 @@ pub const LiteralValue = struct {
     magnitude: u128,
 };
 
+pub const IntegerSuffix = enum {
+    u8,
+    u16,
+    u32,
+    u64,
+    u128,
+    usize,
+    i8,
+    i16,
+    i32,
+    i64,
+    i128,
+    isize,
+
+    pub fn typeName(self: IntegerSuffix) []const u8 {
+        return @tagName(self);
+    }
+
+    pub fn bounds(self: IntegerSuffix) IntBounds {
+        return switch (self) {
+            .u8 => .{ .signed = false, .max = maxUnsigned(8) },
+            .u16 => .{ .signed = false, .max = maxUnsigned(16) },
+            .u32 => .{ .signed = false, .max = maxUnsigned(32) },
+            .u64 => .{ .signed = false, .max = maxUnsigned(64) },
+            .u128 => .{ .signed = false, .max = maxUnsigned(128) },
+            .usize => .{ .signed = false, .max = maxUnsigned(64) },
+            .i8 => signedBounds(8),
+            .i16 => signedBounds(16),
+            .i32 => signedBounds(32),
+            .i64 => signedBounds(64),
+            .i128 => signedBounds(128),
+            .isize => signedBounds(64),
+        };
+    }
+};
+
+pub const ParsedIntegerLiteral = struct {
+    magnitude: u128,
+    suffix: ?IntegerSuffix,
+};
+
 /// The value range of a fixed-width checked integer type. `max` is the largest representable
 /// value; `min_abs` is the magnitude of the most-negative value (`0` for unsigned types).
 pub const IntBounds = struct {
@@ -47,49 +88,71 @@ pub fn signedBounds(bits: u8) IntBounds {
     };
 }
 
-/// Parse an integer literal's magnitude, stripping `_` digit-group separators. Every `_` is
-/// dropped and the full magnitude parsed; we do NOT break at `_<letter>`, because in a hex
-/// literal the letter can be a hex digit (`0xAB_C` == 0xABC) — treating it as a type-suffix
-/// boundary truncated the value and let an out-of-range literal slip past the range check into
-/// a narrower, truncating C emission. Matches the C backend and `eval.zig`.
-pub fn parseIntegerLiteral(raw: []const u8) ?u128 {
+pub fn integerSuffix(raw: []const u8) ?IntegerSuffix {
+    inline for (std.meta.tags(IntegerSuffix)) |suffix| {
+        if (std.mem.eql(u8, raw, suffix.typeName())) return suffix;
+    }
+    return null;
+}
+
+/// Parse and validate an MC integer literal. Separators are accepted only
+/// between digits; a final `_<integer-type>` is retained as a semantic suffix.
+pub fn parseIntegerLiteralParts(raw: []const u8) ?ParsedIntegerLiteral {
     var cleaned: [128]u8 = undefined;
     if (raw.len > cleaned.len) return null;
+    const digit_start: usize = if (std.mem.startsWith(u8, raw, "0x") or std.mem.startsWith(u8, raw, "0X")) 2 else 0;
+    const radix: u8 = if (digit_start == 2) 16 else 10;
+    if (raw.len == digit_start) return null;
+
+    var digit_end = raw.len;
+    var suffix: ?IntegerSuffix = null;
+    var suffix_pos = raw.len;
+    while (suffix_pos > digit_start) {
+        suffix_pos -= 1;
+        if (raw[suffix_pos] != '_') continue;
+        if (integerSuffix(raw[suffix_pos + 1 ..])) |found| {
+            digit_end = suffix_pos;
+            suffix = found;
+        }
+        break;
+    }
+    if (digit_end == digit_start) return null;
+
     var len: usize = 0;
-    for (raw) |ch| {
-        if (ch == '_') continue;
+    var previous_separator = false;
+    for (raw[0..digit_end], 0..) |ch, index| {
+        if (index < digit_start) {
+            cleaned[len] = ch;
+            len += 1;
+            continue;
+        }
+        if (ch == '_') {
+            if (index == digit_start or index + 1 == digit_end or previous_separator) return null;
+            previous_separator = true;
+            continue;
+        }
+        const valid_digit = if (radix == 16) std.ascii.isHex(ch) else std.ascii.isDigit(ch);
+        if (!valid_digit) return null;
+        previous_separator = false;
         cleaned[len] = ch;
         len += 1;
     }
-    return std.fmt.parseInt(u128, cleaned[0..len], 0) catch null;
+    const magnitude = std.fmt.parseInt(u128, cleaned[0..len], 0) catch return null;
+    return .{ .magnitude = magnitude, .suffix = suffix };
+}
+
+pub fn parseIntegerLiteral(raw: []const u8) ?u128 {
+    return (parseIntegerLiteralParts(raw) orelse return null).magnitude;
 }
 
 /// `parseIntegerLiteral` narrowed to `usize` (array lengths, indices).
 pub fn parseUsizeLiteral(literal: []const u8) ?usize {
-    var cleaned: [128]u8 = undefined;
-    if (literal.len > cleaned.len) return null;
-    var len: usize = 0;
-    for (literal) |ch| {
-        if (ch != '_') {
-            cleaned[len] = ch;
-            len += 1;
-        }
-    }
-    return std.fmt.parseInt(usize, cleaned[0..len], 0) catch null;
+    return std.math.cast(usize, parseIntegerLiteral(literal) orelse return null);
 }
 
 /// `parseIntegerLiteral` narrowed to `i128`, accepting MC digit separators.
 pub fn parseI128Literal(raw: []const u8) ?i128 {
-    var cleaned: [160]u8 = undefined;
-    if (raw.len > cleaned.len) return null;
-    var len: usize = 0;
-    for (raw) |ch| {
-        if (ch != '_') {
-            cleaned[len] = ch;
-            len += 1;
-        }
-    }
-    return std.fmt.parseInt(i128, cleaned[0..len], 0) catch null;
+    return std.math.cast(i128, parseIntegerLiteral(raw) orelse return null);
 }
 
 /// The code-point value of a char literal (`'a'`, `'\n'`, …), or null if it is not a
@@ -141,4 +204,17 @@ pub fn integerLiteralValue(expr: ast.Expr) ?LiteralValue {
         },
         else => null,
     };
+}
+
+test "integer literal parser separates suffixes and validates separators" {
+    const typed = parseIntegerLiteralParts("0x20_u8").?;
+    try std.testing.expectEqual(@as(u128, 32), typed.magnitude);
+    try std.testing.expectEqual(IntegerSuffix.u8, typed.suffix.?);
+    try std.testing.expectEqual(@as(u128, 0xabc), parseIntegerLiteral("0xAB_C").?);
+    try std.testing.expectEqual(@as(u128, 123456), parseIntegerLiteral("123_456").?);
+
+    const invalid = [_][]const u8{
+        "1__2", "1_", "0x_1", "0x1_", "0x1__2", "1__u8", "1_u7",
+    };
+    for (invalid) |literal| try std.testing.expect(parseIntegerLiteralParts(literal) == null);
 }

@@ -137,8 +137,15 @@ pub const Options = struct {
     pub fn remappedSourcePath(self: Options, allocator: std.mem.Allocator, path: []const u8) !?[]const u8 {
         const remap = self.remap_prefix orelse return null;
         if (!std.mem.startsWith(u8, path, remap.from)) return null;
-        if (path.len > remap.from.len and path[remap.from.len] != std.fs.path.sep) return null;
-        const remapped = try std.fmt.allocPrint(allocator, "{s}{s}", .{ remap.to, path[remap.from.len..] });
+        const from_ends_separator = remap.from.len > 0 and isPathSeparator(remap.from[remap.from.len - 1]);
+        if (!from_ends_separator and path.len > remap.from.len and !isPathSeparator(path[remap.from.len])) return null;
+        const tail = path[remap.from.len..];
+        const needs_separator = tail.len > 0 and !isPathSeparator(tail[0]) and
+            remap.to.len > 0 and !isPathSeparator(remap.to[remap.to.len - 1]);
+        const remapped = if (needs_separator)
+            try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ remap.to, remap.from[remap.from.len - 1], tail })
+        else
+            try std.fmt.allocPrint(allocator, "{s}{s}", .{ remap.to, tail });
         return remapped;
     }
 
@@ -253,3 +260,23 @@ pub const Options = struct {
         return error.InvalidArgs;
     }
 };
+
+fn isPathSeparator(ch: u8) bool {
+    return ch == '/' or ch == '\\';
+}
+
+test "source remap accepts trailing separators and preserves boundaries" {
+    const allocator = std.testing.allocator;
+    const posix = Options{ .remap_prefix = .{ .from = "/work/project/", .to = "/src" } };
+    const remapped = (try posix.remappedSourcePath(allocator, "/work/project/file.mc")).?;
+    defer allocator.free(remapped);
+    try std.testing.expectEqualStrings("/src/file.mc", remapped);
+
+    const windows = Options{ .remap_prefix = .{ .from = "C:\\work\\", .to = "Z:\\src" } };
+    const windows_remapped = (try windows.remappedSourcePath(allocator, "C:\\work\\file.mc")).?;
+    defer allocator.free(windows_remapped);
+    try std.testing.expectEqualStrings("Z:\\src\\file.mc", windows_remapped);
+
+    const bounded = Options{ .remap_prefix = .{ .from = "/work/project", .to = "/src" } };
+    try std.testing.expect((try bounded.remappedSourcePath(allocator, "/work/project2/file.mc")) == null);
+}

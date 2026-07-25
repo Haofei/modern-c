@@ -63,5 +63,19 @@ export fn numeric_literal_boundaries_run() -> u32 {
     if bitcast<u32>(F32_NEG_SNAN) != F32_NEG_SNAN_SOURCE {
         return 11;
     }
+    if 0x20_u8 != 32_u8 ||
+        1_u16 != 1 as u16 ||
+        1_u32 != 1 as u32 ||
+        1_u64 != 1 as u64 ||
+        1_u128 != 1 as u128 ||
+        1_usize != 1 as usize ||
+        1_i8 != 1 as i8 ||
+        1_i16 != 1 as i16 ||
+        1_i32 != 1 as i32 ||
+        1_i64 != 1 as i64 ||
+        1_i128 != 1 as i128 ||
+        1_isize != 1 as isize {
+        return 12;
+    }
     return 0;
 }

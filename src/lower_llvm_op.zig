@@ -49,12 +49,7 @@ pub fn floatComparisonPredicate(op: ast.BinaryOp) ?[]const u8 {
 }
 
 pub fn normalizedIntLiteral(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
-    var cleaned: std.ArrayList(u8) = .empty;
-    for (literal) |ch| {
-        if (ch != '_') try cleaned.append(allocator, ch);
-    }
-    const text = try cleaned.toOwnedSlice(allocator);
-    const value = std.fmt.parseInt(i128, text, 0) catch return text;
+    const value = numeric.parseIntegerLiteral(literal) orelse return error.UnsupportedLlvmEmission;
     return std.fmt.allocPrint(allocator, "{d}", .{value});
 }
 

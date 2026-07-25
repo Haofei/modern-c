@@ -59,6 +59,9 @@ DIAGNOSTIC_DEBOUNCE_MS = int(os.environ.get("MC_LSP_DIAGNOSTIC_DEBOUNCE_MS", "15
 DIAGNOSTIC_DEBOUNCE_SECONDS = max(DIAGNOSTIC_DEBOUNCE_MS, 0) / 1000.0
 MCC_TIMEOUT_SECONDS = max(float(os.environ.get("MC_LSP_MCC_TIMEOUT_SECONDS", "15")), 0.1)
 WRITE_LOCK = threading.RLock()
+MAX_MESSAGE_SIZE = int(os.environ.get("MC_LSP_MAX_MESSAGE_SIZE", str(16 * 1024 * 1024)))
+MAX_HEADER_COUNT = 64
+MAX_HEADER_LINE = 8192
 
 
 def log(*a):
@@ -80,19 +83,46 @@ def server_version():
 # ---- JSON-RPC framing over stdio -----------------------------------------------------------
 def read_message(stream):
     headers = {}
+    header_count = 0
     while True:
-        line = stream.readline()
+        line = stream.readline(MAX_HEADER_LINE + 1)
         if not line:
             return None  # EOF
-        line = line.decode("utf-8", "replace").rstrip("\r\n")
+        if len(line) > MAX_HEADER_LINE:
+            raise ValueError("LSP header line exceeds configured limit")
+        line = line.decode("ascii").rstrip("\r\n")
         if line == "":
             break
-        if ":" in line:
-            k, v = line.split(":", 1)
-            headers[k.strip().lower()] = v.strip()
-    length = int(headers.get("content-length", 0))
-    body = stream.read(length)
-    return json.loads(body.decode("utf-8"))
+        header_count += 1
+        if header_count > MAX_HEADER_COUNT:
+            raise ValueError("LSP header count exceeds configured limit")
+        if ":" not in line:
+            raise ValueError("malformed LSP header")
+        k, v = line.split(":", 1)
+        key = k.strip().lower()
+        if key in headers:
+            raise ValueError(f"duplicate LSP header: {key}")
+        headers[key] = v.strip()
+    if "content-length" not in headers:
+        raise ValueError("missing Content-Length")
+    try:
+        length = int(headers["content-length"], 10)
+    except ValueError as error:
+        raise ValueError("invalid Content-Length") from error
+    if length < 0 or length > MAX_MESSAGE_SIZE:
+        raise ValueError("Content-Length is outside the configured bounds")
+    chunks = []
+    remaining = length
+    while remaining:
+        chunk = stream.read(remaining)
+        if not chunk:
+            raise ValueError("truncated LSP message body")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    message = json.loads(b"".join(chunks).decode("utf-8"))
+    if not isinstance(message, dict):
+        raise ValueError("LSP message must be a JSON object")
+    return message
 
 
 def write_message(stream, payload):
@@ -594,8 +624,12 @@ def _le(a, b):
     return (a["line"], a["character"]) <= (b["line"], b["character"])
 
 
+def _lt(a, b):
+    return (a["line"], a["character"]) < (b["line"], b["character"])
+
+
 def in_range(pos, rng):
-    return _le(rng["start"], pos) and _le(pos, rng["end"])
+    return _le(rng["start"], pos) and _lt(pos, rng["end"])
 
 
 # Find the def or ref whose span covers `position`: returns ("ref"|"def", entry) or (None, None).
@@ -821,45 +855,121 @@ def parse_fn_type(t):
     return params, ret
 
 
+def _masked_source_prefix(text, position):
+    lines = text.splitlines(keepends=True)
+    line_no = position["line"]
+    if line_no < 0 or line_no >= len(lines):
+        return None
+    line = lines[line_no].rstrip("\r\n")
+    cursor = sum(len(item) for item in lines[:line_no])
+    cursor += utf16_to_strindex(line, position["character"])
+    prefix = text[:cursor]
+    chars = list(prefix)
+    state = "normal"
+    index = 0
+    while index < len(chars):
+        c = chars[index]
+        nxt = chars[index + 1] if index + 1 < len(chars) else ""
+        if state == "line_comment":
+            if c == "\n":
+                state = "normal"
+            else:
+                chars[index] = " "
+            index += 1
+            continue
+        if state == "block_comment":
+            chars[index] = " "
+            if c == "*" and nxt == "/":
+                chars[index + 1] = " "
+                state = "normal"
+                index += 2
+            else:
+                index += 1
+            continue
+        if state in ("string", "char"):
+            quote = '"' if state == "string" else "'"
+            chars[index] = " "
+            if c == "\\" and index + 1 < len(chars):
+                chars[index + 1] = " "
+                index += 2
+            elif c == quote:
+                state = "normal"
+                index += 1
+            else:
+                index += 1
+            continue
+        if c == "/" and nxt == "/":
+            chars[index] = chars[index + 1] = " "
+            state = "line_comment"
+            index += 2
+        elif c == "/" and nxt == "*":
+            chars[index] = chars[index + 1] = " "
+            state = "block_comment"
+            index += 2
+        elif c == '"':
+            chars[index] = " "
+            state = "string"
+            index += 1
+        elif c == "'":
+            chars[index] = " "
+            state = "char"
+            index += 1
+        else:
+            index += 1
+    return "".join(chars)
+
+
+def _callee_before(source, open_index):
+    end = open_index
+    while end > 0 and source[end - 1].isspace():
+        end -= 1
+    if end > 0 and source[end - 1] == ">":
+        depth = 1
+        end -= 1
+        while end > 0 and depth:
+            end -= 1
+            if source[end] == ">":
+                depth += 1
+            elif source[end] == "<":
+                depth -= 1
+        while end > 0 and source[end - 1].isspace():
+            end -= 1
+    start = end
+    while start > 0 and (source[start - 1].isalnum() or source[start - 1] == "_"):
+        start -= 1
+    return source[start:end]
+
+
+def _active_call(text, position):
+    prefix = _masked_source_prefix(text, position)
+    if prefix is None:
+        return None
+    matching = {")": "(", "]": "[", "}": "{"}
+    stack = []
+    for index, char in enumerate(prefix):
+        if char in "([{":
+            stack.append({"kind": char,
+                          "callee": _callee_before(prefix, index) if char == "(" else "",
+                          "commas": 0})
+        elif char in ")]}":
+            expected = matching[char]
+            while stack and stack[-1]["kind"] != expected:
+                stack.pop()
+            if stack:
+                stack.pop()
+        elif char == "," and stack:
+            stack[-1]["commas"] += 1
+    for frame in reversed(stack):
+        if frame["kind"] == "(" and frame["callee"]:
+            return frame["callee"], frame["commas"]
+    return None
+
+
 def signature_help(uri, text, position):
-    lines = text.split("\n")
-    ln = position["line"]
-    if ln >= len(lines):
+    active_call = _active_call(text, position)
+    if active_call is None:
         return None
-    line = lines[ln]
-    prefix = line[:utf16_to_strindex(line, position["character"])]
-
-    # Find the innermost unmatched '(' to the left of the cursor.
-    depth, open_idx = 0, -1
-    for i in range(len(prefix) - 1, -1, -1):
-        c = prefix[i]
-        if c == ")":
-            depth += 1
-        elif c == "(":
-            if depth == 0:
-                open_idx = i
-                break
-            depth -= 1
-    if open_idx < 0:
-        return None
-
-    # The callee is the identifier immediately before that '('.
-    k = open_idx
-    while k > 0 and (prefix[k - 1].isalnum() or prefix[k - 1] == "_"):
-        k -= 1
-    callee = prefix[k:open_idx]
-    if not callee:
-        return None
-
-    # Active parameter = number of top-level commas between the '(' and the cursor.
-    depth, active = 0, 0
-    for c in prefix[open_idx + 1:]:
-        if c in "(<[":
-            depth += 1
-        elif c in ")>]":
-            depth -= 1
-        elif c == "," and depth == 0:
-            active += 1
+    callee, active = active_call
 
     fn = next((d for d in get_index(uri, text).get("defs", [])
                if d["name"] == callee and d["kind"] == "function"), None)
@@ -1394,7 +1504,11 @@ def main():
         timer.start()
 
     while True:
-        msg = read_message(stdin)
+        try:
+            msg = read_message(stdin)
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            log("closing malformed JSON-RPC stream:", error)
+            break
         if msg is None:
             break
         method = msg.get("method")

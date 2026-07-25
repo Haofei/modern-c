@@ -232,6 +232,47 @@ fn appendNormalizedContent(out: *std.ArrayList(u8), allocator: std.mem.Allocator
     }
 }
 
+fn lineTouchesBlockComment(line: []const u8, inside_block_comment: *bool) bool {
+    var touched = inside_block_comment.*;
+    var index: usize = 0;
+    while (index < line.len) {
+        if (inside_block_comment.*) {
+            touched = true;
+            if (index + 1 < line.len and line[index] == '*' and line[index + 1] == '/') {
+                inside_block_comment.* = false;
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if (index + 1 < line.len and line[index] == '/' and line[index + 1] == '/') break;
+        if (index + 1 < line.len and line[index] == '/' and line[index + 1] == '*') {
+            inside_block_comment.* = true;
+            touched = true;
+            index += 2;
+            continue;
+        }
+        if (line[index] == '"' or line[index] == '\'') {
+            const quote = line[index];
+            index += 1;
+            while (index < line.len) {
+                if (line[index] == '\\' and index + 1 < line.len) {
+                    index += 2;
+                } else if (line[index] == quote) {
+                    index += 1;
+                    break;
+                } else {
+                    index += 1;
+                }
+            }
+            continue;
+        }
+        index += 1;
+    }
+    return touched;
+}
+
 // Produce the canonically-formatted text. Caller owns the returned buffer.
 pub fn format(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
     // Count source lines (1-based).
@@ -249,8 +290,19 @@ pub fn format(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
     var line_no: usize = 0;
     var pending_blank = false; // a blank line is buffered; emit it only before real content
     var emitted_any = false;
+    var inside_block_comment = false;
     while (it.next()) |raw| {
         line_no += 1;
+        if (lineTouchesBlockComment(raw, &inside_block_comment)) {
+            if (pending_blank) {
+                try out.append(allocator, '\n');
+                pending_blank = false;
+            }
+            try out.appendSlice(allocator, raw);
+            try out.append(allocator, '\n');
+            emitted_any = true;
+            continue;
+        }
         const content = rtrim(ltrim(raw));
         if (content.len == 0) {
             // Collapse runs of blank lines to a single one, and never lead with a blank.

@@ -985,8 +985,18 @@ fn comptimeCallReturnType(scope: *const ComptimeScope, call: anytype) ?ast.TypeE
     return resolveComptimeType(&call_scope, return_type);
 }
 
+fn comptimeIntegerLiteralType(expr: ast.Expr, literal: []const u8) ?ast.TypeExpr {
+    const parsed = numeric.parseIntegerLiteralParts(literal) orelse return null;
+    const suffix = parsed.suffix orelse return null;
+    return .{
+        .span = expr.span,
+        .kind = .{ .name = .{ .text = suffix.typeName(), .span = expr.span } },
+    };
+}
+
 fn comptimeExprType(scope: *const ComptimeScope, expr: ast.Expr) ?ast.TypeExpr {
     return switch (expr.kind) {
+        .int_literal => |literal| comptimeIntegerLiteralType(expr, literal),
         .ident => |ident| scope.binding_types.get(ident.text) orelse
             (if (moduleGlobalType(scope, ident.text)) |ty| resolveComptimeType(scope, ty) else null),
         .grouped => |inner| comptimeExprType(scope, inner.*),

@@ -6,6 +6,8 @@ broken document, and an empty diagnostic list for a clean one.
 Usage: lsp-test.py <path-to-mcc>
 """
 import json
+import importlib.util
+import io
 import os
 import subprocess
 import sys
@@ -16,6 +18,44 @@ import pathlib
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SERVER = os.path.join(HERE, "tools", "lsp", "mc-lsp.py")
 BUILD_ZIG_ZON = os.path.join(HERE, "build.zig.zon")
+
+
+def load_server_module():
+    spec = importlib.util.spec_from_file_location("mc_lsp_under_test", SERVER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_protocol_helpers():
+    module = load_server_module()
+    rng = {"start": {"line": 0, "character": 4}, "end": {"line": 0, "character": 7}}
+    if not module.in_range({"line": 0, "character": 4}, rng):
+        raise SystemExit("FAIL: lsp-test — range start must be included")
+    if module.in_range({"line": 0, "character": 7}, rng):
+        raise SystemExit("FAIL: lsp-test — LSP range end must be excluded")
+
+    call = 'pair(\n    "comma, and paren (", /* ignored, */\n    second'
+    active = module._active_call(call, {"line": 2, "character": len("    second")})
+    if active != ("pair", 1):
+        raise SystemExit(f"FAIL: lsp-test — token-aware multiline call scan failed: {active}")
+
+    payload = b'{"jsonrpc":"2.0","method":"test"}'
+    framed = io.BytesIO(f"Content-Length: {len(payload)}\r\n\r\n".encode("ascii") + payload)
+    if module.read_message(framed).get("method") != "test":
+        raise SystemExit("FAIL: lsp-test — valid JSON-RPC frame was not read")
+    malformed_frames = [
+        b"\r\n{}",
+        b"Content-Length: -1\r\n\r\n",
+        b"Content-Length: 5\r\nContent-Length: 5\r\n\r\n12345",
+        b"Content-Length: 10\r\n\r\n{}",
+    ]
+    for frame in malformed_frames:
+        try:
+            module.read_message(io.BytesIO(frame))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        raise SystemExit(f"FAIL: lsp-test — malformed JSON-RPC frame was accepted: {frame!r}")
 
 BAD = (
     "#[no_lang_trap]\n"
@@ -188,6 +228,7 @@ def build_zig_zon_version():
 
 
 def main():
+    test_protocol_helpers()
     mcc = sys.argv[1] if len(sys.argv) > 1 else "mcc"
     mcc = os.path.abspath(mcc)
     expected_server_version = build_zig_zon_version()

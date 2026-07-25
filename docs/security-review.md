@@ -218,7 +218,7 @@ An independent audit of the production kernel should cover, at minimum:
 - [ ] **Resource accounting:** confirm every allocation/broker/device path charges the ledger and
       that no path can leak or double-release; drive the soak gate longer.
 - [ ] **Audit trail:** review for suppress/forge resistance and add persistence.
-- [ ] **DoS:** re-evaluate once full timer preemption + uniform budgets land; confirm no agent can
-      starve the kernel.
+- [ ] **DoS:** timer-driven process preemption is gated by `agent-preempt-test`; re-evaluate once
+      uniform budgets land and confirm no agent can starve the kernel.
 - [ ] **Vendored engines:** track upstream CVEs for WAMR/QuickJS/BearSSL and the vendoring
       process.

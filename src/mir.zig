@@ -44,6 +44,13 @@ const integerLiteralValue = numeric.integerLiteralValue;
 const parseArrayLen = array_len.parseArrayLen;
 const parseArrayLenWithReflect = array_len.parseArrayLenWithReflect;
 
+fn integerLiteralTypeExpr(literal: []const u8, span: ast.Span) ast.TypeExpr {
+    if (numeric.parseIntegerLiteralParts(literal)) |parsed| {
+        if (parsed.suffix) |suffix| return ast_query.simpleNameType(suffix.typeName(), span);
+    }
+    return ast_query.simpleNameType("u32", span);
+}
+
 const mir_model = @import("mir_model.zig");
 const mir_operator = @import("mir_operator.zig");
 const mir_representation = @import("mir_representation.zig");
@@ -4464,7 +4471,7 @@ const FunctionBuilder = struct {
             return ty;
         }
         return switch (subject.kind) {
-            .int_literal => ast_query.simpleNameType("u32", subject.span),
+            .int_literal => |literal| integerLiteralTypeExpr(literal, subject.span),
             .binary => |node| if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op)) ast_query.simpleNameType("bool", subject.span) else null,
             .unary => |node| if (node.op == .logical_not) ast_query.simpleNameType("bool", subject.span) else null,
             .grouped => |inner| self.switchSubjectTypeExpr(inner.*),
@@ -4476,7 +4483,7 @@ const FunctionBuilder = struct {
         if (self.typeExprForExpr(initializer)) |ty| return ty;
         return switch (initializer.kind) {
             .call => |node| self.inferredLocalCallType(node),
-            .int_literal => ast_query.simpleNameType("u32", initializer.span),
+            .int_literal => |literal| integerLiteralTypeExpr(literal, initializer.span),
             .bool_literal => ast_query.simpleNameType("bool", initializer.span),
             .unary => |node| if (node.op == .logical_not)
                 ast_query.simpleNameType("bool", initializer.span)
@@ -6389,7 +6396,7 @@ const FunctionBuilder = struct {
     fn expressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) !?ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
-            .int_literal => ast_query.simpleNameType("u32", expr.span),
+            .int_literal => |literal| integerLiteralTypeExpr(literal, expr.span),
             .bool_literal => ast_query.simpleNameType("bool", expr.span),
             // A direct function address is a code pointer, not a pointer to a
             // value. Its full signature belongs to MIR so backends cannot
@@ -8837,7 +8844,7 @@ const FunctionBuilder = struct {
     fn conversionSourceTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
-            .int_literal => ast_query.simpleNameType("u32", expr.span),
+            .int_literal => |literal| integerLiteralTypeExpr(literal, expr.span),
             .grouped => |inner| self.conversionSourceTypeExpr(inner.*),
             .unary => |node| if (node.op == .neg and node.expr.kind == .int_literal)
                 ast_query.simpleNameType("i32", expr.span)

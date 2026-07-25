@@ -86,6 +86,29 @@ test "lexer recognizes MC literal and operator forms" {
     try std.testing.expect(saw_underscore);
 }
 
+test "lexer rejects malformed integer separators and unknown suffixes" {
+    const invalid = [_][]const u8{
+        "let x = 1__2;",
+        "let x = 1_;",
+        "let x = 0x_1;",
+        "let x = 0x1_;",
+        "let x = 0x1__2;",
+        "let x = 1__u8;",
+        "let x = 1_u7;",
+        "let x = 1.0__2;",
+        "let x = 1e__2;",
+        "let x = 1e2_;",
+        "let x = 1.0_u8;",
+    };
+    for (invalid) |source| {
+        var reporter = diagnostics.Reporter.init(std.testing.allocator, "invalid_integer.mc", source);
+        defer reporter.deinit();
+        lexAll(&reporter);
+        try std.testing.expect(reporter.has_errors);
+        try std.testing.expect(std.mem.startsWith(u8, reporter.diagnostics.items[0].message, "E_LEX_INVALID_"));
+    }
+}
+
 test "lexer reports diagnostic positions" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "test.mc", "let x = 1abc;\nlet y = \"unterminated\n");
     defer reporter.deinit();

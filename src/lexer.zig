@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const diagnostics = @import("diagnostics.zig");
+const numeric = @import("numeric.zig");
 const token = @import("token.zig");
 
 pub const Lexer = struct {
@@ -129,8 +130,8 @@ pub const Lexer = struct {
                 last_was_underscore = false;
                 _ = self.advance();
             } else if (c == '_') {
-                if (isIdentStart(self.peekNext())) break;
-                if (last_was_underscore) invalid = true;
+                if (integerSuffixAt(self.source[self.index..])) break;
+                if (!saw_digit or last_was_underscore or !isDigitForBase(self.peekNext(), base)) invalid = true;
                 last_was_underscore = true;
                 _ = self.advance();
             } else {
@@ -199,7 +200,9 @@ pub const Lexer = struct {
             if (!isIdentStart(self.peek())) {
                 invalid = true;
             } else {
+                const suffix_start = self.index;
                 while (!self.isAtEnd() and isIdentContinue(self.peek())) _ = self.advance();
+                if (is_float or numeric.integerSuffix(self.source[suffix_start..self.index]) == null) invalid = true;
             }
         } else if (!self.isAtEnd() and isIdentStart(self.peek())) {
             invalid = true;
@@ -336,6 +339,13 @@ pub const Lexer = struct {
         return true;
     }
 };
+
+fn integerSuffixAt(raw: []const u8) bool {
+    if (raw.len < 2 or raw[0] != '_') return false;
+    var end: usize = 1;
+    while (end < raw.len and isIdentContinue(raw[end])) end += 1;
+    return numeric.integerSuffix(raw[1..end]) != null;
+}
 
 const Mark = struct {
     offset: usize,

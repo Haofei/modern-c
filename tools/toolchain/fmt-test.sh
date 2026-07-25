@@ -32,8 +32,11 @@ trap 'cleanup_tmps; rm -rf "$W"' EXIT
 
 checked=0
 while IFS= read -r f; do
-    # `mcc lex` resolves imports. Intentional missing-import reject fixtures are diagnostic
-    # tests, not formatter corpus members; diagnostics-test owns them.
+    # Reject fixtures are diagnostic tests, not formatter corpus members. In particular,
+    # malformed-token fixtures intentionally cannot satisfy the token-preservation oracle.
+    case "$f" in
+        */bad/*) continue ;;
+    esac
     if grep -q 'EXPECT_ERROR: E_IMPORT_' "$f"; then
         continue
     fi
@@ -74,6 +77,25 @@ fi
 # A formatted file passes --check.
 if ! "$MCC" fmt "$W/messy.fmt" --check >/dev/null 2>&1; then
     echo "FAIL: fmt-test — fmt --check rejected an already-formatted file"; exit 1
+fi
+
+cat >"$W/comment.mc" <<'EOF'
+/*
+alpha-beta
+a+b
+x/y
+foo:bar
+a,b
+*/
+fn comment_guard() -> void {
+    let text = "/* not a comment */";
+}
+EOF
+"$MCC" fmt "$W/comment.mc" >"$W/comment.fmt"
+sed -n '1,7p' "$W/comment.fmt" >"$W/comment.payload"
+sed -n '1,7p' "$W/comment.mc" >"$W/comment.want"
+if ! cmp -s "$W/comment.want" "$W/comment.payload"; then
+    echo "FAIL: fmt-test — multiline block-comment payload changed"; diff "$W/comment.want" "$W/comment.payload"; exit 1
 fi
 
 echo "PASS: fmt-test — fmt is token-preserving and idempotent across $checked modules; --check passes formatted / fails misindented input"

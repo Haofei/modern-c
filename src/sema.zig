@@ -2811,7 +2811,10 @@ pub const Checker = struct {
             // The async transform eliminates every `await_expr` pre-sema.
             .await_expr => unreachable,
             .ident => |ident| self.checkIdentExpr(ident, ctx),
-            .int_literal => .int_literal,
+            .int_literal => |literal| if (integerLiteralTypeExpr(literal, expr.span)) |ty|
+                classifyTypeCtx(ty, ctx)
+            else
+                .int_literal,
             .float_literal => .float_literal,
             .void_literal => .void,
             .bool_literal => .bool,
@@ -4956,6 +4959,10 @@ pub const Checker = struct {
     }
 
     fn checkIntegerLiteralInitializer(self: *Checker, target: TypeClass, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
+        if (integerLiteralSuffix(expr)) |suffix| {
+            const suffix_ty = ast_query.simpleNameType(suffix.typeName(), expr.span);
+            if (classifyTypeCtx(suffix_ty, ctx) != target) return false;
+        }
         const value = integerLiteralValue(expr) orelse {
             if (integerLiteralSyntaxOverflow(expr)) {
                 self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
@@ -5813,6 +5820,13 @@ pub const Checker = struct {
         if (integerLiteralSyntaxOverflow(expr)) {
             self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
             return true;
+        }
+        if (integerLiteralSuffix(expr)) |suffix| {
+            const value = integerLiteralValue(expr) orelse return false;
+            if (!integerLiteralFitsBounds(value, suffix.bounds())) {
+                self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in its explicit suffix type");
+                return true;
+            }
         }
 
         switch (expr.kind) {
@@ -7451,6 +7465,15 @@ fn integerLiteralSyntaxOverflow(expr: ast.Expr) bool {
     };
 }
 
+fn integerLiteralSuffix(expr: ast.Expr) ?numeric.IntegerSuffix {
+    return switch (expr.kind) {
+        .int_literal => |literal| (numeric.parseIntegerLiteralParts(literal) orelse return null).suffix,
+        .grouped => |inner| integerLiteralSuffix(inner.*),
+        .unary => |node| if (node.op == .neg) integerLiteralSuffix(node.expr.*) else null,
+        else => null,
+    };
+}
+
 fn checkedIntBounds(kind: TypeClass) ?IntBounds {
     return switch (kind) {
         .checked_u8 => .{ .signed = false, .max = maxUnsigned(8) },
@@ -7855,6 +7878,7 @@ fn qualifiedUnionConstructorReturnType(node: anytype, ctx: Context) ?ast.TypeExp
 
 pub fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
+        .int_literal => |literal| integerLiteralTypeExpr(literal, expr.span),
         .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse byteViewCallReturnType(node) orelse vaCallReturnType(node) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse mathBuiltinReturnType(node.callee.*) orelse unwrapCallReturnType(node, ctx) orelse dynDispatchReturnType(node, ctx) orelse closureCallReturnType(node.callee.*, ctx) orelse fnPointerCallReturnType(node.callee.*, ctx) orelse qualifiedUnionConstructorReturnType(node, ctx) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
         .try_expr => |inner| tryPayloadType(inner.operand.*, ctx),
         .cast => |node| node.ty.*,
@@ -7872,6 +7896,12 @@ pub fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .unary => |node| if (node.op == .logical_not) boolTypeExpr(expr.span) else exprStorageType(expr, ctx),
         else => exprStorageType(expr, ctx),
     };
+}
+
+fn integerLiteralTypeExpr(literal: []const u8, span: diagnostics.Span) ?ast.TypeExpr {
+    const parsed = numeric.parseIntegerLiteralParts(literal) orelse return null;
+    const suffix = parsed.suffix orelse return null;
+    return ast_query.simpleNameType(suffix.typeName(), span);
 }
 
 fn boolTypeExpr(span: diagnostics.Span) ast.TypeExpr {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const diagnostics = @import("diagnostics.zig");
 const lexer = @import("lexer.zig");
@@ -606,6 +607,7 @@ fn stripUtf8Bom(source: []const u8) []const u8 {
 
 fn isExplicitlyRelative(rel: []const u8) bool {
     return std.mem.startsWith(u8, rel, "./") or std.mem.startsWith(u8, rel, "../") or
+        std.mem.startsWith(u8, rel, ".\\") or std.mem.startsWith(u8, rel, "..\\") or
         std.mem.eql(u8, rel, ".") or std.mem.eql(u8, rel, "..");
 }
 
@@ -731,9 +733,30 @@ fn defaultSandboxRoot(allocator: std.mem.Allocator, io: std.Io, canon_root: []co
 }
 
 fn pathWithin(root: []const u8, path: []const u8) bool {
-    if (std.mem.eql(u8, root, path)) return true;
+    if (pathEquals(root, path)) return true;
     if (root.len == 0) return false;
-    if (!std.mem.startsWith(u8, path, root)) return false;
-    if (root[root.len - 1] == '/') return true;
-    return path.len > root.len and path[root.len] == '/';
+    if (path.len < root.len or !pathEquals(root, path[0..root.len])) return false;
+    if (isPathSeparator(root[root.len - 1])) return true;
+    return path.len > root.len and isPathSeparator(path[root.len]);
+}
+
+fn pathEquals(left: []const u8, right: []const u8) bool {
+    return if (builtin.os.tag == .windows)
+        std.ascii.eqlIgnoreCase(left, right)
+    else
+        std.mem.eql(u8, left, right);
+}
+
+fn isPathSeparator(ch: u8) bool {
+    return ch == '/' or ch == '\\';
+}
+
+test "import path predicates accept native and Windows separators without sibling escape" {
+    try std.testing.expect(isExplicitlyRelative("./child.mc"));
+    try std.testing.expect(isExplicitlyRelative("..\\child.mc"));
+    try std.testing.expect(pathWithin("/project", "/project/child.mc"));
+    try std.testing.expect(!pathWithin("/project", "/project2/child.mc"));
+    try std.testing.expect(pathWithin("C:\\project", "C:\\project\\child.mc"));
+    try std.testing.expect(!pathWithin("C:\\project", "C:\\project2\\child.mc"));
+    try std.testing.expect(pathWithin("C:\\project\\", "C:\\project\\child.mc"));
 }

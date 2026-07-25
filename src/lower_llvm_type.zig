@@ -11,8 +11,9 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const scalar_repr = @import("scalar_repr.zig");
 const ast_query = @import("ast_query.zig");
+const numeric = @import("numeric.zig");
+const scalar_repr = @import("scalar_repr.zig");
 
 const typeName = ast_query.typeName;
 
@@ -129,14 +130,7 @@ pub fn literalArrayLenValue(expr: ast.Expr) ?u64 {
 }
 
 pub fn parseU64Literal(literal: []const u8) ?u64 {
-    var value: u64 = 0;
-    for (literal) |ch| {
-        if (ch == '_') continue;
-        if (ch < '0' or ch > '9') return null;
-        value = std.math.mul(u64, value, 10) catch return null;
-        value = std.math.add(u64, value, ch - '0') catch return null;
-    }
-    return value;
+    return std.math.cast(u64, numeric.parseIntegerLiteral(literal) orelse return null);
 }
 
 pub fn integerBits(ty: ast.TypeExpr) ?u16 {
