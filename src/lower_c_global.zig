@@ -21,7 +21,7 @@ const staticCInitializer = lower_c_const.staticCInitializer;
 
 pub const WriteLineDirectiveFn = *const fn (ctx: *anyopaque, span: ast.Span) anyerror!void;
 pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void;
-pub const ConstGlobalCValueFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror!?[]const u8;
+pub const ConstGlobalCValueFn = *const fn (ctx: *anyopaque, expr: ast.Expr, ty: ?ast.TypeExpr) anyerror!?[]const u8;
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror!void;
 pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, target_ty: ast.TypeExpr) anyerror!void;
 pub const EmitExprWithLocalsFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
@@ -94,7 +94,7 @@ pub fn emitGlobal(ctx: EmitContext, global: ast.GlobalDecl) !void {
         // so initializers like `MAX * 2` that reference earlier const
         // globals lower to a plain C constant.
         if (global.is_const) {
-            if (try ctx.const_global_c_value(ctx.emit_ctx, initializer)) |text| {
+            if (try ctx.const_global_c_value(ctx.emit_ctx, initializer, global.ty)) |text| {
                 try ctx.out.print(ctx.allocator, " = {s};\n\n", .{text});
                 return;
             }

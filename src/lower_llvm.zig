@@ -293,6 +293,7 @@ pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Mod
         .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
         .const_global_widths = std.StringHashMap(u16).init(allocator),
         .const_global_domains = std.StringHashMap(eval.DomainWidth).init(allocator),
+        .comptime_module = module,
         .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
         .enum_types = std.StringHashMap(ast.EnumDecl).init(allocator),
         .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
@@ -437,6 +438,7 @@ const LlvmEmitter = struct {
     const_globals: std.StringHashMap(eval.ComptimeValue) = undefined,
     const_global_widths: std.StringHashMap(u16) = undefined,
     const_global_domains: std.StringHashMap(eval.DomainWidth) = undefined,
+    comptime_module: ast.Module,
     type_aliases: std.StringHashMap(ast.TypeExpr) = undefined,
     enum_types: std.StringHashMap(ast.EnumDecl) = undefined,
     packed_bits: std.StringHashMap(PackedBitsInfo) = undefined,
@@ -777,7 +779,7 @@ const LlvmEmitter = struct {
             else => if (view_narrow_target) |fact| fact.target_ty else ty,
         };
         const resolved_ty = self.resolveAliasType(semantic_ty);
-        if (self.foldConstGlobalValue(expr)) |value| {
+        if (self.foldConstGlobalValue(expr, semantic_ty)) |value| {
             return try self.comptimeValueInitializer(value, semantic_ty);
         }
         if (self.atomicPayloadType(resolved_ty)) |payload_ty| {
@@ -959,7 +961,7 @@ const LlvmEmitter = struct {
     }
 
     fn globalConstIndexValue(self: *LlvmEmitter, expr: ast.Expr) ?u64 {
-        if (self.foldConstGlobalValue(expr)) |value| {
+        if (self.foldConstGlobalValue(expr, null)) |value| {
             return switch (value) {
                 .int => |n| if (n >= 0 and n <= std.math.maxInt(u64)) @intCast(n) else null,
                 else => null,
@@ -975,7 +977,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn foldConstGlobalValue(self: *LlvmEmitter, expr: ast.Expr) ?eval.ComptimeValue {
+    fn foldConstGlobalValue(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ?ast.TypeExpr) ?eval.ComptimeValue {
         var fb_arena: ?std.heap.ArenaAllocator = null;
         defer if (fb_arena) |*a| a.deinit();
         const fold_alloc = eval.tryFoldScratch() orelse blk: {
@@ -987,15 +989,20 @@ const LlvmEmitter = struct {
         defer scope.deinit();
         var reflect_env = self.reflectEnv();
         if (!self.seedConstFoldScope(&scope, &reflect_env)) return null;
-        return switch (eval.foldComptimeExpr(&scope, expr)) {
+        const folded = if (expected_ty) |ty|
+            eval.foldComptimeExprExpected(&scope, expr, ty)
+        else
+            eval.foldComptimeExpr(&scope, expr);
+        return switch (folded) {
             .value => |v| eval.cloneComptimeValue(self.scratch.allocator(), v) catch null,
             else => null,
         };
     }
 
     fn seedConstFoldScope(self: *LlvmEmitter, scope: *eval.ComptimeScope, reflect_env: *LlvmReflectEnv) bool {
-        _ = self;
-        return lower_llvm_reflect.seedConstFoldScope(reflect_env, scope);
+        if (!lower_llvm_reflect.seedConstFoldScope(reflect_env, scope)) return false;
+        scope.module = self.comptime_module;
+        return true;
     }
 
     fn reflectEnv(self: *LlvmEmitter) LlvmReflectEnv {
@@ -1050,15 +1057,20 @@ const LlvmEmitter = struct {
                 try text.appendSlice(self.scratch.allocator(), " }");
                 break :blk try text.toOwnedSlice(self.scratch.allocator());
             },
-            // LLVM float/double constants accept the exact f64 bit pattern in hex. For an
-            // f32 target, round to f32 first (then widen) so the value is representable.
+            // Preserve the exact source-width IEEE representation. Widening an
+            // f32 through a host f64 quiets signaling NaNs, so materialize the
+            // constant from its raw integer bits instead.
             .float => |f| blk: {
                 const tname = switch (resolved.kind) {
                     .name => |n| n.text,
                     else => "",
                 };
-                const fv: f64 = if (std.mem.eql(u8, tname, "f32")) @floatCast(f.asF32()) else f.asF64();
-                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "0x{X:0>16}", .{@as(u64, @bitCast(fv))});
+                if (std.mem.eql(u8, tname, "f32")) {
+                    const bits: u32 = @bitCast(f.asF32());
+                    break :blk try std.fmt.allocPrint(self.scratch.allocator(), "bitcast (i32 {d} to float)", .{bits});
+                }
+                const bits: u64 = if (f.width == 64) f.bits else @bitCast(f.asF64());
+                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "bitcast (i64 {d} to double)", .{bits});
             },
             .void, .bytes => error.UnsupportedLlvmEmission,
         };

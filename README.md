@@ -47,7 +47,7 @@ The normative language contract is
 ## Quick Start
 
 The required compiler version is Zig 0.16.0. A native development environment
-also needs Python 3 and LLVM 18 on `PATH`.
+also needs Python 3.10 or newer and LLVM 18 on `PATH`.
 
 ```sh
 zig build
@@ -77,7 +77,7 @@ Required for compiler and host development:
 - Zig `0.16.0`;
 - `clang` from LLVM 18;
 - LLVM 18 tools: `llvm-as`, `llc`, `opt`, `llvm-dwarfdump`;
-- Python 3.
+- Python 3.10 or newer.
 
 The QEMU qualification gates additionally use `qemu-system-riscv64`,
 `qemu-system-aarch64`, `qemu-system-x86_64`, `ld.lld`, and `llvm-objcopy`.
@@ -220,9 +220,12 @@ The complete test architecture and gate ownership model are documented in
 
 ### C
 
-The C backend emits freestanding C by default and uses Clang/GCC builtins for
-traps, checked arithmetic, atomics, and wide intermediate arithmetic. Generated
-C is an implementation artifact and differential oracle, not portable ISO C11.
+The C backend emits freestanding C for the qualified Clang 18 toolchain and uses
+Clang builtins for traps, checked arithmetic, atomics, wide intermediate
+arithmetic, and exact-bit floating constants. Generated C is an implementation
+artifact and differential oracle, not portable ISO C11; GCC C is not currently
+a qualified consumer because it does not provide Clang's C-mode
+`__builtin_bit_cast`.
 
 ```sh
 zig build c-test

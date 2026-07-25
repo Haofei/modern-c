@@ -435,12 +435,19 @@ pub fn releaseFoldScratch() void {
 
 pub const ComptimeScope = struct {
     bindings: std.StringHashMap(ComptimeValue),
+    // Complete declared or inferred types for value bindings. Width/domain
+    // maps remain fast-path caches, but correctness for projections, generic
+    // substitution, and call results comes from these typed bindings.
+    binding_types: std.StringHashMap(ast.TypeExpr),
     // Concrete type arguments for `comptime T: type` parameters. These are
     // AST slices/pointers owned by the parsed module's arena; the map only
     // borrows them for the duration of the fold.
     type_bindings: std.StringHashMap(ast.TypeExpr),
     // Registry of `const fn` declarations callable at comptime (section 22).
     funcs: ?*const std.StringHashMap(ast.FnDecl) = null,
+    // Parsed declarations used to resolve global types, aliases, and aggregate
+    // field types while folding. AST storage is owned by the caller.
+    module: ?ast.Module = null,
     // Named compile-time constants (`const NAME: T = …` globals), resolved when
     // an identifier is not a local binding.
     globals: ?*const std.StringHashMap(ComptimeValue) = null,
@@ -454,6 +461,8 @@ pub const ComptimeScope = struct {
     reflect_ctx: ?*anyopaque = null,
     // Nested const-fn call depth, bounded by comptime_call_fuel.
     call_depth: u32 = 0,
+    // Substituted return type of the const function currently being evaluated.
+    return_type: ?ast.TypeExpr = null,
     // Declared integer bit-width of bound names (params, comptime locals), so a
     // width-dependent fold like `~x` can mask to the operand's type. The comptime
     // model otherwise works in untyped i128, where `~0` is -1 rather than the
@@ -467,6 +476,7 @@ pub const ComptimeScope = struct {
     pub fn init(allocator: std.mem.Allocator) ComptimeScope {
         return .{
             .bindings = std.StringHashMap(ComptimeValue).init(allocator),
+            .binding_types = std.StringHashMap(ast.TypeExpr).init(allocator),
             .type_bindings = std.StringHashMap(ast.TypeExpr).init(allocator),
             .widths = std.StringHashMap(u16).init(allocator),
             .domains = std.StringHashMap(DomainWidth).init(allocator),
@@ -475,6 +485,7 @@ pub const ComptimeScope = struct {
 
     pub fn deinit(self: *ComptimeScope) void {
         self.bindings.deinit();
+        self.binding_types.deinit();
         self.type_bindings.deinit();
         self.widths.deinit();
         self.domains.deinit();
@@ -526,8 +537,13 @@ pub const ComptimeScope = struct {
     // Bind a name's full domain+width from its declared type (covers `wrap`/`sat`/checked);
     // also records the bit width so width-sensitive bitwise ops keep working.
     pub fn bindTypeInfo(self: *ComptimeScope, name: []const u8, ty: ast.TypeExpr) std.mem.Allocator.Error!void {
-        if (comptimeTypeBitWidth(ty)) |bits| try self.bindWidth(name, bits);
-        if (comptimeTypeDomainWidth(ty)) |dw| {
+        const resolved = resolveComptimeType(self, ty);
+        self.binding_types.put(name, resolved) catch {
+            self.oom = true;
+            return error.OutOfMemory;
+        };
+        if (comptimeTypeBitWidth(resolved)) |bits| try self.bindWidth(name, bits);
+        if (comptimeTypeDomainWidth(resolved)) |dw| {
             self.domains.put(name, dw) catch {
                 self.oom = true;
                 return error.OutOfMemory;
@@ -674,8 +690,16 @@ fn comptimeCastValue(value: ComptimeValue, ty: ast.TypeExpr) ?ComptimeValue {
         .uint => |n| n,
         .float => |x| blk: {
             const t = @trunc(x.asF64());
-            if (!std.math.isFinite(t) or t >= 1.7e38 or t <= -1.7e38) return null;
-            break :blk @bitCast(@as(i128, @intFromFloat(t)));
+            if (!std.math.isFinite(t)) return null;
+            if (int_info.signed) {
+                const lower: f64 = -0x1p127;
+                const upper: f64 = 0x1p127;
+                if (t < lower or t >= upper) return null;
+                break :blk @bitCast(@as(i128, @intFromFloat(t)));
+            }
+            const upper: f64 = 0x1p128;
+            if (t < 0 or t >= upper) return null;
+            break :blk @as(u128, @intFromFloat(t));
         },
         else => return null,
     };
@@ -688,6 +712,9 @@ fn comptimeCastValue(value: ComptimeValue, ty: ast.TypeExpr) ?ComptimeValue {
 // checker forbids mixed-width operands, so taking the left operand's width (then
 // the right's) is sufficient.
 fn comptimeExprWidth(scope: *const ComptimeScope, expr: ast.Expr) ?u16 {
+    if (comptimeExprType(scope, expr)) |ty| {
+        if (comptimeTypeBitWidth(resolveComptimeType(scope, ty))) |bits| return bits;
+    }
     return switch (expr.kind) {
         .ident => |id| scope.widths.get(id.text),
         .grouped => |inner| comptimeExprWidth(scope, inner.*),
@@ -702,6 +729,9 @@ fn comptimeExprWidth(scope: *const ComptimeScope, expr: ast.Expr) ?u16 {
 // width/domain-preserving operators (mirrors comptimeExprWidth). Drives wrap/sat/checked
 // overflow folding.
 fn comptimeExprDomainWidth(scope: *const ComptimeScope, expr: ast.Expr) ?DomainWidth {
+    if (comptimeExprType(scope, expr)) |ty| {
+        if (comptimeTypeDomainWidth(resolveComptimeType(scope, ty))) |dw| return dw;
+    }
     return switch (expr.kind) {
         .ident => |id| scope.domains.get(id.text) orelse if (scope.global_domains) |domains| domains.get(id.text) else null,
         .grouped => |inner| comptimeExprDomainWidth(scope, inner.*),
@@ -741,6 +771,7 @@ pub fn collectConstGlobalsWithOptions(
     defer arena.deinit();
     var scope = ComptimeScope.init(arena.allocator());
     defer scope.deinit();
+    scope.module = module;
     scope.funcs = funcs;
     scope.globals = out;
     scope.reflect = options.reflect;
@@ -752,10 +783,13 @@ pub fn collectConstGlobalsWithOptions(
         };
         if (!global.is_const) continue;
         const init_expr = global.init orelse continue;
-        switch (foldComptimeExpr(&scope, init_expr)) {
+        const folded = if (global.ty) |ty|
+            foldComptimeExprExpected(&scope, init_expr, ty)
+        else
+            foldComptimeExpr(&scope, init_expr);
+        switch (folded) {
             .value => |folded_value| {
-                const v = if (global.ty) |ty| comptimeCastValue(folded_value, ty) orelse folded_value else folded_value;
-                const cloned = try cloneComptimeValue(allocator, v);
+                const cloned = try cloneComptimeValue(allocator, folded_value);
                 errdefer freeComptimeValue(allocator, cloned);
                 try out.put(global.name.text, cloned);
                 if (global.ty) |ty| {
@@ -864,6 +898,122 @@ fn trySubstituteTypePtr(scope: *const ComptimeScope, ty: ast.TypeExpr) ?*ast.Typ
     };
 }
 
+fn moduleAliasType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr {
+    const module = scope.module orelse return null;
+    for (module.decls) |decl| {
+        const alias = switch (decl.kind) {
+            .type_alias => |node| node,
+            else => continue,
+        };
+        if (std.mem.eql(u8, alias.name.text, name)) return alias.ty;
+    }
+    return null;
+}
+
+fn moduleGlobalType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr {
+    const module = scope.module orelse return null;
+    for (module.decls) |decl| {
+        const global = switch (decl.kind) {
+            .global_decl => |node| node,
+            else => continue,
+        };
+        if (std.mem.eql(u8, global.name.text, name)) return global.ty;
+    }
+    return null;
+}
+
+fn moduleStructFieldType(scope: *const ComptimeScope, ty: ast.TypeExpr, field_name: []const u8) ?ast.TypeExpr {
+    const resolved = resolveComptimeType(scope, ty);
+    const struct_name = switch (resolved.kind) {
+        .name => |name| name.text,
+        else => return null,
+    };
+    const module = scope.module orelse return null;
+    for (module.decls) |decl| {
+        const struct_decl = switch (decl.kind) {
+            .struct_decl => |node| node,
+            else => continue,
+        };
+        if (!std.mem.eql(u8, struct_decl.name.text, struct_name)) continue;
+        for (struct_decl.fields) |field| {
+            if (std.mem.eql(u8, field.name.text, field_name)) return resolveComptimeType(scope, field.ty);
+        }
+        return null;
+    }
+    return null;
+}
+
+fn resolveComptimeType(scope: *const ComptimeScope, ty: ast.TypeExpr) ast.TypeExpr {
+    var current = substituteComptimeType(scope, ty) orelse ty;
+    var depth: usize = 0;
+    while (depth < 32) : (depth += 1) {
+        const name = switch (current.kind) {
+            .name => |ident| ident.text,
+            .qualified => |node| {
+                current = node.child.*;
+                continue;
+            },
+            else => return current,
+        };
+        const aliased = moduleAliasType(scope, name) orelse return current;
+        current = substituteComptimeType(scope, aliased) orelse aliased;
+    }
+    return current;
+}
+
+fn comptimeCallReturnType(scope: *const ComptimeScope, call: anytype) ?ast.TypeExpr {
+    const funcs = scope.funcs orelse return null;
+    const name = switch (call.callee.*.kind) {
+        .ident => |ident| ident.text,
+        else => return null,
+    };
+    const fn_decl = funcs.get(name) orelse return null;
+    const return_type = fn_decl.return_type orelse return null;
+
+    var call_scope = ComptimeScope.init(scope.bindings.allocator);
+    defer call_scope.deinit();
+    call_scope.module = scope.module;
+    call_scope.funcs = scope.funcs;
+    for (fn_decl.params, call.args) |param, arg| {
+        if (!isComptimeTypeParam(param)) continue;
+        const ty = comptimeTypeArg(scope, arg) orelse return null;
+        call_scope.bindType(param.name.text, resolveComptimeType(scope, ty)) catch {
+            scope.recordOom();
+            return null;
+        };
+    }
+    return resolveComptimeType(&call_scope, return_type);
+}
+
+fn comptimeExprType(scope: *const ComptimeScope, expr: ast.Expr) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .ident => |ident| scope.binding_types.get(ident.text) orelse
+            (if (moduleGlobalType(scope, ident.text)) |ty| resolveComptimeType(scope, ty) else null),
+        .grouped => |inner| comptimeExprType(scope, inner.*),
+        .unary => |node| comptimeExprType(scope, node.expr.*),
+        .binary => |node| comptimeExprType(scope, node.left.*) orelse comptimeExprType(scope, node.right.*),
+        .cast => |node| resolveComptimeType(scope, node.ty.*),
+        .index => |node| blk: {
+            const base_ty = resolveComptimeType(scope, comptimeExprType(scope, node.base.*) orelse break :blk null);
+            break :blk switch (base_ty.kind) {
+                .array => |array| resolveComptimeType(scope, array.child.*),
+                else => null,
+            };
+        },
+        .member => |node| blk: {
+            const base_ty = comptimeExprType(scope, node.base.*) orelse break :blk null;
+            break :blk moduleStructFieldType(scope, base_ty, node.name.text);
+        },
+        .call => |call| comptimeCallReturnType(scope, call),
+        else => null,
+    };
+}
+
+pub fn bindComptimeExprType(scope: *ComptimeScope, name: []const u8, expr: ast.Expr) std.mem.Allocator.Error!void {
+    const ty = comptimeExprType(scope, expr) orelse return;
+    try scope.bindTypeInfo(name, ty);
+}
+
 fn foldComptimeReflection(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFold {
     const reflect = scope.reflect orelse return .unknown;
     const rewritten = rewriteReflectionExpr(scope, expr) orelse return .unknown;
@@ -887,6 +1037,178 @@ fn rewriteReflectionExpr(scope: *const ComptimeScope, expr: ast.Expr) ?ast.Expr 
         return .{ .span = expr.span, .kind = .{ .call = .{ .callee = call.callee, .type_args = type_args, .args = call.args[1..] } } };
     }
     return expr;
+}
+
+fn contextualComptimeValue(scope: *const ComptimeScope, value: ComptimeValue, ty: ast.TypeExpr) ComptimeFold {
+    const resolved = resolveComptimeType(scope, ty);
+    if (comptimeIntType(resolved)) |info| {
+        const raw: u128 = switch (value) {
+            .int => |n| blk: {
+                if (info.signed) {
+                    if (info.bits < 128) {
+                        const min = -(@as(i128, 1) << @intCast(info.bits - 1));
+                        const max = (@as(i128, 1) << @intCast(info.bits - 1)) - 1;
+                        if (n < min or n > max) return .trap;
+                    }
+                } else {
+                    if (n < 0) return .trap;
+                    if (info.bits < 128 and @as(u128, @intCast(n)) > ((@as(u128, 1) << @intCast(info.bits)) - 1)) return .trap;
+                }
+                break :blk @bitCast(n);
+            },
+            .uint => |n| blk: {
+                if (info.signed) {
+                    const max: u128 = if (info.bits == 128)
+                        @intCast(std.math.maxInt(i128))
+                    else
+                        (@as(u128, 1) << @intCast(info.bits - 1)) - 1;
+                    if (n > max) return .trap;
+                } else if (info.bits < 128 and n > ((@as(u128, 1) << @intCast(info.bits)) - 1)) {
+                    return .trap;
+                }
+                break :blk n;
+            },
+            else => return if (comptimeCastValue(value, resolved)) |converted|
+                .{ .value = converted }
+            else
+                .unknown,
+        };
+        if (!info.signed and info.bits == 128) return .{ .value = comptimeUnsignedValue(raw) };
+        const converted = comptimeIntFromBits(raw, info) orelse return .trap;
+        return .{ .value = .{ .int = converted } };
+    }
+    const type_name = switch (resolved.kind) {
+        .name => |name| name.text,
+        else => return .{ .value = value },
+    };
+    if (std.mem.eql(u8, type_name, "f32") or std.mem.eql(u8, type_name, "f64")) {
+        return if (comptimeCastValue(value, resolved)) |converted|
+            .{ .value = converted }
+        else
+            .unknown;
+    }
+    return .{ .value = value };
+}
+
+fn foldComptimeUnaryExpected(scope: *const ComptimeScope, op: ast.UnaryOp, operand_expr: ast.Expr, expected_ty: ast.TypeExpr) ComptimeFold {
+    const resolved = resolveComptimeType(scope, expected_ty);
+    const operand = switch (foldComptimeExpr(scope, operand_expr)) {
+        .value => |value| value,
+        .trap => return .trap,
+        .unknown => return .unknown,
+    };
+    const folded: ComptimeFold = switch (op) {
+        .neg => switch (operand) {
+            .int => |value| foldComptimeIntegerNeg(comptimeTypeDomainWidth(resolved), value),
+            .uint => |value| foldComptimeUnsignedNeg(comptimeTypeDomainWidth(resolved), value),
+            .float => blk: {
+                const converted = switch (contextualComptimeValue(scope, operand, resolved)) {
+                    .value => |value| value,
+                    .trap => break :blk .trap,
+                    .unknown => break :blk .unknown,
+                };
+                const float_value = switch (converted) {
+                    .float => |value| value,
+                    else => break :blk .unknown,
+                };
+                break :blk .{ .value = .{ .float = .{
+                    .bits = float_value.bits ^ if (float_value.width == 32) @as(u64, 1) << 31 else @as(u64, 1) << 63,
+                    .width = float_value.width,
+                } } };
+            },
+            else => .unknown,
+        },
+        .bit_not => blk: {
+            const bits = comptimeTypeBitWidth(resolved) orelse break :blk .unknown;
+            const mask: u128 = if (bits == 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(bits)) - 1;
+            const raw = switch (operand) {
+                .int => |value| @as(u128, @bitCast(value)),
+                .uint => |value| value,
+                else => break :blk .unknown,
+            };
+            break :blk contextualComptimeValue(scope, comptimeUnsignedValue((~raw) & mask), resolved);
+        },
+        .logical_not => return foldComptimeUnary(scope, op, operand_expr),
+    };
+    return switch (folded) {
+        .value => |value| contextualComptimeValue(scope, value, resolved),
+        .trap => .trap,
+        .unknown => .unknown,
+    };
+}
+
+pub fn foldComptimeExprExpected(scope: *const ComptimeScope, expr: ast.Expr, expected_ty: ast.TypeExpr) ComptimeFold {
+    const resolved = resolveComptimeType(scope, expected_ty);
+    return switch (expr.kind) {
+        .grouped => |inner| foldComptimeExprExpected(scope, inner.*, resolved),
+        .binary => |node| foldComptimeBinaryWithExpected(scope, node.op, node.left.*, node.right.*, resolved),
+        .unary => |node| foldComptimeUnaryExpected(scope, node.op, node.expr.*, resolved),
+        .array_literal => |items| foldComptimeArrayLiteralExpected(scope, items, resolved),
+        .struct_literal => |fields| foldComptimeStructLiteralExpected(scope, fields, resolved),
+        else => switch (foldComptimeExpr(scope, expr)) {
+            .value => |value| contextualComptimeValue(scope, value, resolved),
+            .trap => .trap,
+            .unknown => .unknown,
+        },
+    };
+}
+
+fn foldComptimeArrayLiteralExpected(scope: *const ComptimeScope, items: []const ast.Expr, expected_ty: ast.TypeExpr) ComptimeFold {
+    const array = switch (resolveComptimeType(scope, expected_ty).kind) {
+        .array => |node| node,
+        else => return foldComptimeArrayLiteral(scope, items),
+    };
+    const elems = scope.alloc(ComptimeValue, items.len) catch return .unknown;
+    for (items, 0..) |item, i| {
+        elems[i] = switch (foldComptimeExprExpected(scope, item, array.child.*)) {
+            .value => |value| value,
+            .trap => return .trap,
+            .unknown => return .unknown,
+        };
+    }
+    return .{ .value = .{ .array = elems } };
+}
+
+fn foldComptimeStructLiteralExpected(scope: *const ComptimeScope, fields: []const ast.StructLiteralField, expected_ty: ast.TypeExpr) ComptimeFold {
+    const resolved = resolveComptimeType(scope, expected_ty);
+    const struct_name = switch (resolved.kind) {
+        .name => |name| name.text,
+        else => return foldComptimeStructLiteral(scope, fields),
+    };
+    const module = scope.module orelse return foldComptimeStructLiteral(scope, fields);
+    var struct_decl: ?ast.StructDecl = null;
+    for (module.decls) |decl| {
+        const candidate = switch (decl.kind) {
+            .struct_decl => |node| node,
+            else => continue,
+        };
+        if (std.mem.eql(u8, candidate.name.text, struct_name)) {
+            struct_decl = candidate;
+            break;
+        }
+    }
+    const declaration = struct_decl orelse return foldComptimeStructLiteral(scope, fields);
+    const out = scope.alloc(ComptimeStructField, fields.len) catch return .unknown;
+    for (fields, 0..) |field, i| {
+        var field_ty: ?ast.TypeExpr = null;
+        for (declaration.fields) |decl_field| {
+            if (std.mem.eql(u8, decl_field.name.text, field.name.text)) {
+                field_ty = decl_field.ty;
+                break;
+            }
+        }
+        const folded = if (field_ty) |ty|
+            foldComptimeExprExpected(scope, field.value, ty)
+        else
+            foldComptimeExpr(scope, field.value);
+        const value = switch (folded) {
+            .value => |next| next,
+            .trap => return .trap,
+            .unknown => return .unknown,
+        };
+        out[i] = .{ .name = field.name.text, .value = value };
+    }
+    return .{ .value = .{ .@"struct" = out } };
 }
 
 pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFold {
@@ -1194,6 +1516,7 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
     var callee_scope = ComptimeScope.init(scope.bindings.allocator);
     defer callee_scope.deinit();
     callee_scope.funcs = scope.funcs;
+    callee_scope.module = scope.module;
     callee_scope.globals = scope.globals;
     callee_scope.global_domains = scope.global_domains;
     callee_scope.reflect = scope.reflect;
@@ -1208,20 +1531,23 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
             };
             continue;
         }
-        var value = switch (foldComptimeExpr(scope, arg)) {
+        const param_ty = resolveComptimeType(&callee_scope, param.ty);
+        const value = switch (foldComptimeExprExpected(scope, arg, param_ty)) {
             .value => |v| v,
             .trap => return .trap,
             .unknown => return .unknown,
         };
-        value = comptimeCastValue(value, param.ty) orelse value;
         callee_scope.bind(param.name.text, value) catch {
             scope.recordOom();
             return .unknown;
         };
-        callee_scope.bindTypeInfo(param.name.text, param.ty) catch {
+        callee_scope.bindTypeInfo(param.name.text, param_ty) catch {
             scope.recordOom();
             return .unknown;
         };
+    }
+    if (fn_decl.return_type) |return_type| {
+        callee_scope.return_type = resolveComptimeType(&callee_scope, return_type);
     }
     const folded = foldComptimeFnBody(&callee_scope, body);
     if (callee_scope.hasOom()) scope.recordOom();
@@ -1277,11 +1603,15 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                     if (local.ty) |lty| scope.bindTypeInfo(local.names[0].text, lty) catch return .unknown;
                     continue;
                 }
-                switch (foldComptimeExpr(scope, init_expr)) {
+                const folded = if (local.ty) |lty|
+                    foldComptimeExprExpected(scope, init_expr, lty)
+                else
+                    foldComptimeExpr(scope, init_expr);
+                switch (folded) {
                     .value => |folded_value| {
-                        const value = if (local.ty) |lty| comptimeCastValue(folded_value, lty) orelse folded_value else folded_value;
-                        scope.bind(local.names[0].text, value) catch return .unknown;
+                        scope.bind(local.names[0].text, folded_value) catch return .unknown;
                         if (local.ty) |lty| scope.bindTypeInfo(local.names[0].text, lty) catch return .unknown;
+                        if (local.ty == null) bindComptimeExprType(scope, local.names[0].text, init_expr) catch return .unknown;
                     },
                     .trap => return .trap,
                     .unknown => return .unknown,
@@ -1296,7 +1626,10 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
             },
             .@"return" => |maybe_expr| {
                 const expr = maybe_expr orelse return .{ .returned = .{ .value = .void } };
-                return .{ .returned = foldComptimeExpr(scope, expr) };
+                return .{ .returned = if (scope.return_type) |ty|
+                    foldComptimeExprExpected(scope, expr, ty)
+                else
+                    foldComptimeExpr(scope, expr) };
             },
             .assert => |expr| {
                 switch (foldComptimeExpr(scope, expr)) {
@@ -1357,6 +1690,7 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
 // Fold an `if let` over a comptime optional (`if let x = opt`) or Result
 // (`if let ok(v) = r` / `if let err(e) = r`), section 22 narrowing.
 fn foldComptimeIfLet(scope: *ComptimeScope, node: ast.IfLet) BodyFlow {
+    const source_ty = if (comptimeExprType(scope, node.value)) |ty| resolveComptimeType(scope, ty) else null;
     const value = switch (foldComptimeExpr(scope, node.value)) {
         .value => |v| v,
         .trap => return .trap,
@@ -1367,6 +1701,13 @@ fn foldComptimeIfLet(scope: *ComptimeScope, node: ast.IfLet) BodyFlow {
         .bind => |name| blk: {
             if (isComptimeNull(value)) break :blk false;
             scope.bind(name.text, value) catch return .unknown;
+            if (source_ty) |ty| {
+                const payload_ty = switch (ty.kind) {
+                    .nullable => |child| resolveComptimeType(scope, child.*),
+                    else => ty,
+                };
+                scope.bindTypeInfo(name.text, payload_ty) catch return .unknown;
+            }
             break :blk true;
         },
         // `if let ok(v) = r` / `if let err(e) = r`: bind the payload on a tag match.
@@ -1389,6 +1730,7 @@ fn foldComptimeIfLet(scope: *ComptimeScope, node: ast.IfLet) BodyFlow {
 // the first arm whose literal/tag/wildcard/binding pattern matches, and run
 // that arm's body. Payload tag-bind patterns are not modeled at comptime.
 fn foldComptimeSwitch(scope: *ComptimeScope, sw: ast.Switch) BodyFlow {
+    const subject_ty = comptimeExprType(scope, sw.subject);
     const subject = switch (foldComptimeExpr(scope, sw.subject)) {
         .value => |v| v,
         .trap => return .trap,
@@ -1400,6 +1742,7 @@ fn foldComptimeSwitch(scope: *ComptimeScope, sw: ast.Switch) BodyFlow {
                 .wildcard => true,
                 .bind => |name| blk: {
                     scope.bind(name.text, subject) catch return .unknown;
+                    if (subject_ty) |ty| scope.bindTypeInfo(name.text, ty) catch return .unknown;
                     break :blk true;
                 },
                 .literal => |lit| switch (foldComptimeExpr(scope, lit)) {
@@ -1510,7 +1853,11 @@ pub const AssignResult = enum { ok, trap, unknown };
 // rebind the whole aggregate with an updated copy (copy-on-write). This is the
 // comptime "memory" model — values, no aliasing.
 pub fn foldComptimeAssign(scope: *ComptimeScope, target: ast.Expr, value_expr: ast.Expr) AssignResult {
-    const v = switch (foldComptimeExpr(scope, value_expr)) {
+    const folded = if (comptimeExprType(scope, target)) |ty|
+        foldComptimeExprExpected(scope, value_expr, ty)
+    else
+        foldComptimeExpr(scope, value_expr);
+    const v = switch (folded) {
         .value => |x| x,
         .trap => return .trap,
         .unknown => return .unknown,
@@ -1642,6 +1989,13 @@ fn foldComptimeWhile(scope: *ComptimeScope, loop: ast.Loop) BodyFlow {
 fn foldComptimeForLoop(scope: *ComptimeScope, loop: ast.Loop) BodyFlow {
     const iterable_expr = loop.iterable orelse return .unknown;
     const binding = loop.label orelse return .unknown;
+    const element_ty: ?ast.TypeExpr = if (comptimeExprType(scope, iterable_expr)) |iterable_ty|
+        switch (resolveComptimeType(scope, iterable_ty).kind) {
+            .array => |array| resolveComptimeType(scope, array.child.*),
+            else => null,
+        }
+    else
+        null;
     const arr = switch (foldComptimeExpr(scope, iterable_expr)) {
         .value => |v| switch (v) {
             .array => |a| a,
@@ -1652,6 +2006,7 @@ fn foldComptimeForLoop(scope: *ComptimeScope, loop: ast.Loop) BodyFlow {
     };
     for (arr) |element| {
         scope.bind(binding.text, element) catch return .unknown;
+        if (element_ty) |ty| scope.bindTypeInfo(binding.text, ty) catch return .unknown;
         switch (foldComptimeStmtSeq(scope, loop.body.items)) {
             .fallthrough, .continued => {},
             .broke => return .fallthrough,
@@ -1721,6 +2076,26 @@ fn foldComptimeUnsignedNeg(dw: ?DomainWidth, value: u128) ComptimeFold {
         if (value <= std.math.maxInt(i128)) return .{ .value = .{ .int = -@as(i128, @intCast(value)) } };
         return .unknown;
     };
+    if (d.signed) {
+        const limit: u128 = @as(u128, 1) << @intCast(d.bits - 1);
+        if (value > limit) return switch (d.domain) {
+            .checked => .trap,
+            .wrap => blk: {
+                const mask: u128 = if (d.bits == 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(d.bits)) - 1;
+                const raw = (0 -% value) & mask;
+                break :blk if (comptimeIntFromBits(raw, .{ .bits = d.bits, .signed = true })) |n|
+                    .{ .value = .{ .int = n } }
+                else
+                    .unknown;
+            },
+            .sat => .{ .value = .{ .int = if (d.bits == 128) std.math.minInt(i128) else -(@as(i128, 1) << @intCast(d.bits - 1)) } },
+        };
+        if (value == limit) {
+            const minimum = if (d.bits == 128) std.math.minInt(i128) else -(@as(i128, 1) << @intCast(d.bits - 1));
+            return .{ .value = .{ .int = minimum } };
+        }
+        return .{ .value = .{ .int = -@as(i128, @intCast(value)) } };
+    }
     if (d.domain == .checked) return if (value == 0) .{ .value = .{ .int = 0 } } else .trap;
     if (d.domain == .sat) return .{ .value = .{ .int = 0 } };
     const mask: u128 = if (d.bits == 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(d.bits)) - 1;
@@ -1845,6 +2220,10 @@ fn foldSignedShift(op: ast.BinaryOp, value: i128, count: i128, dw: ?DomainWidth)
 }
 
 fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: ast.Expr, right_expr: ast.Expr) ComptimeFold {
+    return foldComptimeBinaryWithExpected(scope, op, left_expr, right_expr, null);
+}
+
+fn foldComptimeBinaryWithExpected(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: ast.Expr, right_expr: ast.Expr, expected_ty: ?ast.TypeExpr) ComptimeFold {
     // Logical operators short-circuit so a known-determining operand folds even
     // when the other side is not a constant.
     if (op == .logical_and or op == .logical_or) {
@@ -1870,12 +2249,24 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         };
     }
 
-    const left = switch (foldComptimeExpr(scope, left_expr)) {
+    const context_applies = switch (op) {
+        .add, .sub, .mul, .div, .mod, .bit_and, .bit_or, .bit_xor, .shl, .shr => expected_ty != null,
+        else => false,
+    };
+    const left_fold = if (context_applies)
+        foldComptimeExprExpected(scope, left_expr, expected_ty.?)
+    else
+        foldComptimeExpr(scope, left_expr);
+    const right_fold = if (context_applies)
+        foldComptimeExprExpected(scope, right_expr, expected_ty.?)
+    else
+        foldComptimeExpr(scope, right_expr);
+    const left = switch (left_fold) {
         .value => |v| v,
         .trap => return .trap,
         .unknown => return .unknown,
     };
-    const right = switch (foldComptimeExpr(scope, right_expr)) {
+    const right = switch (right_fold) {
         .value => |v| v,
         .trap => return .trap,
         .unknown => return .unknown,
@@ -1965,7 +2356,12 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         };
     }
 
-    const dw = comptimeExprDomainWidth(scope, left_expr) orelse comptimeExprDomainWidth(scope, right_expr);
+    const dw = if (expected_ty) |ty|
+        comptimeTypeDomainWidth(resolveComptimeType(scope, ty)) orelse
+            comptimeExprDomainWidth(scope, left_expr) orelse
+            comptimeExprDomainWidth(scope, right_expr)
+    else
+        comptimeExprDomainWidth(scope, left_expr) orelse comptimeExprDomainWidth(scope, right_expr);
     if (left == .uint or right == .uint or (dw != null and !dw.?.signed))
         return foldWideUnsignedBinary(op, left, right, dw);
 

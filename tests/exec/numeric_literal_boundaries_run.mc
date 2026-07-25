@@ -6,6 +6,10 @@ const F32_ONE: f32 = 1.0;
 const F32_FOLDED: f32 = (F32_EDGE + F32_ONE) - F32_EDGE;
 const NAN_SOURCE: u64 = 18444492273895871028;
 const PAYLOAD_NAN: f64 = bitcast<f64>(NAN_SOURCE);
+const F32_SNAN_SOURCE: u32 = 2139095041;
+const F32_NEG_SNAN_SOURCE: u32 = 4286578689;
+const F32_SNAN: f32 = bitcast<f32>(F32_SNAN_SOURCE);
+const F32_NEG_SNAN: f32 = bitcast<f32>(F32_NEG_SNAN_SOURCE);
 
 fn f32_runtime(a: f32, one: f32) -> f32 {
     return (a + one) - a;
@@ -52,6 +56,12 @@ export fn numeric_literal_boundaries_run() -> u32 {
     }
     if bitcast<u64>(PAYLOAD_NAN) != NAN_SOURCE {
         return 9;
+    }
+    if bitcast<u32>(F32_SNAN) != F32_SNAN_SOURCE {
+        return 10;
+    }
+    if bitcast<u32>(F32_NEG_SNAN) != F32_NEG_SNAN_SOURCE {
+        return 11;
     }
     return 0;
 }

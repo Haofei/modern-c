@@ -340,6 +340,7 @@ pub const Checker = struct {
     // comptime folds such as `~CONST_U32`.
     const_global_widths: ?*const std.StringHashMap(u16) = null,
     const_global_domains: ?*const std.StringHashMap(eval.DomainWidth) = null,
+    comptime_module: ?ast.Module = null,
     // Functions that declare at least one `comptime` parameter (section 22),
     // keyed by name, so call sites can re-check their comptime assertions with
     // the parameters bound to the call's constant arguments.
@@ -431,6 +432,8 @@ pub const Checker = struct {
     }
 
     pub fn checkModule(self: *Checker, module: ast.Module) void {
+        self.comptime_module = module;
+        defer self.comptime_module = null;
         defer self.live_locals.deinit(self.reporter.allocator); // free the block-scoping liveness stack
         var mmio_structs = std.StringHashMap(MmioStruct).init(self.reporter.allocator);
         defer deinitMmioStructs(&mmio_structs);
@@ -1332,13 +1335,23 @@ pub const Checker = struct {
         // initializer or folds through the section-22 comptime evaluator. The
         // latter admits expressions like `1 + 2` and const-fn aggregate builders
         // while still rejecting runtime calls.
-        const folds_static = self.comptimeConstantFolds(initializer);
+        const fold_status = self.comptimeConstantFoldStatus(initializer, ty);
+        if (fold_status == .trap and self.reporter.diagnostics.items.len == errors_before) {
+            self.errorCode(initializer.span, "E_COMPTIME_TRAP", "trap during const eval is a compile error");
+        }
+        const folds_static = fold_status == .value;
         if (type_valid and self.reporter.diagnostics.items.len == errors_before and !isStaticGlobalInitializer(initializer, ctx) and !folds_static) {
             self.errorCode(initializer.span, "E_GLOBAL_INITIALIZER_NOT_STATIC", "global initializer must be a compile-time static value for M0 C emission");
         }
     }
 
     fn comptimeConstantFolds(self: *Checker, expr: ast.Expr) bool {
+        return self.comptimeConstantFoldStatus(expr, null) == .value;
+    }
+
+    const ComptimeConstantStatus = enum { value, trap, unknown };
+
+    fn comptimeConstantFoldStatus(self: *Checker, expr: ast.Expr, expected_ty: ?ast.TypeExpr) ComptimeConstantStatus {
         var fb_arena: ?std.heap.ArenaAllocator = null;
         defer if (fb_arena) |*a| a.deinit();
         const fold_alloc = eval.tryFoldScratch() orelse blk: {
@@ -1350,18 +1363,24 @@ pub const Checker = struct {
         self.seedComptimeScope(&scope);
         if (scope.hasOom()) {
             self.noteComptimeOom(&scope);
-            return false;
+            return .unknown;
         }
-        const folds = switch (eval.foldComptimeExpr(&scope, expr)) {
-            .value => true,
-            else => false,
+        const folded = if (expected_ty) |ty|
+            eval.foldComptimeExprExpected(&scope, expr, ty)
+        else
+            eval.foldComptimeExpr(&scope, expr);
+        const status: ComptimeConstantStatus = switch (folded) {
+            .value => .value,
+            .trap => .trap,
+            .unknown => .unknown,
         };
         self.noteComptimeOom(&scope);
-        return folds;
+        return status;
     }
 
     fn seedComptimeScope(self: *Checker, scope: *eval.ComptimeScope) void {
         scope.funcs = self.const_fns;
+        scope.module = self.comptime_module;
         scope.globals = self.const_globals;
         scope.global_domains = self.const_global_domains;
         if (self.reflect_env) |env| {
@@ -2134,13 +2153,20 @@ pub const Checker = struct {
                         };
                         continue;
                     }
-                    switch (eval.foldComptimeExpr(scope, init_expr)) {
+                    const folded = if (local.ty) |lty|
+                        eval.foldComptimeExprExpected(scope, init_expr, lty)
+                    else
+                        eval.foldComptimeExpr(scope, init_expr);
+                    switch (folded) {
                         .value => |value| {
                             scope.bind(local.names[0].text, value) catch {
                                 self.noteComptimeOom(scope);
                                 return;
                             };
                             if (local.ty) |lty| scope.bindTypeInfo(local.names[0].text, lty) catch {
+                                self.noteComptimeOom(scope);
+                                return;
+                            } else eval.bindComptimeExprType(scope, local.names[0].text, init_expr) catch {
                                 self.noteComptimeOom(scope);
                                 return;
                             };
@@ -2190,32 +2216,6 @@ pub const Checker = struct {
         self.noteComptimeOom(scope);
     }
 
-    // Returns the folded comptime value of `expr`, or null if it is not a
-    // compile-time constant (section 22).
-    fn comptimeFoldValue(self: *Checker, expr: ast.Expr) ?eval.ComptimeValue {
-        // NOTE: deliberately NOT switched to the shared fold-scratch buffer.
-        // Unlike the other fold sites this returns the ComptimeValue itself, and
-        // an aggregate value (.bytes/.array/.@"struct") aliases slices allocated
-        // from this scope's allocator — the result can escape into the caller's
-        // separate scope (checkComptimeCallAsserts binds it). Reusing a shared,
-        // reset-on-next-use buffer would risk clobbering that escaped aggregate,
-        // so this keeps its own per-call buffer. Not a hot path.
-        var buf: [64 * 1024]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&buf);
-        var scope = eval.ComptimeScope.init(fba.allocator());
-        self.seedComptimeScope(&scope);
-        if (scope.hasOom()) {
-            self.noteComptimeOom(&scope);
-            return null;
-        }
-        const folded = switch (eval.foldComptimeExpr(&scope, expr)) {
-            .value => |v| v,
-            else => null,
-        };
-        self.noteComptimeOom(&scope);
-        return folded;
-    }
-
     // Re-check a called function's comptime assertions with its `comptime`
     // parameters bound to the call's constant arguments (section 22). Failures
     // are reported at the call site.
@@ -2240,7 +2240,10 @@ pub const Checker = struct {
                 };
                 continue;
             }
-            const value = self.comptimeFoldValue(arg) orelse return; // non-const arg already diagnosed
+            const value = switch (eval.foldComptimeExprExpected(&scope, arg, param.ty)) {
+                .value => |folded| folded,
+                else => return, // non-const/trapping arg is diagnosed by the normal call checks
+            };
             scope.bind(param.name.text, value) catch {
                 self.noteComptimeOom(&scope);
                 return;

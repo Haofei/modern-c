@@ -242,6 +242,7 @@ const CEmitter = struct {
     const_globals: std.StringHashMap(eval.ComptimeValue),
     const_global_widths: std.StringHashMap(u16),
     const_global_domains: std.StringHashMap(eval.DomainWidth),
+    comptime_module: ?ast.Module = null,
     structs: std.StringHashMap(ast.StructDecl),
     mmio_structs: std.StringHashMap(MmioStruct),
     packed_bits: std.StringHashMap(PackedBitsInfo),
@@ -439,6 +440,7 @@ const CEmitter = struct {
     // queries (`comptimeStructLayout`) resolve exactly as during emission. Shared by
     // `emitModule` (which goes on to emit) and `appendLayoutAsserts` (layouts only).
     fn collectModule(self: *CEmitter, module: ast.Module) anyerror!void {
+        self.comptime_module = module;
         try self.collectConstFns(module);
         try self.collectForwardTypeNames(module);
         try self.collectConstGlobals(module);
@@ -659,8 +661,8 @@ const CEmitter = struct {
     }
 
     // Fold a `const` global initializer to its C constant text (section 22).
-    fn constGlobalCValue(self: *CEmitter, expr: ast.Expr) !?[]const u8 {
-        const value = self.foldConstGlobalValue(expr) orelse return null;
+    fn constGlobalCValue(self: *CEmitter, expr: ast.Expr, ty: ?ast.TypeExpr) !?[]const u8 {
+        const value = self.foldConstGlobalValue(expr, ty) orelse return null;
         return switch (value) {
             // Values above the signed-64 range need an unsigned suffix, or C
             // reads the decimal literal as implicitly unsigned (a warning).
@@ -693,13 +695,13 @@ const CEmitter = struct {
                 return true;
             }
         }
-        const value = self.foldConstGlobalValue(expr) orelse return false;
+        const value = self.foldConstGlobalValue(expr, ty) orelse return false;
         try self.out.appendSlice(self.allocator, " = ");
         try self.emitComptimeValueInitializer(value, ty);
         return true;
     }
 
-    fn foldConstGlobalValue(self: *CEmitter, expr: ast.Expr) ?eval.ComptimeValue {
+    fn foldConstGlobalValue(self: *CEmitter, expr: ast.Expr, expected_ty: ?ast.TypeExpr) ?eval.ComptimeValue {
         var fb_arena: ?std.heap.ArenaAllocator = null;
         defer if (fb_arena) |*a| a.deinit();
         const fold_alloc = eval.tryFoldScratch() orelse blk: {
@@ -711,7 +713,11 @@ const CEmitter = struct {
         defer scope.deinit();
         var reflect_env = self.reflectEnv();
         if (!self.seedConstFoldScope(&scope, &reflect_env)) return null;
-        return switch (eval.foldComptimeExpr(&scope, expr)) {
+        const folded = if (expected_ty) |ty|
+            eval.foldComptimeExprExpected(&scope, expr, ty)
+        else
+            eval.foldComptimeExpr(&scope, expr);
+        return switch (folded) {
             .value => |v| eval.cloneComptimeValue(self.scratch.allocator(), v) catch null,
             else => null,
         };
@@ -719,6 +725,7 @@ const CEmitter = struct {
 
     fn seedConstFoldScope(self: *CEmitter, scope: *eval.ComptimeScope, reflect_env: *ReflectEnv) bool {
         scope.funcs = &self.const_fns;
+        scope.module = self.comptime_module;
         scope.globals = &self.const_globals;
         scope.global_domains = &self.const_global_domains;
         scope.reflect = lower_c_reflect.comptimeReflectThunk;
@@ -1364,9 +1371,9 @@ const CEmitter = struct {
         try self.emitDeclarator(ty, name);
     }
 
-    fn constGlobalCValueForGlobal(ctx: *anyopaque, expr: ast.Expr) anyerror!?[]const u8 {
+    fn constGlobalCValueForGlobal(ctx: *anyopaque, expr: ast.Expr, ty: ?ast.TypeExpr) anyerror!?[]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.constGlobalCValue(expr);
+        return self.constGlobalCValue(expr, ty);
     }
 
     fn emitExprForGlobal(ctx: *anyopaque, expr: ast.Expr) anyerror!void {
