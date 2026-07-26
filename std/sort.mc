@@ -70,6 +70,7 @@ export fn binary_search_u32(xs: []mut u32, key: u32) -> usize {
 
 // Ascending in-place insertion sort of `xs` under the strict-weak ordering `less`
 // (`less(a, b)` == "a comes before b"). Stable: equal elements keep their input order.
+#[mc_abi]
 export fn sort(comptime T: type, xs: []mut T, less: closure(T, T) -> bool) -> void {
     let n: usize = xs.len;
     var i: usize = 1;
@@ -89,6 +90,7 @@ export fn sort(comptime T: type, xs: []mut T, less: closure(T, T) -> bool) -> vo
 }
 
 // True if `xs` is ordered under `less` (no element comes before its predecessor).
+#[mc_abi]
 export fn is_sorted(comptime T: type, xs: []mut T, less: closure(T, T) -> bool) -> bool {
     let n: usize = xs.len;
     var i: usize = 1;
@@ -103,6 +105,7 @@ export fn is_sorted(comptime T: type, xs: []mut T, less: closure(T, T) -> bool) 
 
 // First index `i` in a `less`-sorted `xs` where `!less(xs[i], key)` — the insertion point
 // for `key` (the standard lower bound). Returns `xs.len` if every element precedes `key`.
+#[mc_abi]
 export fn lower_bound(comptime T: type, xs: []mut T, key: T, less: closure(T, T) -> bool) -> usize {
     var lo: usize = 0;
     var hi: usize = xs.len;

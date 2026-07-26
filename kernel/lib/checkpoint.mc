@@ -58,6 +58,7 @@ struct CkptFrame {
 // Reads the live state through the existing accessors (proc_pid_at / proc_fds / proc_macct),
 // stages it into one contiguous frame, and writes that frame as a single blob. PutFailed on any
 // BlobStore rejection (never a partial write — blob_put fails closed).
+#[mc_abi]
 export fn checkpoint_save(t: *mut ProcTable, slot: usize, store: *mut BlobStore, id: u32) -> Result<usize, CkptError> {
     var frame: CkptFrame = uninit;
     frame.pid = proc_pid_at(t, slot) as usize;
@@ -81,6 +82,7 @@ export fn checkpoint_save(t: *mut ProcTable, slot: usize, store: *mut BlobStore,
 // the saved frame back, and replays the saved FdSpace + ResourceAccount into the new slot through
 // the mutable accessors. Returns the new slot. NotFound if `id` was never saved; GetFailed if the
 // stored blob is shorter than a frame (the saved pid is informational and intentionally discarded).
+#[mc_abi]
 export fn checkpoint_restore(t: *mut ProcTable, store: *mut BlobStore, id: u32, stack_top: usize, entry: fn() -> void) -> Result<usize, CkptError> {
     // Fail before spawning if the blob is absent, so a bad restore does not consume a slot.
     switch blob_len(store, id) {
@@ -120,6 +122,7 @@ export fn checkpoint_restore(t: *mut ProcTable, store: *mut BlobStore, id: u32, 
 // the caller can retry. The source is touched only once the destination already holds the restored
 // agent, so at no point is the agent absent from both tables. (Single-threaded model: there is no
 // window where another observer sees neither copy.)
+#[mc_abi]
 export fn migrate(src_t: *mut ProcTable, src_slot: usize, dst_t: *mut ProcTable, store: *mut BlobStore, id: u32, stack_top: usize, entry: fn() -> void) -> Result<usize, CkptError> {
     // 1. Checkpoint the source agent into the durable blob. On failure the source is untouched.
     switch checkpoint_save(src_t, src_slot, store, id) {

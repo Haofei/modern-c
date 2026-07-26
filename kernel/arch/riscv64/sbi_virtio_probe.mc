@@ -18,6 +18,7 @@ const VIRTIO_MMIO_MAGIC: u32 = 0x74726976;
 // Probe for a device with the given device_id, returning its typed register
 // pointer, or a null MmioPtr if absent. The raw MMIO loads + the MmioPtr mint are
 // the audited unsafe boundary.
+#[mc_abi]
 export fn find_virtio_device(device_id: u32) -> MmioPtr<VirtioMmio> {
     var i: usize = 0;
     while i < VIRTIO_MMIO_COUNT {

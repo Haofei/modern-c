@@ -151,6 +151,7 @@ pub struct PageTable {
 }
 
 // The root physical address (for loading into TTBR0_EL1).
+#[mc_abi]
 export fn page_table_root(pt: *PageTable) -> PAddr {
     return pt.root;
 }
@@ -380,6 +381,7 @@ export fn page_table_lookup(pt: *PageTable, virt: VAddr) -> Result<LeafMapping, 
 }
 
 // Permission predicates on a resolved mapping (the descriptor bit encoding stays here).
+#[mc_abi]
 export fn mapping_phys(m: *LeafMapping) -> PAddr { return m.phys; }
 // AArch64 semantics: EL0-accessible (user) iff the low AP bit is set (AP == 0b01 or 0b11).
 export fn mapping_is_user(m: *LeafMapping) -> bool { return (m.flags & ATTR_AP_LOW) != 0; }
@@ -407,6 +409,7 @@ export fn pte_flags_for_user(r: bool, w: bool, x: bool) -> u64 {
 
 // Translate `virt` to its mapped physical address (including the page offset). Traps if the
 // address is not mapped — callers verify a mapping exists first (or use lookup).
+#[mc_abi]
 export fn page_table_translate(pt: *PageTable, virt: VAddr) -> PAddr {
     switch page_table_lookup(pt, virt) {
         ok(m) => { return m.phys; }

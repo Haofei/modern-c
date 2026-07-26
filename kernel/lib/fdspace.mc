@@ -38,6 +38,7 @@ export fn fd_count(s: *mut FdSpace) -> usize {
 }
 
 // Allocate the lowest free fd for (kind, handle); Full if the space is exhausted.
+#[mc_abi]
 export fn fd_alloc(s: *mut FdSpace, kind: u32, handle: u32) -> Result<usize, FdError> {
     switch slotmap_alloc(FdEntry, FD_MAX, &s.slots) {
         ok(fd) => {
@@ -54,6 +55,7 @@ export fn fd_alloc(s: *mut FdSpace, kind: u32, handle: u32) -> Result<usize, FdE
     }
 }
 
+#[mc_abi]
 export fn fd_kind(s: *mut FdSpace, fd: usize) -> Result<u32, FdError> {
     switch slotmap_get(FdEntry, FD_MAX, &s.slots, fd) {
         ok(e) => {
@@ -65,6 +67,7 @@ export fn fd_kind(s: *mut FdSpace, fd: usize) -> Result<u32, FdError> {
     }
 }
 
+#[mc_abi]
 export fn fd_handle(s: *mut FdSpace, fd: usize) -> Result<u32, FdError> {
     switch slotmap_get(FdEntry, FD_MAX, &s.slots, fd) {
         ok(e) => {
@@ -76,6 +79,7 @@ export fn fd_handle(s: *mut FdSpace, fd: usize) -> Result<u32, FdError> {
     }
 }
 
+#[mc_abi]
 export fn fd_set_ready(s: *mut FdSpace, fd: usize, r: bool) -> Result<bool, FdError> {
     switch slotmap_get(FdEntry, FD_MAX, &s.slots, fd) {
         ok(e) => {
@@ -104,6 +108,7 @@ export fn fd_is_ready(s: *mut FdSpace, fd: usize) -> bool {
     }
 }
 
+#[mc_abi]
 export fn fd_close(s: *mut FdSpace, fd: usize) -> Result<bool, FdError> {
     switch slotmap_free(FdEntry, FD_MAX, &s.slots, fd) {
         ok(b) => {
@@ -119,6 +124,7 @@ export fn fd_close(s: *mut FdSpace, fd: usize) -> Result<bool, FdError> {
 // two descriptors share the underlying resource (the same socket/pipe/file handle) but are
 // independent fd slots — the primitive fd inheritance across fork builds on. The dup starts
 // not-ready (its readiness is recomputed by the next poll). BadFd if `fd` is not open.
+#[mc_abi]
 export fn fd_dup(s: *mut FdSpace, fd: usize) -> Result<usize, FdError> {
     switch slotmap_get(FdEntry, FD_MAX, &s.slots, fd) {
         ok(e) => {
@@ -137,6 +143,7 @@ export fn fd_dup(s: *mut FdSpace, fd: usize) -> Result<usize, FdError> {
 // table. `child` must be freshly `fd_init`'d (empty); inherited descriptors start not-ready
 // (readiness is recomputed by the next poll). Returns the count inherited, or `Full` if the
 // child could not hold a descriptor (only possible when `child` was not empty).
+#[mc_abi]
 export fn fd_inherit(parent: *mut FdSpace, child: *mut FdSpace) -> Result<usize, FdError> {
     var i: usize = 0;
     var inherited: usize = 0;
@@ -167,6 +174,7 @@ export fn fd_inherit(parent: *mut FdSpace, child: *mut FdSpace) -> Result<usize,
 }
 
 // select/poll: the lowest open fd that is ready, or NoneReady.
+#[mc_abi]
 export fn fd_select(s: *mut FdSpace) -> Result<usize, FdError> {
     var i: usize = 0;
     while i < FD_MAX {

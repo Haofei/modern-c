@@ -4,7 +4,8 @@ Date: 2026-07-26
 
 This follow-up closes another concrete subset of the 4483a254 review items on
 `master`. It does not claim the long-term production-readiness architecture is
-complete.
+complete, but the release-required fast gate is now green for the remediated
+surface.
 
 ## Fixed in this change
 
@@ -52,9 +53,28 @@ invalid-state checks.
 
 ### MC-only ABI annotations
 
-The OTA chunk/finish APIs and two MC-only helper exports were annotated with
-`#[mc_abi]` so they no longer claim C ABI compatibility for MC-only value
-shapes such as `Result` and function pointers.
+The MC-only exported helper surface was audited and annotated with `#[mc_abi]`
+where it exposes MC value shapes that are not C ABI contracts. This covers
+kernel/runtime helpers returning `Result`, MC structs/enums, function-pointer or
+closure based APIs, `*dyn` interfaces, and comparable MC-only kernel service
+boundaries.
+
+The cleanup includes process, scheduler, IPC, fdspace, block, treefs/vfs,
+ledger, policy, persistent audit, network broker, virtio/rng/paging helpers,
+selected standard-library helpers, and the QEMU runtime fixtures that call these
+MC-only exports.
+
+The negative C ABI fixtures under `tests/c_emit/bad` were intentionally left
+unchanged so they continue proving that unannotated invalid C ABI exports fail
+closed.
+
+### Supervision generation test repair
+
+`tests/qemu/proc/instrument_demo.mc` now re-links supervision edges after the
+intentional parent generation bump used to test stale-edge rejection. This keeps
+the test aligned with generation-safe supervision semantics: stale links are
+rejected, and fresh `{slot, generation}` links participate in crash-loop
+cascade.
 
 ## Verification run in Docker
 
@@ -65,7 +85,9 @@ docker compose run --rm dev zig build heap-test llvm-heap-test
 docker compose run --rm dev bash tools/lib/host-harness.sh zig-out/bin/mcc heapfree-test
 docker compose run --rm dev bash tools/lib/host-harness.sh zig-out/bin/mcc alloc-test
 docker compose run --rm dev zig build production-ops-test bundle-fuzz-test bundle-metadata-test ota-test llvm-ota-test
-docker compose run --rm dev zig build bundle-fuzz-test
+docker compose run --rm dev zig build app-run-test llvm-app-run-test ledger-test llvm-ledger-test instrument-test llvm-instrument-test fdspace-test treefs-test agent-containment-test
+docker compose run --rm dev bash -lc 'for t in ipcprov-test pause-test ipcsample-test fairsched-test ipcfast-test; do bash tools/lib/host-harness.sh zig-out/bin/mcc "$t"; done'
+docker compose run --rm dev zig build fast -j1
 ```
 
 Also passed as part of the bundle metadata run:
@@ -74,33 +96,19 @@ Also passed as part of the bundle metadata run:
 rsa-verify-test
 ```
 
-Known remaining failure observed during this follow-up:
-
-```text
-docker compose run --rm dev zig build app-run-test
-```
-
-The failure is a broad existing ABI-cleanup issue: many MC-only `export fn`
-helpers across process, fdspace, treefs, net broker, ledger, IPC and related
-runtime modules expose `Result`, enum, struct, or function-pointer values through
-the explicit C ABI surface. These need a deliberate pass to separate true C ABI
-entry points from MC-only exported kernel/runtime helpers, not a blind mechanical
-rewrite.
-
 ## Still not closed
 
 The following review items remain larger architectural work:
 
 - production `VerifiedBundle` with SHA-256/RSA verification bound to immutable
   exact payload bytes and the actual loader;
-- complete C ABI/MC ABI surface audit for all exported kernel/runtime helpers;
 - backend API that exposes only verified MIR facts and no AST side channel;
 - global `CompilationSession` replacing process-level compilation state;
 - descriptor/stateful TLB and SMP model for active page-table mutation and
   uaccess;
 - generation-safe process handles in every public process/supervision API;
 - true module graph/separate compilation;
-- full release-required `fast -j1` / parallel backend parity gates green.
+- parallel backend parity release gate evidence on the target CI matrix.
 
 This change improves concrete safety boundaries but does not by itself make the
 repository production-qualified.

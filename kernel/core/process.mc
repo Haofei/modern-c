@@ -283,6 +283,7 @@ export fn proc_metrics(t: *mut ProcTable) -> *mut Metrics {
 // Set the platform's CPU-idle action (e.g. a `wfi` wrapper). Called when the scheduler has
 // nothing runnable, so a blocked kernel sleeps instead of spinning. The wfi itself lives in
 // arch code (this module stays host-portable); the platform installs it at boot.
+#[mc_abi]
 export fn proc_set_idle(t: *mut ProcTable, hook: fn() -> void) -> void {
     t.idle_hook = hook;
 }
@@ -296,10 +297,12 @@ fn proc_idle(t: *mut ProcTable) -> void {
 // Install the global resource-cleanup hook, run with (pid, gen) on every process death.
 // A microkernel installs one closure that revokes the dead pid's grants and unregisters
 // its services, so a dead owner's resources can never outlive it. See proc_death_cleanup.
+#[mc_abi]
 export fn proc_set_death_hook(t: *mut ProcTable, hook: fn(u32, u32) -> void) -> void {
     t.death_hook = hook;
 }
 
+#[mc_abi]
 export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -> u32 {
     // Reuse a reaped (Unused) slot if one exists; otherwise grow the table. Without this,
     // spawn/reap cycles would permanently exhaust the table even with free slots.
@@ -418,6 +421,7 @@ export fn proc_macct(t: *mut ProcTable, slot: usize) -> *mut ResourceAccount {
 // Charge `n` units against process `slot`'s memory quota. All-or-nothing (fail closed): on
 // success returns the new used total; on failure returns err(.OverQuota) and reserves nothing,
 // so the allocator can treat an over-quota charge as a clean no-op and refuse the allocation.
+#[mc_abi]
 export fn proc_charge_mem(t: *mut ProcTable, slot: usize, n: usize) -> Result<usize, MemError> {
     return resacct_charge(proc_macct(t, slot), n);
 }
@@ -450,6 +454,7 @@ const OOM_KILLED_CODE: u32 = 0xDEAD_00F0;
 // bootstrap and is never a victim) process with the HIGHEST current memory usage — the worst
 // offender, the most likely runaway. Returns its slot, or err(.NoVictim) if no eligible process
 // exists. Pure selection: makes no state changes.
+#[mc_abi]
 export fn proc_oom_victim(t: *mut ProcTable) -> Result<usize, OomError> {
     var best: usize = MAX_PROCS; // sentinel: no victim found yet
     var best_used: usize = 0;
@@ -508,6 +513,7 @@ export fn proc_oom_kill(t: *mut ProcTable, slot: usize) -> void {
 // The memory-pressure entry point: pick the worst live offender (proc_oom_victim) and OOM-kill
 // it (proc_oom_kill), returning the reclaimed slot. err(.NoVictim) if there is nothing to kill.
 // The heap/allocator calls this on allocation exhaustion to reclaim memory from a runaway agent.
+#[mc_abi]
 export fn proc_oom_reclaim(t: *mut ProcTable) -> Result<usize, OomError> {
     switch proc_oom_victim(t) {
         ok(slot) => {
@@ -562,6 +568,7 @@ export fn proc_leave_agent(t: *mut ProcTable) -> void {
 // The slot of the agent that currently owns the CPU, or err(.NoVictim) if the kernel itself is
 // running (no fault domain marked). This is the trap handler's classifier: ok => a fault is a
 // recoverable agent fault; err => a fault is fatal-kernel.
+#[mc_abi]
 export fn proc_fault_domain(t: *mut ProcTable) -> Result<usize, OomError> {
     if g_fault_domain == MAX_PROCS {
         return err(.NoVictim);
@@ -606,6 +613,7 @@ export fn proc_fault_kill(t: *mut ProcTable, slot: usize) -> void {
 // agent?) and, if so, contain it (kill+reclaim the faulting agent) — returning ok(slot) of the
 // reclaimed agent. err(.NoVictim) means the fault is NOT attributable to any agent (the kernel's
 // own fault), so the handler must keep it fatal (panic + halt) instead of recovering.
+#[mc_abi]
 export fn proc_fault_contain(t: *mut ProcTable) -> Result<usize, OomError> {
     switch proc_fault_domain(t) {
         ok(slot) => {
@@ -625,6 +633,7 @@ export fn proc_fault_contain(t: *mut ProcTable) -> Result<usize, OomError> {
 // swap. Run accounting is reset for the new image; privileges and scheduling policy are kept.
 // The slot must hold a live (non-Unused) process. In the integrated boot path `entry` is the
 // ELF entry point from elf_parse_header (kernel/core/elf) once its LOAD segments are mapped.
+#[mc_abi]
 export fn proc_exec(t: *mut ProcTable, slot: usize, stack_top: usize, entry: fn() -> void) -> void {
     mc_thread_init(&t.procs[slot].context, stack_top, entry);
     t.procs[slot].exit_code = 0;
@@ -802,6 +811,7 @@ export fn proc_exit(t: *mut ProcTable, code: u32) -> void {
 // the slot. A non-blocking `wait` — errors if the caller has no children, or has children
 // but none have exited yet (the caller can yield and retry). Reaping is what turns a Zombie
 // back into a free (Unused) slot.
+#[mc_abi]
 export fn proc_reap(t: *mut ProcTable, parent_pid: u32) -> Result<ReapInfo, ReapError> {
     let parent_slot: usize = parent_pid as usize;
     if parent_slot >= t.count {
@@ -847,6 +857,7 @@ export fn proc_reap(t: *mut ProcTable, parent_pid: u32) -> Result<ReapInfo, Reap
 // Block until a child of `parent_pid` exits, then reap it. While no child has
 // exited, yield so the runnable children get to run (and eventually exit). Returns
 // the reaped child's `ReapInfo`, or `NoChildren` if the caller has none.
+#[mc_abi]
 export fn proc_wait(t: *mut ProcTable, parent_pid: u32) -> Result<ReapInfo, ReapError> {
     var result: ReapInfo = .{ .pid = 0, .code = 0 };
     var done: bool = false;
@@ -941,6 +952,7 @@ export fn cap_audit_set_enabled(on: bool) -> void {
 // Kernel-call gateway: a server requests a privileged op through one checked entry
 // point. Denied unless the caller's kcall_mask permits `op`. (The op itself is a
 // stand-in here; a real kernel would map/grant/program IRQs behind this gate.)
+#[mc_abi]
 export fn kcall(t: *mut ProcTable, op: u32, arg: u64) -> Result<u64, KError> {
     let cur: usize = t.current;
     // Capability-use audit: record the invocation BEFORE the permission decision, so the

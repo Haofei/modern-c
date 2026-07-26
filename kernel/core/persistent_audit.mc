@@ -79,6 +79,7 @@ fn persistent_audit_frame_len(count: usize) -> usize {
     return sizeof(u32) + sizeof(u64) + sizeof(u64) + sizeof(u64) + sizeof(usize) + (count * sizeof(IpcEvent));
 }
 
+#[mc_abi]
 export fn persistent_policy_save(
     store: *mut BlobStore,
     id: u32,
@@ -102,6 +103,7 @@ export fn persistent_policy_save(
     }
 }
 
+#[mc_abi]
 export fn persistent_policy_load(store: *mut BlobStore, id: u32) -> Result<PersistentPolicySnapshot, PersistentAuditError> {
     var snap: PersistentPolicySnapshot = persistent_policy_snapshot_empty();
     let need: usize = sizeof(PersistentPolicySnapshot);
@@ -115,6 +117,7 @@ export fn persistent_policy_load(store: *mut BlobStore, id: u32) -> Result<Persi
     }
 }
 
+#[mc_abi]
 export fn persistent_audit_capture(
     trace: *mut IpcTrace,
     store: *mut BlobStore,
@@ -176,6 +179,7 @@ fn persistent_audit_load_frame(store: *mut BlobStore, id: u32) -> Result<Persist
     }
 }
 
+#[mc_abi]
 export fn persistent_audit_count(store: *mut BlobStore, id: u32) -> Result<usize, PersistentAuditError> {
     switch persistent_audit_load_frame(store, id) {
         ok(frame) => { return ok(frame.count); }
@@ -183,6 +187,7 @@ export fn persistent_audit_count(store: *mut BlobStore, id: u32) -> Result<usize
     }
 }
 
+#[mc_abi]
 export fn persistent_audit_policy_version(store: *mut BlobStore, id: u32) -> Result<u64, PersistentAuditError> {
     switch persistent_audit_load_frame(store, id) {
         ok(frame) => { return ok(frame.policy_version); }
@@ -190,6 +195,7 @@ export fn persistent_audit_policy_version(store: *mut BlobStore, id: u32) -> Res
     }
 }
 
+#[mc_abi]
 export fn persistent_audit_boot_epoch(store: *mut BlobStore, id: u32) -> Result<u64, PersistentAuditError> {
     switch persistent_audit_load_frame(store, id) {
         ok(frame) => { return ok(frame.boot_epoch); }
@@ -197,6 +203,7 @@ export fn persistent_audit_boot_epoch(store: *mut BlobStore, id: u32) -> Result<
     }
 }
 
+#[mc_abi]
 export fn persistent_audit_trace_dropped(store: *mut BlobStore, id: u32) -> Result<u64, PersistentAuditError> {
     switch persistent_audit_load_frame(store, id) {
         ok(frame) => { return ok(frame.trace_dropped); }
@@ -204,6 +211,7 @@ export fn persistent_audit_trace_dropped(store: *mut BlobStore, id: u32) -> Resu
     }
 }
 
+#[mc_abi]
 export fn persistent_audit_get(store: *mut BlobStore, id: u32, i: usize) -> Result<IpcEvent, PersistentAuditError> {
     switch persistent_audit_load_frame(store, id) {
         ok(frame) => {

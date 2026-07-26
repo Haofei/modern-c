@@ -96,6 +96,7 @@ export fn pages_available(a: *mut PageAllocator) -> usize {
 }
 
 // The physical address of a page (borrow) — a typed `PAddr`, not a raw `usize`.
+#[mc_abi]
 export fn page_addr(p: *Page) -> PAddr {
     return p.addr;
 }

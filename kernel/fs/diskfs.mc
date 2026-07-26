@@ -62,6 +62,7 @@ export fn diskfs_create_named(disk: PAddr, capacity: usize, name_key: u32) -> u3
 }
 
 // Resolve a name to its inode by scanning the root directory; NotFound if absent.
+#[mc_abi]
 export fn diskfs_lookup(disk: PAddr, capacity: usize, name_key: u32) -> Result<u32, DiskfsError> {
     var r: ByteReader = byte_reader(disk, capacity);
     let n: u32 = br_be32(&r, SB_OFF + 4);

@@ -125,6 +125,7 @@ export fn endpoint_registry_init(reg: *mut EndpointRegistry) -> void {
 
 // Register endpoint `id` with `handler` in the first free slot. Returns the claimed slot index, or
 // err(.NoEndpoint) if the registry is full (no free slot). Mirrors agent.mc's tool_register.
+#[mc_abi]
 export fn endpoint_register(reg: *mut EndpointRegistry, id: u32, handler: fn(u32) -> u32) -> Result<usize, BrokerError> {
     var i: usize = 0;
     while i < MAX_ENDPOINTS {
@@ -147,6 +148,7 @@ export fn endpoint_register(reg: *mut EndpointRegistry, id: u32, handler: fn(u32
 // descriptor instead of a mock handler, and tags the slot EP_KIND_TCP so a mock dispatch to it is
 // rejected (NoEndpoint). `handler` is set to the ep_no_handler stub (never dispatched on the TCP
 // path, never uninitialized). Returns the claimed slot index, or err(.NoEndpoint) if the registry is full.
+#[mc_abi]
 export fn endpoint_register_tcp(reg: *mut EndpointRegistry, id: u32, dst_ip: u32, dst_port: u16) -> Result<usize, BrokerError> {
     var i: usize = 0;
     while i < MAX_ENDPOINTS {
@@ -180,6 +182,7 @@ export fn endpoint_dst_port_at(reg: *mut EndpointRegistry, slot: usize) -> u16 {
 // ok-payload is a plain usize — a Result whose payload is a fn pointer is not emittable on the LLVM
 // backend, and the registry is the single source of truth for the handler anyway. Fetch the handler
 // with endpoint_handler_at(reg, slot).)
+#[mc_abi]
 export fn endpoint_lookup(reg: *mut EndpointRegistry, id: u32) -> Result<usize, BrokerError> {
     var i: usize = 0;
     while i < MAX_ENDPOINTS {
@@ -195,6 +198,7 @@ export fn endpoint_lookup(reg: *mut EndpointRegistry, id: u32) -> Result<usize, 
 
 // The handler stored in registry slot `slot`. Pair with a successful endpoint_lookup, which returns
 // the slot to read. (Split out so endpoint_lookup's Result carries a plain index, not a fn pointer.)
+#[mc_abi]
 export fn endpoint_handler_at(reg: *mut EndpointRegistry, slot: usize) -> fn(u32) -> u32 {
     return reg.eps[slot].handler;
 }
@@ -227,6 +231,7 @@ export fn endpoint_handler_at(reg: *mut EndpointRegistry, slot: usize) -> fn(u32
 //   5. charge       — spend one request unit.
 // Returns ok(slot) once steps 1–5 have all succeeded (so the caller need only dispatch); err(...)
 // otherwise, with NO side effects (no audit, no charge) on any failure path.
+#[mc_abi]
 export fn net_policy_admit(t: *mut ProcTable, reg: *mut EndpointRegistry, sb: *mut Sandbox, nc: *mut NetCap, endpoint_id: u32, req: u32, want_kind: u8) -> Result<usize, BrokerError> {
     // 1. egress check: not in the agent's egress allowlist ⇒ Denied (the exfil block — no budget
     //    spent, NO packet on the wire). The blocked attempt IS recorded as a DENY event (distinct
@@ -264,6 +269,7 @@ export fn net_policy_admit(t: *mut ProcTable, reg: *mut EndpointRegistry, sb: *m
 // THE BROKERED CALL (MOCK transport). Runs the shared policy, then dispatches the resolved slot's
 // in-process handler (the MOCKED packet send) and returns its simulated response. Used by
 // agent_net_demo, where the QEMU image has no live peer.
+#[mc_abi]
 export fn net_fetch(t: *mut ProcTable, reg: *mut EndpointRegistry, sb: *mut Sandbox, nc: *mut NetCap, endpoint_id: u32, req: u32) -> Result<u32, BrokerError> {
     switch net_policy_admit(t, reg, sb, nc, endpoint_id, req, EP_KIND_MOCK) {
         ok(slot) => {

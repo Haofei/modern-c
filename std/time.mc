@@ -17,6 +17,7 @@ type Ticks = counter<u64>;
 extern fn mc_read_ticks() -> Ticks;
 extern fn mc_udelay(us: u32) -> void;
 
+#[mc_abi]
 export fn read_ticks() -> Ticks {
     return mc_read_ticks();
 }

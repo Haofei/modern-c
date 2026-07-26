@@ -16,6 +16,7 @@
 // ----- construction / raw access (the only usize<->PAddr boundary) -----
 
 // Wrap a raw physical address value (e.g. from the platform/device tree).
+#[mc_abi]
 export fn pa(value: usize) -> PAddr {
     return phys(value);
 }
@@ -28,6 +29,7 @@ export fn pa_value(a: PAddr) -> usize {
 // ----- checked arithmetic -----
 
 // `a + n`, trapping on address-space overflow (MC arithmetic is checked).
+#[mc_abi]
 export fn pa_offset(a: PAddr, n: usize) -> PAddr {
     return phys((a as usize) + n);
 }
@@ -43,6 +45,7 @@ export fn pa_is_aligned(a: PAddr, align: usize) -> bool {
     return ((a as usize) % align) == 0;
 }
 
+#[mc_abi]
 export fn pa_align_down(a: PAddr, align: usize) -> PAddr {
     if align == 0 {
         unreachable; // alignment must be non-zero (else `% align` divides by zero)
@@ -54,6 +57,7 @@ export fn pa_align_down(a: PAddr, align: usize) -> PAddr {
     return phys(v - (v % align));
 }
 
+#[mc_abi]
 export fn pa_align_up(a: PAddr, align: usize) -> PAddr {
     if align == 0 {
         unreachable; // alignment must be non-zero
@@ -90,10 +94,12 @@ fn phys_range(start: PAddr, len: usize) -> PhysRange {
     return .{ .start = start, .end = pa_offset(start, len) };
 }
 
+#[mc_abi]
 export fn pr_start(r: *PhysRange) -> PAddr {
     return r.start;
 }
 
+#[mc_abi]
 export fn pr_end(r: *PhysRange) -> PAddr {
     return r.end;
 }
@@ -114,6 +120,7 @@ export fn pr_contains(r: *PhysRange, a: PAddr) -> bool {
 // Used by the page-table / virtual-memory code; kept symmetric with PAddr so the
 // two cannot be confused (E_ADDRESS_CLASS_MISMATCH).
 
+#[mc_abi]
 export fn va(value: usize) -> VAddr {
     // The single audited usize -> VAddr boundary (symmetric with `pa`'s `phys`
     // builtin). Minting an address class via `as` is gated; this is the controlled
@@ -125,6 +132,7 @@ export fn va_value(a: VAddr) -> usize {
     return a as usize;
 }
 
+#[mc_abi]
 export fn va_offset(a: VAddr, n: usize) -> VAddr {
     // checked add (traps on overflow); re-mint stays within the VAddr class.
     unsafe { return ((a as usize) + n) as VAddr; }
@@ -144,6 +152,7 @@ export fn va_is_aligned(a: VAddr, align: usize) -> bool {
     return ((a as usize) % align) == 0;
 }
 
+#[mc_abi]
 export fn va_align_down(a: VAddr, align: usize) -> VAddr {
     if align == 0 {
         unreachable; // alignment must be non-zero (else `% align` divides by zero)
@@ -155,6 +164,7 @@ export fn va_align_down(a: VAddr, align: usize) -> VAddr {
     unsafe { return (v - (v % align)) as VAddr; } // re-mint within VAddr class
 }
 
+#[mc_abi]
 export fn va_align_up(a: VAddr, align: usize) -> VAddr {
     if align == 0 {
         unreachable; // alignment must be non-zero

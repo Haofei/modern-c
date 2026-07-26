@@ -4,6 +4,7 @@
 // intent explicit. (Scans with side effects or multi-array checks keep their own loops.)
 
 // First index i in arr[0..N] where pred(arr[i]) holds, or N if none match.
+#[mc_abi]
 export fn find_index(comptime T: type, comptime N: usize, arr: [N]T, pred: closure(T) -> bool) -> usize {
     var i: usize = 0;
     while i < N {
@@ -16,6 +17,7 @@ export fn find_index(comptime T: type, comptime N: usize, arr: [N]T, pred: closu
 }
 
 // True if any element satisfies the predicate.
+#[mc_abi]
 export fn any(comptime T: type, comptime N: usize, arr: [N]T, pred: closure(T) -> bool) -> bool {
     return find_index(T, N, arr, pred) < N;
 }

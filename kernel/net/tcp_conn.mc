@@ -48,6 +48,7 @@ export fn tcp_listen(c: *mut TcpConn) -> void {
 }
 
 // Active open: send a SYN.
+#[mc_abi]
 export fn tcp_connect(c: *mut TcpConn) -> TcpAction {
     c.state = .SynSent;
     c.snd_nxt = c.snd_nxt + 1; // SYN consumes one sequence number
@@ -56,6 +57,7 @@ export fn tcp_connect(c: *mut TcpConn) -> TcpAction {
 
 // Process a received segment (its control flags + sequence number) and return the
 // control segment to emit.
+#[mc_abi]
 export fn tcp_on_segment(c: *mut TcpConn, flags: u16, seg_seq: u32) -> TcpAction {
     let st: TcpState = c.state;
     switch st {
@@ -125,6 +127,7 @@ export fn tcp_on_segment(c: *mut TcpConn, flags: u16, seg_seq: u32) -> TcpAction
 }
 
 // Application close: send a FIN (from ESTABLISHED or CLOSE_WAIT).
+#[mc_abi]
 export fn tcp_close(c: *mut TcpConn) -> TcpAction {
     let st: TcpState = c.state;
     switch st {
@@ -167,6 +170,7 @@ export fn tcp_close(c: *mut TcpConn) -> TcpAction {
     }
 }
 
+#[mc_abi]
 export fn tcp_conn_state(c: *mut TcpConn) -> TcpState {
     return c.state;
 }

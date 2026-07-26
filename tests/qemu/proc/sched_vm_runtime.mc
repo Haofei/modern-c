@@ -88,6 +88,7 @@ fn trampoline() -> void {
 // Prime a fresh context: the first switch into it `ret`s to the trampoline (with the
 // entry in s0) on the given stack. Callee-saved slots start zeroed. Written through raw
 // byte-offset stores (LLVM rejects `(*ptr).field = x`): ra@0, sp@8, s0@16, s1..s11@24..104.
+#[mc_abi]
 export fn mc_thread_init(ctx: *mut Context, stack_top: usize, entry: fn() -> void) -> void {
     let base: usize = ctx as usize;
     var off: usize = 0;

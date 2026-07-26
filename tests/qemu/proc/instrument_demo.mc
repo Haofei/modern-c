@@ -204,6 +204,13 @@ fn run_suptree() -> u32 {
     // must make the old edge fail closed.
     g_t.procs[1].gen = g_t.procs[1].gen + 1;
     if proc_supervise_parent(&g_t, 2) != MAX_PROCS { sup = 0; }
+    // Re-link through the current parent generation before the cascade scenario
+    // below. The stale-edge check above proves the old relation fails closed;
+    // the crash-loop cascade intentionally exercises a live, current edge.
+    proc_supervise_child(&g_t, 2, 1);
+    proc_supervise_child(&g_t, 3, 2);
+    if proc_supervise_parent(&g_t, 2) != 1 { sup = 0; }
+    if proc_supervise_parent(&g_t, 3) != 2 { sup = 0; }
 
     // Scan A @15: parent missed (restart #1); children + unrelated beat -> None.
     proc_heartbeat(&g_t, 2, 15);

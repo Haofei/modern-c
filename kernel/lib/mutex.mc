@@ -62,6 +62,7 @@ export fn mutex_try_lock(m: *mut Mutex, task: u32) -> bool {
 // C2: this op may block (the caller is parked on contention), so it is sleepable —
 // calling it from an `#[irq_context]` function is "scheduling while atomic".
 #[may_sleep]
+#[mc_abi]
 export fn mutex_lock(m: *mut Mutex, task: u32) -> LockOutcome {
     if !m.locked {
         m.locked = true;
@@ -76,6 +77,7 @@ export fn mutex_lock(m: *mut Mutex, task: u32) -> LockOutcome {
 // FIFO-next waiter (ownership transferred without unlocking, so no other task can race in) and
 // that waiter's id is returned for the kernel to wake — `ok(id)`. With no waiters the lock is
 // released and `ok(0)` is returned. `NotOwner` if `task` does not hold the lock.
+#[mc_abi]
 export fn mutex_unlock(m: *mut Mutex, task: u32) -> Result<u32, MtxError> {
     if !m.locked {
         return err(.NotOwner);

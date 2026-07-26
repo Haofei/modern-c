@@ -36,6 +36,7 @@ struct BlkDevice {
 
 // Bring the block device up: handshake (no required features), set up the request
 // queue, go live.
+#[mc_abi]
 export fn blk_init(dev: *BlkDevice) -> Result<bool, BlkError> {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let vq: *mut Virtq = dev.vq;
@@ -59,6 +60,7 @@ export fn blk_init(dev: *BlkDevice) -> Result<bool, BlkError> {
 // sector on success (enough to verify the read), or a typed error. Submits the
 // virtio-blk request as header(read) -> data(device-writable) -> status(device-
 // writable) and waits for completion under a deadline.
+#[mc_abi]
 export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError> {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let vq: *mut Virtq = dev.vq;
@@ -137,6 +139,7 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
 // Read a full 512-byte sector into `dst` (a kernel PAddr with room for SECTOR_SIZE bytes). Like
 // blk_read_sector but copies the WHOLE sector out (not just the first word) — the read half of a
 // BlockDevice over virtio-blk (durable storage, production-readiness §3.1 #3).
+#[mc_abi]
 export fn blk_read_into(dev: *BlkDevice, sector: u64, dst: PAddr) -> Result<bool, BlkError> {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let vq: *mut Virtq = dev.vq;
@@ -192,6 +195,7 @@ export fn blk_read_into(dev: *BlkDevice, sector: u64, dst: PAddr) -> Result<bool
 // write half of a BlockDevice over virtio-blk: header(read) -> data(device-READABLE, the bytes to
 // write) -> status(device-writable). Mirrors blk_read_into but the data descriptor is device-
 // readable and we load it from `src` before flushing it to the device.
+#[mc_abi]
 export fn blk_write(dev: *BlkDevice, sector: u64, src: PAddr) -> Result<bool, BlkError> {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let vq: *mut Virtq = dev.vq;

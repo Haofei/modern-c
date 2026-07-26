@@ -19,6 +19,7 @@ const PLAT_FINISHER_HALT: u32 = 0x5555;        // power-off / end-of-run code
 type Ticks = counter<u64>;
 
 // Monotonic tick source (std/time.mc `extern fn mc_read_ticks`).
+#[mc_abi]
 export fn mc_read_ticks() -> Ticks {
     var t: u64 = 0;
     unsafe { t = raw.load<u64>(phys(PLAT_MTIME)); }

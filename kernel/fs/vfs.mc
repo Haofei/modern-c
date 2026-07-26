@@ -52,6 +52,7 @@ fn alloc_fd(v: *mut Vfs, file_idx: usize) -> Result<usize, VfsError> {
 }
 
 // Open `name`, creating it if absent. Returns a fresh fd positioned at 0.
+#[mc_abi]
 export fn vfs_open(v: *mut Vfs, name: usize, name_len: usize) -> Result<usize, VfsError> {
     switch ramfs_find((&v.fs) as *mut Ramfs, name, name_len) {
         ok(idx) => {
@@ -82,6 +83,7 @@ fn fd_file(v: *mut Vfs, fd: usize) -> Result<usize, VfsError> {
 }
 
 // Write `len` bytes from `src` to fd `fd`, advancing its position.
+#[mc_abi]
 export fn vfs_write(v: *mut Vfs, fd: usize, src: usize, len: usize) -> Result<usize, VfsError> {
     let file_idx: usize = fd_file(v, fd)?; // VfsError -> VfsError (plain propagate)
     let pos: usize = v.fds[fd].pos;
@@ -91,6 +93,7 @@ export fn vfs_write(v: *mut Vfs, fd: usize, src: usize, len: usize) -> Result<us
 }
 
 // Read up to `len` bytes from fd `fd` (at its position) into `dst`, advancing it.
+#[mc_abi]
 export fn vfs_read(v: *mut Vfs, fd: usize, dst: usize, len: usize) -> Result<usize, VfsError> {
     let file_idx: usize = fd_file(v, fd)?; // VfsError -> VfsError (plain propagate)
     let pos: usize = v.fds[fd].pos;
@@ -99,6 +102,7 @@ export fn vfs_read(v: *mut Vfs, fd: usize, dst: usize, len: usize) -> Result<usi
     return ok(n);
 }
 
+#[mc_abi]
 export fn vfs_close(v: *mut Vfs, fd: usize) -> Result<bool, VfsError> {
     if fd >= MAX_FDS {
         return err(.BadFd);
@@ -118,6 +122,7 @@ struct Stat {
 }
 
 // Report metadata for an open fd: the backing file's size/capacity and this fd's position.
+#[mc_abi]
 export fn vfs_stat(v: *mut Vfs, fd: usize) -> Result<Stat, VfsError> {
     let file_idx: usize = fd_file(v, fd)?;
     return ok(.{
@@ -130,6 +135,7 @@ export fn vfs_stat(v: *mut Vfs, fd: usize) -> Result<Stat, VfsError> {
 // Duplicate an open fd: a fresh descriptor onto the SAME backing file, with the position copied
 // at dup time (the two descriptors then advance independently — a descriptor copy, not a shared
 // open-file-description offset). The lowest free fd is returned.
+#[mc_abi]
 export fn vfs_dup(v: *mut Vfs, fd: usize) -> Result<usize, VfsError> {
     let file_idx: usize = fd_file(v, fd)?;
     let new_fd: usize = alloc_fd(v, file_idx)?;

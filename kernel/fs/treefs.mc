@@ -241,6 +241,7 @@ fn descend(t: *mut Tree, cur: usize, r: *ByteReader, c: *Comp) -> Result<usize, 
 // Resolve an absolute path to an existing node. The path is taken as rooted at
 // ROOT regardless of a leading '/'. `.`/`..` are honoured; `..` from the root
 // stays at the root (no traversal escape). NotFound if any component is absent.
+#[mc_abi]
 export fn tree_resolve(t: *mut Tree, path: usize, path_len: usize) -> Result<usize, TreeError> {
     var r: ByteReader = byte_reader(pa(path), path_len);
     var cur: usize = ROOT;
@@ -327,6 +328,7 @@ fn make_path(t: *mut Tree, path: usize, path_len: usize, kind: u32, capacity: us
 // parent directory (and so deny it) before any side effect occurs. A missing or
 // non-directory intermediate is NotFound/NotDir; a path with no final component
 // (empty / "/") is InvalidName.
+#[mc_abi]
 export fn tree_lookup_parent(t: *mut Tree, path: usize, path_len: usize) -> Result<usize, TreeError> {
     var r: ByteReader = byte_reader(pa(path), path_len);
     var cur: usize = ROOT;
@@ -346,11 +348,13 @@ export fn tree_lookup_parent(t: *mut Tree, path: usize, path_len: usize) -> Resu
 }
 
 // Create a directory at `path`; its parent chain must already exist.
+#[mc_abi]
 export fn tree_mkdir(t: *mut Tree, path: usize, path_len: usize) -> Result<usize, TreeError> {
     return make_path(t, path, path_len, KIND_DIR, 0);
 }
 
 // Create an empty file at `path`, reserving `capacity` bytes of data pool.
+#[mc_abi]
 export fn tree_create(t: *mut Tree, path: usize, path_len: usize, capacity: usize) -> Result<usize, TreeError> {
     return make_path(t, path, path_len, KIND_FILE, capacity);
 }
@@ -358,6 +362,7 @@ export fn tree_create(t: *mut Tree, path: usize, path_len: usize, capacity: usiz
 // ----- file data: same slice discipline as ramfs -----
 
 // Write `len` bytes from `src` into file `idx` at `offset`, never past capacity.
+#[mc_abi]
 export fn tree_write_at(t: *mut Tree, idx: usize, offset: usize, src: usize, len: usize) -> Result<usize, TreeError> {
     if !tree_valid(t, idx) {
         return err(.BadIndex);
@@ -440,6 +445,7 @@ export fn tree_child_count(t: *mut Tree, dir: usize) -> usize {
 }
 
 // The node index of the `n`-th child of `dir` (list order), or NotFound.
+#[mc_abi]
 export fn tree_child_at(t: *mut Tree, dir: usize, n: usize) -> Result<usize, TreeError> {
     if !tree_is_dir(t, dir) {
         return err(.NotDir);

@@ -155,6 +155,7 @@ export fn req_race2_result(r: *mut ReqRace2) -> i32 {
 // PRECONDITION: entered with interrupts ENABLED; returns with interrupts ENABLED. It parks in
 // `wfi` rather than yielding to other runnable tasks (integrating with preemptive scheduling is
 // broader scheduler work), so it drives ONE top-level future on the current task.
+#[mc_abi]
 export fn drive_irq(f: *mut dyn Future, irq_off: fn() -> void, irq_on: fn() -> void, wfi: fn() -> void) -> void {
     var done: bool = false;
     while !done {

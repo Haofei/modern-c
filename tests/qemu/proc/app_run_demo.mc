@@ -397,12 +397,14 @@ fn fs_path_is_irq_disk(path_len: usize) -> bool {
         g_fs_path[6] == 0x73 && g_fs_path[7] == 0x6B;
 }
 
+#[mc_abi]
 export fn app_net_override_set(init: fn() -> void, fetch: fn(u32, u32) -> i32) -> void {
     g_net_override_init = init;
     g_net_override_fetch = fetch;
     g_net_override_ready = true;
 }
 
+#[mc_abi]
 export fn app_net_override_set_async(init: fn() -> void, submit: fn(u64, u32, u32) -> i32, pump: fn() -> void) -> void {
     g_net_override_init = init;
     g_net_override_submit = submit;
@@ -425,6 +427,7 @@ export fn app_net_async_complete(id: u64, status: i32, result: i32) -> void {
     g_slot_ready[slot] = g_clock;
 }
 
+#[mc_abi]
 export fn app_fs_override_set_async(init: fn() -> void, submit: fn(u64, u32) -> i32, pump: fn() -> void) -> void {
     g_fs_override_init = init;
     g_fs_override_submit = submit;

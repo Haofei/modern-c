@@ -33,6 +33,7 @@ export fn bytebuf_len(comptime N: usize, b: *mut ByteBuf<N>) -> usize {
 
 // Store `v` at index `i`; OutOfBounds if i >= N (does not silently drop the write). Writing
 // at or past the current end extends the logical length so copy_to sees the new byte.
+#[mc_abi]
 export fn bytebuf_set(comptime N: usize, b: *mut ByteBuf<N>, i: usize, v: u8) -> Result<bool, ByteError> {
     if i >= N {
         return err(.OutOfBounds);
@@ -54,6 +55,7 @@ export fn bytebuf_get(comptime N: usize, b: *mut ByteBuf<N>, i: usize) -> u8 {
 
 // Copy `n` bytes from physical address `src` into the buffer; OutOfBounds if n > N. On
 // success sets len = n.
+#[mc_abi]
 export fn bytebuf_copy_from(comptime N: usize, b: *mut ByteBuf<N>, src: PAddr, n: usize) -> Result<usize, ByteError> {
     if n > N {
         return err(.OutOfBounds);
@@ -65,6 +67,7 @@ export fn bytebuf_copy_from(comptime N: usize, b: *mut ByteBuf<N>, src: PAddr, n
 
 // Copy `n` bytes from the buffer to physical address `dst`; OutOfBounds if n exceeds the
 // logical length (so only meaningful bytes are copied, never stale ones past `len`).
+#[mc_abi]
 export fn bytebuf_copy_to(comptime N: usize, b: *mut ByteBuf<N>, dst: PAddr, n: usize) -> Result<usize, ByteError> {
     if n > b.len {
         return err(.OutOfBounds);

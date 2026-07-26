@@ -26,36 +26,36 @@ Source: `std/addr.mc`
 
 | Signature | Source |
 |---|---|
-| <code>struct PhysRange</code> | `std/addr.mc:83` |
+| <code>struct PhysRange</code> | `std/addr.mc:87` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn pa(value: usize) -&gt; PAddr</code> | `std/addr.mc:19` |
-| <code>export fn pa_value(a: PAddr) -&gt; usize</code> | `std/addr.mc:24` |
-| <code>export fn pa_offset(a: PAddr, n: usize) -&gt; PAddr</code> | `std/addr.mc:31` |
-| <code>export fn pa_diff(from: PAddr, to: PAddr) -&gt; usize</code> | `std/addr.mc:36` |
-| <code>export fn pa_is_aligned(a: PAddr, align: usize) -&gt; bool</code> | `std/addr.mc:42` |
-| <code>export fn pa_align_down(a: PAddr, align: usize) -&gt; PAddr</code> | `std/addr.mc:46` |
-| <code>export fn pa_align_up(a: PAddr, align: usize) -&gt; PAddr</code> | `std/addr.mc:57` |
-| <code>export fn pa_lt(a: PAddr, b: PAddr) -&gt; bool</code> | `std/addr.mc:71` |
-| <code>export fn pa_le(a: PAddr, b: PAddr) -&gt; bool</code> | `std/addr.mc:74` |
-| <code>export fn pa_eq(a: PAddr, b: PAddr) -&gt; bool</code> | `std/addr.mc:77` |
-| <code>export fn pr_start(r: *PhysRange) -&gt; PAddr</code> | `std/addr.mc:93` |
-| <code>export fn pr_end(r: *PhysRange) -&gt; PAddr</code> | `std/addr.mc:97` |
-| <code>export fn pr_len(r: *PhysRange) -&gt; usize</code> | `std/addr.mc:101` |
-| <code>export fn pr_contains(r: *PhysRange, a: PAddr) -&gt; bool</code> | `std/addr.mc:106` |
-| <code>export fn va(value: usize) -&gt; VAddr</code> | `std/addr.mc:117` |
-| <code>export fn va_value(a: VAddr) -&gt; usize</code> | `std/addr.mc:124` |
-| <code>export fn va_offset(a: VAddr, n: usize) -&gt; VAddr</code> | `std/addr.mc:128` |
-| <code>export fn va_diff(from: VAddr, to: VAddr) -&gt; usize</code> | `std/addr.mc:133` |
-| <code>export fn va_is_aligned(a: VAddr, align: usize) -&gt; bool</code> | `std/addr.mc:137` |
-| <code>export fn va_align_down(a: VAddr, align: usize) -&gt; VAddr</code> | `std/addr.mc:147` |
-| <code>export fn va_align_up(a: VAddr, align: usize) -&gt; VAddr</code> | `std/addr.mc:158` |
-| <code>export fn va_lt(a: VAddr, b: VAddr) -&gt; bool</code> | `std/addr.mc:170` |
-| <code>export fn va_le(a: VAddr, b: VAddr) -&gt; bool</code> | `std/addr.mc:173` |
-| <code>export fn va_eq(a: VAddr, b: VAddr) -&gt; bool</code> | `std/addr.mc:176` |
+| <code>export fn pa(value: usize) -&gt; PAddr</code> | `std/addr.mc:20` |
+| <code>export fn pa_value(a: PAddr) -&gt; usize</code> | `std/addr.mc:25` |
+| <code>export fn pa_offset(a: PAddr, n: usize) -&gt; PAddr</code> | `std/addr.mc:33` |
+| <code>export fn pa_diff(from: PAddr, to: PAddr) -&gt; usize</code> | `std/addr.mc:38` |
+| <code>export fn pa_is_aligned(a: PAddr, align: usize) -&gt; bool</code> | `std/addr.mc:44` |
+| <code>export fn pa_align_down(a: PAddr, align: usize) -&gt; PAddr</code> | `std/addr.mc:49` |
+| <code>export fn pa_align_up(a: PAddr, align: usize) -&gt; PAddr</code> | `std/addr.mc:61` |
+| <code>export fn pa_lt(a: PAddr, b: PAddr) -&gt; bool</code> | `std/addr.mc:75` |
+| <code>export fn pa_le(a: PAddr, b: PAddr) -&gt; bool</code> | `std/addr.mc:78` |
+| <code>export fn pa_eq(a: PAddr, b: PAddr) -&gt; bool</code> | `std/addr.mc:81` |
+| <code>export fn pr_start(r: *PhysRange) -&gt; PAddr</code> | `std/addr.mc:98` |
+| <code>export fn pr_end(r: *PhysRange) -&gt; PAddr</code> | `std/addr.mc:103` |
+| <code>export fn pr_len(r: *PhysRange) -&gt; usize</code> | `std/addr.mc:107` |
+| <code>export fn pr_contains(r: *PhysRange, a: PAddr) -&gt; bool</code> | `std/addr.mc:112` |
+| <code>export fn va(value: usize) -&gt; VAddr</code> | `std/addr.mc:124` |
+| <code>export fn va_value(a: VAddr) -&gt; usize</code> | `std/addr.mc:131` |
+| <code>export fn va_offset(a: VAddr, n: usize) -&gt; VAddr</code> | `std/addr.mc:136` |
+| <code>export fn va_diff(from: VAddr, to: VAddr) -&gt; usize</code> | `std/addr.mc:141` |
+| <code>export fn va_is_aligned(a: VAddr, align: usize) -&gt; bool</code> | `std/addr.mc:145` |
+| <code>export fn va_align_down(a: VAddr, align: usize) -&gt; VAddr</code> | `std/addr.mc:156` |
+| <code>export fn va_align_up(a: VAddr, align: usize) -&gt; VAddr</code> | `std/addr.mc:168` |
+| <code>export fn va_lt(a: VAddr, b: VAddr) -&gt; bool</code> | `std/addr.mc:180` |
+| <code>export fn va_le(a: VAddr, b: VAddr) -&gt; bool</code> | `std/addr.mc:183` |
+| <code>export fn va_eq(a: VAddr, b: VAddr) -&gt; bool</code> | `std/addr.mc:186` |
 
 ## `std/alloc/alloc`
 
@@ -255,10 +255,10 @@ Source: `std/byteview.mc`
 |---|---|
 | <code>export fn bytebuf_init(comptime N: usize, b: *mut ByteBuf&lt;N&gt;) -&gt; void</code> | `std/byteview.mc:27` |
 | <code>export fn bytebuf_len(comptime N: usize, b: *mut ByteBuf&lt;N&gt;) -&gt; usize</code> | `std/byteview.mc:30` |
-| <code>export fn bytebuf_set(comptime N: usize, b: *mut ByteBuf&lt;N&gt;, i: usize, v: u8) -&gt; Result&lt;bool, ByteError&gt;</code> | `std/byteview.mc:36` |
-| <code>export fn bytebuf_get(comptime N: usize, b: *mut ByteBuf&lt;N&gt;, i: usize) -&gt; u8</code> | `std/byteview.mc:48` |
-| <code>export fn bytebuf_copy_from(comptime N: usize, b: *mut ByteBuf&lt;N&gt;, src: PAddr, n: usize) -&gt; Result&lt;usize, ByteError&gt;</code> | `std/byteview.mc:57` |
-| <code>export fn bytebuf_copy_to(comptime N: usize, b: *mut ByteBuf&lt;N&gt;, dst: PAddr, n: usize) -&gt; Result&lt;usize, ByteError&gt;</code> | `std/byteview.mc:68` |
+| <code>export fn bytebuf_set(comptime N: usize, b: *mut ByteBuf&lt;N&gt;, i: usize, v: u8) -&gt; Result&lt;bool, ByteError&gt;</code> | `std/byteview.mc:37` |
+| <code>export fn bytebuf_get(comptime N: usize, b: *mut ByteBuf&lt;N&gt;, i: usize) -&gt; u8</code> | `std/byteview.mc:49` |
+| <code>export fn bytebuf_copy_from(comptime N: usize, b: *mut ByteBuf&lt;N&gt;, src: PAddr, n: usize) -&gt; Result&lt;usize, ByteError&gt;</code> | `std/byteview.mc:59` |
+| <code>export fn bytebuf_copy_to(comptime N: usize, b: *mut ByteBuf&lt;N&gt;, dst: PAddr, n: usize) -&gt; Result&lt;usize, ByteError&gt;</code> | `std/byteview.mc:71` |
 
 ## `std/canary`
 
@@ -714,8 +714,8 @@ Source: `std/scan.mc`
 
 | Signature | Source |
 |---|---|
-| <code>export fn find_index(comptime T: type, comptime N: usize, arr: [N]T, pred: closure(T) -&gt; bool) -&gt; usize</code> | `std/scan.mc:7` |
-| <code>export fn any(comptime T: type, comptime N: usize, arr: [N]T, pred: closure(T) -&gt; bool) -&gt; bool</code> | `std/scan.mc:19` |
+| <code>export fn find_index(comptime T: type, comptime N: usize, arr: [N]T, pred: closure(T) -&gt; bool) -&gt; usize</code> | `std/scan.mc:8` |
+| <code>export fn any(comptime T: type, comptime N: usize, arr: [N]T, pred: closure(T) -&gt; bool) -&gt; bool</code> | `std/scan.mc:21` |
 
 ## `std/sort`
 
@@ -728,9 +728,9 @@ Source: `std/sort.mc`
 | <code>export fn sort_u32(xs: []mut u32) -&gt; void</code> | `std/sort.mc:18` |
 | <code>export fn is_sorted_u32(xs: []mut u32) -&gt; bool</code> | `std/sort.mc:37` |
 | <code>export fn binary_search_u32(xs: []mut u32, key: u32) -&gt; usize</code> | `std/sort.mc:51` |
-| <code>export fn sort(comptime T: type, xs: []mut T, less: closure(T, T) -&gt; bool) -&gt; void</code> | `std/sort.mc:73` |
-| <code>export fn is_sorted(comptime T: type, xs: []mut T, less: closure(T, T) -&gt; bool) -&gt; bool</code> | `std/sort.mc:92` |
-| <code>export fn lower_bound(comptime T: type, xs: []mut T, key: T, less: closure(T, T) -&gt; bool) -&gt; usize</code> | `std/sort.mc:106` |
+| <code>export fn sort(comptime T: type, xs: []mut T, less: closure(T, T) -&gt; bool) -&gt; void</code> | `std/sort.mc:74` |
+| <code>export fn is_sorted(comptime T: type, xs: []mut T, less: closure(T, T) -&gt; bool) -&gt; bool</code> | `std/sort.mc:94` |
+| <code>export fn lower_bound(comptime T: type, xs: []mut T, key: T, less: closure(T, T) -&gt; bool) -&gt; usize</code> | `std/sort.mc:109` |
 
 ## `std/strbuf`
 
@@ -891,12 +891,12 @@ Source: `std/time.mc`
 
 | Signature | Source |
 |---|---|
-| <code>export fn read_ticks() -&gt; Ticks</code> | `std/time.mc:20` |
-| <code>export fn delta_mod(start: Ticks, now: Ticks) -&gt; u64</code> | `std/time.mc:31` |
-| <code>export fn timed_out(start: Ticks, now: Ticks, limit: u64) -&gt; bool</code> | `std/time.mc:40` |
-| <code>export fn poll_until(probe: fn() -&gt; bool, timeout: u64) -&gt; bool</code> | `std/time.mc:50` |
-| <code>export fn udelay(us: u32) -&gt; void</code> | `std/time.mc:61` |
-| <code>export fn mdelay(ms: u32) -&gt; void</code> | `std/time.mc:65` |
+| <code>export fn read_ticks() -&gt; Ticks</code> | `std/time.mc:21` |
+| <code>export fn delta_mod(start: Ticks, now: Ticks) -&gt; u64</code> | `std/time.mc:32` |
+| <code>export fn timed_out(start: Ticks, now: Ticks, limit: u64) -&gt; bool</code> | `std/time.mc:41` |
+| <code>export fn poll_until(probe: fn() -&gt; bool, timeout: u64) -&gt; bool</code> | `std/time.mc:52` |
+| <code>export fn udelay(us: u32) -&gt; void</code> | `std/time.mc:63` |
+| <code>export fn mdelay(ms: u32) -&gt; void</code> | `std/time.mc:67` |
 
 ## `std/virtio`
 
@@ -914,8 +914,8 @@ Source: `std/virtio.mc`
 | Signature | Source |
 |---|---|
 | <code>export fn virtio_reset(regs: MmioPtr&lt;VirtioMmio&gt;) -&gt; bool</code> | `std/virtio.mc:65` |
-| <code>export fn virtio_init(regs: MmioPtr&lt;VirtioMmio&gt;, device_id: u32, want_lo: u32, want_hi: u32) -&gt; Result&lt;bool, VirtioError&gt;</code> | `std/virtio.mc:84` |
-| <code>export fn virtio_driver_ok(regs: MmioPtr&lt;VirtioMmio&gt;) -&gt; void</code> | `std/virtio.mc:135` |
+| <code>export fn virtio_init(regs: MmioPtr&lt;VirtioMmio&gt;, device_id: u32, want_lo: u32, want_hi: u32) -&gt; Result&lt;bool, VirtioError&gt;</code> | `std/virtio.mc:85` |
+| <code>export fn virtio_driver_ok(regs: MmioPtr&lt;VirtioMmio&gt;) -&gt; void</code> | `std/virtio.mc:136` |
 
 ## `std/virtqueue`
 

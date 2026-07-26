@@ -301,6 +301,7 @@ pub fn ipc_send_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, 
 // It distinguishes the three failure modes the bool variants conflate: a permission denial
 // (allow_mask), a dead destination (never existed / exited), and a timeout (mailbox stayed full
 // for the whole `max_yields` budget). `ok(true)` means delivered.
+#[mc_abi]
 export fn ipc_send_result(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, max_yields: u32) -> Result<bool, SendError> {
     let cur: usize = t.current;
     if !mask32_contains(&t.procs[cur].allow_mask, dst_pid) {

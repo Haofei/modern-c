@@ -24,6 +24,7 @@ enum RxError {
 }
 
 // Parse + deliver one received frame located at `frame` (`len` bytes).
+#[mc_abi]
 export fn net_rx_deliver(t: *mut SocketTable, frame: usize, len: usize) -> Result<bool, RxError> {
     if len < (ETH_HDR + IP_HDR + UDP_HDR) {
         return err(.TooShort);

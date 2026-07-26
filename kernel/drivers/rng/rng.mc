@@ -47,6 +47,7 @@ struct RngDevice {
 // Find the entropy device and bring it up: scan for device-id 4, run the virtio 1.x
 // handshake (virtio-rng requires no feature bits), set up the request queue, go live.
 // `vq` is caller-owned storage for the one queue (as with blk/net).
+#[mc_abi]
 export fn rng_open(vq: *mut Virtq) -> Result<RngDevice, RngError> {
     // Scan the mmio window for the entropy device (device-id 4). The MC twin of the
     // inline C slot scan; kept local so the net/blk drivers don't inherit it. The matching
@@ -85,6 +86,7 @@ export fn rng_open(vq: *mut Virtq) -> Result<RngDevice, RngError> {
 // then copies the bytes the device actually wrote into `dst`. Returns the number of
 // bytes written, or a typed error. This is the single DMA-cycle for entropy:
 // alloc -> clean_for_device -> submit_rx -> kick -> wait_used -> complete -> copy.
+#[mc_abi]
 export fn rng_read(dev: *RngDevice, dst: usize, max: usize) -> Result<usize, RngError> {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let vq: *mut Virtq = dev.vq;

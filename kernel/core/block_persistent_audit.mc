@@ -105,6 +105,7 @@ fn read_record(dev: *dyn BlockDevice, block: u64, dst: usize, len: usize) -> Res
     }
 }
 
+#[mc_abi]
 export fn block_persistent_policy_save(
     dev: *dyn BlockDevice,
     block: u64,
@@ -125,6 +126,7 @@ export fn block_persistent_policy_save(
     return write_record(dev, block, (&snap) as usize, sizeof(BlockPolicySnapshot));
 }
 
+#[mc_abi]
 export fn block_persistent_policy_load(dev: *dyn BlockDevice, block: u64) -> Result<BlockPolicySnapshot, BlockPersistentAuditError> {
     var snap: BlockPolicySnapshot = block_policy_snapshot_empty();
     switch read_record(dev, block, (&snap) as usize, sizeof(BlockPolicySnapshot)) {
@@ -137,6 +139,7 @@ export fn block_persistent_policy_load(dev: *dyn BlockDevice, block: u64) -> Res
     return ok(snap);
 }
 
+#[mc_abi]
 export fn block_persistent_audit_capture(
     trace: *mut IpcTrace,
     dev: *dyn BlockDevice,
@@ -190,6 +193,7 @@ fn block_persistent_audit_load_frame(dev: *dyn BlockDevice, block: u64) -> Resul
     return ok(frame);
 }
 
+#[mc_abi]
 export fn block_persistent_audit_count(dev: *dyn BlockDevice, block: u64) -> Result<usize, BlockPersistentAuditError> {
     switch block_persistent_audit_load_frame(dev, block) {
         ok(frame) => { return ok(frame.count); }
@@ -197,6 +201,7 @@ export fn block_persistent_audit_count(dev: *dyn BlockDevice, block: u64) -> Res
     }
 }
 
+#[mc_abi]
 export fn block_persistent_audit_policy_version(dev: *dyn BlockDevice, block: u64) -> Result<u64, BlockPersistentAuditError> {
     switch block_persistent_audit_load_frame(dev, block) {
         ok(frame) => { return ok(frame.policy_version); }
@@ -204,6 +209,7 @@ export fn block_persistent_audit_policy_version(dev: *dyn BlockDevice, block: u6
     }
 }
 
+#[mc_abi]
 export fn block_persistent_audit_boot_epoch(dev: *dyn BlockDevice, block: u64) -> Result<u64, BlockPersistentAuditError> {
     switch block_persistent_audit_load_frame(dev, block) {
         ok(frame) => { return ok(frame.boot_epoch); }
@@ -211,6 +217,7 @@ export fn block_persistent_audit_boot_epoch(dev: *dyn BlockDevice, block: u64) -
     }
 }
 
+#[mc_abi]
 export fn block_persistent_audit_trace_dropped(dev: *dyn BlockDevice, block: u64) -> Result<u64, BlockPersistentAuditError> {
     switch block_persistent_audit_load_frame(dev, block) {
         ok(frame) => { return ok(frame.trace_dropped); }
@@ -218,6 +225,7 @@ export fn block_persistent_audit_trace_dropped(dev: *dyn BlockDevice, block: u64
     }
 }
 
+#[mc_abi]
 export fn block_persistent_audit_get(dev: *dyn BlockDevice, block: u64, i: usize) -> Result<IpcEvent, BlockPersistentAuditError> {
     switch block_persistent_audit_load_frame(dev, block) {
         ok(frame) => {

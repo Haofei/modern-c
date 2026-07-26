@@ -28,6 +28,7 @@ fn smode_external_irq_noop() -> void {}
 
 global g_smode_external_irq: fn() -> void = smode_external_irq_noop;
 
+#[mc_abi]
 export fn smode_external_irq_set(handler: fn() -> void) -> void {
     g_smode_external_irq = handler;
 }

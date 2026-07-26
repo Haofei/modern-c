@@ -67,6 +67,7 @@ fn thread_trampoline() -> void {
 // Prime a fresh context: lay the trampoline address at the top of the stack so the first `ret`
 // into this context jumps to it, with `entry` in r12. 16-byte align the stack so the
 // trampoline's `call entry` leaves entry's stack at the ABI-required (rsp % 16 == 8).
+#[mc_abi]
 export fn mc_thread_init(ctx: *mut Context, stack_top: usize, entry: fn() -> void) -> void {
     let top: usize = stack_top & 0xFFFFFFFFFFFFFFF0; // 16-byte align
     let sp: usize = top - 8;

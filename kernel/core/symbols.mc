@@ -36,6 +36,7 @@ export fn symtab_init(t: *mut SymbolTable) -> void {
 
 // Append a symbol. Entries must arrive in non-decreasing address order (as a linker
 // emits them); out-of-order or overflow is a typed error, not silent corruption.
+#[mc_abi]
 export fn symtab_add(t: *mut SymbolTable, addr: u64, id: u32) -> Result<usize, SymError> {
     let n: usize = t.count;
     if n >= MAX_SYMS {
@@ -54,6 +55,7 @@ export fn symtab_add(t: *mut SymbolTable, addr: u64, id: u32) -> Result<usize, S
 }
 
 // Find the function containing `pc`: the symbol with the greatest address <= pc.
+#[mc_abi]
 export fn symbolize(t: *SymbolTable, pc: u64) -> Result<SymHit, SymError> {
     if t.count == 0 {
         return err(.BelowFirst);

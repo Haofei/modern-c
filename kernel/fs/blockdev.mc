@@ -24,6 +24,7 @@ enum BlockError {
 }
 
 // Read one block into `dst` (must hold BLOCK_SIZE bytes), through the device vtable.
+#[mc_abi]
 export fn bd_read_block(dev: *dyn BlockDevice, blk: u64, dst: usize) -> Result<bool, BlockError> {
     if blk >= dev.blocks() {
         return err(.OutOfRange);
@@ -36,6 +37,7 @@ export fn bd_read_block(dev: *dyn BlockDevice, blk: u64, dst: usize) -> Result<b
 }
 
 // Write one block from `src` (BLOCK_SIZE bytes) through the device vtable.
+#[mc_abi]
 export fn bd_write_block(dev: *dyn BlockDevice, blk: u64, src: usize) -> Result<bool, BlockError> {
     if blk >= dev.blocks() {
         return err(.OutOfRange);
@@ -71,6 +73,7 @@ export fn bfs_init(fs: *mut BlockFs) -> void {
 }
 
 // Create a file reserving `nblocks` contiguous blocks on `dev`.
+#[mc_abi]
 export fn bfs_create(fs: *mut BlockFs, dev: *dyn BlockDevice, nblocks: u64) -> Result<usize, BlockError> {
     var slot: usize = MAX_FILES;
     var i: usize = 0;
@@ -101,6 +104,7 @@ export fn bfs_create(fs: *mut BlockFs, dev: *dyn BlockDevice, nblocks: u64) -> R
 
 // Write `len` bytes from `src` to file `idx`, block by block, through the device.
 // `src` must span whole blocks (ceil(len / BLOCK_SIZE) blocks).
+#[mc_abi]
 export fn bfs_write(fs: *mut BlockFs, dev: *dyn BlockDevice, idx: usize, src: usize, len: usize) -> Result<usize, BlockError> {
     if !fs.files[idx].used {
         return err(.BadFile);
@@ -127,6 +131,7 @@ export fn bfs_write(fs: *mut BlockFs, dev: *dyn BlockDevice, idx: usize, src: us
 }
 
 // Read up to `len` bytes of file `idx` into `dst` (whole blocks), through the device.
+#[mc_abi]
 export fn bfs_read(fs: *mut BlockFs, dev: *dyn BlockDevice, idx: usize, dst: usize, len: usize) -> Result<usize, BlockError> {
     if !fs.files[idx].used {
         return err(.BadFile);

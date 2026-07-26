@@ -99,6 +99,7 @@ export fn ipc_trace_record(t: *mut IpcTrace, from: u32, to: u32, tag: u32, size:
 
 // Read (peek) the i-th live event, oldest-first (i in 0..len). Does NOT remove it — for a
 // drainer that wants to scan/snapshot without consuming. Empty if `i` is out of range.
+#[mc_abi]
 export fn ipc_trace_get(t: *mut IpcTrace, i: usize) -> Result<IpcEvent, TraceError> {
     if i >= t.count {
         return err(.Empty);
@@ -110,6 +111,7 @@ export fn ipc_trace_get(t: *mut IpcTrace, i: usize) -> Result<IpcEvent, TraceErr
 // Pop the oldest live event, removing it — the drainer's consuming read. Advances `head` and
 // shrinks `count`. Empty when there is nothing to drain. A drainer loops this until Empty,
 // then checks `ipc_trace_dropped` to learn how many records were lost since last time.
+#[mc_abi]
 export fn ipc_trace_drain(t: *mut IpcTrace) -> Result<IpcEvent, TraceError> {
     if t.count == 0 {
         return err(.Empty);

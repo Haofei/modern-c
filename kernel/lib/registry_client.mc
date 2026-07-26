@@ -11,6 +11,7 @@ enum LookupError {
 }
 
 // Resolve the endpoint registered for `key`, or Unavailable.
+#[mc_abi]
 export fn lookup(reg: *mut Registry, key: u32) -> Result<u32, LookupError> {
     switch registry_find(reg, key) {
         ok(ep) => {

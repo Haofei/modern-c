@@ -180,6 +180,7 @@ fn fair_cost(t: *mut ProcTable, slot: usize) -> u64 {
 // the lower slot index. NoRunnable if nothing is runnable. Unlike next_runnable this is an
 // absolute pick (it may return the current slot) — it is an alternative selection policy, not a
 // round-robin successor, and leaves next_runnable / proc_yield untouched.
+#[mc_abi]
 export fn proc_pick_fair(t: *mut ProcTable) -> Result<usize, SchedError> {
     var best: usize = NO_SLOT;
     var best_cost: u64 = 0;
@@ -685,6 +686,7 @@ enum SupervisorAction {
 // children each tick — `for slot in children: switch proc_supervise_step(t, slot, now, max) { ... }`
 // — keeping the mechanism here and the actuation (respawn via proc_spawn / kill via proc_kill, and
 // proc_restart_record on an actual restart / proc_restart_reset on a clean recovery) in the caller.
+#[mc_abi]
 export fn proc_supervise_step(t: *mut ProcTable, slot: usize, now: u64, max_restarts: u32) -> SupervisorAction {
     // A missed heartbeat OR an expired lease demands attention; both feed the same verdict.
     if !sup_expired(t, slot, now) {

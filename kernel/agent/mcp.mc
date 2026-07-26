@@ -120,6 +120,7 @@ export fn mcp_resolve(c: *mut McpCatalog, name: usize, name_len: usize) -> u32 {
 // a native tool id and dispatched through the capability front door — so the path
 // capability + tool allowlist + budget all apply exactly as for a native call. An
 // unadvertised method is NoSuchTool; everything else is the front door's verdict.
+#[mc_abi]
 export fn mcp_call(c: *mut McpCatalog, t: *mut Tree, sink: *mut IpcTrace, agent: *mut AgentFs, name: usize, name_len: usize, path: usize, path_len: usize, offset: usize, buf: usize, n: usize, capacity: usize) -> Result<usize, AgentToolError> {
     let tid: u32 = mcp_resolve(c, name, name_len);
     if tid == MCP_NONE {

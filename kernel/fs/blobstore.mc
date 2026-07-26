@@ -93,6 +93,7 @@ export fn blob_reopen(s: *mut BlobStore) -> void {
 // fresh bytes (the directory then points at the new copy); a new id claims a free slot.
 // Fails closed with `Full` if the directory is full or `TooLarge` if the bytes will not
 // fit in the remaining arena — never a partial/truncated write.
+#[mc_abi]
 export fn blob_put(s: *mut BlobStore, id: u32, src: PAddr, len: usize) -> Result<usize, BlobError> {
     if !fits_within(s.bump, len, STORE_BYTES) {
         return err(.TooLarge);
@@ -123,6 +124,7 @@ export fn blob_put(s: *mut BlobStore, id: u32, src: PAddr, len: usize) -> Result
 }
 
 // Length in bytes of the blob stored under `id`, or `NotFound`.
+#[mc_abi]
 export fn blob_len(s: *mut BlobStore, id: u32) -> Result<usize, BlobError> {
     let slot: usize = blob_find(s, id);
     if slot == MAX_BLOBS {
@@ -133,6 +135,7 @@ export fn blob_len(s: *mut BlobStore, id: u32) -> Result<usize, BlobError> {
 
 // Copy the blob stored under `id` out to `dst`, up to `cap` bytes; returns the count
 // copied (min of the blob length and `cap`). `NotFound` if no such blob is present.
+#[mc_abi]
 export fn blob_get(s: *mut BlobStore, id: u32, dst: PAddr, cap: usize) -> Result<usize, BlobError> {
     let slot: usize = blob_find(s, id);
     if slot == MAX_BLOBS {

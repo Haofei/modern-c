@@ -28,6 +28,7 @@ export fn rq_push(rq: *mut RunQueues, core: usize, p: u32) -> bool {
     return ring_push(u32, RQ_CAP, &rq.q[core], p);
 }
 
+#[mc_abi]
 export fn rq_pop(rq: *mut RunQueues, core: usize) -> Result<u32, RqError> {
     if ring_is_empty(u32, RQ_CAP, &rq.q[core]) {
         return err(.Empty);
@@ -40,6 +41,7 @@ export fn rq_count(rq: *mut RunQueues, core: usize) -> usize {
 }
 
 // Idle `core` steals one task from the busiest other core; Empty if none available.
+#[mc_abi]
 export fn rq_steal(rq: *mut RunQueues, core: usize) -> Result<u32, RqError> {
     var best: usize = core;
     var best_count: usize = 0;

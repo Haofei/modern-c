@@ -98,6 +98,7 @@ fn check_pages(uas: *UserAddrSpace, addr: usize, len: usize, need_write: bool) -
 
 // Copy `len` bytes from user VA `src` into the kernel buffer at `dst`, translating each page
 // through the page table and requiring it be user-accessible. All-or-nothing.
+#[mc_abi]
 export fn copy_from_user_pt(uas: *UserAddrSpace, dst: PAddr, src: UserPtr<u8>, len: usize) -> Result<bool, UaccessError> {
     let src_addr: usize = src as usize;
     switch check_pages(uas, src_addr, len, false) {
@@ -109,6 +110,7 @@ export fn copy_from_user_pt(uas: *UserAddrSpace, dst: PAddr, src: UserPtr<u8>, l
 
 // Copy `len` bytes from the kernel buffer at `src` to user VA `dst`, translating each page
 // through the page table and requiring it be user-writable.
+#[mc_abi]
 export fn copy_to_user_pt(uas: *UserAddrSpace, dst: UserPtr<u8>, src: PAddr, len: usize) -> Result<bool, UaccessError> {
     let dst_addr: usize = dst as usize;
     switch check_pages(uas, dst_addr, len, true) {

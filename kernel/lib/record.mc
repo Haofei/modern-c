@@ -85,6 +85,7 @@ fn rec_frame_len(count: usize) -> usize {
 // captured log reflects exactly the events that were live at capture time, in causal order.
 // PutFailed on any BlobStore rejection (never a partial write — blob_put fails closed). An empty
 // ring records a valid zero-event log (count 0).
+#[mc_abi]
 export fn record_capture(trace: *mut IpcTrace, store: *mut BlobStore, id: u32) -> Result<usize, RecError> {
     var frame: RecFrame = rec_frame_empty();
     var n: usize = 0;
@@ -116,6 +117,7 @@ export fn record_capture(trace: *mut IpcTrace, store: *mut BlobStore, id: u32) -
 
 // How many events the recorded log under `id` holds. Reads just the framed count back.
 // NotFound if `id` was never recorded; GetFailed if the blob is shorter than the count word.
+#[mc_abi]
 export fn record_count(store: *mut BlobStore, id: u32) -> Result<usize, RecError> {
     var frame: RecFrame = rec_frame_empty();
     let need: usize = sizeof(usize); // only the count word is required to answer this
@@ -133,6 +135,7 @@ export fn record_count(store: *mut BlobStore, id: u32) -> Result<usize, RecError
 // verbatim. NotFound if `id` was never recorded; GetFailed on a short/corrupt blob; OutOfRange
 // if `i` is past the recorded count. This is the read the replay reader (P3.2) iterates to walk
 // the persisted provenance stream in causal order.
+#[mc_abi]
 export fn record_get(store: *mut BlobStore, id: u32, i: usize) -> Result<IpcEvent, RecError> {
     var frame: RecFrame = rec_frame_empty();
 
@@ -182,6 +185,7 @@ struct ReplayCursor {
 // Open a playback cursor positioned at the first recorded event of log `id`. NotFound if no log
 // was recorded under `id` (propagated from record_count). An empty (zero-event) log opens fine —
 // it is simply already exhausted, so the first replay_next returns Done.
+#[mc_abi]
 export fn replay_open(store: *mut BlobStore, id: u32) -> Result<ReplayCursor, RecError> {
     switch record_count(store, id) {
         ok(n) => {
@@ -196,6 +200,7 @@ export fn replay_open(store: *mut BlobStore, id: u32) -> Result<ReplayCursor, Re
 // signal `Done` once the cursor has played every recorded event (pos == len) — a clean, distinct
 // EOS the caller switches on rather than a sentinel value. The actual event read is delegated to
 // record_get, so playback order is exactly the recorded oldest-first order.
+#[mc_abi]
 export fn replay_next(store: *mut BlobStore, c: *mut ReplayCursor) -> Result<IpcEvent, RecError> {
     if c.pos >= c.len {
         return err(.Done); // stream exhausted: no event to hand back

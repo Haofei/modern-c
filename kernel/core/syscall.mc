@@ -21,6 +21,7 @@ export fn syscall_init(t: *mut SyscallTable) -> void {
     }
 }
 
+#[mc_abi]
 export fn syscall_register(t: *mut SyscallTable, number: usize, handler: fn(u64, u64, u64) -> u64) -> void {
     if number >= SYS_MAX {
         unreachable; // syscall number out of range

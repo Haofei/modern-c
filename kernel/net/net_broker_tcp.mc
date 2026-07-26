@@ -21,6 +21,7 @@ import "kernel/net/ethernet.mc";    // MacAddr
 // or err(.NoEndpoint) if the TCP active-open/send fails after admission (the dispatch could not
 // reach the resolved endpoint). Policy failures return Denied/Budget/NoEndpoint as usual, BEFORE any
 // socket work, so a denied destination never touches the wire.
+#[mc_abi]
 export fn net_fetch_tcp(
     t: *mut ProcTable, reg: *mut EndpointRegistry, sb: *mut Sandbox, nc: *mut NetCap,
     endpoint_id: u32, req: u32,

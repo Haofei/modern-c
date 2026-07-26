@@ -79,6 +79,7 @@ fn name_matches(fs: *mut Ramfs, idx: usize, q: *ByteReader, qlen: usize) -> bool
 // Create a file with the given name. Rejects a duplicate name (so `find` stays unambiguous)
 // and reserves a fixed slice of the data pool for the file's bytes. The raw API is public, so
 // it enforces uniqueness itself rather than trusting the caller to `find` first.
+#[mc_abi]
 export fn ramfs_create(fs: *mut Ramfs, name: usize, name_len: usize, capacity: usize) -> Result<usize, FsError> {
     var qr: ByteReader = byte_reader(pa(name), name_len);
     var k: usize = 0;
@@ -127,6 +128,7 @@ export fn ramfs_create(fs: *mut Ramfs, name: usize, name_len: usize, capacity: u
 }
 
 // Find a file by name.
+#[mc_abi]
 export fn ramfs_find(fs: *mut Ramfs, name: usize, name_len: usize) -> Result<usize, FsError> {
     var q: ByteReader = byte_reader(pa(name), name_len);
     var i: usize = 0;
@@ -143,6 +145,7 @@ export fn ramfs_find(fs: *mut Ramfs, name: usize, name_len: usize) -> Result<usi
 
 // Append `len` bytes from `src` to file `idx`. The file's data lives in a fixed
 // pool slice [data_off, data_off + capacity); appending past it is an error.
+#[mc_abi]
 export fn ramfs_write(fs: *mut Ramfs, idx: usize, src: usize, len: usize) -> Result<usize, FsError> {
     if !ramfs_valid(fs, idx) {
         return err(.BadIndex);
@@ -152,6 +155,7 @@ export fn ramfs_write(fs: *mut Ramfs, idx: usize, src: usize, len: usize) -> Res
 
 // Write `len` bytes from `src` to file `idx` starting at `offset`. The write may
 // overwrite existing bytes or extend the file, but never past its reserved slice.
+#[mc_abi]
 export fn ramfs_write_at(fs: *mut Ramfs, idx: usize, offset: usize, src: usize, len: usize) -> Result<usize, FsError> {
     if !ramfs_valid(fs, idx) {
         return err(.BadIndex);

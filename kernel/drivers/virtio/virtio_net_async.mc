@@ -202,6 +202,7 @@ struct NetAsyncDev {
 // per-send DMA buffer pool (allocated once here for the device's lifetime). Both queues are set up
 // (virtio requires every queue a device exposes to be configured before DRIVER_OK) but only the TX
 // queue is driven async here.
+#[mc_abi]
 export fn net_async_init(dev: *mut NetAsyncDev) -> Result<bool, bool> {
     net_map_init(dev.tx_map);
     net_map_init(dev.rx_map);

@@ -28,6 +28,7 @@ export fn resacct_init(a: *mut ResourceAccount, limit: usize) -> void {
 // failure (`used + n` exceeds `limit`, or the addition would overflow a usize) `used` is left
 // unchanged and `OverQuota` is returned. The overflow guard (`a.used + n < a.used`) catches the
 // wraparound case where a huge `n` would otherwise compute a small, deceptively-in-budget sum.
+#[mc_abi]
 export fn resacct_charge(a: *mut ResourceAccount, n: usize) -> Result<usize, MemError> {
     let sum: usize = a.used + n;
     if sum < a.used {

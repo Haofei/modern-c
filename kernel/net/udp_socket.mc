@@ -73,6 +73,7 @@ fn bound_socket(t: *mut SocketTable, port: u16) -> usize {
 }
 
 // Bind socket `idx` to `port`; the port must be free.
+#[mc_abi]
 export fn socket_bind(t: *mut SocketTable, idx: usize, port: u16) -> Result<bool, SockError> {
     if idx >= MAX_SOCKETS {
         return err(.BadSocket);
@@ -90,6 +91,7 @@ export fn socket_bind(t: *mut SocketTable, idx: usize, port: u16) -> Result<bool
 
 // Deliver a received datagram: demux to the socket bound to `dst_port` and queue it
 // (copying the payload into the pool). No listener / no room are typed errors.
+#[mc_abi]
 export fn socket_deliver(t: *mut SocketTable, dst_port: u16, src_ip: u32, src_port: u16, src_addr: usize, len: usize) -> Result<bool, SockError> {
     if len > DGRAM_MAX {
         return err(.TooLarge);
@@ -122,6 +124,7 @@ export fn socket_deliver(t: *mut SocketTable, dst_port: u16, src_ip: u32, src_po
 
 // Receive the next datagram for socket `idx` into `out_addr` (up to `max` bytes).
 // Records the sender for socket_last_src_*; returns the payload length.
+#[mc_abi]
 export fn socket_recv(t: *mut SocketTable, idx: usize, out_addr: usize, max: usize) -> Result<u64, SockError> {
     if idx >= MAX_SOCKETS {
         return err(.BadSocket);

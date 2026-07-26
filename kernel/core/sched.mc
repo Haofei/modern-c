@@ -26,6 +26,7 @@ export fn sched_init(s: *mut Scheduler) -> void {
 
 // Register a thread that runs `entry` on the stack ending at `stack_top`. Traps if
 // the table is full (a fixed-capacity scheduler; callers gate on `MAX_THREADS`).
+#[mc_abi]
 export fn sched_spawn(s: *mut Scheduler, stack_top: usize, entry: fn() -> void) -> void {
     if s.count >= MAX_THREADS {
         unreachable; // scheduler table full

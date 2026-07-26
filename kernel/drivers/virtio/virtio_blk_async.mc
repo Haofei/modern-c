@@ -207,6 +207,7 @@ struct BlkAsyncDev {
 
 // Bring the block device up (handshake + queue setup), initialize the id map, and reserve the
 // fixed per-request DMA buffer pool (allocated once here for the device's lifetime).
+#[mc_abi]
 export fn blk_async_init(dev: *mut BlkAsyncDev) -> Result<bool, bool> {
     blk_map_init(dev.map);
     blk_pool_init(dev.pool);

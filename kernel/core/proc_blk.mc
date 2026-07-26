@@ -18,6 +18,7 @@ import "kernel/fs/blockdev.mc";
 
 // Charged block read: charge one BlockIo unit, meter BlkRead, then read block `blk` into `dst`
 // through the device. err(.IoError) with the device untouched if the ledger refuses the charge.
+#[mc_abi]
 export fn proc_blk_read(t: *mut ProcTable, dev: *dyn BlockDevice, blk: u64, dst: usize) -> Result<bool, BlockError> {
     switch ledger_charge(proc_ledger(t), .BlockIo, 1) {
         ok(v) => {}
@@ -29,6 +30,7 @@ export fn proc_blk_read(t: *mut ProcTable, dev: *dyn BlockDevice, blk: u64, dst:
 
 // Charged block write: charge one BlockIo unit, meter BlkWrite, then write block `blk` from `src`
 // through the device. err(.IoError) with the device untouched if the ledger refuses the charge.
+#[mc_abi]
 export fn proc_blk_write(t: *mut ProcTable, dev: *dyn BlockDevice, blk: u64, src: usize) -> Result<bool, BlockError> {
     switch ledger_charge(proc_ledger(t), .BlockIo, 1) {
         ok(v) => {}

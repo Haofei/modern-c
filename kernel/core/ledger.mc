@@ -77,6 +77,7 @@ export fn ledger_init(l: *mut Ledger) -> void {
 
 // Set the hard ceiling for one dimension (0 = unlimited). Does not touch `used`; a limit set below
 // the current `used` simply means every further charge fails until enough is released.
+#[mc_abi]
 export fn ledger_set_limit(l: *mut Ledger, res: Resource, limit: u64) -> void {
     l.entries[res_index(res)].limit = limit;
 }
@@ -90,6 +91,7 @@ export fn ledger_set_limit(l: *mut Ledger, res: Resource, limit: u64) -> void {
 // against THAT. The naive `used + amount` sum — which would overflow a u64 and, under checked
 // arithmetic, TRAP — is never formed. For an unlimited dimension the headroom is `U64_MAX - used`,
 // so even an unbounded counter cannot wrap.
+#[mc_abi]
 export fn ledger_charge(l: *mut Ledger, res: Resource, amount: u64) -> Result<bool, LedgerError> {
     let i: usize = res_index(res);
     let used: u64 = l.entries[i].used;
@@ -116,6 +118,7 @@ export fn ledger_charge(l: *mut Ledger, res: Resource, amount: u64) -> Result<bo
 
 // Release `amount` units previously charged to `res`. Refuses `err(.Underflow)` if `amount`
 // exceeds what is currently reserved, leaving `used` unchanged; otherwise `used -= amount`.
+#[mc_abi]
 export fn ledger_release(l: *mut Ledger, res: Resource, amount: u64) -> Result<bool, LedgerError> {
     let i: usize = res_index(res);
     let used: u64 = l.entries[i].used;
@@ -127,17 +130,20 @@ export fn ledger_release(l: *mut Ledger, res: Resource, amount: u64) -> Result<b
 }
 
 // Units currently reserved against `res`.
+#[mc_abi]
 export fn ledger_used(l: *Ledger, res: Resource) -> u64 {
     return l.entries[res_index(res)].used;
 }
 
 // The hard ceiling for `res` (0 = unlimited).
+#[mc_abi]
 export fn ledger_limit(l: *Ledger, res: Resource) -> u64 {
     return l.entries[res_index(res)].limit;
 }
 
 // Units still chargeable against `res` before hitting its limit, computed overflow-safe as
 // `limit - used` and saturating at 0. An unlimited dimension reports `U64_MAX - used`.
+#[mc_abi]
 export fn ledger_available(l: *Ledger, res: Resource) -> u64 {
     let i: usize = res_index(res);
     let used: u64 = l.entries[i].used;

@@ -58,6 +58,7 @@ fn trampoline() -> void {
 // Prime `ctx` so the first switch into it starts running `entry` on `stack_top`.
 // Writes the 14 contiguous u64 slots (ra, sp, s0-s11) by raw store at their byte
 // offsets — the Context layout matches kernel/arch/riscv64/context.mc.
+#[mc_abi]
 export fn mc_thread_init(ctx: *mut Context, stack_top: usize, entry: fn() -> void) -> void {
     let base: usize = ctx as usize;
     unsafe {

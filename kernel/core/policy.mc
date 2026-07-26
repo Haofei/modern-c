@@ -152,6 +152,7 @@ export fn policy_overflowed(p: *mut Policy) -> bool {
 
 // The recommended action for `pid`, by accumulated denial pressure. Checked
 // highest-severity first so the thresholds escalate monotonically.
+#[mc_abi]
 export fn policy_decide(p: *mut Policy, pid: u32) -> PolicyAction {
     let d: u32 = policy_denies(p, pid);
     if d >= p.kill_at {

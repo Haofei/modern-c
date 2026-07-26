@@ -24,6 +24,7 @@ export fn pci_cfg_read32(dev: u32, off: u32) -> u32 {
 }
 
 // Scan bus 0 for the first device matching vendor:device; NotFound if absent.
+#[mc_abi]
 export fn pci_find(vendor: u16, device: u16) -> Result<u32, PciError> {
     var d: u32 = 0;
     while d < 32 {
@@ -41,6 +42,7 @@ export fn pci_find(vendor: u16, device: u16) -> Result<u32, PciError> {
 }
 
 // BAR0 of device `dev` (its MMIO/IO resource base register); NoResource if all-ones.
+#[mc_abi]
 export fn pci_bar0(dev: u32) -> Result<u32, PciError> {
     let bar: u32 = pci_cfg_read32(dev, 0x10);
     if bar == PCI_INVALID {

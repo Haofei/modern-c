@@ -309,6 +309,7 @@ export fn tcp_socket_recv(s: *mut TcpSocket, dst: usize, max: usize) -> u32 {
 }
 
 // Current connection state (for callers that want to assert ESTABLISHED).
+#[mc_abi]
 export fn tcp_socket_state(s: *mut TcpSocket) -> TcpState {
     return tcp_conn_state(&s.conn);
 }

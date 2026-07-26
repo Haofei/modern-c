@@ -43,6 +43,7 @@ fn trampoline() -> void {
     asm opaque volatile { "jr s0" }
 }
 
+#[mc_abi]
 export fn mc_thread_init(ctx: *mut Context, stack_top: usize, entry: fn() -> void) -> void {
     ctx.ra = (&trampoline) as usize as u64;
     ctx.sp = stack_top as u64;

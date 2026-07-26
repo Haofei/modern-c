@@ -96,6 +96,7 @@ export fn bus_register_provider(bus: *mut Bus, provider: *mut dyn DriverProvider
 // Probe `dev` against each provider; the first match attaches it (binds the driver, sets
 // the exposed class + endpoint) and records (class_code -> endpoint) in `reg`. Returns the
 // matching provider index, or NoDriver.
+#[mc_abi]
 export fn bus_probe_attach(bus: *mut Bus, dev: *mut Device, reg: *mut Registry) -> Result<usize, AttachError> {
     var i: usize = 0;
     while i < bus.nprov {

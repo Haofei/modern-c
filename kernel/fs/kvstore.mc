@@ -115,6 +115,7 @@ fn kv_evict(s: *mut KvStore, slot: usize) -> void {
 // top of the packed region. Fails closed with `Full` if the directory has no free
 // slot for a new key or `TooLarge` if the bytes will not fit in the remaining arena
 // — never a partial/truncated write (capacity is checked before anything is moved).
+#[mc_abi]
 export fn kv_put(s: *mut KvStore, key: u64, src: PAddr, len: usize) -> Result<usize, KvError> {
     var slot: usize = kv_find(s, key);
     if slot != MAX_KEYS {
@@ -154,6 +155,7 @@ export fn kv_put(s: *mut KvStore, key: u64, src: PAddr, len: usize) -> Result<us
 }
 
 // Length in bytes of the value stored under `key`, or `NotFound`.
+#[mc_abi]
 export fn kv_len(s: *mut KvStore, key: u64) -> Result<usize, KvError> {
     let slot: usize = kv_find(s, key);
     if slot == MAX_KEYS {
@@ -170,6 +172,7 @@ export fn kv_has(s: *mut KvStore, key: u64) -> bool {
 // Copy the value stored under `key` out to `dst`, up to `cap` bytes; returns the
 // count copied (min of the value length and `cap`). `NotFound` if no such value is
 // present.
+#[mc_abi]
 export fn kv_get(s: *mut KvStore, key: u64, dst: PAddr, cap: usize) -> Result<usize, KvError> {
     let slot: usize = kv_find(s, key);
     if slot == MAX_KEYS {
@@ -186,6 +189,7 @@ export fn kv_get(s: *mut KvStore, key: u64, dst: PAddr, cap: usize) -> Result<us
 // Delete the value under `key`, freeing its directory slot and arena bytes for
 // reuse. Returns ok(true) if a value was removed, or `NotFound` if the key was
 // absent (a typed miss rather than a silent no-op).
+#[mc_abi]
 export fn kv_delete(s: *mut KvStore, key: u64) -> Result<bool, KvError> {
     let slot: usize = kv_find(s, key);
     if slot == MAX_KEYS {

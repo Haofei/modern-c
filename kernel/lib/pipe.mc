@@ -34,6 +34,7 @@ export fn pipe_write(p: *mut Pipe, b: u8) -> bool {
 }
 
 // Read one byte (0..255), or Empty if the pipe is empty.
+#[mc_abi]
 export fn pipe_read(p: *mut Pipe) -> Result<u8, PipeError> {
     if p.count == 0 {
         return err(.Empty);

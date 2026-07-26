@@ -42,6 +42,7 @@ export fn registry_count(reg: *mut Registry) -> usize {
 }
 
 // Register key -> (endpoint, gen). Duplicates per key are allowed. Returns the slot, or Full.
+#[mc_abi]
 export fn registry_add(reg: *mut Registry, key: u32, endpoint: u32, gen: u32) -> Result<usize, RegError> {
     var i: usize = 0;
     while i < REG_MAX {
@@ -64,6 +65,7 @@ fn entry_key_matches(key: u32, e: RegEntry) -> bool {
 }
 
 // The first endpoint registered under `key`, or NotFound.
+#[mc_abi]
 export fn registry_find(reg: *mut Registry, key: u32) -> Result<u32, RegError> {
     let pred: closure(RegEntry) -> bool = bind(key, entry_key_matches);
     let i: usize = find_index(RegEntry, REG_MAX, reg.entries, pred);
@@ -75,6 +77,7 @@ export fn registry_find(reg: *mut Registry, key: u32) -> Result<u32, RegError> {
 
 // The generation registered with the first endpoint for `key` (so a client can compare it to
 // the live process generation and detect a stale registration), or NotFound.
+#[mc_abi]
 export fn registry_find_gen(reg: *mut Registry, key: u32) -> Result<u32, RegError> {
     let pred: closure(RegEntry) -> bool = bind(key, entry_key_matches);
     let i: usize = find_index(RegEntry, REG_MAX, reg.entries, pred);
@@ -101,6 +104,7 @@ export fn registry_count_key(reg: *mut Registry, key: u32) -> usize {
 
 // The `n`-th endpoint registered under `key` (0-based, in slot order), or NotFound — for
 // enumerating multiple devices/services of one class.
+#[mc_abi]
 export fn registry_find_nth(reg: *mut Registry, key: u32, n: usize) -> Result<u32, RegError> {
     var seen: usize = 0;
     var i: usize = 0;
@@ -119,6 +123,7 @@ export fn registry_find_nth(reg: *mut Registry, key: u32, n: usize) -> Result<u3
 }
 
 // Remove the first entry for `key`, or NotFound.
+#[mc_abi]
 export fn registry_remove(reg: *mut Registry, key: u32) -> Result<bool, RegError> {
     var i: usize = 0;
     while i < REG_MAX {

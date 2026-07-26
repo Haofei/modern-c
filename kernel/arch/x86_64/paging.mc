@@ -102,6 +102,7 @@ pub struct PageTable {
 }
 
 // The root physical address (for loading into CR3).
+#[mc_abi]
 export fn page_table_root(pt: *PageTable) -> PAddr {
     return pt.root;
 }
@@ -335,6 +336,7 @@ export fn page_table_lookup(pt: *PageTable, virt: VAddr) -> Result<LeafMapping, 
 }
 
 // Permission predicates on a resolved mapping (the PTE bit encoding stays here).
+#[mc_abi]
 export fn mapping_phys(m: *LeafMapping) -> PAddr { return m.phys; }
 // x86 semantics: user-accessible iff US is set at EVERY level on the walk.
 export fn mapping_is_user(m: *LeafMapping) -> bool { return m.us_all && (m.flags & PTE_US) != 0; }
@@ -358,6 +360,7 @@ export fn pte_flags_for_user(r: bool, w: bool, x: bool) -> u64 {
 
 // Translate `virt` to its mapped physical address (including the page offset). Traps if
 // the address is not mapped — callers verify a mapping exists first (or use lookup).
+#[mc_abi]
 export fn page_table_translate(pt: *PageTable, virt: VAddr) -> PAddr {
     switch page_table_lookup(pt, virt) {
         ok(m) => { return m.phys; }

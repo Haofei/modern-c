@@ -137,7 +137,7 @@ Total codes: **239**.
 | `E_LOCAL_ADDRESS_ESCAPE` | cannot return a closure that captures local storage (the environment would dangle)<br>cannot return the address of local storage<br>cannot return the address of local storage inside an aggregate (the borrow would dangle)<br>_+2 more_ | `src/mir_verify_util.zig:196`<br>`src/sema.zig:2738`<br>`src/sema.zig:2742`<br>`src/sema.zig:5468`<br>`src/sema.zig:5473`<br>`src/sema.zig:5569`<br>_+1 more_ |
 | `E_LOCAL_REQUIRES_INITIALIZER` | ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage | `src/sema.zig:2592` |
 | `E_MC_VOID_POINTER_FFI` | use c_void for C opaque object pointers, not MC void | `src/sema.zig:3467` |
-| `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:9681` |
+| `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:9686` |
 | `E_MMIO_ACCESS_FORBIDDEN` | MIR verifier found MMIO register access disallowed by Reg/RegBits mode<br>MMIO register access mode does not allow read<br>MMIO register access mode does not allow write | `src/mir.zig:986`<br>`src/sema.zig:3693`<br>`src/sema.zig:3703` |
 | `E_MMIO_ACCESS_MODE` | MMIO register access mode must be .read, .write, or .read_write | `src/sema.zig:3673`<br>`src/sema.zig:3678` |
 | `E_MMIO_DIRECT_ASSIGN` | MIR verifier found direct assignment to an MMIO register<br>MMIO registers must be accessed through typed read/write methods | `src/mir.zig:980`<br>`src/sema.zig:2522` |

@@ -108,6 +108,7 @@ fn dns_skip_name(r: *ByteReader, base_off: usize, len: usize) -> usize {
 // Parse a DNS response in [base, base+len). Validates the txn id + response bit, skips
 // the question section, and returns the first A record's IPv4 address as a host-order
 // u32. `base` is the raw address of the first DNS header byte (the UDP payload start).
+#[mc_abi]
 export fn dns_parse_response(base: usize, len: usize, txn_id: u16) -> Result<u32, DnsError> {
     if len < 12 {
         return err(.Malformed);

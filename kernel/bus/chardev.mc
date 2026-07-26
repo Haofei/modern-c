@@ -33,6 +33,7 @@ export fn char_registry_init(reg: *mut CharRegistry) -> void {
 }
 
 // Register a char device (any `*dyn CharDevice`), returning its id. Traps if full.
+#[mc_abi]
 export fn register_chardev(reg: *mut CharRegistry, dev: *dyn CharDevice) -> usize {
     let id: usize = reg.count;
     if id >= MAX_CHARDEV {
