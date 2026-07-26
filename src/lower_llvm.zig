@@ -7,6 +7,7 @@ const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
+const numeric = @import("numeric.zig");
 const sema_type = @import("sema_type.zig");
 const sema_decl = @import("sema_decl.zig");
 
@@ -1497,6 +1498,14 @@ const LlvmEmitter = struct {
             .block => |block| try self.emitBlockExprValue(block, expected_ty),
             else => self.unsupportedExprValue(expr),
         };
+        // An unsuffixed integer literal is context-typed. `value` is an LLVM
+        // constant spelling and already has the caller's `expected_ty`; do not
+        // reinterpret the MIR's default literal classification (commonly u32)
+        // as a source width and truncate a wide literal before extending it.
+        if (expr.kind == .int_literal) {
+            const parts = numeric.parseIntegerLiteralParts(expr.kind.int_literal) orelse return error.UnsupportedLlvmEmission;
+            if (parts.suffix == null) return value;
+        }
         return try self.coerceExprValue(value, expr, expected_ty);
     }
 
@@ -8004,7 +8013,7 @@ const LlvmEmitter = struct {
         // Secret is transparent, so the inner bool is what we lower against.
         const want = secretInnerType(expected_ty) orelse expected_ty;
         if (!typeNameEql(want, "bool")) return error.UnsupportedLlvmEmission;
-        const operand_ty = self.exprType(node.left.*) orelse self.exprType(node.right.*) orelse return error.UnsupportedLlvmEmission;
+        const operand_ty = self.comparisonOperandType(node) orelse return error.UnsupportedLlvmEmission;
         const llvm_ty = try self.llvmType(operand_ty);
         const pred = if (self.isFloatTypeOf(operand_ty))
             floatComparisonPredicate(node.op) orelse return error.UnsupportedLlvmEmission
@@ -8016,6 +8025,29 @@ const LlvmEmitter = struct {
         const cmp_op: []const u8 = if (self.isFloatTypeOf(operand_ty)) "fcmp" else "icmp";
         try self.out.print(self.allocator, "  {s} = {s} {s} {s} {s}, {s}\n", .{ result, cmp_op, pred, llvm_ty, left, right });
         return result;
+    }
+
+    fn comparisonOperandType(self: *LlvmEmitter, node: anytype) ?ast.TypeExpr {
+        const left_ty = self.exprType(node.left.*);
+        const right_ty = self.exprType(node.right.*);
+        const left_contextual = contextualIntegerLiteralExpr(node.left.*);
+        const right_contextual = contextualIntegerLiteralExpr(node.right.*);
+
+        if (left_contextual and !right_contextual) return right_ty orelse left_ty;
+        if (right_contextual and !left_contextual) return left_ty orelse right_ty;
+        return left_ty orelse right_ty;
+    }
+
+    fn contextualIntegerLiteralExpr(expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .int_literal => |literal| blk: {
+                const parts = numeric.parseIntegerLiteralParts(literal) orelse break :blk false;
+                break :blk parts.suffix == null;
+            },
+            .grouped => |inner| contextualIntegerLiteralExpr(inner.*),
+            .unary => |node| node.op == .neg and contextualIntegerLiteralExpr(node.expr.*),
+            else => false,
+        };
     }
 
     fn nullLiteralExpr(expr: ast.Expr) bool {
@@ -8197,6 +8229,12 @@ const LlvmEmitter = struct {
     }
 
     fn emitBinaryOperand(self: *LlvmEmitter, expr: ast.Expr, target_ty: ast.TypeExpr) anyerror![]const u8 {
+        if (expr.kind == .int_literal) {
+            const parts = numeric.parseIntegerLiteralParts(expr.kind.int_literal) orelse return error.UnsupportedLlvmEmission;
+            if (parts.suffix == null) {
+                return self.emitExprWithMirRangeTarget(expr, target_ty, "binary_operand");
+            }
+        }
         const source_ty = self.exprType(expr) orelse return self.emitExprWithMirRangeTarget(expr, target_ty, "binary_operand");
         const value = try self.emitExprWithMirRangeTarget(expr, source_ty, "binary_operand");
         return try self.castValue(value, source_ty, target_ty);

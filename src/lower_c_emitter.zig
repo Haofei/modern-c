@@ -5620,7 +5620,10 @@ const CEmitter = struct {
                 const right = try self.mirFloatLiteralTargetForExpr(node.right.*);
                 if (left == null) break :blk right;
                 if (right == null) break :blk left;
-                if (!std.meta.eql(left.?, right.?)) return error.UnsupportedCEmission;
+                // TypeExpr carries source spans. Two f32 facts at different
+                // literals are semantically equal even though their AST values
+                // are not byte-for-byte equal.
+                if (!sema_type.sameTypeSyntax(self.resolveAliasType(left.?), self.resolveAliasType(right.?))) return error.UnsupportedCEmission;
                 break :blk left;
             },
             else => null,

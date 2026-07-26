@@ -125,7 +125,19 @@ pub struct RollbackState {
 }
 
 pub fn rollback_state_valid(r: *RollbackState) -> bool {
-    return r.active < 2 && r.previous < 2;
+    if r.active >= 2 || r.previous >= 2 {
+        return false;
+    }
+    // The fallback must always name a previously admitted, bootable image.
+    // Otherwise a damaged persistent record could "roll back" into Empty,
+    // Booting, or Failed state.
+    if r.slots[r.previous].state != .Good {
+        return false;
+    }
+    // The active slot is either the known-good fallback itself or a candidate
+    // currently being tried. Empty/Failed cannot be an active boot target.
+    let active_state: SlotState = r.slots[r.active].state;
+    return active_state == .Good || active_state == .Booting;
 }
 
 pub fn rollback_init(r: *mut RollbackState, version: u64) -> void {
@@ -162,6 +174,9 @@ pub fn rollback_mark_boot_success(r: *mut RollbackState) -> void {
 
 pub fn rollback_mark_boot_failed(r: *mut RollbackState, max_failures: u32) -> bool {
     if !rollback_state_valid(r) {
+        return false;
+    }
+    if max_failures == 0 {
         return false;
     }
     if r.slots[r.active].failed_boots != 0xFFFF_FFFF {
@@ -266,6 +281,11 @@ pub fn agent_control_init(s: *mut AgentControlState, budget: u32) -> void {
 }
 
 pub fn policy_apply_runtime_action(s: *mut AgentControlState, action: RuntimeAction) -> void {
+    // Revoked and Killed are terminal. Later policy messages may be delayed or
+    // duplicated, but they must never resurrect the subject.
+    if s.lifecycle == .Revoked || s.lifecycle == .Killed {
+        return;
+    }
     switch action {
         .Allow => {}
         .Throttle => {

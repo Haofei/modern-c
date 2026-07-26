@@ -103,6 +103,7 @@ struct Process {
     hb_last: u64,                // supervision: tick of the most recent heartbeat
     restart_count: u32,          // supervision: restarts attempted this incarnation (crash-loop guard)
     sup_parent: usize,           // supervision tree: parent slot (MAX_PROCS = no supervision parent)
+    sup_parent_gen: u32,         // parent generation paired with sup_parent; prevents slot-reuse ABA
     lease_expiry: u64,           // supervision lease: absolute tick the grant expires (0 = no lease)
     lease_ttl: u64,              // supervision lease: the ttl last granted, so a re-arm recomputes expiry
     fds: FdSpace,                // open file descriptors; copied to a child on spawn (fork), kept across exec
@@ -247,6 +248,7 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].hb_last = 0;
         t.procs[i].restart_count = 0;
         t.procs[i].sup_parent = MAX_PROCS; // no supervision parent until linked
+        t.procs[i].sup_parent_gen = 0;
         t.procs[i].lease_expiry = 0;       // no lease until granted
         t.procs[i].lease_ttl = 0;
         fd_init(&t.procs[i].fds);
@@ -348,6 +350,7 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     t.procs[slot].hb_last = 0;
     t.procs[slot].restart_count = 0;  // ... crash-loop count starts fresh for the new incarnation
     t.procs[slot].sup_parent = MAX_PROCS; // ... no supervision parent until re-linked
+    t.procs[slot].sup_parent_gen = 0;
     t.procs[slot].lease_expiry = 0;   // ... no lease until re-granted
     t.procs[slot].lease_ttl = 0;
     // fork fd semantics: the child inherits a COPY of the spawner's open descriptors at the

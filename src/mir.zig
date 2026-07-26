@@ -4478,7 +4478,12 @@ const FunctionBuilder = struct {
         }
         return switch (subject.kind) {
             .int_literal => |literal| integerLiteralTypeExpr(literal, subject.span),
-            .binary => |node| if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op)) ast_query.simpleNameType("bool", subject.span) else null,
+            .binary => |node| if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op))
+                ast_query.simpleNameType("bool", subject.span)
+            else if (mirIsArithmeticBinary(node.op) or mirIsBitwiseBinary(node.op))
+                self.typeExprForExpr(node.left.*) orelse self.typeExprForExpr(node.right.*)
+            else
+                null,
             .unary => |node| if (node.op == .logical_not) ast_query.simpleNameType("bool", subject.span) else null,
             .grouped => |inner| self.switchSubjectTypeExpr(inner.*),
             else => null,
@@ -5083,14 +5088,25 @@ const FunctionBuilder = struct {
         return false;
     }
 
-    fn buildExpr(self: *FunctionBuilder, expr: ast.Expr) anyerror!void {
+    fn buildExpr(self: *FunctionBuilder, input_expr: ast.Expr) anyerror!void {
+        // Parentheses are semantically transparent but fuzz-generated
+        // left-deep expressions can contain one grouping node per operator.
+        // Recording those facts recursively doubled the call depth of MIR
+        // construction and could overflow the compiler stack for syntax the
+        // parser deliberately admits.  Preserve the facts for every wrapper,
+        // then build the enclosed expression in the current frame.
+        var expr = input_expr;
+        while (expr.kind == .grouped) {
+            try self.addTargetTypeFactForExpr(expr);
+            try self.addSelfTypedExpressionFact(expr);
+            try self.addExpressionResultFact(expr);
+            expr = expr.kind.grouped.*;
+        }
+
         self.expr_depth += 1;
         defer self.expr_depth -= 1;
-        const counts_for_semantic_depth = expr.kind != .grouped;
-        if (counts_for_semantic_depth) self.semantic_expr_depth += 1;
-        defer {
-            if (counts_for_semantic_depth) self.semantic_expr_depth -= 1;
-        }
+        self.semantic_expr_depth += 1;
+        defer self.semantic_expr_depth -= 1;
         try self.addTargetTypeFactForExpr(expr);
         try self.addSelfTypedExpressionFact(expr);
         try self.addExpressionResultFact(expr);
@@ -5155,7 +5171,7 @@ const FunctionBuilder = struct {
             .unreachable_expr => {
                 try self.addTrapEdge(.Unreachable, .unreachable_expr, expr.span);
             },
-            .grouped => |inner| try self.buildExpr(inner.*),
+            .grouped => unreachable,
             .address_of => |inner| {
                 // OPT (annex E) — taking an address exposes the target to a later aliased write we
                 // cannot see; conservatively drop all facts so none is used past this point.
@@ -9141,9 +9157,38 @@ const FunctionBuilder = struct {
     }
 
     fn exprType(self: *FunctionBuilder, expr: ast.Expr) ValueType {
-        return switch (expr.kind) {
-            .ident => |ident| self.local_types.get(ident.text) orelse self.globals.get(ident.text) orelse valueTypeFromExpr(expr),
-            .grouped => |inner| self.exprType(inner.*),
+        // Arithmetic chains are represented as a left-deep AST.  Following
+        // their result type recursively made this query quadratic when it was
+        // called for every binary node and could exhaust the compiler stack
+        // well below the parser's admitted nesting limit.  The result type of
+        // these operators is the left operand's type, so peel that spine
+        // iteratively.
+        var current = expr;
+        while (true) {
+            switch (current.kind) {
+                .grouped => |inner| {
+                    current = inner.*;
+                    continue;
+                },
+                .unary => |node| switch (node.op) {
+                    .logical_not => return .bool,
+                    .neg, .bit_not => {
+                        current = node.expr.*;
+                        continue;
+                    },
+                },
+                .binary => |node| {
+                    if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op)) return .bool;
+                    current = node.left.*;
+                    continue;
+                },
+                else => {},
+            }
+            break;
+        }
+
+        return switch (current.kind) {
+            .ident => |ident| self.local_types.get(ident.text) orelse self.globals.get(ident.text) orelse valueTypeFromExpr(current),
             .cast => |node| valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases),
             .call => |node| if (self.qualifiedUnionConstructorTypeExpr(node)) |ty|
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
@@ -9174,14 +9219,6 @@ const FunctionBuilder = struct {
                 .result => |shape| valueTypeFromTypeName(shape.ok, self.enums, self.structs),
                 else => .unknown,
             },
-            .unary => |node| switch (node.op) {
-                .logical_not => .bool,
-                .neg, .bit_not => self.exprType(node.expr.*),
-            },
-            .binary => |node| if (mirIsLogicalBinary(node.op) or mirIsComparisonBinary(node.op))
-                .bool
-            else
-                self.exprType(node.left.*),
             .block => |block| if (blockValueExpr(block)) |value| self.exprType(value) else .unknown,
             .member => |node| if (self.enumVariantPathTypeExpr(node)) |ty|
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
@@ -9191,7 +9228,7 @@ const FunctionBuilder = struct {
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
             else
                 .unknown,
-            else => valueTypeFromExpr(expr),
+            else => valueTypeFromExpr(current),
         };
     }
 

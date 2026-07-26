@@ -81,10 +81,22 @@ _start:
     or  $((1<<5) | (1<<9) | (1<<10)), %eax
     mov %eax, %cr4
 
-    # EFER.LME (MSR 0xC0000080, bit 8)
+    # The W^X profile requires CPUID.80000001H:EDX.NX. Fail closed on a
+    # CPU that cannot enforce execute-never page-table entries.
+    mov $0x80000000, %eax
+    cpuid
+    cmp $0x80000001, %eax
+    jb 2f
+    mov $0x80000001, %eax
+    cpuid
+    test $(1<<20), %edx
+    jz 2f
+
+    # EFER.LME + EFER.NXE (MSR 0xC0000080, bits 8 and 11). NXE must be
+    # active before any PTE_NX leaf is installed.
     mov $0xC0000080, %ecx
     rdmsr
-    or  $(1<<8), %eax
+    or  $((1<<8) | (1<<11)), %eax
     wrmsr
 
     # CR0: clear EM(bit2), set MP(bit1) for SSE; set PG(bit31) to turn on paging
@@ -95,6 +107,11 @@ _start:
 
     lgdt gdt64_ptr
     ljmp $CODE_SEG, $long_mode_start
+
+2:
+    cli
+    hlt
+    jmp 2b
 
     .code64
     .type long_mode_start, @function

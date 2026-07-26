@@ -100,7 +100,7 @@ pub fn emitDmaCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Loca
         const slice_name = try ctx.slice_type_name(ctx.emit_ctx, payload_ty, .mut);
         try ctx.out.print(ctx.allocator, "(({s}){{ .ptr = ", .{slice_name});
         try ctx.emit_expr_with_target(ctx.emit_ctx, member.base.*, locals, buffer_ty);
-        try ctx.out.appendSlice(ctx.allocator, ", .len = 1 }})");
+        try ctx.out.appendSlice(ctx.allocator, ", .len = 1 })");
         return true;
     }
     return error.UnsupportedCEmission;

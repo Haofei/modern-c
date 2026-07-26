@@ -339,6 +339,7 @@ export fn mapping_phys(m: *LeafMapping) -> PAddr { return m.phys; }
 // x86 semantics: user-accessible iff US is set at EVERY level on the walk.
 export fn mapping_is_user(m: *LeafMapping) -> bool { return m.us_all && (m.flags & PTE_US) != 0; }
 export fn mapping_is_writable(m: *LeafMapping) -> bool { return (m.flags & PTE_W) != 0; }
+export fn mapping_is_executable(m: *LeafMapping) -> bool { return (m.flags & PTE_NX) == 0; }
 export fn mapping_is_present(m: *LeafMapping) -> bool { return (m.flags & PTE_P) != 0; }
 // Part of the uniform paging interface (used by kernel/core/uaccess.mc). On x86-64 a leaf has
 // no separate readable bit — a present page is readable (NX governs execute, not read) — so
@@ -346,14 +347,12 @@ export fn mapping_is_present(m: *LeafMapping) -> bool { return (m.flags & PTE_P)
 export fn mapping_is_readable(m: *LeafMapping) -> bool { return (m.flags & PTE_P) != 0; }
 
 // Arch hook for the generic ELF loader (kernel/core/elf_loader.mc): translate a user segment's
-// R/W/X intent into leaf-PTE bits. On x86-64 a leaf has no separate R/X bits — a present,
-// user-accessible page (PTE_US) is readable and (NX not enabled in boot.S) executable — so only
-// writability is an extra bit. PTE_US is always set (loaded image = user); PTE_P is added by
-// page_table_try_map. r/x come for free with a present US page; only w maps to a bit. (W^X is
-// still enforced structurally by the loader rejecting a W&X segment.)
+// R/W/X intent into leaf-PTE bits. boot.S enables EFER.NXE before paging,
+// so every non-executable mapping must carry PTE_NX.
 export fn pte_flags_for_user(r: bool, w: bool, x: bool) -> u64 {
     var flags: u64 = PTE_US;
     if w { flags = flags | PTE_W; }
+    if !x { flags = flags | PTE_NX; }
     return flags;
 }
 

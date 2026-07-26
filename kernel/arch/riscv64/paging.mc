@@ -350,6 +350,7 @@ export fn mapping_phys(m: *LeafMapping) -> PAddr { return m.phys; }
 export fn mapping_is_user(m: *LeafMapping) -> bool { return (m.flags & PTE_U) != 0; }
 export fn mapping_is_readable(m: *LeafMapping) -> bool { return (m.flags & PTE_R) != 0; }
 export fn mapping_is_writable(m: *LeafMapping) -> bool { return (m.flags & PTE_W) != 0; }
+export fn mapping_is_executable(m: *LeafMapping) -> bool { return (m.flags & PTE_X) != 0; }
 
 // Arch hook for the generic ELF loader (kernel/core/elf_loader.mc): translate a user
 // segment's R/W/X intent into leaf-PTE permission bits. A loaded image is user code, so

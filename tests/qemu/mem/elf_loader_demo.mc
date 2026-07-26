@@ -192,6 +192,11 @@ fn build_nonexec_entry_image() -> void {
     img_u64(24, DATA_VADDR as u64); // entry lies in R|W data, not executable text
 }
 
+fn build_bad_alignment_image() -> void {
+    build_image();
+    img_u64(64 + 48, 3); // p_align must be zero/one or a power of two
+}
+
 // A HOSTILE image whose single PT_LOAD claims a memsz spanning MORE than MAX_SEGMENT_PAGES
 // (4096) pages — the loader must reject it (TooManyPages) before allocating anything. filesz is
 // tiny so the image need not actually hold the bytes; the page-count check fires first.
@@ -318,6 +323,7 @@ export fn elf_loader_run() -> u32 {
         ok(m) => {
             if !mapping_is_user(&m) { pass = 0; }
             if mapping_is_writable(&m) { pass = 0; } // text is R|X, not writable
+            if !mapping_is_executable(&m) { pass = 0; }
         }
         err(e) => { pass = 0; }
     }
@@ -325,6 +331,7 @@ export fn elf_loader_run() -> u32 {
         ok(m) => {
             if !mapping_is_user(&m) { pass = 0; }
             if !mapping_is_writable(&m) { pass = 0; } // data is R|W
+            if mapping_is_executable(&m) { pass = 0; }
         }
         err(e) => { pass = 0; }
     }
@@ -349,6 +356,11 @@ export fn elf_loader_run() -> u32 {
     }
     //   - entry outside executable PT_LOAD  -> BadSegment (4)
     build_nonexec_entry_image();
+    if load_err_code((&g_pool[0]) as usize, 262144) != 4 {
+        pass = 0;
+    }
+    //   - malformed PT_LOAD alignment       -> BadSegment (4)
+    build_bad_alignment_image();
     if load_err_code((&g_pool[0]) as usize, 262144) != 4 {
         pass = 0;
     }

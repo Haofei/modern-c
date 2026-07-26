@@ -594,7 +594,10 @@ fn sup_expired(t: *mut ProcTable, slot: usize, now: u64) -> bool {
 export fn proc_supervise_child(t: *mut ProcTable, child_slot: usize, parent_slot: usize) -> void {
     if child_slot < MAX_PROCS {
         if parent_slot < MAX_PROCS {
-            t.procs[child_slot].sup_parent = parent_slot;
+            if t.procs[child_slot].state != .Unused && t.procs[parent_slot].state != .Unused {
+                t.procs[child_slot].sup_parent = parent_slot;
+                t.procs[child_slot].sup_parent_gen = t.procs[parent_slot].gen;
+            }
         }
     }
 }
@@ -602,7 +605,14 @@ export fn proc_supervise_child(t: *mut ProcTable, child_slot: usize, parent_slot
 // The supervision parent slot of `slot`, or MAX_PROCS if it has none.
 export fn proc_supervise_parent(t: *mut ProcTable, slot: usize) -> usize {
     if slot < MAX_PROCS {
-        return t.procs[slot].sup_parent;
+        let parent: usize = t.procs[slot].sup_parent;
+        if parent < t.count {
+            if t.procs[parent].state != .Unused {
+                if t.procs[parent].gen == t.procs[slot].sup_parent_gen {
+                    return parent;
+                }
+            }
+        }
     }
     return MAX_PROCS;
 }
@@ -751,7 +761,7 @@ export fn proc_supervisor_scan(t: *mut ProcTable, now: u64, max_restarts: u32) -
     var c0: usize = 0;
     while c0 < t.count {
         if t.procs[c0].state != .Unused {
-            let par: usize = t.procs[c0].sup_parent;
+            let par: usize = proc_supervise_parent(t, c0);
             if par < MAX_PROCS {
                 sib[c0] = head[par]; // push c0 onto parent's child list
                 head[par] = c0;

@@ -122,6 +122,11 @@ fn load_segment(elf: *ByteReader, pt: *mut PageTable, h: *mut Heap, p: *ProgramH
     if (p.flags & PF_W) != 0 && (p.flags & PF_X) != 0 {
         return err(.BadSegment);
     }
+    // The admitted user-image profile has no execute-only or write-only pages.
+    // Requiring R keeps the three architecture encodings identical.
+    if (p.flags & PF_R) == 0 {
+        return err(.BadSegment);
+    }
 
     // A zero-size segment maps nothing (a degenerate but legal PT_LOAD); skip it.
     if memsz == 0 {
@@ -272,6 +277,9 @@ export fn elf_load_image_for(image_base: usize, image_len: usize, expected_machi
                 return err(.TooManyPages);
             }
             if ph.filesz > ph.memsz {
+                return err(.BadSegment);
+            }
+            if !ph_alignment_valid(&ph) {
                 return err(.BadSegment);
             }
             if ph.memsz != 0 {

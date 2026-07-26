@@ -51,6 +51,7 @@ fn disable_interrupts(h: Hart<IrqsOn>) -> Hart<TrapReady> {
 
 // The hart id (borrow; works in any state — read-only access independent of the
 // typestate parameter).
+#[mc_abi]
 export fn hart_id(comptime State: type, h: *Hart<State>) -> u32 {
     return h.id;
 }

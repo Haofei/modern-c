@@ -69,6 +69,7 @@ export fn production_ops_run() -> u32 {
     if rollback_active_version(&rb) != 11 { pass = 0; }
     if rollback_mark_boot_failed(&rb, 1) != true { pass = 0; }
     if rollback_active_version(&rb) != 10 { pass = 0; }
+    if rollback_mark_boot_failed(&rb, 0) { pass = 0; }
     rollback_install_candidate(&rb, 12);
     rollback_mark_boot_success(&rb);
     if rollback_active_version(&rb) != 12 { pass = 0; }
@@ -105,8 +106,17 @@ export fn production_ops_run() -> u32 {
     policy_apply_runtime_action(&ctl, .Revoke);
     switch ctl.lifecycle { .Revoked => {} _ => { pass = 0; } }
     if ctl.budget != 0 { pass = 0; }
+    policy_apply_runtime_action(&ctl, .Throttle);
+    switch ctl.lifecycle { .Revoked => {} _ => { pass = 0; } }
     policy_apply_runtime_action(&ctl, .Kill);
-    switch ctl.lifecycle { .Killed => {} _ => { pass = 0; } }
+    switch ctl.lifecycle { .Revoked => {} _ => { pass = 0; } }
+
+    var killed: AgentControlState = agent_control(10);
+    policy_apply_runtime_action(&killed, .Kill);
+    policy_apply_runtime_action(&killed, .Throttle);
+    policy_apply_runtime_action(&killed, .Allow);
+    switch killed.lifecycle { .Killed => {} _ => { pass = 0; } }
+    if killed.budget != 0 { pass = 0; }
 
     if action_code(.Allow) != 0 { pass = 0; }
     if action_code(.Throttle) != 1 { pass = 0; }

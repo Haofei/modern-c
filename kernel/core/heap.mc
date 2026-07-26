@@ -262,6 +262,12 @@ fn heap_release_compact(h: *mut Heap, start: PAddr, len: usize) -> void {
     while i < h.free_count {
         let fstart: PAddr = h.free[i].start;
         let fend: PAddr = pa_offset(fstart, h.free[i].len);
+        // Exact duplicates and partial overlaps are allocator corruption, not
+        // additional free capacity. This catches double-free of a non-frontier
+        // block and any release overlapping an already-free interval.
+        if pa_lt(bstart, fend) && pa_lt(fstart, bend) {
+            unreachable;
+        }
         var merged: bool = false;
         if pa_eq(fend, bstart) {
             // existing block sits just before the released one
@@ -353,6 +359,9 @@ fn heap_release_legacy(h: *mut Heap, start: PAddr, len: usize) -> void {
             if h.free[i].len != 0 {
                 let fstart: PAddr = h.free[i].start;
                 let fend: PAddr = pa_offset(fstart, h.free[i].len);
+                if pa_lt(bstart, fend) && pa_lt(fstart, bend) {
+                    unreachable;
+                }
                 if pa_eq(fend, bstart) {
                     // existing block sits just before the released one
                     bstart = fstart;

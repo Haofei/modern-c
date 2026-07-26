@@ -11,7 +11,7 @@ The extractor is static: it records `pub`/`export` function signatures, public c
 public type declarations, and local types named by public declarations.
 
 Total modules: **41**.
-Total public functions: **351**.
+Total public functions: **353**.
 Total public constants: **6**.
 Total public type declarations: **46**.
 Total referenced local types: **15**.
@@ -586,10 +586,12 @@ Source: `std/math.mc`
 | <code>export const fn pow_u32(base: u32, exp: u32) -&gt; u32</code> | `std/math.mc:28` |
 | <code>export const fn ilog2(x: u32) -&gt; u32</code> | `std/math.mc:39` |
 | <code>export const fn wrapping_add_u32(a: u32, b: u32) -&gt; u32</code> | `std/math.mc:52` |
-| <code>export const fn wrapping_sub_u32(a: u32, b: u32) -&gt; u32</code> | `std/math.mc:57` |
-| <code>export const fn wrapping_mul_u32(a: u32, b: u32) -&gt; u32</code> | `std/math.mc:65` |
-| <code>export const fn wrapping_add_u16(a: u16, b: u16) -&gt; u16</code> | `std/math.mc:72` |
-| <code>export const fn wrapping_shl_u32(x: u32, n: u32) -&gt; u32</code> | `std/math.mc:80` |
+| <code>export const fn wrapping_add_u64(a: u64, b: u64) -&gt; u64</code> | `std/math.mc:59` |
+| <code>export const fn wrapping_sub_u64(a: u64, b: u64) -&gt; u64</code> | `std/math.mc:65` |
+| <code>export const fn wrapping_sub_u32(a: u32, b: u32) -&gt; u32</code> | `std/math.mc:72` |
+| <code>export const fn wrapping_mul_u32(a: u32, b: u32) -&gt; u32</code> | `std/math.mc:80` |
+| <code>export const fn wrapping_add_u16(a: u16, b: u16) -&gt; u16</code> | `std/math.mc:87` |
+| <code>export const fn wrapping_shl_u32(x: u32, n: u32) -&gt; u32</code> | `std/math.mc:95` |
 
 ## `std/mathf`
 

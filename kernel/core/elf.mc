@@ -13,7 +13,6 @@ const ELFCLASS64: u8 = 2;      // e_ident[EI_CLASS]
 const ELFDATA2LSB: u8 = 1;     // e_ident[EI_DATA]
 const PT_LOAD: u32 = 1;        // loadable segment
 const ET_EXEC: u16 = 2;
-const ET_DYN: u16 = 3;
 const EV_CURRENT: u32 = 1;
 
 pub enum ElfError {
@@ -46,6 +45,7 @@ pub struct ProgramHeader {
     vaddr: u64,
     filesz: u64,
     memsz: u64,
+    align: u64,
 }
 
 // Parse + validate the ELF64 header (field offsets per the ELF64 spec).
@@ -72,7 +72,9 @@ pub fn elf_parse_header(r: *ByteReader) -> Result<ElfHeader, ElfError> {
         return err(.UnsupportedData);
     }
     let object_type: u16 = br_le16(r, 16);
-    if object_type != ET_EXEC && object_type != ET_DYN {
+    // The current loader has no load-bias or relocation phase. Fail closed on
+    // ET_DYN until PIE relocation is implemented and qualified.
+    if object_type != ET_EXEC {
         return err(.UnsupportedType);
     }
     let machine: u16 = br_le16(r, 18);
@@ -143,11 +145,22 @@ pub fn elf_program_header(r: *ByteReader, table_off: usize, entsize: usize, i: u
         .vaddr = br_le64(r, off + 16),
         .filesz = br_le64(r, off + 32),
         .memsz = br_le64(r, off + 40),
+        .align = br_le64(r, off + 48),
     };
 }
 
 pub fn ph_is_load(p: *ProgramHeader) -> bool {
     return p.p_type == PT_LOAD;
+}
+
+pub fn ph_alignment_valid(p: *ProgramHeader) -> bool {
+    if p.align == 0 || p.align == 1 {
+        return true;
+    }
+    if (p.align & (p.align - 1)) != 0 {
+        return false;
+    }
+    return (p.offset % p.align) == (p.vaddr % p.align);
 }
 
 // Copy a PT_LOAD segment into memory at `dst`: `filesz` bytes from the image, then
@@ -164,6 +177,9 @@ pub fn elf_load_segment(elf: *ByteReader, p: *ProgramHeader, dst: PAddr) -> Resu
     // invariant as the full loader. Without it, callers can copy filesz bytes
     // into a memsz-sized destination even when filesz > memsz.
     if p.filesz > p.memsz {
+        return err(.BadProgramHeaders);
+    }
+    if !ph_alignment_valid(p) {
         return err(.BadProgramHeaders);
     }
     let filesz: usize = p.filesz as usize;

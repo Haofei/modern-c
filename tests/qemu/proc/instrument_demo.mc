@@ -200,6 +200,10 @@ fn run_suptree() -> u32 {
     if proc_supervise_parent(&g_t, 2) != 1 { sup = 0; }
     if proc_supervise_parent(&g_t, 3) != 2 { sup = 0; }
     if proc_supervise_parent(&g_t, 4) != MAX_PROCS { sup = 0; }
+    // A reused parent slot is not the same supervisor: the stored generation
+    // must make the old edge fail closed.
+    g_t.procs[1].gen = g_t.procs[1].gen + 1;
+    if proc_supervise_parent(&g_t, 2) != MAX_PROCS { sup = 0; }
 
     // Scan A @15: parent missed (restart #1); children + unrelated beat -> None.
     proc_heartbeat(&g_t, 2, 15);
