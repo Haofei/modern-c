@@ -41,6 +41,7 @@ const E_BADABI: u32 = 3;
 const E_BADVERSION: u32 = 4;
 const E_BADSIG: u32 = 5;
 const E_WRONGKEY: u32 = 6;
+const E_BADHASH: u32 = 7;
 
 // FNV-1a-32 constants.
 const FNV_OFFSET: u32 = 0x811c9dc5;
@@ -84,6 +85,7 @@ fn err_code(e: BundleError) -> u32 {
         .BadVersion => { return E_BADVERSION; }
         .BadSignature => { return E_BADSIG; }
         .WrongKey => { return E_WRONGKEY; }
+        .BadImageHash => { return E_BADHASH; }
     }
 }
 

@@ -47,6 +47,7 @@ export fn timed_out(start: Ticks, now: Ticks, limit: u64) -> bool {
 // `probe` is a context-free predicate (a non-capturing fn pointer); a probe that
 // needs state (e.g. a specific virtqueue) uses a typed wrapper like `vq_wait_used`
 // until capturing closures exist.
+#[mc_abi]
 export fn poll_until(probe: fn() -> bool, timeout: u64) -> bool {
     let start: Ticks = read_ticks();
     while !timed_out(start, read_ticks(), timeout) {

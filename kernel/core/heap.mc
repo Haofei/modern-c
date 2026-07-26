@@ -24,6 +24,7 @@ import "std/alloc/alloc.mc";
 // Max distinct (non-coalesced) free blocks tracked at once. A kernel heap fragments
 // little; coalescing collapses adjacent frees, so this rarely fills.
 const HEAP_FREE_SLOTS: usize = 64;
+const HEAP_LIVE_SLOTS: usize = 256;
 
 // Free-list coalesce strategy (Phase 2.1, perf refactor). The free list is kept in one
 // of two representations, selected at compile time:
@@ -113,11 +114,17 @@ pub struct FreeBlock {
     len: usize,
 }
 
+pub struct LiveBlock {
+    start: PAddr,
+    len: usize,
+}
+
 pub struct Heap {
     range: PhysRange,
     next: PAddr, // bump frontier: [next, range.end) is untouched tail
     free: [HEAP_FREE_SLOTS]FreeBlock,
-    // Number of live (non-empty) blocks packed into `free[0..free_count)` when the
+    live: [HEAP_LIVE_SLOTS]LiveBlock,
+    // Number of free (non-empty) blocks packed into `free[0..free_count)` when the
     // COMPACTED representation is active (`HEAP_COMPACT_FREELIST`). Slots at and above
     // `free_count` are empty. The legacy unsorted path does not maintain this.
     free_count: usize,
@@ -129,6 +136,10 @@ pub struct Heap {
     // (default) disables it. Independent of `redzone`, though `heap_new_ksan` enables
     // both so freed blocks AND redzones are poisoned in the shadow.
     ksan: usize,
+    // Exact ownership table for live user allocations. A free must match one
+    // currently-live {addr, size} entry, which catches double-free, partial-free,
+    // and overlapping-free attempts before the free-list can be corrupted.
+    live_count: usize,
     // Capacity loss is never silent: if fixed metadata is exhausted, retain
     // the exact leaked-byte total for health policy/telemetry.
     dropped_free_bytes: usize,
@@ -136,6 +147,10 @@ pub struct Heap {
 
 // An empty free slot.
 fn fb_empty() -> FreeBlock {
+    return .{ .start = pa(0), .len = 0 };
+}
+
+fn lb_empty() -> LiveBlock {
     return .{ .start = pa(0), .len = 0 };
 }
 
@@ -152,15 +167,54 @@ fn heap_empty_free_list() -> [HEAP_FREE_SLOTS]FreeBlock {
     };
 }
 
+fn heap_empty_live_list() -> [HEAP_LIVE_SLOTS]LiveBlock {
+    return .{
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+        lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(), lb_empty(),
+    };
+}
+
 // Build a heap over a physical region (e.g. a frame range reserved at boot).
 pub fn heap_new(range: PhysRange) -> Heap {
     return .{
         .range = range,
         .next = pr_start(&range),
         .free = heap_empty_free_list(),
+        .live = heap_empty_live_list(),
         .free_count = 0,
         .redzone = 0,
         .ksan = 0,
+        .live_count = 0,
         .dropped_free_bytes = 0,
     };
 }
@@ -397,6 +451,77 @@ fn heap_release_legacy(h: *mut Heap, start: PAddr, len: usize) -> void {
     return;
 }
 
+// ----- live-allocation ownership helpers -----
+
+fn heap_live_overlaps(h: *mut Heap, start: PAddr, len: usize, skip: usize) -> bool {
+    if len == 0 {
+        return false;
+    }
+    let end: PAddr = pa_offset(start, len);
+    var i: usize = 0;
+    while i < h.live_count {
+        if i != skip {
+            let lstart: PAddr = h.live[i].start;
+            let lend: PAddr = pa_offset(lstart, h.live[i].len);
+            if pa_lt(start, lend) && pa_lt(lstart, end) {
+                return true;
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn heap_record_live(h: *mut Heap, start: PAddr, len: usize) -> void {
+    if len == 0 {
+        return;
+    }
+    if h.live_count >= HEAP_LIVE_SLOTS {
+        unreachable; // refuse to create an allocation that cannot be owned
+    }
+    if heap_live_overlaps(h, start, len, HEAP_LIVE_SLOTS) {
+        unreachable; // allocator produced overlapping live memory
+    }
+    h.live[h.live_count] = .{ .start = start, .len = len };
+    h.live_count = h.live_count + 1;
+}
+
+fn heap_find_live(h: *mut Heap, start: PAddr, len: usize) -> usize {
+    var i: usize = 0;
+    while i < h.live_count {
+        if pa_eq(h.live[i].start, start) && h.live[i].len == len {
+            return i;
+        }
+        i = i + 1;
+    }
+    unreachable; // free/grow must exactly match a currently live allocation
+}
+
+fn heap_take_live(h: *mut Heap, start: PAddr, len: usize) -> void {
+    if len == 0 {
+        return;
+    }
+    let i: usize = heap_find_live(h, start, len);
+    let last: usize = h.live_count - 1;
+    h.live[i] = h.live[last];
+    h.live[last] = lb_empty();
+    h.live_count = last;
+}
+
+fn heap_resize_live(h: *mut Heap, start: PAddr, old_len: usize, new_len: usize) -> void {
+    if old_len == new_len {
+        return;
+    }
+    if old_len == 0 || new_len == 0 {
+        unreachable; // in-place grow operates on an existing non-empty allocation
+    }
+    let i: usize = heap_find_live(h, start, old_len);
+    if heap_live_overlaps(h, start, new_len, i) {
+        unreachable;
+    }
+    h.live[i].len = new_len;
+}
+
 // ----- public allocator -----
 
 // Allocate `size` bytes aligned to `align` (a power of two). Reuses a freed block
@@ -415,8 +540,13 @@ fn heap_release_legacy(h: *mut Heap, start: PAddr, len: usize) -> void {
 #[may_sleep]
 pub fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
     let rz: usize = h.redzone;
+    if size != 0 && h.live_count >= HEAP_LIVE_SLOTS {
+        unreachable; // no unowned allocation may escape
+    }
     if rz == 0 {
-        return heap_alloc_raw(h, size, align);
+        let p: PAddr = heap_alloc_raw(h, size, align);
+        heap_record_live(h, p, size);
+        return p;
     }
     // The leading guard is exactly `rz` bytes; for the user pointer to stay aligned
     // we therefore require `align <= rz` (rz is a power-of-two-friendly 16). Kernel
@@ -446,6 +576,7 @@ pub fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
         mc_ksan_poison(pa_value(raw_start), rz);             // leading guard
         mc_ksan_poison(pa_value(pa_offset(user, size)), rz); // trailing guard
     }
+    heap_record_live(h, user, size);
     return user;
 }
 
@@ -525,7 +656,16 @@ pub fn heap_try_alloc(h: *mut Heap, size: usize, align: usize) -> Result<PAddr, 
     if h.redzone != 0 {
         unreachable; // fallible allocation is only wired for non-redzoned heaps
     }
-    return heap_try_alloc_raw(h, size, align);
+    if size != 0 && h.live_count >= HEAP_LIVE_SLOTS {
+        return err(.Exhausted);
+    }
+    switch heap_try_alloc_raw(h, size, align) {
+        ok(p) => {
+            heap_record_live(h, p, size);
+            return ok(p);
+        }
+        err(e) => { return err(e); }
+    }
 }
 
 // Verify the redzones fencing the user allocation `[addr, addr+size)` are intact.
@@ -555,10 +695,14 @@ pub fn heap_check_block(h: *mut Heap, addr: PAddr, size: usize) -> void {
 // first verifies both guard bands (trapping on a detected overflow before the block
 // re-enters the free list) and then releases the *fenced* block [addr-rz, addr+size+rz).
 pub fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
+    if size == 0 {
+        return;
+    }
+    heap_take_live(h, addr, size);
     var faddr: PAddr = addr;
     var fsize: usize = size;
     let rz: usize = h.redzone;
-    if rz != 0 && size != 0 {
+    if rz != 0 {
         faddr = pa(pa_value(addr) - rz); // raw fenced start, checked subtraction
         fsize = rz + size + rz;          // full fenced length
         // KASAN: the redzone bands are POISONED in the shadow (so a user OOB access traps);
@@ -575,9 +719,6 @@ pub fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
     }
     if fsize > pr_len(&h.range) {
         unreachable; // nonsensical size
-    }
-    if fsize == 0 {
-        return;
     }
     let end: PAddr = pa_offset(faddr, fsize); // checked
     if pa_lt(pr_end(&h.range), end) {
@@ -647,6 +788,7 @@ pub fn heap_try_grow_in_place(h: *mut Heap, addr: PAddr, old_len: usize, new_len
     if pa_lt(pr_end(&h.range), new_end) {
         return false; // backing range too short — caller may heap_extend then retry
     }
+    heap_resize_live(h, addr, old_len, new_len);
     h.next = new_end;
     return true;
 }
@@ -667,6 +809,10 @@ pub fn heap_available(h: *mut Heap) -> usize {
 // instead of silently reporting the heap as healthy.
 pub fn heap_dropped_free_bytes(h: *mut Heap) -> usize {
     return h.dropped_free_bytes;
+}
+
+pub fn heap_live_allocations(h: *mut Heap) -> usize {
+    return h.live_count;
 }
 
 // The heap conforms to the Allocator trait (std/alloc §32), so callers allocate against

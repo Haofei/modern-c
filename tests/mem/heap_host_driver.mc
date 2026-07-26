@@ -20,6 +20,9 @@ export fn heap_host_test(pool_start: usize, pool_len: usize) -> u32 {
     if heap_available(&h) != pool_len {
         return 1;
     }
+    if heap_live_allocations(&h) != 0 {
+        return 8;
+    }
 
     // (2) First alloc starts at the (already 64-aligned) base.
     let a: PAddr = heap_alloc(&h, 100, 16);
@@ -29,6 +32,9 @@ export fn heap_host_test(pool_start: usize, pool_len: usize) -> u32 {
     // (3) ...and is 16-aligned.
     if !pa_is_aligned(a, 16) {
         return 3;
+    }
+    if heap_live_allocations(&h) != 1 {
+        return 9;
     }
 
     // (4) Next alloc is aligned up past a's 100 bytes: align_up(base+100, 64)
@@ -48,6 +54,9 @@ export fn heap_host_test(pool_start: usize, pool_len: usize) -> u32 {
     if !pa_lt(a, b) {
         return 6;
     }
+    if heap_live_allocations(&h) != 2 {
+        return 10;
+    }
 
     // (7) Only the bytes actually carved are unavailable: a's 100 + b's 8 = 108.
     //     The 28-byte alignment gap [base+100, base+128) is reclaimed onto the
@@ -56,6 +65,28 @@ export fn heap_host_test(pool_start: usize, pool_len: usize) -> u32 {
     let expect_avail: usize = pool_len - used;
     if heap_available(&h) != expect_avail {
         return 7;
+    }
+
+    heap_free(&h, a, 100);
+    if heap_live_allocations(&h) != 1 {
+        return 11;
+    }
+
+    let c: PAddr = heap_alloc(&h, 32, 16);
+    if heap_live_allocations(&h) != 2 {
+        return 12;
+    }
+    if !pa_eq(c, a) {
+        return 13;
+    }
+
+    heap_free(&h, b, 8);
+    if heap_live_allocations(&h) != 1 {
+        return 14;
+    }
+    heap_free(&h, c, 32);
+    if heap_live_allocations(&h) != 0 {
+        return 15;
     }
 
     return 0;

@@ -80,6 +80,7 @@ export fn ota_begin(s: *mut OtaSession, expected_len: usize, expected_hash: u64)
 //   * Overflow   — the chunk would carry `received` past `expected_len`.
 // On success the chunk's bytes are folded into the running hash and `received` advances.
 // Returns ok(true) once the whole expected length has been received, ok(false) otherwise.
+#[mc_abi]
 export fn ota_chunk(s: *mut OtaSession, offset: usize, bytes_ptr: *const u8, len: usize) -> Result<bool, OtaError> {
     if !s.active {
         return err(.OutOfOrder);
@@ -112,6 +113,7 @@ export fn ota_chunk(s: *mut OtaSession, offset: usize, bytes_ptr: *const u8, len
 // Finalize a delivery: require the full length was received and that the streamed digest
 // equals the expected fixture checksum. On success the caller may validate metadata and
 // rollback_install_candidate. Deactivates the session on success so it cannot be reused.
+#[mc_abi]
 export fn ota_finish(s: *mut OtaSession) -> Result<bool, OtaError> {
     // Reject a session that was never begun or was already finalized. Without this a zeroed session
     // (received == expected_len == 0, hash_accum == expected_hash == 0) would spuriously finalize, and

@@ -1032,6 +1032,7 @@ fn app_bundle_error_status(e: BundleError) -> u32 {
         .BadVersion => { return LS_BUNDLE_BADVERSION; }
         .BadSignature => { return LS_BUNDLE_BADSIG; }
         .WrongKey => { return LS_BUNDLE_WRONGKEY; }
+        .BadImageHash => { return LS_BUNDLE_HASH; }
     }
 }
 

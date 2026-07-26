@@ -81,6 +81,7 @@ export fn virtio_reset(regs: MmioPtr<VirtioMmio>) -> bool {
 // device is moved to FAILED and a typed `VirtioError` is returned. The requested
 // feature words are lo = bits 0..31, hi = bits 32..63. Caller then sets up
 // virtqueues and calls `driver_ok`.
+#[mc_abi]
 export fn virtio_init(regs: MmioPtr<VirtioMmio>, device_id: u32, want_lo: u32, want_hi: u32) -> Result<bool, VirtioError> {
     if regs.magic.read(.acquire) != VIRTIO_MAGIC {
         return err(.NotVirtio); // not a virtio device at all — nothing to FAIL

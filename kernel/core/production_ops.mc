@@ -20,6 +20,7 @@ pub enum BundleError {
     BadVersion,
     BadSignature,
     WrongKey,
+    BadImageHash,
 }
 
 const BUNDLE_MAGIC: u32 = 0x4d43424e; // "MCBN"
@@ -33,6 +34,20 @@ pub struct BundleHeader {
     key_id: u32,
     image_hash: u64,
     signature_len: usize,
+}
+
+// Opaque admission token for a bundle whose metadata and expected image digest
+// have been checked together. This is still the metadata/FNV-era bridge: the
+// cryptographic secure-boot path must replace `image_hash: u64` with a real
+// SHA-256 digest over an immutable storage object, but callers can no longer
+// manufacture a "valid" enum/status outside this module.
+pub opaque struct VerifiedBundle {
+    kind: BundleKind,
+    version: u64,
+    abi_version: u32,
+    policy_version: u64,
+    key_id: u32,
+    image_hash: u64,
 }
 
 pub fn bundle_header_init(kind: BundleKind, version: u64, abi_version: u32, policy_version: u64, key_id: u32, image_hash: u64, signature_len: usize) -> BundleHeader {
@@ -104,6 +119,59 @@ pub fn bundle_image_hash_matches(h: *BundleHeader, expected_hash: u64) -> bool {
     return h.image_hash == expected_hash;
 }
 
+impl VerifiedBundle {
+    fn admit(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, expected_image_hash: u64) -> Result<VerifiedBundle, BundleError> {
+        switch bundle_validate_metadata(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id) {
+            ok(v) => {}
+            err(e) => { return err(e); }
+        }
+        if h.image_hash != expected_image_hash {
+            return err(.BadImageHash);
+        }
+        return ok(.{
+            .kind = h.kind,
+            .version = h.version,
+            .abi_version = h.abi_version,
+            .policy_version = h.policy_version,
+            .key_id = h.key_id,
+            .image_hash = h.image_hash,
+        });
+    }
+
+    fn kind(v: VerifiedBundle) -> BundleKind {
+        return v.kind;
+    }
+    fn version(v: VerifiedBundle) -> u64 {
+        return v.version;
+    }
+    fn image_hash(v: VerifiedBundle) -> u64 {
+        return v.image_hash;
+    }
+    fn key_id(v: VerifiedBundle) -> u32 {
+        return v.key_id;
+    }
+}
+
+pub fn bundle_verify_and_admit_metadata(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, expected_image_hash: u64) -> Result<VerifiedBundle, BundleError> {
+    return VerifiedBundle.admit(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id, expected_image_hash);
+}
+
+pub fn verified_bundle_kind(v: VerifiedBundle) -> BundleKind {
+    return VerifiedBundle.kind(v);
+}
+
+pub fn verified_bundle_version(v: VerifiedBundle) -> u64 {
+    return VerifiedBundle.version(v);
+}
+
+pub fn verified_bundle_image_hash(v: VerifiedBundle) -> u64 {
+    return VerifiedBundle.image_hash(v);
+}
+
+pub fn verified_bundle_key_id(v: VerifiedBundle) -> u32 {
+    return VerifiedBundle.key_id(v);
+}
+
 pub enum SlotState {
     Empty,
     Installed,
@@ -164,6 +232,10 @@ pub fn rollback_install_candidate(r: *mut RollbackState, version: u64) -> usize 
     return candidate;
 }
 
+pub fn rollback_install_verified_candidate(r: *mut RollbackState, bundle: VerifiedBundle) -> usize {
+    return rollback_install_candidate(r, VerifiedBundle.version(bundle));
+}
+
 pub fn rollback_mark_boot_success(r: *mut RollbackState) -> void {
     if !rollback_state_valid(r) {
         return;
@@ -182,11 +254,12 @@ pub fn rollback_mark_boot_failed(r: *mut RollbackState, max_failures: u32) -> bo
     if r.slots[r.active].failed_boots != 0xFFFF_FFFF {
         r.slots[r.active].failed_boots = r.slots[r.active].failed_boots + 1;
     }
-    r.slots[r.active].state = .Failed;
     if r.slots[r.active].failed_boots >= max_failures {
+        r.slots[r.active].state = .Failed;
         r.active = r.previous;
         return true;
     }
+    r.slots[r.active].state = .Booting;
     return false;
 }
 

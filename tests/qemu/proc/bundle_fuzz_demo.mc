@@ -116,9 +116,11 @@ export fn fuzz_bundle(seed: u32) -> u32 {
 
 // Drive a RANDOM sequence of rollback ops (install candidate / mark boot success / mark boot failed)
 // and assert the A/B slot invariant after every op: active and previous are ALWAYS a valid slot
-// index (< 2). Returns 0 if the invariant held throughout, 1 if it was ever violated. The real
-// safety property is NO TRAP: an escaped index would make `1 - active` (checked usize) underflow or
-// `slots[active]` over-read and abort the driver before it could return.
+// index (< 2). Candidate install may return sentinel 2 when the persistent state is invalid; that
+// is the fail-closed path and must not mutate active/previous out of range. Returns 0 if the
+// invariant held throughout, 1 if it was ever violated. The real safety property is NO TRAP: an
+// escaped index would make `1 - active` (checked usize) underflow or `slots[active]` over-read and
+// abort the driver before it could return.
 export fn fuzz_rollback(seed: u32) -> u32 {
     rollback_init(&g_rb, 100);
     var st: u32 = seed | 1;
@@ -130,7 +132,7 @@ export fn fuzz_rollback(seed: u32) -> u32 {
             st = rng(st);
             let v: u64 = (st as u64) & 0xFFFF;
             let cand: usize = rollback_install_candidate(&g_rb, v);
-            if cand > 1 { return 1; } // candidate slot must be the other valid slot
+            if cand > 2 { return 1; } // 0/1 are real slots; 2 is invalid-state sentinel
         } else {
             if op == 1 {
                 rollback_mark_boot_success(&g_rb);
