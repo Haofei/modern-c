@@ -1,23 +1,21 @@
-// Signed kernel-image admission + rollback proof (production-readiness: secure boot).
+// Bundle metadata admission + rollback proof.
 //
 // Exercises the bundle-admission and A/B rollback state machine in
 // kernel/core/production_ops.mc END TO END on the real target under QEMU (bare M-mode,
 // booted `-bios none`, reporting over the 16550 UART), not just as host unit logic:
 //
-//   1. Compute an IMAGE HASH over a byte buffer. No native MC hash primitive is linkable
-//      into a freestanding image here (BearSSL is C + needs the TLS link infra), so per the
-//      gate spec we use a deterministic FNV-1a-32 checksum AS THE IMAGE HASH for this demo.
-//      The hash is carried in the BundleHeader and would be the value a signature covers.
-//   2. bundle_validate ACCEPTS a correctly-signed, in-ABI, in-version-range bundle whose
-//      key matches the trusted key id and whose SignatureStatus is Valid  -> SIGBOOT-ACCEPT.
-//   3. bundle_validate REJECTS every tamper case with the RIGHT BundleError:
-//      wrong key id, bad signature status, ABI mismatch, version below min, version above max.
+//   1. Compute a deterministic NON-CRYPTOGRAPHIC fixture checksum. This exercises only
+//      metadata transport; it is not an image-integrity proof.
+//   2. bundle_validate_metadata accepts an in-ABI, in-range bundle whose key metadata
+//      matches the trusted key id -> BUNDLE-METADATA-ACCEPT.
+//   3. bundle_validate_metadata rejects malformed metadata with the right BundleError.
 //   4. Rollback: install a candidate, drive it to max_failures failed boots -> the state
 //      machine rolls back (mark_boot_failed returns true) and the active version reverts to
-//      the prior good image; a separate SUCCESS path COMMITS the candidate -> SIGBOOT-ROLLBACK-OK.
-//   5. SIGNED-BOOT-OK prints only if every assertion above held.
+//      the prior good image; a separate SUCCESS path commits the candidate.
+//   5. BUNDLE-METADATA-OK prints only if every assertion above held.
 //
-// The harness (tools/fs/signed-boot-test.sh) boots this once and asserts all three markers.
+// Cryptographic RSA/SHA-256 exact-byte verification is tested separately. This gate
+// does not establish a verifier-to-loader byte binding and must not be called secure boot.
 
 import "tests/qemu/lib/test_report.mc";
 import "kernel/core/production_ops.mc";
@@ -122,46 +120,48 @@ export fn test_main() -> void {
 
     var all_ok: bool = true;
 
-    // 2. ACCEPT: a correctly-signed, in-range, trusted-key kernel bundle.
+    // 2. ACCEPT metadata for an in-range, trusted-key kernel bundle.
     var good: BundleHeader = bundle_header_init(.Kernel, GOOD_VERSION, EXPECTED_ABI, POLICY_VERSION, TRUSTED_KEY, img_hash, SIG_LEN);
-    if is_accept(bundle_validate(&good, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY, .Valid)) {
-        uputs("SIGBOOT-ACCEPT\n");
+    if is_accept(bundle_validate_metadata(&good, .Kernel, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY)) {
+        uputs("BUNDLE-METADATA-ACCEPT\n");
     } else {
-        uputs("SIGBOOT-ACCEPT-FAIL\n");
+        uputs("BUNDLE-METADATA-ACCEPT-FAIL\n");
         all_ok = false;
     }
 
     // 3a. REJECT: wrong key id (header signed by an untrusted key).
     var wrongkey: BundleHeader = bundle_header_init(.Kernel, GOOD_VERSION, EXPECTED_ABI, POLICY_VERSION, 0x0000_0BAD, img_hash, SIG_LEN);
-    if !is_reject_with(bundle_validate(&wrongkey, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY, .Valid), E_WRONGKEY) {
-        uputs("SIGBOOT-WRONGKEY-FAIL\n");
+    if !is_reject_with(bundle_validate_metadata(&wrongkey, .Kernel, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY), E_WRONGKEY) {
+        uputs("BUNDLE-WRONGKEY-FAIL\n");
         all_ok = false;
     }
 
-    // 3b. REJECT: bad signature status (key/abi/version all fine, signature is forged).
-    if !is_reject_with(bundle_validate(&good, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY, .Bad), E_BADSIG) {
-        uputs("SIGBOOT-BADSIG-FAIL\n");
+    // 3b. REJECT: missing signature metadata. Cryptographic signature validity
+    // is qualified separately by rsa-verify-test over exact bytes.
+    var missing: BundleHeader = bundle_header_init(.Kernel, GOOD_VERSION, EXPECTED_ABI, POLICY_VERSION, TRUSTED_KEY, img_hash, 0);
+    if !is_reject_with(bundle_validate_metadata(&missing, .Kernel, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY), E_BADSIG) {
+        uputs("BUNDLE-SIGNATURE-METADATA-FAIL\n");
         all_ok = false;
     }
 
     // 3c. REJECT: ABI mismatch (image built against a different kernel ABI).
     var wrongabi: BundleHeader = bundle_header_init(.Kernel, GOOD_VERSION, 99, POLICY_VERSION, TRUSTED_KEY, img_hash, SIG_LEN);
-    if !is_reject_with(bundle_validate(&wrongabi, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY, .Valid), E_BADABI) {
-        uputs("SIGBOOT-ABI-FAIL\n");
+    if !is_reject_with(bundle_validate_metadata(&wrongabi, .Kernel, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY), E_BADABI) {
+        uputs("BUNDLE-ABI-FAIL\n");
         all_ok = false;
     }
 
     // 3d. REJECT: version below the minimum (anti-rollback floor / downgrade attack).
     var tooold: BundleHeader = bundle_header_init(.Kernel, 50, EXPECTED_ABI, POLICY_VERSION, TRUSTED_KEY, img_hash, SIG_LEN);
-    if !is_reject_with(bundle_validate(&tooold, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY, .Valid), E_BADVERSION) {
-        uputs("SIGBOOT-MINVER-FAIL\n");
+    if !is_reject_with(bundle_validate_metadata(&tooold, .Kernel, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY), E_BADVERSION) {
+        uputs("BUNDLE-MINVER-FAIL\n");
         all_ok = false;
     }
 
     // 3e. REJECT: version above the maximum (unknown future image).
     var toonew: BundleHeader = bundle_header_init(.Kernel, 250, EXPECTED_ABI, POLICY_VERSION, TRUSTED_KEY, img_hash, SIG_LEN);
-    if !is_reject_with(bundle_validate(&toonew, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY, .Valid), E_BADVERSION) {
-        uputs("SIGBOOT-MAXVER-FAIL\n");
+    if !is_reject_with(bundle_validate_metadata(&toonew, .Kernel, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY), E_BADVERSION) {
+        uputs("BUNDLE-MAXVER-FAIL\n");
         all_ok = false;
     }
 
@@ -195,16 +195,16 @@ export fn test_main() -> void {
     }
 
     if rb_ok {
-        uputs("SIGBOOT-ROLLBACK-OK\n");
+        uputs("BUNDLE-ROLLBACK-OK\n");
     } else {
-        uputs("SIGBOOT-ROLLBACK-FAIL\n");
+        uputs("BUNDLE-ROLLBACK-FAIL\n");
         all_ok = false;
     }
 
     if all_ok {
-        uputs("SIGNED-BOOT-OK\n");
+        uputs("BUNDLE-METADATA-OK\n");
     } else {
-        uputs("SIGNED-BOOT-FAIL\n");
+        uputs("BUNDLE-METADATA-FAIL\n");
     }
     halt();
 }

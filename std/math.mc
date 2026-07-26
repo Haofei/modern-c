@@ -53,6 +53,21 @@ export const fn wrapping_add_u32(a: u32, b: u32) -> u32 {
     return (((a as u64) + (b as u64)) & 0x0000_0000_FFFF_FFFF) as u32;
 }
 
+// Modular 64-bit counter helpers. These are deliberately named rather than
+// relying on the default checked integer domain at long-running clock/accounting
+// boundaries.
+export const fn wrapping_add_u64(a: u64, b: u64) -> u64 {
+    let wa: wrap<u64> = a as wrap<u64>;
+    let wb: wrap<u64> = b as wrap<u64>;
+    return (wa + wb) as u64;
+}
+
+export const fn wrapping_sub_u64(a: u64, b: u64) -> u64 {
+    let wa: wrap<u64> = a as wrap<u64>;
+    let wb: wrap<u64> = b as wrap<u64>;
+    return (wa - wb) as u64;
+}
+
 // Wrapping (modulo-2^32) 32-bit subtract. `a + 2^32 - b` stays positive in 64 bits.
 export const fn wrapping_sub_u32(a: u32, b: u32) -> u32 {
     return (((a as u64) + 0x0000_0001_0000_0000 - (b as u64)) & 0x0000_0000_FFFF_FFFF) as u32;

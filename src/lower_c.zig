@@ -28,25 +28,25 @@ pub fn mcBackend() backend_mod.Backend {
         .name = "c",
         .artifact_ext = ".c",
         .supports_profiles = true,
-        .ctx = undefined,
+        .ctx = null,
         .lowerFn = backendLower,
         .emitMapFn = backendEmitMap,
     };
 }
 
 fn backendLower(
-    ctx: *anyopaque,
+    ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    return appendCProfileWithOptions(allocator, module, out, opts.profile, opts.source_path, opts.checks, opts.stub_asm, opts.reporter);
+    return appendCProfileWithMir(allocator, program.syntax_module, program.typed_mir, out, opts.profile, opts.source_path, opts.checks, opts.stub_asm, opts.reporter);
 }
 
 fn backendEmitMap(
-    ctx: *anyopaque,
+    ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
     module: ast.Module,
     out: *std.ArrayList(u8),

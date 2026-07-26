@@ -113,6 +113,7 @@ pub fn page_table_new(h: *mut Heap) -> PageTable {
 // Non-trapping form: allocate the root frame fallibly, so a caller on a hostile-input path
 // (e.g. the ELF loader's app_build) can turn even root-table exhaustion into a typed error
 // rather than a kernel trap.
+#[mc_abi]
 export fn page_table_try_new(h: *mut Heap) -> Result<PageTable, HeapError> {
     switch try_alloc_table(h) {
         ok(root) => { return ok(.{ .root = root }); }
@@ -143,6 +144,7 @@ pub enum MapError {
 // returning a typed error instead of trapping. Interior tables are allocated from `h`
 // as needed. This is the validated form callers use on dynamic paths (mmap, fault
 // handlers) where a conflict or misalignment is a runtime condition to handle.
+#[mc_abi]
 export fn page_table_try_map(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_target: PAddr, flags: u64) -> Result<bool, MapError> {
     if (va_value(virt) % PAGE_SIZE) != 0 {
         return err(.MisalignedAddress);
@@ -193,6 +195,7 @@ export fn page_table_map(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_tar
 
 // Map a 1 GiB gigapage: a leaf PTE at the top level (level 2). `virt` and `phys`
 // must be 1 GiB-aligned. Returns a typed error instead of trapping.
+#[mc_abi]
 export fn page_table_try_map_gigapage(pt: *mut PageTable, virt: VAddr, phys_target: PAddr, flags: u64) -> Result<bool, MapError> {
     if (va_value(virt) % GIGAPAGE_SIZE) != 0 {
         return err(.MisalignedAddress);
@@ -319,6 +322,7 @@ enum LookupError {
 // Resolve `virt` to its leaf mapping without trapping — the building block for
 // permission-checked user/kernel access. Returns `NotMapped` if any level on the
 // path is invalid. Handles leaf PTEs at any level (gigapage/megapage/4 KiB).
+#[mc_abi]
 export fn page_table_lookup(pt: *PageTable, virt: VAddr) -> Result<LeafMapping, LookupError> {
     var table: PAddr = pt.root;
     var level: u32 = 2;

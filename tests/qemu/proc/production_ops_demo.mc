@@ -13,15 +13,11 @@ export fn production_ops_run() -> u32 {
     var pass: u32 = 1;
 
     var agent: BundleHeader = bundle_header_init(.Agent, 10, 1, 41, 7, 0xAA55, 256);
-    switch bundle_validate(&agent, 1, 8, 12, 7, .Valid) {
+    switch bundle_validate_metadata(&agent, .Agent, 1, 8, 12, 7) {
         ok(v) => {}
         err(e) => { pass = 0; }
     }
-    switch bundle_validate_kind(&agent, .Agent, 1, 8, 12, 7, .Valid) {
-        ok(v) => {}
-        err(e) => { pass = 0; }
-    }
-    switch bundle_validate_kind(&agent, .Kernel, 1, 8, 12, 7, .Valid) {
+    switch bundle_validate_metadata(&agent, .Kernel, 1, 8, 12, 7) {
         ok(v) => { pass = 0; }
         err(e) => {
             switch e {
@@ -33,7 +29,7 @@ export fn production_ops_run() -> u32 {
     if !bundle_image_hash_matches(&agent, 0xAA55) { pass = 0; }
     if bundle_image_hash_matches(&agent, 0x55AA) { pass = 0; }
     agent.signature_len = 0;
-    switch bundle_validate(&agent, 1, 8, 12, 7, .Missing) {
+    switch bundle_validate_metadata(&agent, .Agent, 1, 8, 12, 7) {
         ok(v) => { pass = 0; }
         err(e) => {
             switch e {
@@ -44,7 +40,7 @@ export fn production_ops_run() -> u32 {
     }
     agent.signature_len = 256;
     agent.abi_version = 2;
-    switch bundle_validate(&agent, 1, 8, 12, 7, .Valid) {
+    switch bundle_validate_metadata(&agent, .Agent, 1, 8, 12, 7) {
         ok(v) => { pass = 0; }
         err(e) => {
             switch e {
@@ -55,7 +51,7 @@ export fn production_ops_run() -> u32 {
     }
     agent.abi_version = 1;
     agent.key_id = 8;
-    switch bundle_validate(&agent, 1, 8, 12, 7, .Valid) {
+    switch bundle_validate_metadata(&agent, .Agent, 1, 8, 12, 7) {
         ok(v) => { pass = 0; }
         err(e) => {
             switch e {
@@ -76,6 +72,10 @@ export fn production_ops_run() -> u32 {
     rollback_install_candidate(&rb, 12);
     rollback_mark_boot_success(&rb);
     if rollback_active_version(&rb) != 12 { pass = 0; }
+    rb.active = 2;
+    if rollback_state_valid(&rb) { pass = 0; }
+    if rollback_install_candidate(&rb, 13) != 2 { pass = 0; }
+    if rollback_active_version(&rb) != 0 { pass = 0; }
 
     var wd: Watchdog = uninit;
     watchdog_arm(&wd, 100, 10);
@@ -84,6 +84,11 @@ export fn production_ops_run() -> u32 {
     watchdog_pet(&wd, 111);
     if watchdog_expired(&wd, 120) { pass = 0; }
     if !watchdog_expired(&wd, 121) { pass = 0; }
+    // Deadline crosses u64::MAX: no checked-overflow trap and expiry is based
+    // on the modular elapsed interval, not ordered absolute samples.
+    watchdog_arm(&wd, 0xFFFF_FFFF_FFFF_FFFC, 8);
+    if watchdog_expired(&wd, 3) { pass = 0; }
+    if !watchdog_expired(&wd, 4) { pass = 0; }
 
     var rr: RebootRecord = reboot_record(3, .Watchdog, 44);
     if rr.boot_epoch != 3 { pass = 0; }
@@ -95,15 +100,13 @@ export fn production_ops_run() -> u32 {
 
     var ctl: AgentControlState = agent_control(10);
     policy_apply_runtime_action(&ctl, .Throttle);
-    if !ctl.throttled { pass = 0; }
+    switch ctl.lifecycle { .Throttled => {} _ => { pass = 0; } }
     if ctl.budget != 5 { pass = 0; }
     policy_apply_runtime_action(&ctl, .Revoke);
-    if !ctl.revoked { pass = 0; }
+    switch ctl.lifecycle { .Revoked => {} _ => { pass = 0; } }
     if ctl.budget != 0 { pass = 0; }
-    if !ctl.running { pass = 0; }
     policy_apply_runtime_action(&ctl, .Kill);
-    if !ctl.killed { pass = 0; }
-    if ctl.running { pass = 0; }
+    switch ctl.lifecycle { .Killed => {} _ => { pass = 0; } }
 
     if action_code(.Allow) != 0 { pass = 0; }
     if action_code(.Throttle) != 1 { pass = 0; }

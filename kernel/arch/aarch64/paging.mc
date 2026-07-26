@@ -163,6 +163,7 @@ pub fn page_table_new(h: *mut Heap) -> PageTable {
 
 // Non-trapping form: allocate the root L0 frame fallibly, so a caller on a hostile-input path
 // can turn even root-table exhaustion into a typed error.
+#[mc_abi]
 export fn page_table_try_new(h: *mut Heap) -> Result<PageTable, HeapError> {
     switch try_alloc_table(h) {
         ok(root) => { return ok(.{ .root = root }); }
@@ -194,6 +195,7 @@ pub enum MapError {
 // install a 4 KiB page leaf at L3 mapping `virt` -> `phys` with `flags`. AF + inner-shareable
 // + page type bits are added here. Returns a typed error instead of trapping — the validated
 // form callers use on dynamic paths (mmap, fault handlers).
+#[mc_abi]
 export fn page_table_try_map(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_target: PAddr, flags: u64) -> Result<bool, MapError> {
     if (va_value(virt) % PAGE_SIZE) != 0 {
         return err(.MisalignedAddress);
@@ -245,6 +247,7 @@ export fn page_table_map(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_tar
 // Map a 2 MiB block: a block leaf at L2 (level 1) reached through L0->L1. `virt` and `phys`
 // must be 2 MiB-aligned. Interior L0/L1 tables are allocated as needed. The cheap way to
 // identity-map kernel RAM ranges. Returns a typed error instead of trapping.
+#[mc_abi]
 export fn page_table_try_map_block_2mib(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_target: PAddr, flags: u64) -> Result<bool, MapError> {
     if (va_value(virt) % BLOCK_2MIB) != 0 {
         return err(.MisalignedAddress);
@@ -353,6 +356,7 @@ enum LookupError {
 // Resolve `virt` to its leaf mapping without trapping — the building block for permission-
 // checked user/kernel access. Returns NotMapped if any level is invalid. Handles 2 MiB block
 // leaves at L2 and 4 KiB page leaves at L3.
+#[mc_abi]
 export fn page_table_lookup(pt: *PageTable, virt: VAddr) -> Result<LeafMapping, LookupError> {
     var table: PAddr = pt.root;
     var level: u32 = 3;

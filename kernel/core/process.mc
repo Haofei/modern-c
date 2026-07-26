@@ -96,7 +96,7 @@ struct Process {
     kcall_mask: Mask32,          // least privilege: bit op = may invoke kernel call `op`
     priority: u32,               // scheduling priority (policy set externally; higher runs first)
     quantum: u32,                // remaining scheduling quantum in ticks (0 = expired)
-    ticks: u32,                  // accounting: total ticks this incarnation has consumed
+    ticks: u64,                  // saturating long-running accounting; never traps on uptime
     sched_endpoint: u32,         // the scheduler service to notify on quantum expiry (0 = none)
     throttle: u32,               // fair-share throttle penalty (added to effective ticks; see proc_throttle)
     hb_deadline: u64,            // supervision: max ticks allowed between heartbeats (0 = unsupervised)

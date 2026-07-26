@@ -5,7 +5,7 @@
 # kernel/core/production_ops.mc end to end), links it into a bare riscv64 M-mode image, and
 # boots it ONCE under QEMU. PASS requires all three markers:
 #   OTA-DELIVER-OK — a good image, delivered in N in-order chunks, reassembled + hash-verified,
-#                    was admitted by bundle_validate and installed as a rollback candidate
+#                    passed bundle_validate_metadata and was installed as a rollback candidate
 #   OTA-REJECT-OK  — a corrupted chunk was caught (HashMismatch) and out-of-order / oversized
 #                    chunks were rejected (OutOfOrder / Overflow) WITHOUT trapping
 #   OTA-OK         — every deliver / corrupt / reject assertion held

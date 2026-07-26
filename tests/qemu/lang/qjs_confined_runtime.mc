@@ -26,7 +26,7 @@ extern global app_image_hash: u64;
 extern fn mc_halt() -> void;
 extern fn usermode_setup() -> void;
 extern fn enter_user(entry: usize, user_sp: usize) -> void;
-extern fn app_build_agent_admitted(image_base: usize, image_len: usize, region_base: usize, region_len: usize, expected_hash: u64) -> u64;
+extern fn app_build_agent_metadata_checked(image_base: usize, image_len: usize, region_base: usize, region_len: usize, expected_hash: u64) -> u64;
 extern fn app_build_status() -> u32;
 extern fn app_entry() -> u64;
 extern fn app_kernel_unmapped(kernel_va: usize) -> u32;
@@ -87,7 +87,7 @@ export fn test_main() -> void {
     let expected_hash: u64 = app_image_hash;
     let region: usize = page_align((&g_region[0]) as usize);
 
-    let bad_satp: u64 = app_build_agent_admitted(image_base, image_len, region, RT_REGION_LEN, expected_hash ^ 1);
+    let bad_satp: u64 = app_build_agent_metadata_checked(image_base, image_len, region, RT_REGION_LEN, expected_hash ^ 1);
     if bad_satp != 0 {
         uputs("APP-ADMISSION-PROOF: hash mismatch accepted\n");
         mc_halt();
@@ -99,7 +99,7 @@ export fn test_main() -> void {
     }
     uputs("APP-ADMISSION-PROOF: hash mismatch rejected\n");
 
-    let satp: u64 = app_build_agent_admitted(image_base, image_len, region, RT_REGION_LEN, expected_hash);
+    let satp: u64 = app_build_agent_metadata_checked(image_base, image_len, region, RT_REGION_LEN, expected_hash);
     if satp == 0 {
         print_load_status(app_build_status());
         mc_halt();

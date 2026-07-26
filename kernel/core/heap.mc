@@ -129,6 +129,9 @@ pub struct Heap {
     // (default) disables it. Independent of `redzone`, though `heap_new_ksan` enables
     // both so freed blocks AND redzones are poisoned in the shadow.
     ksan: usize,
+    // Capacity loss is never silent: if fixed metadata is exhausted, retain
+    // the exact leaked-byte total for health policy/telemetry.
+    dropped_free_bytes: usize,
 }
 
 // An empty free slot.
@@ -158,6 +161,7 @@ pub fn heap_new(range: PhysRange) -> Heap {
         .free_count = 0,
         .redzone = 0,
         .ksan = 0,
+        .dropped_free_bytes = 0,
     };
 }
 
@@ -215,7 +219,12 @@ fn fl_swap_remove(h: *mut Heap, i: usize) -> void {
 // an appended block never abuts an existing one (preserving the no-adjacent invariant).
 fn fl_append(h: *mut Heap, start: PAddr, len: usize) -> void {
     if h.free_count >= HEAP_FREE_SLOTS {
-        return; // full and no coalesce was possible: drop (fail-safe leak)
+        if h.dropped_free_bytes > 0xFFFF_FFFF_FFFF_FFFF - len {
+            h.dropped_free_bytes = 0xFFFF_FFFF_FFFF_FFFF;
+        } else {
+            h.dropped_free_bytes = h.dropped_free_bytes + len;
+        }
+        return; // fail-closed accounting; callers can trip health policy below
     }
     h.free[h.free_count] = .{ .start = start, .len = len };
     h.free_count = h.free_count + 1;
@@ -642,6 +651,13 @@ pub fn heap_available(h: *mut Heap) -> usize {
         i = i + 1;
     }
     return total;
+}
+
+// Bytes that could not be represented in the bounded free-list metadata.
+// Production health policy treats any non-zero value as allocator degradation
+// instead of silently reporting the heap as healthy.
+pub fn heap_dropped_free_bytes(h: *mut Heap) -> usize {
+    return h.dropped_free_bytes;
 }
 
 // The heap conforms to the Allocator trait (std/alloc §32), so callers allocate against

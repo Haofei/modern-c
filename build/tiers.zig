@@ -336,7 +336,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-ledger-test"));
     // llvm-soak-test runs the LLVM-lowered single-boot soak workload under QEMU.
     m0_step.dependOn(ctx.cmd("llvm-soak-test"));
-    m0_step.dependOn(ctx.cmd("llvm-signed-boot-test"));
+    m0_step.dependOn(ctx.cmd("llvm-bundle-metadata-test"));
     // llvm-ota-test runs the LLVM-lowered chunked OTA transport + admission + rollback under QEMU.
     m0_step.dependOn(ctx.cmd("llvm-ota-test"));
     // llvm-metrics-test runs the LLVM-lowered structured metrics + deterministic replay under QEMU.
@@ -811,7 +811,7 @@ pub fn register(ctx: *h.Ctx) void {
     // parser-fuzz-test (P1) fuzzes the DNS+TCP parsers with malformed/truncated bytes:
     // every parse is total over its finite buffer — no over-read, garbage rejected (clang).
     m0_step.dependOn(ctx.cmd("parser-fuzz-test"));
-    // bundle-fuzz-test (P6) fuzzes the bundle/OTA admission surface (bundle_validate + rollback)
+    // bundle-fuzz-test (P6) fuzzes bundle metadata admission + rollback.
     // over adversarial headers + random op-sequences: every call total, fail-closed, no trap (clang).
     m0_step.dependOn(ctx.cmd("bundle-fuzz-test"));
     // net-rx-live-test routes a real virtio-net RX frame through net_rx_deliver under QEMU.
@@ -850,8 +850,8 @@ pub fn register(ctx: *h.Ctx) void {
     // soak-test runs the single-boot soak workload (thousands of spawn/charge/supervise/reclaim/
     // reap cycles return to baseline; no leak, no counter-overflow trap) under QEMU.
     m0_step.dependOn(ctx.cmd("soak-test"));
-    // signed-boot-test runs signed-image admission + A/B rollback (production_ops) end to end under QEMU.
-    m0_step.dependOn(ctx.cmd("signed-boot-test"));
+    // Metadata admission and rollback are distinct from RSA/SHA-256 byte verification.
+    m0_step.dependOn(ctx.cmd("bundle-metadata-test"));
     // ota-test runs chunked OTA transport (kernel/core/ota) + admission + rollback end to end under QEMU.
     m0_step.dependOn(ctx.cmd("ota-test"));
     // metrics-test runs structured metrics + deterministic event-log replay under QEMU.

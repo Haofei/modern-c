@@ -1,14 +1,13 @@
 // kernel/core/ota — chunked OTA (over-the-air) update TRANSPORT.
 //
 // The admission + rollback control plane already exists in kernel/core/production_ops.mc
-// (BundleHeader/bundle_validate, RollbackState/rollback_install_candidate). What that layer
+// (BundleHeader/bundle_validate_metadata, RollbackState/rollback_install_candidate).
 // assumes is an image already in memory. This module supplies the missing TRANSPORT: an
 // image arrives in arbitrary-sized CHUNKS (a network/flash stream), is reassembled in
 // strict order, and a running hash over the reassembled bytes is verified against the
-// expected image hash BEFORE the bytes are handed to bundle_validate + rollback install.
+// expected fixture checksum before metadata validation + rollback installation.
 //
-// The hash is the SAME deterministic FNV-1a-32 the signed-boot demo carries as its image
-// hash (see tests/qemu/arch/signed_boot_demo.mc): identical offset basis and prime, so a
+// The hash is the same deterministic FNV-1a-32 used by bundle_metadata_demo.mc, so a
 // streamed hash over in-order chunks equals a one-shot hash over the whole buffer. FNV-1a
 // folds one byte at a time, which is exactly what a chunk state machine needs — no full
 // buffer copy is required to compute the digest.
@@ -18,7 +17,7 @@
 // remaining-capacity check is written as `len > expected_len - received` where the
 // subtraction can never underflow because the invariant `received <= expected_len` holds.
 
-// FNV-1a-32 constants — MUST match signed_boot_demo.mc so the digests are interchangeable.
+// Fixture checksum constants — must match bundle_metadata_demo.mc.
 const OTA_FNV_OFFSET: u32 = 0x811c9dc5;
 const OTA_FNV_PRIME: u32 = 0x0100_0193;
 
@@ -38,7 +37,7 @@ struct OtaSession {
 }
 
 // u32*u32 fits in u64, so the product never trips the checked-overflow trap; truncating
-// back to u32 gives the modular (wrapping) FNV multiply. Identical to signed_boot_demo's.
+// back to u32 gives the modular (wrapping) FNV multiply.
 fn ota_wrap_mul_u32(a: u32, b: u32) -> u32 {
     return (((a as u64) * (b as u64)) & 0x0000_0000_FFFF_FFFF) as u32;
 }
@@ -111,7 +110,7 @@ export fn ota_chunk(s: *mut OtaSession, offset: usize, bytes_ptr: *const u8, len
 }
 
 // Finalize a delivery: require the full length was received and that the streamed digest
-// equals the expected image hash. On success the caller may proceed to bundle_validate +
+// equals the expected fixture checksum. On success the caller may validate metadata and
 // rollback_install_candidate. Deactivates the session on success so it cannot be reused.
 export fn ota_finish(s: *mut OtaSession) -> Result<bool, OtaError> {
     // Reject a session that was never begun or was already finalized. Without this a zeroed session

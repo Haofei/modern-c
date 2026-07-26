@@ -19,8 +19,12 @@ int main(void) {
     elf[0] = 0x7F; elf[1] = 'E'; elf[2] = 'L'; elf[3] = 'F';
     elf[4] = 2; // ELFCLASS64
     elf[5] = 1; // little-endian
+    put_u16(&elf[16], 2);             // e_type = ET_EXEC
+    put_u16(&elf[18], 243);           // e_machine = EM_RISCV
+    put_u32(&elf[20], 1);             // e_version = EV_CURRENT
     put_u64(&elf[24], 0x80001000);  // e_entry
     put_u64(&elf[32], 64);          // e_phoff
+    put_u16(&elf[52], 64);          // e_ehsize
     put_u16(&elf[54], 56);          // e_phentsize
     put_u16(&elf[56], 1);           // e_phnum
     // one PT_LOAD program header at offset 64, segment = the 4 payload bytes that

@@ -694,9 +694,9 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "parser-fuzz-test", "Fuzz the DNS+TCP parsers with malformed bytes (total, no over-read)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "parser-fuzz-test" });
 
     // P6: bundle/OTA admission fuzz oracle — drive kernel/core/production_ops.mc's
-    // bundle_validate over >200k adversarial headers (fail-closed typed reject) + 50k random
+    // bundle metadata validation over >200k adversarial headers + 50k random
     // rollback A/B op-sequences (slot-index invariant); every call total, never a trap.
-    _ = h.addScriptTest(ctx, "bundle-fuzz-test", "Fuzz the bundle/OTA admission surface (bundle_validate + rollback) with adversarial input (total, fail-closed, no trap)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "bundle-fuzz-test" });
+    _ = h.addScriptTest(ctx, "bundle-fuzz-test", "Fuzz bundle metadata admission + rollback with adversarial input (total, fail-closed, no trap)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "bundle-fuzz-test" });
 
     _ = h.addScriptTest(ctx, "net-rx-live-test", "Route a real virtio-net RX frame through net_rx_deliver under QEMU", &.{ "bash", "tools/net/net-rx-live-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-net-rx-live-test", "Route a real LLVM-lowered virtio-net RX frame through net_rx_deliver under QEMU", &.{ "bash", "tools/net/net-rx-live-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -785,9 +785,9 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-soak-test", "Run the LLVM-lowered single-boot soak workload under QEMU", &.{ "bash", "tools/proc/soak-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "signed-boot-test", "Run signed-image admission + A/B rollback (kernel/core/production_ops) end to end under QEMU", &.{ "bash", "tools/fs/signed-boot-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "bundle-metadata-test", "Run bundle metadata admission + A/B rollback under QEMU (cryptographic verification is qualified separately)", &.{ "bash", "tools/fs/bundle-metadata-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-signed-boot-test", "Run the LLVM-lowered signed-image admission + A/B rollback end to end under QEMU", &.{ "bash", "tools/fs/signed-boot-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "llvm-bundle-metadata-test", "Run LLVM-lowered bundle metadata admission + A/B rollback under QEMU", &.{ "bash", "tools/fs/bundle-metadata-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "ota-test", "Run chunked OTA transport (kernel/core/ota) + admission + rollback end to end under QEMU", &.{ "bash", "tools/fs/ota-test.sh", "zig-out/bin/mcc", "c" });
 

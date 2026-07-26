@@ -14,7 +14,7 @@
 # Usage:
 #   tools/run-kernel.sh [demo.mc] [c|llvm]
 # Examples:
-#   tools/run-kernel.sh                                   # default: signed_boot demo, C backend
+#   tools/run-kernel.sh                                   # default: bundle metadata demo, C backend
 #   tools/run-kernel.sh tests/qemu/proc/agent_preempt_demo.mc c
 #   MC_DISK=disk.img tools/run-kernel.sh tests/qemu/arch/blk_persist_demo.mc   # attach a virtio-blk disk
 #
@@ -28,7 +28,7 @@
 #   OUT=<dir>                    output dir for the built image (default: out/vm)
 set -euo pipefail
 
-SRC_IN="${1:-tests/qemu/arch/signed_boot_demo.mc}"
+SRC_IN="${1:-tests/qemu/arch/bundle_metadata_demo.mc}"
 BACKEND="${2:-c}"
 
 MCC="${MCC_UNDER_TEST:-${MCC:-zig-out/bin/mcc}}"

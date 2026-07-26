@@ -144,13 +144,23 @@ fn writeStdout(bytes: []const u8) !void {
 }
 
 fn writeOutputPath(path: []const u8, bytes: []const u8) !void {
-    const file = std.Io.Dir.cwd().createFile(stdout_io, path, .{ .truncate = true }) catch |err| {
+    // Materialize artifacts through a sibling temporary file and atomically
+    // replace the destination only after the complete write succeeds. A failed
+    // or killed compilation therefore cannot truncate a previously valid
+    // artifact or expose a partially written one.
+    var atomic_file = std.Io.Dir.cwd().createFileAtomic(stdout_io, path, .{
+        .replace = true,
+    }) catch |err| {
         std.debug.print("error: unable to write output \"{s}\": {s}\n", .{ path, @errorName(err) });
         return error.OutputWriteFailed;
     };
-    defer file.close(stdout_io);
-    file.writeStreamingAll(stdout_io, bytes) catch |err| {
+    defer atomic_file.deinit(stdout_io);
+    atomic_file.file.writeStreamingAll(stdout_io, bytes) catch |err| {
         std.debug.print("error: unable to write output \"{s}\": {s}\n", .{ path, @errorName(err) });
+        return error.OutputWriteFailed;
+    };
+    atomic_file.replace(stdout_io) catch |err| {
+        std.debug.print("error: unable to commit output \"{s}\": {s}\n", .{ path, @errorName(err) });
         return error.OutputWriteFailed;
     };
 }

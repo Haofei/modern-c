@@ -44,6 +44,8 @@ const PF_R: u32 = 4; // readable
 // drive an unbounded map/alloc loop (and also bounds the per-page loop so it is
 // provably terminating). 4096 pages = 16 MiB per segment.
 const MAX_SEGMENT_PAGES: usize = 4096;
+const MAX_LOAD_SEGMENTS: usize = 64;
+const MAX_TOTAL_PAGES: usize = 8192;
 
 // Why a load was rejected. A malformed/hostile image maps to one of these instead of
 // trapping or mapping wild memory.
@@ -52,6 +54,20 @@ enum LoadError {
     TooManyPages,  // a segment covers more than MAX_SEGMENT_PAGES pages
     NoFrame,       // heap exhausted allocating a page frame or interior page table
     BadSegment,    // a segment's vaddr/memsz/filesz is absurd or overflows
+}
+
+// Roll back leaf mappings and their data frames for a page range. Interior page
+// tables remain owned by the address space and are reclaimed when that address
+// space is destroyed; no ELF payload frame survives a failed load.
+fn rollback_pages(pt: *mut PageTable, h: *mut Heap, start: usize, count: usize) -> void {
+    var i: usize = 0;
+    while i < count {
+        let page: VAddr = va(start + i * PAGE);
+        let frame: PAddr = page_table_translate(pt, page);
+        page_table_unmap(pt, page);
+        heap_free(h, frame, PAGE);
+        i = i + 1;
+    }
 }
 
 // Map elf.mc's parse error into our LoadError (every parse failure is a BadElf to the
@@ -157,7 +173,10 @@ fn load_segment(elf: *ByteReader, pt: *mut PageTable, h: *mut Heap, p: *ProgramH
         var frame: PAddr = uninit;
         switch heap_try_alloc(h, PAGE, PAGE) {
             ok(f) => { frame = f; }
-            err(e) => { return err(.NoFrame); }
+            err(e) => {
+                rollback_pages(pt, h, seg_start, pi);
+                return err(.NoFrame);
+            }
         }
         mem_set(frame, 0, PAGE);
 
@@ -168,6 +187,10 @@ fn load_segment(elf: *ByteReader, pt: *mut PageTable, h: *mut Heap, p: *ProgramH
         switch page_table_try_map(pt, h, va(page_vaddr), frame, pte_flags_for(p.flags)) {
             ok(v) => {}
             err(e) => {
+                // The new data frame is not mapped on any error. Return it
+                // before rolling back pages installed earlier in this segment.
+                heap_free(h, frame, PAGE);
+                rollback_pages(pt, h, seg_start, pi);
                 switch e {
                     .OutOfFrames => { return err(.NoFrame); }
                     .MisalignedAddress => { return err(.BadSegment); }
@@ -192,7 +215,10 @@ fn load_segment(elf: *ByteReader, pt: *mut PageTable, h: *mut Heap, p: *ProgramH
             // is rejected cleanly before br_copy_to's reads run off the end.
             switch br_validate_len(elf, src_off, n) {
                 ok(v) => {}
-                err(e) => { return err(.BadSegment); }
+                err(e) => {
+                    rollback_pages(pt, h, seg_start, pi + 1);
+                    return err(.BadSegment);
+                }
             }
 
             // We already hold this page's physical frame from the allocation above, so
@@ -210,31 +236,100 @@ fn load_segment(elf: *ByteReader, pt: *mut PageTable, h: *mut Heap, p: *ProgramH
 // Load a complete ELF image into the page table `pt`, mapping every PT_LOAD segment and
 // copying its file bytes (bss left zeroed). Frames and interior page-table pages come
 // from `h`. Returns the ELF entry point on success, or a typed LoadError for a
-// malformed/hostile image. `pt` is left partially populated on error — callers that
-// need atomicity tear the address space down on a non-ok result.
-export fn elf_load_image(image_base: usize, image_len: usize, pt: *mut PageTable, h: *mut Heap) -> Result<u64, LoadError> {
+// malformed/hostile image. Payload mappings and frames installed by this call
+// are rolled back on error. `expected_machine` binds the image to the active
+// architecture (for example EM_RISCV=243), and every non-empty segment must
+// remain within the caller's admitted [user_start,user_end) VA window.
+#[mc_abi]
+export fn elf_load_image_for(image_base: usize, image_len: usize, expected_machine: u16, user_start: usize, user_end: usize, pt: *mut PageTable, h: *mut Heap) -> Result<u64, LoadError> {
     var r: ByteReader = byte_reader(pa(image_base), image_len);
 
     // Parse + validate the header (and the whole program-header table) up front.
     var hdr: ElfHeader = uninit;
-    switch elf_parse_header(&r) {
+    switch elf_parse_header_for(&r, expected_machine) {
         ok(v) => { hdr = v; }
         err(e) => { return err(from_elf_error(e)); }
     }
 
-    // Walk the program-header table; load each PT_LOAD. `phnum` is u16 and the parser
-    // already validated the whole table lies within the image, so this loop is bounded
-    // (<= 65535) and every per-header read is in range.
+    // Plan the complete image before allocating the first payload frame. This
+    // establishes aggregate resource bounds and proves the entry lies in an
+    // executable PT_LOAD segment.
     let phnum: usize = hdr.phnum as usize;
     let phoff: usize = hdr.phoff as usize;
     let phentsize: usize = hdr.phentsize as usize;
+    var load_segments: usize = 0;
+    var total_pages: usize = 0;
+    var entry_is_executable: bool = false;
+    if user_start >= user_end {
+        return err(.BadSegment);
+    }
     var i: usize = 0;
+    while i < phnum {
+        var ph: ProgramHeader = elf_program_header(&r, phoff, phentsize, i);
+        if ph_is_load(&ph) {
+            load_segments = load_segments + 1;
+            if load_segments > MAX_LOAD_SEGMENTS {
+                return err(.TooManyPages);
+            }
+            if ph.filesz > ph.memsz {
+                return err(.BadSegment);
+            }
+            if ph.memsz != 0 {
+                if ph.vaddr > 0xFFFF_FFFF_FFFF_FFFF - ph.memsz {
+                    return err(.BadSegment);
+                }
+                let end: u64 = ph.vaddr + ph.memsz;
+                if ph.vaddr < (user_start as u64) || end > (user_end as u64) {
+                    return err(.BadSegment);
+                }
+                if end > 0xFFFF_FFFF_FFFF_FFFF - ((PAGE as u64) - 1) {
+                    return err(.BadSegment);
+                }
+                let start_page: usize = align_down(ph.vaddr as usize, PAGE);
+                let end_page: usize = align_up(end as usize, PAGE);
+                let pages: usize = (end_page - start_page) / PAGE;
+                if pages > MAX_SEGMENT_PAGES {
+                    return err(.TooManyPages);
+                }
+                if total_pages > MAX_TOTAL_PAGES - pages {
+                    return err(.TooManyPages);
+                }
+                total_pages = total_pages + pages;
+                if (ph.flags & PF_X) != 0 {
+                    if hdr.entry >= ph.vaddr && hdr.entry < end {
+                        entry_is_executable = true;
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    if !entry_is_executable {
+        return err(.BadSegment);
+    }
+
+    // Execute the validated plan. load_segment is segment-atomic; if a later
+    // segment fails, unwind every earlier successful PT_LOAD.
+    i = 0;
     while i < phnum {
         var ph: ProgramHeader = elf_program_header(&r, phoff, phentsize, i);
         if ph_is_load(&ph) {
             switch load_segment(&r, pt, h, &ph) {
                 ok(v) => {}
-                err(e) => { return err(e); }
+                err(e) => {
+                    var j: usize = 0;
+                    while j < i {
+                        var prior: ProgramHeader = elf_program_header(&r, phoff, phentsize, j);
+                        if ph_is_load(&prior) && prior.memsz != 0 {
+                            let prior_end: usize = (prior.vaddr + prior.memsz) as usize;
+                            let prior_start_page: usize = align_down(prior.vaddr as usize, PAGE);
+                            let prior_end_page: usize = align_up(prior_end, PAGE);
+                            rollback_pages(pt, h, prior_start_page, (prior_end_page - prior_start_page) / PAGE);
+                        }
+                        j = j + 1;
+                    }
+                    return err(e);
+                }
             }
         }
         i = i + 1;

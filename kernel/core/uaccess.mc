@@ -59,6 +59,7 @@ fn check_range(us: *UserSpace, addr: usize, len: usize) -> Result<bool, UaccessE
 // Copy `len` bytes from user pointer `src` into the kernel buffer at `dst`, after
 // validating the user range. Returns `OutOfRange` (copying nothing) if the source
 // range escapes the user region.
+#[mc_abi]
 export fn copy_from_user(us: *UserSpace, dst: PAddr, src: UserPtr<u8>, len: usize) -> Result<bool, UaccessError> {
     let src_addr: usize = src as usize;
     switch check_range(us, src_addr, len) {
@@ -71,6 +72,7 @@ export fn copy_from_user(us: *UserSpace, dst: PAddr, src: UserPtr<u8>, len: usiz
 
 // Copy `len` bytes from the kernel buffer at `src` to user pointer `dst`, after
 // validating the destination range.
+#[mc_abi]
 export fn copy_to_user(us: *UserSpace, dst: UserPtr<u8>, src: PAddr, len: usize) -> Result<bool, UaccessError> {
     let dst_addr: usize = dst as usize;
     switch check_range(us, dst_addr, len) {
@@ -102,24 +104,25 @@ pub struct UserSnapshot<T> {
     value: T,
 }
 
-// Copy a single `T` in from `src` (numeric UserSpace path) exactly once, returning
-// an immutable kernel snapshot. Callers MUST make every decision against `.value`
-// and MUST NOT re-fetch `src` — one fetch, one truth. On any validation failure
-// nothing is copied and the snapshot is never returned (fail closed).
-pub fn fetch_user(comptime T: type, us: *UserSpace, src: UserPtr<T>) -> Result<UserSnapshot<T>, UaccessError> {
-    var snap: UserSnapshot<T> = uninit; // storage only: filled through `dst`, whole-read via `filled` below
+// Copy one representation-total byte in from `src` exactly once. This API is
+// intentionally restricted to u8: arbitrary user bytes must never be re-read
+// as an arbitrary MC `T` because closed enums, optionals, pointers, and structs
+// may have invalid representations. Multi-byte syscall fields are decoded
+// explicitly from byte snapshots/wire readers.
+pub fn fetch_user(us: *UserSpace, src: UserPtr<u8>) -> Result<UserSnapshot<u8>, UaccessError> {
+    var snap: UserSnapshot<u8> = uninit; // storage only: filled through `dst`, whole-read via `filled` below
     let dst: PAddr = pa((&snap.value) as usize);
     // Re-tag UserPtr<T> -> UserPtr<u8> for the byte-wise copy: stays within the
     // UserPtr class (the round-trips through usize); the audited uaccess boundary.
     var src_bytes: UserPtr<u8> = uninit;
     unsafe { src_bytes = (src as usize) as UserPtr<u8>; }
-    switch copy_from_user(us, dst, src_bytes, sizeof(T)) {
+    switch copy_from_user(us, dst, src_bytes, 1) {
         ok(v) => {
             // The copy filled `.value` through `dst` — a raw-address write definite-init
             // (S0.1) cannot see — so return one whole typed re-read of the snapshot rather
             // than the `uninit`-tracked variable. Still exactly one user fetch.
             unsafe {
-                let filled: *UserSnapshot<T> = raw.ptr<UserSnapshot<T>>(pa((&snap) as usize));
+                let filled: *UserSnapshot<u8> = raw.ptr<UserSnapshot<u8>>(pa((&snap) as usize));
                 return ok(filled.*);
             }
         }
@@ -129,17 +132,17 @@ pub fn fetch_user(comptime T: type, us: *UserSpace, src: UserPtr<T>) -> Result<U
 
 // Page-table-aware single-fetch snapshot: copy one `T` in through the process page
 // table exactly once. Same contract as `fetch_user`: use `.value`, never re-fetch.
-pub fn fetch_user_pt(comptime T: type, uas: *UserAddrSpace, src: UserPtr<T>) -> Result<UserSnapshot<T>, UaccessError> {
-    var snap: UserSnapshot<T> = uninit; // storage only: filled through `dst`, whole-read via `filled` below
+pub fn fetch_user_pt(uas: *UserAddrSpace, src: UserPtr<u8>) -> Result<UserSnapshot<u8>, UaccessError> {
+    var snap: UserSnapshot<u8> = uninit; // storage only: filled through `dst`, whole-read via `filled` below
     let dst: PAddr = pa((&snap.value) as usize);
     // Re-tag UserPtr<T> -> UserPtr<u8> for the byte-wise copy (audited uaccess boundary).
     var src_bytes: UserPtr<u8> = uninit;
     unsafe { src_bytes = (src as usize) as UserPtr<u8>; }
-    switch copy_from_user_pt(uas, dst, src_bytes, sizeof(T)) {
+    switch copy_from_user_pt(uas, dst, src_bytes, 1) {
         ok(v) => {
             // Same S0.1 shape as fetch_user: whole typed re-read of the copy-filled storage.
             unsafe {
-                let filled: *UserSnapshot<T> = raw.ptr<UserSnapshot<T>>(pa((&snap) as usize));
+                let filled: *UserSnapshot<u8> = raw.ptr<UserSnapshot<u8>>(pa((&snap) as usize));
                 return ok(filled.*);
             }
         }
@@ -316,6 +319,7 @@ fn check_pages(uas: *UserAddrSpace, addr: usize, len: usize, need_write: bool) -
 // Copy `len` bytes from user VA `src` (in `uas`) into the kernel buffer at `dst`,
 // translating each page through the page table and requiring it be user-readable.
 // Validated all-or-nothing: on any failure, nothing is copied.
+#[mc_abi]
 export fn copy_from_user_pt(uas: *UserAddrSpace, dst: PAddr, src: UserPtr<u8>, len: usize) -> Result<bool, UaccessError> {
     let src_addr: usize = src as usize;
     switch check_pages(uas, src_addr, len, false) { // require PTE_U + PTE_R on every page
@@ -327,6 +331,7 @@ export fn copy_from_user_pt(uas: *UserAddrSpace, dst: PAddr, src: UserPtr<u8>, l
 
 // Copy `len` bytes from the kernel buffer at `src` to user VA `dst` (in `uas`),
 // translating each page through the page table and requiring it be user-writable.
+#[mc_abi]
 export fn copy_to_user_pt(uas: *UserAddrSpace, dst: UserPtr<u8>, src: PAddr, len: usize) -> Result<bool, UaccessError> {
     let dst_addr: usize = dst as usize;
     switch check_pages(uas, dst_addr, len, true) { // require PTE_U + PTE_W on every page

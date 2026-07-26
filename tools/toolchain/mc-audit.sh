@@ -127,7 +127,7 @@ import "std/addr.mc";
 // passing checked_len/validate_bound — the heartbleed over-read.
 export fn bad_unvalidated_len(us: *UserSpace, lenp: UserPtr<u8>, dst: PAddr, src: UserPtr<u8>) -> bool {
     var n: u8 = 0;
-    switch fetch_user(u8, us, lenp) {
+    switch fetch_user(us, lenp) {
         ok(snap) => { n = snap.value; }   // tainted: raw user length
         err(e) => { return false; }
     }
@@ -144,7 +144,7 @@ export fn bad_unvalidated_len(us: *UserSpace, lenp: UserPtr<u8>, dst: PAddr, src
 // the false negative this lint fix closes.
 export fn bad_validate_wrong_value(us: *UserSpace, lenp: UserPtr<u8>, dst: PAddr, src: UserPtr<u8>, lim: u8) -> bool {
     var m: u8 = 0;
-    switch fetch_user(u8, us, lenp) {
+    switch fetch_user(us, lenp) {
         ok(snap) => { m = snap.value; }
         err(e) => { return false; }
     }
@@ -390,9 +390,12 @@ function end_unsafe(   tot) {
 
 # ===================== MODE: double-fetch (U2) =====================
 
-# The user pointer is the 3rd arg of copy_from_user{,_pt} / fetch_user{,_pt}.
+# The user pointer is the 3rd arg of copy_from_user{,_pt}, and the 2nd
+# arg of the representation-safe byte-only fetch_user{,_pt}.
 function user_src(l,   a) {
-  a = call_args(l, "(copy_from_user_pt|copy_from_user|fetch_user_pt|fetch_user)[ \t]*\\(")
+  a = call_args(l, "(fetch_user_pt|fetch_user)[ \t]*\\(")
+  if (a != "<<NONE>>") return nth_arg(a, 2)
+  a = call_args(l, "(copy_from_user_pt|copy_from_user)[ \t]*\\(")
   if (a == "<<NONE>>") return ""
   return nth_arg(a, 3)
 }

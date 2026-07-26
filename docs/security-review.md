@@ -130,23 +130,22 @@ captured too). This is guarantee **G5**.
 Residual: **persist-across-reboot** of the audit trail is not yet done (threat-model §4.3);
 today it is in-memory.
 
-### 2.8 OTA / signed boot / rollback
+### 2.8 OTA metadata / cryptographic primitive / rollback
 
-`kernel/core/production_ops.mc` is the update control plane: `bundle_validate` gates a bundle
-header (magic, ABI, version range, trusted key id, signature presence + status — fail-closed,
-typed `BundleError`), and the A/B `RollbackState` machine promotes/demotes slots with a bounded
-failed-boot count. The signed-boot path + rollback is gated end-to-end
-(`signed-boot-test` / `llvm-signed-boot-test`), and the admission surface is now fuzzed over
->200k adversarial headers + 50k random rollback op-sequences (`bundle-fuzz-test`, §4).
+`kernel/core/production_ops.mc` gates bundle metadata (magic, kind, ABI, version range,
+trusted key id, and signature length) and implements the A/B rollback state machine. The
+metadata and rollback path is gated as `bundle-metadata-test` /
+`llvm-bundle-metadata-test`, while the BearSSL RSA-2048/SHA-256 primitive is qualified
+separately by `rsa-verify-test` / `llvm-rsa-verify-test`. The metadata surface is fuzzed
+over >200k adversarial headers + 50k rollback sequences (`bundle-fuzz-test`, §4).
 
-Residual — **called out explicitly:** the image hash used in the signed-boot demo
-(`tests/qemu/arch/signed_boot_demo.mc`, `image_hash_fnv1a`) is **FNV-1a-32, a non-cryptographic
-hash used as a stand-in** because there is no native MC hash primitive linkable into that demo.
-FNV is trivially collidable and MUST NOT be relied on for image integrity. The real fix is to
-compute the image digest with **BearSSL SHA-256** (already vendored, already used for the RSA
-signature path in `kernel/crypto/rsa_verify.mc`) and have the signature cover that digest.
-Until then, boot-image *integrity* is not cryptographically assured even though the *signature
-verify* primitive itself is sound. A reproducible-build determinism gate has **landed**
+Residual — **production blocker:** these gates do not yet establish one opaque
+`VerifiedBundle` from canonical raw bytes and force the ELF loader to consume those exact
+verified bytes. The FNV-1a-32 value used by the OTA/metadata fixtures is only a
+non-cryptographic transport checksum and MUST NOT be described as signed-image integrity.
+Until verifier, policy admission, loader consumption, and runtime identity audit are wired
+into one byte-bound path, the repository does not claim end-to-end secure boot. A
+reproducible-build determinism gate has **landed**
 (`reproducible-build-test`: byte-identical emitted C/LLVM across rebuilds); an OTA transport
 delivers + hash-verifies images (`ota-test`).
 
@@ -156,8 +155,8 @@ delivers + hash-verifies images (`ota-test`).
 
 1. **TCB bugs are undefended at runtime.** A defect in the compiler, WAMR, QuickJS, or BearSSL
    can break any guarantee. Defense is vendoring discipline + the differential/fuzz gates.
-2. **FNV image hash is a placeholder** — not collision-resistant; boot-image integrity awaits
-   BearSSL SHA-256 (§2.8). Highest-severity honest gap in the OTA/boot story.
+2. **Secure boot remains open** — the RSA/SHA-256 primitive and metadata/rollback gates are
+   independent; an opaque exact-byte verifier-to-loader binding is still required (§2.8).
 3. **Availability is best-effort** — agent preemption has landed (§2.5), so the remaining risk is
    finer-grained / uniform per-agent CPU/memory budget enforcement, not preemption itself.
 4. **Policy/audit persistence + revocation** across reboot are not yet wired (§2.3, §2.7).
@@ -182,14 +181,14 @@ CI gates plus this review:
   Runs on both backends under QEMU. Deterministic (no RNG, no wall-clock).
 - **`bundle-fuzz-test`** (`tools/lib/host-drivers/bundle-fuzz-test.c`,
   `tests/qemu/proc/bundle_fuzz_demo.mc`): the OTA/bundle admission fuzz oracle — >200k
-  adversarial `BundleHeader`s to `bundle_validate` (fail-closed typed reject; only an
-  exactly-valid+signed header accepted) + 50k random rollback A/B op-sequences (the active/
+  adversarial `BundleHeader`s to `bundle_validate_metadata` (fail-closed typed reject) +
+  50k random rollback A/B op-sequences (the active/
   previous slot index must stay a valid index — a `1 - active` checked-usize underflow would
   trap and abort the driver). Deterministic (seeded xorshift, fixed corpus), bounded.
 
 These extend, not replace, the existing security gates (confined-agent family, broker
 allow+deny audit gates, `parser-fuzz-test`/`net-fuzz-test`, ELF/syscall hostile-input gates,
-`signed-boot-test`, `ledger-test`, `proc-supervisor-test`).
+`bundle-metadata-test`, `rsa-verify-test`, `ledger-test`, `proc-supervisor-test`).
 
 ---
 
@@ -210,9 +209,9 @@ An independent audit of the production kernel should cover, at minimum:
       bypass; confirm every external effect is gated and audited.
 - [ ] **Parsers:** re-fuzz DNS/TCP/IP/TLS/ELF with a larger hostile corpus + a coverage-guided
       fuzzer; look for over-reads the current `br_try_*` routing missed.
-- [ ] **OTA/boot:** **replace FNV with BearSSL SHA-256** and confirm the signature covers the
-      real digest (§2.8); audit `bundle_validate` + `RollbackState` for a version-downgrade or
-      slot-confusion attack; review reproducible-build story.
+- [ ] **OTA/boot:** construct an opaque byte-bound `VerifiedBundle`; canonicalize, hash and
+      verify the raw bundle; force policy admission and the ELF loader to consume that exact
+      verified payload; audit rollback and runtime image identity (§2.8).
 - [ ] **Crypto:** review `kernel/crypto/rsa_verify.mc` integration with BearSSL i31 (constant-time
       assumptions, key-id trust, padding).
 - [ ] **Resource accounting:** confirm every allocation/broker/device path charges the ledger and

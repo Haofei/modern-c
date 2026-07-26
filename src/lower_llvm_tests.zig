@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
@@ -12199,8 +12200,11 @@ test "LLVM unsupported diagnostics use nearest source span for generated nodes" 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(std.testing.allocator);
 
+    var module_mir = try mir.build(std.testing.allocator, module);
+    defer module_mir.deinit();
+    const verified = try backend_mod.VerifiedProgram.init(module, &module_mir, &reporter);
     const llvm_backend = lower_llvm.mcBackend();
-    try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerFn(llvm_backend.ctx, std.testing.allocator, module, &out, .{
+    try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerFn(llvm_backend.ctx, std.testing.allocator, verified, &out, .{
         .profile = .kernel,
         .source_path = "synthetic.mc",
         .reporter = &reporter,

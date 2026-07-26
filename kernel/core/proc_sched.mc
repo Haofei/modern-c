@@ -81,7 +81,11 @@ export fn proc_schedctl(t: *mut ProcTable, pid: u32, prio: u32, quantum: u32, sc
 #[irq_context]
 export fn proc_tick(t: *mut ProcTable) -> bool {
     let cur: usize = t.current;
-    t.procs[cur].ticks = t.procs[cur].ticks + 1;
+    // Accounting must not turn a long-lived timer interrupt into a checked-
+    // overflow trap. Saturation preserves fair-order monotonicity.
+    if t.procs[cur].ticks != 0xFFFF_FFFF_FFFF_FFFF {
+        t.procs[cur].ticks = t.procs[cur].ticks + 1;
+    }
     if t.procs[cur].quantum == 0 {
         return false; // already expired — edge-triggered, so do not re-notify the scheduler
     }
@@ -96,7 +100,7 @@ export fn proc_quantum(t: *mut ProcTable, pid: u32) -> u32 {
     }
     return 0;
 }
-export fn proc_ticks(t: *mut ProcTable, pid: u32) -> u32 {
+export fn proc_ticks(t: *mut ProcTable, pid: u32) -> u64 {
     let p: usize = pid as usize;
     if p < t.count {
         return t.procs[p].ticks;
@@ -157,7 +161,13 @@ const NO_SLOT: usize = MAX_PROCS; // sentinel: "no candidate found yet"
 // priority-2 agent may consume twice the ticks of a priority-1 agent before losing its turn.
 // u64 math avoids overflow when penalty is large.
 fn fair_cost(t: *mut ProcTable, slot: usize) -> u64 {
-    let base: u64 = (t.procs[slot].ticks as u64) + (t.procs[slot].throttle as u64);
+    let penalty: u64 = t.procs[slot].throttle as u64;
+    var base: u64 = t.procs[slot].ticks;
+    if base > 0xFFFF_FFFF_FFFF_FFFF - penalty {
+        base = 0xFFFF_FFFF_FFFF_FFFF;
+    } else {
+        base = base + penalty;
+    }
     var w: u32 = t.procs[slot].priority;
     if w == 0 {
         w = 1; // priority 0 (default/unset) weights as 1, never divides by zero

@@ -12,20 +12,31 @@ const PH_SIZE: usize = 56;     // ELF64 program-header size
 const ELFCLASS64: u8 = 2;      // e_ident[EI_CLASS]
 const ELFDATA2LSB: u8 = 1;     // e_ident[EI_DATA]
 const PT_LOAD: u32 = 1;        // loadable segment
+const ET_EXEC: u16 = 2;
+const ET_DYN: u16 = 3;
+const EV_CURRENT: u32 = 1;
 
 pub enum ElfError {
     TooSmall,        // buffer shorter than the header
     BadMagic,        // not 0x7F 'E' 'L' 'F'
     UnsupportedClass, // not ELFCLASS64
     UnsupportedData,  // not little-endian
+    UnsupportedType,
+    UnsupportedMachine,
+    UnsupportedVersion,
+    BadHeaderSize,
     BadProgramHeaders, // phoff/phnum/phentsize escape the buffer
 }
 
 pub struct ElfHeader {
+    object_type: u16,
+    machine: u16,
+    version: u32,
     entry: u64,
     phoff: u64,
     phnum: u16,
     phentsize: u16,
+    ehsize: u16,
 }
 
 pub struct ProgramHeader {
@@ -60,10 +71,23 @@ pub fn elf_parse_header(r: *ByteReader) -> Result<ElfHeader, ElfError> {
     if br_u8(r, 5) != ELFDATA2LSB {
         return err(.UnsupportedData);
     }
+    let object_type: u16 = br_le16(r, 16);
+    if object_type != ET_EXEC && object_type != ET_DYN {
+        return err(.UnsupportedType);
+    }
+    let machine: u16 = br_le16(r, 18);
+    let version: u32 = br_le32(r, 20);
+    if version != EV_CURRENT {
+        return err(.UnsupportedVersion);
+    }
     let entry: u64 = br_le64(r, 24);     // e_entry
     let phoff: u64 = br_le64(r, 32);     // e_phoff
     let phentsize: u16 = br_le16(r, 54); // e_phentsize
     let phnum: u16 = br_le16(r, 56);     // e_phnum
+    let ehsize: u16 = br_le16(r, 52);
+    if (ehsize as usize) < EH_SIZE {
+        return err(.BadHeaderSize);
+    }
 
     // The program-header table is sized by UNTRUSTED count/entsize fields (e_phnum,
     // e_phentsize) and located by an untrusted offset (e_phoff). P2: validate that the
@@ -85,7 +109,28 @@ pub fn elf_parse_header(r: *ByteReader) -> Result<ElfHeader, ElfError> {
         ok(u) => {}
         err(e) => { return err(.BadProgramHeaders); }
     }
-    return ok(.{ .entry = entry, .phoff = phoff, .phnum = phnum, .phentsize = phentsize });
+    return ok(.{
+        .object_type = object_type,
+        .machine = machine,
+        .version = version,
+        .entry = entry,
+        .phoff = phoff,
+        .phnum = phnum,
+        .phentsize = phentsize,
+        .ehsize = ehsize,
+    });
+}
+
+pub fn elf_parse_header_for(r: *ByteReader, expected_machine: u16) -> Result<ElfHeader, ElfError> {
+    switch elf_parse_header(r) {
+        ok(h) => {
+            if h.machine != expected_machine {
+                return err(.UnsupportedMachine);
+            }
+            return ok(h);
+        }
+        err(e) => { return err(e); }
+    }
 }
 
 // Parse the i-th program header. `table_off` = e_phoff, `entsize` = e_phentsize.
@@ -115,6 +160,12 @@ pub fn ph_is_load(p: *ProgramHeader) -> bool {
 // driving br_copy_to's trapping reads off the end. On success returns the number of
 // bytes copied from the image (filesz) so the loader can advance; err stops the load.
 pub fn elf_load_segment(elf: *ByteReader, p: *ProgramHeader, dst: PAddr) -> Result<usize, ElfError> {
+    // The public parser helper must enforce the same fundamental segment
+    // invariant as the full loader. Without it, callers can copy filesz bytes
+    // into a memsz-sized destination even when filesz > memsz.
+    if p.filesz > p.memsz {
+        return err(.BadProgramHeaders);
+    }
     let filesz: usize = p.filesz as usize;
     let memsz: usize = p.memsz as usize;
     let src_off: usize = p.offset as usize;

@@ -1035,10 +1035,10 @@ fn app_bundle_error_status(e: BundleError) -> u32 {
     }
 }
 
-export fn app_build_agent_bundle(image_base: usize, image_len: usize, region_base: usize, region_len: usize, h: *BundleHeader, sig: SignatureStatus) -> u64 {
+export fn app_build_agent_bundle_metadata(image_base: usize, image_len: usize, region_base: usize, region_len: usize, h: *BundleHeader) -> u64 {
     g_load_status = LS_OK;
 
-    switch bundle_validate_kind(h, .Agent, AGENT_BUNDLE_ABI, AGENT_BUNDLE_MIN_VERSION, AGENT_BUNDLE_MAX_VERSION, AGENT_BUNDLE_TRUSTED_KEY, sig) {
+    switch bundle_validate_metadata(h, .Agent, AGENT_BUNDLE_ABI, AGENT_BUNDLE_MIN_VERSION, AGENT_BUNDLE_MAX_VERSION, AGENT_BUNDLE_TRUSTED_KEY) {
         ok(v) => {}
         err(e) => {
             g_load_status = app_bundle_error_status(e);
@@ -1055,9 +1055,9 @@ export fn app_build_agent_bundle(image_base: usize, image_len: usize, region_bas
     return app_build(image_base, image_len, region_base, region_len);
 }
 
-export fn app_build_agent_admitted(image_base: usize, image_len: usize, region_base: usize, region_len: usize, expected_hash: u64) -> u64 {
+export fn app_build_agent_metadata_checked(image_base: usize, image_len: usize, region_base: usize, region_len: usize, expected_hash: u64) -> u64 {
     var h: BundleHeader = bundle_header_init(.Agent, AGENT_BUNDLE_DEFAULT_VERSION, AGENT_BUNDLE_ABI, AGENT_BUNDLE_POLICY_VERSION, AGENT_BUNDLE_TRUSTED_KEY, expected_hash, AGENT_BUNDLE_SIG_LEN);
-    return app_build_agent_bundle(image_base, image_len, region_base, region_len, &h, .Valid);
+    return app_build_agent_bundle_metadata(image_base, image_len, region_base, region_len, &h);
 }
 
 export fn app_build(image_base: usize, image_len: usize, region_base: usize, region_len: usize) -> u64 {
@@ -1070,7 +1070,7 @@ export fn app_build(image_base: usize, image_len: usize, region_base: usize, reg
         err(e) => { g_load_status = LS_NOFRAME; return 0; }
     }
 
-    switch elf_load_image(image_base, image_len, &g_pt, &g_heap) {
+    switch elf_load_image_for(image_base, image_len, 243, USER_BASE, USER_LIMIT, &g_pt, &g_heap) {
         ok(e) => { g_entry = e; }
         err(e) => {
             switch e {

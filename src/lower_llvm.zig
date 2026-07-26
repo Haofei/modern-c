@@ -214,20 +214,20 @@ pub fn mcBackend() backend_mod.Backend {
         .name = "llvm",
         .artifact_ext = ".ll",
         .supports_profiles = false,
-        .ctx = undefined,
+        .ctx = null,
         .lowerFn = backendLower,
     };
 }
 
 fn backendLower(
-    ctx: *anyopaque,
+    ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    try appendLlvmCheckedReport(allocator, module, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch, opts.reporter);
+    try appendLlvmCheckedMir(allocator, program.syntax_module, program.typed_mir, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch, opts.reporter);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {

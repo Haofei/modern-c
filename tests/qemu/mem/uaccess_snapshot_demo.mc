@@ -40,7 +40,7 @@ export fn uaccess_snapshot_run() -> u32 {
 
     // SAFE: copy the length in ONCE. The decision is made against the snapshot.
     var n: u8 = 0;
-    switch fetch_user(u8, &us, uptr(ubase)) {
+    switch fetch_user(&us, uptr(ubase)) {
         ok(snap) => { n = snap.value; }
         err(e) => { pass = 0; }
     }
@@ -55,7 +55,7 @@ export fn uaccess_snapshot_run() -> u32 {
     // is gone — there is no way to "go back" to it, which is the whole point: you
     // snapshot once and commit). The first snapshot value `n` is unaffected.
     var n2: u8 = 0;
-    switch fetch_user(u8, &us, uptr(ubase)) {
+    switch fetch_user(&us, uptr(ubase)) {
         ok(snap) => { n2 = snap.value; }
         err(e) => { pass = 0; }
     }
@@ -64,7 +64,7 @@ export fn uaccess_snapshot_run() -> u32 {
 
     // Fail-closed still holds: a snapshot of a datum that straddles the region end
     // returns an error and yields no value.
-    switch fetch_user(u8, &us, uptr(ubase + 256)) {
+    switch fetch_user(&us, uptr(ubase + 256)) {
         ok(snap) => { pass = 0; } // out of range: must not produce a snapshot
         err(e) => {}
     }

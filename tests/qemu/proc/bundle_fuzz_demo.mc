@@ -6,9 +6,9 @@
 // The bundle header is the first thing the kernel decodes about an untrusted OTA image; the rollback
 // state machine drives A/B slot promotion/demotion after a boot. Both are attacker-influenced (a
 // hostile update server controls the header bytes; boot outcomes drive the rollback ops). This
-// fuzzer feeds RANDOM field values to `bundle_validate` and RANDOM op sequences to the rollback
+// fuzzer feeds RANDOM field values to `bundle_validate_metadata` and RANDOM rollback operations
 // machine and asserts:
-//   * bundle_validate always returns — a garbage header is rejected with a typed BundleError
+//   * bundle_validate_metadata always returns — garbage metadata is rejected with a typed error
 //     (fail-closed), and ONLY an exactly-valid+signed header is accepted;
 //   * the rollback machine's active/previous slot indices ALWAYS stay in {0,1} — a bug that let an
 //     index escape would make `1 - active` (usize, CHECKED) underflow-trap or `slots[active]`
@@ -48,18 +48,9 @@ fn kind_of(r: u32) -> BundleKind {
     return .Agent;
 }
 
-fn sig_of(r: u32) -> SignatureStatus {
-    let m: u32 = r % 4;
-    if m == 0 { return .Valid; }
-    if m == 1 { return .Missing; }
-    if m == 2 { return .Bad; }
-    return .WrongKey;
-}
-
-// 0 iff bundle_validate accepted the header, 1 iff it returned a typed error. Either way it MUST
-// return (no trap): bundle_validate is pure comparison logic over the header.
-fn bv(h: *BundleHeader, sig: SignatureStatus) -> u32 {
-    switch bundle_validate(h, EXPECTED_ABI, MIN_VER, MAX_VER, TRUSTED_KEY, sig) {
+// 0 iff metadata admission accepted the header, 1 iff it returned a typed error.
+fn bv(h: *BundleHeader) -> u32 {
+    switch bundle_validate_metadata(h, .Kernel, EXPECTED_ABI, MIN_VER, MAX_VER, TRUSTED_KEY) {
         ok(v) => { return 0; }
         err(e) => { return 1; }
     }
@@ -74,7 +65,7 @@ fn make_valid() -> BundleHeader {
 // The valid+signed header MUST be accepted (returns 0). Anchors the accept path.
 export fn fuzz_valid() -> u32 {
     var h: BundleHeader = make_valid();
-    return bv(&h, .Valid);
+    return bv(&h);
 }
 
 // Corrupt exactly ONE admission-relevant field of the valid header (or the sig), and it MUST be
@@ -82,7 +73,6 @@ export fn fuzz_valid() -> u32 {
 // sweeps every value and requires 1 each time — teeth: a dropped guard makes one return 0 (accept).
 export fn fuzz_corrupt(which: u32) -> u32 {
     var h: BundleHeader = make_valid();
-    var sig: SignatureStatus = .Valid;
     let w: u32 = which % 7;
     if w == 0 { h.magic = 0xBAD0_0000; }          // wrong magic -> BadMagic
     if w == 1 { h.abi_version = EXPECTED_ABI + 1; } // wrong ABI  -> BadAbi
@@ -90,12 +80,12 @@ export fn fuzz_corrupt(which: u32) -> u32 {
     if w == 3 { h.version = MAX_VER + 1; }          // above range -> BadVersion
     if w == 4 { h.key_id = TRUSTED_KEY + 1; }       // untrusted key -> WrongKey
     if w == 5 { h.signature_len = 0; }              // no signature  -> BadSignature
-    if w == 6 { sig = .Missing; }                   // unsigned      -> BadSignature
-    return bv(&h, sig);
+    if w == 6 { h.kind = .Agent; }                  // wrong kind    -> BadKind
+    return bv(&h);
 }
 
 // Feed a fully RANDOM header (each admission field independently randomized to straddle its
-// accept/reject boundary) to bundle_validate. Returns 0 if accepted, 1 if rejected — either way it
+// accept/reject boundary) to bundle_validate_metadata. Returns 0 if accepted, 1 if rejected.
 // returns without trapping. The driver runs this over many seeds and requires BOTH outcomes to
 // occur (both paths are real) with no trap.
 export fn fuzz_bundle(seed: u32) -> u32 {
@@ -106,7 +96,7 @@ export fn fuzz_bundle(seed: u32) -> u32 {
     st = rng(st); let abi_r: u32 = st;
     st = rng(st); let key_r: u32 = st;
     st = rng(st); let siglen_r: u32 = st;
-    st = rng(st); let sig_r: u32 = st;
+    st = rng(st);
     st = rng(st); let hash_r: u32 = st;
 
     // version straddles [100, 229] so both in-range and above-range occur; abi straddles 7;
@@ -121,7 +111,7 @@ export fn fuzz_bundle(seed: u32) -> u32 {
     // bundle_header_init always stamps the correct magic; corrupt it half the time to fuzz the
     // magic guard too.
     if (magic_r & 2) == 0 { h.magic = magic_r; }
-    return bv(&h, sig_of(sig_r));
+    return bv(&h);
 }
 
 // Drive a RANDOM sequence of rollback ops (install candidate / mark boot success / mark boot failed)

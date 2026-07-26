@@ -114,6 +114,7 @@ pub fn page_table_new(h: *mut Heap) -> PageTable {
 
 // Non-trapping form: allocate the root PML4 frame fallibly, so a caller on a
 // hostile-input path can turn even root-table exhaustion into a typed error.
+#[mc_abi]
 export fn page_table_try_new(h: *mut Heap) -> Result<PageTable, HeapError> {
     switch try_alloc_table(h) {
         ok(root) => { return ok(.{ .root = root }); }
@@ -145,6 +146,7 @@ pub enum MapError {
 // the PT level mapping `virt` -> `phys` with `flags | PTE_P`. Interior entries are linked
 // PTE_P|PTE_W|PTE_US (see interior-US policy at the top). Returns a typed error instead of
 // trapping — the validated form callers use on dynamic paths (mmap, fault handlers).
+#[mc_abi]
 export fn page_table_try_map(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_target: PAddr, flags: u64) -> Result<bool, MapError> {
     if (va_value(virt) % PAGE_SIZE) != 0 {
         return err(.MisalignedAddress);
@@ -196,6 +198,7 @@ export fn page_table_map(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_tar
 // Map a 2 MiB huge page: a leaf PTE at the PD level (PTE_PS) reached through PML4->PDPT->PD.
 // `virt` and `phys` must be 2 MiB-aligned. Interior PML4/PDPT tables are allocated as needed.
 // Cheap way to identity-map kernel RAM ranges. Returns a typed error instead of trapping.
+#[mc_abi]
 export fn page_table_try_map_2mib(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_target: PAddr, flags: u64) -> Result<bool, MapError> {
     if (va_value(virt) % HUGE_2MIB) != 0 {
         return err(.MisalignedAddress);
@@ -299,6 +302,7 @@ enum LookupError {
 // permission-checked user/kernel access. Returns NotMapped if any level is not present.
 // Handles 2 MiB PS leaves at the PD level and 4 KiB leaves at the PT level, tracking the
 // US-AND across the walk for an honest `mapping_is_user`.
+#[mc_abi]
 export fn page_table_lookup(pt: *PageTable, virt: VAddr) -> Result<LeafMapping, LookupError> {
     var table: PAddr = pt.root;
     var us_all: bool = true;

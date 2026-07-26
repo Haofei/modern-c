@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
+const mir = @import("mir.zig");
 const lower_c = @import("lower_c.zig");
 const lower_llvm = @import("lower_llvm.zig");
 
@@ -83,6 +84,24 @@ pub const LowerOptions = struct {
     reporter: ?*diagnostics.Reporter = null,
 };
 
+/// The only code-generation input accepted by a Backend. Construction runs the
+/// MIR verifier; syntax remains attached solely for source spelling and
+/// declaration metadata that MIR emission has not yet normalized.
+pub const VerifiedProgram = struct {
+    syntax_module: ast.Module,
+    typed_mir: *const mir.Module,
+
+    pub fn init(
+        syntax_module: ast.Module,
+        typed_mir: *const mir.Module,
+        reporter: *diagnostics.Reporter,
+    ) !VerifiedProgram {
+        try mir.verifyBuiltMir(typed_mir.*, reporter);
+        if (reporter.has_errors) return error.InvalidMir;
+        return .{ .syntax_module = syntax_module, .typed_mir = typed_mir };
+    }
+};
+
 /// A code-generation backend: the seam at which `main.zig` selects a target and
 /// invokes lowering. This is the *entry* abstraction — it routes backend
 /// selection and the top-level `module -> textual artifact` call through one
@@ -103,14 +122,14 @@ pub const Backend = struct {
     /// kernel/hosted profiles; the LLVM backend does not.
     supports_profiles: bool,
     /// Opaque per-backend state pointer. Built-in backends are stateless and
-    /// pass `undefined`; the field exists so a stateful backend can carry
+    /// pass null; the field exists so a stateful backend can carry
     /// context without changing the interface.
-    ctx: *anyopaque,
+    ctx: ?*anyopaque,
     /// Top-level lowering: append the textual artifact for `module` to `out`.
     lowerFn: *const fn (
-        ctx: *anyopaque,
+        ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
-        module: ast.Module,
+        program: VerifiedProgram,
         out: *std.ArrayList(u8),
         opts: LowerOptions,
     ) anyerror!void,
@@ -118,7 +137,7 @@ pub const Backend = struct {
     /// this; null means the backend has no source-map artifact. Signature
     /// mirrors `lower_c.appendCSourceMap`.
     emitMapFn: ?*const fn (
-        ctx: *anyopaque,
+        ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
         module: ast.Module,
         out: *std.ArrayList(u8),
@@ -130,11 +149,11 @@ pub const Backend = struct {
     pub fn lower(
         self: Backend,
         allocator: std.mem.Allocator,
-        module: ast.Module,
+        program: VerifiedProgram,
         out: *std.ArrayList(u8),
         opts: LowerOptions,
     ) anyerror!void {
-        return self.lowerFn(self.ctx, allocator, module, out, opts);
+        return self.lowerFn(self.ctx, allocator, program, out, opts);
     }
 
     /// Whether this backend can emit a source map (i.e. `emitMapFn != null`).

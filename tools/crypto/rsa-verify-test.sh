@@ -74,7 +74,9 @@ C
 STUBS=""
 [ "$BACKEND" = llvm ] && STUBS="$WORK/trap_stubs.c"
 
-"$CLANG" "$WORK/driver.c" $STUBS "$WORK/mod.o" "$WORK"/bo/*.o -o "$WORK/app"
+"$CLANG" "$WORK/driver.c" $STUBS \
+    "$HERE/kernel/crypto/bearssl_rsa_shim.c" \
+    "$WORK/mod.o" "$WORK"/bo/*.o -I"$B/inc" -o "$WORK/app"
 
 OUT="$("$WORK/app" || true)"
 echo "--- rsa-verify ($BACKEND) output: '$OUT' (compiled $i BearSSL objs) ---"

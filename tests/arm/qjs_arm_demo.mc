@@ -372,7 +372,7 @@ export fn app_build_aarch64(image_base: usize, image_len: usize, region_base: us
         err(e) => { qa_load_status = QA_LS_NOFRAME; return 0; }
     }
 
-    switch elf_load_image(image_base, image_len, &qa_pt, &qa_heap) {
+    switch elf_load_image_for(image_base, image_len, 183, QA_USER_BASE, QA_USER_LIMIT, &qa_pt, &qa_heap) {
         ok(e) => { qa_entry = e; }
         err(e) => {
             switch e {

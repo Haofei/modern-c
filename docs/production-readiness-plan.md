@@ -149,10 +149,10 @@ substantially more implemented + gated than first credited):
   - (8) structured **metrics + deterministic replay** (`kernel/core/metrics.mc`: saturating named
     counters + a bounded event log whose `evlog_replay` reconstructs byte-identical state) —
     `metrics-test` both backends. (Wiring into hot paths is the follow-up; the subsystem is proven.)
-  - (9) **signed-image admission + A/B rollback** end-to-end (`signed-boot-test`, both backends):
-    `bundle_validate` accepts a correctly-signed in-range bundle and rejects every tamper case
-    (wrong key / bad signature / ABI / version), and a failed boot rolls back to the prior good image.
-    (Reproducible builds + an OTA transport remain a build/update-pipeline follow-up.)
+  - (9) **bundle metadata admission + A/B rollback** (`bundle-metadata-test`, both backends):
+    `bundle_validate_metadata` enforces kind/key/ABI/version/signature-length metadata and a failed
+    candidate rolls back. RSA-2048/SHA-256 is qualified separately by `rsa-verify-test`; an opaque
+    exact-byte verifier-to-loader binding remains open and this is not an end-to-end secure-boot gate.
   - (12) supervision — mechanism (heartbeat-liveness + restart/crash-loop guard +
     `proc_supervise_step` verdict) AND a **running supervisor loop** (`proc_supervisor_scan` scans all
     supervised slots and actuates Restart/GiveUp) — `proc-supervisor-test` both backends.
@@ -169,15 +169,13 @@ substantially more implemented + gated than first credited):
     clean; `soak-test`, both backends), a **fuzz** gate (>200k adversarial bundle headers + 50k
     rollback op-sequences, deterministic seed; `bundle-fuzz-test`), and `docs/security-review.md`.
 
-- **Genuinely remaining:** (10) a real **board profile + hardware bring-up** — strategically
-  essential but **blocked on physical hardware**; cannot be closed under QEMU. Also honestly noted in
-  `docs/security-review.md`: the signed-boot / OTA image hash is currently FNV-1a (a non-cryptographic
-  stand-in); the real fix is a BearSSL SHA-256 digest — a bounded follow-up, not a blocker for the
-  gated flows. Local dev VM: `tools/run-kernel.sh` boots any demo as a QEMU VM on the host.
+- **Genuinely remaining:** (10) a real **board profile + hardware bring-up**, plus the secure-boot
+  integration described above. The latter requires canonical bundle parsing, cryptographic
+  verification, exact-byte loader consumption, and runtime identity audit; it is not closed merely
+  by the independent RSA and metadata gates. Local dev VM: `tools/run-kernel.sh` boots demos in QEMU.
 
-The point of this section: every software-tractable production blocker AND its follow-up polish is now
-closed and QEMU-gated on both backends. The only genuine remainder is first-hardware bring-up, which
-is blocked on physical hardware.
+The point of this section is to distinguish qualified mechanisms from end-to-end claims. Metadata,
+rollback, and RSA primitives are gated, but secure-boot integration and real hardware remain open.
 
 ## 4. Main production blockers
 

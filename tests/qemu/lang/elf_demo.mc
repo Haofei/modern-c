@@ -19,8 +19,12 @@ fn err_ordinal(e: ElfError) -> u32 {
         .UnsupportedData => {
             return 3;
         }
+        .UnsupportedType => { return 4; }
+        .UnsupportedMachine => { return 5; }
+        .UnsupportedVersion => { return 6; }
+        .BadHeaderSize => { return 7; }
         .BadProgramHeaders => {
-            return 4;
+            return 8;
         }
     }
 }

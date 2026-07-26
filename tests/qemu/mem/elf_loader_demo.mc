@@ -45,6 +45,7 @@ const T_PT_LOAD: u32 = 1;
 const T_PF_X: u32 = 1;
 const T_PF_W: u32 = 2;
 const T_PF_R: u32 = 4;
+const T_EM_RISCV: u16 = 243;
 
 // The synthetic ELF image. Big enough to hold the header, the PH table, and the two
 // segment payloads at their page-aligned file offsets (data ends at 0x2008).
@@ -83,6 +84,24 @@ fn img_u64(off: usize, v: u64) -> void {
     img_u32(off + 4, ((v >> 32) & 0xFFFF_FFFF) as u32);
 }
 
+fn img_elf_header(phnum: u16) -> void {
+    img_u8(0, 0x7F);
+    img_u8(1, 0x45);
+    img_u8(2, 0x4C);
+    img_u8(3, 0x46);
+    img_u8(4, 2);                 // ELFCLASS64
+    img_u8(5, 1);                 // ELFDATA2LSB
+    img_u8(6, 1);                 // EI_VERSION
+    img_u16(16, 2);               // ET_EXEC
+    img_u16(18, T_EM_RISCV);
+    img_u32(20, 1);               // EV_CURRENT
+    img_u64(24, ENTRY);
+    img_u64(32, 64);
+    img_u16(52, 64);              // ELF64 header size
+    img_u16(54, 56);
+    img_u16(56, phnum);
+}
+
 // Write one ELF64 program header (56 bytes) at `off`.
 fn img_phdr(off: usize, p_type: u32, flags: u32, offset: u64, vaddr: u64, filesz: u64, memsz: u64) -> void {
     img_u32(off + 0, p_type);   // p_type
@@ -106,17 +125,7 @@ fn build_image() -> void {
     }
 
     // --- ELF64 header @0 ---
-    img_u8(0, 0x7F);
-    img_u8(1, 0x45); // 'E'
-    img_u8(2, 0x4C); // 'L'
-    img_u8(3, 0x46); // 'F'
-    img_u8(4, 2);    // EI_CLASS = ELFCLASS64
-    img_u8(5, 1);    // EI_DATA  = ELFDATA2LSB
-    img_u8(6, 1);    // EI_VERSION
-    img_u64(24, ENTRY);     // e_entry
-    img_u64(32, 64);        // e_phoff (PH table right after the 64-byte header)
-    img_u16(54, 56);        // e_phentsize (ELF64 program-header size)
-    img_u16(56, 2);         // e_phnum
+    img_elf_header(2);
 
     // --- program headers @64 ---
     img_phdr(64, T_PT_LOAD, T_PF_R | T_PF_X, TEXT_OFF as u64, TEXT_VADDR as u64, TEXT_SZ as u64, TEXT_SZ as u64);
@@ -149,17 +158,7 @@ fn build_overlap_image() -> void {
     }
 
     // ELF64 header @0 (identical to the valid image).
-    img_u8(0, 0x7F);
-    img_u8(1, 0x45);
-    img_u8(2, 0x4C);
-    img_u8(3, 0x46);
-    img_u8(4, 2);
-    img_u8(5, 1);
-    img_u8(6, 1);
-    img_u64(24, ENTRY);
-    img_u64(32, 64);
-    img_u16(54, 56);
-    img_u16(56, 2);
+    img_elf_header(2);
 
     // PH[0]: text @vaddr 0x10000. PH[1]: data claiming the SAME vaddr 0x10000 (the overlap).
     img_phdr(64, T_PT_LOAD, T_PF_R | T_PF_X, TEXT_OFF as u64, TEXT_VADDR as u64, TEXT_SZ as u64, TEXT_SZ as u64);
@@ -183,6 +182,16 @@ fn build_badelf_image() -> void {
     img_u8(0, 0x00); // clobber the 0x7F magic byte
 }
 
+fn build_wrong_machine_image() -> void {
+    build_image();
+    img_u16(18, 62); // EM_X86_64, rejected by the RISC-V loader policy
+}
+
+fn build_nonexec_entry_image() -> void {
+    build_image();
+    img_u64(24, DATA_VADDR as u64); // entry lies in R|W data, not executable text
+}
+
 // A HOSTILE image whose single PT_LOAD claims a memsz spanning MORE than MAX_SEGMENT_PAGES
 // (4096) pages — the loader must reject it (TooManyPages) before allocating anything. filesz is
 // tiny so the image need not actually hold the bytes; the page-count check fires first.
@@ -192,17 +201,7 @@ fn build_toomany_image() -> void {
         g_image[i] = 0;
         i = i + 1;
     }
-    img_u8(0, 0x7F);
-    img_u8(1, 0x45);
-    img_u8(2, 0x4C);
-    img_u8(3, 0x46);
-    img_u8(4, 2);
-    img_u8(5, 1);
-    img_u8(6, 1);
-    img_u64(24, ENTRY);
-    img_u64(32, 64);
-    img_u16(54, 56);
-    img_u16(56, 1); // one program header
+    img_elf_header(1);
     // memsz = 4097 pages = 0x100_1000 (> MAX_SEGMENT_PAGES * PAGE = 16 MiB). R|X, not W^X.
     img_phdr(64, T_PT_LOAD, T_PF_R | T_PF_X, TEXT_OFF as u64, TEXT_VADDR as u64, 16, 0x0100_1000);
 }
@@ -217,17 +216,7 @@ fn build_highaddr_image() -> void {
         g_image[i] = 0;
         i = i + 1;
     }
-    img_u8(0, 0x7F);
-    img_u8(1, 0x45);
-    img_u8(2, 0x4C);
-    img_u8(3, 0x46);
-    img_u8(4, 2);
-    img_u8(5, 1);
-    img_u8(6, 1);
-    img_u64(24, ENTRY);
-    img_u64(32, 64);
-    img_u16(54, 56);
-    img_u16(56, 1); // one program header
+    img_elf_header(1);
     img_phdr(64, T_PT_LOAD, T_PF_R | T_PF_X, 0, 0xFFFF_FFFF_FFFF_F000, 0, 0x0000_0000_0000_0500);
 }
 
@@ -242,7 +231,7 @@ fn load_err_code(pool_base: usize, pool_len: usize) -> u32 {
         ok(t) => { p = t; }
         err(e) => { return 3; } // NoFrame: heap too small even for the root table
     }
-    switch elf_load_image((&g_image[0]) as usize, IMAGE_CAP, &p, &heap) {
+    switch elf_load_image_for((&g_image[0]) as usize, IMAGE_CAP, T_EM_RISCV, 0x1000, 0x1000_0000, &p, &heap) {
         ok(e) => { code = 0; }
         err(e) => {
             switch e {
@@ -278,7 +267,7 @@ export fn elf_loader_run() -> u32 {
 
     // Load the image.
     var entry: u64 = 0;
-    switch elf_load_image(image_base, IMAGE_CAP, &pt, &heap) {
+    switch elf_load_image_for(image_base, IMAGE_CAP, T_EM_RISCV, 0x1000, 0x1000_0000, &pt, &heap) {
         ok(e) => { entry = e; }
         err(e) => { return 0; } // load failed outright
     }
@@ -351,6 +340,16 @@ export fn elf_loader_run() -> u32 {
     //   - corrupt ELF magic             -> BadElf (1)
     build_badelf_image();
     if load_err_code((&g_pool[0]) as usize, 262144) != 1 {
+        pass = 0;
+    }
+    //   - wrong architecture identity       -> BadElf (1)
+    build_wrong_machine_image();
+    if load_err_code((&g_pool[0]) as usize, 262144) != 1 {
+        pass = 0;
+    }
+    //   - entry outside executable PT_LOAD  -> BadSegment (4)
+    build_nonexec_entry_image();
+    if load_err_code((&g_pool[0]) as usize, 262144) != 4 {
         pass = 0;
     }
     //   - segment over MAX_SEGMENT_PAGES -> TooManyPages (2)

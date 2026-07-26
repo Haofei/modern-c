@@ -365,7 +365,7 @@ export fn app_build_x86(image_base: usize, image_len: usize, region_base: usize,
         err(e) => { qx_load_status = QX_LS_NOFRAME; return 0; }
     }
 
-    switch elf_load_image(image_base, image_len, &qx_pt, &qx_heap) {
+    switch elf_load_image_for(image_base, image_len, 62, QX_USER_BASE, QX_USER_LIMIT, &qx_pt, &qx_heap) {
         ok(e) => { qx_entry = e; }
         err(e) => {
             switch e {
@@ -419,4 +419,3 @@ export fn app_entry_is_user_x86() -> u32 {
         err(e) => { return 0; }
     }
 }
-

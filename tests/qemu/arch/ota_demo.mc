@@ -8,7 +8,7 @@
 //      the signed-boot demo carries as its image hash (ota_hash_bytes == signed_boot's).
 //   2. GOOD DELIVERY: the image is delivered in N in-order chunks; each ota_chunk accepts,
 //      ota_finish re-verifies the streamed digest == expected hash, THEN the reassembled
-//      image is admitted by bundle_validate and installed as a rollback candidate
+//      metadata is admitted by bundle_validate_metadata and installed as a rollback candidate
 //        -> OTA-DELIVER-OK.
 //   3. CORRUPT DELIVERY: one chunk byte is flipped; the length is still complete so ota_chunk
 //      accepts every chunk, but ota_finish detects the digest mismatch -> HashMismatch.
@@ -26,7 +26,7 @@ import "kernel/core/ota.mc";
 const FINISHER: usize = 0x0010_0000; // SiFive test finisher
 const FINISHER_HALT: u32 = 0x5555;
 
-// Admission policy this device trusts (mirrors signed_boot_demo.mc).
+// Admission policy this device trusts (mirrors bundle_metadata_demo.mc).
 const EXPECTED_ABI: u32 = 7;
 const MIN_VERSION: u64 = 100;
 const MAX_VERSION: u64 = 200;
@@ -88,7 +88,7 @@ fn ota_is_reject_with(r: Result<bool, OtaError>, want: u32) -> bool {
     }
 }
 
-// True iff bundle_validate accepted.
+// True iff bundle_validate_metadata accepted.
 fn bundle_is_accept(r: Result<bool, BundleError>) -> bool {
     switch r {
         ok(v) => { return v; }
@@ -132,7 +132,7 @@ export fn test_main() -> void {
     }
     if deliver_ok {
         var good: BundleHeader = bundle_header_init(.Kernel, GOOD_VERSION, EXPECTED_ABI, POLICY_VERSION, TRUSTED_KEY, img_hash, SIG_LEN);
-        if bundle_is_accept(bundle_validate(&good, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY, .Valid)) {
+        if bundle_is_accept(bundle_validate_metadata(&good, .Kernel, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY)) {
             rollback_init(&g_rb, GOOD_VERSION);
             let cand: usize = rollback_install_candidate(&g_rb, 160);
             if rollback_active_version(&g_rb) == 160 {

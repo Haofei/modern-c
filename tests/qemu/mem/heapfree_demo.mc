@@ -81,5 +81,24 @@ export fn heapfree_run() -> u32 {
         return 0;
     }
 
+    // ---- 4. metadata exhaustion is observable, never silent ----
+    // Keep odd blocks live so freeing each even block creates 65 distinct,
+    // non-coalescing holes (one more than the bounded metadata table).
+    var k: usize = 0;
+    while k < 65 {
+        // Strictly increasing hole sizes prevent the next allocation from
+        // reusing any earlier free-list entry.
+        let hole_size: usize = (k + 1) * 16;
+        let hole: PAddr = heap_alloc(&h, hole_size, 16);
+        let pin: PAddr = heap_alloc(&h, 2048, 16);
+        if pa_value(pin) == 0 { return 0; }
+        heap_free(&h, hole, hole_size);
+        k = k + 1;
+    }
+    let dropped: usize = heap_dropped_free_bytes(&h);
+    if dropped != 65 * 16 {
+        return (dropped as u32) + 2;
+    }
+
     return 1;
 }

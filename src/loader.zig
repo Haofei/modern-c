@@ -435,7 +435,13 @@ fn expandAll(
                 try rejectBudget(reporter, budget, origin, "E_IMPORT_FILE_LIMIT", "import graph exceeds configured file limit {d}", .{budget.limits.max_files});
                 break;
             }
-            const imp_source = std.Io.Dir.cwd().readFileAlloc(io, imp.path, allocator, .limited(64 * 1024 * 1024)) catch |err| {
+            const imp_source = readResolvedImportAlloc(
+                allocator,
+                io,
+                imp.path,
+                sandbox_root,
+                installed_roots,
+            ) catch |err| {
                 if (err == error.OutOfMemory) return error.OutOfMemory;
                 if (reporter) |r| {
                     r.err(.{
@@ -474,6 +480,43 @@ fn expandAll(
             children.items[child_index].source_owned = false;
         }
     }
+}
+
+fn readResolvedImportAlloc(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    resolved_path: []const u8,
+    sandbox_root: []const u8,
+    installed_roots: []const InstalledRoot,
+) ![]u8 {
+    var authority_root: ?[]const u8 = null;
+    if (pathWithin(sandbox_root, resolved_path)) {
+        authority_root = sandbox_root;
+    } else {
+        for (installed_roots) |root| {
+            if (pathWithin(root.path, resolved_path)) {
+                authority_root = root.path;
+                break;
+            }
+        }
+    }
+    const root = authority_root orelse return error.AccessDenied;
+    const relative = try std.fs.path.relative(allocator, root, null, root, resolved_path);
+    defer allocator.free(relative);
+
+    // The opened root descriptor is the authority. resolve_beneath asks the OS
+    // to keep component traversal below it, and follow_symlinks=false binds the
+    // bytes read below to the same non-symlink final object that was opened.
+    var root_dir = try std.Io.Dir.openDirAbsolute(io, root, .{ .follow_symlinks = false });
+    defer root_dir.close(io);
+    const file = try root_dir.openFile(io, relative, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+        .resolve_beneath = true,
+    });
+    defer file.close(io);
+    var reader = file.reader(io, &.{});
+    return reader.interface.allocRemaining(allocator, .limited(64 * 1024 * 1024));
 }
 
 fn recordFile(
