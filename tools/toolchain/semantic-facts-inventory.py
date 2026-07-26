@@ -754,9 +754,9 @@ ANCHORS: dict[str, list[str]] = {
         "try ir.appendLowerIr",
     ],
     "src/numeric.zig": [
-        "pub fn parseIntegerLiteral",
-        "if (raw.len > cleaned.len) return null;",
-        "std.fmt.parseInt(u128",
+        "pub fn parseIntegerLiteral(raw",
+        "if (index == digit_start or index + 1 == digit_end or previous_separator) return null;",
+        "magnitude = std.math.mul(u128, magnitude, radix) catch return null;",
     ],
     "src/sema.zig": [
         "fn checkIntegerLiteralInitializer",
@@ -1047,8 +1047,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         ".bind => .bind,": 1,
     },
     "src/numeric.zig": {
-        "pub fn parseIntegerLiteral": 1,
-        "std.fmt.parseInt(u128": 1,
+        "pub fn parseIntegerLiteral(raw": 1,
+        "magnitude = std.math.mul(u128, magnitude, radix) catch return null;": 1,
     },
     "src/lower_c.zig": {
         "try mir.validateIntegerFactsForLowering(typed_mir.*);": 1,

@@ -68,6 +68,9 @@ MAX_WORKSPACE_SOURCE_BYTES = int(os.environ.get("MC_LSP_MAX_WORKSPACE_SOURCE_BYT
 MAX_WORKSPACE_TOTAL_BYTES = int(os.environ.get("MC_LSP_MAX_WORKSPACE_TOTAL_BYTES", str(64 * 1024 * 1024)))
 MAX_WORKSPACE_SOURCES = int(os.environ.get("MC_LSP_MAX_WORKSPACE_SOURCES", "10000"))
 MAX_WORKSPACE_SCAN_SECONDS = max(float(os.environ.get("MC_LSP_MAX_WORKSPACE_SCAN_SECONDS", "5")), 0.1)
+MAX_WORKSPACE_COMPILER_INVOCATIONS = int(os.environ.get("MC_LSP_MAX_WORKSPACE_COMPILER_INVOCATIONS", "64"))
+MAX_WORKSPACE_SYMBOLS = int(os.environ.get("MC_LSP_MAX_WORKSPACE_SYMBOLS", "10000"))
+MAX_WORKSPACE_RESULT_BYTES = int(os.environ.get("MC_LSP_MAX_WORKSPACE_RESULT_BYTES", str(4 * 1024 * 1024)))
 
 
 def log(*a):
@@ -181,18 +184,19 @@ def line_of(text_lines, one_based_line):
 # mcc accepts `-` as source input and resolves its imports relative to cwd. This is a real
 # in-memory overlay: it preserves relative-import behavior without requiring the source tree
 # to be writable.
-def run_on_temp(path, text, args):
+def run_on_temp(path, text, args, timeout=None):
     directory = os.path.dirname(path) or "."
     argv = [MCC, args[0], "-", *args[1:]]
+    effective_timeout = MCC_TIMEOUT_SECONDS if timeout is None else max(min(timeout, MCC_TIMEOUT_SECONDS), 0.001)
     try:
         proc = subprocess.run(argv, cwd=directory, input=text,
-                              capture_output=True, text=True, timeout=MCC_TIMEOUT_SECONDS)
+                              capture_output=True, text=True, timeout=effective_timeout)
         return proc.returncode, proc.stdout, proc.stderr, "-"
     except FileNotFoundError:
         log(f"compiler '{MCC}' not found")
         return 127, "", "", "-"
     except subprocess.TimeoutExpired:
-        log(f"compiler '{MCC}' exceeded {MCC_TIMEOUT_SECONDS:g}s timeout")
+        log(f"compiler '{MCC}' exceeded {effective_timeout:g}s timeout")
         return 124, "", "mcc subprocess timed out", "-"
     except OSError as exc:
         log(f"compiler '{MCC}' failed: {exc}")
@@ -575,16 +579,17 @@ def invalidate_document_caches(uri):
     _document_symbol_cache.pop(uri, None)
 
 
-def get_index(uri, text):
+def get_index(uri, text, timeout=None):
     cached = _index_cache.get(uri)
     if cached and cached[0] == text:
         return cached[1]
-    rc, out, err, _ = run_on_temp(uri_to_path(uri), text, ["symbols"])
+    rc, out, err, _ = run_on_temp(uri_to_path(uri), text, ["symbols"], timeout=timeout)
     try:
         index = json.loads(out) if rc != 127 and out else {"defs": [], "refs": [], "fields": []}
     except (json.JSONDecodeError, ValueError):
         index = {"defs": [], "refs": [], "fields": []}
-    _index_cache[uri] = (text, index)
+    if rc != 124:
+        _index_cache[uri] = (text, index)
     return index
 
 
@@ -765,11 +770,35 @@ def semantic_tokens(uri, text):
 
 
 # ---- workspace symbols (workspace/symbol) --------------------------------------------------
-def workspace_sources(docs, roots):
+def open_workspace_source(root, path):
+    """Open PATH beneath ROOT without following any path component symlink."""
+    relative = os.path.relpath(path, root)
+    components = relative.split(os.sep)
+    if (relative == os.pardir or relative.startswith(os.pardir + os.sep)
+            or any(component in ("", ".", os.pardir) for component in components)):
+        raise OSError("workspace source escapes root")
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    if os.open in getattr(os, "supports_dir_fd", set()):
+        directory_flags = os.O_RDONLY | cloexec | nofollow | getattr(os, "O_DIRECTORY", 0)
+        directory_fd = os.open(root, directory_flags)
+        try:
+            for component in components[:-1]:
+                next_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+                os.close(directory_fd)
+                directory_fd = next_fd
+            return os.open(components[-1], os.O_RDONLY | cloexec | nofollow, dir_fd=directory_fd)
+        finally:
+            os.close(directory_fd)
+    return os.open(path, os.O_RDONLY | cloexec | nofollow)
+
+
+def workspace_sources(docs, roots, deadline=None):
     sources = dict(docs)
     skipped = {".git", ".zig-cache", "zig-out", "zig-pkg", "mc_packages"}
     total_bytes = 0
-    deadline = time.monotonic() + MAX_WORKSPACE_SCAN_SECONDS
+    if deadline is None:
+        deadline = time.monotonic() + MAX_WORKSPACE_SCAN_SECONDS
     for root in roots:
         root_real = os.path.realpath(root)
         if not os.path.isdir(root_real):
@@ -791,8 +820,7 @@ def workspace_sources(docs, roots):
                     real_path = os.path.realpath(path)
                     if os.path.commonpath((root_real, real_path)) != root_real:
                         continue
-                    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-                    fd = os.open(path, flags)
+                    fd = open_workspace_source(root_real, path)
                     try:
                         opened = os.fstat(fd)
                         if not stat.S_ISREG(opened.st_mode) or opened.st_size > MAX_WORKSPACE_SOURCE_BYTES:
@@ -817,12 +845,25 @@ def workspace_sources(docs, roots):
 
 
 def workspace_symbols(docs, query, roots=()):
+    deadline = time.monotonic() + MAX_WORKSPACE_SCAN_SECONDS
     q = query.lower()
     results = []
     seen = set()
-    for uri, text in workspace_sources(docs, roots).items():
-        index = get_index(uri, text)
+    result_bytes = 0
+    compiler_invocations = 0
+    for uri, text in workspace_sources(docs, roots, deadline=deadline).items():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        cached = _index_cache.get(uri)
+        if not cached or cached[0] != text:
+            if compiler_invocations >= MAX_WORKSPACE_COMPILER_INVOCATIONS:
+                break
+            compiler_invocations += 1
+        index = get_index(uri, text, timeout=remaining)
         for d in index.get("defs", []):
+            if time.monotonic() >= deadline or len(results) >= MAX_WORKSPACE_SYMBOLS:
+                return results
             if d["kind"] in ("param", "local", "local_mut"):
                 continue  # workspace symbols are top-level only
             if q and q not in d["name"].lower():
@@ -833,11 +874,16 @@ def workspace_symbols(docs, query, roots=()):
             if key in seen:
                 continue
             seen.add(key)
-            results.append({
+            item = {
                 "name": d["name"],
                 "kind": KIND_TO_SYMBOLKIND.get(d["kind"], 13),
                 "location": location,
-            })
+            }
+            item_bytes = len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+            if result_bytes + item_bytes > MAX_WORKSPACE_RESULT_BYTES:
+                return results
+            result_bytes += item_bytes
+            results.append(item)
     return results
 
 
@@ -1489,13 +1535,23 @@ def publish(out, uri, text):
 # ---- server loop ---------------------------------------------------------------------------
 def invalid_request_params(msg):
     if not isinstance(msg, dict):
-        return "JSON-RPC message must be an object"
+        return -32600, "JSON-RPC message must be an object"
     method = msg.get("method")
+    if msg.get("jsonrpc") != "2.0":
+        return -32600, "jsonrpc must be exactly '2.0'"
+    if not isinstance(method, str):
+        return -32600, "method must be a string"
+    request_id = msg.get("id")
+    if (request_id is not None
+            and (isinstance(request_id, bool) or not isinstance(request_id, (int, str)))):
+        return -32600, "id must be a string, integer, or null"
     params = msg.get("params", {})
     if params is None:
         params = {}
     if not isinstance(params, dict):
-        return "params must be an object"
+        return -32602, "params must be an object"
+    # Dispatch consumes this normalized object rather than rereading `null`.
+    msg["params"] = params
 
     text_document_methods = {
         "textDocument/didOpen", "textDocument/didChange", "textDocument/didSave",
@@ -1509,7 +1565,7 @@ def invalid_request_params(msg):
     if method in text_document_methods:
         document = params.get("textDocument")
         if not isinstance(document, dict) or not isinstance(document.get("uri"), str):
-            return "params.textDocument.uri must be a string"
+            return -32602, "params.textDocument.uri must be a string"
 
     position_methods = {
         "textDocument/hover", "textDocument/definition", "textDocument/references",
@@ -1523,48 +1579,48 @@ def invalid_request_params(msg):
                 or not isinstance(position.get("line"), int)
                 or not isinstance(position.get("character"), int)
                 or position["line"] < 0 or position["character"] < 0):
-            return "params.position must contain nonnegative integer line and character"
+            return -32602, "params.position must contain nonnegative integer line and character"
 
     if method == "textDocument/didOpen":
         if not isinstance(params["textDocument"].get("text"), str):
-            return "params.textDocument.text must be a string"
+            return -32602, "params.textDocument.text must be a string"
     elif method == "textDocument/didChange":
         changes = params.get("contentChanges")
         if (not isinstance(changes, list)
                 or any(not isinstance(change, dict) or not isinstance(change.get("text"), str)
                        for change in changes)):
-            return "params.contentChanges must be an array of full-text changes"
+            return -32602, "params.contentChanges must be an array of full-text changes"
     elif method == "textDocument/rename":
         if not is_valid_identifier(params.get("newName")):
-            return "params.newName must be a non-keyword MC identifier"
+            return -32602, "params.newName must be a non-keyword MC identifier"
     elif method == "textDocument/references":
         context = params.get("context", {})
         if not isinstance(context, dict):
-            return "params.context must be an object"
+            return -32602, "params.context must be an object"
     elif method == "workspace/symbol":
         if not isinstance(params.get("query", ""), str):
-            return "params.query must be a string"
+            return -32602, "params.query must be a string"
     elif method == "initialize":
         folders = params.get("workspaceFolders") or []
         if (not isinstance(folders, list)
                 or any(not isinstance(folder, dict)
                        or not isinstance(folder.get("uri"), str)
                        for folder in folders)):
-            return "params.workspaceFolders must contain URI objects"
+            return -32602, "params.workspaceFolders must contain URI objects"
         for key in ("rootUri", "rootPath"):
             if params.get(key) is not None and not isinstance(params[key], str):
-                return f"params.{key} must be a string or null"
+                return -32602, f"params.{key} must be a string or null"
     elif method in {"callHierarchy/incomingCalls", "callHierarchy/outgoingCalls"}:
         item = params.get("item")
         if not isinstance(item, dict) or not isinstance(item.get("uri"), str):
-            return "params.item.uri must be a string"
+            return -32602, "params.item.uri must be a string"
         selection = item.get("selectionRange")
         start = selection.get("start") if isinstance(selection, dict) else None
         if (not isinstance(start, dict)
                 or not isinstance(start.get("line"), int)
                 or not isinstance(start.get("character"), int)
                 or start["line"] < 0 or start["character"] < 0):
-            return "params.item.selectionRange.start must be a valid position"
+            return -32602, "params.item.selectionRange.start must be a valid position"
     return None
 
 
@@ -1676,176 +1732,192 @@ def main():
         invalid_params = invalid_request_params(msg)
         if not isinstance(msg, dict):
             log("invalid JSON-RPC message:", invalid_params)
+            write_message(stdout, {
+                "jsonrpc": "2.0", "id": None,
+                "error": {"code": -32600, "message": invalid_params[1]},
+            })
             continue
         method = msg.get("method")
         mid = msg.get("id")
         if invalid_params is not None:
-            log("invalid request parameters for", method, ":", invalid_params)
+            error_code, error_message = invalid_params
+            log("invalid request parameters for", method, ":", error_message)
             if mid is not None:
                 write_message(stdout, {
                     "jsonrpc": "2.0", "id": mid,
-                    "error": {"code": -32602, "message": invalid_params},
+                    "error": {"code": error_code, "message": error_message},
                 })
             continue
 
-        if method == "initialize":
-            params = msg.get("params", {})
-            folders = params.get("workspaceFolders") or []
-            for folder in folders:
-                folder_uri = folder.get("uri") if isinstance(folder, dict) else None
-                if folder_uri:
-                    workspace_roots.append(uri_to_path(folder_uri))
-            root_uri = params.get("rootUri")
-            root_path = params.get("rootPath")
-            if root_uri:
-                workspace_roots.append(uri_to_path(root_uri))
-            elif root_path:
-                workspace_roots.append(root_path)
-            workspace_roots[:] = list(dict.fromkeys(os.path.abspath(root) for root in workspace_roots))
-            write_message(stdout, {
-                "jsonrpc": "2.0",
-                "id": mid,
-                "result": {
-                    "capabilities": {
-                        "textDocumentSync": 1,  # Full
-                        "documentFormattingProvider": True,  # via `mcc fmt`
-                        "documentSymbolProvider": True,       # via `mcc emit-map`
-                        # the following are powered by `mcc symbols`
-                        "hoverProvider": True,
-                        "definitionProvider": True,
-                        "referencesProvider": True,
-                        "documentHighlightProvider": True,
-                        "renameProvider": True,
-                        "semanticTokensProvider": {
-                            "legend": {"tokenTypes": TOKEN_TYPES, "tokenModifiers": []},
-                            "full": True,
+        try:
+            if method == "initialize":
+                params = msg.get("params", {})
+                folders = params.get("workspaceFolders") or []
+                for folder in folders:
+                    folder_uri = folder.get("uri") if isinstance(folder, dict) else None
+                    if folder_uri:
+                        workspace_roots.append(uri_to_path(folder_uri))
+                root_uri = params.get("rootUri")
+                root_path = params.get("rootPath")
+                if root_uri:
+                    workspace_roots.append(uri_to_path(root_uri))
+                elif root_path:
+                    workspace_roots.append(root_path)
+                workspace_roots[:] = list(dict.fromkeys(os.path.abspath(root) for root in workspace_roots))
+                write_message(stdout, {
+                    "jsonrpc": "2.0",
+                    "id": mid,
+                    "result": {
+                        "capabilities": {
+                            "textDocumentSync": 1,  # Full
+                            "documentFormattingProvider": True,  # via `mcc fmt`
+                            "documentSymbolProvider": True,       # via `mcc emit-map`
+                            # the following are powered by `mcc symbols`
+                            "hoverProvider": True,
+                            "definitionProvider": True,
+                            "referencesProvider": True,
+                            "documentHighlightProvider": True,
+                            "renameProvider": True,
+                            "semanticTokensProvider": {
+                                "legend": {"tokenTypes": TOKEN_TYPES, "tokenModifiers": []},
+                                "full": True,
+                            },
+                            "workspaceSymbolProvider": True,
+                            "callHierarchyProvider": True,
+                            "completionProvider": {"triggerCharacters": ["."]},
+                            "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
+                            "diagnosticProvider": {  # LSP 3.17 pull model (in addition to push)
+                                "interFileDependencies": True,
+                                "workspaceDiagnostics": False,
+                            },
                         },
-                        "workspaceSymbolProvider": True,
-                        "callHierarchyProvider": True,
-                        "completionProvider": {"triggerCharacters": ["."]},
-                        "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
-                        "diagnosticProvider": {  # LSP 3.17 pull model (in addition to push)
-                            "interFileDependencies": True,
-                            "workspaceDiagnostics": False,
-                        },
+                        "serverInfo": {"name": "mc-lsp", "version": server_version()},
                     },
-                    "serverInfo": {"name": "mc-lsp", "version": server_version()},
-                },
-            })
-        elif method == "initialized":
-            pass
-        elif method == "textDocument/didOpen":
-            doc = msg["params"]["textDocument"]
-            cancel_pending_diagnostics(doc["uri"])
-            update_doc(doc["uri"], doc["text"])
-            publish(stdout, doc["uri"], doc["text"])
-        elif method == "textDocument/didChange":
-            uri = msg["params"]["textDocument"]["uri"]
-            changes = msg["params"]["contentChanges"]
-            if changes:  # Full sync: the last change carries the whole document
-                update_doc(uri, changes[-1]["text"])
-                schedule_diagnostics(uri)
-        elif method == "textDocument/didSave":
-            uri = msg["params"]["textDocument"]["uri"]
-            cancel_pending_diagnostics(uri)
-            _diagnostics_cache.pop(uri, None)
-            _related_diagnostics_cache.pop(uri, None)
-            publish(stdout, uri, get_doc_text(uri))
-        elif method == "textDocument/didClose":
-            uri = msg["params"]["textDocument"]["uri"]
-            with state_lock:
-                cancel_pending_diagnostics_locked(uri)
-                docs.pop(uri, None)
-                doc_versions.pop(uri, None)
-                invalidate_document_caches(uri)
-                for related_uri in _published_related_diagnostics.pop(uri, set()):
-                    publish_diagnostics(stdout, related_uri, [])
-        elif method == "textDocument/formatting":
-            uri = msg["params"]["textDocument"]["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": format_document(uri, get_doc_text(uri))})
-        elif method == "textDocument/documentSymbol":
-            uri = msg["params"]["textDocument"]["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": document_symbols(uri, get_doc_text(uri))})
-        elif method == "textDocument/hover":
-            p = msg["params"]
-            uri = p["textDocument"]["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": hover(uri, get_doc_text(uri), p["position"])})
-        elif method == "textDocument/definition":
-            p = msg["params"]
-            uri = p["textDocument"]["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": goto_definition(uri, get_doc_text(uri), p["position"])})
-        elif method == "textDocument/references":
-            p = msg["params"]
-            uri = p["textDocument"]["uri"]
-            include = p.get("context", {}).get("includeDeclaration", True)
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": find_references(uri, get_doc_text(uri), p["position"], include)})
-        elif method == "textDocument/documentHighlight":
-            p = msg["params"]
-            uri = p["textDocument"]["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": document_highlight(uri, get_doc_text(uri), p["position"])})
-        elif method == "textDocument/rename":
-            p = msg["params"]
-            uri = p["textDocument"]["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": do_rename(uri, get_doc_text(uri), p["position"], p["newName"])})
-        elif method == "textDocument/semanticTokens/full":
-            uri = msg["params"]["textDocument"]["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": semantic_tokens(uri, get_doc_text(uri))})
-        elif method == "textDocument/completion":
-            p = msg["params"]
-            uri = p["textDocument"]["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": completion(uri, get_doc_text(uri), p["position"])})
-        elif method == "textDocument/signatureHelp":
-            p = msg["params"]
-            uri = p["textDocument"]["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": signature_help(uri, get_doc_text(uri), p["position"])})
-        elif method == "textDocument/diagnostic":
-            uri = msg["params"]["textDocument"]["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": {"kind": "full",
-                                              "items": run_diagnostics(uri, get_doc_text(uri))}})
-        elif method == "workspace/symbol":
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": workspace_symbols(docs, msg["params"].get("query", ""), workspace_roots)})
-        elif method == "textDocument/prepareCallHierarchy":
-            p = msg["params"]
-            uri = p["textDocument"]["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": prepare_call_hierarchy(uri, get_doc_text(uri), p["position"])})
-        elif method == "callHierarchy/incomingCalls":
-            item = msg["params"]["item"]
-            uri = item["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": incoming_calls(uri, get_doc_text(uri), item)})
-        elif method == "callHierarchy/outgoingCalls":
-            item = msg["params"]["item"]
-            uri = item["uri"]
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
-                                   "result": outgoing_calls(uri, get_doc_text(uri), item)})
-        elif method == "shutdown":
-            shutting_down = True
-            cancel_all_diagnostics()
-            write_message(stdout, {"jsonrpc": "2.0", "id": mid, "result": None})
-        elif method == "exit":
-            shutting_down = True
-            cancel_all_diagnostics()
-            break
-        elif mid is not None:
-            # Unknown request: reply MethodNotFound rather than hang the client.
-            write_message(stdout, {
-                "jsonrpc": "2.0", "id": mid,
-                "error": {"code": -32601, "message": f"method not found: {method}"},
-            })
-        # notifications we don't handle are ignored
+                })
+            elif method == "initialized":
+                pass
+            elif method == "textDocument/didOpen":
+                doc = msg["params"]["textDocument"]
+                cancel_pending_diagnostics(doc["uri"])
+                update_doc(doc["uri"], doc["text"])
+                publish(stdout, doc["uri"], doc["text"])
+            elif method == "textDocument/didChange":
+                uri = msg["params"]["textDocument"]["uri"]
+                changes = msg["params"]["contentChanges"]
+                if changes:  # Full sync: the last change carries the whole document
+                    update_doc(uri, changes[-1]["text"])
+                    schedule_diagnostics(uri)
+            elif method == "textDocument/didSave":
+                uri = msg["params"]["textDocument"]["uri"]
+                cancel_pending_diagnostics(uri)
+                _diagnostics_cache.pop(uri, None)
+                _related_diagnostics_cache.pop(uri, None)
+                publish(stdout, uri, get_doc_text(uri))
+            elif method == "textDocument/didClose":
+                uri = msg["params"]["textDocument"]["uri"]
+                with state_lock:
+                    cancel_pending_diagnostics_locked(uri)
+                    docs.pop(uri, None)
+                    doc_versions.pop(uri, None)
+                    invalidate_document_caches(uri)
+                    for related_uri in _published_related_diagnostics.pop(uri, set()):
+                        publish_diagnostics(stdout, related_uri, [])
+            elif method == "textDocument/formatting":
+                uri = msg["params"]["textDocument"]["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": format_document(uri, get_doc_text(uri))})
+            elif method == "textDocument/documentSymbol":
+                uri = msg["params"]["textDocument"]["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": document_symbols(uri, get_doc_text(uri))})
+            elif method == "textDocument/hover":
+                p = msg["params"]
+                uri = p["textDocument"]["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": hover(uri, get_doc_text(uri), p["position"])})
+            elif method == "textDocument/definition":
+                p = msg["params"]
+                uri = p["textDocument"]["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": goto_definition(uri, get_doc_text(uri), p["position"])})
+            elif method == "textDocument/references":
+                p = msg["params"]
+                uri = p["textDocument"]["uri"]
+                include = p.get("context", {}).get("includeDeclaration", True)
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": find_references(uri, get_doc_text(uri), p["position"], include)})
+            elif method == "textDocument/documentHighlight":
+                p = msg["params"]
+                uri = p["textDocument"]["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": document_highlight(uri, get_doc_text(uri), p["position"])})
+            elif method == "textDocument/rename":
+                p = msg["params"]
+                uri = p["textDocument"]["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": do_rename(uri, get_doc_text(uri), p["position"], p["newName"])})
+            elif method == "textDocument/semanticTokens/full":
+                uri = msg["params"]["textDocument"]["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": semantic_tokens(uri, get_doc_text(uri))})
+            elif method == "textDocument/completion":
+                p = msg["params"]
+                uri = p["textDocument"]["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": completion(uri, get_doc_text(uri), p["position"])})
+            elif method == "textDocument/signatureHelp":
+                p = msg["params"]
+                uri = p["textDocument"]["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": signature_help(uri, get_doc_text(uri), p["position"])})
+            elif method == "textDocument/diagnostic":
+                uri = msg["params"]["textDocument"]["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": {"kind": "full",
+                                                  "items": run_diagnostics(uri, get_doc_text(uri))}})
+            elif method == "workspace/symbol":
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": workspace_symbols(docs, msg["params"].get("query", ""), workspace_roots)})
+            elif method == "textDocument/prepareCallHierarchy":
+                p = msg["params"]
+                uri = p["textDocument"]["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": prepare_call_hierarchy(uri, get_doc_text(uri), p["position"])})
+            elif method == "callHierarchy/incomingCalls":
+                item = msg["params"]["item"]
+                uri = item["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": incoming_calls(uri, get_doc_text(uri), item)})
+            elif method == "callHierarchy/outgoingCalls":
+                item = msg["params"]["item"]
+                uri = item["uri"]
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                       "result": outgoing_calls(uri, get_doc_text(uri), item)})
+            elif method == "shutdown":
+                shutting_down = True
+                cancel_all_diagnostics()
+                write_message(stdout, {"jsonrpc": "2.0", "id": mid, "result": None})
+            elif method == "exit":
+                shutting_down = True
+                cancel_all_diagnostics()
+                break
+            elif mid is not None:
+                # Unknown request: reply MethodNotFound rather than hang the client.
+                write_message(stdout, {
+                    "jsonrpc": "2.0", "id": mid,
+                    "error": {"code": -32601, "message": f"method not found: {method}"},
+                })
+            # notifications we don't handle are ignored
+        except Exception as error:
+            # A single malformed or unexpectedly shaped request must never take
+            # down the long-lived server.  Validation remains the primary
+            # defence; this is the final containment boundary.
+            log("request failed for", method, ":", repr(error))
+            if mid is not None:
+                write_message(stdout, {
+                    "jsonrpc": "2.0", "id": mid,
+                    "error": {"code": -32603, "message": "internal error"},
+                })
 
 
 if __name__ == "__main__":

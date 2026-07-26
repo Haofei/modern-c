@@ -87,3 +87,52 @@ test "private mangling rewrites declaration-level value references" {
     try std.testing.expectEqualStrings("N__mcp0", lengths[0].?);
     try std.testing.expectEqualStrings("N__mcp1", lengths[1].?);
 }
+
+test "private mangling avoids user names and rewrites statement contracts" {
+    const file_a =
+        \\const LIMIT: usize = 4;
+        \\fn LIMIT__mcp0() -> u32 { return 9; }
+        \\fn guarded_a() -> usize {
+        \\    #[unsafe_contract(no_overflow, LIMIT)] { return LIMIT; }
+        \\}
+    ;
+    const file_b =
+        \\const LIMIT: usize = 8;
+        \\fn guarded_b() -> usize {
+        \\    #[unsafe_contract(no_overflow, LIMIT)] { return LIMIT; }
+        \\}
+    ;
+    const source = file_a ++ file_b;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "private_contract_a.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    var module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    module.visibility_mode = .explicit_public;
+    const boundaries = [_]loader.FileBoundary{
+        .{ .start = 0, .path = "private_contract_a.mc" },
+        .{ .start = file_a.len, .path = "private_contract_b.mc" },
+    };
+    const transformed = try mangle_private.transform(arena.allocator(), module, &boundaries);
+
+    var contract_names: [2]?[]const u8 = .{ null, null };
+    var contract_index: usize = 0;
+    var saw_disambiguated = false;
+    for (transformed.decls) |decl| switch (decl.kind) {
+        .global_decl => |global| {
+            if (std.mem.startsWith(u8, global.name.text, "LIMIT__mcp0__g")) saw_disambiguated = true;
+        },
+        .fn_decl => |function| {
+            if (!std.mem.startsWith(u8, function.name.text, "guarded_")) continue;
+            const contract = function.body.?.items[0].kind.contract_block.attr.kind.unsafe_contract;
+            contract_names[contract_index] = contract.args[0].kind.ident.text;
+            contract_index += 1;
+        },
+        else => {},
+    };
+    try std.testing.expect(saw_disambiguated);
+    try std.testing.expect(std.mem.startsWith(u8, contract_names[0].?, "LIMIT__mcp0__g"));
+    try std.testing.expectEqualStrings("LIMIT__mcp1", contract_names[1].?);
+}

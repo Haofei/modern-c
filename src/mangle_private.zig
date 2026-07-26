@@ -105,6 +105,10 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, boundaries: ?[]co
     // Build per-file rename maps: file index -> (original name -> mangled name).
     var per_file = std.AutoHashMap(usize, *std.StringHashMap([]const u8)).init(arena);
     defer per_file.deinit();
+    var occupied = std.StringHashMap(void).init(arena);
+    defer occupied.deinit();
+    var occupied_it = names.iterator();
+    while (occupied_it.next()) |entry| try occupied.put(entry.key_ptr.*, {});
     var any = false;
 
     var it = names.iterator();
@@ -113,7 +117,13 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, boundaries: ?[]co
         if (info.has_non_renameable) continue;
         if (!spansTwoFiles(info.files.items)) continue;
         for (info.files.items) |fi| {
-            const mangled = try std.fmt.allocPrint(arena, "{s}__mcp{d}", .{ e.key_ptr.*, fi });
+            const base = try std.fmt.allocPrint(arena, "{s}__mcp{d}", .{ e.key_ptr.*, fi });
+            var mangled = base;
+            var disambiguator: usize = 0;
+            while (occupied.contains(mangled)) : (disambiguator += 1) {
+                mangled = try std.fmt.allocPrint(arena, "{s}__g{d}", .{ base, disambiguator });
+            }
+            try occupied.put(mangled, {});
             const map = try getOrCreateFileMap(arena, &per_file, fi);
             // A same-file duplicate would collide here (same key); keep the first — sema's
             // E_DUPLICATE_DECLARATION still fires on the original names.
@@ -338,7 +348,10 @@ const Walker = struct {
                 }
             },
             .unsafe_block, .comptime_block, .block => |*bl| try self.walkBlock(bl),
-            .contract_block => |*cb| try self.walkBlock(&cb.block),
+            .contract_block => |*cb| {
+                try self.walkAttr(&cb.attr);
+                try self.walkBlock(&cb.block);
+            },
             .asm_stmt => |*asm_stmt| {
                 for (@constCast(asm_stmt.outputs)) |*output| try self.walkType(&output.ty);
                 for (@constCast(asm_stmt.inputs)) |*input| {

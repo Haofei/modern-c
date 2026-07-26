@@ -118,6 +118,88 @@ test "monomorphize discovers generic instances used only by type aliases and ext
     try testing.expect(alias_rewritten and extern_rewritten);
 }
 
+test "monomorphize preserves named loop break and continue targets" {
+    const source =
+        \\fn sized(comptime N: usize, flag: bool) -> usize {
+        \\    var data: [N]u8 = uninit;
+        \\    outer: while flag {
+        \\        break :outer;
+        \\    }
+        \\    again: while flag {
+        \\        continue :again;
+        \\    }
+        \\    return N;
+        \\}
+        \\fn use() -> usize { return sized(3, false); }
+    ;
+    var reporter = diagnostics.Reporter.init(testing.allocator, "generic_named_loop.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    try testing.expect(!reporter.has_errors);
+
+    const specialized = try monomorphize.transformReport(arena.allocator(), module, &reporter);
+    try testing.expect(!reporter.has_errors);
+    var found = false;
+    for (specialized.decls) |decl| {
+        if (decl.kind != .fn_decl or !std.mem.eql(u8, decl.kind.fn_decl.name.text, "sized__3")) continue;
+        found = true;
+        const body = decl.kind.fn_decl.body.?;
+        try testing.expectEqualStrings("3", body.items[0].kind.var_decl.ty.?.kind.array.len.kind.int_literal);
+        try testing.expectEqualStrings("outer", body.items[1].kind.loop.loop_label.?.text);
+        try testing.expectEqualStrings("outer", body.items[1].kind.loop.body.items[0].kind.@"break".?.text);
+        try testing.expectEqualStrings("again", body.items[2].kind.loop.loop_label.?.text);
+        try testing.expectEqualStrings("again", body.items[2].kind.loop.body.items[0].kind.@"continue".?.text);
+    }
+    try testing.expect(found);
+
+    var checker = sema.Checker.init(&reporter);
+    checker.checkModule(specialized);
+    try testing.expect(!reporter.has_errors);
+}
+
+test "monomorphize detects comptime identifiers nested in array-length calls" {
+    const source =
+        \\const fn plus_one(value: usize) -> usize { return value + 1; }
+        \\fn sized(comptime N: usize) -> usize {
+        \\    var data: [plus_one(N)]u8 = uninit;
+        \\    return sizeof(data);
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(testing.allocator, "generic_nested_dependency.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    try testing.expect(!reporter.has_errors);
+    try testing.expect(monomorphize.isTypeGenericFunction(module.decls[1].kind.fn_decl));
+}
+
+test "monomorphize rejects generated names that collide with user declarations" {
+    // DIAGNOSTIC_UNIT: E_GENERATED_NAME_COLLISION
+    const source =
+        \\struct Box__u32 { existing: u8 }
+        \\struct Box<T> { value: T }
+        \\type Concrete = Box<u32>;
+    ;
+    var reporter = diagnostics.Reporter.init(testing.allocator, "generic_name_collision.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    try testing.expect(!reporter.has_errors);
+
+    try testing.expectError(
+        error.GenericLinkageCollision,
+        monomorphize.transformReport(arena.allocator(), module, &reporter),
+    );
+    try testing.expect(hasDiagnosticMessage(&reporter, "E_GENERATED_NAME_COLLISION"));
+}
+
 test "monomorphize keeps delimiter-colliding generic instances distinct" {
     const source =
         \\struct A__B { value: u32 }

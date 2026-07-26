@@ -91,9 +91,17 @@ def test_protocol_helpers():
         raise SystemExit(f"FAIL: lsp-test — missing --mcc value was not rejected cleanly: {missing_mcc}")
 
     if module.invalid_request_params({
-        "method": "textDocument/hover", "params": {},
+        "jsonrpc": "2.0", "method": "textDocument/hover", "params": {},
     }) is None:
         raise SystemExit("FAIL: lsp-test — malformed hover parameters were accepted")
+    invalid_method = module.invalid_request_params({
+        "jsonrpc": "2.0", "id": 1, "method": [], "params": {},
+    })
+    if invalid_method is None or invalid_method[0] != -32600:
+        raise SystemExit("FAIL: lsp-test — non-string method was not an Invalid Request")
+    normalized = {"jsonrpc": "2.0", "id": 2, "method": "workspace/symbol", "params": None}
+    if module.invalid_request_params(normalized) is not None or normalized["params"] != {}:
+        raise SystemExit("FAIL: lsp-test — null params were not normalized for dispatch")
     if module.is_valid_identifier("a-b") or module.is_valid_identifier("fn"):
         raise SystemExit("FAIL: lsp-test — rename accepted invalid or keyword replacement text")
 
@@ -121,6 +129,31 @@ def test_protocol_helpers():
             raise SystemExit("FAIL: lsp-test — bounded workspace scan skipped a regular source")
         if "outside_secret" in scanned_text or any("large.mc" in uri for uri in scanned):
             raise SystemExit("FAIL: lsp-test — workspace scan followed a symlink or read an oversized file")
+
+    old_index = module.get_index
+    old_seconds = module.MAX_WORKSPACE_SCAN_SECONDS
+    calls = []
+    module.MAX_WORKSPACE_SCAN_SECONDS = 0.1
+    def slow_index(uri, text, timeout=None):
+        calls.append(timeout)
+        time.sleep(min(0.03, timeout or 0.03))
+        return {"defs": [], "refs": [], "fields": []}
+    module.get_index = slow_index
+    started = time.monotonic()
+    try:
+        module.workspace_symbols(
+            {f"file:///tmp/deadline-{index}.mc": "fn item() -> void {}" for index in range(100)},
+            "",
+        )
+    finally:
+        module.get_index = old_index
+        module.MAX_WORKSPACE_SCAN_SECONDS = old_seconds
+    elapsed = time.monotonic() - started
+    if elapsed > 0.35 or len(calls) > 5:
+        raise SystemExit(
+            f"FAIL: lsp-test — workspace deadline expanded across compiler calls "
+            f"(elapsed={elapsed:.3f}s calls={len(calls)})"
+        )
 
 BAD = (
     "#[no_lang_trap]\n"
@@ -394,6 +427,14 @@ def main():
         invalid = read_message(proc.stdout)
         if invalid.get("id") != 44 or invalid.get("error", {}).get("code") != -32602:
             raise SystemExit(f"FAIL: lsp-test — malformed request did not return InvalidParams: {invalid}")
+        proc.stdin.write(frame({"jsonrpc": "2.0", "id": 46, "method": [], "params": {}}))
+        proc.stdin.flush()
+        invalid_method = read_message(proc.stdout)
+        if invalid_method.get("id") != 46 or invalid_method.get("error", {}).get("code") != -32600:
+            raise SystemExit(f"FAIL: lsp-test — invalid method did not return InvalidRequest: {invalid_method}")
+        null_params = request(proc, 47, "workspace/symbol", None)
+        if not isinstance(null_params, list):
+            raise SystemExit(f"FAIL: lsp-test — null params were not normalized: {null_params}")
         alive = request(proc, 45, "workspace/symbol", {"query": "nothing"})
         if alive != []:
             raise SystemExit(f"FAIL: lsp-test — server did not remain usable after InvalidParams: {alive}")

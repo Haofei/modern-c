@@ -94,6 +94,33 @@ MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" build "$WORK
     exit 1
 }
 
+# Package metadata cannot nominate source or managed metadata as build output.
+SELF_OVERWRITE="$WORK/self-overwrite"
+cp -R "$PKG" "$SELF_OVERWRITE"
+sed -i.bak 's|^output = .*|output = src/app.mc|' "$SELF_OVERWRITE/mcpkg.txt"
+rm -f "$SELF_OVERWRITE/mcpkg.txt.bak"
+if MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" build "$SELF_OVERWRITE" >/dev/null 2>&1; then
+    echo "FAIL: pkg-test — package output overwrote its entry source"
+    exit 1
+fi
+grep -q 'demo_main' "$SELF_OVERWRITE/src/app.mc" || {
+    echo "FAIL: pkg-test — rejected build still modified its entry source"
+    exit 1
+}
+
+MANIFEST_OVERWRITE="$WORK/manifest-overwrite"
+cp -R "$PKG" "$MANIFEST_OVERWRITE"
+sed -i.bak 's/^output = .*/output = mcpkg.txt/' "$MANIFEST_OVERWRITE/mcpkg.txt"
+rm -f "$MANIFEST_OVERWRITE/mcpkg.txt.bak"
+if MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" build "$MANIFEST_OVERWRITE" >/dev/null 2>&1; then
+    echo "FAIL: pkg-test — package output overwrote its manifest"
+    exit 1
+fi
+grep -q '^name = demo' "$MANIFEST_OVERWRITE/mcpkg.txt" || {
+    echo "FAIL: pkg-test — rejected build still modified its manifest"
+    exit 1
+}
+
 # `build` must produce the object from the entry + its imports.
 MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" build "$PKG" >/dev/null
 cp "$PKG/demo.o" "$WORK/demo.o"

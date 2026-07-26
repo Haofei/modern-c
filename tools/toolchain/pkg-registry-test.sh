@@ -44,15 +44,27 @@ fi
 # Publication and installation locks fail closed instead of allowing a lost
 # index update or overlapping vendor/lock commits.
 mkdir "$REG/.publish.lock"
+printf '%s\n' "$$" >"$REG/.publish.lock/owner"
 if bash "$REGTOOL" publish "$FIX/mathlib-1.2.0" --registry "$REG" >/dev/null 2>&1; then
     fail "publish ignored the registry transaction lock"
 fi
-rmdir "$REG/.publish.lock"
+rm -rf "$REG/.publish.lock"
 mkdir "$APP/.mcpkg.install.lock"
+printf '%s\n' "$$" >"$APP/.mcpkg.install.lock/owner"
 if bash "$REGTOOL" install "$APP" --registry "$REG" >/dev/null 2>&1; then
     fail "install ignored the package transaction lock"
 fi
-rmdir "$APP/.mcpkg.install.lock"
+rm -rf "$APP/.mcpkg.install.lock"
+
+# A package directory committed before an index-cache failure remains discoverable
+# because immutable package directories, not the cache, are authoritative.
+RECOVERY_REG="$W/recovery-registry"
+if MCC_REGISTRY_FAIL_AFTER_PACKAGE_COMMIT=1 \
+    bash "$REGTOOL" publish "$FIX/mathlib-1.0.0" --registry "$RECOVERY_REG" >/dev/null 2>&1; then
+    fail "injected post-commit publication failure unexpectedly succeeded"
+fi
+[ "$(bash "$REGTOOL" versions mathlib --registry "$RECOVERY_REG")" = "1.0.0" ] ||
+    fail "committed package became invisible after index-cache failure"
 
 # 2. resolve (version policy)
 [ "$(bash "$REGTOOL" resolve mathlib '^1.0.0' --registry "$REG")" = "1.1.0" ] || fail "^1.0.0 should resolve to 1.1.0"
@@ -62,12 +74,37 @@ if bash "$REGTOOL" resolve mathlib '^3.0.0' --registry "$REG" >/dev/null 2>&1; t
     fail "^3.0.0 should be unsatisfiable"
 fi
 
-# 3. install -> vendors 1.1.0 + writes lock
+# 3. Any added file is part of the authenticated inventory. Even a historically
+# excluded object or vendor file must invalidate the package before it is copied.
+printf 'unauthenticated\n' >"$REG/pkgs/mathlib/1.1.0/evil.o"
+mkdir -p "$REG/pkgs/mathlib/1.1.0/mc_packages/injected"
+printf 'fn injected() -> void {}\n' >"$REG/pkgs/mathlib/1.1.0/mc_packages/injected/payload.mc"
+if bash "$REGTOOL" install "$APP" --registry "$REG" >/dev/null 2>&1; then
+    fail "install accepted an injected checksum-excluded file"
+fi
+rm -f "$REG/pkgs/mathlib/1.1.0/evil.o"
+rm -rf "$REG/pkgs/mathlib/1.1.0/mc_packages"
+
+# 3b. install -> vendors 1.1.0 + writes lock
 bash "$REGTOOL" install "$APP" --registry "$REG" >/dev/null
 grep -q '^name = mathlib' "$APP/mc_packages/mathlib/mcpkg.txt" || fail "mathlib not vendored"
 grep -q '^version = 1.1.0' "$APP/mc_packages/mathlib/mcpkg.txt" || fail "wrong mathlib version vendored"
 awk '$1=="mathlib"{print $2}' "$APP/mcpkg.lock" | grep -qx "1.1.0" || fail "lockfile did not pin mathlib 1.1.0"
 grep -q 'return 110;' "$APP/mc_packages/mathlib/mathlib.mc" || fail "vendored source is not the 1.1.0 build"
+
+# A hard interruption between vendor and lockfile commits is completed
+# idempotently on the next invocation.
+if MCC_REGISTRY_KILL_AFTER_VENDOR_COMMIT=1 \
+    bash "$REGTOOL" install "$APP" --registry "$REG" >/dev/null 2>&1; then
+    fail "injected install interruption unexpectedly succeeded"
+fi
+bash "$REGTOOL" install "$APP" --registry "$REG" >/dev/null
+[ ! -e "$APP/.mcpkg.install.lock" ] &&
+    [ ! -e "$APP/.mc_packages.install.next" ] &&
+    [ ! -e "$APP/.mc_packages.previous" ] ||
+    fail "install recovery left transaction state behind"
+awk '$1=="mathlib"{print $2}' "$APP/mcpkg.lock" | grep -qx "1.1.0" ||
+    fail "install recovery did not commit matching vendor/lock generation"
 
 # 4. reproducibility: publish a newer 1.2.0; a locked re-install must stay on 1.1.0.
 bash "$REGTOOL" publish "$FIX/mathlib-1.2.0" --registry "$REG" >/dev/null

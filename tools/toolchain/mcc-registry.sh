@@ -78,16 +78,94 @@ registry_deps_of() {
     ' "$1"
 }
 
-# Content checksum of a directory: hash the sorted list of (path, file-hash), excluding build
-# output and the vendor/lock files so it is stable across installs.
+# Content checksum of the exact installed inventory. The only excluded file is
+# the checksum record itself; every other regular file is authenticated.
+# Length-prefixing paths makes newline and other unusual Unix names unambiguous.
 checksum_dir() {
-    local dir="$1" hasher
-    if command -v sha256sum >/dev/null 2>&1; then hasher="sha256sum"
-    elif command -v shasum >/dev/null 2>&1; then hasher="shasum -a 256"
-    else echo "mcc-registry: no sha256 tool found" >&2; return 1; fi
-    ( cd "$dir" && find . -type f \
-        ! -path './mc_packages/*' ! -name 'mcpkg.lock' ! -name '*.o' ! -name '.checksum' \
-        | LC_ALL=C sort | while read -r f; do $hasher "$f"; done | $hasher | awk '{print $1}' )
+    python3 - "$1" <<'PY'
+import hashlib, os, stat, struct, sys
+root = os.path.realpath(sys.argv[1])
+entries = []
+for directory, dirnames, filenames in os.walk(root, followlinks=False):
+    dirnames.sort()
+    filenames.sort()
+    for name in dirnames:
+        path = os.path.join(directory, name)
+        rel = os.path.relpath(path, root)
+        if not stat.S_ISDIR(os.lstat(path).st_mode):
+            raise SystemExit(f"mcc-registry: non-directory package entry: {rel}")
+    for name in filenames:
+        path = os.path.join(directory, name)
+        rel = os.path.relpath(path, root)
+        if rel == ".checksum":
+            continue
+        mode = os.lstat(path).st_mode
+        if not stat.S_ISREG(mode):
+            raise SystemExit(f"mcc-registry: non-regular package entry: {rel}")
+        entries.append((os.fsencode(rel), path))
+digest = hashlib.sha256()
+for encoded, path in sorted(entries):
+    size = os.path.getsize(path)
+    digest.update(struct.pack(">Q", len(encoded)))
+    digest.update(encoded)
+    digest.update(struct.pack(">Q", size))
+    with open(path, "rb") as source:
+        while True:
+            chunk = source.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
+copy_publish_inventory() {
+    python3 - "$1" "$2" <<'PY'
+import os, shutil, stat, sys
+source, target = map(os.path.realpath, sys.argv[1:3])
+for directory, dirnames, filenames in os.walk(source, followlinks=False):
+    rel_dir = os.path.relpath(directory, source)
+    dirnames[:] = sorted(d for d in dirnames if not (rel_dir == "." and d == "mc_packages"))
+    for name in dirnames:
+        path = os.path.join(directory, name)
+        rel = os.path.relpath(path, source)
+        if not stat.S_ISDIR(os.lstat(path).st_mode):
+            raise SystemExit(f"mcc-registry: refusing non-directory package entry: {rel}")
+    for name in sorted(filenames):
+        if (rel_dir == "." and name == "mcpkg.lock") or name.endswith(".o"):
+            continue
+        path = os.path.join(directory, name)
+        rel = os.path.relpath(path, source)
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            raise SystemExit(f"mcc-registry: refusing non-regular package entry: {rel}")
+        destination = os.path.join(target, rel)
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        shutil.copyfile(path, destination)
+PY
+}
+
+copy_installed_inventory() {
+    python3 - "$1" "$2" <<'PY'
+import os, shutil, stat, sys
+source, target = map(os.path.realpath, sys.argv[1:3])
+for directory, dirnames, filenames in os.walk(source, followlinks=False):
+    dirnames.sort()
+    for name in dirnames:
+        path = os.path.join(directory, name)
+        rel = os.path.relpath(path, source)
+        if not stat.S_ISDIR(os.lstat(path).st_mode):
+            raise SystemExit(f"mcc-registry: refusing non-directory published entry: {rel}")
+    for name in sorted(filenames):
+        path = os.path.join(directory, name)
+        rel = os.path.relpath(path, source)
+        if rel == ".checksum":
+            continue
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            raise SystemExit(f"mcc-registry: refusing non-regular published entry: {rel}")
+        destination = os.path.join(target, rel)
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        shutil.copyfile(path, destination)
+PY
 }
 
 # --- version policy --------------------------------------------------------------------------
@@ -115,8 +193,34 @@ version_satisfies() {
 published_versions() {
     local reg="$1" name="$2"
     validate_name "$name"
-    [ -f "$reg/index" ] || return 0
-    awk -F'\t' -v n="$name" '$1==n {print $2}' "$reg/index" | LC_ALL=C sort -V
+    local package_root="$reg/pkgs/$name" entry version
+    [ -d "$package_root" ] || return 0
+    for entry in "$package_root"/*; do
+        [ -d "$entry" ] || continue
+        version="$(basename "$entry")"
+        if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            printf '%s\n' "$version"
+        fi
+    done | LC_ALL=C sort -V
+}
+
+# The immutable package directories are authoritative; `index` is a rebuildable
+# cache for humans and older tooling, never the publication commit point.
+rebuild_index() {
+    local reg="$1" output="$2" package name_dir version_dir name version
+    : > "$output"
+    for name_dir in "$reg"/pkgs/*; do
+        [ -d "$name_dir" ] || continue
+        name="$(basename "$name_dir")"
+        validate_name "$name"
+        for version_dir in "$name_dir"/*; do
+            [ -d "$version_dir" ] || continue
+            version="$(basename "$version_dir")"
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+            printf '%s\t%s\n' "$name" "$version" >> "$output"
+        done
+    done
+    LC_ALL=C sort -u "$output" -o "$output"
 }
 
 # Resolve a constraint against the registry; print the chosen version or fail.
@@ -164,6 +268,59 @@ done
 
 pkg_dir() { local a="${1:-.}"; [ -f "$a" ] && a="$(dirname "$a")"; (cd "$a" && pwd); }
 
+acquire_process_lock() {
+    local lock="$1" label="$2" owner
+    if mkdir "$lock" 2>/dev/null; then
+        printf '%s\n' "$$" > "$lock/owner"
+        return 0
+    fi
+    owner="$(cat "$lock/owner" 2>/dev/null || true)"
+    if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
+        die "$label is busy"
+    fi
+    # A dead owner cannot protect state. Recovery is operation-specific; after
+    # it runs, replacing this exact lock directory is safe and bounded.
+    rm -rf -- "$lock"
+    mkdir "$lock" || die "cannot acquire $label lock"
+    printf '%s\n' "$$" > "$lock/owner"
+}
+
+release_process_lock() {
+    local lock="$1"
+    rm -f -- "$lock/owner" "$lock/phase"
+    rmdir "$lock" 2>/dev/null || true
+}
+
+recover_install_transaction() {
+    local dir="$1"
+    local lock="$dir/.mcpkg.install.lock"
+    [ -d "$lock" ] || return 0
+    local owner phase
+    owner="$(cat "$lock/owner" 2>/dev/null || true)"
+    if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
+        die "package installation is busy"
+    fi
+    phase="$(cat "$lock/phase" 2>/dev/null || true)"
+    local next_vendor="$dir/.mc_packages.install.next"
+    local next_lock="$dir/.mcpkg.lock.next"
+    local previous_vendor="$dir/.mc_packages.previous"
+    if [ "$phase" = committing ]; then
+        if [ -d "$next_vendor" ]; then
+            if [ -e "$dir/mc_packages" ] && [ ! -e "$previous_vendor" ]; then
+                mv "$dir/mc_packages" "$previous_vendor"
+            fi
+            [ ! -e "$dir/mc_packages" ] || rm -rf -- "$dir/mc_packages"
+            mv "$next_vendor" "$dir/mc_packages"
+        fi
+        if [ -f "$next_lock" ]; then mv "$next_lock" "$dir/mcpkg.lock"; fi
+        [ ! -e "$previous_vendor" ] || rm -rf -- "$previous_vendor"
+    else
+        [ ! -e "$next_vendor" ] || rm -rf -- "$next_vendor"
+        [ ! -e "$next_lock" ] || rm -f -- "$next_lock"
+    fi
+    rm -rf -- "$lock"
+}
+
 case "$cmd" in
     publish)
         DIR="$(pkg_dir "${ARGS[0]:-.}")"
@@ -176,15 +333,13 @@ case "$cmd" in
         require_plain_path "$REG" pkgs
         mkdir -p "$REG/pkgs/$name"
         publish_lock="$REG/.publish.lock"
-        if ! mkdir "$publish_lock"; then
-            die "registry publication is busy"
-        fi
+        acquire_process_lock "$publish_lock" "registry publication"
         stage=""
         index_tmp=""
         cleanup_publish() {
             [ -z "$stage" ] || [ ! -e "$stage" ] || rm -rf -- "$stage"
             [ -z "$index_tmp" ] || [ ! -e "$index_tmp" ] || rm -f -- "$index_tmp"
-            rmdir "$publish_lock" 2>/dev/null || true
+            release_process_lock "$publish_lock"
         }
         trap cleanup_publish EXIT INT TERM
         # The immutable destination and index are one registry transaction.
@@ -196,15 +351,15 @@ case "$cmd" in
         fi
         [ ! -e "$dest" ] || die "$name@$version has a non-directory registry entry"
         stage="$(mktemp -d "$REG/pkgs/$name/.publish.XXXXXX")"
-        # Copy the package tree minus vendor/build artifacts.
-        ( cd "$DIR" && find . -type f ! -path './mc_packages/*' ! -name 'mcpkg.lock' ! -name '*.o' \
-            | while read -r f; do mkdir -p "$stage/$(dirname "$f")"; cp "$f" "$stage/$f"; done )
+        # Copy the publishable tree; checksum_dir then authenticates every copied file.
+        copy_publish_inventory "$DIR" "$stage"
         checksum_dir "$stage" > "$stage/.checksum"
         mv "$stage" "$dest"
+        if [ "${MCC_REGISTRY_FAIL_AFTER_PACKAGE_COMMIT:-0}" = 1 ]; then
+            die "injected failure after package commit"
+        fi
         index_tmp="$(mktemp "$REG/.index.XXXXXX")"
-        [ ! -f "$REG/index" ] || cp "$REG/index" "$index_tmp"
-        printf '%s\t%s\n' "$name" "$version" >> "$index_tmp"
-        LC_ALL=C sort -u "$index_tmp" -o "$index_tmp"
+        rebuild_index "$REG" "$index_tmp"
         mv "$index_tmp" "$REG/index"
         echo "published: $name@$version -> $dest ($(cat "$dest/.checksum"))"
         cleanup_publish
@@ -225,16 +380,15 @@ case "$cmd" in
         DIR="$(pkg_dir "${ARGS[0]:-.}")"
         MAN="$DIR/mcpkg.txt"
         [ -f "$MAN" ] || { echo "mcc-registry: no mcpkg.txt in $DIR" >&2; exit 1; }
+        recover_install_transaction "$DIR"
         install_lock="$DIR/.mcpkg.install.lock"
-        if ! mkdir "$install_lock"; then
-            die "package installation is busy"
-        fi
+        acquire_process_lock "$install_lock" "package installation"
         new_lock=""
         vendor_stage=""
         cleanup_install_stage() {
             [ -z "$new_lock" ] || [ ! -e "$new_lock" ] || rm -f -- "$new_lock"
             [ -z "$vendor_stage" ] || [ ! -e "$vendor_stage" ] || rm -rf -- "$vendor_stage"
-            rmdir "$install_lock" 2>/dev/null || true
+            release_process_lock "$install_lock"
         }
         trap cleanup_install_stage EXIT INT TERM
         LOCK="$DIR/mcpkg.lock"
@@ -257,9 +411,13 @@ case "$cmd" in
             ' "$LOCK" || die "malformed or duplicate lockfile entry"
         fi
 
-        new_lock="$(mktemp "$DIR/.mcpkg.lock.XXXXXX")"
+        new_lock="$DIR/.mcpkg.lock.next"
+        [ ! -e "$new_lock" ] || die "stale next lockfile survived recovery"
+        : > "$new_lock"
         printf '# mcpkg.lock v1 — generated by mcc-registry; do not edit by hand\n' > "$new_lock"
-        vendor_stage="$(mktemp -d "$DIR/.mc_packages.install.XXXXXX")"
+        vendor_stage="$DIR/.mc_packages.install.next"
+        [ ! -e "$vendor_stage" ] || die "stale next vendor tree survived recovery"
+        mkdir "$vendor_stage"
         count=0
         while read -r name constraint; do
             [ -n "$name" ] || continue
@@ -306,19 +464,23 @@ case "$cmd" in
             target="$vendor_stage/$name"
             [ ! -e "$target" ] || die "duplicate registry dependency '$name'"
             stage="$(mktemp -d "$vendor_stage/.package.XXXXXX")"
-            ( cd "$src" && find . -type f ! -name '.checksum' \
-                | while read -r f; do mkdir -p "$stage/$(dirname "$f")"; cp "$f" "$stage/$f"; done )
+            copy_installed_inventory "$src" "$stage"
             mv "$stage" "$target"
             printf '%s\t%s\t%s\n' "$name" "$version" "$have" >> "$new_lock"
             echo "installed: $name@$version ($constraint) -> mc_packages/$name"
         done < <(registry_deps_of "$MAN")
 
-        vendor_backup="$DIR/.mc_packages.old.$$"
+        vendor_backup="$DIR/.mc_packages.previous"
         [ ! -e "$vendor_backup" ] || die "internal vendor backup path already exists"
+        printf 'prepared\n' > "$install_lock/phase"
+        printf 'committing\n' > "$install_lock/phase"
         if [ -e "$VENDOR" ]; then mv "$VENDOR" "$vendor_backup"; fi
         if ! mv "$vendor_stage" "$VENDOR"; then
             [ ! -e "$vendor_backup" ] || mv "$vendor_backup" "$VENDOR"
             die "failed to commit vendor tree"
+        fi
+        if [ "${MCC_REGISTRY_KILL_AFTER_VENDOR_COMMIT:-0}" = 1 ]; then
+            kill -KILL "$$"
         fi
         if ! mv "$new_lock" "$LOCK"; then
             rm -rf -- "$VENDOR"

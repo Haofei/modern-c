@@ -51,7 +51,22 @@ validate_package_file_path() {
         case "$component" in
             ""|"."|"..") echo "mcc-pkg: manifest '$label' contains an unsafe path component" >&2; exit 1 ;;
         esac
+        if [ "$label" = output ]; then
+            case "$component" in
+                .git|.hg|.svn|mc_packages)
+                    echo "mcc-pkg: manifest output targets managed package metadata" >&2
+                    exit 1
+                    ;;
+            esac
+        fi
     done
+    if [ "$label" = output ]; then
+        case "$value" in
+            mcpkg.txt|mcpkg.lock) echo "mcc-pkg: manifest output targets package metadata" >&2; exit 1 ;;
+            *.o) ;;
+            *) echo "mcc-pkg: manifest output must be an object path ending in .o" >&2; exit 1 ;;
+        esac
+    fi
 }
 
 contained_package_file() {
@@ -154,6 +169,10 @@ case "$cmd" in
         resolve_deps >/dev/null
         ENTRY="$(contained_package_file entry "$PKG_ENTRY" 1)"
         OUT="$(contained_package_file output "$PKG_OUTPUT" 0)"
+        [ "$ENTRY" != "$OUT" ] || {
+            echo "mcc-pkg: manifest output must not overwrite its entry source" >&2
+            exit 1
+        }
         DRIVER="${MCC_PKG_CC:-$HERE/tools/toolchain/mcc-cc.sh}"
         output_tmp="$(mktemp "$(dirname "$OUT")/.mcc-output.XXXXXX")"
         cleanup_output() { rm -f -- "$output_tmp"; }

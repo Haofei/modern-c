@@ -80,6 +80,13 @@ import graph. Workspace symbol search also discovers unopened `.mc` files under
 the physical roots supplied by the client. It rejects symlinks and non-regular
 files and is bounded by `MC_LSP_MAX_WORKSPACE_SOURCE_BYTES` (4 MiB per file),
 `MC_LSP_MAX_WORKSPACE_TOTAL_BYTES` (64 MiB), `MC_LSP_MAX_WORKSPACE_SOURCES`
-(10,000 files), and `MC_LSP_MAX_WORKSPACE_SCAN_SECONDS` (5 seconds).
-Malformed request parameters return JSON-RPC `InvalidParams` without terminating
-the server; rename replacement text must be a non-keyword MC identifier.
+(10,000 files), `MC_LSP_MAX_WORKSPACE_SCAN_SECONDS` (5 seconds end-to-end),
+`MC_LSP_MAX_WORKSPACE_COMPILER_INVOCATIONS` (64 compiler cache misses),
+`MC_LSP_MAX_WORKSPACE_SYMBOLS` (10,000 results), and
+`MC_LSP_MAX_WORKSPACE_RESULT_BYTES` (4 MiB estimated serialized output). The
+single monotonic deadline covers discovery, reading, compiler indexing, and
+result construction; each compiler subprocess receives only the remaining
+budget. Malformed request parameters return JSON-RPC `InvalidRequest` or
+`InvalidParams` without terminating the server, and an unexpected handler
+exception is contained to the current request. Rename replacement text must be
+a non-keyword MC identifier.

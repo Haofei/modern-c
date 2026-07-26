@@ -297,8 +297,9 @@ The repository includes:
 - a token-preserving formatter through `mcc fmt`;
 - structured diagnostics and `mcc explain`;
 - JSON symbol indexing through `mcc symbols`;
-- local package manifests and an offline, filesystem-backed registry with lock
-  files, safe package identities, and publish/install commands;
+- local package manifests and an offline, filesystem-backed registry with
+  authenticated installed-file inventories, recoverable transaction records,
+  safe package identities, and publish/install commands;
 - a CLI-backed language server in `tools/lsp/mc-lsp.py` and a VS Code client in
   `editors/vscode/`.
 
@@ -306,8 +307,9 @@ The language server provides compiler diagnostics, hover, completion, navigation
 references, rename, symbols, semantic tokens, signature help, call hierarchy,
 and formatting; cross-file navigation is qualified for files reachable through the current import
 graph. Workspace symbols also discover unopened `.mc` files under the workspace
-root. Completion and formatting remain intentionally simpler than mature IDE
-toolchains.
+root under one end-to-end time budget plus file, byte, compiler-invocation,
+symbol-count, and result-size caps. Completion and formatting remain
+intentionally simpler than mature IDE toolchains.
 
 The formatter preserves every payload-bearing line inside a multiline block comment
 byte-for-byte. A complete inline block comment still permits indentation and trailing-space

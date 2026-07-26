@@ -222,6 +222,9 @@ const Rewriter = struct {
     // the receiver type concrete (`Square.area(recv)`), this becomes a DIRECT call to
     // the desugared impl method `Square__area(recv)` (Tier 1: zero runtime dispatch).
     fn_names: *const std.StringHashMap(void),
+    // Every user-authored top-level spelling. Generated linkage names must not
+    // enter this namespace and silently create a duplicate declaration.
+    source_names: *const std.StringHashMap(void),
     // Trait-bound checking at the instantiation site (Tier 1). `conformance` holds the
     // `(trait, concrete)` pairs with an `impl Trait for Concrete` (see ConformanceSet);
     // when a generic fn with `where T: Trait` is instantiated with a concrete `T`, an unmet bound is
@@ -248,8 +251,10 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
     var int_consts = std.StringHashMap(i128).init(arena);
     var field_types = std.StringHashMap(std.StringHashMap(ast.TypeExpr)).init(arena);
     var fn_names = std.StringHashMap(void).init(arena);
+    var source_names = std.StringHashMap(void).init(arena);
     var conformance = ConformanceSet.init(arena);
     for (module.decls) |decl| {
+        if (sourceDeclName(decl)) |name| try source_names.put(name, {});
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
                 try fn_names.put(fn_decl.name.text, {});
@@ -325,6 +330,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
         .int_consts = &int_consts,
         .field_types = &field_types,
         .fn_names = &fn_names,
+        .source_names = &source_names,
         .conformance = &conformance,
         .reporter = reporter,
         .limits = options.limits,
@@ -588,8 +594,11 @@ fn blockTypeMentions(block: ast.Block, name: []const u8) bool {
                 if (blockTypeMentions(loop.body, name)) return true;
             },
             .block, .unsafe_block, .comptime_block => |b| if (blockTypeMentions(b, name)) return true,
-            .contract_block => |node| if (blockTypeMentions(node.block, name)) return true,
+            .contract_block => |node| {
+                if (attrTypeMentions(node.attr, name) or blockTypeMentions(node.block, name)) return true;
+            },
             .if_let => |n| {
+                if (patternTypeMentions(n.pattern, name)) return true;
                 if (exprTypeMentions(n.value, name)) return true;
                 if (blockTypeMentions(n.then_block, name)) return true;
                 if (n.else_block) |b| if (blockTypeMentions(b, name)) return true;
@@ -611,10 +620,26 @@ fn blockTypeMentions(block: ast.Block, name: []const u8) bool {
             .assignment => |node| {
                 if (exprTypeMentions(node.target, name) or exprTypeMentions(node.value, name)) return true;
             },
-            else => {},
+            .asm_stmt => |node| {
+                for (node.outputs) |output| if (typeMentionsIdent(output.ty, name)) return true;
+                for (node.inputs) |input| {
+                    if (typeMentionsIdent(input.ty, name) or exprTypeMentions(input.value, name)) return true;
+                }
+            },
+            .@"break", .@"continue" => {},
         }
     }
     return false;
+}
+
+fn attrTypeMentions(attr: ast.Attr, name: []const u8) bool {
+    return switch (attr.kind) {
+        .unsafe_contract => |contract| blk: {
+            for (contract.args) |arg| if (exprTypeMentions(arg, name)) break :blk true;
+            break :blk false;
+        },
+        else => false,
+    };
 }
 
 fn typeMentionsIdent(ty: ast.TypeExpr, name: []const u8) bool {
@@ -650,14 +675,41 @@ fn exprMentionsIdent(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .ident => |id| std.mem.eql(u8, id.text, name),
         .grouped, .address_of, .deref => |inner| exprMentionsIdent(inner.*, name),
-        .try_expr => |inner| exprMentionsIdent(inner.operand.*, name),
+        .try_expr => |inner| exprMentionsIdent(inner.operand.*, name) or
+            if (inner.mapped) |mapped| exprMentionsIdent(mapped.*, name) else false,
+        .await_expr => |inner| exprMentionsIdent(inner.*, name),
         .unary => |n| exprMentionsIdent(n.expr.*, name),
         .binary => |n| exprMentionsIdent(n.left.*, name) or exprMentionsIdent(n.right.*, name),
         .index => |n| exprMentionsIdent(n.base.*, name) or exprMentionsIdent(n.index.*, name),
+        .slice => |n| exprMentionsIdent(n.base.*, name) or
+            exprMentionsIdent(n.start.*, name) or exprMentionsIdent(n.end.*, name),
         .member => |n| exprMentionsIdent(n.base.*, name),
         .cast => |n| exprMentionsIdent(n.value.*, name),
+        .call => |n| blk: {
+            if (exprMentionsIdent(n.callee.*, name)) break :blk true;
+            for (n.args) |arg| if (exprMentionsIdent(arg, name)) break :blk true;
+            break :blk false;
+        },
+        .array_literal => |items| blk: {
+            for (items) |item| if (exprMentionsIdent(item, name)) break :blk true;
+            break :blk false;
+        },
+        .struct_literal => |fields| blk: {
+            for (fields) |field| if (exprMentionsIdent(field.value, name)) break :blk true;
+            break :blk false;
+        },
         .block => |block| blockExprMentionsIdent(block, name),
-        else => false,
+        .int_literal,
+        .float_literal,
+        .string_literal,
+        .char_literal,
+        .bool_literal,
+        .null_literal,
+        .uninit_literal,
+        .unreachable_expr,
+        .void_literal,
+        .enum_literal,
+        => false,
     };
 }
 
@@ -672,8 +724,11 @@ fn blockExprMentionsIdent(block: ast.Block, name: []const u8) bool {
                 if (blockExprMentionsIdent(loop.body, name)) return true;
             },
             .block, .unsafe_block, .comptime_block => |inner| if (blockExprMentionsIdent(inner, name)) return true,
-            .contract_block => |node| if (blockExprMentionsIdent(node.block, name)) return true,
+            .contract_block => |node| {
+                if (attrExprMentionsIdent(node.attr, name) or blockExprMentionsIdent(node.block, name)) return true;
+            },
             .if_let => |node| {
+                if (patternExprMentionsIdent(node.pattern, name)) return true;
                 if (exprMentionsIdent(node.value, name)) return true;
                 if (blockExprMentionsIdent(node.then_block, name)) return true;
                 if (node.else_block) |inner| if (blockExprMentionsIdent(inner, name)) return true;
@@ -697,19 +752,42 @@ fn blockExprMentionsIdent(block: ast.Block, name: []const u8) bool {
             .assignment => |node| {
                 if (exprMentionsIdent(node.target, name) or exprMentionsIdent(node.value, name)) return true;
             },
-            else => {},
+            .asm_stmt => |node| {
+                for (node.inputs) |input| if (exprMentionsIdent(input.value, name)) return true;
+            },
+            .@"break", .@"continue" => {},
         }
     }
     return false;
+}
+
+fn patternExprMentionsIdent(pattern: ast.Pattern, name: []const u8) bool {
+    return switch (pattern.kind) {
+        .literal => |expr| exprMentionsIdent(expr, name),
+        .wildcard, .bind, .tag, .tag_bind => false,
+    };
+}
+
+fn attrExprMentionsIdent(attr: ast.Attr, name: []const u8) bool {
+    return switch (attr.kind) {
+        .unsafe_contract => |contract| blk: {
+            for (contract.args) |arg| if (exprMentionsIdent(arg, name)) break :blk true;
+            break :blk false;
+        },
+        else => false,
+    };
 }
 
 fn exprTypeMentions(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .grouped, .address_of, .deref => |inner| exprTypeMentions(inner.*, name),
         .try_expr => |inner| exprTypeMentions(inner.operand.*, name) or if (inner.mapped) |mapped| exprTypeMentions(mapped.*, name) else false,
+        .await_expr => |inner| exprTypeMentions(inner.*, name),
         .unary => |node| exprTypeMentions(node.expr.*, name),
         .binary => |node| exprTypeMentions(node.left.*, name) or exprTypeMentions(node.right.*, name),
         .index => |node| exprTypeMentions(node.base.*, name) or exprTypeMentions(node.index.*, name),
+        .slice => |node| exprTypeMentions(node.base.*, name) or
+            exprTypeMentions(node.start.*, name) or exprTypeMentions(node.end.*, name),
         .member => |node| exprTypeMentions(node.base.*, name),
         .cast => |node| typeMentionsIdent(node.ty.*, name) or exprTypeMentions(node.value.*, name),
         .call => |node| blk: {
@@ -727,14 +805,25 @@ fn exprTypeMentions(expr: ast.Expr, name: []const u8) bool {
             break :blk false;
         },
         .block => |block| blockTypeMentions(block, name),
-        else => false,
+        .ident,
+        .int_literal,
+        .float_literal,
+        .string_literal,
+        .char_literal,
+        .bool_literal,
+        .null_literal,
+        .uninit_literal,
+        .unreachable_expr,
+        .void_literal,
+        .enum_literal,
+        => false,
     };
 }
 
 fn patternTypeMentions(pattern: ast.Pattern, name: []const u8) bool {
     return switch (pattern.kind) {
         .literal => |expr| exprTypeMentions(expr, name),
-        else => false,
+        .wildcard, .bind, .tag, .tag_bind => false,
     };
 }
 
@@ -1247,6 +1336,12 @@ fn mangleGenericInstance(arena: std.mem.Allocator, base: []const u8, args: []con
 }
 
 fn registerGenericLinkage(rw: *Rewriter, name: []const u8, key: GenericInstanceKey, span: ast.Span) !void {
+    if (rw.source_names.contains(name)) {
+        if (rw.reporter) |reporter| {
+            reporter.err(span, "E_GENERATED_NAME_COLLISION: generic specialization would collide with user declaration `{s}`", .{name});
+        }
+        return error.GenericLinkageCollision;
+    }
     const gop = try rw.linkage_keys.getOrPut(name);
     if (!gop.found_existing) {
         gop.value_ptr.* = key;
@@ -1257,6 +1352,22 @@ fn registerGenericLinkage(rw: *Rewriter, name: []const u8, key: GenericInstanceK
         reporter.err(span, "E_INTERNAL_GENERIC_LINKAGE_COLLISION: unequal generic instance keys produced the same linkage name `{s}`", .{name});
     }
     return error.GenericLinkageCollision;
+}
+
+fn sourceDeclName(decl: ast.Decl) ?[]const u8 {
+    return switch (decl.kind) {
+        .fn_decl, .extern_fn => |node| node.name.text,
+        .type_alias => |node| node.name.text,
+        .struct_decl => |node| node.name.text,
+        .enum_decl => |node| node.name.text,
+        .union_decl => |node| node.name.text,
+        .packed_bits_decl => |node| node.name.text,
+        .overlay_union_decl => |node| node.name.text,
+        .opaque_decl => |name| name.text,
+        .global_decl => |node| node.name.text,
+        .trait_decl => |node| node.name.text,
+        .impl_trait => null,
+    };
 }
 
 // Compute the mangled concrete name and type-parameter substitution for a use of a
@@ -1367,19 +1478,21 @@ fn cloneFields(ctx: *const CloneCtx, input: []const ast.Field) anyerror![]ast.Fi
 
 fn cloneAttrs(ctx: *const CloneCtx, input: []const ast.Attr) anyerror![]ast.Attr {
     var attrs = try ctx.arena.alloc(ast.Attr, input.len);
-    for (input, 0..) |attr, i| {
-        attrs[i] = .{
-            .span = attr.span,
-            .kind = switch (attr.kind) {
-                .unsafe_contract => |contract| .{ .unsafe_contract = .{
-                    .name = contract.name,
-                    .args = try cloneExprSlice(ctx, contract.args),
-                } },
-                else => attr.kind,
-            },
-        };
-    }
+    for (input, 0..) |attr, i| attrs[i] = try cloneAttr(ctx, attr);
     return attrs;
+}
+
+fn cloneAttr(ctx: *const CloneCtx, attr: ast.Attr) anyerror!ast.Attr {
+    return .{
+        .span = attr.span,
+        .kind = switch (attr.kind) {
+            .unsafe_contract => |contract| .{ .unsafe_contract = .{
+                .name = contract.name,
+                .args = try cloneExprSlice(ctx, contract.args),
+            } },
+            else => attr.kind,
+        },
+    };
 }
 
 fn cloneParams(ctx: *const CloneCtx, input: []const ast.Param) anyerror![]ast.Param {
@@ -1442,11 +1555,12 @@ fn cloneStmt(ctx: *const CloneCtx, stmt: ast.Stmt) anyerror!ast.Stmt {
         .loop => |loop| .{ .loop = .{
             .kind = loop.kind,
             .label = loop.label,
+            .loop_label = loop.loop_label,
             .iterable = if (loop.iterable) |it| try cloneExprCtx(ctx, it) else null,
             .body = try cloneBlock(ctx, loop.body),
         } },
         .if_let => |node| .{ .if_let = .{
-            .pattern = node.pattern,
+            .pattern = try clonePattern(ctx, node.pattern),
             .value = try cloneExprCtx(ctx, node.value),
             .then_block = try cloneBlock(ctx, node.then_block),
             .else_block = if (node.else_block) |b| try cloneBlock(ctx, b) else null,
@@ -1454,8 +1568,8 @@ fn cloneStmt(ctx: *const CloneCtx, stmt: ast.Stmt) anyerror!ast.Stmt {
         .@"switch" => |node| .{ .@"switch" = try cloneSwitch(ctx, node) },
         .unsafe_block => |block| .{ .unsafe_block = try cloneBlock(ctx, block) },
         .comptime_block => |block| .{ .comptime_block = try cloneBlock(ctx, block) },
-        .contract_block => |node| .{ .contract_block = .{ .attr = node.attr, .block = try cloneBlock(ctx, node.block) } },
-        .asm_stmt => stmt.kind,
+        .contract_block => |node| .{ .contract_block = .{ .attr = try cloneAttr(ctx, node.attr), .block = try cloneBlock(ctx, node.block) } },
+        .asm_stmt => |node| .{ .asm_stmt = try cloneAsmStmt(ctx, node) },
         .block => |block| .{ .block = try cloneBlock(ctx, block) },
         .@"return" => |maybe| .{ .@"return" = if (maybe) |e| try cloneExprCtx(ctx, e) else null },
         .@"break", .@"continue" => stmt.kind,
@@ -1496,16 +1610,41 @@ fn cloneSwitch(ctx: *const CloneCtx, node: ast.Switch) anyerror!ast.Switch {
 
 fn clonePatterns(ctx: *const CloneCtx, patterns: []const ast.Pattern) anyerror![]ast.Pattern {
     var out = try ctx.arena.alloc(ast.Pattern, patterns.len);
-    for (patterns, 0..) |pattern, i| {
-        out[i] = .{
-            .span = pattern.span,
-            .kind = switch (pattern.kind) {
-                .literal => |expr| .{ .literal = try cloneExprCtx(ctx, expr) },
-                else => pattern.kind,
-            },
+    for (patterns, 0..) |pattern, i| out[i] = try clonePattern(ctx, pattern);
+    return out;
+}
+
+fn clonePattern(ctx: *const CloneCtx, pattern: ast.Pattern) anyerror!ast.Pattern {
+    return .{
+        .span = pattern.span,
+        .kind = switch (pattern.kind) {
+            .literal => |expr| .{ .literal = try cloneExprCtx(ctx, expr) },
+            else => pattern.kind,
+        },
+    };
+}
+
+fn cloneAsmStmt(ctx: *const CloneCtx, node: ast.AsmStmt) anyerror!ast.AsmStmt {
+    var outputs = try ctx.arena.alloc(ast.AsmOutput, node.outputs.len);
+    for (node.outputs, 0..) |output, i| {
+        outputs[i] = .{ .reg = output.reg, .name = output.name, .ty = try cloneType(ctx, output.ty) };
+    }
+    var inputs = try ctx.arena.alloc(ast.AsmInput, node.inputs.len);
+    for (node.inputs, 0..) |input, i| {
+        inputs[i] = .{
+            .reg = input.reg,
+            .value = try cloneExprCtx(ctx, input.value),
+            .ty = try cloneType(ctx, input.ty),
         };
     }
-    return out;
+    return .{
+        .form = node.form,
+        .is_volatile = node.is_volatile,
+        .templates = node.templates,
+        .clobbers = node.clobbers,
+        .outputs = outputs,
+        .inputs = inputs,
+    };
 }
 
 fn clonePtr(ctx: *const CloneCtx, expr: ast.Expr) anyerror!*ast.Expr {
