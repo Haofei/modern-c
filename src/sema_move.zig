@@ -2346,6 +2346,21 @@ test "move borrowed subplaces use typed places rather than compatibility keys" {
     try std.testing.expect(ownershipMoveSlotForPlace(field, &state).?.live);
 }
 
+test "move binding slot removal uses typed place not compatibility key" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const place: MovePlace = .{ .root = "owner" };
+    var state = MoveState.init(std.testing.allocator);
+    defer state.deinit();
+
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = place });
+    try std.testing.expect(removeBindingSlotForPlace(place, &state));
+    try std.testing.expectEqual(@as(usize, 0), state.count());
+
+    try state.put("key-only", .{ .live = true, .span = span, .place = null });
+    try std.testing.expect(!removeBindingSlotForPlace(place, &state));
+    try std.testing.expectEqual(@as(usize, 1), state.count());
+}
+
 test "move alias root consumption uses typed place rather than compatibility key" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-alias-root-place.mc", "");
     defer reporter.deinit();

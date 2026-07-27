@@ -53,7 +53,7 @@ export fn user_x86_build(region_base: usize, region_len: usize,
                          code_phys: usize, code_len: usize,
                          stack_phys: usize, stack_len: usize,
                          out_cr3: *mut u64) -> u32 {
-    g_heap = heap_new(phys_range(pa(region_base), region_len));
+    heap_init_untracked(&g_heap, phys_range(pa(region_base), region_len));
     g_pt = page_table_new(&g_heap);
     g_stack_len = stack_len;
 

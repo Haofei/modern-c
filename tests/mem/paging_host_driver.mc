@@ -26,7 +26,8 @@ const X: u64 = 8; // PTE executable
 // tables. The pool plays the role of physical memory the heap carves table frames from.
 export fn paging_host_test(pool_start: usize, pool_len: usize) -> u32 {
     let rng: PhysRange = phys_range(pa(pool_start), pool_len);
-    var h: Heap = heap_new(rng);
+    var h: Heap = uninit;
+    heap_init(&h, rng);
     var pt: PageTable = page_table_new(&h);
 
     let v0: usize = 0x1000_0000;

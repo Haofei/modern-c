@@ -126,6 +126,24 @@ fn sh_emsg(fd: Fd, s: *const u8) -> void {
     if let err(e) = io_write(fd, pa(s as usize), n) {}
 }
 
+fn sh_emsg_usize(fd: Fd, value: usize) -> void {
+    var buf: [32]u8 = uninit;
+    var n: usize = value;
+    var pos: usize = 32;
+    if n == 0 {
+        pos = pos - 1;
+        buf[pos] = '0';
+    } else {
+        while n != 0 {
+            let digit: usize = n % 10;
+            pos = pos - 1;
+            buf[pos] = ('0' as u8) + (digit as u8);
+            n = n / 10;
+        }
+    }
+    if let err(e) = io_write(fd, pa(((&buf) as usize) + pos), 32 - pos) {}
+}
+
 // ----- the pipeline driver -----
 
 // Read the whole file at `path` into g_src, looping over short reads. Returns the byte count read
@@ -394,6 +412,9 @@ export fn mc_main() -> i32 {
     let serr: u32 = sema_err_count(&st);
     if perr != 0 {
         sh_emsg(stderr_fd(), "mcc2: parse errors in input\n");
+        sh_emsg(stderr_fd(), "mcc2: first parse error byte offset ");
+        sh_emsg_usize(stderr_fd(), sema_parse_first_err_start(&st));
+        sh_emsg(stderr_fd(), "\n");
     }
     if serr != 0 {
         sh_emsg(stderr_fd(), "mcc2: semantic errors in input\n");

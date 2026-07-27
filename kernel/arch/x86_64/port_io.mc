@@ -116,25 +116,29 @@ export fn console_putc(c: u8) -> void {
     outb(COM1, c);
 }
 
+fn console_putc_sink(c: u8) -> void {
+    console_putc(c);
+}
+
 // The digit/nibble arithmetic lives once in `std/fmt_sink` (`fmt_put_*`); the renderers
 // below are the thin binding of those to this COM1 `console_putc` sink.
 
 // Print a NUL-terminated byte string read from raw memory.
 export fn put_str(s: *const u8) -> void {
-    fmt_put_str(console_putc, s);
+    fmt_put_str(console_putc_sink, s);
 }
 
 // Print an unsigned 32-bit value as `0x` + 8 fixed-width hex nibbles.
 export fn put_hex(v: u32) -> void {
-    fmt_put_hex32(console_putc, v);
+    fmt_put_hex32(console_putc_sink, v);
 }
 
 // Print an unsigned 64-bit value as `0x` + 16 fixed-width hex nibbles.
 export fn put_hex64(v: u64) -> void {
-    fmt_put_hex64(console_putc, v);
+    fmt_put_hex64(console_putc_sink, v);
 }
 
 // Print an unsigned 64-bit value in decimal (no leading zeros; "0" for zero).
 export fn put_dec(v: u64) -> void {
-    fmt_put_dec(console_putc, v);
+    fmt_put_dec(console_putc_sink, v);
 }

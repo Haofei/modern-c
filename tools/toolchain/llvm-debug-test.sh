@@ -8,11 +8,17 @@ MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 LLC="${LLC:-llc}"
 DWARFDUMP="${LLVM_DWARFDUMP:-llvm-dwarfdump}"
-READELF="${READELF:-readelf}"
+if [ -n "${READELF:-}" ]; then
+    READELF_BIN="$READELF"
+elif command -v readelf >/dev/null 2>&1; then
+    READELF_BIN="readelf"
+else
+    READELF_BIN="llvm-readelf"
+fi
 
 command -v "$LLC" >/dev/null 2>&1 || { echo "SKIP: llvm-debug-test (llc not found)"; exit 0; }
 command -v "$DWARFDUMP" >/dev/null 2>&1 || { echo "SKIP: llvm-debug-test (llvm-dwarfdump not found)"; exit 0; }
-command -v "$READELF" >/dev/null 2>&1 || { echo "SKIP: llvm-debug-test (readelf not found)"; exit 0; }
+command -v "$READELF_BIN" >/dev/null 2>&1 || { echo "SKIP: llvm-debug-test (readelf/llvm-readelf not found)"; exit 0; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -27,7 +33,7 @@ compile_fixture() {
     # host-dependent (the expected `<line> <col> 1` DWARF rows simply do not appear on aarch64).
     MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/$rel" -o "$obj" -mtriple=x86_64-unknown-none >/dev/null
 
-    "$READELF" -S "$obj" >"$WORK/$stem.sections.txt"
+    "$READELF_BIN" -S "$obj" >"$WORK/$stem.sections.txt"
     grep -q '\.debug_info' "$WORK/$stem.sections.txt"
     grep -q '\.debug_line' "$WORK/$stem.sections.txt"
 

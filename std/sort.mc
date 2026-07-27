@@ -15,6 +15,7 @@
 // ----- concrete: ascending u32 -----
 
 // Ascending in-place insertion sort of a u32 slice.
+#[mc_abi]
 export fn sort_u32(xs: []mut u32) -> void {
     let n: usize = xs.len;
     var i: usize = 1;
@@ -34,6 +35,7 @@ export fn sort_u32(xs: []mut u32) -> void {
 }
 
 // True if `xs` is in non-decreasing order.
+#[mc_abi]
 export fn is_sorted_u32(xs: []mut u32) -> bool {
     let n: usize = xs.len;
     var i: usize = 1;
@@ -48,6 +50,7 @@ export fn is_sorted_u32(xs: []mut u32) -> bool {
 
 // Binary search a sorted (ascending) u32 slice. Returns the index of `key`, or `xs.len`
 // if absent. Half-open [lo, hi) bisection, overflow-safe midpoint.
+#[mc_abi]
 export fn binary_search_u32(xs: []mut u32, key: u32) -> usize {
     var lo: usize = 0;
     var hi: usize = xs.len;

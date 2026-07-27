@@ -197,12 +197,17 @@ fn blk_pool_release(p: *mut BlkBufPool, slot: usize) -> void {
 // complete, and the process table to wake the parked awaiter. A single global of this type is
 // shared between the submit path and the ISR (the ISR reads it through `blk_irq_reap`).
 struct BlkAsyncDev {
-    regs: MmioPtr<VirtioMmio>,
+    regs_addr: usize,
     vq: *mut Virtq,
     map: *mut BlkReqMap,
     pool: *mut BlkBufPool,
     broker: *mut AsyncBroker,
     procs: *mut ProcTable,
+}
+
+#[irq_context]
+fn blk_regs(dev: *mut BlkAsyncDev) -> MmioPtr<VirtioMmio> {
+    unsafe { return dev.regs_addr as MmioPtr<VirtioMmio>; }
 }
 
 // Bring the block device up (handshake + queue setup), initialize the id map, and reserve the
@@ -211,15 +216,17 @@ struct BlkAsyncDev {
 export fn blk_async_init(dev: *mut BlkAsyncDev) -> Result<bool, bool> {
     blk_map_init(dev.map);
     blk_pool_init(dev.pool);
-    switch virtio_init(dev.regs, VIRTIO_BLK_DEVICE_ID, 0, 0) {
+    let regs: MmioPtr<VirtioMmio> = blk_regs(dev);
+    let vq: *mut Virtq = dev.vq;
+    switch virtio_init(regs, VIRTIO_BLK_DEVICE_ID, 0, 0) {
         ok(up) => {}
         err(e) => { return err(false); }
     }
-    switch vq_setup(dev.regs, 0, dev.vq) {
+    switch vq_setup(regs, 0, vq) {
         ok(up) => {}
         err(e) => { return err(false); }
     }
-    virtio_driver_ok(dev.regs);
+    virtio_driver_ok(regs);
     return ok(true);
 }
 
@@ -247,7 +254,8 @@ export fn blk_read_sector_async(dev: *mut BlkAsyncDev, sector: u64) -> u64 {
 
     // Write the request header into this slot's POOLED header memory by re-minting a CpuBuffer view
     // over its stored CPU/bus addresses (the pool owns the memory; we only borrow it to write).
-    let hdr_view: CpuBuffer = blk_slot_hdr_view(&dev.pool.s[slot]);
+    let slot_ptr: *mut BlkBufSlot = &dev.pool.s[slot];
+    let hdr_view: CpuBuffer = blk_slot_hdr_view(slot_ptr);
     write_le32(&hdr_view, 0, VIRTIO_BLK_T_IN);
     write_le32(&hdr_view, 4, 0);
     write_le64(&hdr_view, 8, sector);
@@ -261,14 +269,15 @@ export fn blk_read_sector_async(dev: *mut BlkAsyncDev, sector: u64) -> u64 {
     // VIEWS, not owned handles: the pool keeps the memory alive, so `vq_submit_chain3` consuming
     // them (it `forget_unchecked`s on success, or reclaims on error — see below) does not free
     // pool memory.
-    let hdr_d: DeviceBuffer = blk_view(dev.pool.s[slot].hdr_dev, BLK_HDR_SIZE);
-    let data_d: DeviceBuffer = blk_view(dev.pool.s[slot].data_dev, SECTOR_SIZE);
-    let status_d: DeviceBuffer = blk_view(dev.pool.s[slot].status_dev, 1);
+    let hdr_d: DeviceBuffer = blk_view(slot_ptr.hdr_dev, BLK_HDR_SIZE);
+    let data_d: DeviceBuffer = blk_view(slot_ptr.data_dev, SECTOR_SIZE);
+    let status_d: DeviceBuffer = blk_view(slot_ptr.status_dev, 1);
 
-    let data_addr: u64 = dev.pool.s[slot].data_dev;
+    let data_addr: u64 = slot_ptr.data_dev;
 
     var head: u16 = 0;
-    switch vq_submit_chain3(dev.vq, hdr_d, data_d, status_d, true) {
+    let vq: *mut Virtq = dev.vq;
+    switch vq_submit_chain3(vq, hdr_d, data_d, status_d, true) {
         ok(h) => { head = h; }
         err(e) => {
             // On error vq_submit_chain3 ran invalidate_for_cpu+free on the three views. On the
@@ -289,7 +298,8 @@ export fn blk_read_sector_async(dev: *mut BlkAsyncDev, sector: u64) -> u64 {
         return ASYNC_NO_ID;
     }
 
-    vq_kick(dev.regs, 0);
+    let regs: MmioPtr<VirtioMmio> = blk_regs(dev);
+    vq_kick(regs, 0);
     return id;
 }
 
@@ -357,7 +367,9 @@ fn blk_map_data_addr(m: *mut BlkReqMap, desc_id: u16) -> u64 {
 #[irq_context]
 fn blk_reap_one_head(vq: *mut Virtq) -> u16 {
     let slot: usize = (vq.last_used % VRING_QSIZE) as usize;
-    let raw_id: u32 = vq.used.ring[slot].id;
+    let used_ring: VringUsed = vq.used.*;
+    let used_elem: UsedElem = used_ring.ring[slot];
+    let raw_id: u32 = used_elem.id;
     vq.last_used = vq.last_used + 1; // advance consumer cursor (queue depth 1, no 2^16 wrap risk)
     if raw_id >= VRING_QSIZE as u32 {
         return 0xFFFF;
@@ -375,7 +387,7 @@ fn blk_reap_one_head(vq: *mut Virtq) -> u16 {
 // annotated broker calls plus field/MMIO loads.
 #[irq_context]
 export fn blk_irq_reap(dev: *mut BlkAsyncDev) -> u32 {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = blk_regs(dev);
     let st: u32 = regs.interrupt_status.read(.acquire);
     var reaped: u32 = 0;
     if (st & VIRTIO_INT_USED) != 0 {

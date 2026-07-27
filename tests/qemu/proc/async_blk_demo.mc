@@ -123,7 +123,7 @@ export fn async_blk_demo() -> u32 {
     g_vq.used = &g_used;
 
     g_dev = .{
-        .regs = regs,
+        .regs_addr = regs as usize,
         .vq = &g_vq,
         .map = &g_map,
         .pool = &g_pool,
@@ -164,7 +164,7 @@ export fn async_blk_demo() -> u32 {
         var f: read_sector0__Fut = read_sector0(&g_broker, id);
         putc_(87); // 'W' — future built, about to drive under wfi
         // Drive to completion: poll with interrupts off, wfi until the device IRQ async_completes it.
-        drive_irq(&f, disable_interrupts_global, enable_interrupts_global, wait_for_interrupt);
+        drive_irq(&f, disable_interrupts_global_mc, enable_interrupts_global_mc, wait_for_interrupt_mc);
         putc_(82); // 'R' — resumed
 
         word = read_sector0__Fut_take_result(&f);

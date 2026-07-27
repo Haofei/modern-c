@@ -16,6 +16,7 @@ enum DeviceClass {
 }
 
 // A stable numeric code for a class, usable as a registry key.
+#[mc_abi]
 export fn class_code(c: DeviceClass) -> u32 {
     switch c {
         .None => { return 0; }
@@ -83,6 +84,7 @@ export fn bus_init(bus: *mut Bus) -> void {
 
 // Register a driver provider (any `*mut dyn DriverProvider`); returns its index. Traps if
 // the provider table is full.
+#[mc_abi]
 export fn bus_register_provider(bus: *mut Bus, provider: *mut dyn DriverProvider) -> usize {
     let id: usize = bus.nprov;
     if id >= MAX_PROVIDERS {

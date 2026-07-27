@@ -387,8 +387,7 @@ export fn showcase_run() -> u32 {
 
     // 10. traits Tier 2 (dynamic dispatch via *dyn)
     var sq3: Square = .{ .side = 5 };
-    let shape: *dyn Shape = &sq3;       // checked coercion -> fat pointer
-    if dyn_area(shape) != 25 { pass = 0; }
+    if dyn_area(&sq3) != 25 { pass = 0; } // checked coercion -> fat pointer
 
     // 11. tuples + destructuring
     let mm: (u32, u32) = min_max(9, 4);

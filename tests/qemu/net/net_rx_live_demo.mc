@@ -22,7 +22,7 @@ export fn rx_route_init(port: u16) -> void {
 
 // Bring up the NIC, ARP the gateway, and copy the next received frame into `buf`.
 export fn rx_live_get_frame(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq, txq: *mut Virtq, buf: usize, max: usize) -> usize {
-    var dev: NetDevice = .{ .regs = regs, .rxq = rxq, .txq = txq };
+    var dev: NetDevice = .{ .regs_addr = regs as usize, .rxq = rxq, .txq = txq };
     switch nic_init(&dev) {
         ok(up) => {}
         err(e) => {

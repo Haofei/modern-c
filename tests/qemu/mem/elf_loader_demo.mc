@@ -230,7 +230,8 @@ fn build_highaddr_image() -> void {
 // Uses the fallible root allocation so even a pool too small for the root is a typed NoFrame.
 fn load_err_code(pool_base: usize, pool_len: usize) -> u32 {
     var code: u32 = 0;
-    var heap: Heap = heap_new(phys_range(pa(pool_base), pool_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(pool_base), pool_len));
     var p: PageTable = uninit;
     switch page_table_try_new(&heap) {
         ok(t) => { p = t; }
@@ -265,7 +266,9 @@ export fn elf_loader_run() -> u32 {
 
     var pass: u32 = 1;
 
-    var heap: Heap = heap_new(phys_range(pa((&g_pool[0]) as usize), 262144));
+    var heap: Heap = uninit;
+
+    heap_init_untracked(&heap, phys_range(pa((&g_pool[0]) as usize), 262144));
     var pt: PageTable = page_table_new(&heap);
 
     let image_base: usize = (&g_image[0]) as usize;

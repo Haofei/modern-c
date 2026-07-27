@@ -25,7 +25,7 @@ LLD="${LLD:-ld.lld}"
 LLC="${LLC:-llc}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 
-PORT=8080                          # must match HTTP_PORT in agent_net_real_runtime.c
+PORT="${AGENT_NET_REAL_PORT:-}"
 TOKEN="MC-AGENT-NET-REAL-OK"       # the unique body token we verify over UART
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
@@ -46,6 +46,15 @@ kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 if ! command -v python3 >/dev/null 2>&1; then
     echo "SKIP: $TEST_NAME — python3 unavailable for the test HTTP server"
     exit 0
+fi
+if [ -z "$PORT" ]; then
+    PORT="$(python3 - <<'PY'
+import socket
+with socket.socket() as s:
+    s.bind(("127.0.0.1", 0))
+    print(s.getsockname()[1])
+PY
+)"
 fi
 
 WORK="$(mktemp -d)"
@@ -79,9 +88,11 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/agent.o" "$WORK"
 kernel_boot_compile_mc_object "$BACKEND" "$PLATFORM" "$WORK/platform.o" "$WORK"
 kernel_boot_compile_c_object "$SHARED" "$WORK/shared.o"
+printf '#include <stdint.h>\nuint16_t mc_http_port(void) { return (uint16_t)%s; }\n' "$PORT" >"$WORK/http_port.c"
+"$CLANG" "${CFLAGS[@]}" -c "$WORK/http_port.c" -o "$WORK/http_port.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/shared.o" "$WORK/agent.o" "$WORK/platform.o" $SUPPORT_OBJ -o "$WORK/agent.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/shared.o" "$WORK/agent.o" "$WORK/platform.o" "$WORK/http_port.o" $SUPPORT_OBJ -o "$WORK/agent.elf"
 
 # 4. Boot under QEMU with virtio-net user networking + pcap capture. The guest's brokered agent
 #    connects to the slirp gateway 10.0.2.2:PORT, redirected to the host loopback where python listens.

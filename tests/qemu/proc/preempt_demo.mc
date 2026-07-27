@@ -58,7 +58,8 @@ fn alloc_stack(h: *mut Heap) -> usize {
 }
 
 export fn preempt_demo(region_base: usize, region_len: usize) -> u32 {
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     sched_init(&g_sched);
     sched_spawn(&g_sched, alloc_stack(&heap), worker_a);
     sched_spawn(&g_sched, alloc_stack(&heap), worker_b);

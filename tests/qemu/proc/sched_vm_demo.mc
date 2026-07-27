@@ -66,7 +66,8 @@ fn worker_b() -> void {
 }
 
 export fn sched_vm_setup(region_base: usize, region_len: usize) -> void {
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     g_kernel_satp = build_kernel_space(&heap);
     let satp_a: u64 = build_space(&heap, 0x0000_000A);
     let satp_b: u64 = build_space(&heap, 0x0000_000B);

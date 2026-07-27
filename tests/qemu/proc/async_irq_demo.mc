@@ -51,8 +51,8 @@ export fn async_irq_demo(region_base: usize, region_len: usize) -> u32 {
     // park and the wfi (wait_for_interrupt resumes on the pending timer even with the global
     // enable cleared), so the completion can be neither lost nor idled-through.
     let r: i32 = async_await_irq(&g_broker, &g_procs, g_pending_id,
-                                 disable_interrupts_global, enable_interrupts_global,
-                                 wait_for_interrupt);
+                                 disable_interrupts_global_mc, enable_interrupts_global_mc,
+                                 wait_for_interrupt_mc);
     putc_(82); // 'R'
     return r as u32; // 42 iff the interrupt-delivered completion reached the parked waiter
 }

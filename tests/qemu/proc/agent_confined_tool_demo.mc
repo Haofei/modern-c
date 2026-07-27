@@ -164,7 +164,7 @@ fn map_pages(virt_base: usize, phys_base: usize, len: usize, flags: u64) -> void
 }
 
 export fn agent_confined_build(region_base: usize, region_len: usize, code_phys: usize, code_len: usize, stack_phys: usize, stack_len: usize) -> u64 {
-    g_heap = heap_new(phys_range(pa(region_base), region_len));
+    heap_init_untracked(&g_heap, phys_range(pa(region_base), region_len));
     g_pt = page_table_new(&g_heap);
     map_pages(AGENT_CODE_VA, code_phys, code_len, PTE_R | PTE_X | PTE_U);
     map_pages(AGENT_STACK_VA, stack_phys, stack_len, PTE_R | PTE_W | PTE_U);

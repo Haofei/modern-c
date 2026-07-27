@@ -33,6 +33,7 @@ FUZZ_N="${FUZZ_N:-60}"          # number of mcfuzz programs to fold into the cor
 OUTDIR="${OUTDIR:-$SRC_ROOT/zig-out/lowering-cov}"
 BASELINE="${LOWERING_COV_BASELINE:-$SRC_ROOT/tools/toolchain/lowering-coverage-baseline.tsv}"
 MCC="${MCC_UNDER_TEST:-zig-out/bin/mcc}"
+CMD_TIMEOUT="${LOWERING_COV_CMD_TIMEOUT:-10}"
 
 case "$OUTDIR" in
     /*) ;;
@@ -142,19 +143,35 @@ fi
 
 # --- helper: run both backends over one .mc, accumulating coverage -----------------------
 i=0
+run_with_timeout() {
+    local seconds="$1"
+    shift
+    python3 - "$seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+timeout = float(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    raise SystemExit(subprocess.run(cmd, timeout=timeout).returncode)
+except subprocess.TimeoutExpired:
+    raise SystemExit(124)
+PY
+}
+
 run_one() {
     local mc="$1"
     i=$((i+1))
     # emit-c (kernel + hosted profiles) and emit-llvm; failures are fine (uncompilable
     # fuzz programs / LLVM-unsupported fixtures just contribute whatever they reached).
-    MC_LOWER_COV="$OUTDIR/cov/c_k_$i.txt"  "$MCC" emit-c   "$mc" --profile=kernel >/dev/null 2>&1 || true
-    MC_LOWER_COV="$OUTDIR/cov/c_h_$i.txt"  "$MCC" emit-c   "$mc" --profile=hosted >/dev/null 2>&1 || true
-    MC_LOWER_COV="$OUTDIR/cov/l_$i.txt"    "$MCC" emit-llvm "$mc"                  >/dev/null 2>&1 || true
+    MC_LOWER_COV="$OUTDIR/cov/c_k_$i.txt"  run_with_timeout "$CMD_TIMEOUT" "$MCC" emit-c   "$mc" --profile=kernel >/dev/null 2>&1 || true
+    MC_LOWER_COV="$OUTDIR/cov/c_h_$i.txt"  run_with_timeout "$CMD_TIMEOUT" "$MCC" emit-c   "$mc" --profile=hosted >/dev/null 2>&1 || true
+    MC_LOWER_COV="$OUTDIR/cov/l_$i.txt"    run_with_timeout "$CMD_TIMEOUT" "$MCC" emit-llvm "$mc"                  >/dev/null 2>&1 || true
 }
 
 run_cov_cmd() {
     i=$((i+1))
-    MC_LOWER_COV="$OUTDIR/cov/cmd_$i.txt" "$@" >/dev/null 2>&1 || true
+    MC_LOWER_COV="$OUTDIR/cov/cmd_$i.txt" run_with_timeout "$CMD_TIMEOUT" "$@" >/dev/null 2>&1 || true
 }
 
 # --- 3a. diff-backend host fixtures ------------------------------------------------------

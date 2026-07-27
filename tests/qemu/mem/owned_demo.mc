@@ -10,7 +10,8 @@ struct Cell { v: u32 }
 
 export fn owned_demo_run() -> u32 {
     let base: usize = (&g_pool[0]) as usize;
-    var heap: Heap = heap_new(phys_range(pa(base), 8192));
+    var heap: Heap = uninit;
+    heap_init(&heap, phys_range(pa(base), 8192));
     let a: *mut dyn Allocator = heap_allocator(&heap);
     var pass: u32 = 1;
 

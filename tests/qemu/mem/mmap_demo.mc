@@ -13,7 +13,8 @@ const VA1: usize = 0xC000_0000; // 3 GiB
 const VA2: usize = 0xC000_1000; // 3 GiB + 4 KiB
 
 export fn mmap_demo(region_base: usize, region_len: usize) -> u64 {
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     var pt: PageTable = page_table_new(&heap);
     let rwx: u64 = PTE_R | PTE_W | PTE_X;
     page_table_map_gigapage(&pt, va(0), pa(0), rwx);            // devices

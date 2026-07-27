@@ -36,7 +36,8 @@ fn alloc_stack(h: *mut Heap) -> usize {
 }
 
 export fn signal_demo(region_base: usize, region_len: usize) -> u32 {
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
     install_idle(&g_procs); // wfi when nothing runnable
     g_taken = 0;

@@ -176,6 +176,11 @@ fn net_slot_view(s: *NetBufSlot, len: usize) -> CpuBuffer {
     return .{ .dev_addr = dev, .cpu_addr = pa(s.buf_cpu), .len = len };
 }
 
+fn net_pool_slot_view(p: *mut NetBufPool, slot: usize, len: usize) -> CpuBuffer {
+    let s: NetBufSlot = p.s[slot];
+    return net_slot_view(&s, len);
+}
+
 // Re-mint a DeviceBuffer VIEW over a pooled bus address of the given length (audited DMA boundary).
 fn net_view(dev_addr: u64, len: usize) -> DeviceBuffer {
     var dev: DmaAddr = uninit;
@@ -183,11 +188,16 @@ fn net_view(dev_addr: u64, len: usize) -> DeviceBuffer {
     return .{ .dev_addr = dev, .len = len };
 }
 
+fn net_pool_dev_view(p: *mut NetBufPool, slot: usize, len: usize) -> DeviceBuffer {
+    let s: NetBufSlot = p.s[slot];
+    return net_view(s.buf_dev, len);
+}
+
 // The handle the device IRQ needs: the TX queue to reap, the map to translate ids, the broker to
 // complete, and the process table to wake the parked awaiter. A single global of this type is shared
 // between the submit path and the ISR (the ISR reads it through `net_irq_reap`).
 struct NetAsyncDev {
-    regs: MmioPtr<VirtioMmio>,
+    regs_addr: usize,
     rxq: *mut Virtq,
     txq: *mut Virtq,
     tx_map: *mut NetReqMap,
@@ -196,6 +206,11 @@ struct NetAsyncDev {
     rx_pool: *mut NetBufPool,
     broker: *mut AsyncBroker,
     procs: *mut ProcTable,
+}
+
+#[irq_context]
+fn net_async_regs(dev: *mut NetAsyncDev) -> MmioPtr<VirtioMmio> {
+    unsafe { return dev.regs_addr as MmioPtr<VirtioMmio>; }
 }
 
 // Bring the NIC up (handshake + RX/TX queue setup), initialize the id map, and reserve the fixed
@@ -208,19 +223,20 @@ export fn net_async_init(dev: *mut NetAsyncDev) -> Result<bool, bool> {
     net_map_init(dev.rx_map);
     net_pool_init(dev.tx_pool);
     net_pool_init(dev.rx_pool);
-    switch virtio_init(dev.regs, VIRTIO_NET_DEVICE_ID, 0, VIRTIO_NET_F_VERSION_1_HI) {
+    let regs: MmioPtr<VirtioMmio> = net_async_regs(dev);
+    switch virtio_init(regs, VIRTIO_NET_DEVICE_ID, 0, VIRTIO_NET_F_VERSION_1_HI) {
         ok(up) => {}
         err(e) => { return err(false); }
     }
-    switch vq_setup(dev.regs, RX_QUEUE, dev.rxq) {
+    switch vq_setup(regs, RX_QUEUE, dev.rxq) {
         ok(up) => {}
         err(e) => { return err(false); }
     }
-    switch vq_setup(dev.regs, TX_QUEUE, dev.txq) {
+    switch vq_setup(regs, TX_QUEUE, dev.txq) {
         ok(up) => {}
         err(e) => { return err(false); }
     }
-    virtio_driver_ok(dev.regs);
+    virtio_driver_ok(regs);
     return ok(true);
 }
 
@@ -254,7 +270,8 @@ export fn net_send_frame_async(dev: *mut NetAsyncDev, frame_ptr: usize, frame_le
 
     // Copy the caller's frame into this slot's POOLED memory by re-minting a CpuBuffer view over its
     // stored CPU/bus addresses (the pool owns the memory; we only borrow it to write).
-    let view: CpuBuffer = net_slot_view(&dev.tx_pool.s[slot], n);
+    let tx_pool: *mut NetBufPool = dev.tx_pool;
+    let view: CpuBuffer = net_pool_slot_view(tx_pool, slot, n);
     var i: usize = 0;
     while i < n {
         var b: u8 = 0;
@@ -271,7 +288,7 @@ export fn net_send_frame_async(dev: *mut NetAsyncDev, frame_ptr: usize, frame_le
     // Re-mint a device-buffer VIEW over the slot's stored bus address to submit. It is a VIEW, not an
     // owned handle: the pool keeps the memory alive, so vq_submit_tx consuming it (forget on success,
     // reclaim-as-no-op on error) does not free pool memory.
-    let txbuf: DeviceBuffer = net_view(dev.tx_pool.s[slot].buf_dev, n);
+    let txbuf: DeviceBuffer = net_pool_dev_view(tx_pool, slot, n);
 
     var head: u16 = 0;
     switch vq_submit_tx(dev.txq, txbuf) {
@@ -280,7 +297,7 @@ export fn net_send_frame_async(dev: *mut NetAsyncDev, frame_ptr: usize, frame_le
             // On error vq_submit_tx ran invalidate_for_cpu+free on the view; on the coherent
             // no-IOMMU model `free` is a no-op (pool memory untouched), so the slot is still valid —
             // release it and the broker slot and fail closed.
-            net_pool_release(dev.tx_pool, slot);
+            net_pool_release(tx_pool, slot);
             let _c: bool = async_cancel_slot(dev.broker, id);
             return ASYNC_NO_ID;
         }
@@ -290,12 +307,13 @@ export fn net_send_frame_async(dev: *mut NetAsyncDev, frame_ptr: usize, frame_le
         // Map full (cannot happen while in-flight ≤ MAP_LEN, but fail closed): the frame is already
         // queued. Cancel the broker slot so the id is unknown; the IRQ will reap the head, find no
         // map entry, free the descriptor, but NOT the pool slot — so release it here.
-        net_pool_release(dev.tx_pool, slot);
+        net_pool_release(tx_pool, slot);
         let _c: bool = async_cancel_slot(dev.broker, id);
         return ASYNC_NO_ID;
     }
 
-    vq_kick(dev.regs, TX_QUEUE);
+    let regs: MmioPtr<VirtioMmio> = net_async_regs(dev);
+    vq_kick(regs, TX_QUEUE);
     return id;
 }
 
@@ -314,24 +332,26 @@ export fn net_recv_frame_async(dev: *mut NetAsyncDev, dst: usize, max: usize) ->
         return ASYNC_NO_ID;
     }
 
-    let rxbuf: DeviceBuffer = net_view(dev.rx_pool.s[slot].buf_dev, FRAME_BUF_LEN);
+    let rx_pool: *mut NetBufPool = dev.rx_pool;
+    let rxbuf: DeviceBuffer = net_pool_dev_view(rx_pool, slot, FRAME_BUF_LEN);
     var head: u16 = 0;
     switch vq_submit_rx(dev.rxq, rxbuf) {
         ok(h) => { head = h; }
         err(e) => {
-            net_pool_release(dev.rx_pool, slot);
+            net_pool_release(rx_pool, slot);
             let _c: bool = async_cancel_slot(dev.broker, id);
             return ASYNC_NO_ID;
         }
     }
 
     if !net_map_insert(dev.rx_map, head, slot, id, dst, max) {
-        net_pool_release(dev.rx_pool, slot);
+        net_pool_release(rx_pool, slot);
         let _c: bool = async_cancel_slot(dev.broker, id);
         return ASYNC_NO_ID;
     }
 
-    vq_kick(dev.regs, RX_QUEUE);
+    let regs: MmioPtr<VirtioMmio> = net_async_regs(dev);
+    vq_kick(regs, RX_QUEUE);
     return id;
 }
 
@@ -379,8 +399,10 @@ fn net_map_take(m: *mut NetReqMap, desc_id: u16, out_slot: *mut usize, out_dst: 
 #[irq_context]
 fn net_reap_one_head(vq: *mut Virtq, out_len: *mut u32) -> u16 {
     let slot: usize = (vq.last_used % VRING_QSIZE) as usize;
-    let raw_id: u32 = vq.used.ring[slot].id;
-    out_len.* = vq.used.ring[slot].len;
+    let used_ring: VringUsed = vq.used.*;
+    let used_elem: UsedElem = used_ring.ring[slot];
+    let raw_id: u32 = used_elem.id;
+    out_len.* = used_elem.len;
     vq.last_used = vq.last_used + 1; // advance consumer cursor (wraps mod 2^16, depth ≤ 8)
     if raw_id >= VRING_QSIZE as u32 {
         return 0xFFFF;
@@ -405,7 +427,8 @@ fn net_copy_rx_frame(pool: *mut NetBufPool, slot: usize, dst: usize, max: usize,
             n = max;
         }
         var i: usize = 0;
-        let src: usize = pool.s[slot].buf_cpu + FRAME_AT;
+        let buf_slot: NetBufSlot = pool.s[slot];
+        let src: usize = buf_slot.buf_cpu + FRAME_AT;
         while i < n {
             var b: u8 = 0;
             unsafe { b = raw.load<u8>(phys(src + i)); }
@@ -425,7 +448,7 @@ fn net_copy_rx_frame(pool: *mut NetBufPool, slot: usize, dst: usize, max: usize,
 // heap, no blocking, no DMA frees — only annotated broker/vq calls plus field/MMIO/raw accesses.
 #[irq_context]
 export fn net_irq_reap(dev: *mut NetAsyncDev) -> u32 {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = net_async_regs(dev);
     let st: u32 = regs.interrupt_status.read(.acquire);
     var reaped: u32 = 0;
     if (st & VIRTIO_INT_USED) != 0 {

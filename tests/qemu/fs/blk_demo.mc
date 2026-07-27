@@ -8,7 +8,7 @@ const BLK_INIT_ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 const BLK_READ_ERR: u64 = 0xFFFF_FFFF_FFFF_FFFE;
 
 export fn blk_demo_run(regs: MmioPtr<VirtioMmio>, vq: *mut Virtq, sector: u64) -> u64 {
-    var dev: BlkDevice = .{ .regs = regs, .vq = vq };
+    var dev: BlkDevice = .{ .regs_addr = regs as usize, .vq = vq };
     switch blk_init(&dev) {
         ok(up) => {}
         err(e) => {

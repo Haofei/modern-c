@@ -38,7 +38,7 @@ fn satp_of(pt: *PageTable) -> u64 {
 }
 
 export fn cow_setup(region_base: usize, region_len: usize) -> void {
-    g_heap = heap_new(phys_range(pa(region_base), region_len));
+    heap_init_untracked(&g_heap, phys_range(pa(region_base), region_len));
     g_pt_parent = page_table_new(&g_heap);
     id_map(&g_pt_parent);
     g_pt_child = page_table_new(&g_heap);

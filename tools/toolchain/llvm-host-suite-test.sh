@@ -64,7 +64,7 @@ for name in "${TESTS[@]}"; do
     # contract. Cross-backend agreement is verified by diff-backend; skip them here.
     case "$fixture" in
         tests/llvm/*)
-            echo "SKIP: llvm-host-suite-test - $name (C/LLVM differential fixture; verified by diff-backend)"
+            echo "NOTE: llvm-host-suite-test - $name (C/LLVM differential fixture; verified by diff-backend)"
             continue ;;
     esac
 

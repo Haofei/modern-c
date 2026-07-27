@@ -39,7 +39,7 @@ fn sbi_shutdown() -> void {
 
 const RT_KERNEL_VA: usize = 0x8000_0000;
 const RT_PAGE: usize = 4096;
-const RT_REGION_LEN: usize = 16 * 1024 * 1024;
+const RT_REGION_LEN: usize = 64 * 1024 * 1024;
 const VIRTIO_MMIO_BASE: usize = 0x1000_1000;
 const VIRTIO_MMIO_STRIDE: usize = 0x1000;
 const VIRTIO_MMIO_COUNT: usize = 8;
@@ -56,7 +56,7 @@ extern fn mc_app_image() -> usize;
 extern fn mc_app_image_len() -> usize;
 extern fn app_blk_irq_config(regs_base: usize) -> void;
 
-global g_region: [16781312]u8; // 16 MiB + 4 KiB
+global g_region: [67112960]u8; // 64 MiB + 4 KiB
 
 #[weak]
 export fn mc_agent_source(out_len: *mut usize) -> usize {

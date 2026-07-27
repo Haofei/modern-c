@@ -21,7 +21,7 @@ LLC="${LLC:-llc}"
 ZIG="${ZIG:-zig}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 AR="${AR:-llvm-ar}"
-PORT=8080
+PORT="${WASM_NET_REAL_PORT:-}"
 TOKEN="MC-WASM-NET-REALTOOL-OK"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
@@ -45,6 +45,15 @@ kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 if ! command -v python3 >/dev/null 2>&1; then
     echo "SKIP: $TEST_NAME — python3 unavailable for the test HTTP server"
     exit 0
+fi
+if [ -z "$PORT" ]; then
+    PORT="$(python3 - <<'PY'
+import socket
+with socket.socket() as s:
+    s.bind(("127.0.0.1", 0))
+    print(s.getsockname()[1])
+PY
+)"
 fi
 
 WORK="$(mktemp -d)"
@@ -173,13 +182,15 @@ kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK/run
 kernel_boot_compile_mc_object "$BACKEND" "$PLATFORM" "$WORK/platform.o" "$WORK/platform"
 kernel_boot_compile_c_object "$SHARED" "$WORK/shared.o"
 kernel_boot_compile_c_object "$USERMODE" "$WORK/usermode.o"
+printf '#include <stdint.h>\nuint16_t mc_http_port(void) { return (uint16_t)%s; }\n' "$PORT" >"$WORK/http_port.c"
+"$CLANG" "${KERNEL_CFLAGS[@]}" -c "$WORK/http_port.c" -o "$WORK/http_port.o"
 "$CLANG" "${KERNEL_CFLAGS[@]}" -c "$WORK/app_image.c" -o "$WORK/app_image.o"
 K_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/k-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 "$LLD" --allow-multiple-definition -T "$LDSCRIPT" \
     "$WORK/freestanding.o" "$WORK/shared.o" "$WORK/usermode.o" \
     "$WORK/runtime.o" "$WORK/app.o" "$WORK/nettcp.o" "$WORK/platform.o" \
-    "$WORK/app_image.o" $K_SUPPORT -o "$WORK/kernel.elf"
+    "$WORK/http_port.o" "$WORK/app_image.o" $K_SUPPORT -o "$WORK/kernel.elf"
 
 OUT="$(timeout 120 "$QEMU" -machine virt -bios none -nographic -m 256M \
         -global virtio-mmio.force-legacy=false \

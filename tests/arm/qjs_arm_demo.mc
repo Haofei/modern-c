@@ -365,7 +365,7 @@ export fn mc_syscall(number: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
 export fn app_build_aarch64(image_base: usize, image_len: usize, region_base: usize, region_len: usize, out_ttbr0: *mut u64) -> u32 {
     qa_load_status = QA_LS_OK;
     *out_ttbr0 = 0;
-    qa_heap = heap_new(phys_range(pa(region_base), region_len));
+    heap_init_untracked(&qa_heap, phys_range(pa(region_base), region_len));
 
     switch page_table_try_new(&qa_heap) {
         ok(pt) => { qa_pt = pt; }

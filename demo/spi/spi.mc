@@ -13,12 +13,14 @@ extern fn mc_spi_begin(bus: u32, cs: u32) -> SpiTransaction; // assert CS
 extern fn mc_spi_transfer(t: *SpiTransaction, out: u8) -> u8; // exchange one byte (borrow)
 extern fn mc_spi_end(t: SpiTransaction) -> void;             // deassert CS (consume)
 
+#[mc_abi]
 export fn spi_begin(bus: u32, cs: u32) -> SpiTransaction {
     return mc_spi_begin(bus, cs);
 }
 export fn spi_transfer(t: *SpiTransaction, out: u8) -> u8 {
     return mc_spi_transfer(t, out);
 }
+#[mc_abi]
 export fn spi_end(t: SpiTransaction) -> void {
     mc_spi_end(t);
 }

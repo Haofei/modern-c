@@ -72,7 +72,7 @@ export fn async_agent_demo(region_base: usize, region_len: usize) -> u32 {
     // ---- Phase 1: the agent's two sequential tool calls resolve over the real broker. ----
     var af: agent__Fut = agent(&g_broker);
     putc_(70); // 'F'
-    drive_irq(&af, disable_interrupts_global, enable_interrupts_global, wait_for_interrupt);
+    drive_irq(&af, disable_interrupts_global_mc, enable_interrupts_global_mc, wait_for_interrupt_mc);
     putc_(82); // 'R'
     let result: i32 = agent__Fut_take_result(&af);
 
@@ -85,7 +85,7 @@ export fn async_agent_demo(region_base: usize, region_len: usize) -> u32 {
     var race: ReqRace2 = uninit;
     req_race2_init(&race, &fslow, &fdeadline);            // a = slow tool, b = deadline
     mc_timer_arm_oneshot();
-    drive_irq(&race, disable_interrupts_global, enable_interrupts_global, wait_for_interrupt);
+    drive_irq(&race, disable_interrupts_global_mc, enable_interrupts_global_mc, wait_for_interrupt_mc);
     putc_(84); // 'T'
     let timed_out: bool = req_race2_winner(&race) == 1;   // the deadline (b) won
     let after: usize = async_active_count(&g_broker);     // both slots freed -> 0

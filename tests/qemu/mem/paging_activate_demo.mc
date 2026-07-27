@@ -15,7 +15,8 @@ const TEST_VA: usize = 0xC000_0000;           // 3 GiB — not identity-mapped
 const TEST_VALUE: u32 = 0xCAFE_BABE;
 
 export fn paging_activate(region_base: usize, region_len: usize) -> u64 {
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     var pt: PageTable = page_table_new(&heap);
 
     let rwx: u64 = PTE_R | PTE_W | PTE_X;

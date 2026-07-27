@@ -53,7 +53,11 @@ MCC_UNDER_TEST="$MCC" MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$SRC" -o "$W
 # ----- Stage LANDMARK: mcc2 compiles its OWN CLI driver selfhost/main.mc -> clang-clean C -----
 [ -f "$SRC" ] || { echo "FAIL: selfhost-mainself-test — selfhost/main.mc not found at $SRC"; exit 1; }
 printf 'import "selfhost/main.mc";\n' > "$MROOT"
-"$WORK/mcc2" "$MROOT" > "$WORK/main.c" 2> "$WORK/main.err"
+if ! "$WORK/mcc2" "$MROOT" > "$WORK/main.c" 2> "$WORK/main.err"; then
+    echo "FAIL: selfhost-mainself-test — mcc2 exited non-zero compiling its own CLI driver selfhost/main.mc:"
+    cat "$WORK/main.err"
+    exit 1
+fi
 if [ -s "$WORK/main.err" ]; then
     echo "FAIL: selfhost-mainself-test — mcc2 reported diagnostics compiling its own CLI driver selfhost/main.mc:"
     cat "$WORK/main.err"
@@ -77,7 +81,11 @@ echo "LANDMARK: mcc2 compiled its OWN CLI driver selfhost/main.mc -> clang-clean
 # ----- Stage UNIT: module-level `global` behavioral round-trip -----
 [ -f "$FIXTURE" ] || { echo "FAIL: selfhost-mainself-test — fixture not found at $FIXTURE"; exit 1; }
 printf 'import "tests/toolchain/selfhost_mainself_unit_user.mc";\n' > "$UROOT"
-"$WORK/mcc2" "$UROOT" > "$WORK/unit.c" 2> "$WORK/unit.err"
+if ! "$WORK/mcc2" "$UROOT" > "$WORK/unit.c" 2> "$WORK/unit.err"; then
+    echo "FAIL: selfhost-mainself-test — mcc2 exited non-zero compiling the mainself fixture:"
+    cat "$WORK/unit.err"
+    exit 1
+fi
 if [ -s "$WORK/unit.err" ]; then
     echo "FAIL: selfhost-mainself-test — mcc2 reported diagnostics compiling the mainself fixture:"
     cat "$WORK/unit.err"

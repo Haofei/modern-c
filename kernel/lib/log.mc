@@ -38,18 +38,21 @@ fn level_ord(level: LogLevel) -> u32 {
     }
 }
 
+#[mc_abi]
 export fn log_init(l: *mut Logger, threshold: LogLevel) -> void {
     trace_init((&l.sink) as *mut TraceBuffer);
     l.threshold = level_ord(threshold);
     l.dropped = 0;
 }
 
+#[mc_abi]
 export fn log_set_threshold(l: *mut Logger, threshold: LogLevel) -> void {
     l.threshold = level_ord(threshold);
 }
 
 // Record an event at `level` for tracepoint `id`. Returns true if it met the
 // threshold and was recorded, false if filtered out (and counted as dropped).
+#[mc_abi]
 export fn log_event(l: *mut Logger, level: LogLevel, id: u32, value: u64) -> bool {
     let lo: u32 = level_ord(level);
     if lo < l.threshold {

@@ -14,7 +14,8 @@ import "kernel/core/heap.mc";
 
 export fn heap_host_test(pool_start: usize, pool_len: usize) -> u32 {
     let range: PhysRange = phys_range(pa(pool_start), pool_len);
-    var h: Heap = heap_new(range);
+    var h: Heap = uninit;
+    heap_init(&h, range);
 
     // (1) A fresh heap has the whole pool available.
     if heap_available(&h) != pool_len {

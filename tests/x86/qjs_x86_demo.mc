@@ -358,7 +358,7 @@ export fn mc_syscall(number: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
 export fn app_build_x86(image_base: usize, image_len: usize, region_base: usize, region_len: usize, out_cr3: *mut u64) -> u32 {
     qx_load_status = QX_LS_OK;
     *out_cr3 = 0;
-    qx_heap = heap_new(phys_range(pa(region_base), region_len));
+    heap_init_untracked(&qx_heap, phys_range(pa(region_base), region_len));
 
     switch page_table_try_new(&qx_heap) {
         ok(pt) => { qx_pt = pt; }

@@ -11,7 +11,7 @@ The extractor is static: it records `pub`/`export` function signatures, public c
 public type declarations, and local types named by public declarations.
 
 Total modules: **41**.
-Total public functions: **353**.
+Total public functions: **354**.
 Total public constants: **6**.
 Total public type declarations: **46**.
 Total referenced local types: **15**.
@@ -296,11 +296,12 @@ Source: `std/collections/arc.mc`
 |---|---|
 | <code>pub fn arc_new(comptime T: type, a: *mut dyn Allocator, value: T) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:31` |
 | <code>pub fn arc_new_uninit(comptime T: type, a: *mut dyn Allocator) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:41` |
-| <code>pub fn arc_clone(comptime T: type, h: *Arc&lt;T&gt;) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:50` |
-| <code>pub fn arc_get(comptime T: type, h: *Arc&lt;T&gt;) -&gt; *const T</code> | `std/collections/arc.mc:70` |
-| <code>pub fn arc_get_mut(comptime T: type, h: *Arc&lt;T&gt;) -&gt; *mut T</code> | `std/collections/arc.mc:83` |
-| <code>pub fn arc_count(comptime T: type, h: *Arc&lt;T&gt;) -&gt; u32</code> | `std/collections/arc.mc:92` |
-| <code>pub fn arc_drop(comptime T: type, h: Arc&lt;T&gt;) -&gt; bool</code> | `std/collections/arc.mc:100` |
+| <code>pub fn arc_clone_from_parts(comptime T: type, block: PAddr, allocator: *mut dyn Allocator) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:50` |
+| <code>pub fn arc_clone(comptime T: type, h: *Arc&lt;T&gt;) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:68` |
+| <code>pub fn arc_get(comptime T: type, h: *Arc&lt;T&gt;) -&gt; *const T</code> | `std/collections/arc.mc:74` |
+| <code>pub fn arc_get_mut(comptime T: type, h: *Arc&lt;T&gt;) -&gt; *mut T</code> | `std/collections/arc.mc:87` |
+| <code>pub fn arc_count(comptime T: type, h: *Arc&lt;T&gt;) -&gt; u32</code> | `std/collections/arc.mc:96` |
+| <code>pub fn arc_drop(comptime T: type, h: Arc&lt;T&gt;) -&gt; bool</code> | `std/collections/arc.mc:104` |
 
 ## `std/collections/dynarray`
 
@@ -725,12 +726,12 @@ Source: `std/sort.mc`
 
 | Signature | Source |
 |---|---|
-| <code>export fn sort_u32(xs: []mut u32) -&gt; void</code> | `std/sort.mc:18` |
-| <code>export fn is_sorted_u32(xs: []mut u32) -&gt; bool</code> | `std/sort.mc:37` |
-| <code>export fn binary_search_u32(xs: []mut u32, key: u32) -&gt; usize</code> | `std/sort.mc:51` |
-| <code>export fn sort(comptime T: type, xs: []mut T, less: closure(T, T) -&gt; bool) -&gt; void</code> | `std/sort.mc:74` |
-| <code>export fn is_sorted(comptime T: type, xs: []mut T, less: closure(T, T) -&gt; bool) -&gt; bool</code> | `std/sort.mc:94` |
-| <code>export fn lower_bound(comptime T: type, xs: []mut T, key: T, less: closure(T, T) -&gt; bool) -&gt; usize</code> | `std/sort.mc:109` |
+| <code>export fn sort_u32(xs: []mut u32) -&gt; void</code> | `std/sort.mc:19` |
+| <code>export fn is_sorted_u32(xs: []mut u32) -&gt; bool</code> | `std/sort.mc:39` |
+| <code>export fn binary_search_u32(xs: []mut u32, key: u32) -&gt; usize</code> | `std/sort.mc:54` |
+| <code>export fn sort(comptime T: type, xs: []mut T, less: closure(T, T) -&gt; bool) -&gt; void</code> | `std/sort.mc:77` |
+| <code>export fn is_sorted(comptime T: type, xs: []mut T, less: closure(T, T) -&gt; bool) -&gt; bool</code> | `std/sort.mc:97` |
+| <code>export fn lower_bound(comptime T: type, xs: []mut T, key: T, less: closure(T, T) -&gt; bool) -&gt; usize</code> | `std/sort.mc:112` |
 
 ## `std/strbuf`
 
@@ -931,11 +932,11 @@ Source: `std/virtqueue.mc`
 | <code>pub struct UsedElem</code> | `std/virtqueue.mc:26` |
 | <code>pub struct VringUsed</code> | `std/virtqueue.mc:27` |
 | <code>pub struct Virtq</code> | `std/virtqueue.mc:33` |
-| <code>pub enum VqError</code> | `std/virtqueue.mc:138` |
-| <code>pub enum VqSubmitError</code> | `std/virtqueue.mc:143` |
-| <code>pub enum VqCompleteError</code> | `std/virtqueue.mc:326` |
-| <code>pub move struct CompletedChain3</code> | `std/virtqueue.mc:339` |
-| <code>pub move struct CompletedBuffer</code> | `std/virtqueue.mc:458` |
+| <code>pub enum VqError</code> | `std/virtqueue.mc:143` |
+| <code>pub enum VqSubmitError</code> | `std/virtqueue.mc:148` |
+| <code>pub enum VqCompleteError</code> | `std/virtqueue.mc:331` |
+| <code>pub move struct CompletedChain3</code> | `std/virtqueue.mc:344` |
+| <code>pub move struct CompletedBuffer</code> | `std/virtqueue.mc:470` |
 
 ### Public functions
 
@@ -943,16 +944,16 @@ Source: `std/virtqueue.mc`
 |---|---|
 | <code>pub fn bus_addr(comptime T: type, p: *mut T) -&gt; u64</code> | `std/virtqueue.mc:51` |
 | <code>pub fn vq_free_count(vq: *mut Virtq) -&gt; u16</code> | `std/virtqueue.mc:72` |
-| <code>pub fn vq_free_desc(vq: *mut Virtq, id: u16) -&gt; void</code> | `std/virtqueue.mc:92` |
-| <code>pub fn vq_free_chain3(vq: *mut Virtq, head: u16) -&gt; void</code> | `std/virtqueue.mc:111` |
-| <code>pub fn vq_setup(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32, vq: *mut Virtq) -&gt; Result&lt;bool, VqError&gt;</code> | `std/virtqueue.mc:153` |
-| <code>pub fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:233` |
-| <code>pub fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:237` |
-| <code>pub fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:251` |
-| <code>pub fn vq_complete_chain(vq: *mut Virtq) -&gt; Result&lt;CompletedChain3, VqCompleteError&gt;</code> | `std/virtqueue.mc:352` |
-| <code>pub fn vq_kick(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32) -&gt; void</code> | `std/virtqueue.mc:418` |
-| <code>pub fn vq_has_used(vq: *mut Virtq) -&gt; bool</code> | `std/virtqueue.mc:424` |
-| <code>pub fn vq_wait_used(vq: *mut Virtq, timeout: u64) -&gt; bool</code> | `std/virtqueue.mc:434` |
-| <code>pub fn vq_used_len(vq: *mut Virtq) -&gt; u32</code> | `std/virtqueue.mc:446` |
-| <code>pub fn vq_complete(vq: *mut Virtq) -&gt; Result&lt;CompletedBuffer, VqCompleteError&gt;</code> | `std/virtqueue.mc:473` |
-| <code>pub fn vq_reset_reclaim(vq: *mut Virtq) -&gt; usize</code> | `std/virtqueue.mc:504` |
+| <code>pub fn vq_free_desc(vq: *mut Virtq, id: u16) -&gt; void</code> | `std/virtqueue.mc:94` |
+| <code>pub fn vq_free_chain3(vq: *mut Virtq, head: u16) -&gt; void</code> | `std/virtqueue.mc:113` |
+| <code>pub fn vq_setup(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32, vq: *mut Virtq) -&gt; Result&lt;bool, VqError&gt;</code> | `std/virtqueue.mc:158` |
+| <code>pub fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:238` |
+| <code>pub fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:242` |
+| <code>pub fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:256` |
+| <code>pub fn vq_complete_chain(vq: *mut Virtq) -&gt; Result&lt;CompletedChain3, VqCompleteError&gt;</code> | `std/virtqueue.mc:357` |
+| <code>pub fn vq_kick(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32) -&gt; void</code> | `std/virtqueue.mc:428` |
+| <code>pub fn vq_has_used(vq: *mut Virtq) -&gt; bool</code> | `std/virtqueue.mc:434` |
+| <code>pub fn vq_wait_used(vq: *mut Virtq, timeout: u64) -&gt; bool</code> | `std/virtqueue.mc:444` |
+| <code>pub fn vq_used_len(vq: *mut Virtq) -&gt; u32</code> | `std/virtqueue.mc:456` |
+| <code>pub fn vq_complete(vq: *mut Virtq) -&gt; Result&lt;CompletedBuffer, VqCompleteError&gt;</code> | `std/virtqueue.mc:485` |
+| <code>pub fn vq_reset_reclaim(vq: *mut Virtq) -&gt; usize</code> | `std/virtqueue.mc:518` |

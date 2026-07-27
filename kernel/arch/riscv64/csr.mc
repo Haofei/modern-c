@@ -98,3 +98,19 @@ export fn wait_for_interrupt() -> void {
         }
     }
 }
+
+// Plain MC-ABI adapters for higher-order kernel helpers such as drive_irq/drive_many.
+// The exported CSR entry points above remain explicit C ABI for external symbols; MC
+// function-pointer parameters must receive non-exported wrappers until the language has
+// ABI-qualified function-pointer types.
+fn disable_interrupts_global_mc() -> void {
+    disable_interrupts_global();
+}
+
+fn enable_interrupts_global_mc() -> void {
+    enable_interrupts_global();
+}
+
+fn wait_for_interrupt_mc() -> void {
+    wait_for_interrupt();
+}

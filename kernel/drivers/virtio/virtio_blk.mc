@@ -30,15 +30,19 @@ enum BlkError {
 }
 
 struct BlkDevice {
-    regs: MmioPtr<VirtioMmio>,
+    regs_addr: usize,
     vq: *mut Virtq,
+}
+
+fn blk_regs(dev: *BlkDevice) -> MmioPtr<VirtioMmio> {
+    unsafe { return dev.regs_addr as MmioPtr<VirtioMmio>; }
 }
 
 // Bring the block device up: handshake (no required features), set up the request
 // queue, go live.
 #[mc_abi]
 export fn blk_init(dev: *BlkDevice) -> Result<bool, BlkError> {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = blk_regs(dev);
     let vq: *mut Virtq = dev.vq;
     switch virtio_init(regs, VIRTIO_BLK_DEVICE_ID, 0, 0) {
         ok(up) => {}
@@ -62,7 +66,7 @@ export fn blk_init(dev: *BlkDevice) -> Result<bool, BlkError> {
 // writable) and waits for completion under a deadline.
 #[mc_abi]
 export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError> {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = blk_regs(dev);
     let vq: *mut Virtq = dev.vq;
 
     // Request header (little-endian): type, reserved, sector.
@@ -141,7 +145,7 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
 // BlockDevice over virtio-blk (durable storage, production-readiness §3.1 #3).
 #[mc_abi]
 export fn blk_read_into(dev: *BlkDevice, sector: u64, dst: PAddr) -> Result<bool, BlkError> {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = blk_regs(dev);
     let vq: *mut Virtq = dev.vq;
 
     var hdr: CpuBuffer = alloc(BLK_HDR_SIZE);
@@ -197,7 +201,7 @@ export fn blk_read_into(dev: *BlkDevice, sector: u64, dst: PAddr) -> Result<bool
 // readable and we load it from `src` before flushing it to the device.
 #[mc_abi]
 export fn blk_write(dev: *BlkDevice, sector: u64, src: PAddr) -> Result<bool, BlkError> {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = blk_regs(dev);
     let vq: *mut Virtq = dev.vq;
 
     var hdr: CpuBuffer = alloc(BLK_HDR_SIZE);

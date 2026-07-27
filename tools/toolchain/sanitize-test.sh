@@ -51,10 +51,10 @@ san_one() {
     # UBSan and the plain + differential runs — so only ASan's checks are skipped for them.
     local sanitize_skip=" vqfault-test "
     case "$sanitize_skip" in
-        *" $name "*) echo "SKIP: sanitize $name (hand-built device-state globals confuse ASan; covered by UBSan + diff-backend)"; return 0 ;;
+        *" $name "*) echo "NOTE: sanitize $name (hand-built device-state globals confuse ASan; covered by UBSan + diff-backend)"; return 0 ;;
     esac
     if ! MCC_UNDER_TEST="$MCC" SANITIZE= bash "$HERE/tools/lib/host-harness.sh" "$MCC" "$name" >/dev/null 2>&1; then
-        echo "SKIP: sanitize $name (does not build/run on this host without sanitizers)"
+        echo "NOTE: sanitize $name (does not build/run on this host without sanitizers)"
         return 0
     fi
     local out

@@ -87,7 +87,8 @@ export fn m_main() -> void {
 
     var r: usize = 0;
     while r < ROUNDS {
-        var h: Heap = heap_new(phys_range(pa(base), POOL));
+        var h: Heap = uninit;
+        heap_init(&h, phys_range(pa(base), POOL));
         let baseline: usize = heap_available(&h);
 
         // ---- allocate BCOUNT contiguous blocks (NOT timed) ----

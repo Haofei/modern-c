@@ -11,7 +11,7 @@ import "kernel/platform/qemu_virt/machine.mc";
 
 export fn kernel_main(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq, txq: *mut Virtq) -> u32 {
     var m: Machine = qemu_virt(); // board description — the single source of config
-    var dev: NetDevice = .{ .regs = regs, .rxq = rxq, .txq = txq }; // device-class surface
+    var dev: NetDevice = .{ .regs_addr = regs as usize, .rxq = rxq, .txq = txq }; // device-class surface
 
     // The driver reports typed `NetError`s; the platform boundary is a small
     // stage code (0 = ok). The error tag is available for richer logging.

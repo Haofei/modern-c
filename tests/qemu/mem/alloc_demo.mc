@@ -10,7 +10,8 @@ global g_pool: [8192]u8;
 // Returns 1 iff two allocations via the generic Allocator advance and stay aligned.
 export fn alloc_demo_run() -> u32 {
     let base: usize = (&g_pool[0]) as usize;
-    var heap: Heap = heap_new(phys_range(pa(base), 8192));
+    var heap: Heap = uninit;
+    heap_init(&heap, phys_range(pa(base), 8192));
     let a: *mut dyn Allocator = heap_allocator(&heap); // trait object borrows &heap (this frame)
 
     let p1: usize = pa_value(alloc_bytes(a, 100, 16));

@@ -455,6 +455,19 @@ pub const MoveState = struct {
     }
 };
 
+test "move state getPtr mutates existing slot in place" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    var state = MoveState.init(std.testing.allocator);
+    defer state.deinit();
+
+    try state.put("owner", .{ .live = true, .span = span, .place = .{ .root = "owner" } });
+    const slot = state.getPtr("owner") orelse return error.TestExpectedEqual;
+    slot.live = false;
+
+    try std.testing.expect(!state.get("owner").?.live);
+    try std.testing.expect(state.getPtr("missing") == null);
+}
+
 pub const LoopMoveExitKind = enum {
     break_exit,
     continue_exit,

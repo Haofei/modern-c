@@ -155,6 +155,7 @@ export fn async_await(b: *mut AsyncBroker, t: *mut ProcTable, id: u64) -> i32 {
 //     has cleared our block we stop idling and the outer loop re-checks `ready`.
 // Single task / single waiter per id (it `wfi`-idles rather than yielding to other runnable
 // tasks; integrating this with preemptive multi-task scheduling is broader scheduler work).
+#[mc_abi]
 export fn async_await_irq(b: *mut AsyncBroker, t: *mut ProcTable, id: u64,
                           irq_off: fn() -> void, irq_on: fn() -> void, wfi: fn() -> void) -> i32 {
     var done: bool = false;

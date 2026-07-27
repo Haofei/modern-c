@@ -25,6 +25,14 @@ export fn sys_poll(events_ptr: usize, max: usize, timeout: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_POLL, events_ptr as u64, max as u64, timeout as u64));
 }
 
+fn sys_submit_pump(req_ptr: usize) -> i64 {
+    return sys_submit(req_ptr);
+}
+
+fn sys_poll_pump(events_ptr: usize, max: usize, timeout: usize) -> i64 {
+    return sys_poll(events_ptr, max, timeout);
+}
+
 // write(2): the C-ABI used by qjs_agent. fd in a0, buffer address in a1, length in a2.
 export fn sys_write(fd: u64, buf: usize, len: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_WRITE, fd, buf as u64, len as u64));
@@ -54,5 +62,5 @@ export fn __sbrk(delta: usize) -> usize {
 // goes through sys_submit / sys_poll. A confined agent calls this once, then uses tool_call_async /
 // read_async / write_async / sleep_async / net_fetch_async + pump_run_to_completion over `p`.
 export fn tool_pump_init_syscall(p: *mut ToolPump) -> void {
-    tool_pump_init(p, sys_submit, sys_poll);
+    tool_pump_init(p, sys_submit_pump, sys_poll_pump);
 }

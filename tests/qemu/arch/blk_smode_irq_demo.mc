@@ -121,7 +121,7 @@ export fn s_entry(_hartid: u64, _dtb: u64) -> void {
     g_vq.avail = &g_avail;
     g_vq.used = &g_used;
     g_dev = .{
-        .regs = regs,
+        .regs_addr = regs as usize,
         .vq = &g_vq,
         .map = &g_map,
         .pool = &g_pool,

@@ -3,7 +3,7 @@
 // The all-MC replacement for kernel/arch/riscv64/qjs_confined_runtime.c. Modeled on the
 // existing agent_confined_runtime.mc; the difference is the embedded image comes from the
 // harness-generated app_image[] blob (read via `extern global`) and the frame pool is sized
-// for QuickJS (16 MiB: 8 MiB heap arena + ~1.5 MiB engine + 512 KiB stack + page tables).
+// for QuickJS (64 MiB: 8 MiB heap arena + ~1.5 MiB engine + 512 KiB stack + page tables).
 //
 // `_start`/mc_halt come from context_runtime.c; the U-mode trap path + enter_user from
 // usermode_runtime.c; the ELF loader + confinement (app_build/app_entry/...) from the MC
@@ -13,7 +13,7 @@
 import "tests/qemu/lib/test_report.mc";
 const RT_KERNEL_VA: usize = 0x8000_0000;
 const RT_PAGE: usize = 4096;
-const RT_REGION_LEN: usize = 16 * 1024 * 1024; // 16 MiB usable
+const RT_REGION_LEN: usize = 64 * 1024 * 1024; // 64 MiB usable
 
 // The embedded agent ELF, emitted by the harness as `const unsigned char app_image[]`,
 // `const unsigned int app_image_len`, and an independently-computed `app_image_hash`.
@@ -33,7 +33,7 @@ extern fn app_kernel_unmapped(kernel_va: usize) -> u32;
 
 // Backing store for the agent's page tables + per-page frames. Over-allocated by a page so
 // the base rounds up to 4 KiB (MC has no compile-time global-align attr).
-global g_region: [16781312]u8; // 16 MiB + 4 KiB
+global g_region: [67112960]u8; // 64 MiB + 4 KiB
 
 // §0 ingress (SYS_READ) default: no embedded agent source. WEAK so a source-serving test
 // (qjs-agent-test) that links a STRONG mc_agent_source with its embedded JS overrides it —

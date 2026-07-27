@@ -17,9 +17,10 @@ import "kernel/arch/riscv64/sbi_virtio_probe.mc";
 import "tests/qemu/proc/agent_net_real_demo.mc"; // agent_net_real_main / agent_net_real_resp_*
 
 const VIRTIO_ID_NET: u32 = 1;
-const HTTP_PORT: u16 = 8080;          // must match tools/proc/agent-net-real-test.sh
 const FINISHER: usize = 0x0010_0000;
 const FINISHER_HALT: u32 = 0x5555;
+
+extern fn mc_http_port() -> u16;
 
 global g_rx_desc: DescTable;
 global g_rx_avail: VringAvail;
@@ -75,7 +76,7 @@ export fn test_main() -> void {
     g_txq.used = &g_tx_used;
 
     // The MC story prints the stage markers W/D/B/A as each broker stage passes.
-    let stages: u32 = agent_net_real_main(regs, &g_rxq, &g_txq, HTTP_PORT);
+    let stages: u32 = agent_net_real_main(regs, &g_rxq, &g_txq, mc_http_port());
     uputs("\nstages=");
     uputhex(stages as u64);
     uputc(10);

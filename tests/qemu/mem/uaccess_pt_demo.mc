@@ -48,7 +48,8 @@ fn bytes_are(addr: PAddr, first: u8, n: usize) -> bool {
 }
 
 export fn uaccess_pt_run() -> u32 {
-    var heap: Heap = heap_new(phys_range(pa((&g_pool[0]) as usize), 131072));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa((&g_pool[0]) as usize), 131072));
     var pt: PageTable = page_table_new(&heap);
     var pass: u32 = 1;
 

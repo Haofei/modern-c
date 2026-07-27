@@ -40,7 +40,7 @@ export fn mc_console_putc(c: u8) -> void { console_putc(c); }
 const SYS_EXIT: u64 = 3;                  // qjs agent ABI (user/abi.mc), NOT M8's 2
 const KERNEL_VA: usize = 0x4000_0000;     // RAM base / kernel image load address
 const PAGE: usize = 4096;
-const REGION_LEN: usize = 16 * 1024 * 1024; // 16 MiB
+const REGION_LEN: usize = 64 * 1024 * 1024; // 64 MiB
 
 const CPACR_FPEN: u64 = 0x30_0000;
 const MAIR_VALUE: u64 = 0xFF | (0x04 << 8);
@@ -273,8 +273,8 @@ fn enter_user(entry: usize, user_sp: usize) -> void {
     }
 }
 
-// The agent's page tables + per-page frames (8 MiB arena + engine + 512 KiB stack + tables).
-global g_region: [16781312]u8; // 16 MiB + a page for alignment
+// The agent's page tables + per-page frames (multi-MiB arena + engine + 512 KiB stack + tables).
+global g_region: [67112960]u8; // 64 MiB + a page for alignment
 
 fn page_align(a: usize) -> usize {
     return (a + (PAGE - 1)) & ~(PAGE - 1);

@@ -29,39 +29,39 @@ export fn numeric_literal_boundaries_run() -> u32 {
     let one: u64 = 1;
     let negative_zero_bits: u64 = one << 63;
     if 9223372036854775808 != 9223372036854775808 as u64 {
-        return 1;
-    }
-    if 18446744073709551615 != 18446744073709551615 as u64 {
         return 2;
     }
-    if 340282366920938463463374607431768211455 != maximum {
+    if 18446744073709551615 != 18446744073709551615 as u64 {
         return 3;
+    }
+    if 340282366920938463463374607431768211455 != maximum {
+        return 4;
     }
     if bitcast<u64>(separated_integer) != bitcast<u64>(ordinary_integer) ||
         bitcast<u64>(separated_fraction) != bitcast<u64>(ordinary_fraction) ||
         bitcast<u64>(separated_exponent) != bitcast<u64>(ordinary_exponent) {
-        return 4;
-    }
-    if bitcast<u64>(FOLDED_INFINITY) != bitcast<u64>(direct_infinity) {
         return 5;
     }
-    if bitcast<u64>(FOLDED_NAN) != bitcast<u64>(direct_nan) {
+    if bitcast<u64>(FOLDED_INFINITY) != bitcast<u64>(direct_infinity) {
         return 6;
     }
-    if bitcast<u64>(FOLDED_NEGATIVE_ZERO) != negative_zero_bits {
+    if bitcast<u64>(FOLDED_NAN) != bitcast<u64>(direct_nan) {
         return 7;
     }
-    if bitcast<u32>(F32_FOLDED) != bitcast<u32>(f32_runtime(F32_EDGE, F32_ONE)) {
+    if bitcast<u64>(FOLDED_NEGATIVE_ZERO) != negative_zero_bits {
         return 8;
     }
-    if bitcast<u64>(PAYLOAD_NAN) != NAN_SOURCE {
+    if bitcast<u32>(F32_FOLDED) != bitcast<u32>(f32_runtime(F32_EDGE, F32_ONE)) {
         return 9;
     }
-    if bitcast<u32>(F32_SNAN) != F32_SNAN_SOURCE {
+    if bitcast<u64>(PAYLOAD_NAN) != NAN_SOURCE {
         return 10;
     }
-    if bitcast<u32>(F32_NEG_SNAN) != F32_NEG_SNAN_SOURCE {
+    if bitcast<u32>(F32_SNAN) != F32_SNAN_SOURCE {
         return 11;
+    }
+    if bitcast<u32>(F32_NEG_SNAN) != F32_NEG_SNAN_SOURCE {
+        return 12;
     }
     if 0x20_u8 != 32_u8 ||
         1_u16 != 1 as u16 ||
@@ -75,7 +75,7 @@ export fn numeric_literal_boundaries_run() -> u32 {
         1_i64 != 1 as i64 ||
         1_i128 != 1 as i128 ||
         1_isize != 1 as isize {
-        return 12;
+        return 13;
     }
-    return 0;
+    return 1;
 }

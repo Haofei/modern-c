@@ -136,6 +136,12 @@ pub struct Heap {
     // (default) disables it. Independent of `redzone`, though `heap_new_ksan` enables
     // both so freed blocks AND redzones are poisoned in the shadow.
     ksan: usize,
+    // Exact live-allocation ownership tracking. Normal heaps keep this enabled so
+    // double-free, partial-free, and overlap-free fail closed. Bump/frame pools that
+    // allocate many fixed pages and never free them can explicitly disable this with
+    // heap_init_untracked to avoid turning the inline live table into an artificial
+    // frame-count ceiling.
+    track_live: usize,
     // Exact ownership table for live user allocations. A free must match one
     // currently-live {addr, size} entry, which catches double-free, partial-free,
     // and overlapping-free attempts before the free-list can be corrupted.
@@ -205,6 +211,23 @@ fn heap_empty_live_list() -> [HEAP_LIVE_SLOTS]LiveBlock {
 }
 
 // Build a heap over a physical region (e.g. a frame range reserved at boot).
+pub fn heap_init(h: *mut Heap, range: PhysRange) -> void {
+    h.range = range;
+    h.next = pr_start(&range);
+    h.free = heap_empty_free_list();
+    h.free_count = 0;
+    h.redzone = 0;
+    h.ksan = 0;
+    h.track_live = 1;
+    h.live_count = 0;
+    h.dropped_free_bytes = 0;
+}
+
+pub fn heap_init_untracked(h: *mut Heap, range: PhysRange) -> void {
+    heap_init(h, range);
+    h.track_live = 0;
+}
+
 pub fn heap_new(range: PhysRange) -> Heap {
     return .{
         .range = range,
@@ -214,6 +237,7 @@ pub fn heap_new(range: PhysRange) -> Heap {
         .free_count = 0,
         .redzone = 0,
         .ksan = 0,
+        .track_live = 1,
         .live_count = 0,
         .dropped_free_bytes = 0,
     };
@@ -224,9 +248,18 @@ pub fn heap_new(range: PhysRange) -> Heap {
 // detected and trapped on free / `heap_check_block`. Same backing store, same API —
 // the only difference is the guard bytes and the corruption check.
 pub fn heap_new_redzoned(range: PhysRange) -> Heap {
-    var h: Heap = heap_new(range);
-    h.redzone = REDZONE_BYTES;
-    return h;
+    return .{
+        .range = range,
+        .next = pr_start(&range),
+        .free = heap_empty_free_list(),
+        .live = heap_empty_live_list(),
+        .free_count = 0,
+        .redzone = REDZONE_BYTES,
+        .ksan = 0,
+        .track_live = 1,
+        .live_count = 0,
+        .dropped_free_bytes = 0,
+    };
 }
 
 // Build a heap with the KASAN shadow hardening profile (D2.1). On top of the redzone
@@ -237,9 +270,18 @@ pub fn heap_new_redzoned(range: PhysRange) -> Heap {
 // finer than D2.4, which only catches a redzone clobber on FREE. The caller must arm the
 // shadow region for this heap's backing store (`mc_ksan_arm`, runtime-side) first.
 pub fn heap_new_ksan(range: PhysRange) -> Heap {
-    var h: Heap = heap_new_redzoned(range);
-    h.ksan = 1;
-    return h;
+    return .{
+        .range = range,
+        .next = pr_start(&range),
+        .free = heap_empty_free_list(),
+        .live = heap_empty_live_list(),
+        .free_count = 0,
+        .redzone = REDZONE_BYTES,
+        .ksan = 1,
+        .track_live = 1,
+        .live_count = 0,
+        .dropped_free_bytes = 0,
+    };
 }
 
 // ----- free-list internals -----
@@ -473,6 +515,9 @@ fn heap_live_overlaps(h: *mut Heap, start: PAddr, len: usize, skip: usize) -> bo
 }
 
 fn heap_record_live(h: *mut Heap, start: PAddr, len: usize) -> void {
+    if h.track_live == 0 {
+        return;
+    }
     if len == 0 {
         return;
     }
@@ -498,6 +543,9 @@ fn heap_find_live(h: *mut Heap, start: PAddr, len: usize) -> usize {
 }
 
 fn heap_take_live(h: *mut Heap, start: PAddr, len: usize) -> void {
+    if h.track_live == 0 {
+        return;
+    }
     if len == 0 {
         return;
     }
@@ -509,6 +557,9 @@ fn heap_take_live(h: *mut Heap, start: PAddr, len: usize) -> void {
 }
 
 fn heap_resize_live(h: *mut Heap, start: PAddr, old_len: usize, new_len: usize) -> void {
+    if h.track_live == 0 {
+        return;
+    }
     if old_len == new_len {
         return;
     }
@@ -540,7 +591,7 @@ fn heap_resize_live(h: *mut Heap, start: PAddr, old_len: usize, new_len: usize) 
 #[may_sleep]
 pub fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
     let rz: usize = h.redzone;
-    if size != 0 && h.live_count >= HEAP_LIVE_SLOTS {
+    if h.track_live != 0 && size != 0 && h.live_count >= HEAP_LIVE_SLOTS {
         unreachable; // no unowned allocation may escape
     }
     if rz == 0 {
@@ -656,7 +707,7 @@ pub fn heap_try_alloc(h: *mut Heap, size: usize, align: usize) -> Result<PAddr, 
     if h.redzone != 0 {
         unreachable; // fallible allocation is only wired for non-redzoned heaps
     }
-    if size != 0 && h.live_count >= HEAP_LIVE_SLOTS {
+    if h.track_live != 0 && size != 0 && h.live_count >= HEAP_LIVE_SLOTS {
         return err(.Exhausted);
     }
     switch heap_try_alloc_raw(h, size, align) {

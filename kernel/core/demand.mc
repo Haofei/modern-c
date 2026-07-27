@@ -26,7 +26,7 @@ global g_demand_end: usize;
 // Build the address space: identity-map devices + kernel, leave the demand region
 // unmapped. Returns the satp value to activate.
 export fn dp_setup(region_base: usize, region_len: usize) -> u64 {
-    g_heap = heap_new(phys_range(pa(region_base), region_len));
+    heap_init_untracked(&g_heap, phys_range(pa(region_base), region_len));
     g_pt = page_table_new(&g_heap);
     let rwx: u64 = PTE_R | PTE_W | PTE_X;
     page_table_map_gigapage(&g_pt, va(0), pa(0), rwx);             // devices

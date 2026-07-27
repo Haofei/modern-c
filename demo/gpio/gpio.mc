@@ -16,6 +16,7 @@ extern mmio struct GpioRegs {
 move struct OutputPin { pin: u32 }
 move struct InputPin { pin: u32 }
 
+#[mc_abi]
 export fn config_output(regs: MmioPtr<GpioRegs>, pin: u32) -> OutputPin {
     let mask: u32 = (1 as u32) << pin;
     let cur: u32 = regs.dir.read(.acquire);
@@ -23,6 +24,7 @@ export fn config_output(regs: MmioPtr<GpioRegs>, pin: u32) -> OutputPin {
     return .{ .pin = pin };
 }
 
+#[mc_abi]
 export fn config_input(regs: MmioPtr<GpioRegs>, pin: u32) -> InputPin {
     let mask: u32 = (1 as u32) << pin;
     let cur: u32 = regs.dir.read(.acquire);

@@ -42,7 +42,8 @@ fn build_kernel_space(heap: *mut Heap) -> u64 {
 }
 
 export fn vmctx_setup(region_base: usize, region_len: usize) -> void {
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     g_satp_kernel = build_kernel_space(&heap);
     g_satp_a = build_space(&heap, 0x0000_000A);
     g_satp_b = build_space(&heap, 0x0000_000B);

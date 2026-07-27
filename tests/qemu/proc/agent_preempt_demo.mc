@@ -91,7 +91,8 @@ fn alloc_stack(h: *mut Heap) -> usize {
 }
 
 export fn agent_preempt_demo(region_base: usize, region_len: usize) -> u32 {
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     proc_table_init(&g_t);
     proc_spawn(&g_t, alloc_stack(&heap), worker_a); // pid 1
     proc_spawn(&g_t, alloc_stack(&heap), worker_b); // pid 2

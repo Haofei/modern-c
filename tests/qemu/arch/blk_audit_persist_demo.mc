@@ -55,7 +55,7 @@ export fn test_main() -> void {
     g_vq.desc = &g_desc;
     g_vq.avail = &g_avail;
     g_vq.used = &g_used;
-    var dev: BlkDevice = .{ .regs = regs, .vq = &g_vq };
+    var dev: BlkDevice = .{ .regs_addr = regs as usize, .vq = &g_vq };
     switch blk_init(&dev) {
         ok(b) => {}
         err(e) => { uputs("BLK-INIT-FAIL\n"); halt(); }

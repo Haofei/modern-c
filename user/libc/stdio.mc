@@ -379,6 +379,7 @@ fn nul_str() -> usize {
 
 // ---- public API: buffer sinks ----
 
+#[mc_abi]
 export fn vsnprintf(buf: *mut u8, size: usize, fmt: *const u8, ap: va_list) -> i32 {
     var s: Sink = sink_buffer(buf as usize, size);
     // Work on a local copy of the cursor so va.arg advances our own state.
@@ -407,6 +408,7 @@ export fn snprintf(buf: *mut u8, size: usize, fmt: *const u8, ...) -> i32 {
 
 // ---- public API: console sinks ----
 
+#[mc_abi]
 export fn vprintf(fmt: *const u8, ap: va_list) -> i32 {
     var s: Sink = sink_console();
     var local_ap: va_list = ap;
@@ -433,6 +435,7 @@ export fn fprintf(stream: *mut u8, fmt: *const u8, ...) -> i32 {
     return n as i32;
 }
 
+#[mc_abi]
 export fn vfprintf(stream: *mut u8, fmt: *const u8, ap: va_list) -> i32 {
     return vprintf(fmt, ap);
 }

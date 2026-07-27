@@ -31,7 +31,8 @@ fn build_space(heap: *mut Heap, test_value: u32) -> u64 {
 }
 
 export fn build_spaces(region_base: usize, region_len: usize) -> void {
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     g_satp1 = build_space(&heap, 0x1111_1111);
     g_satp2 = build_space(&heap, 0x2222_2222);
 }

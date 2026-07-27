@@ -106,8 +106,13 @@ fn build_elf() -> void {
     elf_put_u8(3, 70); // 'F'
     elf_put_u8(4, 2);  // ELFCLASS64
     elf_put_u8(5, 1);  // little-endian
+    elf_put_u8(6, 1);  // EV_CURRENT
+    elf_put_u16(16, 2); // ET_EXEC
+    elf_put_u16(18, 243); // EM_RISCV
+    elf_put_u32(20, 1); // EV_CURRENT
     elf_put_u64(24, RT_VADDR as u64);     // e_entry
     elf_put_u64(32, RT_EH as u64);        // e_phoff
+    elf_put_u16(52, RT_EH as u16);        // e_ehsize
     elf_put_u16(54, RT_PH as u16);        // e_phentsize
     elf_put_u16(56, 1);                   // e_phnum
 
@@ -118,6 +123,7 @@ fn build_elf() -> void {
     elf_put_u64(ph + 16, RT_VADDR as u64);// p_vaddr
     elf_put_u64(ph + 32, RT_CODE as u64); // p_filesz
     elf_put_u64(ph + 40, RT_CODE as u64); // p_memsz
+    elf_put_u64(ph + 48, 1);              // p_align (offset and vaddr need not share page congruence)
 
     let code: usize = RT_EH + RT_PH;
     elf_put_u32(code + 0,  0x0050_0893);  // li a7, 5   (SYS_TOOL)
@@ -168,6 +174,10 @@ export fn test_main() -> void {
     let heap_region: usize = page_align((&g_heap_region) as usize);
 
     let r: u64 = elf_load_run(elf_base, 160, load_buf);
+    if r == 0 {
+        uputs("APP-LOAD-FAIL\n");
+        mc_halt();
+    }
     fence_i();
 
     let satp: u64 = agent_confined_build(heap_region, 262144, load_buf, RT_CODE, user_stack, RT_STACK_LEN);

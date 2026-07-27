@@ -23,6 +23,9 @@ const RT_SYS_EXEC: u64 = 10;
 const RT_VADDR: u64 = 0x8000_0000;
 const RT_EH: usize = 64;  // ELF64 header size
 const RT_PH: usize = 56;  // program-header size
+const RT_ET_EXEC: u16 = 2;
+const RT_EM_RISCV: u16 = 243;
+const RT_EV_CURRENT: u32 = 1;
 const RT_CODE: usize = 20; // 5 instructions
 const RT_PROG_LEN: usize = 140; // EH + PH + CODE
 
@@ -92,8 +95,12 @@ fn build_prog_b() -> void {
     store8(base, 3, 70); // 'F'
     store8(base, 4, 2);  // ELFCLASS64
     store8(base, 5, 1);  // little-endian
+    put_u16(base, 16, RT_ET_EXEC);
+    put_u16(base, 18, RT_EM_RISCV);
+    put_u32(base, 20, RT_EV_CURRENT);
     put_u64(base, 24, RT_VADDR);      // e_entry
     put_u64(base, 32, RT_EH as u64);  // e_phoff
+    put_u16(base, 52, RT_EH as u16);  // e_ehsize
     put_u16(base, 54, RT_PH as u16);  // e_phentsize
     put_u16(base, 56, 1);             // e_phnum
 

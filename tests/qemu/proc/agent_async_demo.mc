@@ -139,6 +139,14 @@ export fn k_poll(events_ptr: usize, max: usize, timeout: usize) -> i64 {
     return count as i64;
 }
 
+fn k_submit_pump(req_ptr: usize) -> i64 {
+    return k_submit(req_ptr);
+}
+
+fn k_poll_pump(events_ptr: usize, max: usize, timeout: usize) -> i64 {
+    return k_poll(events_ptr, max, timeout);
+}
+
 // ----- the agent: two awaits over the stable wrappers (read then a SUM tool call) -----
 fn unwrap(r: Result<i32, i32>) -> i32 {
     switch r { ok(v) => { return v; } err(e) => { return e; } }
@@ -153,7 +161,7 @@ async fn agent(p: *mut ToolPump) -> i32 {
 
 export fn agent_async_demo() -> u32 {
     var pump: ToolPump = uninit;
-    tool_pump_init(&pump, k_submit, k_poll);
+    tool_pump_init(&pump, k_submit_pump, k_poll_pump);
 
     // (1) the agent's two awaits resolve through the API over the broker.
     var f: agent__Fut = agent(&pump);

@@ -112,7 +112,7 @@ export fn agent_net_real_main(
     g_resp_len = 0;
 
     // Bring the NIC up and ARP-resolve the gateway ONCE; the socket reuses the resolved gw MAC.
-    var dev: NetDevice = .{ .regs = regs, .rxq = rxq, .txq = txq };
+    var dev: NetDevice = .{ .regs_addr = regs as usize, .rxq = rxq, .txq = txq };
     switch nic_init(&dev) {
         ok(up) => {}
         err(e) => { return stages; }

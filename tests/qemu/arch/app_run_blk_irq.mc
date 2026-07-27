@@ -80,7 +80,7 @@ fn app_blk_irq_start() -> void {
     g_blk_vq.avail = &g_blk_avail;
     g_blk_vq.used = &g_blk_used;
     g_blk_dev = .{
-        .regs = regs,
+        .regs_addr = regs as usize,
         .vq = &g_blk_vq,
         .map = &g_blk_map,
         .pool = &g_blk_pool,

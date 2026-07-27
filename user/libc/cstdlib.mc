@@ -1,8 +1,9 @@
 // user/libc/cstdlib — the C stdlib search/sort/tokenize trio the all-MC libc was missing, added for
 // the WAMR engine (its symbol tables use bsearch/qsort; bh_common uses strtok_r). Standard C-ABI
 // semantics. Work is done on `usize` ADDRESSES (per the libc convention in lcommon.mc); `*mut u8`
-// pointers are minted only at the C-ABI boundary. Comparators are C `int(*)(const void*,const void*)`
-// function pointers, modeled as `fn(*const u8, *const u8) -> i32`.
+// pointers are minted only at the ABI boundary. MC does not yet have an ABI-qualified
+// C function-pointer type, so this all-MC libc export is deliberately marked
+// `#[mc_abi]` and uses the backend-private function-pointer representation.
 
 import "user/libc/lcommon.mc";
 import "std/addr.mc";
@@ -19,6 +20,7 @@ fn lc_st64(addr: usize, value: usize) -> void {
 
 // bsearch(key, base, nmemb, size, cmp): binary search over a sorted array; returns the matching
 // element or NULL. cmp(key, elem) follows the C sign convention (<0 / 0 / >0).
+#[mc_abi]
 export fn bsearch(key: *const u8, base: *const u8, nmemb: usize, size: usize,
                   cmp: fn(*const u8, *const u8) -> i32) -> *mut u8 {
     let b0: usize = base as usize;
@@ -52,6 +54,7 @@ fn lc_swap(a: usize, b: usize, size: usize) -> void {
 // qsort(base, nmemb, size, cmp): insertion sort. O(n^2) but correct for any input; the arrays the
 // engine sorts (native-symbol tables) are small, sorted once at load. A stable, allocation-free sort
 // is preferable here to a recursive quicksort in the confined agent.
+#[mc_abi]
 export fn qsort(base: *mut u8, nmemb: usize, size: usize,
                 cmp: fn(*const u8, *const u8) -> i32) -> void {
     if nmemb < 2 {

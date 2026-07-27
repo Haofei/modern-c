@@ -80,7 +80,9 @@ fn vq_alloc_desc(vq: *mut Virtq) -> u16 {
         unreachable; // queue full
     }
     let id: u16 = vq.free_head;
-    vq.free_head = vq.desc.d[id as usize].next;
+    let descs: DescTable = vq.desc.*;
+    let desc: VringDesc = descs.d[id as usize];
+    vq.free_head = desc.next;
     vq.num_free = vq.num_free - 1;
     return id;
 }
@@ -112,11 +114,14 @@ pub fn vq_free_chain3(vq: *mut Virtq, head: u16) -> void {
     if head >= vq.size {
         return; // out-of-range head — fail safe, free nothing
     }
-    let id1: u16 = vq.desc.d[head as usize].next;
+    let descs: DescTable = vq.desc.*;
+    let head_desc: VringDesc = descs.d[head as usize];
+    let id1: u16 = head_desc.next;
     var id2: u16 = 0;
     var have_id2: bool = false;
     if id1 < vq.size {
-        id2 = vq.desc.d[id1 as usize].next;
+        let desc1: VringDesc = descs.d[id1 as usize];
+        id2 = desc1.next;
         if id2 < vq.size {
             have_id2 = true;
         }
@@ -352,7 +357,9 @@ pub move struct CompletedChain3 {
 pub fn vq_complete_chain(vq: *mut Virtq) -> Result<CompletedChain3, VqCompleteError> {
     rmb();
     let slot: usize = (vq.last_used % vq.size) as usize;
-    let raw_id: u32 = vq.used.ring[slot].id;
+    let used_ring: VringUsed = vq.used.*;
+    let used_elem: UsedElem = used_ring.ring[slot];
+    let raw_id: u32 = used_elem.id;
     if raw_id >= vq.size as u32 {
         return err(.BadDescriptorId);
     }
@@ -362,20 +369,23 @@ pub fn vq_complete_chain(vq: *mut Virtq) -> Result<CompletedChain3, VqCompleteEr
     }
     // Walk the linked chain head → data → status, validating every hop against the
     // queue bounds and our in-flight record before trusting any of it.
-    if (vq.desc.d[id0 as usize].flags & VRING_DESC_F_NEXT) == 0 {
+    let descs: DescTable = vq.desc.*;
+    let desc0: VringDesc = descs.d[id0 as usize];
+    if (desc0.flags & VRING_DESC_F_NEXT) == 0 {
         return err(.BadChain);
     }
-    let id1: u16 = vq.desc.d[id0 as usize].next;
+    let id1: u16 = desc0.next;
     if id1 >= vq.size {
         return err(.BadDescriptorId);
     }
     if !vq.inflight_present[id1 as usize] {
         return err(.NotInFlight);
     }
-    if (vq.desc.d[id1 as usize].flags & VRING_DESC_F_NEXT) == 0 {
+    let desc1: VringDesc = descs.d[id1 as usize];
+    if (desc1.flags & VRING_DESC_F_NEXT) == 0 {
         return err(.BadChain);
     }
-    let id2: u16 = vq.desc.d[id1 as usize].next;
+    let id2: u16 = desc1.next;
     if id2 >= vq.size {
         return err(.BadDescriptorId);
     }
@@ -390,7 +400,7 @@ pub fn vq_complete_chain(vq: *mut Virtq) -> Result<CompletedChain3, VqCompleteEr
     let l1: u32 = vq.inflight_len[id1 as usize];
     let l2: u32 = vq.inflight_len[id2 as usize];
 
-    let used: u32 = vq.used.ring[slot].len;
+    let used: u32 = used_elem.len;
     // Sum the three descriptor lengths in 64 bits: each is a u32, so their sum can exceed
     // u32 and would trap under checked arithmetic before we could return LengthOverflow.
     let total: u64 = (l0 as u64) + (l1 as u64) + (l2 as u64);
@@ -446,7 +456,9 @@ pub fn vq_wait_used(vq: *mut Virtq, timeout: u64) -> bool {
 pub fn vq_used_len(vq: *mut Virtq) -> u32 {
     rmb();
     let slot: usize = (vq.last_used % vq.size) as usize;
-    return vq.used.ring[slot].len;
+    let used_ring: VringUsed = vq.used.*;
+    let used_elem: UsedElem = used_ring.ring[slot];
+    return used_elem.len;
 }
 
 // A single completed DMA buffer handed back to the caller to reclaim. Like
@@ -473,7 +485,9 @@ pub move struct CompletedBuffer {
 pub fn vq_complete(vq: *mut Virtq) -> Result<CompletedBuffer, VqCompleteError> {
     rmb();
     let slot: usize = (vq.last_used % vq.size) as usize;
-    let raw_id: u32 = vq.used.ring[slot].id;
+    let used_ring: VringUsed = vq.used.*;
+    let used_elem: UsedElem = used_ring.ring[slot];
+    let raw_id: u32 = used_elem.id;
     if raw_id >= vq.size as u32 {
         return err(.BadDescriptorId); // device reported an out-of-range descriptor id
     }
@@ -482,7 +496,7 @@ pub fn vq_complete(vq: *mut Virtq) -> Result<CompletedBuffer, VqCompleteError> {
         return err(.NotInFlight); // device completed a descriptor that is not in flight
     }
     let alloc_len: u32 = vq.inflight_len[id as usize];
-    let used: u32 = vq.used.ring[slot].len;
+    let used: u32 = used_elem.len;
     if used > alloc_len {
         return err(.LengthOverflow); // device over-reports the bytes it wrote
     }

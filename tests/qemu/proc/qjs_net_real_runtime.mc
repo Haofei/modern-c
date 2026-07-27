@@ -12,9 +12,8 @@ import "kernel/arch/riscv64/sbi_virtio_probe.mc";
 
 const RT_KERNEL_VA: usize = 0x8000_0000;
 const RT_PAGE: usize = 4096;
-const RT_REGION_LEN: usize = 16 * 1024 * 1024;
+const RT_REGION_LEN: usize = 64 * 1024 * 1024;
 const VIRTIO_ID_NET: u32 = 1;
-const HTTP_PORT: u16 = 8080;
 
 extern fn mc_halt() -> void;
 extern fn usermode_setup() -> void;
@@ -26,8 +25,9 @@ extern fn app_build_status() -> u32;
 extern fn app_entry() -> u64;
 extern fn app_kernel_unmapped(kernel_va: usize) -> u32;
 extern fn app_net_real_config(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq, txq: *mut Virtq, dst_port: u16) -> void;
+extern fn mc_http_port() -> u16;
 
-global g_region: [16781312]u8; // 16 MiB + 4 KiB
+global g_region: [67112960]u8; // 64 MiB + 4 KiB
 global g_rx_desc: DescTable;
 global g_rx_avail: VringAvail;
 global g_rx_used: VringUsed;
@@ -83,7 +83,7 @@ export fn test_main() -> void {
     g_txq.desc = &g_tx_desc;
     g_txq.avail = &g_tx_avail;
     g_txq.used = &g_tx_used;
-    app_net_real_config(regs, &g_rxq, &g_txq, HTTP_PORT);
+    app_net_real_config(regs, &g_rxq, &g_txq, mc_http_port());
 
     let image_base: usize = mc_app_image();
     let image_len: usize = mc_app_image_len();

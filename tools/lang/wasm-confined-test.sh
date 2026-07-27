@@ -23,6 +23,13 @@ LLC="${LLC:-llc}"
 ZIG="${ZIG:-zig}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 AR="${AR:-llvm-ar}"
+if ! command -v "$AR" >/dev/null 2>&1; then
+    if command -v llvm-ar-18 >/dev/null 2>&1; then
+        AR="llvm-ar-18"
+    elif command -v ar >/dev/null 2>&1; then
+        AR="ar"
+    fi
+fi
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"

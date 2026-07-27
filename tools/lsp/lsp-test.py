@@ -703,8 +703,9 @@ def main():
         with open(unopened_path, "w") as f:
             f.write("fn unopened_workspace_symbol() -> u32 { return 9; }\n")
         ws_unopened = request(proc, 43, "workspace/symbol", {"query": "unopened_workspace_symbol"})
+        unopened_uri = pathlib.Path(os.path.realpath(unopened_path)).as_uri()
         if not any(s["name"] == "unopened_workspace_symbol" and
-                   s["location"]["uri"] == pathlib.Path(unopened_path).as_uri()
+                   s["location"]["uri"] == unopened_uri
                    for s in (ws_unopened or [])):
             raise SystemExit(f"FAIL: lsp-test — workspace/symbol ignored unopened file: {ws_unopened}")
 

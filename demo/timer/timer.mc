@@ -17,15 +17,18 @@ extern fn mc_timer_elapsed(t: *TimerRunning) -> u32;
 extern fn mc_timer_stop(t: TimerRunning) -> TimerStopped;
 extern fn mc_timer_close(t: TimerStopped) -> void;
 
+#[mc_abi]
 export fn configure(t: TimerStopped, reload: u32) -> TimerStopped {
     return mc_timer_configure(t, reload);
 }
+#[mc_abi]
 export fn start(t: TimerStopped) -> TimerRunning {
     return mc_timer_start(t);
 }
 export fn elapsed(t: *TimerRunning) -> u32 {
     return mc_timer_elapsed(t);
 }
+#[mc_abi]
 export fn stop(t: TimerRunning) -> TimerStopped {
     return mc_timer_stop(t);
 }

@@ -34,7 +34,8 @@ const DEMO_TEST_VALUE: u32 = 0xCAFE_BABE;
 // software-walk verdict computed before MMU enable (1 = software translate matched and the
 // kernel page is correctly non-user; 0 = software walk disagreed).
 export fn vm_arm_build(region_base: usize, region_len: usize, out_ttbr0: *mut u64, out_test_phys: *mut u64) -> u32 {
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     var pt: PageTable = page_table_new(&heap);
 
     // Identity-map low RAM with 2 MiB blocks. Kernel Normal-memory RWX (PXN=0 so the text it

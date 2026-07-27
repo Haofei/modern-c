@@ -46,7 +46,7 @@ fi
 LINK_FLAGS_STR=""
 if [ "$(uname -s)" = "Linux" ]; then LINK_FLAGS_STR="-no-pie"; fi
 
-export MCC HERE CLANG LLC MANIFEST LINK_FLAGS_STR
+export MCC HERE CLANG LLC MANIFEST LINK_FLAGS_STR EXPECTED_SKIPS
 
 diff_one() {
     local name="$1"
@@ -63,11 +63,20 @@ diff_one() {
         *)      echo "FAIL: diff-backend $name — unknown manifest mode '$mode'"; return 1 ;;
     esac
 
+    skip_or_note() {
+        local why="$1"
+        if awk -F'\t' -v n="$name" 'BEGIN { found=0 } /^#/ { next } NF >= 1 && $1 == n { found=1 } END { exit(found ? 0 : 1) }' "$EXPECTED_SKIPS"; then
+            echo "NOTE: diff-backend $name (expected unsupported: $why)"
+        else
+            echo "SKIP: diff-backend $name ($why)"
+        fi
+    }
+
     if ! MCC_UNDER_TEST="$MCC" MCC="$MCC" bash "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/$fixture" -o "$W/c.o" $mcc_flags >/dev/null 2>&1; then
-        echo "SKIP: diff-backend $name (C backend does not build on this host)"; return 0
+        skip_or_note "C backend does not build on this host"; return 0
     fi
     if ! MCC_UNDER_TEST="$MCC" MCC="$MCC" LLC="$LLC" bash "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/$fixture" -o "$W/l.o" >/dev/null 2>&1; then
-        echo "SKIP: diff-backend $name (LLVM backend cannot lower this fixture yet)"; return 0
+        skip_or_note "LLVM backend cannot lower this fixture yet"; return 0
     fi
     # The C backend inlines its mc_trap_* helpers; the LLVM backend references them externally,
     # so the LLVM link needs trap stubs. Neither passing fixture actually traps, so __builtin_trap
@@ -83,10 +92,10 @@ void mc_trap_NullUnwrap(void) { __builtin_trap(); }
 void mc_trap_Unreachable(void) { __builtin_trap(); }
 C
     if ! "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/c.o" -o "$W/c.bin" >/dev/null 2>&1; then
-        echo "SKIP: diff-backend $name (C link failed)"; return 0
+        skip_or_note "C link failed"; return 0
     fi
     if ! "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/trap_stubs.c" "$W/l.o" -o "$W/l.bin" >/dev/null 2>&1; then
-        echo "SKIP: diff-backend $name (LLVM link failed)"; return 0
+        skip_or_note "LLVM link failed"; return 0
     fi
 
     local c_out l_out c_rc l_rc
@@ -114,7 +123,8 @@ out="$(printf '%s\0' "${names[@]}" | xargs -0 -P "$JOBS" -I{} bash -c 'diff_one 
 
 fails="$(printf '%s\n' "$out" | grep -c '^FAIL:' || true)"
 skips="$(printf '%s\n' "$out" | grep -c '^SKIP:' || true)"
-compared=$(( count - skips ))
+expected_notes="$(printf '%s\n' "$out" | grep -c '^NOTE: diff-backend .*expected unsupported:' || true)"
+compared=$(( count - skips - expected_notes ))
 expected_skip_count="$(awk -F'\t' '/^#/ || NF == 0 { next } $1 != "" { n++ } END { print n + 0 }' "$EXPECTED_SKIPS")"
 min_compared=$(( count - expected_skip_count ))
 if [ "$fails" -gt 0 ]; then
@@ -137,4 +147,4 @@ if [ -n "$unexpected_skips" ]; then
     echo "Add a justified row to tools/toolchain/diff-backend-expected-skips.tsv only for intentional gaps."
     exit 1
 fi
-echo "PASS: diff-backend — C and LLVM agree on $compared comparable host fixtures ($skips skipped, $count total)"
+echo "PASS: diff-backend — C and LLVM agree on $compared comparable host fixtures ($expected_notes expected unsupported, $skips skipped, $count total)"

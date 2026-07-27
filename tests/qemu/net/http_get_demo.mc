@@ -106,7 +106,7 @@ export fn http_get_drive(
     g_resp_len = 0;
     build_request();
 
-    var dev: NetDevice = .{ .regs = regs, .rxq = rxq, .txq = txq };
+    var dev: NetDevice = .{ .regs_addr = regs as usize, .rxq = rxq, .txq = txq };
     switch nic_init(&dev) {
         ok(up) => {}
         err(e) => { return 0; }

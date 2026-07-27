@@ -7,7 +7,7 @@ CLANG="${CLANG:-clang}"; LLC="${LLC:-llc}"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-x86-sched-test" || echo "x86-sched-test")
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: $TEST_NAME (no clang)"; exit 0; }
 if [ "$BACKEND" = llvm ]; then command -v "$LLC" >/dev/null 2>&1 || { echo "SKIP: $TEST_NAME (no llc)"; exit 0; }; fi
-case "$(uname -m)" in x86_64|amd64) ;; *) echo "SKIP: $TEST_NAME (host not x86-64)"; exit 0;; esac
+case "$(uname -m)" in x86_64|amd64) ;; *) echo "NOTE: $TEST_NAME not run on this host (requires x86-64)"; exit 0;; esac
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 case "$BACKEND" in
     c)

@@ -36,7 +36,7 @@ export fn mc_agent_source(out_len: *mut usize) -> usize {
 const SYS_EXIT: u64 = 3;                  // qjs agent ABI (user/abi.mc), NOT M6's 2
 const QEMU_EXIT_PORT: u16 = 0xf4;
 const KERNEL_VA: usize = 0x10_0000;       // 1 MiB: the kernel image load address
-const REGION_LEN: usize = 16 * 1024 * 1024; // 16 MiB
+const REGION_LEN: usize = 64 * 1024 * 1024; // 64 MiB
 const PAGE: usize = 4096;
 
 const SEG_S: u64 = (1 as u64) << 44;
@@ -66,7 +66,7 @@ global gdt: [7]u64;
 global gdtr: [10]u8;
 global tss: [104]u8;
 // The agent's page tables + per-page frames (8 MiB arena + engine + 512 KiB stack + tables).
-global region: [16781312]u8;          // 16 MiB + a page for alignment
+global region: [67112960]u8;          // 64 MiB + a page for alignment
 global kernel_trap_stack: [16384 + 4096]u8; // RSP0
 
 fn align_up(x: usize, a: usize) -> usize {

@@ -56,7 +56,7 @@ export fn async_future_demo(region_base: usize, region_len: usize) -> u32 {
     var f: two__Fut = two(&g_broker);   // constructs ReqFut child0 (submits request 0)
     putc_(87); // 'W'
     mc_timer_arm_oneshot();             // arm the first completion interrupt
-    drive_irq(&f, disable_interrupts_global, enable_interrupts_global, wait_for_interrupt);
+    drive_irq(&f, disable_interrupts_global_mc, enable_interrupts_global_mc, wait_for_interrupt_mc);
     putc_(82); // 'R'
 
     return two__Fut_take_result(&f) as u32;   // 42 iff both real broker completions reached the awaits

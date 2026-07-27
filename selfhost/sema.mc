@@ -2376,6 +2376,11 @@ pub fn sema_parse_err_count(s: *SmState) -> u32 {
     return parser_err_count(&s.p);
 }
 
+pub fn sema_parse_first_err_start(s: *SmState) -> usize {
+    let tok: u32 = parser_first_err_tok(&s.p);
+    return parser_tok_start(&s.p, tok);
+}
+
 // Borrow the parser (and its AST arena) that sema already built (arch plan Phase 0). Lets the caller
 // hand sema's SINGLE parse straight to `emit_c_on` instead of re-parsing the source. Valid until
 // `sema_free`; do not free through it.

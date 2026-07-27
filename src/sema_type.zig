@@ -551,6 +551,25 @@ fn classifyNullableType(child: ast.TypeExpr) TypeClass {
     };
 }
 
+test "nullable classifier distinguishes pointer, dyn-trait, and value payloads" {
+    const span: ast.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    var u8_ty: ast.TypeExpr = .{ .span = span, .kind = .{ .name = .{ .text = "u8", .span = span } } };
+    const ptr_ty: ast.TypeExpr = .{
+        .span = span,
+        .kind = .{ .pointer = .{ .mutability = .mut, .child = &u8_ty } },
+    };
+    try std.testing.expectEqual(TypeClass.nullable_pointer, classifyNullableType(ptr_ty));
+
+    const dyn_ty: ast.TypeExpr = .{
+        .span = span,
+        .kind = .{ .dyn_trait = .{ .mutability = .none, .trait_name = .{ .text = "Shape", .span = span } } },
+    };
+    try std.testing.expectEqual(TypeClass.nullable_dyn_trait, classifyNullableType(dyn_ty));
+
+    const value_ty: ast.TypeExpr = .{ .span = span, .kind = .{ .name = .{ .text = "u32", .span = span } } };
+    try std.testing.expectEqual(TypeClass.nullable_value, classifyNullableType(value_ty));
+}
+
 // The payload classes that a `?T` value optional supports (tagged `{present,value}`
 // repr). Kept in sync with mir_type.valueTypeFrom* and the backends' opt registries.
 pub fn isValueOptionalPayloadClass(kind: TypeClass) bool {

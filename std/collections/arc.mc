@@ -47,8 +47,8 @@ pub fn arc_new_uninit(comptime T: type, a: *mut dyn Allocator) -> Arc<T> {
 
 // Add an owner: bump the count and return another handle to the same block, carrying
 // the same allocator provenance.
-pub fn arc_clone(comptime T: type, h: *Arc<T>) -> Arc<T> {
-    let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(h.block);
+pub fn arc_clone_from_parts(comptime T: type, block: PAddr, allocator: *mut dyn Allocator) -> Arc<T> {
+    let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(block);
     // Check the saturation cap *before* incrementing, so the count is never wrapped to a
     // bogus value. A plain `fetch_add` would write `0` for one instant when the previous
     // value was the maximum — corrupting the refcount before any overflow check could run.
@@ -62,7 +62,11 @@ pub fn arc_clone(comptime T: type, h: *Arc<T>) -> Arc<T> {
         unreachable; // refcount saturated — too many owners; never wrap the counter
     }
     blk.count.store(cur + 1, .release); // cur < max, so the checked add cannot overflow
-    return .{ .block = h.block, .allocator = h.allocator };
+    return .{ .block = block, .allocator = allocator };
+}
+
+pub fn arc_clone(comptime T: type, h: *Arc<T>) -> Arc<T> {
+    return arc_clone_from_parts(T, h.block, h.allocator);
 }
 
 // Borrow the shared value immutably (valid while any handle lives). `value` is at

@@ -46,9 +46,13 @@ pub enum NetError {
 // cpu-owned buffers — so this stays the boundary between transport/queue and
 // protocol.
 pub struct NetDevice {
-    regs: MmioPtr<VirtioMmio>,
+    regs_addr: usize,
     rxq: *mut Virtq,
     txq: *mut Virtq,
+}
+
+fn net_regs(dev: *NetDevice) -> MmioPtr<VirtioMmio> {
+    unsafe { return dev.regs_addr as MmioPtr<VirtioMmio>; }
 }
 
 // Post one device-writable RX buffer for the card to fill.
@@ -67,13 +71,16 @@ fn post_rx_buffer(rxq: *mut Virtq) -> void {
 // leak the posted RX buffers). After a fault the NIC must be re-initialised (`nic_init`)
 // before reuse; callers report the failure upward.
 fn nic_fault_reset(dev: *NetDevice) -> void {
-    if virtio_reset(dev.regs) {
+    let regs: MmioPtr<VirtioMmio> = net_regs(dev);
+    let rxq: *mut Virtq = dev.rxq;
+    let txq: *mut Virtq = dev.txq;
+    if virtio_reset(regs) {
         // Reset acknowledged: the device has relinquished every in-flight buffer, so it is
         // safe to reconstruct them as CPU-owned and free them. A reset drops the WHOLE device,
         // so reclaim BOTH queues — the faulted queue's sibling would otherwise strand its
         // posted buffers (a TX fault would leak the posted RX buffers).
-        vq_reset_reclaim(dev.rxq);
-        vq_reset_reclaim(dev.txq);
+        vq_reset_reclaim(rxq);
+        vq_reset_reclaim(txq);
     }
     // else: the device did not acknowledge the reset and may still own — and write — the
     // in-flight DMA buffers. Reconstructing them as CPU-owned and freeing them would be a
@@ -85,7 +92,7 @@ fn nic_fault_reset(dev: *NetDevice) -> void {
 // Bring the card up: require VERSION_1, set up both queues, go live, and post the
 // initial RX buffers.
 pub fn nic_init(dev: *NetDevice) -> Result<bool, NetError> {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = net_regs(dev);
     let rxq: *mut Virtq = dev.rxq;
     let txq: *mut Virtq = dev.txq;
     switch virtio_init(regs, VIRTIO_NET_DEVICE_ID, 0, VIRTIO_F_VERSION_1_HI) {
@@ -113,7 +120,7 @@ pub fn nic_init(dev: *NetDevice) -> Result<bool, NetError> {
 
 // Send a broadcast ARP request for `target_ip` and reclaim the TX buffer.
 pub fn nic_send_arp(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_ip: u32) -> bool {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = net_regs(dev);
     let txq: *mut Virtq = dev.txq;
     var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
     // The virtio_net_hdr at offset 0 is left zeroed by the allocator.
@@ -151,7 +158,7 @@ pub fn nic_send_arp(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_ip: 
 // payload); the whole allocation is submitted. Consumes `cpu`. Returns false on a
 // full queue or a device fault/timeout.
 pub fn nic_tx_frame(dev: *NetDevice, cpu: CpuBuffer, total_len: usize) -> bool {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = net_regs(dev);
     let txq: *mut Virtq = dev.txq;
     let _ignored: usize = total_len;
     let txbuf: DeviceBuffer = clean_for_device(cpu); // cpu consumed
@@ -166,7 +173,7 @@ pub fn nic_tx_frame(dev: *NetDevice, cpu: CpuBuffer, total_len: usize) -> bool {
 // Poll the RX queue once. Returns the sender IP of a received ARP reply, or 0 if
 // nothing was received (or it was not an ARP reply). Refills the consumed buffer.
 pub fn nic_poll_arp(dev: *NetDevice) -> u32 {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = net_regs(dev);
     let rxq: *mut Virtq = dev.rxq;
     if !vq_has_used(rxq) {
         return 0;
@@ -274,7 +281,7 @@ fn parse_rx_frame(cpu: *CpuBuffer, len: usize) -> RxFrame {
 // Wait (bounded) for one RX frame, parse it, free + refill the buffer, and return
 // the plain record. `valid` is false on timeout.
 fn rx_receive(dev: *NetDevice) -> RxFrame {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = net_regs(dev);
     let rxq: *mut Virtq = dev.rxq;
     var out: RxFrame = .{
         .valid = false, .ethertype = 0,
@@ -333,7 +340,7 @@ fn tx_wait_reclaim(dev: *NetDevice) -> bool {
 // Ping the gateway: ARP for its MAC, send an ICMP echo request, await the reply.
 // The full Ethernet/IPv4/ICMP path over real virtio-net DMA.
 pub fn nic_ping_gateway(dev: *NetDevice, src_mac: *MacAddr, src_ip: Ipv4Addr, gw_ip: Ipv4Addr) -> Result<bool, NetError> {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = net_regs(dev);
     let txq: *mut Virtq = dev.txq;
     // 1. Resolve the gateway's hardware address.
     if !nic_send_arp(dev, src_mac, src_ip.raw, gw_ip.raw) {
@@ -399,7 +406,7 @@ pub fn nic_arp_resolve(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_i
 // real-RX primitive: the caller routes the bytes onward (e.g. to net_rx_deliver),
 // keeping the driver independent of the protocol layers.
 pub fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = net_regs(dev);
     let rxq: *mut Virtq = dev.rxq;
     let start: Ticks = read_ticks();
     while !timed_out(start, read_ticks(), IO_TIMEOUT_TICKS) {
@@ -444,7 +451,7 @@ pub fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
 // ----- inbound responder (the host→guest "pingable" path) -----
 
 fn send_arp_reply(dev: *NetDevice, src_mac: *MacAddr, our_ip: u32, dst_mac: *MacAddr, dst_ip: u32) -> bool {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = net_regs(dev);
     let txq: *mut Virtq = dev.txq;
     var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
     arp_write_reply(&cpu, FRAME_AT, src_mac, our_ip, dst_mac, dst_ip);
@@ -458,7 +465,7 @@ fn send_arp_reply(dev: *NetDevice, src_mac: *MacAddr, our_ip: u32, dst_mac: *Mac
 }
 
 fn send_icmp_reply(dev: *NetDevice, src_mac: *MacAddr, our_ip: u32, dst_mac: *MacAddr, dst_ip: u32, ident: u16, seq: u16) -> bool {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = net_regs(dev);
     let txq: *mut Virtq = dev.txq;
     var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
     icmp_write_echo_reply(&cpu, FRAME_AT, src_mac, dst_mac, our_ip, dst_ip, ident, seq);

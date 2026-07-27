@@ -11,17 +11,30 @@ import "kernel/core/heap.mc";
 struct Packet { len: u32, data: [64]u8 }
 global g_pool: [8192]u8;
 
-// A consumer: sum the packet's bytes through its shared handle, then release the owner.
-// Returns sum, with bit 16 set if this consumer's drop freed the buffer (it was last).
-fn consume(owner: Arc<Packet>) -> u32 {
-    let p: *const Packet = arc_get(Packet, &owner);
+fn packet_init(owner: *Arc<Packet>) -> void {
+    var p: *mut Packet = raw.ptr<Packet>(0);
+    unsafe {
+        p = arc_get_mut(Packet, owner);
+    }
+    p.len = 4;
+    p.data[0] = 10;
+    p.data[1] = 20;
+    p.data[2] = 30;
+    p.data[3] = 40; // sum = 100
+}
+
+fn packet_sum_addr(block: PAddr) -> u32 {
+    let p: *const Packet = raw.ptr<Packet>(block);
     var sum: u32 = 0;
     var i: usize = 0;
     while i < (p.len as usize) {
         sum = sum + (p.data[i] as u32);
         i = i + 1;
     }
-    let freed: bool = arc_drop(Packet, owner); // release this owner (consumes it)
+    return sum;
+}
+
+fn mark_freed(sum: u32, freed: bool) -> u32 {
     var r: u32 = sum;
     if freed {
         r = r | 0x10000;
@@ -30,7 +43,8 @@ fn consume(owner: Arc<Packet>) -> u32 {
 }
 
 export fn arc_pkt_run() -> u32 {
-    var heap: Heap = heap_new(phys_range(pa((&g_pool[0]) as usize), 8192));
+    var heap: Heap = uninit;
+    heap_init(&heap, phys_range(pa((&g_pool[0]) as usize), 8192));
     let a: *mut dyn Allocator = heap_allocator(&heap);
     var pass: u32 = 1;
 
@@ -38,21 +52,17 @@ export fn arc_pkt_run() -> u32 {
 
     // Fill the packet once while this handle is still unique. arc_get_mut is unsafe (the
     // checker can't prove no clone aliases the pointer); we do not clone `owner` until after.
-    var p: *mut Packet = raw.ptr<Packet>(0);
-    unsafe {
-        p = arc_get_mut(Packet, &owner);
-    }
-    p.len = 4;
-    p.data[0] = 10;
-    p.data[1] = 20;
-    p.data[2] = 30;
-    p.data[3] = 40; // sum = 100
+    packet_init(&owner);
 
     // Two owners share the buffer.
-    var owner2: Arc<Packet> = arc_clone(Packet, &owner);
+    var owner2: Arc<Packet> = arc_clone_from_parts(Packet, owner.block, owner.allocator);
 
-    let s1: u32 = consume(owner); // first consumer: reads, drops -> not last
-    let s2: u32 = consume(owner2); // second consumer: reads, drops -> frees
+    let s1_sum: u32 = packet_sum_addr(owner.block);
+    let s1_freed: bool = arc_drop(Packet, owner); // first consumer: reads, drops -> not last
+    let s1: u32 = mark_freed(s1_sum, s1_freed);
+    let s2_sum: u32 = packet_sum_addr(owner2.block);
+    let s2_freed: bool = arc_drop(Packet, owner2); // second consumer: reads, drops -> frees
+    let s2: u32 = mark_freed(s2_sum, s2_freed);
 
     if s1 != 100 {
         pass = 0; // first consumer saw the shared bytes

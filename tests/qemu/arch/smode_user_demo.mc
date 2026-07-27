@@ -82,7 +82,7 @@ fn map_pages(virt_base: usize, phys_base: usize, len: usize, flags: u64) -> void
 // Build the agent's Sv39 space. `region` backs the page tables. `code_phys`/`stack_phys`
 // are physical frames the bring-up already populated. Returns the satp to activate.
 export fn smode_space_build(region_base: usize, region_len: usize, code_phys: usize, code_len: usize, stack_phys: usize, stack_len: usize) -> u64 {
-    g_heap = heap_new(phys_range(pa(region_base), region_len));
+    heap_init_untracked(&g_heap, phys_range(pa(region_base), region_len));
     g_pt = page_table_new(&g_heap);
     g_stack_len = stack_len;
 
@@ -158,6 +158,9 @@ const SYS_EXIT: u64 = 3;
 const RT_VADDR: u64 = 0x4000_0000; // must match AGENT_CODE_VA above
 const RT_EH: usize = 64;           // ELF header size
 const RT_PH: usize = 56;           // program header size
+const RT_ET_EXEC: u16 = 2;
+const RT_EM_RISCV: u16 = 243;
+const RT_EV_CURRENT: u32 = 1;
 
 // The U-mode program layout (mirrors the C bring-up):
 //   WRITE(hello): li a7/a0/a1 (6) + ecall (1) = 7 insns
@@ -267,8 +270,12 @@ fn build_elf() -> void {
     elf_put_u8(3, 70); // 'F'
     elf_put_u8(4, 2);  // ELFCLASS64
     elf_put_u8(5, 1);  // little-endian
+    elf_put_u16(16, RT_ET_EXEC);
+    elf_put_u16(18, RT_EM_RISCV);
+    elf_put_u32(20, RT_EV_CURRENT);
     elf_put_u64(24, RT_VADDR);            // e_entry
     elf_put_u64(32, RT_EH as u64);        // e_phoff
+    elf_put_u16(52, RT_EH as u16);        // e_ehsize
     elf_put_u16(54, RT_PH as u16);        // e_phentsize
     elf_put_u16(56, 1);                   // e_phnum
 

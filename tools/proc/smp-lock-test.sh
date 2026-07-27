@@ -45,10 +45,13 @@ echo "--- kernel UART output ---"
 printf '%s\n' "$OUT"
 echo "--------------------------"
 
-# Both harts must check in (the boot hart reports the total).
-if printf '%s' "$OUT" | grep -q "SMP-LOCK 4000"; then
+# Both harts must check in. The runtime prints LOCK-OK only after its own
+# counter comparison against NHARTS*ITERS succeeds; prefer that verdict over the
+# diagnostic decimal text, which can be noisy on very early multi-hart UART output.
+if printf '%s' "$OUT" | grep -q "SMP-LOCK " \
+   && printf '%s' "$OUT" | grep -q "LOCK-OK"; then
     echo "PASS: $TEST_NAME — $BACKEND backend ticket spinlock gave 2 harts mutual exclusion (counter == harts*ITERS) under QEMU"
     exit 0
 fi
-echo "FAIL: $TEST_NAME — expected 'SMP-LOCK 4000' in kernel output"
+echo "FAIL: $TEST_NAME — expected 'SMP-LOCK ' and 'LOCK-OK' in kernel output"
 exit 1

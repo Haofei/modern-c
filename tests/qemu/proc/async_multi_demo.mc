@@ -78,7 +78,7 @@ export fn async_multi_demo(region_base: usize, region_len: usize) -> u32 {
     // Drive all three to completion. max_idle is generous (each completion is one wfi wake);
     // 64 consecutive no-progress idles fail closed (here we expect exactly 3 idles, one per request).
     let completed: usize = drive_many(&set, 64,
-        disable_interrupts_global, enable_interrupts_global, wait_for_interrupt);
+        disable_interrupts_global_mc, enable_interrupts_global_mc, wait_for_interrupt_mc);
     putc_(82); // 'R'
 
     let r0: i32 = one__Fut_take_result(&f0);

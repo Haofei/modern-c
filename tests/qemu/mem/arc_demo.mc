@@ -9,8 +9,14 @@ import "kernel/core/heap.mc";
 struct Payload { value: u32 }
 global g_pool: [4096]u8;
 
+fn payload_value(block: PAddr) -> u32 {
+    let p: *const Payload = raw.ptr<Payload>(block);
+    return p.value;
+}
+
 export fn arc_demo_run() -> u32 {
-    var heap: Heap = heap_new(phys_range(pa((&g_pool[0]) as usize), 4096));
+    var heap: Heap = uninit;
+    heap_init(&heap, phys_range(pa((&g_pool[0]) as usize), 4096));
     let a: *mut dyn Allocator = heap_allocator(&heap);
     var pass: u32 = 1;
 
@@ -20,17 +26,15 @@ export fn arc_demo_run() -> u32 {
         pass = 0;
     }
 
-    var h2: Arc<Payload> = arc_clone(Payload, &h1); // second owner
+    var h2: Arc<Payload> = arc_clone_from_parts(Payload, h1.block, h1.allocator); // second owner
     if arc_count(Payload, &h1) != 2 {
         pass = 0;
     }
 
-    let v1: *const Payload = arc_get(Payload, &h1);
-    if v1.value != 0xBEEF {
+    if payload_value(h1.block) != 0xBEEF {
         pass = 0;
     }
-    let v2: *const Payload = arc_get(Payload, &h2);
-    if v2.value != 0xBEEF {
+    if payload_value(h2.block) != 0xBEEF {
         pass = 0;
     }
 

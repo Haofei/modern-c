@@ -49,6 +49,7 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
 # (MC has no -D). The \r\n in REQ are literal backslash sequences MC's lexer interprets.
 cat > "$WORK/dnscfg.mc" <<EOF
 export fn mc_dns_server_ip() -> u32 { return 0x0A000203; }
+export fn mc_dns_server_port() -> u16 { return 53; }
 export fn mc_http_port() -> u16 { return 80; }
 export fn mc_dns_hostname() -> *const u8 { return "$HOSTNAME"; }
 export fn mc_http_request() -> *const u8 { return "$REQ"; }

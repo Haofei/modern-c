@@ -82,7 +82,7 @@ fn app_net_real_start() -> void {
 
     var regs: MmioPtr<VirtioMmio> = uninit;
     unsafe { regs = g_real_regs_base as MmioPtr<VirtioMmio>; }
-    g_real_dev = .{ .regs = regs, .rxq = g_real_rxq, .txq = g_real_txq };
+    g_real_dev = .{ .regs_addr = regs as usize, .rxq = g_real_rxq, .txq = g_real_txq };
     switch nic_init(&g_real_dev) {
         ok(up) => {}
         err(e) => { return; }

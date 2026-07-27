@@ -74,11 +74,11 @@ const ATTR_PXN: u64 = 0x0020_0000_0000_0000; // bit 53 — privileged execute-ne
 // Kernel Normal-memory RWX page (PXN=0 so EL1 may fetch instructions; UXN=1, EL0 cannot exec).
 pub const FLAGS_KERNEL_RWX: u64 = ATTR_AP_KRW | ATTR_ATTRIDX0 | ATTR_UXN;
 // Kernel Normal-memory data page (no execute at all): PXN=1, UXN=1.
-export const FLAGS_KERNEL_DATA: u64 = ATTR_AP_KRW | ATTR_ATTRIDX0 | ATTR_PXN | ATTR_UXN;
+pub const FLAGS_KERNEL_DATA: u64 = ATTR_AP_KRW | ATTR_ATTRIDX0 | ATTR_PXN | ATTR_UXN;
 // Device memory (UART MMIO): Device-nGnRE, kernel RW, no execute.
 pub const FLAGS_DEVICE: u64 = ATTR_AP_KRW | ATTR_ATTRIDX1 | ATTR_PXN | ATTR_UXN;
 // User Normal-memory RW data page: EL0 RW, PXN=1 (EL1 cannot exec user data), UXN=1.
-export const FLAGS_USER_RW: u64 = ATTR_AP_URW | ATTR_ATTRIDX0 | ATTR_PXN | ATTR_UXN;
+pub const FLAGS_USER_RW: u64 = ATTR_AP_URW | ATTR_ATTRIDX0 | ATTR_PXN | ATTR_UXN;
 
 // The 9-bit index into the table at `level` for virtual address `a`.
 // level 3 = L0 (>>39), 2 = L1 (>>30), 1 = L2 (>>21), 0 = L3 (>>12).

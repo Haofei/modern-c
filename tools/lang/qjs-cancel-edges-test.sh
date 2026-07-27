@@ -39,7 +39,11 @@ TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-$NAME_BASE-test" || echo "$NAME_
 kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+if [ "${KEEP_WORK:-0}" = 1 ]; then
+    echo "KEEP_WORK: $WORK" >&2
+else
+    trap 'rm -rf "$WORK"' EXIT
+fi
 
 # ---- 1. The confined U-mode agent ELF: fixed host + embedded JS agent + engine + all-MC libc ----
 APP_CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d

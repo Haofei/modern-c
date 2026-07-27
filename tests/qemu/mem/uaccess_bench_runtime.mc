@@ -69,7 +69,8 @@ fn report(label: *const u8, cycles: u64) -> void {
 }
 
 export fn m_main() -> void {
-    var heap: Heap = heap_new(phys_range(pa((&g_pool[0]) as usize), 2 * 1024 * 1024));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa((&g_pool[0]) as usize), 2 * 1024 * 1024));
     var pt: PageTable = page_table_new(&heap);
 
     // Map PAGES contiguous user-accessible pages (PTE_U | R | W), each backed by a real frame.

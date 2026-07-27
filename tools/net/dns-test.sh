@@ -24,12 +24,13 @@ LLD="${LLD:-ld.lld}"
 LLC="${LLC:-llc}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 
-PORT_H=18080                       # local HTTP server port
+PORT_D="${DNS_TEST_DNS_PORT:-}"
+PORT_H="${DNS_TEST_HTTP_PORT:-}"
 HOSTNAME="host.test"               # the name the guest resolves
 RESOLVE_TO="10.0.2.2"              # the A record we answer with (gateway -> host HTTP)
 TOKEN="MC-DNS-HTTP-OK"             # the unique HTTP body token we verify
-DNS_FWD_IP="10.0.2.3"              # slirp's built-in DNS forwarder (relays to resolv.conf)
-DNS_FWD_HEX="0x0A000203u"          # 10.0.2.3 as a host-order u32
+DNS_FWD_IP="10.0.2.2"              # slirp host gateway; UDP reaches the host responder
+DNS_FWD_HEX="0x0A000202u"          # 10.0.2.2 as a host-order u32
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
@@ -46,17 +47,23 @@ if ! command -v python3 >/dev/null 2>&1; then
     echo "SKIP: $TEST_NAME — python3 unavailable for the test DNS/HTTP servers"
     exit 0
 fi
+pick_free_port() {
+    python3 - <<'PY'
+import socket
+with socket.socket() as s:
+    s.bind(("127.0.0.1", 0))
+    print(s.getsockname()[1])
+PY
+}
+[ -n "$PORT_D" ] || PORT_D="$(pick_free_port)"
+[ -n "$PORT_H" ] || PORT_H="$(pick_free_port)"
 
 WORK="$(mktemp -d)"
 HTTP_PID=""
 DNS_PID=""
-RESOLV="/etc/resolv.conf"
-RESOLV_BAK="$WORK/resolv.conf.bak"
-RESOLV_SAVED=0
 cleanup() {
     [ -n "$HTTP_PID" ] && kill "$HTTP_PID" 2>/dev/null || true
     [ -n "$DNS_PID" ] && kill "$DNS_PID" 2>/dev/null || true
-    [ "$RESOLV_SAVED" = 1 ] && cp "$RESOLV_BAK" "$RESOLV" 2>/dev/null || true
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -65,17 +72,15 @@ trap cleanup EXIT
 mkdir -p "$WORK/docroot"
 printf '<html><body>%s</body></html>\n' "$TOKEN" > "$WORK/docroot/index.html"
 
-# 2. A tiny LOCAL authoritative DNS responder bound to 127.0.0.1:53. We point the
-#    container's resolv.conf at it so QEMU slirp's built-in DNS forwarder (10.0.2.3,
-#    which relays the guest's query to the host's configured nameserver) lands the
-#    guest's REAL DNS A-query here. The responder answers HOSTNAME with RESOLVE_TO and
-#    logs every query it receives (the wire proof). Real UDP packets end to end.
+# 2. A tiny LOCAL authoritative DNS responder bound to a non-privileged dynamic port.
+#    The guest sends directly to the slirp host gateway (10.0.2.2:PORT_D), avoiding
+#    privileged port 53 and host /etc/resolv.conf mutation.
 cat > "$WORK/dns_server.py" <<PYEOF
 import socket, struct, sys
 ANSWER = bytes(int(x) for x in "$RESOLVE_TO".split("."))
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", 53))
+s.bind(("0.0.0.0", $PORT_D))
 log = open("$WORK/dns.log", "w", buffering=1)
 while True:
     data, addr = s.recvfrom(2048)
@@ -102,22 +107,18 @@ while True:
 PYEOF
 python3 -u "$WORK/dns_server.py" >"$WORK/dns_stderr.log" 2>&1 &
 DNS_PID=$!
-# Wait for the responder to bind :53.
+# Wait for the responder to bind.
 for _ in 1 2 3 4 5 6 7 8 9 10; do
     # Probe with a DISTINCT name ("probe.test") so the only "$HOSTNAME" query logged is
     # the guest's — the proof grep then can't be satisfied by this readiness probe.
     if python3 -c 'import socket,sys
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(0.5)
-s.sendto(b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x05probe\x04test\x00\x00\x01\x00\x01",("127.0.0.1",53))
+s.sendto(b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x05probe\x04test\x00\x00\x01\x00\x01",("127.0.0.1",$PORT_D))
 try: s.recvfrom(512); sys.exit(0)
 except Exception: sys.exit(1)' 2>/dev/null; then break; fi
-    if ! kill -0 "$DNS_PID" 2>/dev/null; then echo "SKIP: $TEST_NAME — could not start local DNS responder on :53"; cat "$WORK/dns_stderr.log"; exit 0; fi
+    if ! kill -0 "$DNS_PID" 2>/dev/null; then echo "FAIL: $TEST_NAME — could not start local DNS responder on :$PORT_D"; cat "$WORK/dns_stderr.log"; exit 1; fi
     sleep 0.3
 done
-
-# Point the resolver at our responder so slirp's 10.0.2.3 forwarder relays here.
-cp "$RESOLV" "$RESOLV_BAK" 2>/dev/null && RESOLV_SAVED=1 || true
-printf 'nameserver 127.0.0.1\noptions ndots:0\n' > "$RESOLV"
 
 # 3. The REAL HTTP server, access log captured. Bind 0.0.0.0 so the gateway redirect
 #    (10.0.2.2 -> host loopback) reaches it.
@@ -130,10 +131,9 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
     sleep 0.3
 done
 
-# 4. Build the kernel image. The runtime is parameterized via -D: the kernel sends its
-#    DNS A-query to 10.0.2.3:53 (slirp's built-in DNS forwarder), which relays it to the
-#    host nameserver we configured above (our local responder); then it GETs the resolved
-#    IP (10.0.2.2 -> host HTTP server) on PORT_H.
+# 4. Build the kernel image. The runtime is parameterized via generated MC config: the
+#    kernel sends its DNS A-query to 10.0.2.2:PORT_D, where QEMU slirp reaches the host
+#    DNS responder; then it GETs the resolved IP (10.0.2.2 -> host HTTP server) on PORT_H.
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
         -Wno-unused-function -fno-builtin)
@@ -143,6 +143,7 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
 DNS_IP_MC="${DNS_FWD_HEX%u}"
 cat > "$WORK/dnscfg.mc" <<EOF
 export fn mc_dns_server_ip() -> u32 { return $DNS_IP_MC; }
+export fn mc_dns_server_port() -> u16 { return $PORT_D; }
 export fn mc_http_port() -> u16 { return $PORT_H; }
 export fn mc_dns_hostname() -> *const u8 { return "$HOSTNAME"; }
 export fn mc_http_request() -> *const u8 { return ""; }
@@ -156,9 +157,8 @@ kernel_boot_compile_rt "$WORK/freestanding.o"
 "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/dns.o" "$WORK/platform.o" "$WORK/dnscfg.o" $SUPPORT_OBJ -o "$WORK/dns.elf"
 
 # 5. Boot under QEMU with virtio-net user networking + pcap. The guest's DNS A-query to
-#    10.0.2.3:53 hits slirp's built-in forwarder, which relays it to our local responder
-#    via the host resolver; the gateway 10.0.2.2 TCP:PORT_H reaches the host HTTP server
-#    on the loopback as usual (the slirp gateway proxies to host services).
+#    10.0.2.2:PORT_D reaches the host responder; the gateway 10.0.2.2 TCP:PORT_H reaches
+#    the host HTTP server on the loopback as usual.
 OUT="$(timeout 50 "$QEMU" -machine virt -bios none -nographic \
         -global virtio-mmio.force-legacy=false \
         -netdev "user,id=n0" \

@@ -159,7 +159,8 @@ export fn agent_net_main(region_base: usize, region_len: usize) -> u32 {
     var stages: u32 = 0;
 
     // 1) Heap allocator.
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     let probe: PAddr = heap_alloc(&heap, 64, 16);
     if pa_value(probe) != 0 {
         stages = stages | 0x1;

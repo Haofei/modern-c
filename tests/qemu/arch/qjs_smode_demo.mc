@@ -70,7 +70,7 @@ fn qjs_smode_finish_build(satp: u64) -> u64 {
     // The UART MMIO page (supervisor-only): the agent's SYS_WRITE handler writes JS output
     // here via console_putc. A single 4 KiB page added to the existing VPN2-index-0 subtree;
     // interior tables come from a small private heap, storing PTEs into the same root frame.
-    g_aux_heap = heap_new(phys_range(pa((&g_aux_region[0]) as usize), 32768));
+    heap_init(&g_aux_heap, phys_range(pa((&g_aux_region[0]) as usize), 32768));
     page_table_map(&pt, &g_aux_heap, va(UART_MMIO_BASE), pa(UART_MMIO_BASE), PTE_R | PTE_W);
     page_table_map(&pt, &g_aux_heap, va(PLIC_PRIORITY_PAGE), pa(PLIC_PRIORITY_PAGE), PTE_R | PTE_W);
     page_table_map(&pt, &g_aux_heap, va(PLIC_ENABLE_S_PAGE), pa(PLIC_ENABLE_S_PAGE), PTE_R | PTE_W);

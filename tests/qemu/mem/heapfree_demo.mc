@@ -17,7 +17,8 @@ const REGION_BASE: usize = 0x8000_0000;
 const REGION_LEN: usize = 1 << 20; // 1 MiB
 
 export fn heapfree_run() -> u32 {
-    var h: Heap = heap_new(phys_range(pa(REGION_BASE), REGION_LEN));
+    var h: Heap = uninit;
+    heap_init(&h, phys_range(pa(REGION_BASE), REGION_LEN));
 
     let baseline: usize = heap_available(&h);
     if baseline != REGION_LEN {
@@ -96,7 +97,8 @@ export fn heapfree_run() -> u32 {
         k = k + 1;
     }
     let dropped: usize = heap_dropped_free_bytes(&h);
-    if dropped != 65 * 16 {
+    let expected_dropped: usize = 65 * 16;
+    if dropped != expected_dropped {
         return (dropped as u32) + 2;
     }
 

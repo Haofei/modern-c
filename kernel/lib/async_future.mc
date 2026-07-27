@@ -229,6 +229,7 @@ export fn futset_init(s: *mut FutSet) -> void {
 
 // Append a future to the set (no-op past DRIVE_MANY_MAX — fail closed). `f` is a `*mut dyn Future`
 // (a coerced `&concrete`). Returns the slot index, or DRIVE_MANY_MAX if full.
+#[mc_abi]
 export fn futset_push(s: *mut FutSet, f: *mut dyn Future) -> usize {
     if s.n >= DRIVE_MANY_MAX {
         return DRIVE_MANY_MAX;
@@ -239,6 +240,7 @@ export fn futset_push(s: *mut FutSet, f: *mut dyn Future) -> usize {
     return i;
 }
 
+#[mc_abi]
 export fn drive_many(set: *mut FutSet, max_idle: u32,
                      irq_off: fn() -> void, irq_on: fn() -> void, wfi: fn() -> void) -> usize {
     // Clamp to the array bound UP FRONT so the FutSet.n invariant is enforced, not merely

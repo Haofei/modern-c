@@ -1621,7 +1621,19 @@ fn parse_global(p: *mut Parser) -> u32 {
     return add_node(p, .global_decl, gname, gty, ginit);
 }
 
+fn skip_decl_attrs(p: *mut Parser) -> void {
+    while at(p, .hash) && at_next(p, 1, .l_bracket) {
+        p_advance(p); // '#'
+        p_advance(p); // '['
+        while !at(p, .r_bracket) && !at(p, .eof) {
+            p_advance(p);
+        }
+        expect(p, .r_bracket);
+    }
+}
+
 fn parse_decl(p: *mut Parser) -> u32 {
+    skip_decl_attrs(p);
     // A leading `import "..."` is the module directive (an identifier `import`, not a keyword).
     if at(p, .identifier) {
         if tok_is_import(p, p.tok as u32) {
@@ -1803,6 +1815,10 @@ pub fn parser_err_count(p: *Parser) -> u32 {
 // The token index of the first parse error (0 if none).
 pub fn parser_first_err_tok(p: *Parser) -> u32 {
     return p.first_err_tok;
+}
+
+pub fn parser_tok_start(p: *Parser, tok: u32) -> usize {
+    return token_start_at(&p.tl, tok as usize);
 }
 
 // Release the arena + token list. Call exactly once when done.

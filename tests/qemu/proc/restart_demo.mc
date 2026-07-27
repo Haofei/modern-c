@@ -35,7 +35,8 @@ fn alloc_stack(h: *mut Heap) -> usize {
 // Supervise the server: on a failed exit, reincarnate it (bounded). Returns the
 // number of restarts performed (expect 1).
 export fn restart_demo(region_base: usize, region_len: usize) -> u32 {
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
     install_idle(&g_procs); // wfi when nothing runnable
     g_incarnation = 0;

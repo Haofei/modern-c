@@ -75,7 +75,7 @@ export fn tls_net_up(
     g_rxmax = rxmax;
     g_resolved_ip = 0;
 
-    g_dev = .{ .regs = regs, .rxq = rxq, .txq = txq };
+    g_dev = .{ .regs_addr = regs as usize, .rxq = rxq, .txq = txq };
     switch nic_init(&g_dev) {
         ok(up) => {}
         err(e) => { return 0; }

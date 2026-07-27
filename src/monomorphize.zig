@@ -1666,3 +1666,67 @@ fn cloneTypeSlice(ctx: *const CloneCtx, types: []const ast.TypeExpr) anyerror![]
     for (types, 0..) |t, i| out[i] = try cloneType(ctx, t);
     return out;
 }
+
+test "monomorphize helper coverage for contract attrs, literal patterns, and precise asm cloning" {
+    const span: ast.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    const ident_t: ast.Ident = .{ .text = "T", .span = span };
+    const ident_x: ast.Ident = .{ .text = "x", .span = span };
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const t_type: ast.TypeExpr = .{ .span = span, .kind = .{ .name = ident_t } };
+    const x_expr: ast.Expr = .{ .span = span, .kind = .{ .ident = ident_x } };
+    const cast_expr: ast.Expr = .{
+        .span = span,
+        .kind = .{ .cast = .{
+            .value = try ast.makePtr(arena, x_expr),
+            .ty = try ast.makePtr(arena, t_type),
+        } },
+    };
+
+    const expr_args = try arena.alloc(ast.Expr, 1);
+    expr_args[0] = x_expr;
+    const expr_attr: ast.Attr = .{
+        .span = span,
+        .kind = .{ .unsafe_contract = .{
+            .name = .{ .text = "requires", .span = span },
+            .args = expr_args,
+        } },
+    };
+    try std.testing.expect(attrExprMentionsIdent(expr_attr, "x"));
+
+    const type_args = try arena.alloc(ast.Expr, 1);
+    type_args[0] = cast_expr;
+    const type_attr: ast.Attr = .{
+        .span = span,
+        .kind = .{ .unsafe_contract = .{
+            .name = .{ .text = "requires", .span = span },
+            .args = type_args,
+        } },
+    };
+    try std.testing.expect(attrTypeMentions(type_attr, "T"));
+
+    const literal_pattern: ast.Pattern = .{ .span = span, .kind = .{ .literal = x_expr } };
+    try std.testing.expect(patternExprMentionsIdent(literal_pattern, "x"));
+
+    const outputs = try arena.alloc(ast.AsmOutput, 1);
+    outputs[0] = .{ .reg = "\"=r\"", .name = ident_x, .ty = t_type };
+    const inputs = try arena.alloc(ast.AsmInput, 1);
+    inputs[0] = .{ .reg = "\"r\"", .value = x_expr, .ty = t_type };
+    const asm_stmt: ast.AsmStmt = .{
+        .form = .precise,
+        .is_volatile = true,
+        .templates = &.{"nop"},
+        .clobbers = &.{"memory"},
+        .outputs = outputs,
+        .inputs = inputs,
+    };
+    const ctx: CloneCtx = .{ .arena = arena };
+    const cloned = try cloneAsmStmt(&ctx, asm_stmt);
+    try std.testing.expectEqual(@as(usize, 1), cloned.outputs.len);
+    try std.testing.expectEqual(@as(usize, 1), cloned.inputs.len);
+    try std.testing.expect(typeMentionsIdent(cloned.outputs[0].ty, "T"));
+    try std.testing.expect(exprMentionsIdent(cloned.inputs[0].value, "x"));
+}

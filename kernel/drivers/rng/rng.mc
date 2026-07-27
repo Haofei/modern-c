@@ -40,8 +40,12 @@ enum RngError {
 
 // The device-class surface: the register block plus the single request queue.
 struct RngDevice {
-    regs: MmioPtr<VirtioMmio>,
+    regs_addr: usize,
     vq: *mut Virtq,
+}
+
+fn rng_regs(dev: *RngDevice) -> MmioPtr<VirtioMmio> {
+    unsafe { return dev.regs_addr as MmioPtr<VirtioMmio>; }
 }
 
 // Find the entropy device and bring it up: scan for device-id 4, run the virtio 1.x
@@ -74,7 +78,7 @@ export fn rng_open(vq: *mut Virtq) -> Result<RngDevice, RngError> {
                 err(e) => { return err(.QueueUnavailable); }
             }
             virtio_driver_ok(slot);
-            return ok(.{ .regs = slot, .vq = vq });
+            return ok(.{ .regs_addr = slot as usize, .vq = vq });
         }
         i = i + 1;
     }
@@ -88,7 +92,7 @@ export fn rng_open(vq: *mut Virtq) -> Result<RngDevice, RngError> {
 // alloc -> clean_for_device -> submit_rx -> kick -> wait_used -> complete -> copy.
 #[mc_abi]
 export fn rng_read(dev: *RngDevice, dst: usize, max: usize) -> Result<usize, RngError> {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let regs: MmioPtr<VirtioMmio> = rng_regs(dev);
     let vq: *mut Virtq = dev.vq;
 
     var want: usize = RNG_CHUNK;

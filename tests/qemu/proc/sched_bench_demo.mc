@@ -60,7 +60,8 @@ fn rdcycle() -> u64 {
 // taken through proc_next_runnable_probe (MAX_PROCS = "nothing runnable"), the same seam the
 // differential gate uses, so next_runnable stays private.
 export fn sched_bench(region_base: usize, region_len: usize) -> u64 {
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
     var w: u32 = 0;
     while w < WORKERS {

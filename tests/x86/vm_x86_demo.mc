@@ -32,7 +32,8 @@ const TEST_VALUE: u32 = 0xCAFE_BABE;
 // RETURNS a software-walk verdict computed before activation (1 = software translate matched
 // and the kernel page is correctly non-user; 0 = software walk disagreed).
 export fn vm_x86_build(region_base: usize, region_len: usize, out_cr3: *mut u64, out_test_phys: *mut u64) -> u32 {
-    var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
+    var heap: Heap = uninit;
+    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
     var pt: PageTable = page_table_new(&heap);
 
     // Identity-map the low 1 GiB with 2 MiB huge pages. Kernel-only: writable, NOT user

@@ -55,7 +55,7 @@ export fn async_select_demo(region_base: usize, region_len: usize) -> u32 {
     var grace: Race2 = uninit;
     race2_init(&grace, &ga, &gb);            // &ReqFut coerces to *mut dyn Future
     mc_timer_arm_oneshot();
-    drive_irq(&grace, disable_interrupts_global, enable_interrupts_global, wait_for_interrupt);
+    drive_irq(&grace, disable_interrupts_global_mc, enable_interrupts_global_mc, wait_for_interrupt_mc);
     let gw: i32 = race2_winner(&grace);
     let gactive: usize = async_active_count(&g_broker);
     // winner is request a (the first active the ISR completed); exactly one completion happened
@@ -69,7 +69,7 @@ export fn async_select_demo(region_base: usize, region_len: usize) -> u32 {
     var race: ReqRace2 = uninit;
     req_race2_init(&race, &fa, &fb);
     mc_timer_arm_oneshot();   // delivers ONE completion -> completes request a (first active)
-    drive_irq(&race, disable_interrupts_global, enable_interrupts_global, wait_for_interrupt);
+    drive_irq(&race, disable_interrupts_global_mc, enable_interrupts_global_mc, wait_for_interrupt_mc);
 
     let w: i32 = req_race2_winner(&race);
     let res: i32 = req_race2_result(&race);

@@ -120,8 +120,8 @@ fn resp_append(src: usize, n: usize) -> void {
     }
 }
 
-// Build + transmit one DNS A-query for g_host to dns_ip:53 over UDP.
-fn send_dns_query(dev: *NetDevice, gw_mac: *MacAddr, src_mac: *MacAddr, dns_ip: u32) -> bool {
+// Build + transmit one DNS A-query for g_host to dns_ip:dns_port over UDP.
+fn send_dns_query(dev: *NetDevice, gw_mac: *MacAddr, src_mac: *MacAddr, dns_ip: u32, dns_port: u16) -> bool {
     let eth_at: usize = DNSTX_NET_HDR;
     let ip_at: usize = eth_at + ETH_HDR_LEN; // 26
     let udp_at: usize = ip_at + 20;          // 46
@@ -142,7 +142,7 @@ fn send_dns_query(dev: *NetDevice, gw_mac: *MacAddr, src_mac: *MacAddr, dns_ip: 
 
     // L4 UDP (checksum over the DNS payload already in place).
     var w2: ByteWriter = byte_writer(cpu_addr(&cpu), cpu.len);
-    udp_write(&w2, udp_at, OUR_IP, dns_ip, DNS_SPORT, 0x0035, dns_len); // dport 53
+    udp_write(&w2, udp_at, OUR_IP, dns_ip, DNS_SPORT, dns_port, dns_len);
 
     let total: usize = dns_at + dns_len; // virtio hdr + eth + ip + udp + dns
     return nic_tx_frame(dev, cpu, total);
@@ -150,7 +150,7 @@ fn send_dns_query(dev: *NetDevice, gw_mac: *MacAddr, src_mac: *MacAddr, dns_ip: 
 
 // Receive a UDP DNS response addressed to us and parse the first A record. Returns
 // true and sets g_resolved_ip on success. `buf` is the runtime scratch RX region.
-fn recv_dns_response(dev: *NetDevice, buf: usize, max: usize) -> bool {
+fn recv_dns_response(dev: *NetDevice, buf: usize, max: usize, dns_port: u16) -> bool {
     var tries: u32 = 0;
     while tries < 32 {
         let n: usize = nic_rx_into(dev, buf, max);
@@ -165,7 +165,7 @@ fn recv_dns_response(dev: *NetDevice, buf: usize, max: usize) -> bool {
                     let udp_off: usize = 14 + ihl;
                     let sport: u16 = br_be16(&r, udp_off + 0);
                     let dport: u16 = br_be16(&r, udp_off + 2);
-                    if sport == 0x0035 { // from port 53
+                    if sport == dns_port {
                         if dport == DNS_SPORT {
                             let dns_off: usize = udp_off + 8;
                             let dns_len: usize = n - dns_off;
@@ -292,18 +292,18 @@ fn http_drive_to(
     return 3;
 }
 
-// Resolve g_host via `dns_ip`, then HTTP GET the resolved address on `http_port`.
+// Resolve g_host via `dns_ip:dns_port`, then HTTP GET the resolved address on `http_port`.
 // Status: 0 = NIC/ARP failed; 5 = DNS query TX failed; 6 = no/invalid DNS response;
 // otherwise the http_drive_to status (1 no-syn-ack, 2 GET-TX, 3 no-resp, 4 success).
 export fn dns_http_drive(
     regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq, txq: *mut Virtq,
-    dns_ip: u32, http_port: u16, rxbuf: usize, rxmax: usize,
+    dns_ip: u32, dns_port: u16, http_port: u16, rxbuf: usize, rxmax: usize,
 ) -> u32 {
     g_resp_len = 0;
     g_resolved_ip = 0;
     build_request();
 
-    var dev: NetDevice = .{ .regs = regs, .rxq = rxq, .txq = txq };
+    var dev: NetDevice = .{ .regs_addr = regs as usize, .rxq = rxq, .txq = txq };
     switch nic_init(&dev) {
         ok(up) => {}
         err(e) => { return 0; }
@@ -316,10 +316,10 @@ export fn dns_http_drive(
         err(e) => { return 0; }
     }
 
-    if !send_dns_query(&dev, &gw_mac, &src_mac, dns_ip) {
+    if !send_dns_query(&dev, &gw_mac, &src_mac, dns_ip, dns_port) {
         return 5;
     }
-    if !recv_dns_response(&dev, rxbuf, rxmax) {
+    if !recv_dns_response(&dev, rxbuf, rxmax, dns_port) {
         return 6;
     }
 

@@ -31,10 +31,11 @@ import "std/mask.mc";               // Mask32 allowlist (mask32_zero/mask32_set)
 const SATP_SV39: u64 = 0x8000_0000_0000_0000;
 const COMP_CAP: usize = 8;
 const USER_BASE: usize = 0x10000;
-// Upper bound for uaccess validation. Must cover the agent's whole VA span — for the QuickJS
-// agent that includes the multi-MiB heap arena + stack high in .bss, so a small app's 1 MiB is
-// far too low (SYS_WRITE buffers live above it). 16 MiB covers the confined-agent images.
-const USER_LIMIT: usize = 0x0100_0000;
+// Upper bound for ELF admission and initial uaccess validation. Must cover the agent's whole
+// initial VA span — for QuickJS/WAMR agents that includes multi-MiB text/rodata plus a large
+// static data/bss segment. 32 MiB covers the larger S-mode WASM agents after strict ELF segment
+// validation while staying far below the demand-grown heap and linear-memory windows.
+const USER_LIMIT: usize = 0x0200_0000;
 const KBUF: usize = 256;
 const AGENT_PID: u64 = 7;
 
@@ -51,9 +52,9 @@ const AGENT_PID: u64 = 7;
 // derives the pool/cap from bootinfo + the ledger.
 const PAGE_BYTES: usize = 4096;
 const HEAP_BASE: usize = 0x6000_0000;      // agent-side VA where the demand-grown heap begins (clear of
-                                           // the ELF image below 16 MiB and the stack)
+                                           // the ELF image below 32 MiB and the stack)
 const SBRK_POOL_BASE: usize = 0x8400_0000; // physical RAM for grown frames: 64 MiB into RAM, above the
-                                           // kernel image + the 16 MiB confinement region
+                                           // kernel image + the 64 MiB confinement region
 const SBRK_POOL_LEN: usize = 0x0500_0000;  // 80 MiB sbrk pool. The old single 128 MiB frame window is
                                            // now SPLIT 80/48 between the libc-heap sbrk pool and the WASM
                                            // linear-memory demand-paging pool below — SAME total physical
@@ -1066,7 +1067,7 @@ export fn app_build_agent_metadata_checked(image_base: usize, image_len: usize, 
 
 export fn app_build(image_base: usize, image_len: usize, region_base: usize, region_len: usize) -> u64 {
     g_load_status = LS_OK;
-    g_heap = heap_new(phys_range(pa(region_base), region_len));
+    heap_init_untracked(&g_heap, phys_range(pa(region_base), region_len));
 
     // Root page table fallibly: even root-frame exhaustion is a typed NoFrame, not a trap.
     switch page_table_try_new(&g_heap) {
@@ -1164,7 +1165,7 @@ export fn app_entry() -> u64 {
 }
 
 // Confinement proof: NO kernel VA is mapped in the agent's address space. The kernel image and
-// its 16 MiB frame `region` live from `kernel_va` (0x8000_0000) upward, so a single probe is weak
+// its 64 MiB frame `region` live from `kernel_va` (0x8000_0000) upward, so a single probe is weak
 // evidence — sweep several representative VAs across that range. If ANY is reachable through the
 // agent's page table, the kernel leaked into the agent and confinement is broken.
 export fn app_kernel_unmapped(kernel_va: usize) -> u32 {

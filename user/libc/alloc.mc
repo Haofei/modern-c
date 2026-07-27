@@ -42,7 +42,7 @@ global g_inited: u8;
 // Build the free-list over the arena on first allocation (the arena is zeroed by the loader).
 fn ensure_init() -> void {
     if g_inited == 0 {
-        g_heap = heap_new(phys_range(pa((&g_arena[0]) as usize), ARENA_BYTES));
+        heap_init_untracked(&g_heap, phys_range(pa((&g_arena[0]) as usize), ARENA_BYTES));
         g_inited = 1;
     }
 }
@@ -112,7 +112,7 @@ fn grown_ensure_init() -> bool {
         if sbrk_failed(base) {
             return false;
         }
-        g_grown = heap_new(phys_range(pa(base), 0)); // empty; extended as we sbrk
+        heap_init_untracked(&g_grown, phys_range(pa(base), 0)); // empty; extended as we sbrk
         g_grown_inited = 1;
     }
     return true;

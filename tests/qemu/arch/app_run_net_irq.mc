@@ -113,7 +113,7 @@ fn app_net_irq_start() -> void {
     g_txq.avail = &g_txavail;
     g_txq.used = &g_txused;
     g_dev = .{
-        .regs = regs,
+        .regs_addr = regs as usize,
         .rxq = &g_rxq,
         .txq = &g_txq,
         .tx_map = &g_tx_map,

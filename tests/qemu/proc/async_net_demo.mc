@@ -163,7 +163,7 @@ export fn async_net_demo() -> u32 {
     g_txq.used = &g_txused;
 
     g_dev = .{
-        .regs = regs,
+        .regs_addr = regs as usize,
         .rxq = &g_rxq,
         .txq = &g_txq,
         .tx_map = &g_tx_map,
@@ -209,7 +209,7 @@ export fn async_net_demo() -> u32 {
         var f: send_frame__Fut = send_frame(&g_broker, id);
         putc_(87); // 'W' — future built, about to drive under wfi
         // Drive to completion: poll with interrupts off, wfi until the device IRQ async_completes it.
-        drive_irq(&f, disable_interrupts_global, enable_interrupts_global, wait_for_interrupt);
+        drive_irq(&f, disable_interrupts_global_mc, enable_interrupts_global_mc, wait_for_interrupt_mc);
         putc_(82); // 'R' — resumed
 
         word = send_frame__Fut_take_result(&f);

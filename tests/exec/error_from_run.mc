@@ -43,7 +43,7 @@ fn use_ok() -> Result<u32, HighErr> {
 fn observe(r: Result<u32, HighErr>) -> u32 {
     switch r {
         ok(v) => { return 1000 + v; },  // ok(7) -> 1007
-        err(e) => { return e.raw(); },
+        err(e) => { return e.raw() as u32; },
     }
 }
 

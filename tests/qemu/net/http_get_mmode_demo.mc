@@ -13,9 +13,10 @@ import "kernel/arch/riscv64/sbi_virtio_probe.mc";
 import "tests/qemu/net/http_get_demo.mc"; // http_get_drive / http_resp_len / http_resp_byte
 
 const VIRTIO_ID_NET: u32 = 1;
-const HTTP_PORT: u16 = 8080;          // must match tools/net/http-get-test.sh
 const FINISHER: usize = 0x0010_0000;
 const FINISHER_HALT: u32 = 0x5555;
+
+extern fn mc_http_port() -> u16;
 
 global g_rx_desc: DescTable;
 global g_rx_avail: VringAvail;
@@ -72,7 +73,7 @@ export fn test_main() -> void {
 
     uputs("http-get booting\n");
     let rxbuf: usize = (&g_framebuf[0]) as usize;
-    let st: u32 = http_get_drive(regs, &g_rxq, &g_txq, HTTP_PORT, rxbuf, 2048);
+    let st: u32 = http_get_drive(regs, &g_rxq, &g_txq, mc_http_port(), rxbuf, 2048);
     uputs("DRIVE-STATUS=");
     uputhex(st as u64);
     uputc(10);

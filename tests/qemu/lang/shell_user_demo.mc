@@ -111,7 +111,7 @@ export fn syscall_setup() -> void {
     syscall_register(&g_sys, SYS_WAIT, sys_wait);
     // Build a real ProcTable: slot 0 is the running bootstrap; spawn a few more so `top`
     // reflects actual scheduler state (Running for the active slot, Ready for spawned).
-    g_heap = heap_new(phys_range(pa((&g_heapmem[0]) as usize), 65536));
+    heap_init(&g_heap, phys_range(pa((&g_heapmem[0]) as usize), 65536));
     proc_table_init(&g_procs);
     install_idle(&g_procs); // wfi when nothing runnable
     proc_spawn(&g_procs, alloc_stack(), dummy_task);
