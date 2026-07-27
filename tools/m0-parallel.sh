@@ -41,10 +41,49 @@ done < <(awk '/const m0_step = b.step/{f=1} /const c0_step = b.step/{f=0} f' bui
     | grep -oE 'ctx\.cmd\("[^"]+"\)' | sed -E 's/.*\("([^"]+)"\)/\1/' | sort -u)
 [ "${#GATES[@]}" -gt 0 ] || { echo "[m0-parallel] no gates extracted from build/tiers.zig"; exit 1; }
 
-# Longest-processing-time-first: if a prior profiling run left step-times.tsv (MC_TIME_STEPS=1),
-# order gates by descending recorded wall time so the slow aarch64-QEMU long poles launch first and
-# overlap with everything else (shrinks the tail). Unknown/new gates sort first (assumed heavy).
+# Some gates operate on the whole source tree or otherwise contend badly with
+# unrelated build steps. Keep them out of the parallel pool and run them once
+# after the parallel pass.
+SERIAL_GATES=(compiler-coverage source-package-test)
+PARALLEL_GATES=()
+for g in "${GATES[@]}"; do
+    serial=0
+    for s in "${SERIAL_GATES[@]}"; do
+        if [ "$g" = "$s" ]; then serial=1; break; fi
+    done
+    if [ "$serial" -eq 0 ]; then
+        PARALLEL_GATES+=("$g")
+    fi
+done
+GATES=("${PARALLEL_GATES[@]}")
+
+# Longest-processing-time-first: by default use build-runner step timings, which
+# are less distorted by m0-parallel resource contention. A previous m0-parallel
+# profile is still recorded and can be selected explicitly with
+# MC_M0_USE_PARALLEL_PROFILE=1. Missing timings are estimated conservatively so
+# known-heavy fuzz/coverage gates do not get stranded at the tail.
+PROFILE_TIMES=".wamr-cache/m0-parallel-times.tsv"
 TIMES=".wamr-cache/step-times.tsv"
+if [ "${MC_M0_USE_PARALLEL_PROFILE:-0}" = 1 ] && [ -s "$PROFILE_TIMES" ]; then
+    TIMES="$PROFILE_TIMES"
+fi
+estimate_ms() {
+    local gate="$1"
+    case "$gate" in
+        lowering-coverage)
+            echo 45000 ;;
+        parser-fuzz-test|bundle-fuzz-test|sched-difftest)
+            echo 25000 ;;
+        fuzz-*|*-fuzz)
+            echo 5000 ;;
+        llvm-host-suite-test|diff-backend|sanitize|*sweep*)
+            echo 60000 ;;
+        *qjs*|*wasm*|*wamr*|*smode*|arm-*|llvm-arm-*|aarch64*|llvm-aarch64*|bearssl-smode-test)
+            echo 30000 ;;
+        *)
+            echo 1000 ;;
+    esac
+}
 if [ -s "$TIMES" ]; then
     ORDERED=()
     while IFS= read -r gate; do
@@ -52,25 +91,36 @@ if [ -s "$TIMES" ]; then
     done < <(
         for g in "${GATES[@]}"; do
             ms=$(awk -F'\t' -v g="$g" '$1==g{value=$2} END{print value}' "$TIMES")
+            if [ -z "$ms" ]; then
+                ms="$(estimate_ms "$g")"
+            fi
             printf '%s\t%s\n' "${ms:-0}" "$g"
         done | sort -t$'\t' -k1 -nr | cut -f2)
     GATES=("${ORDERED[@]}")
 fi
-echo "[m0-parallel] ${#GATES[@]} gates, outer -P $J, inner JOBS=$JOBS, COUNT=${COUNT:-300} $( [ -s "$TIMES" ] && echo '(LPT-ordered)' )"
+echo "[m0-parallel] $((${#GATES[@]} + ${#SERIAL_GATES[@]})) gates (${#GATES[@]} parallel + ${#SERIAL_GATES[@]} serial), outer -P $J, inner JOBS=$JOBS, COUNT=${COUNT:-300} $( [ -s "$TIMES" ] && echo '(LPT-ordered)' )"
 
 S=$(date +%s)
+mkdir -p "$OUT/times"
 printf '%s\n' "${GATES[@]}" | xargs -P "$J" -I{} bash -c '
     g="$1"
     log=".wamr-cache/m0p-logs/$g.log"
+    time_log=".wamr-cache/m0p-logs/times/$g.tsv"
+    start=$(date +%s)
+    rc=0
     if zig build "$g" >"$log" 2>&1; then
         if [ "${MC_REQUIRE_TOOLS:-0}" = 1 ] && grep -q "^SKIP:" "$log"; then
             echo "FAIL $g"
+            rc=1
         else
             echo "PASS $g"
         fi
     else
         echo "FAIL $g"
+        rc=1
     fi
+    end=$(date +%s)
+    printf "%s\t%s\t%s\n" "$g" "$(((end - start) * 1000))" "$rc" >"$time_log"
 ' _ {} | tee "$OUT/summary.txt"
 E=$(date +%s)
 
@@ -100,6 +150,26 @@ if [ "${#FAILED[@]}" -gt 0 ]; then
         fi
     done
 fi
+if [ "${#SERIAL_GATES[@]}" -gt 0 ]; then
+    echo "[m0-parallel] running ${#SERIAL_GATES[@]} serialized gate(s) ..."
+    for g in "${SERIAL_GATES[@]}"; do
+        log="$OUT/$g.log"
+        time_log="$OUT/times/$g.tsv"
+        start=$(date +%s)
+        if zig build "$g" >"$log" 2>&1 &&
+            { [ "${MC_REQUIRE_TOOLS:-0}" != 1 ] || ! grep -q '^SKIP:' "$log"; }; then
+            echo "  PASS(serial): $g"
+            rc=0
+        else
+            echo "  REAL FAILURE(serial): $g  (see $log)"
+            rc=1
+            real_fail=$((real_fail + 1))
+        fi
+        end=$(date +%s)
+        printf "%s\t%s\t%s\n" "$g" "$(((end - start) * 1000))" "$rc" >"$time_log"
+    done
+fi
+find "$OUT/times" -type f -name '*.tsv' -print0 | xargs -0 cat | sort -t$'\t' -k1,1 >"$PROFILE_TIMES"
 EE=$(date +%s)
 echo "[m0-parallel] DONE  real_failures=$real_fail  total_wall=$((EE - S))s"
 [ "$real_fail" -eq 0 ] || exit 1

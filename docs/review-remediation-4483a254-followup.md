@@ -187,10 +187,23 @@ The m0 speed work focused on removing avoidable retries and false failures:
 - targeted LLVM/golden updates so constant-folded IR forms do not force retry or
   fail otherwise-valid gates;
 - stale/orphaned long-running test processes were cleared before the final run.
+- `tools/m0-parallel.sh` now records per-gate timings for future profiling,
+  applies conservative missing-duration estimates for coverage/fuzz families,
+  and runs whole-tree/source-copy gates (`compiler-coverage`,
+  `source-package-test`) serially after the parallel pool. This avoids known
+  false failures from concurrent source-tree packaging and instrumented
+  compiler coverage.
 
 Compared with the earlier failing parallel run (`PASS=584 FAIL=26`, then
 `real_failures=19`, `total_wall=4903s` after serial retries), the final run
 completed cleanly in 3170 seconds with no retry phase.
+
+A later experimental ordering run that aggressively advanced all fuzz gates was
+aborted because it overscheduled CPU-heavy fuzz oracles and was further polluted
+by unrelated host CPU load outside this repository. The retained runner policy
+therefore defaults to the less distorted build-step timing file and only uses
+the m0-parallel timing profile when explicitly requested with
+`MC_M0_USE_PARALLEL_PROFILE=1`.
 
 Note: the remediation was initially developed and verified in the Docker dev
 container, including `zig build fast`. After that pass, the local Docker/OrbStack
