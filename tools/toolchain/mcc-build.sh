@@ -57,7 +57,11 @@ done
 [ -n "$INPUT" ] || fail_usage "missing input file"
 [ -n "$OUT" ] || fail_usage "missing -o <exe>"
 [ -f "$INPUT" ] || { echo "mcc build: input file not found: $INPUT" >&2; exit 1; }
-[ -x "$MCC_BIN" ] || { echo "mcc build: compiler not found or not executable: $MCC_BIN" >&2; exit 1; }
+if [[ "$MCC_BIN" == */* ]]; then
+    [ -x "$MCC_BIN" ] || { echo "mcc build: compiler not found or not executable: $MCC_BIN" >&2; exit 1; }
+else
+    command -v "$MCC_BIN" >/dev/null 2>&1 || { echo "mcc build: compiler not found on PATH: $MCC_BIN" >&2; exit 1; }
+fi
 command -v "$CLANG_BIN" >/dev/null 2>&1 || { echo "mcc build: clang not found" >&2; exit 1; }
 
 WORK="$(mktemp -d)"

@@ -47,6 +47,39 @@ struct Policy {
     overflow: bool,   // more distinct agents observed than the table can hold
 }
 
+fn policy_saturating_inc(v: u32) -> u32 {
+    if v == 0xFFFF_FFFF {
+        return v;
+    }
+    return v + 1;
+}
+
+fn policy_find(p: *mut Policy, pid: u32) -> usize {
+    var i: usize = 0;
+    while i < POL_MAX_AGENTS {
+        if p.agents[i].used {
+            if p.agents[i].pid == pid {
+                return i;
+            }
+        }
+        i = i + 1;
+    }
+    return POL_MAX_AGENTS;
+}
+
+export fn policy_thresholds_valid(throttle_at: u32, revoke_at: u32, kill_at: u32) -> bool {
+    if throttle_at == 0 {
+        return false;
+    }
+    if revoke_at < throttle_at {
+        return false;
+    }
+    if kill_at < revoke_at {
+        return false;
+    }
+    return true;
+}
+
 // Initialize with escalation thresholds (require throttle_at <= revoke_at <= kill_at).
 export fn policy_init(p: *mut Policy, throttle_at: u32, revoke_at: u32, kill_at: u32) -> void {
     var i: usize = 0;
@@ -57,10 +90,20 @@ export fn policy_init(p: *mut Policy, throttle_at: u32, revoke_at: u32, kill_at:
         p.agents[i].denies = 0;
         i = i + 1;
     }
-    p.throttle_at = throttle_at;
-    p.revoke_at = revoke_at;
-    p.kill_at = kill_at;
-    p.overflow = false;
+    if policy_thresholds_valid(throttle_at, revoke_at, kill_at) {
+        p.throttle_at = throttle_at;
+        p.revoke_at = revoke_at;
+        p.kill_at = kill_at;
+        p.overflow = false;
+    } else {
+        // Invalid policy configuration is itself unsafe. Preserve the void
+        // initializer ABI, but install a conservative one-denial escalation
+        // profile and mark overflow so unknown subjects fail closed.
+        p.throttle_at = 1;
+        p.revoke_at = 1;
+        p.kill_at = 1;
+        p.overflow = true;
+    }
 }
 
 // Locate `pid`'s stat slot, allocating one on first sight. POL_MAX_AGENTS if the
@@ -97,9 +140,9 @@ export fn policy_observe(p: *mut Policy, from: u32, verdict: u32) -> void {
         return;
     }
     if verdict == ALLOW_VERDICT {
-        p.agents[idx].allows = p.agents[idx].allows + 1;
+        p.agents[idx].allows = policy_saturating_inc(p.agents[idx].allows);
     } else {
-        p.agents[idx].denies = p.agents[idx].denies + 1;
+        p.agents[idx].denies = policy_saturating_inc(p.agents[idx].denies);
     }
 }
 
@@ -121,27 +164,17 @@ export fn policy_scan(p: *mut Policy, trace: *mut IpcTrace) -> usize {
 }
 
 export fn policy_denies(p: *mut Policy, pid: u32) -> u32 {
-    var i: usize = 0;
-    while i < POL_MAX_AGENTS {
-        if p.agents[i].used {
-            if p.agents[i].pid == pid {
-                return p.agents[i].denies;
-            }
-        }
-        i = i + 1;
+    let idx: usize = policy_find(p, pid);
+    if idx != POL_MAX_AGENTS {
+        return p.agents[idx].denies;
     }
     return 0;
 }
 
 export fn policy_allows(p: *mut Policy, pid: u32) -> u32 {
-    var i: usize = 0;
-    while i < POL_MAX_AGENTS {
-        if p.agents[i].used {
-            if p.agents[i].pid == pid {
-                return p.agents[i].allows;
-            }
-        }
-        i = i + 1;
+    let idx: usize = policy_find(p, pid);
+    if idx != POL_MAX_AGENTS {
+        return p.agents[idx].allows;
     }
     return 0;
 }
@@ -154,7 +187,18 @@ export fn policy_overflowed(p: *mut Policy) -> bool {
 // highest-severity first so the thresholds escalate monotonically.
 #[mc_abi]
 export fn policy_decide(p: *mut Policy, pid: u32) -> PolicyAction {
-    let d: u32 = policy_denies(p, pid);
+    let idx: usize = policy_find(p, pid);
+    if idx == POL_MAX_AGENTS {
+        // Before capacity loss, an unobserved subject has no denial pressure.
+        // After capacity loss, an unknown subject may be one of the dropped
+        // principals, so fail closed to a conservative throttle rather than
+        // granting nominal Allow.
+        if p.overflow {
+            return .Throttle;
+        }
+        return .Allow;
+    }
+    let d: u32 = p.agents[idx].denies;
     if d >= p.kill_at {
         return .Kill;
     }

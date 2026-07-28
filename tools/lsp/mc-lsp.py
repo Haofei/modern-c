@@ -32,10 +32,12 @@ import copy
 import json
 import os
 import re
+import selectors
 import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import pathlib
@@ -71,6 +73,7 @@ MAX_WORKSPACE_SCAN_SECONDS = max(float(os.environ.get("MC_LSP_MAX_WORKSPACE_SCAN
 MAX_WORKSPACE_COMPILER_INVOCATIONS = int(os.environ.get("MC_LSP_MAX_WORKSPACE_COMPILER_INVOCATIONS", "64"))
 MAX_WORKSPACE_SYMBOLS = int(os.environ.get("MC_LSP_MAX_WORKSPACE_SYMBOLS", "10000"))
 MAX_WORKSPACE_RESULT_BYTES = int(os.environ.get("MC_LSP_MAX_WORKSPACE_RESULT_BYTES", str(4 * 1024 * 1024)))
+MAX_COMPILER_OUTPUT_BYTES = int(os.environ.get("MC_LSP_MAX_COMPILER_OUTPUT_BYTES", str(8 * 1024 * 1024)))
 
 
 def log(*a):
@@ -180,6 +183,131 @@ def line_of(text_lines, one_based_line):
     return text_lines[idx] if 0 <= idx < len(text_lines) else ""
 
 
+def terminate_process_tree(proc):
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGTERM)
+        else:
+            proc.terminate()
+    except ProcessLookupError:
+        return
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name == "posix":
+                kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+                os.killpg(proc.pid, kill_signal)
+            else:
+                proc.kill()
+        except ProcessLookupError:
+            pass
+        except OSError:
+            pass
+
+
+def run_compiler_bounded(argv, cwd, input_text, timeout, cancel_handle=None, start_new_session=False):
+    input_bytes = input_text.encode("utf-8")
+    out_chunks = []
+    err_chunks = []
+    out_len = 0
+    err_len = 0
+    proc = None
+    try:
+        with tempfile.TemporaryFile() as stdin_file:
+            stdin_file.write(input_bytes)
+            stdin_file.seek(0)
+            popen_kwargs = {
+                "cwd": cwd,
+                "stdin": stdin_file,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+            }
+            if os.name == "posix" and start_new_session:
+                popen_kwargs["start_new_session"] = True
+            proc = subprocess.Popen(argv, **popen_kwargs)
+            if cancel_handle is not None:
+                cancel_handle.attach(proc)
+
+            sel = selectors.DefaultSelector()
+            assert proc.stdout is not None
+            assert proc.stderr is not None
+            os.set_blocking(proc.stdout.fileno(), False)
+            os.set_blocking(proc.stderr.fileno(), False)
+            sel.register(proc.stdout, selectors.EVENT_READ, "stdout")
+            sel.register(proc.stderr, selectors.EVENT_READ, "stderr")
+            deadline = time.monotonic() + timeout
+            timed_out = False
+            output_limited = False
+
+            while sel.get_map():
+                if cancel_handle is not None and cancel_handle.is_canceled():
+                    terminate_process_tree(proc)
+                    return None
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    terminate_process_tree(proc)
+                    break
+                events = sel.select(min(0.1, remaining))
+                if not events and proc.poll() is not None:
+                    events = [(key, selectors.EVENT_READ) for key in list(sel.get_map().values())]
+                for key, _mask in events:
+                    try:
+                        data = os.read(key.fileobj.fileno(), 65536)
+                    except BlockingIOError:
+                        continue
+                    if not data:
+                        try:
+                            sel.unregister(key.fileobj)
+                        except KeyError:
+                            pass
+                        continue
+                    if key.data == "stdout":
+                        out_len += len(data)
+                        if out_len <= MAX_COMPILER_OUTPUT_BYTES:
+                            out_chunks.append(data)
+                    else:
+                        err_len += len(data)
+                        if err_len <= MAX_COMPILER_OUTPUT_BYTES:
+                            err_chunks.append(data)
+                    if out_len > MAX_COMPILER_OUTPUT_BYTES or err_len > MAX_COMPILER_OUTPUT_BYTES:
+                        output_limited = True
+                        terminate_process_tree(proc)
+                        break
+                if output_limited:
+                    break
+
+            try:
+                rc = proc.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                terminate_process_tree(proc)
+                rc = 124
+
+            out = b"".join(out_chunks).decode("utf-8", "replace")
+            err = b"".join(err_chunks).decode("utf-8", "replace")
+            if output_limited:
+                log(f"compiler '{MCC}' exceeded {MAX_COMPILER_OUTPUT_BYTES} byte output limit")
+                return 125, out, "mcc subprocess output exceeded configured limit"
+            if timed_out:
+                log(f"compiler '{MCC}' exceeded {timeout:g}s timeout")
+                return 124, out, err or "mcc subprocess timed out"
+            return rc, out, err
+    except FileNotFoundError:
+        log(f"compiler '{MCC}' not found")
+        return 127, "", ""
+    except OSError as exc:
+        log(f"compiler '{MCC}' failed: {exc}")
+        return 126, "", str(exc)
+    finally:
+        if proc is not None and proc.poll() is None:
+            terminate_process_tree(proc)
+
+
 # ---- run the compiler on the in-memory document --------------------------------------------
 # mcc accepts `-` as source input and resolves its imports relative to cwd. This is a real
 # in-memory overlay: it preserves relative-import behavior without requiring the source tree
@@ -188,19 +316,8 @@ def run_on_temp(path, text, args, timeout=None):
     directory = os.path.dirname(path) or "."
     argv = [MCC, args[0], "-", *args[1:]]
     effective_timeout = MCC_TIMEOUT_SECONDS if timeout is None else max(min(timeout, MCC_TIMEOUT_SECONDS), 0.001)
-    try:
-        proc = subprocess.run(argv, cwd=directory, input=text,
-                              capture_output=True, text=True, timeout=effective_timeout)
-        return proc.returncode, proc.stdout, proc.stderr, "-"
-    except FileNotFoundError:
-        log(f"compiler '{MCC}' not found")
-        return 127, "", "", "-"
-    except subprocess.TimeoutExpired:
-        log(f"compiler '{MCC}' exceeded {effective_timeout:g}s timeout")
-        return 124, "", "mcc subprocess timed out", "-"
-    except OSError as exc:
-        log(f"compiler '{MCC}' failed: {exc}")
-        return 126, "", str(exc), "-"
+    rc, out, err = run_compiler_bounded(argv, directory, text, effective_timeout)
+    return rc, out, err, "-"
 
 
 class DiagnosticRun:
@@ -269,29 +386,18 @@ def run_diagnostic_on_temp(path, text, cancel_handle):
     try:
         if cancel_handle is not None and cancel_handle.is_canceled():
             return None
-        popen_kwargs = {"cwd": directory, "stdin": subprocess.PIPE, "stdout": subprocess.PIPE,
-                        "stderr": subprocess.PIPE, "text": True}
-        if os.name == "posix":
-            popen_kwargs["start_new_session"] = True
         def run_check(args):
             argv = [MCC, args[0], "-", *args[1:]]
-            try:
-                proc = subprocess.Popen(argv, **popen_kwargs)
-            except FileNotFoundError:
-                log(f"compiler '{MCC}' not found")
-                return 127, "", ""
-            if cancel_handle is not None:
-                cancel_handle.attach(proc)
-            try:
-                out, err = proc.communicate(text, timeout=MCC_TIMEOUT_SECONDS)
-            except subprocess.TimeoutExpired:
-                DiagnosticRun()._terminate(proc)
-                out, err = proc.communicate()
-                log(f"compiler '{MCC}' exceeded {MCC_TIMEOUT_SECONDS:g}s diagnostic timeout")
-                return 124, out, err
             if cancel_handle is not None and cancel_handle.is_canceled():
                 return None
-            return proc.returncode, out, err
+            return run_compiler_bounded(
+                argv,
+                directory,
+                text,
+                MCC_TIMEOUT_SECONDS,
+                cancel_handle=cancel_handle,
+                start_new_session=True,
+            )
 
         result = run_check(["check", "--json"])
         if result is None:

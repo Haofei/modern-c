@@ -53,6 +53,15 @@ fn reject_missing_final_return() -> u32 {
     let code: u32 = 0;
 }
 
+fn reject_asm_fallthrough_missing_return() -> u32 {
+    // EXPECT_ERROR: E_RETURN_MISSING
+    unsafe {
+        asm opaque volatile {
+            "nop"
+        }
+    }
+}
+
 fn reject_non_exhaustive_switch_return(n: u32) -> u32 {
     // EXPECT_ERROR: E_RETURN_MISSING
     switch n {

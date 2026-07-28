@@ -126,6 +126,7 @@ export fn mcp_run() -> u32 {
     if !mcp_register(&g_cat, gn(), n_write(), TOOL_FS_WRITE) { pass = 0; }
     if !mcp_register(&g_cat, gn(), n_read(), TOOL_FS_READ) { pass = 0; }
     if !mcp_register(&g_cat, gn(), n_exec(), TOOL_FS_EXEC) { pass = 0; }
+    if mcp_register(&g_cat, gn(), n_write(), TOOL_FS_READ) { pass = 0; }
 
     // "fs/write" on /workspace -> allowed (the benign write).
     let nl_w: usize = n_write();

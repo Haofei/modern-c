@@ -8651,7 +8651,12 @@ fn fallthroughSpan(block: ast.Block, ctx: Context) ?diagnostics.Span {
 
 fn stmtMayFallThrough(stmt: ast.Stmt, ctx: Context) bool {
     return switch (stmt.kind) {
-        .@"return", .@"break", .@"continue", .asm_stmt => false,
+        .@"return", .@"break", .@"continue" => false,
+        // Ordinary inline asm is a side-effecting statement, not a control-flow
+        // terminator. Backends emit it and then continue, so return checking
+        // must treat it as fallthrough unless a future explicit noreturn-asm
+        // form proves otherwise.
+        .asm_stmt => true,
         .expr => |expr| exprMayFallThrough(expr, ctx),
         .block, .unsafe_block, .comptime_block => |block| fallthroughSpan(block, ctx) != null,
         .contract_block => |contract| fallthroughSpan(contract.block, ctx) != null,

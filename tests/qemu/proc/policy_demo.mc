@@ -12,6 +12,7 @@ import "kernel/core/ipc_trace.mc";
 global g_audit: IpcTrace;
 global g_pol: Policy;
 global g_pol2: Policy;
+global g_pol3: Policy;
 
 const V_ALLOW: u32 = 1;
 const V_DENY: u32 = 0;
@@ -72,7 +73,9 @@ export fn policy_run() -> u32 {
     if decide(123) != 0 { pass = 0; }
 
     // Overflow: a fresh policy seeing more distinct agents than it can hold flags
-    // the loss (and the untracked agent still decides Allow, never a false Kill).
+    // the loss. Tracked agents still decide from their own counters; an
+    // untracked agent fails closed to Throttle rather than nominal Allow because
+    // it may be one of the subjects dropped after table capacity loss.
     policy_init(&g_pol2, 2, 3, 5);
     var pid: u32 = 100;
     while pid < 111 { // 11 distinct agents > POL_MAX_AGENTS (8)
@@ -82,10 +85,19 @@ export fn policy_run() -> u32 {
     if !policy_overflowed(&g_pol2) { pass = 0; }
     // The first 8 distinct agents are tracked: agent 100's single denial folded.
     if policy_denies(&g_pol2, 100) != 1 { pass = 0; }
-    // A dropped (overflowed) agent is untracked: reads as 0 denials and decides
-    // Allow — a full table never manufactures a denial it didn't see.
+    // A dropped (overflowed) agent is untracked: counter queries still read 0,
+    // but policy_decide is conservative after overflow.
     if policy_denies(&g_pol2, 110) != 0 { pass = 0; }
-    if act(policy_decide(&g_pol2, 110)) != 0 { pass = 0; } // Allow (fail-safe)
+    if act(policy_decide(&g_pol2, 110)) != 1 { pass = 0; } // Throttle (fail-closed)
+
+    // Invalid thresholds are rejected by the validator and policy_init installs
+    // a conservative fail-closed profile for legacy void-init callers.
+    if policy_thresholds_valid(5, 3, 4) { pass = 0; }
+    policy_init(&g_pol3, 5, 3, 4);
+    if !policy_overflowed(&g_pol3) { pass = 0; }
+    if act(policy_decide(&g_pol3, 777)) != 1 { pass = 0; }
+    policy_observe(&g_pol3, 777, V_DENY);
+    if act(policy_decide(&g_pol3, 777)) != 3 { pass = 0; }
 
     return pass;
 }

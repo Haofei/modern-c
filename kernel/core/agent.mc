@@ -31,10 +31,16 @@ pub enum ToolError {
     Denied,      // the tool id is not in the agent's tool allowlist — refused without side effects
     NoSuchTool,  // the tool id is not registered in the system's tool registry
     Exhausted,   // the agent's tool-call budget is used up (resource bound hit)
+    Duplicate,   // registry construction tried to bind an id that is already present
 }
 
 // Maximum tools the system registry can hold. Small and fixed (no allocation) — a scaffold bound.
 const MAX_TOOLS: usize = 8;
+pub const TOOL_AUDIT_DENY: u32 = 0;
+pub const TOOL_AUDIT_ALLOW: u32 = 1;
+pub const TOOL_AUDIT_DENIED_TAG: u32 = 0x2000;
+pub const TOOL_AUDIT_EXHAUSTED_TAG: u32 = 0x2001;
+pub const TOOL_AUDIT_NO_SUCH_TAG: u32 = 0x2002;
 
 // One registered tool: a stable id, its handler, and whether the slot is occupied. In the mock a
 // handler is an in-process fn pointer; in a real system this would be a service endpoint to a tool
@@ -74,11 +80,20 @@ pub fn tool_registry_init(r: *mut ToolRegistry) -> void {
     }
 }
 
-// Register tool `id` with `handler` in the first free slot. Returns the claimed slot index, or
-// err(.Exhausted) if the registry is full (no free slot). Does NOT dedupe ids — the registry is
-// a set of slots, and tool_lookup returns the first matching id.
+// Register tool `id` with `handler` in the first free slot. Returns the claimed slot index,
+// err(.Duplicate) if the id is already present, or err(.Exhausted) if the registry is full.
+// Duplicate ids are refused so registry construction cannot silently shadow a later binding.
 pub fn tool_register(r: *mut ToolRegistry, id: u32, handler: fn(u32) -> u32) -> Result<usize, ToolError> {
     var i: usize = 0;
+    while i < MAX_TOOLS {
+        if r.tools[i].present {
+            if r.tools[i].id == id {
+                return err(.Duplicate);
+            }
+        }
+        i = i + 1;
+    }
+    i = 0;
     while i < MAX_TOOLS {
         if !r.tools[i].present {
             r.tools[i].id = id;
@@ -115,6 +130,10 @@ pub fn tool_handler_at(r: *mut ToolRegistry, slot: usize) -> fn(u32) -> u32 {
     return r.tools[slot].handler;
 }
 
+fn agent_audit(t: *mut ProcTable, sb: *mut Sandbox, verdict: u32, tag: u32, tool_id: u32) -> void {
+    ipc_trace_record(cap_audit(), proc_pid_at(t, sb.slot), verdict, tag, tool_id);
+}
+
 // ----- sandbox: spawn + tool-call ABI -----
 
 // Spawn a SANDBOXED agent. The agent's process is created via proc_spawn_attenuated, so its
@@ -129,20 +148,22 @@ pub fn agent_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void, all
 
 // THE TOOL-CALL ABI. The single checked entry point through which a sandboxed agent invokes a
 // tool. Checks run in a deliberate order — Denied BEFORE budget BEFORE NoSuchTool — so a forbidden
-// tool is refused WITHOUT consuming the agent's budget, and only a dispatched call is audited:
+// tool is refused WITHOUT consuming the agent's dispatch budget, and every verdict is audited:
 //   1. capability check — tool id must be in the agent's allowlist (else Denied);
 //   2. budget check     — the agent must have calls left (else Exhausted);
 //   3. resolve          — the tool must be registered (else NoSuchTool);
-//   4. audit            — record the (about-to-dispatch) call into the capability-use trace,
-//                         from = the agent's pid, tag = tool id (a tool call IS authority use);
+//   4. audit            — record Allow/Deny into the capability-use trace,
+//                         from = the agent's pid, tag = verdict/tool kind;
 //   5. charge + dispatch — spend one budget unit, run the handler, return its result.
 pub fn agent_tool_call(t: *mut ProcTable, reg: *mut ToolRegistry, sb: *mut Sandbox, tool_id: u32, arg: u32) -> Result<u32, ToolError> {
     // 1. capability check: not in the agent's tool allowlist ⇒ Denied (no side effects, no budget spent).
     if !mask32_contains(&sb.tools, tool_id) {
+        agent_audit(t, sb, TOOL_AUDIT_DENY, TOOL_AUDIT_DENIED_TAG, tool_id);
         return err(.Denied);
     }
     // 2. budget check: out of tool-call budget ⇒ Exhausted (resource bound).
     if sb.calls_left == 0 {
+        agent_audit(t, sb, TOOL_AUDIT_DENY, TOOL_AUDIT_EXHAUSTED_TAG, tool_id);
         return err(.Exhausted);
     }
     // 3. resolve: unregistered tool ⇒ NoSuchTool. (Checked after Denied so an out-of-allowlist id
@@ -153,15 +174,17 @@ pub fn agent_tool_call(t: *mut ProcTable, reg: *mut ToolRegistry, sb: *mut Sandb
     switch tool_lookup(reg, tool_id) {
         ok(slot) => {
             // 4. audit: a tool call is a capability use — record it into the SAME provenance trace
-            //    kcall uses (cap_audit). from = the agent's pid, tag = the tool id. Only DISPATCHED
-            //    calls are recorded; the Denied/Exhausted/NoSuchTool returns above leave no entry.
-            ipc_trace_record(cap_audit(), proc_pid_at(t, sb.slot), 0, tool_id, 0);
+            //    kcall uses (cap_audit). from = the agent's pid, to = Allow, tag = the tool id.
+            agent_audit(t, sb, TOOL_AUDIT_ALLOW, tool_id, 0);
             // 5. charge + dispatch: spend one budget unit, run the resolved handler, return its result.
             sb.calls_left = sb.calls_left - 1;
             let handler: fn(u32) -> u32 = tool_handler_at(reg, slot); // initialized, never uninit
             let result: u32 = handler(arg);
             return ok(result);
         }
-        err(e) => { return err(e); } // NoSuchTool — not in the registry; no budget spent, no audit.
+        err(e) => {
+            agent_audit(t, sb, TOOL_AUDIT_DENY, TOOL_AUDIT_NO_SUCH_TAG, tool_id);
+            return err(e);
+        }
     }
 }

@@ -53,9 +53,20 @@ export fn mcp_init(c: *mut McpCatalog) -> void {
 }
 
 // Advertise an MCP method `name` bound to native `tool_id`. false if the catalog
-// or its name pool is full. (Kernel-side catalog construction; the agent only
-// gets to CALL names, never to bind new ones.)
+// or its name pool is full, or if `name` is already present. (Kernel-side catalog
+// construction; the agent only gets to CALL names, never to bind new ones.)
 export fn mcp_register(c: *mut McpCatalog, name: usize, name_len: usize, tool_id: u32) -> bool {
+    var q: ByteReader = byte_reader(pa(name), name_len);
+    var existing: usize = 0;
+    while existing < MCP_MAX {
+        if c.tools[existing].used {
+            if mcp_name_eq(c, existing, &q, name_len) {
+                return false;
+            }
+        }
+        existing = existing + 1;
+    }
+
     var slot: usize = MCP_MAX;
     var i: usize = 0;
     while i < MCP_MAX {

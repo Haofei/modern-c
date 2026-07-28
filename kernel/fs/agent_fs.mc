@@ -35,10 +35,12 @@ pub const TOOL_FS_LIST: u32 = 3;
 pub const TOOL_CATALOG_MAX: u32 = 3; // highest id with a handler
 
 // Verdict + a synthetic op code for front-door audit records. The FS catalog ops
-// reuse the server's OP_* tags; a denied/unknown tool is logged with its raw id
-// plus this bias so it is distinguishable from a served op in the trace.
+// reuse the server's OP_* tags; a denied/unknown tool is logged with a stable
+// front-door tag and the raw probed tool id in the event size/argument field.
+// Keep the untrusted id out of arithmetic: denial auditing must be total even
+// for hostile values such as 0xffff_ffff.
 pub const FD_DENY: u32 = 0;
-pub const FD_TOOL_TAG_BIAS: u32 = 0x1000;
+pub const FD_TOOL_DENIED_TAG: u32 = 0x1000;
 
 // An agent's FS-tool authority: the allowlist, the remaining call budget, and
 // the path capability the server will enforce. All three travel together.
@@ -82,8 +84,10 @@ fn map_fs(e: FsToolError) -> AgentToolError {
 }
 
 fn fd_audit(sink: *mut IpcTrace, a: *mut AgentFs, tool_id: u32) -> void {
-    // Attribute the denied attempt to the agent, tagging the probed tool id.
-    ipc_trace_record(sink, a.cap.agent_pid, FD_DENY, FD_TOOL_TAG_BIAS + tool_id, 0);
+    // Attribute the denied attempt to the agent. `tool_id` is attacker-facing
+    // input, so record it verbatim instead of adding a tag bias that can
+    // overflow under checked arithmetic.
+    ipc_trace_record(sink, a.cap.agent_pid, FD_DENY, FD_TOOL_DENIED_TAG, tool_id);
 }
 
 // THE TOOL-CALL FRONT DOOR. Checks run allowlist -> budget -> resolve before any

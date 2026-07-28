@@ -119,26 +119,28 @@ fn run_e2e() -> bool {
         err(e) => { if e != .Exhausted { pass = false; } say(0x58); } // 'X'
     }
 
-    // --- audit: exactly the FOUR DISPATCHED calls were recorded (load, process, load, process),
-    // each carrying the agent's pid (from) and the tool id (tag). The Denied (net) and the
-    // Exhausted call were never dispatched, so they leave no audit entry. ---
+    // --- audit: all tool verdicts were recorded. Dispatched calls are Allow
+    // events tagged by tool id; Denied/Exhausted requests are Deny events tagged
+    // by rejection kind with the raw tool id in size. ---
     let aud: *mut IpcTrace = cap_audit();
-    if ipc_trace_len(aud) != 4 { pass = false; }
-    let expect_tools: [4]u32 = .{ 1, 2, 1, 2 };
+    if ipc_trace_len(aud) != 6 { pass = false; }
+    let expect_to: [6]u32 = .{ TOOL_AUDIT_ALLOW, TOOL_AUDIT_ALLOW, TOOL_AUDIT_DENY, TOOL_AUDIT_ALLOW, TOOL_AUDIT_ALLOW, TOOL_AUDIT_DENY };
+    let expect_tags: [6]u32 = .{ 1, 2, TOOL_AUDIT_DENIED_TAG, 1, 2, TOOL_AUDIT_EXHAUSTED_TAG };
+    let expect_size: [6]u32 = .{ 0, 0, 9, 0, 0, 1 };
     var i: usize = 0;
-    while i < 4 {
+    while i < 6 {
         switch ipc_trace_drain(aud) {
             ok(ev) => {
-                if ev.from != agent_pid { pass = false; }      // caller = the agent
-                if ev.tag != expect_tools[i] { pass = false; } // tool id
-                if ev.to != 0 { pass = false; }
-                if ev.size != 0 { pass = false; }
+                if ev.from != agent_pid { pass = false; } // caller = the agent
+                if ev.to != expect_to[i] { pass = false; }
+                if ev.tag != expect_tags[i] { pass = false; }
+                if ev.size != expect_size[i] { pass = false; }
             }
             err(e) => { pass = false; }
         }
         i = i + 1;
     }
-    if ipc_trace_len(aud) != 0 { pass = false; } // drained dry — no Denied/Exhausted entries
+    if ipc_trace_len(aud) != 0 { pass = false; } // drained dry
     if pass { say(0x41); } // 'A' — audit correct (exactly the dispatched tool-use transcript)
 
     return pass;

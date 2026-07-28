@@ -70,7 +70,8 @@ fn last_field(which: u32) -> u32 {
         ok(ev) => {
             if which == 0 { return ev.from; }
             if which == 1 { return ev.to; }
-            return ev.tag;
+            if which == 2 { return ev.tag; }
+            return ev.size;
         }
         err(e) => { return 0xFFFF_FFFF; }
     }
@@ -78,6 +79,7 @@ fn last_field(which: u32) -> u32 {
 fn last_from() -> u32 { return last_field(0); }
 fn last_verdict() -> u32 { return last_field(1); }
 fn last_tag() -> u32 { return last_field(2); }
+fn last_size() -> u32 { return last_field(3); }
 
 // agent_fs_call wrapper: ok payload, or a sentinel for the error.
 fn call(a: *mut AgentFs, tool: u32, n: usize, off: usize, buf: usize, blen: usize, capb: usize) -> u64 {
@@ -160,7 +162,13 @@ export fn agent_fs_run() -> u32 {
     if ipc_trace_len(&g_audit) != before + 1 { pass = 0; }      // the denied probe WAS recorded
     if last_from() != AGENT { pass = 0; }                       // attributed to the agent
     if last_verdict() != FD_DENY { pass = 0; }
-    if last_tag() != FD_TOOL_TAG_BIAS + TOOL_EXEC { pass = 0; } // which tool was probed
+    if last_tag() != FD_TOOL_DENIED_TAG { pass = 0; }
+    if last_size() != TOOL_EXEC { pass = 0; }                    // which tool was probed
+
+    // Extreme out-of-range ids must deny and audit without checked-overflow traps.
+    if call(&ag, 0xFFFF_FFFF, p_ws_notes(), 0, (&g_src[0]) as usize, 1, 16) != E_DENIED { pass = 0; }
+    if last_tag() != FD_TOOL_DENIED_TAG { pass = 0; }
+    if last_size() != 0xFFFF_FFFF { pass = 0; }
 
     // resource bound: a budget-1 agent gets exactly one call, then Exhausted.
     var tw: Mask32 = mask32_zero();

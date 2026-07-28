@@ -47,6 +47,13 @@ enum TraceError {
     Empty,
 }
 
+fn trace_sat_inc(v: u64) -> u64 {
+    if v == 0xFFFF_FFFF_FFFF_FFFF {
+        return v;
+    }
+    return v + 1;
+}
+
 // Reset `t` to empty in place. Seq numbering restarts at 0 (a fresh trace has no causal
 // history). Event slots are never read while `count` bounds the live region, so they need
 // not be cleared.
@@ -88,12 +95,12 @@ export fn ipc_trace_record(t: *mut IpcTrace, from: u32, to: u32, tag: u32, size:
     if t.count == IPC_TRACE_CAP {
         // Full: we just clobbered the oldest event. Advance the read cursor and count the loss.
         t.head = (t.head + 1) % IPC_TRACE_CAP;
-        t.dropped = t.dropped + 1;
+        t.dropped = trace_sat_inc(t.dropped);
     } else {
         t.count = t.count + 1;
     }
 
-    t.next_seq = t.next_seq + 1;
+    t.next_seq = trace_sat_inc(t.next_seq);
     return seq;
 }
 

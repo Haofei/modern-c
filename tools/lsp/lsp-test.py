@@ -177,6 +177,7 @@ MONO_BAD = (
 )
 CANCEL_BAD = "# cancel_probe\n" + BAD
 TIMEOUT_BAD = "# timeout_probe\n" + GOOD
+OUTPUT_BAD = "# output_probe\n" + GOOD
 MESSY = "fn   f( )->u32{\n        return 7;\n}\n"  # misindented -> formatting changes it
 # A multi-byte string literal before an undefined-identifier error on the same line: the LSP
 # `character` must be the UTF-16 offset of `missing_id`, not its byte offset.
@@ -375,6 +376,10 @@ def main():
             "    if 'timeout_probe' in source:\n"
             "        while True:\n"
             "            time.sleep(0.05)\n"
+            "    if 'output_probe' in source:\n"
+            "        sys.stdout.write('x' * 65536)\n"
+            "        sys.stdout.flush()\n"
+            "        sys.exit(0)\n"
             "elif len(sys.argv) > 1 and sys.argv[1] == 'emit-map':\n"
             "    with open(os.environ['MC_LSP_TEST_EMIT_MAP_COUNTER'], 'a') as count_file:\n"
             "        count_file.write('1\\n')\n"
@@ -384,7 +389,8 @@ def main():
         )
     os.chmod(wrapper_path, 0o755)
     env = dict(os.environ, MCC=wrapper_path, MC_LSP_DIAGNOSTIC_DEBOUNCE_MS="50",
-               MC_LSP_MCC_TIMEOUT_SECONDS="1.5",
+               MC_LSP_MCC_TIMEOUT_SECONDS="3.0",
+               MC_LSP_MAX_COMPILER_OUTPUT_BYTES="4096",
                MC_LSP_TEST_REAL_MCC=mcc, MC_LSP_TEST_CHECK_COUNTER=counter_path,
                MC_LSP_TEST_EMIT_MAP_COUNTER=emit_map_counter_path,
                MC_LSP_TEST_SLOW_STARTED=slow_started_path,
@@ -539,8 +545,21 @@ def main():
         timeout_diags = diagnostics_for(proc, timeout_uri)
         if timeout_diags:
             raise SystemExit(f"FAIL: lsp-test — timeout should fail closed without stale diagnostics: {timeout_diags}")
-        if time.monotonic() - started > 4.0:
+        if time.monotonic() - started > 6.0:
             raise SystemExit("FAIL: lsp-test — compiler hard timeout did not bound request latency")
+
+        # A compiler that emits excessive output is killed without letting the LSP process
+        # accumulate unbounded stdout/stderr, and the server remains usable afterwards.
+        output_path = os.path.join(workdir, "output.mc")
+        with open(output_path, "w") as f:
+            f.write(OUTPUT_BAD)
+        output_uri = pathlib.Path(output_path).as_uri()
+        did_open(proc, output_uri, OUTPUT_BAD)
+        output_diags = diagnostics_for(proc, output_uri)
+        if output_diags:
+            raise SystemExit(f"FAIL: lsp-test — output-limit failure should not publish stale diagnostics: {output_diags}")
+        if request(proc, 48, "workspace/symbol", {"query": "still_alive"}) != []:
+            raise SystemExit("FAIL: lsp-test — server did not remain usable after output-limit failure")
 
         # URI decoding and stdin overlays work in an encoded, read-only source directory.
         encoded_dir = os.path.join(workdir, "space \u00fc")
