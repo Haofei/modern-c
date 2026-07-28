@@ -62,7 +62,7 @@ set +e
 "$MCC" build "$WORK/ok.mc" >"$WORK/missing-out.out" 2>"$WORK/missing-out.err"
 RC=$?
 set -e
-if [ "$RC" -ne 2 ] || ! grep -Fq "missing -o <exe>" "$WORK/missing-out.err"; then
+if [ "$RC" -ne 1 ] || ! grep -Fq "missing -o <exe>" "$WORK/missing-out.err"; then
     echo "FAIL: mcc-build-test - missing -o did not fail with a usage diagnostic"
     cat "$WORK/missing-out.out"
     cat "$WORK/missing-out.err"
@@ -84,7 +84,7 @@ set +e
 "$MCC" build "$WORK/ok.mc" "$WORK/void_main.mc" -o "$WORK/two" >"$WORK/two.out" 2>"$WORK/two.err"
 RC=$?
 set -e
-if [ "$RC" -ne 2 ] || ! grep -Fq "multiple input files are not supported" "$WORK/two.err"; then
+if [ "$RC" -ne 1 ] || ! grep -Fq "multiple input files are not supported" "$WORK/two.err"; then
     echo "FAIL: mcc-build-test - multiple inputs did not fail with a usage diagnostic"
     cat "$WORK/two.out"
     cat "$WORK/two.err"

@@ -22,6 +22,46 @@ test "lower-c grouped i128 minimum never reads an inactive AST union arm" {
     try expectContains(output.items, "grouped_i128_minimum");
 }
 
+test "lower-c nullable narrowing with long identifiers never falls back to constants" {
+    var long_name: std.ArrayList(u8) = .empty;
+    defer long_name.deinit(std.testing.allocator);
+    try long_name.appendSlice(std.testing.allocator, "nullable_subject_");
+    for (0..320) |_| try long_name.append(std.testing.allocator, 'x');
+
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+    try source.print(std.testing.allocator,
+        \\fn maybe_u32(x: u32) -> ?u32 {{
+        \\    if x > 0 {{ return x; }}
+        \\    return null;
+        \\}}
+        \\fn long_iflet() -> u32 {{
+        \\    let {s}: ?u32 = maybe_u32(3);
+        \\    if let value = {s} {{ return value; }}
+        \\    return 0;
+        \\}}
+        \\fn long_switch() -> u32 {{
+        \\    let {s}: ?u32 = maybe_u32(4);
+        \\    switch {s} {{
+        \\        value => {{ return value; }},
+        \\        _ => {{ return 0; }},
+        \\    }}
+        \\}}
+        \\
+    , .{ long_name.items, long_name.items, long_name.items, long_name.items });
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_long_nullable_identifier.mc", source.items, &output);
+    const expected_present = try std.fmt.allocPrint(std.testing.allocator, "{s}.present", .{long_name.items});
+    defer std.testing.allocator.free(expected_present);
+    const expected_value = try std.fmt.allocPrint(std.testing.allocator, "{s}.value", .{long_name.items});
+    defer std.testing.allocator.free(expected_value);
+    try expectContains(output.items, expected_present);
+    try expectContains(output.items, expected_value);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (0)") == null);
+}
+
 test "lower-c value optional pointer derefs lower race-tolerantly" {
     const source =
         \\struct Point { x: u32, y: u32 }

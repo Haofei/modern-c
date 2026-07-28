@@ -67,7 +67,7 @@ const usage =
     \\  mcc lower-c <file.mc>
     \\  mcc emit-c <file.mc> [-o <out.c>] [--profile=kernel|hosted] [--checks=all|elide-proven] [--stub-asm] [--remap-prefix=FROM=TO]
     \\  mcc build <file.mc> -o <exe>
-    \\  mcc emit-map <file.mc> [-o <out.mcmap>] [--profile=kernel|hosted] [--remap-prefix=FROM=TO]
+    \\  mcc emit-map <file.mc> [-o <out.mcmap>] [--profile=kernel|hosted] [--checks=all|elide-proven] [--stub-asm] [--remap-prefix=FROM=TO]
     \\  mcc emit-llvm <file.mc> [-o <out.ll>] [--checks=all|elide-proven] [--stub-asm] [--linux-kernel]
     \\  mcc emit-layout <file.mc> --structs=A,B,C
     \\  mcc emit-c-struct <file.mc> --structs=A,B,C
@@ -232,6 +232,7 @@ fn runMain(init: std.process.Init) !void {
     const options = cli.Options.parse(command, &args) catch |err| switch (err) {
         error.InvalidArgs => return failUsage(),
     };
+    if (!std.mem.eql(u8, command, "fmt") and !cli.Options.isSourceLoadingCommand(command)) return failUsage();
     active_visibility_mode = options.visibility_mode;
     const is_emit_layout = cli.Options.isEmitLayout(command);
     const is_emit_c_struct = cli.Options.isEmitCStruct(command);
@@ -324,10 +325,14 @@ fn runMain(init: std.process.Init) !void {
         const remapped_source_path = try options.remappedSourcePath(allocator, path);
         defer if (remapped_source_path) |p| allocator.free(p);
         try runEmitC(allocator, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.output_path);
+    } else if (std.mem.eql(u8, command, "build")) {
+        const remapped_source_path = try options.remappedSourcePath(allocator, path);
+        defer if (remapped_source_path) |p| allocator.free(p);
+        try runBuild(allocator, init.io, path, remapped_source_path orelse path, source, options.output_path.?, init.environ_map.get("CLANG") orelse "clang");
     } else if (std.mem.eql(u8, command, "emit-map")) {
         const remapped_source_path = try options.remappedSourcePath(allocator, path);
         defer if (remapped_source_path) |p| allocator.free(p);
-        try runEmitMap(allocator, path, remapped_source_path orelse path, source, options.profile, options.output_path);
+        try runEmitMap(allocator, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.output_path);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
         try runEmitLlvm(allocator, path, source, options.checks, options.stub_asm, options.targetArch(), options.linux_kernel, options.output_path);
     } else if (std.mem.eql(u8, command, "list-tests")) {
@@ -361,6 +366,7 @@ fn isExpectedCliFailure(err: anyerror) bool {
         error.RunTrapFailed,
         error.LowerCFailed,
         error.EmitCFailed,
+        error.BuildFailed,
         error.EmitLlvmFailed,
         error.EmitLayoutFailed,
         error.EmitCStructFailed,
@@ -503,9 +509,10 @@ fn runFmt(allocator: std.mem.Allocator, path: []const u8, source: []const u8, ch
     try writeStdout(formatted);
 }
 
-// `mcc symbols <file>` prints a JSON symbol index (defs + refs with spans) for the language
-// server. Best-effort: it needs only a parse (not sema), and on a hard parse failure it still
-// prints a valid empty index so the client always gets parseable JSON.
+// `mcc symbols <file>` prints a JSON symbol index (defs + refs with spans) for
+// the language server. Parse failures are reported as structured incomplete
+// results; internal/resource failures return nonzero rather than masquerading as
+// a clean empty file.
 fn runSymbols(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
     var diag = initReporter(allocator, path, source);
     defer diag.deinit();
@@ -514,9 +521,15 @@ fn runSymbols(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = parseModuleOrReport(source, parse_allocator, &diag) catch {
-        try writeStdout("{\"defs\":[],\"refs\":[]}\n");
-        return;
+    const module = parseModuleOrReport(source, parse_allocator, &diag) catch |err| switch (err) {
+        error.ParseFailed => {
+            try writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_PARSE_FAILED\",\"message\":\"symbol indexing aborted after parse diagnostics\"}]}\n");
+            return error.ParseFailed;
+        },
+        else => {
+            try writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_SYMBOLS_INTERNAL\",\"message\":\"symbol indexing aborted by an internal error\"}]}\n");
+            return err;
+        },
     };
     defer module.deinit(parse_allocator);
 
@@ -783,9 +796,22 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, artifact_source_path
         return error.EmitCFailed;
     }
 
+    const program = try backend.VerifiedProgram.init(module, &module_mir, &diag);
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitCFailed;
+    }
+
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    lower_c.appendCProfileWithMir(allocator, module, &module_mir, &output, profile, artifact_source_path, checks, stub_asm, &diag) catch |err| switch (err) {
+    const be = backend.byName("c").?;
+    be.lower(allocator, program, &output, .{
+        .profile = profile,
+        .source_path = artifact_source_path,
+        .checks = checks,
+        .stub_asm = stub_asm,
+        .reporter = &diag,
+    }) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
             diag.render();
@@ -796,7 +822,167 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, artifact_source_path
     try writeArtifact(output.items, output_path);
 }
 
-fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, output_path: ?[]const u8) !void {
+fn runBuild(allocator: std.mem.Allocator, io: std.Io, path: []const u8, artifact_source_path: []const u8, source: []const u8, output_path: []const u8, clang_bin: []const u8) !void {
+    var diag = initReporter(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.BuildFailed;
+    }
+
+    var checker = sema.Checker.init(&diag);
+    checker.file_boundaries = combined_boundaries;
+    checker.checkModule(module);
+    if (diag.has_errors) {
+        diag.render();
+        return error.BuildFailed;
+    }
+
+    var module_mir = try mir.build(allocator, module);
+    defer module_mir.deinit();
+    const program = try backend.VerifiedProgram.init(module, &module_mir, &diag);
+    if (diag.has_errors) {
+        diag.render();
+        return error.BuildFailed;
+    }
+
+    var raw_c: std.ArrayList(u8) = .empty;
+    defer raw_c.deinit(allocator);
+    const be = backend.byName("c").?;
+    be.lower(allocator, program, &raw_c, .{
+        .profile = .hosted,
+        .source_path = artifact_source_path,
+        .reporter = &diag,
+    }) catch |err| switch (err) {
+        error.UnsupportedCEmission => {
+            if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
+            diag.render();
+            return error.BuildFailed;
+        },
+        else => return err,
+    };
+
+    var hosted_c: std.ArrayList(u8) = .empty;
+    defer hosted_c.deinit(allocator);
+    try appendHostedBuildWrapper(allocator, raw_c.items, &hosted_c, path);
+
+    const tmp_c = try std.fmt.allocPrint(allocator, "{s}.mc-build-{d}.c", .{ output_path, std.Thread.getCurrentId() });
+    defer allocator.free(tmp_c);
+    defer std.Io.Dir.cwd().deleteFile(io, tmp_c) catch {};
+    try writeOutputPath(tmp_c, hosted_c.items);
+
+    const argv = [_][]const u8{
+        clang_bin,
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-fno-strict-aliasing",
+        "-fno-delete-null-pointer-checks",
+        "-fwrapv",
+        tmp_c,
+        "-lm",
+        "-o",
+        output_path,
+    };
+    const result = std.process.run(allocator, io, .{
+        .argv = &argv,
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
+        .expand_arg0 = .expand,
+    }) catch |err| {
+        std.debug.print("mcc build: clang invocation failed: {s}\n", .{@errorName(err)});
+        return error.BuildFailed;
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
+    const clang_ok = switch (result.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!clang_ok) {
+        if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
+        std.debug.print("mcc build: clang failed while linking {s}\n", .{output_path});
+        return error.BuildFailed;
+    }
+    try writeStdout("mcc build: wrote ");
+    try writeStdout(output_path);
+    try writeStdout("\n");
+}
+
+fn appendHostedBuildWrapper(allocator: std.mem.Allocator, raw_c: []const u8, out: *std.ArrayList(u8), source_path: []const u8) !void {
+    const entry_ret = findHostedMainReturnType(raw_c) orelse {
+        std.debug.print("mcc build: expected exported no-argument main() entry point in {s}\n", .{source_path});
+        return error.BuildFailed;
+    };
+
+    var lines = std.mem.splitScalar(u8, raw_c, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, "\r");
+        if (cMainReturnTypeForSuffix(line, " main(void);")) |ret| {
+            try out.appendSlice(allocator, ret);
+            try out.appendSlice(allocator, " mc_user_main(void);");
+        } else if (cMainReturnTypeForSuffix(line, " main(void) {")) |ret| {
+            try out.appendSlice(allocator, ret);
+            try out.appendSlice(allocator, " mc_user_main(void) {");
+        } else {
+            try out.appendSlice(allocator, raw_line);
+        }
+        try out.append(allocator, '\n');
+    }
+    try out.appendSlice(allocator, "\nint main(void) {\n");
+    if (std.mem.eql(u8, entry_ret, "void")) {
+        try out.appendSlice(allocator, "    mc_user_main();\n    return 0;\n");
+    } else {
+        try out.appendSlice(allocator, "    return (int)mc_user_main();\n");
+    }
+    try out.appendSlice(allocator, "}\n");
+}
+
+fn findHostedMainReturnType(raw_c: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, raw_c, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, "\r");
+        if (cMainReturnTypeForSuffix(line, " main(void);")) |ret| return ret;
+    }
+    return null;
+}
+
+fn cMainReturnTypeForSuffix(line: []const u8, suffix: []const u8) ?[]const u8 {
+    if (!std.mem.endsWith(u8, line, suffix)) return null;
+    const ret = line[0 .. line.len - suffix.len];
+    if (!isCIdentifier(ret)) return null;
+    return ret;
+}
+
+fn isCIdentifier(text: []const u8) bool {
+    if (text.len == 0) return false;
+    if (!isCIdentifierStart(text[0])) return false;
+    for (text[1..]) |ch| {
+        if (!isCIdentifierContinue(ch)) return false;
+    }
+    return true;
+}
+
+fn isCIdentifierStart(ch: u8) bool {
+    return (ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or ch == '_';
+}
+
+fn isCIdentifierContinue(ch: u8) bool {
+    return isCIdentifierStart(ch) or (ch >= '0' and ch <= '9');
+}
+
+fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, output_path: ?[]const u8) !void {
+    const optimize = checks.optimize;
     var diag = initReporter(allocator, path, source);
     defer diag.deinit();
 
@@ -814,22 +1000,48 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, artifact_source_pa
 
     var checker = sema.Checker.init(&diag);
     checker.file_boundaries = combined_boundaries;
+    checker.optimize = optimize;
     checker.checkModule(module);
     if (diag.has_errors) {
         diag.render();
         return error.EmitCFailed;
     }
 
-    try mir.verify(allocator, module, &diag);
+    var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
+    defer module_mir.deinit();
+    const program = try backend.VerifiedProgram.init(module, &module_mir, &diag);
     if (diag.has_errors) {
         diag.render();
         return error.EmitCFailed;
     }
 
     const be = backend.byName("c").?;
+    var generated_c: std.ArrayList(u8) = .empty;
+    defer generated_c.deinit(allocator);
+    be.lower(allocator, program, &generated_c, .{
+        .profile = profile,
+        .source_path = artifact_source_path,
+        .checks = checks,
+        .stub_asm = stub_asm,
+        .reporter = &diag,
+    }) catch |err| switch (err) {
+        error.UnsupportedCEmission => {
+            if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
+            diag.render();
+            return error.EmitCFailed;
+        },
+        else => return err,
+    };
+
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.emitMap(allocator, module, &output, profile, artifact_source_path);
+    try be.emitMap(allocator, program, &output, generated_c.items, .{
+        .profile = profile,
+        .source_path = artifact_source_path,
+        .checks = checks,
+        .stub_asm = stub_asm,
+        .reporter = &diag,
+    });
     try writeArtifact(output.items, output_path);
 }
 
@@ -867,9 +1079,24 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
         return error.EmitLlvmFailed;
     }
 
+    const program = try backend.VerifiedProgram.init(module, &module_mir, &diag);
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitLlvmFailed;
+    }
+
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    lower_llvm.appendLlvmCheckedMirProfile(allocator, module, &module_mir, &output, path, checks, stub_asm, target_arch, linux_kernel, &diag) catch |err| switch (err) {
+    const be = backend.byName("llvm").?;
+    be.lower(allocator, program, &output, .{
+        .profile = .kernel,
+        .source_path = path,
+        .target_arch = target_arch,
+        .checks = checks,
+        .stub_asm = stub_asm,
+        .reporter = &diag,
+        .linux_kernel = linux_kernel,
+    }) catch |err| switch (err) {
         error.UnsupportedLlvmEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "LLVM");
             diag.render();

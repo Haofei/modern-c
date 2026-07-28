@@ -691,10 +691,10 @@ def get_index(uri, text, timeout=None):
         return cached[1]
     rc, out, err, _ = run_on_temp(uri_to_path(uri), text, ["symbols"], timeout=timeout)
     try:
-        index = json.loads(out) if rc != 127 and out else {"defs": [], "refs": [], "fields": []}
+        index = json.loads(out) if out else {"complete": False, "defs": [], "refs": [], "fields": []}
     except (json.JSONDecodeError, ValueError):
-        index = {"defs": [], "refs": [], "fields": []}
-    if rc != 124:
+        index = {"complete": False, "defs": [], "refs": [], "fields": []}
+    if rc == 0 and index.get("complete") is True:
         _index_cache[uri] = (text, index)
     return index
 

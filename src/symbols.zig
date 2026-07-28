@@ -505,7 +505,7 @@ pub fn emitJson(allocator: std.mem.Allocator, module: ast.Module, reporter: *con
         }
     };
 
-    try out.appendSlice(allocator, "{\"defs\":[");
+    try out.appendSlice(allocator, "{\"complete\":true,\"defs\":[");
     for (b.defs.items, 0..) |d, i| {
         if (i > 0) try out.append(allocator, ',');
         try out.appendSlice(allocator, "{\"name\":");

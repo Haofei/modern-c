@@ -115,6 +115,10 @@ pub const Options = struct {
                 if (opts.remap_prefix != null) return error.InvalidArgs;
                 opts.remap_prefix = try parsePathRemap(flag["--remap-prefix=".len..]);
             } else {
+                if (std.mem.eql(u8, command, "build") and !std.mem.startsWith(u8, flag, "-")) {
+                    std.debug.print("mcc build: multiple input files are not supported\n", .{});
+                    return error.InvalidArgs;
+                }
                 std.debug.print("error: unknown option: {s}\n", .{flag});
                 return error.InvalidArgs;
             }
@@ -168,6 +172,7 @@ pub const Options = struct {
 
     pub fn isSourceLoadingCommand(command: []const u8) bool {
         return std.mem.eql(u8, command, "lex") or
+            std.mem.eql(u8, command, "build") or
             std.mem.eql(u8, command, "check") or
             std.mem.eql(u8, command, "run-trap") or
             std.mem.eql(u8, command, "facts") or
@@ -187,11 +192,18 @@ pub const Options = struct {
     }
 
     fn parseChecks(self: *Options, value: []const u8) !void {
+        var saw_all = false;
+        var saw_elide_proven = false;
         var tokens = std.mem.splitScalar(u8, value, ',');
         while (tokens.next()) |tok| {
+            if (tok.len == 0) return error.InvalidArgs;
             if (std.mem.eql(u8, tok, "all")) {
+                if (saw_all or saw_elide_proven) return error.InvalidArgs;
+                saw_all = true;
                 self.checks.optimize = false;
             } else if (std.mem.eql(u8, tok, "elide-proven")) {
+                if (saw_all or saw_elide_proven) return error.InvalidArgs;
+                saw_elide_proven = true;
                 self.checks.optimize = true;
             } else if (std.mem.eql(u8, tok, "ksan")) {
                 self.checks.ksan = true;
@@ -233,11 +245,13 @@ pub const Options = struct {
     fn validate(self: Options, command: []const u8, seen: SeenFlags) !void {
         const is_c_artifact_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map");
         const accepts_output_path = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map") or
-            std.mem.eql(u8, command, "emit-llvm");
+            std.mem.eql(u8, command, "emit-llvm") or std.mem.eql(u8, command, "build");
         const accepts_checks = std.mem.eql(u8, command, "verify") or std.mem.eql(u8, command, "lower-mir") or
-            std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-llvm");
+            std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map") or
+            std.mem.eql(u8, command, "emit-llvm");
         const needs_structs = isEmitLayout(command) or isEmitCStruct(command);
-        const is_emit_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-llvm");
+        const is_emit_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map") or
+            std.mem.eql(u8, command, "emit-llvm");
 
         if (seen.saw_profile_flag and !is_c_artifact_command) return invalidOptionForCommand("--profile", command);
         if (seen.saw_checks_flag and !accepts_checks) return invalidOptionForCommand("--checks", command);
@@ -258,6 +272,10 @@ pub const Options = struct {
         if (self.check_fmt and !std.mem.eql(u8, command, "fmt")) return invalidOptionForCommand("--check", command);
         if (self.structs_flag != null and !needs_structs) return invalidOptionForCommand("--structs", command);
         if (needs_structs and self.structs_flag == null) return error.InvalidArgs;
+        if (std.mem.eql(u8, command, "build") and self.output_path == null) {
+            std.debug.print("mcc build: missing -o <exe>\n", .{});
+            return error.InvalidArgs;
+        }
     }
 
     fn invalidOptionForCommand(option: []const u8, command: []const u8) error{InvalidArgs} {

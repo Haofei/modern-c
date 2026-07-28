@@ -48,13 +48,21 @@ fn backendLower(
 fn backendEmitMap(
     ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
-    profile: Profile,
-    source_path: []const u8,
+    generated_artifact: []const u8,
+    opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    return appendCSourceMap(allocator, module, out, profile, source_path, null);
+    return appendCSourceMapFromGenerated(
+        allocator,
+        program.syntax_module,
+        out,
+        generated_artifact,
+        program.typed_mir,
+        opts.source_path orelse "-",
+        null,
+    );
 }
 
 pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
@@ -124,5 +132,17 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
 
-    try lower_c_map.appendSourceMap(allocator, module, out, generated_c.items, &typed_mir, source_path, generated_c_path);
+    try appendCSourceMapFromGenerated(allocator, module, out, generated_c.items, &typed_mir, source_path, generated_c_path);
+}
+
+pub fn appendCSourceMapFromGenerated(
+    allocator: std.mem.Allocator,
+    module: ast.Module,
+    out: *std.ArrayList(u8),
+    generated_c: []const u8,
+    typed_mir: *const mir.Module,
+    source_path: []const u8,
+    generated_c_path: ?[]const u8,
+) anyerror!void {
+    try lower_c_map.appendSourceMap(allocator, module, out, generated_c, typed_mir, source_path, generated_c_path);
 }

@@ -308,16 +308,18 @@ pub fn emitTaggedUnionSwitchBranchBody(ctx: EmitContext, body: ast.SwitchBody, l
 
 fn emitNullableIfLetThen(ctx: EmitContext, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject: NullableSwitchSubject, binding: ast.Ident) anyerror!void {
     try writeIndent(ctx);
-    var cond_buf: [256]u8 = undefined;
-    try ctx.out.print(ctx.allocator, "if ({s}) {{\n", .{subject.someCond(&cond_buf)});
+    try ctx.out.appendSlice(ctx.allocator, "if (");
+    try subject.appendSomeCond(ctx.allocator, ctx.out);
+    try ctx.out.appendSlice(ctx.allocator, ") {\n");
     var then_locals = try lower_c_access.cloneLocals(ctx.allocator, locals.*);
     defer then_locals.deinit();
     const binding_info: LocalInfo = if (subject.inner_ty) |it| try ctx.local_info_from_type(ctx.emit_ctx, it) else .{ .c_type = subject.inner_c_type };
     try then_locals.put(binding.text, binding_info);
     ctx.indent.* += 1;
     try writeIndent(ctx);
-    var val_buf: [256]u8 = undefined;
-    try ctx.out.print(ctx.allocator, "MC_UNUSED {s} {s} = {s};\n", .{ subject.inner_c_type, try ctx.c_ident(ctx.emit_ctx, binding.text), subject.valueExpr(&val_buf) });
+    try ctx.out.print(ctx.allocator, "MC_UNUSED {s} {s} = ", .{ subject.inner_c_type, try ctx.c_ident(ctx.emit_ctx, binding.text) });
+    try subject.appendValueExpr(ctx.allocator, ctx.out);
+    try ctx.out.appendSlice(ctx.allocator, ";\n");
     try ctx.emit_switch_body(ctx.emit_ctx, .{ .block = node.then_block }, &then_locals, return_ty);
     ctx.indent.* -= 1;
     try writeIndent(ctx);
@@ -387,7 +389,9 @@ fn emitNullableSwitchBinding(ctx: EmitContext, locals: *std.StringHashMap(LocalI
     const binding_info: LocalInfo = if (subject.inner_ty) |it| try ctx.local_info_from_type(ctx.emit_ctx, it) else .{ .c_type = subject.inner_c_type };
     try locals.put(binding_name, binding_info);
     try writeIndent(ctx);
-    try ctx.out.print(ctx.allocator, "MC_UNUSED {s} {s} = {s};\n", .{ subject.inner_c_type, binding_name, subject.name });
+    try ctx.out.print(ctx.allocator, "MC_UNUSED {s} {s} = ", .{ subject.inner_c_type, try ctx.c_ident(ctx.emit_ctx, binding_name) });
+    try subject.appendValueExpr(ctx.allocator, ctx.out);
+    try ctx.out.appendSlice(ctx.allocator, ";\n");
 }
 
 fn emitTaggedUnionSwitchBinding(ctx: EmitContext, locals: *std.StringHashMap(LocalInfo), subject: TaggedUnionSwitchSubject, branch: TaggedUnionSwitchBranch, binding_name: []const u8) anyerror!void {
@@ -468,10 +472,9 @@ fn writeIndent(ctx: EmitContext) !void {
 }
 
 pub fn nullableSwitchBranch(allocator: std.mem.Allocator, pattern: ast.Pattern, subject: NullableSwitchSubject) !?NullableSwitchBranch {
-    var cond_buf: [256]u8 = undefined;
     return switch (pattern.kind) {
         .bind => |binding| NullableSwitchBranch{
-            .condition = try std.fmt.allocPrint(allocator, "{s}", .{subject.someCond(&cond_buf)}),
+            .condition = try subject.allocSomeCond(allocator),
             .binding_name = binding.text,
         },
         .wildcard => NullableSwitchBranch{ .condition = null },

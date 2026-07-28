@@ -205,21 +205,35 @@ pub const NullableSwitchSubject = struct {
     // `.present` tag and the some-binding reads the `.value` payload (not the whole word).
     is_value_opt: bool = false,
 
-    // The C boolean expression that is true when the subject is `some` (present).
-    pub fn someCond(self: NullableSwitchSubject, buf: []u8) []const u8 {
-        if (self.is_value_opt)
-            return std.fmt.bufPrint(buf, "{s}.present", .{self.name}) catch "0";
-        return if (self.is_dyn)
-            std.fmt.bufPrint(buf, "{s}.data != NULL", .{self.name}) catch "0"
-        else
-            std.fmt.bufPrint(buf, "{s} != NULL", .{self.name}) catch "0";
+    // Append the C boolean expression that is true when the subject is `some`
+    // (present). This deliberately writes into the caller's artifact buffer
+    // instead of formatting through a fixed scratch buffer: identifier length is
+    // a lexer/input policy, and codegen must never translate formatting failure
+    // into a semantic constant such as `0`.
+    pub fn appendSomeCond(self: NullableSwitchSubject, allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
+        if (self.is_value_opt) {
+            try out.print(allocator, "{s}.present", .{self.name});
+        } else if (self.is_dyn) {
+            try out.print(allocator, "{s}.data != NULL", .{self.name});
+        } else {
+            try out.print(allocator, "{s} != NULL", .{self.name});
+        }
     }
 
-    // The C expression that yields the some-payload value.
-    pub fn valueExpr(self: NullableSwitchSubject, buf: []u8) []const u8 {
-        if (self.is_value_opt)
-            return std.fmt.bufPrint(buf, "{s}.value", .{self.name}) catch self.name;
-        return self.name;
+    // Append the C expression that yields the some-payload value.
+    pub fn appendValueExpr(self: NullableSwitchSubject, allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
+        if (self.is_value_opt) {
+            try out.print(allocator, "{s}.value", .{self.name});
+        } else {
+            try out.appendSlice(allocator, self.name);
+        }
+    }
+
+    pub fn allocSomeCond(self: NullableSwitchSubject, allocator: std.mem.Allocator) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
+        try self.appendSomeCond(allocator, &out);
+        return out.toOwnedSlice(allocator);
     }
 };
 

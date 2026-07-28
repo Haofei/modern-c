@@ -82,6 +82,9 @@ pub const LowerOptions = struct {
     /// Optional reporter used by backends to turn expected unsupported lowering
     /// bailouts into source-spanned diagnostics instead of raw backend errors.
     reporter: ?*diagnostics.Reporter = null,
+    /// LLVM kernel-profile runtime import mode (`mcc emit-llvm --linux-kernel`).
+    /// Ignored by backends that do not consume LLVM runtime declarations.
+    linux_kernel: bool = false,
 };
 
 /// The only code-generation input accepted by a Backend. Construction runs the
@@ -134,15 +137,17 @@ pub const Backend = struct {
         opts: LowerOptions,
     ) anyerror!void,
     /// Optional source-map emission ("emit-map"). Only the C backend supplies
-    /// this; null means the backend has no source-map artifact. Signature
-    /// mirrors `lower_c.appendCSourceMap`.
+    /// this; null means the backend has no source-map artifact. The map is
+    /// emitted from the same verified program and generated artifact as the
+    /// codegen request, so map metadata cannot silently drift from lowering
+    /// options such as checks/profile/stub-asm.
     emitMapFn: ?*const fn (
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
-        module: ast.Module,
+        program: VerifiedProgram,
         out: *std.ArrayList(u8),
-        profile: Profile,
-        source_path: []const u8,
+        generated_artifact: []const u8,
+        opts: LowerOptions,
     ) anyerror!void = null,
 
     /// Lower `module` to its textual artifact via the backend's vtable.
@@ -165,12 +170,12 @@ pub const Backend = struct {
     pub fn emitMap(
         self: Backend,
         allocator: std.mem.Allocator,
-        module: ast.Module,
+        program: VerifiedProgram,
         out: *std.ArrayList(u8),
-        profile: Profile,
-        source_path: []const u8,
+        generated_artifact: []const u8,
+        opts: LowerOptions,
     ) anyerror!void {
-        return self.emitMapFn.?(self.ctx, allocator, module, out, profile, source_path);
+        return self.emitMapFn.?(self.ctx, allocator, program, out, generated_artifact, opts);
     }
 };
 

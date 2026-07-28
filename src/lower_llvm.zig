@@ -228,7 +228,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    try appendLlvmCheckedMir(allocator, program.syntax_module, program.typed_mir, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch, opts.reporter);
+    try appendLlvmCheckedMirProfile(allocator, program.syntax_module, program.typed_mir, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch, opts.linux_kernel, opts.reporter);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
