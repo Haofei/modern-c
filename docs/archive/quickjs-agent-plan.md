@@ -2,7 +2,7 @@
 
 Status: **plan / not started.** This is the concrete, phased path to running QuickJS as a
 genuinely-untrusted JavaScript agent on the MC kernel — the "step 0 target" named in
-`docs/agent-sandbox-milestone.md`. It builds on substrate that already exists, so most of
+`agent-sandbox-milestone.md`. It builds on substrate that already exists, so most of
 the risk people fear is already retired.
 
 ## 0. End state
@@ -440,7 +440,7 @@ program that calls `pow`/`malloc`, run it as an app). Phases 4–6 are integrati
 substrate.
 
 ## 8. Where this connects
-This is the missing **step 0** of `docs/agent-sandbox-milestone.md` (untrusted execution):
+This is the missing **step 0** of `agent-sandbox-milestone.md` (untrusted execution):
 the M1–M6 capability substrate (treefs, fs_toolserver, agent_fs, policy, netcap, mcp) is
 already built and gated; it has been driven so far by hand-built confined ELFs. QuickJS is
 the real untrusted *interpreter* those capabilities were designed to contain. Finishing this

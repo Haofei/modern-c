@@ -14,10 +14,10 @@ Related documents:
   fair C/Rust/MC kernel machine-contract comparisons.
 - `docs/future-kernel-plan.md` — overall capability-native edge agent OS direction.
 - `docs/platform-portability-plan.md` — platform work for RISC-V S-mode, x86_64, and AArch64.
-- `docs/quickjs-agent-plan.md` — QuickJS as a confined U-mode agent.
-- `docs/agent-sandbox-milestone.md` — sandbox, broker, policy, and MCP milestones.
+- `docs/archive/quickjs-agent-plan.md` — QuickJS as a confined U-mode agent.
+- `docs/archive/agent-sandbox-milestone.md` — sandbox, broker, policy, and MCP milestones.
 - `docs/todo.md` — consolidated current roadmap.
-- `docs/hardening-todo.md` — historical compiler/kernel hardening campaign record.
+- `docs/archive/hardening-todo.md` — historical compiler/kernel hardening campaign record.
 - `docs/test-architecture.md` — test-system direction.
 
 Language-comparison results do not make this appliance production-ready, and

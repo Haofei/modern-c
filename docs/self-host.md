@@ -1071,7 +1071,7 @@ Build the harness first. Without it, the project becomes a large rewrite with no
    Stage1/Stage2 artifacts and runs a smoke corpus with Stage2.
 5. **Corpus manifest.** Add a checked-in manifest for the self-host corpus rather than discovering files
    ad hoc. Track expected mode per file: parse-only, check-fail, emit-C, emit-LLVM, object, run, QEMU.
-6. **Ledger.** Keep [`docs/full-selfhost-ledger.md`](full-selfhost-ledger.md) current with phase,
+6. **Ledger.** Keep [`docs/archive/full-selfhost-ledger.md`](archive/full-selfhost-ledger.md) current with phase,
    corpus size, pass/fail counts, unsupported features, performance, and the commit that changed
    the result.
 

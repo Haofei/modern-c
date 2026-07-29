@@ -20,7 +20,7 @@ platform profile.
 > resource-accounting primitives, live OOM reclaim, provenance/audit, capability
 > attenuation, checkpoint/restore/migrate seeds, pause/fair scheduling hooks, and
 > brokered FS/network demonstrations are gated. The table below now lists the remaining
-> current gaps; see [`todo.md`](todo.md) for the short operational roadmap.
+> current gaps; see [`../todo.md`](../todo.md) for the short operational roadmap.
 
 ---
 

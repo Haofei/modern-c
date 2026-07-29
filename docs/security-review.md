@@ -5,7 +5,7 @@ Scope: the production kernel that runs untrusted edge-AI agents — RISC-V S/U-m
 reference target, aarch64/x86_64 secondary. This is a *structured, code-grounded* review
 of the actual enforcers, meant to be read alongside [`docs/threat-model.md`](threat-model.md)
 (assets, trust boundaries, guarantees G1–G5) and the hardening backlog in
-[`docs/hardening-todo.md`](hardening-todo.md). It is deliberately honest about gaps; where a
+[`docs/archive/hardening-todo.md`](archive/hardening-todo.md). It is deliberately honest about gaps; where a
 mitigation is partial or a primitive is a stand-in, that is called out as a residual risk
 rather than glossed over.
 

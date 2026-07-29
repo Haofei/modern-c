@@ -20,7 +20,7 @@ readiness. Those remain owned by:
   qualified `mcc` supported subset;
 - [`production-readiness-plan.md`](production-readiness-plan.md) for the focused
   agent-kernel product;
-- [`virtio-rng-language-experiment-plan.md`](virtio-rng-language-experiment-plan.md)
+- [`archive/virtio-rng-language-experiment-plan.md`](archive/virtio-rng-language-experiment-plan.md)
   for the first C/Rust/MC protocol experiment.
 
 The canonical T/M/P phase status lives only in
@@ -28,7 +28,7 @@ The canonical T/M/P phase status lives only in
 it must not maintain a competing completion count.
 
 The current bounded developer measurements and their negative K2 conclusion are
-recorded in [`virtio-rng-comparison-evidence.md`](virtio-rng-comparison-evidence.md).
+recorded in [`archive/virtio-rng-comparison-evidence.md`](archive/virtio-rng-comparison-evidence.md).
 
 ## 1. Claim boundary
 

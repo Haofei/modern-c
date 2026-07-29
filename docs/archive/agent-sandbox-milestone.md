@@ -6,7 +6,7 @@
 > the user's full authority.**
 >
 > Companion docs: [`agent-os-vision.md`](agent-os-vision.md) (the why),
-> [`spec/MC_Kernel_Design.md`](spec/MC_Kernel_Design.md) (the what), this doc (the *next
+> [`../spec/MC_Kernel_Design.md`](../spec/MC_Kernel_Design.md) (the what), this doc (the *next
 > milestone* and its acceptance bar).
 
 ---

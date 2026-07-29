@@ -1,7 +1,7 @@
 # Kernel-Language Hardening — Actionable Backlog
 
 > **Historical status.** The main hardening campaign described here is resolved
-> or explicitly deferred. For current open work, start with [`todo.md`](todo.md).
+> or explicitly deferred. For current open work, start with [`../todo.md`](../todo.md).
 
 A prioritized backlog for hardening MC **as a kernel language** — no hosted runtime, no GC, no
 userland allocator, so hardening must be **static** (type system, zero runtime cost), **cheap
@@ -279,5 +279,5 @@ The throughline: MC has the mechanisms; hardening pulls their disciplines into t
 (static, zero-cost) or the trap/sanitizer model (cheap dynamic). **K** + **T(term)2** are what make
 this an *agent* OS — static guarantees for running untrusted agent code.
 
-See also `docs/mcfuzz-coverage-todo.md` (fuzzer generator surface), `docs/agent-os-vision.md`, and
+See also `../mcfuzz-coverage-todo.md` (fuzzer generator surface), `agent-os-vision.md`, and
 memory `differential-testing.md`.

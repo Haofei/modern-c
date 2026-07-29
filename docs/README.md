@@ -30,7 +30,7 @@ These are still useful as day-to-day references or rationale companions:
 | Testing | [`test-architecture.md`](test-architecture.md), [`qemu-validation-checklist.md`](qemu-validation-checklist.md) | Fixture contracts, gate layers, manifest discipline, and the local/CI QEMU surrogate checklist. |
 | Unsafe/UB audit | [`unsafe-boundary.md`](unsafe-boundary.md), [`c-ub-matrix.md`](c-ub-matrix.md), [`lowering-coverage.md`](lowering-coverage.md) | Unsafe syntax, C-UB handling, and lowering coverage reports. |
 | Traits/async rationale | [`traits-design.md`](traits-design.md), [`async-plan.md`](async-plan.md) | Design reasoning behind implemented or mostly implemented features. |
-| Agent/kernel direction | [`future-kernel-plan.md`](future-kernel-plan.md), [`production-readiness-plan.md`](production-readiness-plan.md), [`platform-portability-plan.md`](platform-portability-plan.md), [`quickjs-agent-plan.md`](quickjs-agent-plan.md), [`agent-sandbox-milestone.md`](agent-sandbox-milestone.md) | Longer-form rationale, product-readiness plans, and milestone history. Prefer `todo.md` for the repo-wide short list. |
+| Agent/kernel direction | [`future-kernel-plan.md`](future-kernel-plan.md), [`production-readiness-plan.md`](production-readiness-plan.md), [`platform-portability-plan.md`](platform-portability-plan.md) | Longer-form rationale and product-readiness plans. Prefer `todo.md` for the repo-wide short list. |
 | Fuzzing backlog | [`mcfuzz-coverage-todo.md`](mcfuzz-coverage-todo.md) | Generator/oracle expansion notes. Some gating statements are historical; see `todo.md` for current gate status. |
 
 ## Historical records
@@ -38,8 +38,7 @@ These are still useful as day-to-day references or rationale companions:
 These documents are retained because they explain decisions and landed work, but
 their original "state today" sections are not current backlog:
 
-- [`agent-os-vision.md`](agent-os-vision.md) — agent-OS thesis.
-- [`hardening-todo.md`](hardening-todo.md) — completed/deferred hardening campaign.
+- [`archive/`](archive/) — historical remediation reports, milestone notes, experiment plans, and completed/deferred campaign records.
 
 When a historical plan conflicts with `README.md`, `todo.md`, or the two specs,
 trust the newer consolidated sources unless the code proves otherwise.

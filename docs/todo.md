@@ -36,12 +36,12 @@ Current baseline:
 
 ## Historical docs folded into this roadmap
 
-- `hardening-todo.md`: the main hardening campaign is resolved or explicitly
+- `archive/hardening-todo.md`: the main hardening campaign is resolved or explicitly
   deferred; use its item list for rationale and evidence, not as a live backlog.
 - Deleted completed records: the agent-OS implementation backlog, test-refactor
   handoff, repo refactor plan, stale review, and S-mode IRQ reset root-cause note.
   Their current takeaways are folded into this roadmap and the platform plan.
-- `platform-portability-plan.md`, `quickjs-agent-plan.md`,
+- `platform-portability-plan.md`, `archive/quickjs-agent-plan.md`,
   `future-kernel-plan.md`, and `production-readiness-plan.md`: still useful for
   details, but their active work is summarized above.
 
