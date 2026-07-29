@@ -1,0 +1,88 @@
+# Machine-readable review risk register.
+#
+# Markdown readiness/remediation documents should summarize this file rather than
+# carrying independent "open/closed" counters. `admitted_subset_status` records
+# whether the currently qualified compiler subset has evidence; `status` records
+# the broader platform/production work item.
+
+risks:
+  - id: ARCH-COMPILATION-SESSION
+    severity: high
+    scope: compiler-platform
+    status: open
+    admitted_subset_status: qualified-with-cli-process-isolation
+    blocks:
+      - in-process-compiler-service
+      - parallel-compilation-library
+      - unrestricted-production-compiler
+    summary: Replace process-global compilation state with explicit request-scoped CompilationSession.
+
+  - id: ARCH-TYPED-MIR
+    severity: high
+    scope: compiler-platform
+    status: open
+    admitted_subset_status: qualified-supported-subset
+    blocks:
+      - unrestricted-production-compiler
+      - third-party-backend-api
+    summary: Migrate MIR type/value/symbol identity away from strings and AST TypeExpr side channels.
+
+  - id: ARCH-BACKEND-FACTS
+    severity: high
+    scope: compiler-backend
+    status: open
+    admitted_subset_status: qualified-supported-subset
+    blocks:
+      - unrestricted-production-compiler
+      - backend-conformance-claim
+    summary: Remove backend-local semantic inference; backends should consume only verified typed facts.
+
+  - id: ARCH-SOURCE-MAP-DIGEST
+    severity: medium
+    scope: artifact-provenance
+    status: open
+    admitted_subset_status: partially-remediated
+    blocks:
+      - release-debug-provenance-claim
+    summary: Bind emitted artifact, source map, toolchain identity, lowering options, and source digest in one metadata object.
+
+  - id: KERNEL-VERIFIED-BUNDLE
+    severity: critical
+    scope: kernel-secure-boot
+    status: open
+    admitted_subset_status: not-production-qualified
+    blocks:
+      - production-kernel
+      - secure-boot-claim
+      - untrusted-agent-loading
+    summary: Loader admission must consume an opaque exact-byte VerifiedBundle created by crypto and policy verification.
+
+  - id: KERNEL-CAPABILITY-MINT
+    severity: high
+    scope: kernel-capability
+    status: open
+    admitted_subset_status: research-profile-only
+    blocks:
+      - third-party-kernel-components
+      - production-kernel
+    summary: Privileged capability/right mint APIs must require an unforgeable root token or become module-private.
+
+  - id: SUPPLY-TCB-CVE-INTAKE
+    severity: high
+    scope: supply-chain
+    status: open
+    admitted_subset_status: documented-tcb
+    blocks:
+      - stable-release
+      - production-kernel
+    summary: Vendored BearSSL, QuickJS, WAMR, openlibm, and firmware TCB require automated advisory intake and waiver policy.
+
+  - id: HARDWARE-PRODUCTION-QUALIFICATION
+    severity: high
+    scope: hardware
+    status: open
+    admitted_subset_status: qemu-surrogate-qualified
+    blocks:
+      - production-kernel
+      - real-device-support-claim
+    summary: Real board boot, soak, power-loss, storage, network, DMA/cache, and interrupt qualification remain required.

@@ -61,6 +61,7 @@ pub const Reporter = struct {
     file_boundaries: ?[]const FileBoundary = null,
     diagnostics: std.ArrayList(Diagnostic),
     has_errors: bool = false,
+    diagnostic_oom: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, path: []const u8, source: []const u8) Reporter {
         return .{
@@ -98,10 +99,14 @@ pub const Reporter = struct {
 
     fn addWithNotes(self: *Reporter, severity: Severity, span: Span, comptime fmt: []const u8, args: anytype, notes: []const NoteMessage) void {
         if (severity == .error_) self.has_errors = true;
-        const msg = std.fmt.allocPrint(self.allocator, fmt, args) catch return;
+        const msg = std.fmt.allocPrint(self.allocator, fmt, args) catch {
+            self.markDiagnosticOom();
+            return;
+        };
 
         const owned_notes = self.allocator.alloc(Note, notes.len) catch {
             self.allocator.free(msg);
+            self.markDiagnosticOom();
             return;
         };
         var initialized: usize = 0;
@@ -110,6 +115,7 @@ pub const Reporter = struct {
                 for (owned_notes[0..initialized]) |owned_note| self.allocator.free(owned_note.message);
                 self.allocator.free(owned_notes);
                 self.allocator.free(msg);
+                self.markDiagnosticOom();
                 return;
             };
             owned_notes[i] = .{
@@ -128,8 +134,14 @@ pub const Reporter = struct {
             for (owned_notes) |note| self.allocator.free(note.message);
             self.allocator.free(owned_notes);
             self.allocator.free(msg);
+            self.markDiagnosticOom();
             return;
         };
+    }
+
+    fn markDiagnosticOom(self: *Reporter) void {
+        self.has_errors = true;
+        self.diagnostic_oom = true;
     }
 
     pub fn render(self: *Reporter) void {
@@ -178,6 +190,9 @@ pub const Reporter = struct {
                 }
             }
         }
+        if (self.diagnostic_oom) {
+            std.debug.print("{s}:1:1: error: E_DIAGNOSTIC_OOM: compiler diagnostic allocation failed\n", .{self.path});
+        }
     }
 
     pub fn appendJson(self: *const Reporter, out: *std.ArrayList(u8)) !void {
@@ -189,6 +204,7 @@ pub const Reporter = struct {
                 .warning => warning_count += 1,
             }
         }
+        if (self.diagnostic_oom) error_count += 1;
 
         try out.appendSlice(self.allocator, "{\"diagnostics\":[");
         for (self.diagnostics.items, 0..) |diag, i| {
@@ -266,6 +282,14 @@ pub const Reporter = struct {
                 try out.append(self.allocator, ']');
             }
             try out.append(self.allocator, '}');
+        }
+        if (self.diagnostic_oom) {
+            if (self.diagnostics.items.len > 0) try out.append(self.allocator, ',');
+            try out.appendSlice(self.allocator, "{\"severity\":\"error\",\"message\":\"compiler diagnostic allocation failed\",\"path\":");
+            try appendJsonString(out, self.allocator, self.path);
+            try out.appendSlice(self.allocator, ",\"file\":");
+            try appendJsonString(out, self.allocator, self.path);
+            try out.appendSlice(self.allocator, ",\"line\":1,\"column\":1,\"code\":\"E_DIAGNOSTIC_OOM\",\"span\":{\"offset\":0,\"length\":0,\"line\":1,\"column\":1}}");
         }
         try out.print(self.allocator, "],\"error_count\":{d},\"warning_count\":{d}}}\n", .{ error_count, warning_count });
     }
@@ -471,6 +495,28 @@ test "Reporter emits structured diagnostic notes" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"message\":\"function `f` required from here\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"path\":\"notes.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"caret\":\"^~~~~~~\"") != null);
+}
+
+test "Reporter records emergency diagnostic when allocation fails" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var reporter = Reporter.init(failing.allocator(), "oom.mc", "fn f() {}\n");
+    defer reporter.deinit();
+
+    reporter.err(.{ .offset = 0, .len = 0, .line = 1, .column = 1 }, "E_TEST: {s}", .{"primary"});
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(reporter.diagnostic_oom);
+    try std.testing.expectEqual(@as(usize, 0), reporter.diagnostics.items.len);
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    const saved_allocator = reporter.allocator;
+    reporter.allocator = std.testing.allocator;
+    defer reporter.allocator = saved_allocator;
+    try reporter.appendJson(&out);
+
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"code\":\"E_DIAGNOSTIC_OOM\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"error_count\":1") != null);
 }
 
 test "Reporter emits boundary-aware JSON spans for imported files" {

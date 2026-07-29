@@ -879,6 +879,21 @@ fn runBuild(allocator: std.mem.Allocator, io: std.Io, path: []const u8, artifact
     defer std.Io.Dir.cwd().deleteFile(io, tmp_c) catch {};
     try writeOutputPath(tmp_c, hosted_c.items);
 
+    const tmp_exe = try std.fmt.allocPrint(allocator, "{s}.mc-build-{d}-{d}.out", .{
+        output_path,
+        std.posix.system.getpid(),
+        std.Thread.getCurrentId(),
+    });
+    defer allocator.free(tmp_exe);
+    defer std.Io.Dir.cwd().deleteFile(io, tmp_exe) catch {};
+    {
+        var reserved = std.Io.Dir.cwd().createFile(io, tmp_exe, .{ .exclusive = true }) catch |err| {
+            std.debug.print("mcc build: unable to reserve temporary executable {s}: {s}\n", .{ tmp_exe, @errorName(err) });
+            return error.BuildFailed;
+        };
+        reserved.close(io);
+    }
+
     const argv = [_][]const u8{
         clang_bin,
         "-std=c11",
@@ -891,7 +906,7 @@ fn runBuild(allocator: std.mem.Allocator, io: std.Io, path: []const u8, artifact
         tmp_c,
         "-lm",
         "-o",
-        output_path,
+        tmp_exe,
     };
     const result = std.process.run(allocator, io, .{
         .argv = &argv,
@@ -914,6 +929,10 @@ fn runBuild(allocator: std.mem.Allocator, io: std.Io, path: []const u8, artifact
         std.debug.print("mcc build: clang failed while linking {s}\n", .{output_path});
         return error.BuildFailed;
     }
+    std.Io.Dir.cwd().rename(tmp_exe, std.Io.Dir.cwd(), output_path, io) catch |err| {
+        std.debug.print("mcc build: unable to commit {s}: {s}\n", .{ output_path, @errorName(err) });
+        return error.BuildFailed;
+    };
     try writeStdout("mcc build: wrote ");
     try writeStdout(output_path);
     try writeStdout("\n");

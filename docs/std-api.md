@@ -627,8 +627,8 @@ Source: `std/mem.mc`
 
 | Signature | Source |
 |---|---|
-| <code>pub struct Split</code> | `std/mem.mc:244` |
-| <code>pub struct SplitField</code> | `std/mem.mc:251` |
+| <code>pub struct Split</code> | `std/mem.mc:254` |
+| <code>pub struct SplitField</code> | `std/mem.mc:261` |
 
 ### Public functions
 
@@ -638,14 +638,14 @@ Source: `std/mem.mc`
 | <code>export fn align_down(addr: usize, align: usize) -&gt; usize</code> | `std/mem.mc:32` |
 | <code>export fn align_up(addr: usize, align: usize) -&gt; usize</code> | `std/mem.mc:37` |
 | <code>export fn fits_within(used: usize, len: usize, limit: usize) -&gt; bool</code> | `std/mem.mc:47` |
-| <code>export fn mem_copy(dst: PAddr, src: PAddr, len: usize) -&gt; void</code> | `std/mem.mc:65` |
-| <code>export fn mem_set(dst: PAddr, value: u8, len: usize) -&gt; void</code> | `std/mem.mc:114` |
-| <code>export fn mem_eql(a: []const u8, b: []const u8) -&gt; bool</code> | `std/mem.mc:165` |
-| <code>export fn mem_starts_with(hay: []const u8, prefix: []const u8) -&gt; bool</code> | `std/mem.mc:181` |
-| <code>export fn mem_index_of_byte(hay: []const u8, b: u8) -&gt; ?usize</code> | `std/mem.mc:197` |
-| <code>export fn mem_index_of(hay: []const u8, needle: []const u8) -&gt; ?usize</code> | `std/mem.mc:211` |
-| <code>pub fn split_by(s: []const u8, sep: u8) -&gt; Split</code> | `std/mem.mc:257` |
-| <code>pub fn split_next(sp: *mut Split) -&gt; SplitField</code> | `std/mem.mc:264` |
+| <code>export fn mem_copy(dst: PAddr, src: PAddr, len: usize) -&gt; void</code> | `std/mem.mc:79` |
+| <code>export fn mem_set(dst: PAddr, value: u8, len: usize) -&gt; void</code> | `std/mem.mc:124` |
+| <code>export fn mem_eql(a: []const u8, b: []const u8) -&gt; bool</code> | `std/mem.mc:175` |
+| <code>export fn mem_starts_with(hay: []const u8, prefix: []const u8) -&gt; bool</code> | `std/mem.mc:191` |
+| <code>export fn mem_index_of_byte(hay: []const u8, b: u8) -&gt; ?usize</code> | `std/mem.mc:207` |
+| <code>export fn mem_index_of(hay: []const u8, needle: []const u8) -&gt; ?usize</code> | `std/mem.mc:221` |
+| <code>pub fn split_by(s: []const u8, sep: u8) -&gt; Split</code> | `std/mem.mc:267` |
+| <code>pub fn split_next(sp: *mut Split) -&gt; SplitField</code> | `std/mem.mc:274` |
 
 ## `std/mmio`
 

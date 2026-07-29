@@ -51,6 +51,20 @@ export fn fits_within(used: usize, len: usize, limit: usize) -> bool {
     return len <= limit - used;
 }
 
+fn ranges_overlap_same_len(a: usize, b: usize, len: usize) -> bool {
+    if len == 0 {
+        return false;
+    }
+    if a <= b {
+        return len > (b - a);
+    }
+    return len > (a - b);
+}
+
+fn addr_offset_mod8(base: usize, off: usize) -> usize {
+    return ((base & 7) + (off & 7)) & 7;
+}
+
 // Copy `len` bytes from physical region `src` to `dst`. The raw load/store is the
 // only unsafe operation; callers pass typed PAddrs. (Regions must not overlap with
 // dst after src — like C memcpy.)
@@ -65,12 +79,8 @@ export fn fits_within(used: usize, len: usize, limit: usize) -> bool {
 export fn mem_copy(dst: PAddr, src: PAddr, len: usize) -> void {
     let d: usize = pa_value(dst);
     let s: usize = pa_value(src);
-    if len > 0 {
-        if d < (s + len) {
-            if s < (d + len) {
-                unreachable; // overlapping ranges: use a memmove-style helper instead
-            }
-        }
+    if ranges_overlap_same_len(d, s, len) {
+        unreachable; // overlapping ranges: use a memmove-style helper instead
     }
     var i: usize = 0;
     // Word bulk: only when both ends share alignment mod 8 and there is a full word.
@@ -78,7 +88,7 @@ export fn mem_copy(dst: PAddr, src: PAddr, len: usize) -> void {
         if ((d ^ s) & 7) == 0 {
             // HEAD: advance byte-by-byte until dst is 8-aligned (< 8 iters, and
             // len >= 8 so this never overruns). src stays in lockstep alignment.
-            while ((d + i) & 7) != 0 {
+            while addr_offset_mod8(d, i) != 0 {
                 unsafe {
                     let b: u8 = raw.load<u8>(pa_offset(src, i));
                     raw.store<u8>(pa_offset(dst, i), b);
@@ -121,7 +131,7 @@ export fn mem_set(dst: PAddr, value: u8, len: usize) -> void {
         w = w | (w << 16);
         w = w | (w << 32);
         // HEAD: byte fill until dst is 8-aligned.
-        while ((d + i) & 7) != 0 {
+        while addr_offset_mod8(d, i) != 0 {
             unsafe {
                 raw.store<u8>(pa_offset(dst, i), value);
             }

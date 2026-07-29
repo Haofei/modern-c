@@ -52,6 +52,30 @@ if [ "$RC" -ne 0 ]; then
     exit 1
 fi
 
+cat >"$WORK/fail-clang.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+out="${@: -1}"
+if [ -n "$out" ]; then
+    printf 'not an executable\n' >"$out"
+fi
+exit 42
+SH
+chmod +x "$WORK/fail-clang.sh"
+
+set +e
+CLANG="$WORK/fail-clang.sh" "$MCC" build "$WORK/ok.mc" -o "$WORK/ok" >"$WORK/fail-clang.out" 2>"$WORK/fail-clang.err"
+RC=$?
+"$WORK/ok" >/dev/null 2>&1
+OLD_RC=$?
+set -e
+if [ "$RC" -ne 1 ] || [ "$OLD_RC" -ne 7 ]; then
+    echo "FAIL: mcc-build-test - failing clang corrupted an existing executable or returned wrong status (build rc=$RC old rc=$OLD_RC)"
+    cat "$WORK/fail-clang.out"
+    cat "$WORK/fail-clang.err"
+    exit 1
+fi
+
 if ! grep -Fq "mcc build: wrote $WORK/ok" "$WORK/build.out"; then
     echo "FAIL: mcc-build-test - build output did not report the executable path"
     cat "$WORK/build.out"
