@@ -6,6 +6,17 @@
 # the broader platform/production work item.
 
 risks:
+  - id: SCOPE-PRODUCT-SURFACE
+    severity: high
+    scope: project-governance
+    status: open
+    admitted_subset_status: current-worktree-continues-development
+    blocks:
+      - unrestricted-production-compiler
+      - production-kernel
+      - stable-release
+    summary: Product surface spans compiler, dual backends, selfhost, kernel, Agent runtime, LSP, release provenance, and multiple runtime TCBs before the core semantic boundary is stable.
+
   - id: ARCH-COMPILATION-SESSION
     severity: high
     scope: compiler-platform
@@ -27,6 +38,16 @@ risks:
       - third-party-backend-api
     summary: Migrate MIR type/value/symbol identity away from strings and AST TypeExpr side channels.
 
+  - id: ARCH-HIR-AUTHORITY
+    severity: medium
+    scope: compiler-architecture
+    status: open
+    admitted_subset_status: inspection-only
+    blocks:
+      - hir-as-production-boundary-claim
+      - unrestricted-production-compiler
+    summary: HIR exists as an inspection/verification projection but is not yet the authoritative production input to MIR/codegen.
+
   - id: ARCH-BACKEND-FACTS
     severity: high
     scope: compiler-backend
@@ -37,6 +58,15 @@ risks:
       - backend-conformance-claim
     summary: Remove backend-local semantic inference; backends should consume only verified typed facts.
 
+  - id: BACKEND-LLVM-PROFILE
+    severity: medium
+    scope: compiler-backend
+    status: open
+    admitted_subset_status: differential-and-experimental-profile
+    blocks:
+      - llvm-production-backend-claim
+    summary: LLVM backend remains valuable for differential testing but should not be treated as equal production authority until typed MIR/fact boundaries are complete.
+
   - id: ARCH-SOURCE-MAP-DIGEST
     severity: medium
     scope: artifact-provenance
@@ -45,6 +75,33 @@ risks:
     blocks:
       - release-debug-provenance-claim
     summary: Bind emitted artifact, source map, toolchain identity, lowering options, and source digest in one metadata object.
+
+  - id: SELFHOST-PROFILE
+    severity: medium
+    scope: selfhost
+    status: open
+    admitted_subset_status: experimental-bootstrap-subset
+    blocks:
+      - selfhost-production-compiler-claim
+    summary: Selfhost is a bootstrap experiment and should not become a second semantic authority while the main compiler IR/fact boundary is still moving.
+
+  - id: GATE-MANIFEST
+    severity: medium
+    scope: build-governance
+    status: open
+    admitted_subset_status: anti-vacuity-checked
+    blocks:
+      - generated-release-evidence
+    summary: Gate inventory is still maintained through large stringly build lists; PR/Nightly/Release profiles should be generated from one manifest.
+
+  - id: LSP-COMPILER-SERVICE
+    severity: medium
+    scope: developer-tools
+    status: open
+    admitted_subset_status: subprocess-isolated-lsp
+    blocks:
+      - low-latency-incremental-lsp-claim
+    summary: LSP currently has substantial subprocess orchestration because no persistent query-based compiler service exists yet.
 
   - id: KERNEL-VERIFIED-BUNDLE
     severity: critical
@@ -76,6 +133,15 @@ risks:
       - stable-release
       - production-kernel
     summary: Vendored BearSSL, QuickJS, WAMR, openlibm, and firmware TCB require automated advisory intake and waiver policy.
+
+  - id: TCB-PROFILE-MINIMIZATION
+    severity: medium
+    scope: supply-chain
+    status: open
+    admitted_subset_status: documented-tcb
+    blocks:
+      - production-profile-minimal-tcb-claim
+    summary: Third-party TCB should be minimized per product profile so QuickJS/WAMR/BearSSL/openlibm are not implicitly included in every production claim.
 
   - id: HARDWARE-PRODUCTION-QUALIFICATION
     severity: high
