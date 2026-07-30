@@ -8,7 +8,6 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
-const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
@@ -75,7 +74,6 @@ pub const TempContext = struct {
     out: *std.ArrayList(u8),
     indent: *usize,
     temp_index: *usize,
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
     emit_expr_with_target: EmitExprWithTargetFn,
@@ -220,8 +218,7 @@ pub fn emitBitcastValueTemp(ctx: TempContext, expr: ast.Expr, locals: *std.Strin
 }
 
 pub fn emitBitcastValueTempFromCall(ctx: TempContext, call: anytype, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
-    const target = bitcastTargetType(ctx, call) orelse return null;
-    const target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, target);
+    const target_ty = bitcastTargetType(ctx, call) orelse return null;
     const source_ty = ctx.mir_target_type(ctx.emit_ctx, .bitcast_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
     const source_temp = try ctx.emit_arg_temp(ctx.emit_ctx, call.args[0], locals, source_ty);
     const result_temp = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});

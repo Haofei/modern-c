@@ -473,7 +473,10 @@ context also no longer carries the owned-target hook; owned fact consumption
 stays in the emitter/lowering contexts that explicitly need ownership identity.
 The C memory-view/DMA context also dropped its unused alias table handle; byte
 view, DMA, and MaybeUninit lowering now expose only the MIR facts and emission
-hooks they actually consume.
+hooks they actually consume. The C leaf-call temp context also stopped carrying
+the alias table for bitcast temporaries; `bitcast_target` is now consumed as the
+MIR-owned target type and C spelling remains delegated to the emitter's type
+view.
 
 | Family | Budget class | Reduction condition |
 |---|---|---|

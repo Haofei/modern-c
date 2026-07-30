@@ -1539,6 +1539,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_c_call.zig": {
         'isIdentNamed(call.callee.*, "trap")': 0,
+        'const lower_c_alias = @import("lower_c_alias.zig");': 0,
+        "type_aliases: *const std.StringHashMap(ast.TypeExpr)": 0,
+        "ctx.type_aliases": 0,
+        "lower_c_alias.resolveAliasType(ctx.type_aliases": 0,
         "expr_source_type: ExprSourceTypeFn": 0,
         "ctx.expr_source_type(ctx.emit_ctx": 0,
         "ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_result": 2,

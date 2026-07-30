@@ -1598,7 +1598,6 @@ const CEmitter = struct {
             .out = self.out,
             .indent = &self.indent,
             .temp_index = &self.temp_index,
-            .type_aliases = &self.type_aliases,
             .emit_ctx = self,
             .emit_expr = emitExprForCall,
             .emit_expr_with_target = emitExprWithTargetForArith,
