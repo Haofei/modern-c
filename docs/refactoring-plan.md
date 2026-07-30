@@ -355,11 +355,17 @@ Current baseline:
 - `docs/profile-manifest.json` defines the six product profiles and ties each
   one to blocking risks, registered gates, and TCB components.
 - `profile-manifest-test` validates the manifest against
-  `review-risk-register.yaml` and the registered Zig build gates.
+  `review-risk-register.yaml`, the registered Zig build gates, and
+  `docs/tcb-components.json`.
+- `docs/tcb-components.json` defines the profile-facing TCB component IDs,
+  owners, categories, advisory status, review dates, and vendored provenance
+  pointers. `vendoring-test` validates that every license-bearing vendored
+  dependency has matching component metadata.
 - `fast`, `m0`, and `c0` run the profile manifest gate; focused dev-gates route
   profile/risk/scope edits to that gate.
 - Full per-component advisory metadata for every vendored TCB remains open
-  under `SUPPLY-TCB-CVE-INTAKE` and `TCB-PROFILE-MINIMIZATION`.
+  under `SUPPLY-TCB-CVE-INTAKE`; automated advisory intake and waiver policy
+  remain open before any production TCB claim.
 
 Closure criteria:
 

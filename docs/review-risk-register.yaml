@@ -123,7 +123,7 @@ risks:
     severity: high
     scope: supply-chain
     status: open
-    admitted_subset_status: documented-tcb
+    admitted_subset_status: vendored-component-metadata-gated-manual-watch
     blocks:
       - stable-release
       - production-kernel
@@ -133,7 +133,7 @@ risks:
     severity: medium
     scope: supply-chain
     status: open
-    admitted_subset_status: profile-manifest-gated
+    admitted_subset_status: profile-and-tcb-component-manifests-gated
     blocks:
       - production-profile-minimal-tcb-claim
     summary: Product profiles now name their TCB components in profile-manifest.json; full vendored component metadata and advisory policy remain open before any minimal production TCB claim.

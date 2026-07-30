@@ -12,6 +12,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "docs" / "profile-manifest.json"
+TCB_COMPONENTS = ROOT / "docs" / "tcb-components.json"
 RISK_REGISTER = ROOT / "docs" / "review-risk-register.yaml"
 BUILD_DIR = ROOT / "build"
 
@@ -87,6 +88,37 @@ def main() -> None:
         fail("schema_version must be 1")
     if manifest.get("risk_register") != "docs/review-risk-register.yaml":
         fail("risk_register must point at docs/review-risk-register.yaml")
+    if manifest.get("tcb_component_manifest") != "docs/tcb-components.json":
+        fail("tcb_component_manifest must point at docs/tcb-components.json")
+
+    component_manifest = load_json(TCB_COMPONENTS)
+    if component_manifest.get("schema_version") != 1:
+        fail("docs/tcb-components.json schema_version must be 1")
+    if component_manifest.get("source_of_truth") != "docs/tcb-components.json":
+        fail("docs/tcb-components.json source_of_truth must point at itself")
+    components = component_manifest.get("components")
+    if not isinstance(components, list) or not components:
+        fail("docs/tcb-components.json must define a non-empty components list")
+
+    component_by_id: dict[str, dict[str, Any]] = {}
+    for component in components:
+        if not isinstance(component, dict):
+            fail("each TCB component must be an object")
+        component_id = component.get("id")
+        if not isinstance(component_id, str) or not component_id:
+            fail("each TCB component must define a non-empty id")
+        if component_id in component_by_id:
+            fail(f"duplicate TCB component id {component_id}")
+        component_by_id[component_id] = component
+        for field in ("category", "owner", "summary", "advisory_status", "review_after"):
+            if not isinstance(component.get(field), str) or not component[field]:
+                fail(f"TCB component {component_id} must define {field}")
+        component_profiles = component.get("profiles")
+        if not isinstance(component_profiles, list) or not component_profiles:
+            fail(f"TCB component {component_id} must list owning profiles")
+        for profile_id in component_profiles:
+            if not isinstance(profile_id, str) or not profile_id:
+                fail(f"TCB component {component_id} has invalid profile reference {profile_id!r}")
 
     profiles = manifest.get("profiles")
     if not isinstance(profiles, list) or not profiles:
@@ -116,7 +148,7 @@ def main() -> None:
         require_scope(profile_id, profile)
         profile_risks = require_string_list(profile_id, profile, "blocking_risks")
         profile_gates = require_string_list(profile_id, profile, "blocking_gates")
-        require_string_list(profile_id, profile, "tcb_components")
+        profile_components = require_string_list(profile_id, profile, "tcb_components")
 
         unknown_risks = sorted(set(profile_risks) - known_risks)
         if unknown_risks:
@@ -126,9 +158,21 @@ def main() -> None:
         if unknown_gates:
             fail(f"profile {profile_id} references unregistered gates: {', '.join(unknown_gates)}")
 
+        unknown_components = sorted(set(profile_components) - set(component_by_id))
+        if unknown_components:
+            fail(f"profile {profile_id} references unknown TCB components: {', '.join(unknown_components)}")
+        for component_id in profile_components:
+            component_profiles = component_by_id[component_id]["profiles"]
+            if profile_id not in component_profiles:
+                fail(f"TCB component {component_id} does not list owning profile {profile_id}")
+
     missing_profiles = sorted(REQUIRED_PROFILES - seen)
     if missing_profiles:
         fail(f"missing required profiles: {', '.join(missing_profiles)}")
+    for component_id, component in component_by_id.items():
+        unknown_component_profiles = sorted(set(component["profiles"]) - seen)
+        if unknown_component_profiles:
+            fail(f"TCB component {component_id} references unknown profiles: {', '.join(unknown_component_profiles)}")
 
     profile_by_id = {profile["id"]: profile for profile in profiles}
     if profile_by_id["compiler-subset"]["production_claim"]:
@@ -157,7 +201,8 @@ def main() -> None:
 
     print(
         "PASS: profile-manifest-test - "
-        f"{len(profiles)} profiles, {len(known_risks)} risk IDs, {len(known_gates)} registered gates"
+        f"{len(profiles)} profiles, {len(component_by_id)} TCB components, "
+        f"{len(known_risks)} risk IDs, {len(known_gates)} registered gates"
     )
 
 

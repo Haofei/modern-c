@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+TCB_COMPONENTS = ROOT / "docs" / "tcb-components.json"
 
 DEPENDENCIES = {
     "bearssl": {
@@ -105,6 +107,7 @@ DOC_NEEDLES = [
     "wamr",
     "openlibm",
     "README.vendored.md",
+    "tcb-components.json",
     "THIRD-PARTY-LICENSES.md",
     "CVE",
     "advisory",
@@ -116,6 +119,38 @@ DOC_NEEDLES = [
 
 def fail(message: str) -> None:
     print(f"FAIL: vendoring-test - {message}", file=sys.stderr)
+
+
+def load_tcb_components() -> tuple[dict[str, dict[str, object]], list[str]]:
+    errors: list[str] = []
+    try:
+        data = json.loads(TCB_COMPONENTS.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}, [f"missing {TCB_COMPONENTS.relative_to(ROOT)}"]
+    except json.JSONDecodeError as exc:
+        return {}, [f"{TCB_COMPONENTS.relative_to(ROOT)} is not valid JSON: {exc}"]
+
+    if data.get("schema_version") != 1:
+        errors.append("docs/tcb-components.json schema_version must be 1")
+    components = data.get("components")
+    if not isinstance(components, list) or not components:
+        errors.append("docs/tcb-components.json must define a non-empty components list")
+        return {}, errors
+
+    by_id: dict[str, dict[str, object]] = {}
+    for component in components:
+        if not isinstance(component, dict):
+            errors.append("each TCB component must be an object")
+            continue
+        component_id = component.get("id")
+        if not isinstance(component_id, str) or not component_id:
+            errors.append("each TCB component must define a non-empty id")
+            continue
+        if component_id in by_id:
+            errors.append(f"duplicate TCB component id {component_id}")
+            continue
+        by_id[component_id] = component
+    return by_id, errors
 
 
 def check_dependency(name: str, cfg: dict[str, object]) -> list[str]:
@@ -154,6 +189,65 @@ def check_dependency(name: str, cfg: dict[str, object]) -> list[str]:
         if needle.lower() in lower_text:
             errors.append(f"{readme.relative_to(ROOT)} still contains forbidden '{needle}'")
 
+    return errors
+
+
+def check_tcb_component_metadata(components: dict[str, dict[str, object]]) -> list[str]:
+    errors: list[str] = []
+    vendored_ids = {
+        component_id
+        for component_id, component in components.items()
+        if component.get("category") == "vendored"
+    }
+    expected_ids = set(DEPENDENCIES)
+    missing_vendored = sorted(expected_ids - vendored_ids)
+    if missing_vendored:
+        errors.append(f"docs/tcb-components.json missing vendored components: {', '.join(missing_vendored)}")
+    extra_vendored = sorted(vendored_ids - expected_ids)
+    if extra_vendored:
+        errors.append(f"docs/tcb-components.json has untracked vendored components: {', '.join(extra_vendored)}")
+
+    for name, cfg in DEPENDENCIES.items():
+        component = components.get(name)
+        if not component:
+            continue
+        for field in (
+            "owner",
+            "summary",
+            "upstream",
+            "revision",
+            "license",
+            "license_file",
+            "provenance_file",
+            "advisory_status",
+            "review_after",
+        ):
+            if not isinstance(component.get(field), str) or not component[field]:
+                errors.append(f"TCB component {name} must define {field}")
+        if component.get("advisory_status") == "unknown":
+            errors.append(f"TCB component {name} must not have unknown advisory_status")
+        profiles = component.get("profiles")
+        if not isinstance(profiles, list) or not profiles:
+            errors.append(f"TCB component {name} must list owning profiles")
+        else:
+            for profile in profiles:
+                if not isinstance(profile, str) or not profile:
+                    errors.append(f"TCB component {name} has invalid profile entry {profile!r}")
+        local_modifications = component.get("local_modifications")
+        if not isinstance(local_modifications, list) or not local_modifications:
+            errors.append(f"TCB component {name} must list local_modifications")
+        license_rel = cfg["license"]
+        assert isinstance(license_rel, str)
+        expected_license = f"third_party/{name}/{license_rel}"
+        if component.get("license_file") != expected_license:
+            errors.append(f"TCB component {name} license_file must be {expected_license}")
+        expected_readme = f"third_party/{name}/README.vendored.md"
+        if component.get("provenance_file") != expected_readme:
+            errors.append(f"TCB component {name} provenance_file must be {expected_readme}")
+        if not (ROOT / expected_license).is_file():
+            errors.append(f"TCB component {name} license_file path is missing")
+        if not (ROOT / expected_readme).is_file():
+            errors.append(f"TCB component {name} provenance_file path is missing")
     return errors
 
 
@@ -215,8 +309,12 @@ def check_wamr_loader_guard() -> list[str]:
 
 def main() -> int:
     errors: list[str] = []
+    components, component_errors = load_tcb_components()
+    errors.extend(component_errors)
     for name, cfg in DEPENDENCIES.items():
         errors.extend(check_dependency(name, cfg))
+    if components:
+        errors.extend(check_tcb_component_metadata(components))
     errors.extend(check_no_extra_license_deps())
     errors.extend(check_doc())
     errors.extend(check_manifest_links())

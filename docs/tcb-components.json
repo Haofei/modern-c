@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "source_of_truth": "docs/tcb-components.json",
+  "risk_register": "docs/review-risk-register.yaml",
+  "components": [
+    {
+      "id": "zig-compiler",
+      "category": "toolchain",
+      "owner": "compiler",
+      "summary": "Zig compiler used to build and test the stage0 implementation.",
+      "advisory_status": "tracked-by-toolchain-version",
+      "review_after": "2026-10-01",
+      "profiles": ["compiler-subset"]
+    },
+    {
+      "id": "clang-for-c-artifact-checks",
+      "category": "toolchain",
+      "owner": "compiler",
+      "summary": "Clang used to compile generated C artifacts in compiler-subset gates.",
+      "advisory_status": "tracked-by-toolchain-version",
+      "review_after": "2026-10-01",
+      "profiles": ["compiler-subset"]
+    },
+    {
+      "id": "llvm-for-differential-checks",
+      "category": "toolchain",
+      "owner": "compiler",
+      "summary": "LLVM tools used by C/LLVM differential checks for the admitted compiler subset.",
+      "advisory_status": "tracked-by-toolchain-version",
+      "review_after": "2026-10-01",
+      "profiles": ["compiler-subset"]
+    },
+    {
+      "id": "llvm-as",
+      "category": "toolchain",
+      "owner": "backend",
+      "summary": "LLVM assembler used by the experimental LLVM backend profile.",
+      "advisory_status": "tracked-by-toolchain-version",
+      "review_after": "2026-10-01",
+      "profiles": ["llvm-experimental"]
+    },
+    {
+      "id": "llc",
+      "category": "toolchain",
+      "owner": "backend",
+      "summary": "LLVM static compiler used by LLVM object and optimizer gates.",
+      "advisory_status": "tracked-by-toolchain-version",
+      "review_after": "2026-10-01",
+      "profiles": ["llvm-experimental"]
+    },
+    {
+      "id": "clang",
+      "category": "toolchain",
+      "owner": "backend",
+      "summary": "Clang used by LLVM profile host and object checks.",
+      "advisory_status": "tracked-by-toolchain-version",
+      "review_after": "2026-10-01",
+      "profiles": ["llvm-experimental"]
+    },
+    {
+      "id": "stage0-mcc",
+      "category": "internal",
+      "owner": "selfhost",
+      "summary": "Stage0 modern-c compiler used to build the selfhost experiment.",
+      "advisory_status": "internal-component",
+      "review_after": "2026-10-01",
+      "profiles": ["selfhost-experimental"]
+    },
+    {
+      "id": "selfhost-c-emitter",
+      "category": "internal",
+      "owner": "selfhost",
+      "summary": "Experimental selfhost C emitter; not a production semantic authority.",
+      "advisory_status": "internal-component",
+      "review_after": "2026-10-01",
+      "profiles": ["selfhost-experimental"]
+    },
+    {
+      "id": "clang-for-stage-link",
+      "category": "toolchain",
+      "owner": "selfhost",
+      "summary": "Clang used to link selfhost stage artifacts.",
+      "advisory_status": "tracked-by-toolchain-version",
+      "review_after": "2026-10-01",
+      "profiles": ["selfhost-experimental"]
+    },
+    {
+      "id": "python3",
+      "category": "toolchain",
+      "owner": "developer-tools",
+      "summary": "Python runtime used by LSP, CI scripts, and local verification helpers.",
+      "advisory_status": "tracked-by-host-runtime",
+      "review_after": "2026-10-01",
+      "profiles": ["developer-tools"]
+    },
+    {
+      "id": "workspace-local-mcc",
+      "category": "internal",
+      "owner": "developer-tools",
+      "summary": "Workspace-built mcc binary invoked by LSP and editor tooling.",
+      "advisory_status": "internal-component",
+      "review_after": "2026-10-01",
+      "profiles": ["developer-tools"]
+    },
+    {
+      "id": "vscode-extension-runtime",
+      "category": "toolchain",
+      "owner": "developer-tools",
+      "summary": "VS Code extension host runtime for the editor adapter.",
+      "advisory_status": "tracked-by-extension-platform",
+      "review_after": "2026-10-01",
+      "profiles": ["developer-tools"]
+    },
+    {
+      "id": "qemu",
+      "category": "emulator",
+      "owner": "kernel",
+      "summary": "QEMU surrogate execution environment for kernel and Agent gates.",
+      "advisory_status": "tracked-by-toolchain-version",
+      "review_after": "2026-10-01",
+      "profiles": ["kernel-qemu"]
+    },
+    {
+      "id": "opensbi",
+      "category": "firmware",
+      "owner": "kernel",
+      "summary": "OpenSBI firmware boundary used by S-mode QEMU and real-board profiles.",
+      "upstream": "https://github.com/riscv-software-src/opensbi",
+      "revision": "environment-provided",
+      "license": "BSD-2-Clause",
+      "advisory_status": "tracked-by-platform-image",
+      "review_after": "2026-10-01",
+      "profiles": ["kernel-qemu", "production-kernel"]
+    },
+    {
+      "id": "real-board-firmware",
+      "category": "firmware",
+      "owner": "kernel",
+      "summary": "Selected production board firmware, DTB, boot ROM, and platform configuration.",
+      "revision": "release-profile-specific",
+      "license": "profile-specific",
+      "advisory_status": "open-before-production",
+      "review_after": "2026-09-01",
+      "profiles": ["production-kernel"]
+    },
+    {
+      "id": "kernel-core",
+      "category": "internal",
+      "owner": "kernel",
+      "summary": "modern-c kernel core, scheduler, memory, syscall, policy, audit, and loader code.",
+      "advisory_status": "internal-component",
+      "review_after": "2026-10-01",
+      "profiles": ["production-kernel"]
+    },
+    {
+      "id": "selected-agent-runtime",
+      "category": "profile-slot",
+      "owner": "kernel",
+      "summary": "The production profile's selected confined Agent runtime; must resolve to a concrete component before production.",
+      "advisory_status": "open-before-production",
+      "review_after": "2026-09-01",
+      "profiles": ["production-kernel"]
+    },
+    {
+      "id": "bearssl",
+      "category": "vendored",
+      "owner": "kernel-crypto",
+      "summary": "BearSSL freestanding TLS and RSA/SHA-256 crypto implementation.",
+      "upstream": "https://www.bearssl.org/git/BearSSL",
+      "revision": "7bea48e5e850ab4cafbe68d3765cdaba13a86d6f",
+      "license": "MIT",
+      "license_file": "third_party/bearssl/LICENSE.txt",
+      "provenance_file": "third_party/bearssl/README.vendored.md",
+      "local_modifications": ["third_party/bearssl/freestanding-shim/string.h"],
+      "advisory_status": "manual-watch-required",
+      "review_after": "2026-09-01",
+      "profiles": ["kernel-qemu", "production-kernel"]
+    },
+    {
+      "id": "quickjs",
+      "category": "vendored",
+      "owner": "agent-runtime",
+      "summary": "QuickJS-NG engine for the confined JavaScript Agent profile.",
+      "upstream": "https://github.com/quickjs-ng/quickjs",
+      "revision": "fd0a0210b7be00957751871e7e01b8291268fc29",
+      "version": "0.15.1",
+      "archive_sha256": "c4e813951b7c46845096a948e978c620b11ab4cf5fd622ca09c727ec31f42623",
+      "license": "MIT",
+      "license_file": "third_party/quickjs/LICENSE",
+      "provenance_file": "third_party/quickjs/README.vendored.md",
+      "local_modifications": ["third_party/quickjs/quickjs.h"],
+      "advisory_status": "manual-watch-required",
+      "review_after": "2026-09-01",
+      "profiles": ["kernel-qemu"]
+    },
+    {
+      "id": "wamr",
+      "category": "vendored",
+      "owner": "agent-runtime",
+      "summary": "WebAssembly Micro Runtime interpreter for confined WASM Agents.",
+      "upstream": "https://github.com/bytecodealliance/wasm-micro-runtime",
+      "revision": "0e65961d8e560b3d8a125045a29336ce6a0b16ad",
+      "version": "2.4.3",
+      "archive_sha256": "dc27b60a1aff64b89d2ca51f036e0f1baee000e156ed7e9283e4f97b660e6e65",
+      "license": "Apache-2.0 WITH LLVM-exception",
+      "license_file": "third_party/wamr/LICENSE",
+      "provenance_file": "third_party/wamr/README.vendored.md",
+      "local_modifications": ["third_party/wamr/core/shared/platform/mc"],
+      "advisory_status": "manual-watch-required",
+      "review_after": "2026-09-01",
+      "profiles": ["kernel-qemu"]
+    },
+    {
+      "id": "openlibm",
+      "category": "vendored",
+      "owner": "agent-runtime",
+      "summary": "Freestanding libm subset used by confined C apps, QuickJS, and WAMR hosts.",
+      "upstream": "https://github.com/JuliaMath/openlibm",
+      "revision": "b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8",
+      "archive_sha256": "b387919068d5ec49929cc012119375b889724175918e851851d3eacab92a665a",
+      "license": "mixed permissive",
+      "license_file": "third_party/openlibm/LICENSE.md",
+      "provenance_file": "third_party/openlibm/README.vendored.md",
+      "local_modifications": ["tools/user/build-openlibm.sh integration only"],
+      "advisory_status": "manual-watch-required",
+      "review_after": "2026-09-01",
+      "profiles": ["kernel-qemu"]
+    }
+  ]
+}

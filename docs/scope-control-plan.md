@@ -27,8 +27,11 @@ profile while the following core items remain open:
 
 Use these profiles when deciding whether a gate or subsystem is release-blocking.
 The machine-readable source for profile status, blocking risks, blocking gates,
-and TCB components is [`profile-manifest.json`](profile-manifest.json); this
-table is the prose policy summary.
+and referenced TCB component IDs is
+[`profile-manifest.json`](profile-manifest.json). Component ownership,
+provenance, advisory status, and vendored dependency metadata live in
+[`tcb-components.json`](tcb-components.json). This table is the prose policy
+summary.
 
 | Profile | Blocking scope | Non-blocking / experimental scope |
 |---|---|---|
@@ -89,10 +92,12 @@ that manifest rather than maintained as separate string lists.
 The current bridge state is:
 
 - profile ownership is machine-readable in `docs/profile-manifest.json`;
+- TCB component ownership, provenance, and advisory status are
+  machine-readable in `docs/tcb-components.json`;
 - the first compiler-core gate subset is machine-readable in
   `docs/gate-manifest.json`;
 - `profile-manifest-test` verifies every profile references known risks and
-  registered build gates;
+  registered build gates and known TCB component IDs;
 - `gate-manifest-test` verifies the pilot gate subset is registered and present
   in its declared build tiers;
 - gate generation itself remains open under `GATE-MANIFEST`.

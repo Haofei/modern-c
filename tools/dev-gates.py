@@ -197,6 +197,11 @@ RULES: tuple[Rule, ...] = (
         "profile and risk-governance changes need the profile manifest gate",
     ),
     Rule(
+        ("docs/tcb-components.json",),
+        ("profile-manifest-test", "vendoring-test"),
+        "TCB component manifest changes need profile linkage and vendored provenance gates",
+    ),
+    Rule(
         (
             "docs/gate-manifest.json",
             "tools/toolchain/gate-manifest-test.py",
@@ -297,7 +302,7 @@ RULES: tuple[Rule, ...] = (
         "generated stdlib API docs need the std API docs gate",
     ),
     Rule(
-        ("docs/vendoring.md",),
+        ("docs/vendoring.md", "docs/tcb-components.json"),
         ("vendoring-test",),
         "vendoring process docs need the vendoring provenance gate",
     ),

@@ -2,6 +2,7 @@
   "schema_version": 1,
   "source_of_truth": "docs/profile-manifest.json",
   "risk_register": "docs/review-risk-register.yaml",
+  "tcb_component_manifest": "docs/tcb-components.json",
   "profiles": [
     {
       "id": "compiler-subset",
@@ -204,7 +205,8 @@
         "opensbi",
         "bearssl",
         "quickjs",
-        "wamr"
+        "wamr",
+        "openlibm"
       ]
     },
     {

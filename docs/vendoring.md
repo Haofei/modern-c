@@ -31,11 +31,19 @@ Every license-bearing dependency must also be represented in
 `THIRD-PARTY-LICENSES.md`, and that manifest must link both the dependency's
 `README.vendored.md` provenance record and its retained license file.
 
+Every profile-facing TCB component must also be represented in
+[`tcb-components.json`](tcb-components.json). For vendored dependencies, that
+component row must name the owner, upstream, revision or source evidence,
+license, local provenance file, local license file, advisory status, review
+date, local modifications, and the profiles that include the component. Profile
+manifests may reference only component IDs present in that file.
+
 Run the static check before sending a vendoring change:
 
 ```sh
 python3 tools/toolchain/vendoring-test.py
 zig build vendoring-test
+zig build profile-manifest-test
 ```
 
 ## Re-vendor process
@@ -65,7 +73,8 @@ zig build vendoring-test
    dependency.
 8. Document the update in the dependency README with the new version/commit,
    source checksum, security advisory/CVE review result, local diffs kept, and
-   tests run.
+   tests run. Update `docs/tcb-components.json` in the same patch so the
+   profile TCB view and vendored-source README cannot drift.
 
 ## CVE and advisory watch
 

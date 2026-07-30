@@ -223,6 +223,7 @@ def main() -> None:
     assert_gates(module, ["tools/toolchain/third-party-licenses-test.py"], ["third-party-licenses-test"])
     assert_gates(module, ["tools/toolchain/profile-manifest-test.py"], ["profile-manifest-test"])
     assert_gates(module, ["docs/profile-manifest.json"], ["profile-manifest-test"])
+    assert_gates(module, ["docs/tcb-components.json"], ["profile-manifest-test", "vendoring-test"])
     assert_route(module, ["docs/scope-control-plan.md"], ["profile-manifest-test"], ["git diff --check"])
     assert_gates(module, ["docs/review-risk-register.yaml"], ["profile-manifest-test"])
     assert_gates(module, ["tools/toolchain/gate-manifest-test.py"], ["gate-manifest-test"])
