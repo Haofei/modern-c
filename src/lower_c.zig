@@ -62,6 +62,15 @@ fn backendEmitMap(
         program.typed_mir,
         opts.source_path orelse "-",
         null,
+        .{
+            .source_sha256 = opts.source_sha256,
+            .profile = @tagName(opts.profile),
+            .checks_optimize = opts.checks.optimize,
+            .checks_ksan = opts.checks.ksan,
+            .checks_msan = opts.checks.msan,
+            .checks_csan = opts.checks.csan,
+            .stub_asm = opts.stub_asm,
+        },
     );
 }
 
@@ -132,7 +141,14 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
 
-    try appendCSourceMapFromGenerated(allocator, module, out, generated_c.items, &typed_mir, source_path, generated_c_path);
+    try appendCSourceMapFromGenerated(allocator, module, out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
+        .profile = @tagName(profile),
+        .checks_optimize = false,
+        .checks_ksan = false,
+        .checks_msan = false,
+        .checks_csan = false,
+        .stub_asm = false,
+    });
 }
 
 pub fn appendCSourceMapFromGenerated(
@@ -143,6 +159,7 @@ pub fn appendCSourceMapFromGenerated(
     typed_mir: *const mir.Module,
     source_path: []const u8,
     generated_c_path: ?[]const u8,
+    metadata: lower_c_map.Metadata,
 ) anyerror!void {
-    try lower_c_map.appendSourceMap(allocator, module, out, generated_c, typed_mir, source_path, generated_c_path);
+    try lower_c_map.appendSourceMap(allocator, module, out, generated_c, typed_mir, source_path, generated_c_path, metadata);
 }

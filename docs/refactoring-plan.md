@@ -200,8 +200,11 @@ Deliverables:
 Current baseline:
 
 - `emit-map` consumes the same generated C bytes used for the map and records
-  their SHA-256 digest in the map header. Full source/MIR/toolchain metadata
-  remains open until `ArtifactBundle` exists.
+  their SHA-256 digest in the map header.
+- `emit-map` also records the exact source SHA-256 supplied by the request layer
+  and the lowering profile/check/stub options used to produce the artifact.
+- Full MIR/fact/toolchain/source-map digest binding remains open until
+  `ArtifactBundle` exists.
 
 Closure criteria:
 

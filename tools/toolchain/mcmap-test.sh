@@ -26,12 +26,46 @@ SRC="$HERE/tests/toolchain/mcmap_demo.mc"
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+LOADED_SRC="$W/loaded-source.mc"
+# loader.loadCombinedSource appends a separator newline for this no-import root.
+cat "$SRC" > "$LOADED_SRC"
+printf '\n' >> "$LOADED_SRC"
 
 sha256_file() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | awk '{print $1}'
     else
         shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+header_value() {
+    local name="$1" map="$2"
+    grep -m1 "^# ${name}=" "$map" | sed "s/^# ${name}=//"
+}
+
+require_header() {
+    local name="$1" expected="$2" map="$3"
+    local actual
+    actual="$(header_value "$name" "$map")"
+    if [ "$actual" != "$expected" ]; then
+        echo "FAIL: mcmap-test — header $name=$actual, expected $expected"
+        exit 1
+    fi
+}
+
+require_sha_header() {
+    local name="$1" expected="$2" map="$3"
+    local actual
+    actual="$(header_value "$name" "$map")"
+    printf '%s\n' "$actual" | grep -Eq '^[0-9a-f]{64}$' || {
+        echo "FAIL: mcmap-test — $name header is missing or malformed"; exit 1;
+    }
+    if [ "$actual" != "$expected" ]; then
+        echo "FAIL: mcmap-test — $name does not match expected digest"
+        echo "map:      $actual"
+        echo "expected: $expected"
+        exit 1
     fi
 }
 
@@ -44,17 +78,25 @@ fi
 MAP="$W/a.mcmap"
 
 "$MCC" emit-c "$SRC" > "$W/generated.c" 2>/dev/null
-map_artifact_sha="$(grep -m1 '^# generated_artifact_sha256=' "$MAP" | sed 's/^# generated_artifact_sha256=//')"
-actual_artifact_sha="$(sha256_file "$W/generated.c")"
-printf '%s\n' "$map_artifact_sha" | grep -Eq '^[0-9a-f]{64}$' || {
-    echo "FAIL: mcmap-test — generated_artifact_sha256 header is missing or malformed"; exit 1;
-}
-if [ "$map_artifact_sha" != "$actual_artifact_sha" ]; then
-    echo "FAIL: mcmap-test — generated_artifact_sha256 does not match emit-c output"
-    echo "map:    $map_artifact_sha"
-    echo "emit-c: $actual_artifact_sha"
-    exit 1
-fi
+require_sha_header generated_artifact_sha256 "$(sha256_file "$W/generated.c")" "$MAP"
+require_sha_header source_sha256 "$(sha256_file "$LOADED_SRC")" "$MAP"
+require_header lower_profile kernel "$MAP"
+require_header lower_checks_optimize false "$MAP"
+require_header lower_checks_ksan false "$MAP"
+require_header lower_checks_msan false "$MAP"
+require_header lower_checks_csan false "$MAP"
+require_header lower_stub_asm false "$MAP"
+
+"$MCC" emit-map "$SRC" --profile=hosted --checks=elide-proven,ksan --stub-asm > "$W/hosted.mcmap" 2>/dev/null
+"$MCC" emit-c "$SRC" --profile=hosted --checks=elide-proven,ksan --stub-asm > "$W/hosted.c" 2>/dev/null
+require_sha_header generated_artifact_sha256 "$(sha256_file "$W/hosted.c")" "$W/hosted.mcmap"
+require_sha_header source_sha256 "$(sha256_file "$LOADED_SRC")" "$W/hosted.mcmap"
+require_header lower_profile hosted "$W/hosted.mcmap"
+require_header lower_checks_optimize true "$W/hosted.mcmap"
+require_header lower_checks_ksan true "$W/hosted.mcmap"
+require_header lower_checks_msan false "$W/hosted.mcmap"
+require_header lower_checks_csan false "$W/hosted.mcmap"
+require_header lower_stub_asm true "$W/hosted.mcmap"
 
 # 2. Every entry row has a non-empty typed_ast_node and mir_block, and the AST IDs are unique.
 rows="$(grep -c '^entry ' "$MAP" || true)"
@@ -111,4 +153,4 @@ esac
 grep -qx "mc_renamed_export" "$W/c.syms"   || { echo "FAIL: mcmap-test — renamed symbol absent from C object"; exit 1; }
 grep -qx "mc_renamed_export" "$W/l.syms"   || { echo "FAIL: mcmap-test — renamed symbol absent from LLVM object"; exit 1; }
 
-echo "PASS: mcmap-test — stable typed-AST/MIR IDs, generated-artifact digest binding, and every exported object_symbol (incl. the #[backend_name] rename) matches the real C and LLVM object symbols"
+echo "PASS: mcmap-test — stable typed-AST/MIR IDs, generated/source digest + lowering-option metadata, and every exported object_symbol (incl. the #[backend_name] rename) matches the real C and LLVM object symbols"

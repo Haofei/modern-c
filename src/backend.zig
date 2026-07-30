@@ -6,6 +6,8 @@ const mir = @import("mir.zig");
 const lower_c = @import("lower_c.zig");
 const lower_llvm = @import("lower_llvm.zig");
 
+pub const Sha256Digest = [std.crypto.hash.sha2.Sha256.digest_length]u8;
+
 /// Code-generation profile. Re-exported from `lower_c.zig`, which owns the
 /// definition (`kernel`/`hosted`). Only profile-aware backends (currently the C
 /// backend) act on it; profile-agnostic backends ignore it.
@@ -82,6 +84,9 @@ pub const LowerOptions = struct {
     /// Optional reporter used by backends to turn expected unsupported lowering
     /// bailouts into source-spanned diagnostics instead of raw backend errors.
     reporter: ?*diagnostics.Reporter = null,
+    /// SHA-256 of the exact source bytes used for this request. Source-map
+    /// emission records this when the application layer can provide it.
+    source_sha256: ?Sha256Digest = null,
     /// LLVM kernel-profile runtime import mode (`mcc emit-llvm --linux-kernel`).
     /// Ignored by backends that do not consume LLVM runtime declarations.
     linux_kernel: bool = false,

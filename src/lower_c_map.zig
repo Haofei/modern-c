@@ -11,6 +11,16 @@ const mir = @import("mir.zig");
 
 const Sha256 = std.crypto.hash.sha2.Sha256;
 
+pub const Metadata = struct {
+    source_sha256: ?[Sha256.digest_length]u8 = null,
+    profile: ?[]const u8 = null,
+    checks_optimize: ?bool = null,
+    checks_ksan: ?bool = null,
+    checks_msan: ?bool = null,
+    checks_csan: ?bool = null,
+    stub_asm: ?bool = null,
+};
+
 pub fn appendSourceMap(
     allocator: std.mem.Allocator,
     module: ast.Module,
@@ -19,12 +29,20 @@ pub fn appendSourceMap(
     mir_module: *const mir.Module,
     source_path: []const u8,
     generated_c_path: ?[]const u8,
+    metadata: Metadata,
 ) !void {
     var line_index = try buildGeneratedLineIndex(allocator, generated_c);
     defer line_index.deinit(allocator);
 
     try out.appendSlice(allocator, "# mcmap v1\n");
     try appendDigestHeader(allocator, out, "generated_artifact_sha256", generated_c);
+    try appendOptionalDigestHeader(allocator, out, "source_sha256", metadata.source_sha256);
+    try appendOptionalStringHeader(allocator, out, "lower_profile", metadata.profile);
+    try appendOptionalBoolHeader(allocator, out, "lower_checks_optimize", metadata.checks_optimize);
+    try appendOptionalBoolHeader(allocator, out, "lower_checks_ksan", metadata.checks_ksan);
+    try appendOptionalBoolHeader(allocator, out, "lower_checks_msan", metadata.checks_msan);
+    try appendOptionalBoolHeader(allocator, out, "lower_checks_csan", metadata.checks_csan);
+    try appendOptionalBoolHeader(allocator, out, "lower_stub_asm", metadata.stub_asm);
     try out.appendSlice(allocator, "# columns: kind symbol source_line source_column source_len generated_c_line source_path generated_c_path typed_ast_node mir_block object_symbol source_module source_qualname symbol_kind visibility backend_name origin\n");
     var mapper = SourceMapEmitter{
         .allocator = allocator,
@@ -59,12 +77,48 @@ fn appendDigestHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), nam
     try out.appendSlice(allocator, "\n");
 }
 
+fn appendOptionalDigestHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, maybe_digest: ?[Sha256.digest_length]u8) !void {
+    const digest = maybe_digest orelse return;
+    try out.print(allocator, "# {s}=", .{name});
+    try appendHexBytes(allocator, out, &digest);
+    try out.appendSlice(allocator, "\n");
+}
+
+fn appendOptionalStringHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, maybe_value: ?[]const u8) !void {
+    const value = maybe_value orelse return;
+    try out.print(allocator, "# {s}=", .{name});
+    try appendEscapedMetadataValue(out, allocator, value);
+    try out.appendSlice(allocator, "\n");
+}
+
+fn appendOptionalBoolHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, maybe_value: ?bool) !void {
+    const value = maybe_value orelse return;
+    try out.print(allocator, "# {s}={s}\n", .{ name, if (value) "true" else "false" });
+}
+
 fn appendHexBytes(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) !void {
     const hex = "0123456789abcdef";
     for (bytes) |byte| {
         try out.append(allocator, hex[byte >> 4]);
         try out.append(allocator, hex[byte & 0x0f]);
     }
+}
+
+fn appendEscapedMetadataValue(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: []const u8) !void {
+    for (value) |ch| switch (ch) {
+        '\\', '\n', '\r', '\t', ' ' => {
+            try out.append(allocator, '\\');
+            switch (ch) {
+                '\\' => try out.append(allocator, '\\'),
+                '\n' => try out.append(allocator, 'n'),
+                '\r' => try out.append(allocator, 'r'),
+                '\t' => try out.append(allocator, 't'),
+                ' ' => try out.append(allocator, 's'),
+                else => unreachable,
+            }
+        },
+        else => try out.append(allocator, ch),
+    };
 }
 
 // The source module name a symbol belongs to: the file basename without directory or

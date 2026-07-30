@@ -1047,6 +1047,8 @@ fn isCIdentifierContinue(ch: u8) bool {
 fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, output_path: ?[]const u8) !void {
     const allocator = session.allocator;
     const optimize = checks.optimize;
+    var source_sha256: backend.Sha256Digest = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &source_sha256, .{});
     var diag = session.initReporter(path, source);
     defer diag.deinit();
 
@@ -1070,6 +1072,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
         .checks = checks,
         .stub_asm = stub_asm,
         .reporter = &diag,
+        .source_sha256 = source_sha256,
     }) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
@@ -1087,6 +1090,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
         .checks = checks,
         .stub_asm = stub_asm,
         .reporter = &diag,
+        .source_sha256 = source_sha256,
     });
     try session.writeArtifact(output.items, output_path);
 }
