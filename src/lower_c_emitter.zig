@@ -1786,8 +1786,7 @@ const CEmitter = struct {
             .global_assignment_target = globalAssignmentTargetForAccess,
             .emit_assign_target = emitAssignTargetForAccess,
             .emit_race_load_temp = emitRaceLoadTempForAccess,
-            .slice_return_type_for_call = sliceReturnTypeForAccess,
-            .array_return_type_for_expr = arrayReturnTypeForAccess,
+            .direct_index_base_type = directIndexBaseTypeForAccess,
             .array_len_text = arrayLenTextForAccess,
             .mir_call_target_kind = mirCallTargetKindForLowering,
             .mir_target_type = mirTargetTypeForLowering,
@@ -2302,14 +2301,9 @@ const CEmitter = struct {
         return self.localInfoFromType(ty);
     }
 
-    fn sliceReturnTypeForAccess(ctx: *anyopaque, call: ast_query.CallExpr) ?ast.TypeExpr {
+    fn directIndexBaseTypeForAccess(ctx: *anyopaque, expr: ast.Expr) ?ast.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.directCallResultTypeForCall(call, isSliceDirectCallResultType);
-    }
-
-    fn arrayReturnTypeForAccess(ctx: *anyopaque, expr: ast.Expr) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.directCallResultTypeForExpr(expr, isArrayDirectCallResultType);
+        return self.directCallResultTypeForExpr(expr, isDirectIndexBaseResultType);
     }
 
     fn arrayLenTextForAccess(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!?[]const u8 {
@@ -5227,6 +5221,13 @@ const CEmitter = struct {
 
     fn isSliceDirectCallResultType(self: *CEmitter, ty: ast.TypeExpr) bool {
         return self.resolveAliasType(ty).kind == .slice;
+    }
+
+    fn isDirectIndexBaseResultType(self: *CEmitter, ty: ast.TypeExpr) bool {
+        return switch (self.resolveAliasType(ty).kind) {
+            .array, .slice => true,
+            else => false,
+        };
     }
 
     fn emitEnumCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {

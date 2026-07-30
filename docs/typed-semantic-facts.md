@@ -381,7 +381,10 @@ longer exposes public slice/array/enum/nullable/tagged-union/Result call
 return-type classifier helpers that are only used inside the infer module. The
 remaining `lower_c_infer` public entrypoints are now individually exact-count
 gated in the semantic-facts inventory so this registered inference surface
-cannot grow without an explicit inventory update.
+cannot grow without an explicit inventory update. Direct-call index lowering now
+uses one `direct_index_base_type` callback for both array and slice base typing,
+instead of separate access-context callbacks named as slice/array return-type
+classifiers.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|
