@@ -3480,7 +3480,7 @@ const CEmitter = struct {
             else => false,
         };
         if (subject_is_result) {
-            if (try self.emitResultSwitch(node, locals, return_ty)) return;
+            if (try self.emitResultSwitch(node, locals, return_ty, subject_ty)) return;
             return error.UnsupportedCEmission;
         }
         if (resolved_subject_ty.kind == .nullable) {
@@ -3557,8 +3557,8 @@ const CEmitter = struct {
         };
     }
 
-    fn emitResultSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
-        const subject = (try lower_c_switch.resultSubjectForValueExpr(self.switchEmitContext(), node.subject, locals)) orelse return false;
+    fn emitResultSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject_ty: ast.TypeExpr) anyerror!bool {
+        const subject = (try lower_c_switch.resultSubjectForValueExprWithType(self.switchEmitContext(), node.subject, locals, subject_ty)) orelse return false;
         return lower_c_switch.emitResultSwitch(self.switchEmitContext(), node, locals, return_ty, subject);
     }
 

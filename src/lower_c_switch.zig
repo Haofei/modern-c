@@ -499,12 +499,6 @@ pub fn resultSubjectForExpr(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo
     return .{ .name = name, .ok_c_type = ok_ty, .err_c_type = err_ty, .ok_source_ty = ok_src, .err_source_ty = err_src };
 }
 
-pub fn resultSubjectForValueExpr(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?ResultSwitchSubject {
-    if (resultSubjectForExpr(expr, locals)) |subject| return subject;
-    const result_ty = ctx.result_type_for_expr(ctx.emit_ctx, expr, locals) orelse return null;
-    return resultSubjectForValueExprWithType(ctx, expr, locals, result_ty);
-}
-
 pub fn resultSubjectForValueExprWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), result_ty: ast.TypeExpr) !?ResultSwitchSubject {
     if (resultSubjectForExpr(expr, locals)) |subject| return subject;
     const temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, expr, locals, result_ty);
