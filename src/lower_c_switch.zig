@@ -13,6 +13,7 @@ const switch_lower = @import("switch_lower.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const MmioReadReplacement = lower_c_model.MmioReadReplacement;
+const NullableRepresentation = lower_c_model.NullableRepresentation;
 const NullableSwitchBranch = lower_c_model.NullableSwitchBranch;
 const NullableSwitchSubject = lower_c_model.NullableSwitchSubject;
 const ResultSwitchBranch = lower_c_model.ResultSwitchBranch;
@@ -22,7 +23,6 @@ const TaggedUnionSwitchSubject = lower_c_model.TaggedUnionSwitchSubject;
 
 const calleeIdentName = ast_query.calleeIdentName;
 const cPayloadFieldName = lower_c_type.cPayloadFieldName;
-const isDynCTypeName = lower_c_type.isDynCTypeName;
 const nullableInnerTypeExpr = lower_c_type.nullableInnerTypeExpr;
 const taggedUnionCase = ast_query.taggedUnionCase;
 
@@ -569,20 +569,20 @@ pub fn taggedUnionSubjectForValueExpr(ctx: EmitContext, expr: ast.Expr, locals: 
     return taggedUnionSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp.name, .span = expr.span } }, .span = expr.span }, locals, ctx.tagged_unions);
 }
 
-pub fn nullableSubjectForExpr(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?NullableSwitchSubject {
+pub fn nullableSubjectForExpr(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), representation: NullableRepresentation) !?NullableSwitchSubject {
     if (nullableSourceName(expr)) |name| {
-        if (nullableSubjectForLocalName(name, locals)) |subject| return subject;
+        if (nullableSubjectForLocalName(name, locals, representation)) |subject| return subject;
         if (locals.contains(name)) return null;
     }
-    return try materializeNullableSubject(ctx, expr, locals);
+    return try materializeNullableSubject(ctx, expr, locals, representation);
 }
 
-pub fn nullableSubjectForExprWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), nullable_ty: ast.TypeExpr) !?NullableSwitchSubject {
+pub fn nullableSubjectForExprWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), nullable_ty: ast.TypeExpr, representation: NullableRepresentation) !?NullableSwitchSubject {
     if (nullableSourceName(expr)) |name| {
-        if (nullableSubjectForLocalName(name, locals)) |subject| return subject;
+        if (nullableSubjectForLocalName(name, locals, representation)) |subject| return subject;
         if (locals.contains(name)) return null;
     }
-    return try materializeNullableSubjectWithType(ctx, expr, locals, nullable_ty);
+    return try materializeNullableSubjectWithType(ctx, expr, locals, nullable_ty, representation);
 }
 
 fn nullableSourceName(expr: ast.Expr) ?[]const u8 {
@@ -593,42 +593,24 @@ fn nullableSourceName(expr: ast.Expr) ?[]const u8 {
     };
 }
 
-fn nullableSubjectForLocalName(name: []const u8, locals: *std.StringHashMap(LocalInfo)) ?NullableSwitchSubject {
+fn nullableSubjectForLocalName(name: []const u8, locals: *std.StringHashMap(LocalInfo), representation: NullableRepresentation) ?NullableSwitchSubject {
     const info = locals.get(name) orelse return null;
     const inner_c_type = info.nullable_inner_c_type orelse return null;
     const inner_ty = if (info.source_ty) |st| nullableInnerTypeExpr(st) else null;
     return .{
         .name = name,
         .inner_c_type = inner_c_type,
-        .is_dyn = isDynCTypeName(inner_c_type),
         .inner_ty = inner_ty,
-        .is_value_opt = nullablePayloadIsValueOptional(info.source_ty),
+        .representation = representation,
     };
 }
 
-// True when a `?T` (given as the whole optional TypeExpr) uses the tagged value repr —
-// i.e. its payload T is a named value type (scalar/struct/enum/address), not a pointer,
-// slice, fn-pointer, or `*dyn`. Mirrors lower_c_type.nullablePayloadIsValueType.
-fn nullablePayloadIsValueOptional(opt_ty: ?ast.TypeExpr) bool {
-    const ty = opt_ty orelse return false;
-    const child = nullableInnerTypeExpr(ty) orelse return false;
-    return payloadKindIsValue(child);
-}
-
-fn payloadKindIsValue(child: ast.TypeExpr) bool {
-    return switch (child.kind) {
-        .name => |n| !std.mem.eql(u8, n.text, "c_void"),
-        .qualified => |node| payloadKindIsValue(node.child.*),
-        else => false,
-    };
-}
-
-fn materializeNullableSubject(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?NullableSwitchSubject {
+fn materializeNullableSubject(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), representation: NullableRepresentation) !?NullableSwitchSubject {
     const nullable_ty = ctx.nullable_type_for_expr(ctx.emit_ctx, expr, locals) orelse return null;
-    return materializeNullableSubjectWithType(ctx, expr, locals, nullable_ty);
+    return materializeNullableSubjectWithType(ctx, expr, locals, nullable_ty, representation);
 }
 
-fn materializeNullableSubjectWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), nullable_ty: ast.TypeExpr) !?NullableSwitchSubject {
+fn materializeNullableSubjectWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), nullable_ty: ast.TypeExpr, representation: NullableRepresentation) !?NullableSwitchSubject {
     const inner_c_type = try ctx.nullable_inner_c_type_for_type(ctx.emit_ctx, nullable_ty) orelse return null;
     const temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, expr, locals, nullable_ty);
     const temp_info = try ctx.local_info_from_type(ctx.emit_ctx, nullable_ty);
@@ -636,9 +618,8 @@ fn materializeNullableSubjectWithType(ctx: EmitContext, expr: ast.Expr, locals: 
     return .{
         .name = temp.name,
         .inner_c_type = inner_c_type,
-        .is_dyn = isDynCTypeName(inner_c_type),
         .inner_ty = if (temp_info.source_ty) |st| nullableInnerTypeExpr(st) else nullableInnerTypeExpr(nullable_ty),
-        .is_value_opt = nullablePayloadIsValueOptional(temp_info.source_ty orelse nullable_ty),
+        .representation = representation,
     };
 }
 

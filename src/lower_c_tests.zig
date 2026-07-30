@@ -348,6 +348,30 @@ fn renameTargetTypeFactForFunction(module_mir: *mir.Module, name: []const u8, ki
     return error.TestUnexpectedResult;
 }
 
+fn retargetTargetTypeResultForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind, result_ty: mir.ValueType) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        var fact_count: usize = 0;
+        for (function.target_type_facts) |*fact| {
+            if (fact.kind != kind) continue;
+            fact.result_ty = result_ty;
+            fact_count += 1;
+        }
+        var instruction_count: usize = 0;
+        for (function.blocks) |*block| {
+            for (block.instructions) |*instruction| {
+                if (instruction.kind != .target_type) continue;
+                if (!std.mem.eql(u8, instruction.detail, @tagName(kind))) continue;
+                instruction.result_ty = result_ty;
+                instruction_count += 1;
+            }
+        }
+        if (fact_count == 0 or instruction_count == 0) return error.TestUnexpectedResult;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn renameTargetTypeFactAtOffsetForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind, source_offset: usize, source_len: usize, target_name: []const u8) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -2822,6 +2846,13 @@ test "lower-c switches require MIR subject types" {
         defer stale_output.deinit(std.testing.allocator);
         try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
     }
+
+    var stale_nullable_repr = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_nullable_repr.deinit();
+    try retargetTargetTypeResultForFunction(&stale_nullable_repr, "nullable_subject", .switch_subject, .{ .nullable_value = "u32" });
+    var stale_nullable_repr_output: std.ArrayList(u8) = .empty;
+    defer stale_nullable_repr_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_nullable_repr, &stale_nullable_repr_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c if-let statements require MIR subject types" {
@@ -2860,6 +2891,13 @@ test "lower-c if-let statements require MIR subject types" {
         defer stale_output.deinit(std.testing.allocator);
         try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null));
     }
+
+    var stale_nullable_repr = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_nullable_repr.deinit();
+    try retargetTargetTypeResultForFunction(&stale_nullable_repr, "nullable_subject", .if_let_subject, .{ .nullable_value = "u32" });
+    var stale_nullable_repr_output: std.ArrayList(u8) = .empty;
+    defer stale_nullable_repr_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_nullable_repr, &stale_nullable_repr_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c try expressions require MIR operand and result types" {

@@ -127,6 +127,10 @@ Current baseline:
   identity.
 - Representation and target-type facts mirror typed result/value/span/owner IDs.
 - Verifier/admission checks reject result/span/owner drift.
+- C and LLVM nullable `switch` / `if let` subject lowering now consumes the
+  MIR-owned subject representation from `.switch_subject` / `.if_let_subject`
+  facts; stale pointer-vs-value optional representation facts are rejected
+  before emission.
 - Inventory checks anchor the migrated surface.
 
 Implementation order:

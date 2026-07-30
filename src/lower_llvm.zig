@@ -88,6 +88,17 @@ const llvmPreciseAsmConstraints = lower_llvm_text.llvmPreciseAsmConstraints;
 const llvmPreciseAsmTemplate = lower_llvm_text.llvmPreciseAsmTemplate;
 const llvmStringLiteralBytes = lower_llvm_text.llvmStringLiteralBytes;
 const sectionAttr = lower_llvm_text.sectionAttr;
+
+const NullableRepresentation = enum {
+    pointer,
+    dyn_trait,
+    value,
+};
+
+const MirSubjectType = struct {
+    target_ty: ast.TypeExpr,
+    nullable_representation: ?NullableRepresentation = null,
+};
 const hasNamedAttr = sema_decl.hasNamedAttr;
 
 // LLVM backend AST/call-shape queries and small pure lowering helpers.
@@ -1792,8 +1803,9 @@ const LlvmEmitter = struct {
                 return true;
             },
             .@"switch" => |node| {
-                const subject_ty = try self.requireMirSwitchSubjectType(node.subject);
-                if (try self.emitNullableSwitch(node, ret_ty, subject_ty)) |terminated| {
+                const subject_info = try self.requireMirSwitchSubjectType(node.subject);
+                const subject_ty = subject_info.target_ty;
+                if (try self.emitNullableSwitch(node, ret_ty, subject_ty, subject_info.nullable_representation)) |terminated| {
                     if (terminated) return true;
                     return false;
                 }
@@ -1813,9 +1825,10 @@ const LlvmEmitter = struct {
                 return error.UnsupportedLlvmEmission;
             },
             .if_let => |node| {
-                const subject_ty = try self.requireMirIfLetSubjectType(node.value);
+                const subject_info = try self.requireMirIfLetSubjectType(node.value);
+                const subject_ty = subject_info.target_ty;
                 if (try self.emitResultIfLet(node, ret_ty, subject_ty)) return true;
-                if (try self.emitNullableIfLet(node, ret_ty, subject_ty)) return true;
+                if (try self.emitNullableIfLet(node, ret_ty, subject_ty, subject_info.nullable_representation)) return true;
             },
             .@"break" => |target| {
                 const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
@@ -2467,19 +2480,19 @@ const LlvmEmitter = struct {
         try self.emitTrapBranch(is_null, trap, cont, trap, cont, "NullUnwrap");
     }
 
-    fn emitNullableIfLet(self: *LlvmEmitter, node: ast.IfLet, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !bool {
+    fn emitNullableIfLet(self: *LlvmEmitter, node: ast.IfLet, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr, representation: ?NullableRepresentation) !bool {
         const binding = switch (node.pattern.kind) {
             .bind => |ident| ident,
             else => return false,
         };
         const inner_ty = self.nullableInnerType(subject_ty) orelse return false;
+        const nullable_representation = representation orelse return error.UnsupportedLlvmEmission;
         const subject = try self.emitExpr(node.value, subject_ty);
-        const is_value_opt = self.targetIsValueOptional(subject_ty);
         const then_label = try self.nextLabel("nullable_some");
         const else_label = try self.nextLabel("nullable_none");
         const end_label = try self.nextLabel("nullable_end");
         const is_some = try self.nextTemp();
-        if (is_value_opt) {
+        if (nullable_representation == .value) {
             try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ is_some, try self.llvmType(subject_ty), subject });
         } else {
             try self.emitNullableSomeTest(is_some, subject, inner_ty);
@@ -2508,7 +2521,7 @@ const LlvmEmitter = struct {
         defer self.restoreLocalArrayPointerElementsForLocal(binding.text, &old_local_array_pointer_elements) catch {};
 
         const binding_ptr = try self.nextBindingPtr(binding.text);
-        const binding_value = if (is_value_opt) blk: {
+        const binding_value = if (nullable_representation == .value) blk: {
             const payload = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, try self.llvmType(subject_ty), subject });
             break :blk payload;
@@ -3155,22 +3168,54 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn requireMirSwitchSubjectType(self: *LlvmEmitter, subject: ast.Expr) !ast.TypeExpr {
-        if (subject.span.line == 0 or subject.span.column == 0) return self.exprType(subject) orelse error.UnsupportedLlvmEmission;
-        const fact_ty = (self.mirTargetTypeFactAt(.switch_subject, subject.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+    fn requireMirSwitchSubjectType(self: *LlvmEmitter, subject: ast.Expr) !MirSubjectType {
+        if (subject.span.line == 0 or subject.span.column == 0) return .{ .target_ty = self.exprType(subject) orelse return error.UnsupportedLlvmEmission };
+        const fact = self.mirTargetTypeFactAt(.switch_subject, subject.span) orelse return error.UnsupportedLlvmEmission;
+        const fact_ty = fact.target_ty;
         if (self.exprType(subject)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
         }
-        return fact_ty;
+        const resolved_fact_ty = self.resolveAliasType(fact_ty);
+        return .{
+            .target_ty = fact_ty,
+            .nullable_representation = if (resolved_fact_ty.kind == .nullable) try self.nullableRepresentationFromTargetFact(fact) else null,
+        };
     }
 
-    fn requireMirIfLetSubjectType(self: *LlvmEmitter, value: ast.Expr) !ast.TypeExpr {
-        if (value.span.line == 0 or value.span.column == 0) return self.exprType(value) orelse error.UnsupportedLlvmEmission;
-        const fact_ty = (self.mirTargetTypeFactAt(.if_let_subject, value.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+    fn requireMirIfLetSubjectType(self: *LlvmEmitter, value: ast.Expr) !MirSubjectType {
+        if (value.span.line == 0 or value.span.column == 0) return .{ .target_ty = self.exprType(value) orelse return error.UnsupportedLlvmEmission };
+        const fact = self.mirTargetTypeFactAt(.if_let_subject, value.span) orelse return error.UnsupportedLlvmEmission;
+        const fact_ty = fact.target_ty;
         if (self.exprType(value)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
         }
-        return fact_ty;
+        const resolved_fact_ty = self.resolveAliasType(fact_ty);
+        return .{
+            .target_ty = fact_ty,
+            .nullable_representation = if (resolved_fact_ty.kind == .nullable) try self.nullableRepresentationFromTargetFact(fact) else null,
+        };
+    }
+
+    fn nullableRepresentationFromTargetFact(self: *LlvmEmitter, fact: mir.TargetTypeFact) !NullableRepresentation {
+        const from_fact: NullableRepresentation = switch (fact.result_ty) {
+            .nullable_value => .value,
+            .nullable_dyn_trait => .dyn_trait,
+            .nullable_pointer => .pointer,
+            else => return error.UnsupportedLlvmEmission,
+        };
+        const expected = self.nullableRepresentationForTargetType(fact.target_ty) orelse return error.UnsupportedLlvmEmission;
+        if (from_fact != expected) return error.UnsupportedLlvmEmission;
+        return from_fact;
+    }
+
+    fn nullableRepresentationForTargetType(self: *LlvmEmitter, ty: ast.TypeExpr) ?NullableRepresentation {
+        const resolved = self.resolveAliasType(ty);
+        if (resolved.kind != .nullable) return null;
+        const child = resolved.kind.nullable.*;
+        const resolved_child = self.resolveAliasType(child);
+        if (resolved_child.kind == .dyn_trait) return .dyn_trait;
+        if (self.nullablePayloadIsValueType(child)) return .value;
+        return .pointer;
     }
 
     fn requireMirTryOperandType(self: *LlvmEmitter, operand: ast.Expr) !ast.TypeExpr {
@@ -3321,8 +3366,9 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitNullableSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !?bool {
+    fn emitNullableSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr, representation: ?NullableRepresentation) !?bool {
         const inner_ty = self.nullableInnerType(subject_ty) orelse return null;
+        const nullable_representation = representation orelse return error.UnsupportedLlvmEmission;
         if (node.arms.len == 0) return error.UnsupportedLlvmEmission;
 
         const arms = switch (switch_lower.classifyNullableArms(node.arms)) {
@@ -3339,7 +3385,11 @@ const LlvmEmitter = struct {
         const none_label = try self.nextLabel("nullable_none");
         const end_label = try self.nextLabel("nullable_end");
         const is_some = try self.nextTemp();
-        try self.emitNullableSomeTest(is_some, subject, inner_ty);
+        if (nullable_representation == .value) {
+            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ is_some, try self.llvmType(subject_ty), subject });
+        } else {
+            try self.emitNullableSomeTest(is_some, subject, inner_ty);
+        }
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n", .{ is_some, some_label, none_label, try self.debugCallSuffix() });
 
         var all_terminated = true;
@@ -3366,7 +3416,12 @@ const LlvmEmitter = struct {
         defer self.restoreLocalArrayPointerElementsForLocal(bind.text, &old_local_array_pointer_elements) catch {};
 
         const binding_ptr = try self.nextBindingPtr(bind.text);
-        try self.emitAllocaConcreteStore(binding_ptr, inner_ty, subject);
+        const binding_value = if (nullable_representation == .value) blk: {
+            const payload = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, try self.llvmType(subject_ty), subject });
+            break :blk payload;
+        } else subject;
+        try self.emitAllocaConcreteStore(binding_ptr, inner_ty, binding_value);
         try self.local_types.put(bind.text, inner_ty);
         try self.local_slots.put(bind.text, .{ .ty = inner_ty, .ptr = binding_ptr });
         const some_terminated = try self.emitSwitchBody(node.arms[some_i].body, ret_ty);

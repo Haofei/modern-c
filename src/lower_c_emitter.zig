@@ -78,6 +78,7 @@ const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
 const OverlayFieldInfo = lower_c_model.OverlayFieldInfo;
 const OverlayLayout = lower_c_model.OverlayLayout;
 const ResultInfo = lower_c_model.ResultInfo;
+const NullableRepresentation = lower_c_model.NullableRepresentation;
 const ReflectEnv = lower_c_reflect.ReflectEnv;
 const StructTypeStyle = lower_c_model.StructTypeStyle;
 const MmioStruct = lower_c_model.MmioStruct;
@@ -128,6 +129,11 @@ const simpleNameType = ast_query.simpleNameType;
 const contractName = ast_query.contractName;
 const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
+
+const MirSubjectType = struct {
+    target_ty: ast.TypeExpr,
+    nullable_representation: ?NullableRepresentation = null,
+};
 const indexExpr = ast_query.indexExpr;
 const memberCallee = ast_query.memberCallee;
 const memberExpr = ast_query.memberExpr;
@@ -3470,7 +3476,8 @@ const CEmitter = struct {
     }
 
     fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        const subject_ty = try self.requireMirSwitchSubjectType(node.subject, locals);
+        const subject_info = try self.requireMirSwitchSubjectType(node.subject, locals);
+        const subject_ty = subject_info.target_ty;
         const resolved_subject_ty = self.resolveAliasType(subject_ty);
         for (node.arms) |arm| {
             for (arm.patterns) |pattern| self.clearMirPointerProvenanceForPattern(pattern);
@@ -3484,7 +3491,8 @@ const CEmitter = struct {
             return error.UnsupportedCEmission;
         }
         if (resolved_subject_ty.kind == .nullable) {
-            if (try self.emitNullableSwitch(node, locals, return_ty)) return;
+            const representation = subject_info.nullable_representation orelse return error.UnsupportedCEmission;
+            if (try self.emitNullableSwitch(node, locals, return_ty, representation)) return;
             return error.UnsupportedCEmission;
         }
         if (typeName(resolved_subject_ty)) |name| {
@@ -3538,17 +3546,22 @@ const CEmitter = struct {
         });
     }
 
-    fn requireMirSwitchSubjectType(self: *CEmitter, subject: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !ast.TypeExpr {
+    fn requireMirSwitchSubjectType(self: *CEmitter, subject: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !MirSubjectType {
         const known_ty = self.operandEmitType(subject, locals) orelse self.resultTypeForExpr(subject, locals) orelse self.nullableTypeForExpr(subject, locals) orelse self.taggedUnionTypeForExpr(subject, locals);
         const fact = if (known_ty) |ty|
             self.mirTargetTypeFactMatchingType(.switch_subject, subject.span, ty)
         else
             self.mirTargetTypeFactAt(.switch_subject, subject.span);
-        const fact_ty = (fact orelse return error.UnsupportedCEmission).target_ty;
+        const subject_fact = fact orelse return error.UnsupportedCEmission;
+        const fact_ty = subject_fact.target_ty;
         if (known_ty) |ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
         }
-        return fact_ty;
+        const resolved_fact_ty = self.resolveAliasType(fact_ty);
+        return .{
+            .target_ty = fact_ty,
+            .nullable_representation = if (resolved_fact_ty.kind == .nullable) try self.nullableRepresentationFromTargetFact(subject_fact) else null,
+        };
     }
 
     fn emitResultSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
@@ -3556,8 +3569,8 @@ const CEmitter = struct {
         return lower_c_switch.emitResultSwitch(self.switchEmitContext(), node, locals, return_ty, subject);
     }
 
-    fn emitNullableSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
-        const subject = if (try lower_c_switch.nullableSubjectForExpr(self.switchEmitContext(), node.subject, locals)) |subject|
+    fn emitNullableSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, representation: NullableRepresentation) anyerror!bool {
+        const subject = if (try lower_c_switch.nullableSubjectForExpr(self.switchEmitContext(), node.subject, locals, representation)) |subject|
             subject
         else
             return false;
@@ -3640,7 +3653,8 @@ const CEmitter = struct {
 
     fn emitIfLet(self: *CEmitter, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         self.clearMirPointerProvenanceForPattern(node.pattern);
-        const subject_ty = try self.requireMirIfLetSubjectType(node.value, locals);
+        const subject_info = try self.requireMirIfLetSubjectType(node.value, locals);
+        const subject_ty = subject_info.target_ty;
         const resolved_subject_ty = self.resolveAliasType(subject_ty);
         if (node.pattern.kind == .tag_bind) {
             const is_result = switch (resolved_subject_ty.kind) {
@@ -3658,7 +3672,8 @@ const CEmitter = struct {
         }
 
         if (resolved_subject_ty.kind != .nullable) return error.UnsupportedCEmission;
-        const subject = (try lower_c_switch.nullableSubjectForExprWithType(self.switchEmitContext(), node.value, locals, subject_ty)) orelse {
+        const representation = subject_info.nullable_representation orelse return error.UnsupportedCEmission;
+        const subject = (try lower_c_switch.nullableSubjectForExprWithType(self.switchEmitContext(), node.value, locals, subject_ty, representation)) orelse {
             self.reportUnsupported(node.value.span, "if-let value");
             try self.writeIndent();
             try self.out.print(self.allocator, "/* unsupported if-let value: {s} */\n", .{@tagName(node.value.kind)});
@@ -3667,13 +3682,40 @@ const CEmitter = struct {
         try lower_c_switch.emitNullableIfLet(self.switchEmitContext(), node, locals, return_ty, subject);
     }
 
-    fn requireMirIfLetSubjectType(self: *CEmitter, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !ast.TypeExpr {
-        const fact_ty = (self.mirTargetTypeFactAt(.if_let_subject, value.span) orelse return error.UnsupportedCEmission).target_ty;
+    fn requireMirIfLetSubjectType(self: *CEmitter, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !MirSubjectType {
+        const fact = self.mirTargetTypeFactAt(.if_let_subject, value.span) orelse return error.UnsupportedCEmission;
+        const fact_ty = fact.target_ty;
         const known_ty = self.operandEmitType(value, locals) orelse self.resultTypeForExpr(value, locals) orelse self.nullableTypeForExpr(value, locals);
         if (known_ty) |ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
         }
-        return fact_ty;
+        const resolved_fact_ty = self.resolveAliasType(fact_ty);
+        return .{
+            .target_ty = fact_ty,
+            .nullable_representation = if (resolved_fact_ty.kind == .nullable) try self.nullableRepresentationFromTargetFact(fact) else null,
+        };
+    }
+
+    fn nullableRepresentationFromTargetFact(self: *CEmitter, fact: mir.TargetTypeFact) !NullableRepresentation {
+        const from_fact: NullableRepresentation = switch (fact.result_ty) {
+            .nullable_value => .value,
+            .nullable_dyn_trait => .dyn_trait,
+            .nullable_pointer => .pointer,
+            else => return error.UnsupportedCEmission,
+        };
+        const expected = self.nullableRepresentationForTargetType(fact.target_ty) orelse return error.UnsupportedCEmission;
+        if (from_fact != expected) return error.UnsupportedCEmission;
+        return from_fact;
+    }
+
+    fn nullableRepresentationForTargetType(self: *CEmitter, ty: ast.TypeExpr) ?NullableRepresentation {
+        const resolved = self.resolveAliasType(ty);
+        if (resolved.kind != .nullable) return null;
+        const child = resolved.kind.nullable.*;
+        const resolved_child = self.resolveAliasType(child);
+        if (resolved_child.kind == .dyn_trait) return .dyn_trait;
+        if (lower_c_type.nullablePayloadIsValueType(&self.type_aliases, child)) return .value;
+        return .pointer;
     }
 
     fn emitNeverExprStmt(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {

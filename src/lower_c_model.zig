@@ -195,15 +195,13 @@ pub const ResultSwitchBranch = struct {
 pub const NullableSwitchSubject = struct {
     name: []const u8,
     inner_c_type: []const u8,
-    // A `?*dyn Trait` is a two-word fat pointer; its niche is `data == NULL`, so the
-    // none/some test is on the `.data` field, not the whole value.
-    is_dyn: bool = false,
     // The narrowed inner type (`*dyn Trait`), so the some-binding carries enough type
     // information for trait dispatch (`d.m()` -> `d.vtable->m(d.data, …)`).
     inner_ty: ?ast.TypeExpr = null,
-    // A value optional `?T` (tagged repr `{ present, value }`): the some-test reads the
-    // `.present` tag and the some-binding reads the `.value` payload (not the whole word).
-    is_value_opt: bool = false,
+    // MIR-owned nullable representation. The switch/if-let helper may use
+    // syntax spelling to emit fields, but it must not infer whether `?T` is
+    // pointer-niche, dyn-trait-niche, or tagged-value from AST shape.
+    representation: NullableRepresentation = .pointer,
 
     // Append the C boolean expression that is true when the subject is `some`
     // (present). This deliberately writes into the caller's artifact buffer
@@ -211,21 +209,18 @@ pub const NullableSwitchSubject = struct {
     // a lexer/input policy, and codegen must never translate formatting failure
     // into a semantic constant such as `0`.
     pub fn appendSomeCond(self: NullableSwitchSubject, allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
-        if (self.is_value_opt) {
-            try out.print(allocator, "{s}.present", .{self.name});
-        } else if (self.is_dyn) {
-            try out.print(allocator, "{s}.data != NULL", .{self.name});
-        } else {
-            try out.print(allocator, "{s} != NULL", .{self.name});
+        switch (self.representation) {
+            .value => try out.print(allocator, "{s}.present", .{self.name}),
+            .dyn_trait => try out.print(allocator, "{s}.data != NULL", .{self.name}),
+            .pointer => try out.print(allocator, "{s} != NULL", .{self.name}),
         }
     }
 
     // Append the C expression that yields the some-payload value.
     pub fn appendValueExpr(self: NullableSwitchSubject, allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
-        if (self.is_value_opt) {
-            try out.print(allocator, "{s}.value", .{self.name});
-        } else {
-            try out.appendSlice(allocator, self.name);
+        switch (self.representation) {
+            .value => try out.print(allocator, "{s}.value", .{self.name}),
+            .dyn_trait, .pointer => try out.appendSlice(allocator, self.name),
         }
     }
 
@@ -235,6 +230,12 @@ pub const NullableSwitchSubject = struct {
         try self.appendSomeCond(allocator, &out);
         return out.toOwnedSlice(allocator);
     }
+};
+
+pub const NullableRepresentation = enum {
+    pointer,
+    dyn_trait,
+    value,
 };
 
 pub const NullableSwitchBranch = struct {
