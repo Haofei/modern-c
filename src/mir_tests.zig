@@ -1231,11 +1231,16 @@ test "MIR owns dyn coercion targets and excludes pass-through values" {
     try std.testing.expect(!reporter.has_errors);
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
-    try std.testing.expectEqual(mir.TargetTypeKind.dyn_coercion, functionByName(typed_mir, "as_dyn").?.target_type_facts[0].kind);
+    const as_dyn = functionByName(typed_mir, "as_dyn").?;
+    try std.testing.expectEqual(mir.TargetTypeKind.dyn_coercion, as_dyn.target_type_facts[0].kind);
+    try std.testing.expect(targetTypeFactByKind(as_dyn, .dyn_coercion_source) != null);
     const holder = functionByName(typed_mir, "hold").?;
     try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, holder.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.dyn_coercion, holder.target_type_facts[1].kind);
-    try std.testing.expect(targetTypeFactByKind(functionByName(typed_mir, "pass_arg").?, .dyn_coercion) != null);
+    try std.testing.expect(targetTypeFactByKind(holder, .dyn_coercion_source) != null);
+    const pass_arg = functionByName(typed_mir, "pass_arg").?;
+    try std.testing.expect(targetTypeFactByKind(pass_arg, .dyn_coercion) != null);
+    try std.testing.expect(targetTypeFactByKind(pass_arg, .dyn_coercion_source) != null);
     try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "pass_through").?.target_type_facts.len);
     try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "pass_nullable").?.target_type_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.null_literal, functionByName(typed_mir, "no_dyn").?.target_type_facts[0].kind);

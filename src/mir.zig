@@ -6823,6 +6823,8 @@ const FunctionBuilder = struct {
         }
         if (expr.kind != .null_literal and self.isDynOrNullableDynTarget(target_ty) and self.exprNeedsDynCoercion(expr)) {
             try self.appendTargetTypeFact(.dyn_coercion, target_ty, result_ty, expr.span);
+            const source_ty = self.dynCoercionSourceTypeExpr(expr) orelse return error.UnsupportedMirConstruction;
+            try self.appendTargetTypeFact(.dyn_coercion_source, source_ty, valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
             return;
         }
         if (self.valueOptionalPayloadTargetType(target_ty, result_ty)) |payload_ty| {
@@ -7073,6 +7075,14 @@ const FunctionBuilder = struct {
                 .dyn_trait => false,
                 else => false,
             } else false,
+        };
+    }
+
+    fn dynCoercionSourceTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .grouped => |inner| self.dynCoercionSourceTypeExpr(inner.*),
+            .address_of => |inner| self.typeExprForExpr(inner.*),
+            else => self.typeExprForExpr(expr),
         };
     }
 

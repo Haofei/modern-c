@@ -380,6 +380,7 @@ pub const TargetTypeKind = enum {
     null_literal,
     value_optional_coercion,
     dyn_coercion,
+    dyn_coercion_source,
     conversion_source,
     conversion_target,
     wrapping_left,

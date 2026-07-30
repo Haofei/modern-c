@@ -4886,7 +4886,7 @@ const CEmitter = struct {
     fn dynSourceIsPassThrough(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.dynSourceIsPassThrough(inner.*, locals),
-            else => if (self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals)) |source_ty|
+            else => if (self.dynSourceTypeForEmission(expr, locals)) |source_ty|
                 self.targetIsDynOrNullableDyn(source_ty)
             else
                 false,
@@ -4910,7 +4910,7 @@ const CEmitter = struct {
 
     fn emitAddressOfDynCoercion(self: *CEmitter, operand: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), trait_name: []const u8) !bool {
         // `&x` -> .data = (void*)&x, vtable keyed on typeof(x).
-        const source_ty = self.operandEmitType(operand, locals) orelse self.exprSourceTypeForEmission(operand, locals) orelse return false;
+        const source_ty = self.dynSourceTypeForEmission(operand, locals) orelse return false;
         const type_name = typeName(self.resolveAliasType(source_ty)) orelse return false;
         try self.out.print(self.allocator, "({s}){{ .data = (void *)&", .{try self.dynTypeName(trait_name)});
         try self.emitExpr(operand, locals);
@@ -4920,7 +4920,7 @@ const CEmitter = struct {
 
     fn emitPointerValueDynCoercion(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), trait_name: []const u8) !bool {
         // A `*T` value: .data = (void*)<the pointer>, vtable keyed on the pointee T.
-        const source_ty = self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse return false;
+        const source_ty = self.dynSourceTypeForEmission(expr, locals) orelse return false;
         const resolved_src = self.resolveAliasType(source_ty);
         // An existing `*dyn Trait` value passes through (no re-wrap).
         if (resolved_src.kind == .dyn_trait) return false;
@@ -4933,6 +4933,14 @@ const CEmitter = struct {
         try self.emitExpr(expr, locals);
         try self.out.print(self.allocator, ", .vtable = &__vt_{s}_{s} }}", .{ type_name, trait_name });
         return true;
+    }
+
+    fn dynSourceTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (self.mirTargetTypeFactAt(.dyn_coercion_source, expr.span)) |fact| return fact.target_ty;
+        if (self.operandEmitType(expr, locals)) |ty| return ty;
+        if (self.callReturnTypeForExpr(expr, locals)) |ty| return ty;
+        if (expr.span.line == 0 and expr.span.column == 0) return self.exprSourceTypeForEmission(expr, locals);
+        return null;
     }
 
     fn emitF32Expr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {

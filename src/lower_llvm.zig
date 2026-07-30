@@ -3843,13 +3843,13 @@ const LlvmEmitter = struct {
             .grouped => |inner| return self.emitDynCoercion(inner.*, fact.target_ty),
             .address_of => |inner| {
                 // `&x` -> data = &x, vtable keyed on typeof(x).
-                const source_ty = self.exprType(inner.*) orelse return null;
+                const source_ty = (self.mirTargetTypeFactAt(.dyn_coercion_source, expr.span) orelse return error.UnsupportedLlvmEmission).target_ty;
                 type_name = typeName(self.resolveAliasType(source_ty)) orelse return null;
                 data_ptr = try self.emitAddressOf(inner.*);
             },
             else => {
                 // A `*T` value: data = the pointer itself, vtable keyed on the pointee T.
-                const source_ty = self.resolveAliasType(self.exprType(expr) orelse return null);
+                const source_ty = self.resolveAliasType((self.mirTargetTypeFactAt(.dyn_coercion_source, expr.span) orelse return error.UnsupportedLlvmEmission).target_ty);
                 // An existing `*dyn Trait` value passes through (no re-wrap).
                 if (self.targetIsDynOrNullableDyn(source_ty)) return null;
                 const pointee = switch (source_ty.kind) {
