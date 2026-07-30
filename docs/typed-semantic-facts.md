@@ -392,7 +392,9 @@ value query. Boolean identifier classification now uses the same operand type
 query as member and index boolean checks, retiring the separate identifier-only
 helper. That shared operand-bool wrapper has also been inlined into the boolean
 classifier, leaving `operandEmitType` as the single local query before checking
-the bool storage type. The
+the bool storage type. The source-expression bool wrapper and its binary-op
+predicate have also been folded into the boolean classifier, so user-source
+boolean-producing syntax reaches one local MIR `expression_result` check. The
 remaining `lower_c_infer` public entrypoints are now individually exact-count
 gated in the semantic-facts inventory so this registered inference surface
 cannot grow without an explicit inventory update. Direct-call index lowering now

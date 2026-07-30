@@ -153,7 +153,11 @@ pub fn exprIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
         // User-source boolean-producing expressions have complete MIR result
         // facts. Syntax identifies the operation, but it must not independently
         // authorize boolean lowering when that fact is absent.
-        .bool_literal => sourceExpressionResultIsBool(ctx, expr, true),
+        .bool_literal => blk: {
+            if (expr.span.line == 0 or expr.span.column == 0) break :blk true;
+            const ty = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse break :blk false;
+            break :blk isBoolType(resolveAliasType(ctx, ty));
+        },
         .ident, .index, .member => blk: {
             const ty = operandEmitType(ctx, expr, locals) orelse break :blk false;
             break :blk isBoolType(resolveAliasType(ctx, ty));
@@ -165,21 +169,21 @@ pub fn exprIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
             isBoolType(resolveAliasType(ctx, ty))
         else
             false,
-        .binary => |node| sourceExpressionResultIsBool(ctx, expr, binaryOpProducesBool(node.op)),
-        .unary => |node| sourceExpressionResultIsBool(ctx, expr, node.op == .logical_not),
-        else => false,
-    };
-}
-
-fn sourceExpressionResultIsBool(ctx: TypeQueryContext, expr: ast.Expr, generated_fallback: bool) bool {
-    if (expr.span.line == 0 or expr.span.column == 0) return generated_fallback;
-    const ty = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return false;
-    return isBoolType(resolveAliasType(ctx, ty));
-}
-
-fn binaryOpProducesBool(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .eq, .ne, .lt, .le, .gt, .ge, .logical_and, .logical_or => true,
+        .binary => |node| blk: {
+            if (expr.span.line == 0 or expr.span.column == 0) {
+                break :blk switch (node.op) {
+                    .eq, .ne, .lt, .le, .gt, .ge, .logical_and, .logical_or => true,
+                    else => false,
+                };
+            }
+            const ty = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse break :blk false;
+            break :blk isBoolType(resolveAliasType(ctx, ty));
+        },
+        .unary => |node| blk: {
+            if (expr.span.line == 0 or expr.span.column == 0) break :blk node.op == .logical_not;
+            const ty = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse break :blk false;
+            break :blk isBoolType(resolveAliasType(ctx, ty));
+        },
         else => false,
     };
 }
