@@ -1325,6 +1325,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "ExprSourceTypeFn": 0,
     },
     "src/lower_c_infer.zig": {
+        "const FnInfo = lower_c_model.FnInfo": 0,
+        "functions: *const std.StringHashMap(FnInfo)": 0,
+        "ctx.functions": 0,
         "source_type_for_expr": 0,
         "SourceTypeFn": 0,
         "pub fn sliceReturnTypeForExpr(": 1,

@@ -466,7 +466,9 @@ numeric emission now consumes `explicit_cast_target` for source casts before
 checking the requested shape; the AST cast target remains only for generated
 zero-span casts. C inference call-result queries now use the shared emitter
 hook that consumes direct, indirect, dynamic-dispatch, and migrated builtin call
-facts; the private direct-call-only helper is exact-zero gated.
+facts; the private direct-call-only helper is exact-zero gated. The C inference
+context no longer carries the function declaration map, so call-result
+authority cannot be reintroduced there without changing the inventory.
 
 | Family | Budget class | Reduction condition |
 |---|---|---|

@@ -7642,7 +7642,6 @@ const CEmitter = struct {
     fn inferTypeContext(self: *CEmitter) lower_c_infer.TypeQueryContext {
         return .{
             .type_aliases = &self.type_aliases,
-            .functions = &self.functions,
             .globals = &self.globals,
             .structs = &self.structs,
             .enums = &self.enums,

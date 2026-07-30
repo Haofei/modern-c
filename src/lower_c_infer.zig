@@ -13,7 +13,6 @@ const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
 
-const FnInfo = lower_c_model.FnInfo;
 const GlobalInfo = lower_c_model.GlobalInfo;
 const LocalInfo = lower_c_model.LocalInfo;
 const exprIsNumericLiteral = lower_c_expr.exprIsNumericLiteral;
@@ -29,7 +28,6 @@ pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTyp
 
 pub const TypeQueryContext = struct {
     type_aliases: *const std.StringHashMap(ast.TypeExpr),
-    functions: *const std.StringHashMap(FnInfo),
     globals: *const std.StringHashMap(GlobalInfo),
     structs: *const std.StringHashMap(ast.StructDecl),
     enums: *const std.StringHashMap(ast.EnumDecl),
