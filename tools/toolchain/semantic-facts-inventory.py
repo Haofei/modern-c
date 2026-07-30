@@ -1167,7 +1167,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn isDirectIndexBaseResultType(": 0,
         "return self.directCallResultTypeForExpr(expr, isArrayDirectCallResultType);": 0,
         "return self.directCallResultTypeForExpr(expr, isDirectIndexBaseResultType);": 0,
-        ".call => self.directCallResultTypeForExpr(expr, isNullableDirectCallResultType),": 1,
+        ".call => self.directCallResultTypeForExpr(expr, isNullableDirectCallResultType),": 0,
         "fn isArrayDirectCallResultType(": 1,
         "fn arrayDirectCallResultTypeForInferredLocal(": 0,
         "const array_ty = self.arrayReturnTypeForExpr(initializer) orelse return false;": 0,

@@ -3557,7 +3557,10 @@ const CEmitter = struct {
 
     fn nullableTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         return switch (expr.kind) {
-            .call => self.directCallResultTypeForExpr(expr, isNullableDirectCallResultType),
+            .call => blk: {
+                const ty = self.callReturnTypeForExpr(expr, locals) orelse break :blk null;
+                break :blk if (self.resolveAliasType(ty).kind == .nullable) ty else null;
+            },
             .cast => if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else null,
             .grouped => |inner| blk: {
                 const inferred = self.nullableTypeForExpr(inner.*, locals) orelse break :blk null;
