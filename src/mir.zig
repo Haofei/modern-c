@@ -741,7 +741,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             const aggregate_construction = if (fact.aggregate_construction) |kind| @tagName(kind) else "none";
             try out.print(
                 allocator,
-                "mir target_type_fact fn={s} kind={s} target_type={s} result_type={s} aggregate_construction={s} target_owner={s} target_index={s} recorded=true line={} column={} typed_span_id={}\n",
+                "mir target_type_fact fn={s} kind={s} target_type={s} result_type={s} aggregate_construction={s} target_owner={s} target_index={s} recorded=true line={} column={} typed_result_ty_id={} typed_span_id={} typed_target_owner_id={}\n",
                 .{
                     function.name,
                     @tagName(fact.kind),
@@ -752,7 +752,9 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                     target_index,
                     fact.source.line,
                     fact.source.column,
+                    if (fact.typed_result_ty.isValid()) fact.typed_result_ty.index() else std.math.maxInt(usize),
                     if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize),
+                    if (fact.typed_target_owner_id.isValid()) fact.typed_target_owner_id.index() else std.math.maxInt(usize),
                 },
             );
         }

@@ -243,9 +243,15 @@ test "MIR target-type owner identities mirror direct calls" {
     try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir target_owner_identity fn=caller id=0 spelling=callee") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir target_type_fact fn=caller kind=direct_call_result target_type=u32 result_type=u32 aggregate_construction=none target_owner=callee target_index=none recorded=true") != null);
+    const expected_fact_result = try std.fmt.allocPrint(std.testing.allocator, "typed_result_ty_id={}", .{result_type.id.index()});
+    defer std.testing.allocator.free(expected_fact_result);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_fact_result) != null);
     const expected_fact_span = try std.fmt.allocPrint(std.testing.allocator, "typed_span_id={}", .{result_span.id.index()});
     defer std.testing.allocator.free(expected_fact_span);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_fact_span) != null);
+    const expected_fact_owner = try std.fmt.allocPrint(std.testing.allocator, "typed_target_owner_id={}", .{owner.id.index()});
+    defer std.testing.allocator.free(expected_fact_owner);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_fact_owner) != null);
 }
 
 test "MIR verifier rejects target owner instruction identity drift" {

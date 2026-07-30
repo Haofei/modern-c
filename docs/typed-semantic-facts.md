@@ -56,9 +56,10 @@ The MIR verifier also checks instruction-carried `TypeId`, `SpanId`, and
 function identity tables when those IDs are present. Target-type admission also
 requires fact-carried `TypeId`, `SpanId`, and owner `SymbolId` mirrors to match
 their corresponding metadata instruction, and `lower-mir` prints the target-type
-`typed_span_id` on the owned fact row. Hand-built compatibility MIR may still
-leave unrelated typed fields invalid, but built MIR cannot retarget a typed
-instruction identity without a verifier diagnostic.
+`typed_result_ty_id`, `typed_span_id`, and `typed_target_owner_id` on the owned
+fact row. Hand-built compatibility MIR may still leave unrelated typed fields
+invalid, but built MIR cannot retarget a typed instruction identity without a
+verifier diagnostic.
 
 The completed backend AST-inference budget sets the current shrinking budget to
 eight registered backend families. This closes the budget action slice; each
