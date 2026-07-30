@@ -8,6 +8,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const mir = @import("mir.zig");
+const mir_syntax = @import("mir_syntax.zig");
 
 const Sha256 = std.crypto.hash.sha2.Sha256;
 
@@ -36,6 +37,7 @@ pub fn appendSourceMap(
 
     try out.appendSlice(allocator, "# mcmap v1\n");
     try appendDigestHeader(allocator, out, "generated_artifact_sha256", generated_c);
+    try appendMirFactsDigestHeader(allocator, out, mir_module);
     try appendOptionalDigestHeader(allocator, out, "source_sha256", metadata.source_sha256);
     try appendOptionalStringHeader(allocator, out, "lower_profile", metadata.profile);
     try appendOptionalBoolHeader(allocator, out, "lower_checks_optimize", metadata.checks_optimize);
@@ -75,6 +77,203 @@ fn appendDigestHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), nam
     try out.print(allocator, "# {s}=", .{name});
     try appendHexBytes(allocator, out, &digest);
     try out.appendSlice(allocator, "\n");
+}
+
+fn appendMirFactsDigestHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: *const mir.Module) !void {
+    var serialized: std.ArrayList(u8) = .empty;
+    defer serialized.deinit(allocator);
+    try appendMirFactsDigestInput(allocator, &serialized, module);
+    try appendDigestHeader(allocator, out, "mir_facts_sha256", serialized.items);
+}
+
+fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: *const mir.Module) !void {
+    try out.appendSlice(allocator, "mcmap-mir-facts-v1\n");
+    try out.print(allocator, "module symbols={d} functions={d} aggregate_return_summaries={d} aggregate_return_pointer_facts={d}\n", .{
+        module.symbol_identities.len,
+        module.functions.len,
+        module.aggregate_return_summaries.len,
+        module.aggregate_return_pointer_facts.len,
+    });
+    for (module.symbol_identities) |identity| {
+        try out.print(allocator, "symbol_identity id={} spelling={s}\n", .{ typedIndexOrMax(identity.id), identity.spelling });
+    }
+    for (module.aggregate_return_summaries) |fact| {
+        try out.print(allocator, "aggregate_return_summary callee={s} ", .{fact.callee});
+        try appendSourcePointForDigest(allocator, out, fact.source);
+    }
+    for (module.aggregate_return_pointer_facts) |fact| {
+        try out.print(allocator, "aggregate_return_pointer callee={s} field={s} provenance={s} pointer_kind={s} mutability={s} child={s} ", .{
+            fact.callee,
+            fact.field_path,
+            @tagName(fact.provenance),
+            @tagName(fact.pointer_shape.kind),
+            @tagName(fact.pointer_shape.mutability),
+            fact.pointer_shape.child,
+        });
+        try appendSourcePointForDigest(allocator, out, fact.source);
+    }
+    for (module.functions) |function| {
+        try out.print(allocator, "function name={s} symbol_id={} return={s} no_lang_trap={} irq_context={} extern={} c_abi={} params={} blocks={} trap_edges={} contracts={} ranges={} bounds={} integers={} const_get={} call_targets={} target_types={} pointer_provenance={} representations={} elided_bounds={}\n", .{
+            function.name,
+            typedIndexOrMax(function.typed_symbol_id),
+            function.return_ty.name(),
+            function.no_lang_trap,
+            function.irq_context,
+            function.is_extern,
+            function.c_abi,
+            function.param_count,
+            function.blocks.len,
+            function.trap_edges.len,
+            function.contract_regions.len,
+            function.range_facts.len,
+            function.bounds_facts.len,
+            function.integer_facts.len,
+            function.const_get_facts.len,
+            function.call_target_facts.len,
+            function.target_type_facts.len,
+            function.pointer_provenance_facts.len,
+            function.representation_facts.len,
+            function.elided_bounds.len,
+        });
+        for (function.type_identities) |identity| {
+            try out.print(allocator, "type_identity fn={s} id={} spelling={s}\n", .{ function.name, typedIndexOrMax(identity.id), identity.spelling });
+        }
+        for (function.span_identities) |identity| {
+            try out.print(allocator, "span_identity fn={s} id={} ", .{ function.name, typedIndexOrMax(identity.id) });
+            try appendSourcePointForDigest(allocator, out, identity.source);
+        }
+        for (function.value_identities) |identity| {
+            try out.print(allocator, "value_identity fn={s} id={} spelling={s}\n", .{ function.name, typedIndexOrMax(identity.id), identity.spelling });
+        }
+        for (function.target_owner_identities) |identity| {
+            try out.print(allocator, "target_owner_identity fn={s} id={} spelling={s}\n", .{ function.name, typedIndexOrMax(identity.id), identity.spelling });
+        }
+        for (function.blocks) |block| {
+            try out.print(allocator, "block fn={s} id={} typed_id={} kind={s} terminator={s} successors=", .{ function.name, block.id, typedIndexOrMax(block.typed_id), block.kind, block.terminator.name() });
+            for (block.successors, 0..) |successor, index| {
+                if (index != 0) try out.append(allocator, ',');
+                try out.print(allocator, "{}", .{successor});
+            }
+            try out.appendSlice(allocator, " typed_successors=");
+            for (block.typed_successors, 0..) |successor, index| {
+                if (index != 0) try out.append(allocator, ',');
+                try out.print(allocator, "{}", .{typedIndexOrMax(successor)});
+            }
+            try out.append(allocator, '\n');
+            for (block.instructions) |instruction| {
+                try out.print(allocator, "instr fn={s} block={} kind={s} result={s} typed_result={} detail={s} target_type={s} aggregate={s} const_index={} target_owner={s} typed_target_owner={} target_index={} value_id={s} typed_value={} typed_span={} line={} column={} offset={} len={}\n", .{
+                    function.name,
+                    block.id,
+                    @tagName(instruction.kind),
+                    instruction.result_ty.name(),
+                    typedIndexOrMax(instruction.typed_result_ty),
+                    instruction.detail,
+                    if (instruction.target_ty) |target_ty| mir_syntax.typeText(target_ty) else "none",
+                    if (instruction.aggregate_construction) |kind| @tagName(kind) else "none",
+                    optionalUsizeOrMax(instruction.const_index),
+                    instruction.target_owner orelse "none",
+                    optionalTypedIndexOrMax(instruction.typed_target_owner_id),
+                    optionalUsizeOrMax(instruction.target_index),
+                    instruction.value_id orelse "none",
+                    optionalTypedIndexOrMax(instruction.typed_value_id),
+                    typedIndexOrMax(instruction.typed_span_id),
+                    instruction.line,
+                    instruction.column,
+                    instruction.source_offset,
+                    instruction.source_len,
+                });
+            }
+        }
+        for (function.trap_edges) |edge| {
+            try out.print(allocator, "trap_edge fn={s} from={} trap={} kind={s} source={s} line={} column={} offset={} len={}\n", .{ function.name, edge.from_block, edge.trap_block, @tagName(edge.kind), @tagName(edge.source), edge.line, edge.column, edge.source_offset, edge.source_len });
+        }
+        for (function.contract_regions) |region| {
+            try out.print(allocator, "contract_region fn={s} id={} kind={s} begin={} end={}\n", .{ function.name, region.id, region.kind, region.begin_line, region.end_line });
+        }
+        for (function.range_facts) |fact| {
+            try out.print(allocator, "range_fact fn={s} region={} target={s} op={s} left={s} right={s} result={s} line={} column={}\n", .{ function.name, fact.region_id, fact.target, fact.op, fact.left, fact.right, fact.result_ty.name(), fact.line, fact.column });
+        }
+        for (function.bounds_facts) |fact| {
+            try out.print(allocator, "bounds_fact fn={s} kind={s} ", .{ function.name, @tagName(fact.kind) });
+            try appendSourcePointForDigest(allocator, out, fact.source);
+        }
+        for (function.integer_facts) |fact| {
+            try out.print(allocator, "integer_fact fn={s} literal={s} target={s} ", .{ function.name, fact.literal, fact.target_ty.name() });
+            try appendSourcePointForDigest(allocator, out, fact.source);
+        }
+        for (function.const_get_facts) |fact| {
+            try out.print(allocator, "const_get_fact fn={s} index={} ", .{ function.name, fact.index });
+            try appendSourcePointForDigest(allocator, out, fact.source);
+        }
+        for (function.call_target_facts) |fact| {
+            try out.print(allocator, "call_target_fact fn={s} kind={s} result={s} ", .{ function.name, @tagName(fact.kind), fact.result_ty.name() });
+            try appendSourcePointForDigest(allocator, out, fact.source);
+        }
+        for (function.target_type_facts) |fact| {
+            try out.print(allocator, "target_type_fact fn={s} kind={s} target={s} result={s} typed_result={} typed_span={} aggregate={s} target_owner={s} typed_target_owner={} target_index={} ", .{
+                function.name,
+                @tagName(fact.kind),
+                mir_syntax.typeText(fact.target_ty),
+                fact.result_ty.name(),
+                typedIndexOrMax(fact.typed_result_ty),
+                typedIndexOrMax(fact.typed_span_id),
+                if (fact.aggregate_construction) |kind| @tagName(kind) else "none",
+                fact.target_owner orelse "none",
+                typedIndexOrMax(fact.typed_target_owner_id),
+                optionalUsizeOrMax(fact.target_index),
+            });
+            try appendSourcePointForDigest(allocator, out, fact.source);
+        }
+        for (function.pointer_provenance_facts) |fact| {
+            try out.print(allocator, "pointer_provenance_fact fn={s} subject={s} field={s} element={} storage={s} provenance={s} pointer_kind={s} mutability={s} child={s} invalidation_reason={s} invalidation_policy={s} ", .{
+                function.name,
+                fact.subject,
+                fact.field_path orelse "none",
+                optionalUsizeOrMax(fact.element_index),
+                fact.storage orelse "none",
+                @tagName(fact.provenance),
+                @tagName(fact.pointer_shape.kind),
+                @tagName(fact.pointer_shape.mutability),
+                fact.pointer_shape.child,
+                @tagName(fact.invalidation_reason),
+                @tagName(fact.invalidation_policy),
+            });
+            try appendSourcePointForDigest(allocator, out, fact.source);
+        }
+        for (function.representation_facts) |fact| {
+            try out.print(allocator, "representation_fact fn={s} kind={s} detail={s} result={s} typed_result={} value_id={s} typed_value={} typed_span={} ", .{
+                function.name,
+                @tagName(fact.kind),
+                fact.detail,
+                fact.result_ty.name(),
+                typedIndexOrMax(fact.typed_result_ty),
+                fact.value_id,
+                typedIndexOrMax(fact.typed_value_id),
+                typedIndexOrMax(fact.typed_span_id),
+            });
+            try appendSourcePointForDigest(allocator, out, fact.source);
+        }
+        for (function.elided_bounds) |source| {
+            try out.print(allocator, "elided_bounds fn={s} ", .{function.name});
+            try appendSourcePointForDigest(allocator, out, source);
+        }
+    }
+}
+
+fn appendSourcePointForDigest(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source: mir.SourcePoint) !void {
+    try out.print(allocator, "line={} column={} offset={} len={}\n", .{ source.line, source.column, source.offset, source.len });
+}
+
+fn typedIndexOrMax(index: anytype) usize {
+    return if (index.isValid()) index.index() else std.math.maxInt(usize);
+}
+
+fn optionalTypedIndexOrMax(index: anytype) usize {
+    return if (index) |value| typedIndexOrMax(value) else std.math.maxInt(usize);
+}
+
+fn optionalUsizeOrMax(value: ?usize) usize {
+    return value orelse std.math.maxInt(usize);
 }
 
 fn appendOptionalDigestHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, maybe_digest: ?[Sha256.digest_length]u8) !void {
