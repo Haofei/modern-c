@@ -146,6 +146,46 @@ test "MIR verifier rejects function symbol identity drift" {
     try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_SYMBOL_ID") != null);
 }
 
+test "MIR verifier rejects instruction typed identity drift" {
+    const source =
+        \\fn main() -> u32 {
+        \\    let x: u32 = 1;
+        \\    return x;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_instruction_identity.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var type_drift_mir = try mir.build(std.testing.allocator, module);
+    defer type_drift_mir.deinit();
+    var type_drift_fn = functionByNameMut(&type_drift_mir, "main").?;
+    type_drift_fn.blocks[0].instructions[0].typed_result_ty = TypeId.fromIndex(4096);
+
+    var type_reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_instruction_type_identity.mc", source);
+    defer type_reporter.deinit();
+    try mir.verifyBuiltMir(type_drift_mir, &type_reporter);
+    try std.testing.expect(type_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, type_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
+
+    var span_drift_mir = try mir.build(std.testing.allocator, module);
+    defer span_drift_mir.deinit();
+    var span_drift_fn = functionByNameMut(&span_drift_mir, "main").?;
+    span_drift_fn.blocks[0].instructions[0].typed_span_id = SpanId.fromIndex(4096);
+
+    var span_reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_instruction_span_identity.mc", source);
+    defer span_reporter.deinit();
+    try mir.verifyBuiltMir(span_drift_mir, &span_reporter);
+    try std.testing.expect(span_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, span_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
+}
+
 test "MIR dump exposes bounded FFI parameter contracts" {
     const source =
         \\extern "C" fn dma_submit(cpu: [*]mut u8, dma: DmaAddr, len: usize) -> i32;

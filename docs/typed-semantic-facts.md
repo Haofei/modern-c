@@ -48,6 +48,12 @@ those typed ids, and
 legacy string/value/type identity remains live until the later Phase 2 slices
 move those domains onto typed IDs.
 
+The MIR verifier also checks instruction-carried `TypeId`, `SpanId`, and
+`ValueId` rows against the owning function identity tables when those IDs are
+present. Hand-built compatibility MIR may still leave the typed fields invalid,
+but built MIR cannot retarget a typed instruction identity without a verifier
+diagnostic.
+
 The completed backend AST-inference budget sets the current shrinking budget to
 eight registered backend families. This closes the budget action slice; each
 budgeted family still needs a later migration, reduction, or accepted limitation

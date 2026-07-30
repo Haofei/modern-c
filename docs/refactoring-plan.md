@@ -124,6 +124,9 @@ Current status:
   typed `ValueId` representation facts, typed representation result identities,
   typed representation span identities, verifier/admission drift checks, and
   the unit tests that check the public model.
+- The MIR verifier now validates any instruction-carried typed result, span, and
+  value identity against the owning function tables, so a prebuilt MIR artifact
+  cannot silently retarget those IDs before later backend admission.
 
 Work:
 

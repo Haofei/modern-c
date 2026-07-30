@@ -982,6 +982,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
     verifyModuleSymbolIdentities(mir, reporter);
     for (mir.functions) |function| {
         verifyFunctionCfg(function, reporter);
+        verifyFunctionInstructionIdentities(function, reporter);
 
         if (!isVoidLike(function.return_ty)) {
             if (functionFallsThrough(function)) |point| {
@@ -1192,6 +1193,43 @@ fn verifyModuleSymbolIdentities(module: Module, reporter: *diagnostics.Reporter)
             .{},
         );
     }
+}
+
+fn verifyFunctionInstructionIdentities(function: Function, reporter: *diagnostics.Reporter) void {
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (!instructionTypedIdentitiesValid(function, instruction)) {
+                reporter.err(
+                    sourcePointSpan(.{ .line = instruction.line, .column = instruction.column, .offset = instruction.source_offset, .len = instruction.source_len }),
+                    "E_MIR_IDENTITY: MIR verifier found malformed instruction identity",
+                    .{},
+                );
+                return;
+            }
+        }
+    }
+}
+
+fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction) bool {
+    if (instruction.typed_result_ty.isValid()) {
+        const index = instruction.typed_result_ty.index();
+        if (index >= function.type_identities.len) return false;
+        if (!std.mem.eql(u8, function.type_identities[index].spelling, instruction.result_ty.name())) return false;
+    }
+    if (instruction.typed_span_id.isValid()) {
+        const index = instruction.typed_span_id.index();
+        if (index >= function.span_identities.len) return false;
+        const source = function.span_identities[index].source;
+        if (source.line != instruction.line or source.column != instruction.column or source.offset != instruction.source_offset or source.len != instruction.source_len) return false;
+    }
+    if (instruction.typed_value_id) |value_id| {
+        if (!value_id.isValid()) return false;
+        const index = value_id.index();
+        if (index >= function.value_identities.len) return false;
+        const spelling = instruction.value_id orelse return false;
+        if (!std.mem.eql(u8, function.value_identities[index].spelling, spelling)) return false;
+    }
+    return true;
 }
 
 /// Backends consume the owned representation fact table as an admission gate.
@@ -6532,14 +6570,9 @@ const FunctionBuilder = struct {
     }
 
     fn addConstGetInstr(self: *FunctionBuilder, ty: ValueType, index: usize, span: ast.Span) !void {
-        try self.blocks.items[self.current].instructions.append(self.allocator, .{
-            .kind = .index,
-            .result_ty = ty,
-            .detail = "const_get",
-            .const_index = index,
-            .line = span.line,
-            .column = span.column,
-        });
+        try self.addInstr(.index, "const_get", ty, span);
+        const instructions = &self.blocks.items[self.current].instructions;
+        instructions.items[instructions.items.len - 1].const_index = index;
     }
 
     fn addCallTargetFact(self: *FunctionBuilder, kind: CallTargetKind, result_ty: ValueType, span: ast.Span) !void {
