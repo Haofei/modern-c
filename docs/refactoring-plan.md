@@ -41,6 +41,147 @@ layout, provenance, control flow, or safety decisions.
 | P2 | Kernel trust-chain hardening | Keep secure boot, Agent, and hardware claims profile-scoped until compiler authority is stable. |
 | P2 | Selfhost / advanced LSP / new product surface | Useful, but not allowed to become a second semantic authority or production blocker yet. |
 
+## Milestone plan
+
+Use these milestones to decide what to implement next. They are ordered by
+miscompile risk first, product surface second.
+
+### M0 — stop semantic authority growth
+
+Purpose: prevent new backend-local inference while existing helpers are retired.
+
+Allowed work:
+
+- lower an exact-count inventory number;
+- convert one backend decision to a MIR/semantic fact;
+- add a guard that fails if a backend starts reading AST/type spelling for a
+  migrated semantic family;
+- document a temporary mechanics-only exception with an exact count.
+
+Exit criteria:
+
+- `semantic-facts-inventory-test` passes;
+- no new backend helper can infer type, representation, ABI, provenance, control
+  flow, or safety facts without inventory coverage;
+- every touched C/LLVM path either consumes the same fact or has a documented
+  conservative/fail-closed policy.
+
+### M1 — make typed MIR carry backend-critical identity
+
+Purpose: move the high-risk facts into verifier-owned tables or typed IDs.
+
+Implementation order:
+
+1. call target identity and call result facts;
+2. optional/result representation;
+3. ABI/layout-sensitive aggregate facts;
+4. load/store pointer provenance;
+5. trap/runtime-check/control-effect facts.
+
+Exit criteria:
+
+- production lowering positions do not accept `.unknown` except through an
+  explicit diagnostic/debug allowlist;
+- malformed MIR states are rejected before backend admission;
+- backend code does not reconstruct migrated facts from AST shape or string
+  spelling.
+
+### M2 — narrow `VerifiedProgram` into the backend admission boundary
+
+Purpose: make codegen admission mean "verified semantic input", not
+"verified MIR plus syntax escape hatches".
+
+Implementation order:
+
+1. introduce typed views for symbol spelling, source spans, layouts, ABI facts,
+   representation facts, and target config;
+2. replace one AST ingress at a time with one of those views;
+3. remove direct backend entrypoints that bypass `VerifiedProgram`;
+4. keep remaining syntax reads mechanics-only and exact-count-gated.
+
+Exit criteria:
+
+- production C/LLVM entrypoints require `VerifiedProgram`;
+- backend APIs no longer expose `ast.Module` as a general semantic input;
+- adding a backend does not require reimplementing semantic analysis.
+
+### M3 — bind artifact provenance
+
+Purpose: ensure emitted bytes, source maps, options, and tool identity describe
+the same artifact.
+
+Implementation order:
+
+1. add a shared artifact metadata object;
+2. attach artifact digest and lowering options to source maps;
+3. record source/fact/MIR digest and compiler/toolchain identity;
+4. make `build` write the final executable transactionally.
+
+Exit criteria:
+
+- wrong artifact/map pairing is rejected;
+- interrupted or failed `build` does not corrupt an existing output;
+- release evidence can name the same artifact digest as local builds.
+
+### M4 — generate governance from manifests
+
+Purpose: stop Markdown, CI, release, and build files from carrying competing
+status truth.
+
+Implementation order:
+
+1. validate `gate-manifest.json`, `profile-manifest.json`,
+   `tcb-components.json`, and `review-risk-register.yaml` together;
+2. make build/CI assertions consume manifest IDs;
+3. generate Markdown summaries from manifests where practical;
+4. keep active prose navigational rather than authoritative.
+
+Exit criteria:
+
+- missing or renamed blocking gates fail manifest tests;
+- active Markdown has no independent High/Critical open/closed counters;
+- profile claims point to manifest IDs and risk IDs.
+
+### M5 — close profile-scoped kernel production blockers
+
+Purpose: keep kernel/security work from displacing compiler P0 while still
+preserving the production path.
+
+Implementation order:
+
+1. exact-byte `VerifiedBundle` API closure;
+2. capability/right mint isolation;
+3. persistent audit/rollback identity;
+4. vendored TCB advisory intake;
+5. real hardware qualification gates.
+
+Exit criteria:
+
+- production loader cannot express verify-A/load-B;
+- ordinary kernel components cannot mint authority by import convention;
+- QEMU evidence is clearly separated from real-device production evidence.
+
+## First implementation backlog
+
+These are intentionally small patch candidates. Do them in order unless a test
+failure forces a narrower fix.
+
+| Order | Patch candidate | Proof |
+|---:|---|---|
+| 1 | Retire or exact-gate the next C backend inference helper from `semantic-facts-inventory.py`. | Inventory count decreases or exception count is locked. |
+| 2 | Replace one remaining call-family type lookup with a MIR call/result fact. | Touched call fixtures pass on C and LLVM. |
+| 3 | Move one optional/result representation decision into a typed MIR fact. | C/LLVM optional fixtures and malformed-MIR rejection pass. |
+| 4 | Replace one backend AST read with a typed symbol/source-spelling view. | Backend AST semantic-read count does not grow. |
+| 5 | Add a regression for a migrated fact proving backend AST reconstruction would fail. | Regression fails before the code change or inventory guard. |
+| 6 | Introduce the first shared artifact metadata struct without changing emitted bytes. | Emit tests compare unchanged artifacts plus new metadata. |
+| 7 | Bind C source-map output to artifact digest. | Wrong map/artifact pairing is rejected. |
+| 8 | Make `mcc build` final output transactional. | Interrupted/failing build leaves previous output intact. |
+| 9 | Convert one gate/build assertion to consume `gate-manifest.json`. | Manifest test catches a missing gate ID. |
+| 10 | Prototype the next `VerifiedBundle` API closure behind the kernel profile. | Verify/load substitution tests fail closed. |
+
+Default next action: continue with backlog items 1–5 until M0/M1 stop finding
+backend semantic authority regressions.
+
 ## P0 — Compiler semantic authority
 
 ### P0.1 Retire backend-local semantic inference
