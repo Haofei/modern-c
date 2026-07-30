@@ -77,6 +77,12 @@ seven registered backend families. This closes the budget action slice; each
 budgeted family still needs a later migration, reduction, or accepted limitation
 decision.
 
+Within that budget, C's legacy `source_type_for_expr` callback is now
+exact-count gated: one callback slot and six remaining fallback call sites in
+`src/lower_c_infer.zig`. These sites are quarantine boundaries, not new
+authority; future migration slices must reduce the count or replace them with
+typed facts.
+
 The completed scalar pointer deref default audit records the current C/LLVM
 decision entry points and default behavior for missing provenance. It closes the
 audit action slice, not the escaped-pointer or aggregate-return CFG policy
