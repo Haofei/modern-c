@@ -1451,10 +1451,11 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "hasCallTargetFact(ctx.mir_function.*, .bind, expr.span)": 1,
         "fn hasCallTargetFact(": 1,
         "fn byteViewCallResultType(": 1,
-        "mir_call_target_kind(ctx.emit_ctx, call.callee.*.span)": 1,
+        "mir_call_target_kind(ctx.emit_ctx, call.callee.*.span)": 2,
         "mir_target_type(ctx.emit_ctx, .byte_view_result": 1,
         "byteViewCallReturnTypeForCall": 0,
         "mir_target_type(ctx.emit_ctx, .reduce_source": 1,
+        "fn reduceCallSourceType(": 1,
         "fn reduceCallElementType(": 0,
     },
     "src/lower_c_arith.zig": {

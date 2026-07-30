@@ -185,6 +185,8 @@ fn byteViewCallResultType(ctx: TypeArtifactContext, call: anytype) ?ast.TypeExpr
 
 fn reduceCallSourceType(ctx: TypeArtifactContext, call: anytype) ?ast.TypeExpr {
     if (call.type_args.len != 1 or call.args.len != 1) return null;
+    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
+    if (kind != .reduce_sum_checked and kind != .reduce_sum_left and kind != .reduce_sum_fast) return null;
     return ctx.mir_target_type(ctx.emit_ctx, .reduce_source, call.args[0].span);
 }
 
