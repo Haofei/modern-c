@@ -1093,6 +1093,9 @@ fn clangToolchainIdentity(allocator: std.mem.Allocator, io: std.Io, clang_bin: [
         }
     }.make;
 
+    const digest_identity = try clangExecutableDigestIdentity(allocator, io, clang_bin);
+    defer if (digest_identity) |identity| allocator.free(identity);
+
     const argv = [_][]const u8{ clang_bin, "--version" };
     const result = std.process.run(allocator, io, .{
         .argv = &argv,
@@ -1114,7 +1117,60 @@ fn clangToolchainIdentity(allocator: std.mem.Allocator, io: std.Io, clang_bin: [
     const first_line_end = std.mem.indexOfScalar(u8, result.stdout, '\n') orelse result.stdout.len;
     const first_line = std.mem.trim(u8, result.stdout[0..first_line_end], "\r\n\t ");
     if (first_line.len == 0) return fallback(allocator, clang_bin);
+    if (digest_identity) |identity| {
+        return std.fmt.allocPrint(allocator, "clang={s};{s};version={s}", .{ clang_bin, identity, first_line });
+    }
     return std.fmt.allocPrint(allocator, "clang={s};version={s}", .{ clang_bin, first_line });
+}
+
+fn clangExecutableDigestIdentity(allocator: std.mem.Allocator, io: std.Io, clang_bin: []const u8) !?[]const u8 {
+    if (hasPathSeparator(clang_bin)) {
+        const path = try resolveExplicitToolPath(allocator, io, clang_bin);
+        defer allocator.free(path);
+        return try toolDigestIdentityForPath(allocator, io, path);
+    }
+
+    const raw_path = std.c.getenv("PATH") orelse return null;
+    var entries = std.mem.splitScalar(u8, std.mem.span(raw_path), std.fs.path.delimiter);
+    while (entries.next()) |entry| {
+        if (entry.len == 0) continue;
+        const candidate = try std.fs.path.join(allocator, &.{ entry, clang_bin });
+        defer allocator.free(candidate);
+        if (try toolDigestIdentityForPath(allocator, io, candidate)) |identity| return identity;
+    }
+    return null;
+}
+
+fn hasPathSeparator(path: []const u8) bool {
+    return std.mem.indexOfScalar(u8, path, '/') != null or
+        std.mem.indexOfScalar(u8, path, '\\') != null;
+}
+
+fn resolveExplicitToolPath(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(path)) return try allocator.dupe(u8, path);
+
+    var cwd_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const cwd_len = try std.Io.Dir.cwd().realPathFile(io, ".", &cwd_buffer);
+    return std.fs.path.join(allocator, &.{ cwd_buffer[0..cwd_len], path });
+}
+
+fn toolDigestIdentityForPath(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !?[]const u8 {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_artifact_metadata_bytes)) catch return null;
+    defer allocator.free(bytes);
+    const digest = backend.sha256Bytes(bytes);
+    const digest_hex = try allocHexDigest(allocator, digest);
+    defer allocator.free(digest_hex);
+    const identity = try std.fmt.allocPrint(allocator, "path={s};sha256={s}", .{ path, digest_hex });
+    return identity;
+}
+
+fn allocHexDigest(allocator: std.mem.Allocator, digest: backend.Sha256Digest) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    for (digest) |byte| {
+        try out.print(allocator, "{x:0>2}", .{byte});
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 fn appendHostedBuildWrapper(allocator: std.mem.Allocator, raw_c: []const u8, out: *std.ArrayList(u8), source_path: []const u8) !void {

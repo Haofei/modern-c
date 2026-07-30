@@ -52,6 +52,9 @@ grep -Fq "# artifact_kind=host-executable" "$WORK/ok.mcmeta" || {
 grep -Fq "# toolchain_identity=" "$WORK/ok.mcmeta" || {
     echo "FAIL: mcc-build-test - build metadata missing toolchain identity"; cat "$WORK/ok.mcmeta"; exit 1;
 }
+grep -Eq "# toolchain_identity=.*sha256=[0-9a-f]{64}" "$WORK/ok.mcmeta" || {
+    echo "FAIL: mcc-build-test - build metadata missing clang executable digest"; cat "$WORK/ok.mcmeta"; exit 1;
+}
 
 "$MCC" build "$WORK/void_main.mc" -o "$WORK/void-main" >"$WORK/void-build.out" 2>"$WORK/void-build.err"
 set +e

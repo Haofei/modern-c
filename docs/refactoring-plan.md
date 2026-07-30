@@ -297,15 +297,18 @@ Current baseline:
 - `emit-c`, `emit-llvm`, and `build` now write sibling `.mcmeta` sidecars for
   `-o` outputs using the same `ArtifactBundle` header code as `emit-map`.
 - `build` computes the metadata digest from the linked executable bytes and
-  records the clang identity used for that link step.
+  records the clang identity, resolved executable path, and executable SHA-256
+  digest used for that link step when the tool can be resolved from `PATH` or an
+  explicit path.
 - Release packaging now emits `.tar.gz.mcmeta` sidecars for release tarballs and
   records them in `SHA256SUMS`, release inventory, CycloneDX SBOM, workflow
   upload/publish paths, and release-process documentation.
 - Release tarball sidecars record the Zig toolchain version, resolved path, and
   executable SHA-256 digest used by the packaging helper.
-- Producing source maps in the same artifact-writing transaction, recording a
-  full toolchain digest for every downstream tool invocation, and replacing all
-  release evidence prose with generated manifest rows remain open.
+- Producing source maps in the same artifact-writing transaction, recording
+  complete toolchain identities for every remaining downstream tool invocation,
+  and replacing all release evidence prose with generated manifest rows remain
+  open.
 
 Closure criteria:
 
