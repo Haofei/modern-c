@@ -17,7 +17,6 @@ boot components, release provenance, and multiple vendored TCBs.
 Those pieces are useful, but they should not all be treated as one production
 profile while the following core items remain open:
 
-- explicit `CompilationSession`;
 - typed MIR identity and verified facts as the backend boundary;
 - removal of backend-local semantic inference;
 - real module graph and incrementality;
@@ -35,7 +34,7 @@ Use these profiles when deciding whether a gate or subsystem is release-blocking
 | `selfhost-experimental` | Explicit bootstrap subset tests and fixpoint evidence | Any claim that selfhost is the production compiler or language authority |
 | `kernel-qemu` | QEMU boot/runtime workloads, kernel API model tests | Real hardware production support, power-loss/durable security claims |
 | `production-kernel` | Exact-byte bundle, persistent policy/audit, real hardware soak, external audit, minimal TCB | QEMU-only evidence, metadata-only secure-boot demos |
-| `developer-tools` | Basic diagnostics, formatting, navigation smoke, LSP resource limits | Low-latency incremental service claims until `CompilationSession`/query DB exists |
+| `developer-tools` | Basic diagnostics, formatting, navigation smoke, LSP resource limits | Low-latency incremental service claims until a query DB / persistent compiler service exists |
 
 ## Immediate simplification rules
 

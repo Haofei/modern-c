@@ -20,13 +20,10 @@ risks:
   - id: ARCH-COMPILATION-SESSION
     severity: high
     scope: compiler-platform
-    status: open
-    admitted_subset_status: qualified-with-cli-process-isolation
-    blocks:
-      - in-process-compiler-service
-      - parallel-compilation-library
-      - unrestricted-production-compiler
-    summary: Replace process-global compilation state with explicit request-scoped CompilationSession.
+    status: closed
+    admitted_subset_status: request-scoped-session-gated
+    blocks: []
+    summary: Process-global compilation state has been replaced by request-scoped CompilationSession helpers for compile-like CLI commands; compilation-session-inventory-test keeps the seam anchored.
 
   - id: ARCH-TYPED-MIR
     severity: high
