@@ -315,7 +315,10 @@ pub fn resultTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: *std.Str
 }
 
 pub fn resultTypeFromSourceExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    const ty = operandEmitType(ctx, expr, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, expr, locals) orelse return null;
+    const ty = switch (expr.kind) {
+        .cast => |node| node.ty.*,
+        else => operandEmitType(ctx, expr, locals) orelse return null,
+    };
     const resolved = resolveAliasType(ctx, ty);
     return if (resultPayloadTypeForTag(resolved, "ok") != null and resultPayloadTypeForTag(resolved, "err") != null) ty else null;
 }
