@@ -154,9 +154,8 @@ pub fn exprIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
         // facts. Syntax identifies the operation, but it must not independently
         // authorize boolean lowering when that fact is absent.
         .bool_literal => sourceExpressionResultIsBool(ctx, expr, true),
-        .ident => |ident| identIsBoolForEmission(ctx, ident.text, locals),
+        .ident, .index, .member => operandIsBoolForEmission(ctx, expr, locals),
         .call => if (ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals)) |ty| isBoolType(ty) else false,
-        .index, .member => operandIsBoolForEmission(ctx, expr, locals),
         .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
             exprIsBoolForEmission(ctx, inner.*, locals)
         else if (ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span)) |ty|
@@ -173,18 +172,6 @@ fn sourceExpressionResultIsBool(ctx: TypeQueryContext, expr: ast.Expr, generated
     if (expr.span.line == 0 or expr.span.column == 0) return generated_fallback;
     const ty = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return false;
     return isBoolType(resolveAliasType(ctx, ty));
-}
-
-fn identIsBoolForEmission(ctx: TypeQueryContext, name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) bool {
-    if (locals) |local_set| {
-        if (local_set.get(name)) |info| {
-            if (info.source_ty) |ty| return isBoolType(ty);
-        }
-    }
-    if (ctx.globals.get(name)) |global| {
-        if (global.source_ty) |ty| return isBoolType(ty);
-    }
-    return false;
 }
 
 fn operandIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {

@@ -388,7 +388,9 @@ private enum-call wrapper has also been inlined into the enum value query, so
 enum-valued calls use the same common call-result query before checking enum
 identity. The enum variant-path wrapper has also been removed; `Enum.variant`
 now reads the MIR-owned `enum_variant_path_result` row directly from the enum
-value query. The
+value query. Boolean identifier classification now uses the same operand type
+query as member and index boolean checks, retiring the separate identifier-only
+helper. The
 remaining `lower_c_infer` public entrypoints are now individually exact-count
 gated in the semantic-facts inventory so this registered inference surface
 cannot grow without an explicit inventory update. Direct-call index lowering now
