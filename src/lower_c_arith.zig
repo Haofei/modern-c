@@ -394,8 +394,17 @@ fn uncheckedInferredLocalType(ctx: Context, initializer: ast.Expr, locals: *std.
     return switch (initializer.kind) {
         .grouped => |inner| try uncheckedInferredLocalType(ctx, inner.*, locals, range_target),
         .call => |call| try uncheckedCallResultType(ctx, call, initializer.span, locals, range_target),
-        else => ctx.numeric_expr_type(ctx.emit_ctx, initializer, locals),
+        else => sourceExpressionResultType(ctx, initializer) orelse generatedUncheckedNumericType(ctx, initializer, locals),
     };
+}
+
+fn sourceExpressionResultType(ctx: Context, initializer: ast.Expr) ?ast.TypeExpr {
+    return ctx.mir_target_type(ctx.emit_ctx, .expression_result, initializer.span);
+}
+
+fn generatedUncheckedNumericType(ctx: Context, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    if (initializer.span.line != 0 and initializer.span.column != 0) return null;
+    return ctx.numeric_expr_type(ctx.emit_ctx, initializer, locals);
 }
 
 fn uncheckedCallResultType(ctx: Context, call: anytype, call_span: ast.Span, locals: *std.StringHashMap(LocalInfo), range_target: []const u8) !?ast.TypeExpr {

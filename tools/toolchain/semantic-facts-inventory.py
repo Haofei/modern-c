@@ -1467,6 +1467,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mir_target_type(ctx.emit_ctx, .domain_payload": 1,
         "mir_target_type(ctx.emit_ctx, .domain_result": 1,
         "numeric_expr_type(ctx.emit_ctx, member.base.*": 0,
+        "fn sourceExpressionResultType(": 1,
+        "fn generatedUncheckedNumericType(": 1,
+        "ctx.numeric_expr_type(ctx.emit_ctx, initializer, locals)": 1,
     },
     "src/lower_c_access.zig": {
         "SliceReturnTypeForCallFn": 0,

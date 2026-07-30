@@ -457,6 +457,11 @@ backend semantic inference family must either reuse an existing registered
 family or deliberately update this budget. A migration slice that removes a
 family from backend authority must reduce the count.
 
+Current M0 reduction: C unchecked no-overflow inferred-local initialization now
+uses the source expression's complete `expression_result` fact for non-call
+source expressions. The remaining numeric-expression fallback is exact-count
+gated to generated zero-span nodes that cannot be keyed by source span.
+
 | Family | Budget class | Reduction condition |
 |---|---|---|
 | `c-expression-type-inference` | Backend AST inference budget | C expression type decisions that affect lowering are provided by typed facts/MIR or rejected when absent. |
