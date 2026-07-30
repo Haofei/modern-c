@@ -3439,6 +3439,61 @@ test "lower-c inferred local array and slice calls require MIR types" {
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_slice_result, &stale_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 }
 
+test "lower-c inferred local enum and tagged-union calls require MIR types" {
+    const source =
+        \\enum Mode { read, write }
+        \\union Token { number: i64, eof }
+        \\fn make_mode() -> Mode { return Mode.write; }
+        \\fn make_token() -> Token { return Token.number(7); }
+        \\fn enum_caller() -> Mode {
+        \\    let mode = make_mode();
+        \\    return mode;
+        \\}
+        \\fn union_caller() -> Token {
+        \\    let token = make_token();
+        \\    return token;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_inferred_local_enum_union_call_types.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "Mode mode = make_mode()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "Token token = make_token()") != null);
+
+    var missing_enum_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_enum_result.deinit();
+    try removeTargetTypeKindForFunction(&missing_enum_result, "enum_caller", .direct_call_result);
+    var missing_enum_result_output: std.ArrayList(u8) = .empty;
+    defer missing_enum_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_enum_result, &missing_enum_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
+
+    var stale_enum_result = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_enum_result.deinit();
+    try renameTargetTypeFactForFunction(&stale_enum_result, "enum_caller", .direct_call_result, "u64");
+    var stale_enum_result_output: std.ArrayList(u8) = .empty;
+    defer stale_enum_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_enum_result, &stale_enum_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
+
+    var missing_union_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_union_result.deinit();
+    try removeTargetTypeKindForFunction(&missing_union_result, "union_caller", .direct_call_result);
+    var missing_union_result_output: std.ArrayList(u8) = .empty;
+    defer missing_union_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_union_result, &missing_union_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
+
+    var stale_union_result = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_union_result.deinit();
+    try renameTargetTypeFactForFunction(&stale_union_result, "union_caller", .direct_call_result, "u64");
+    var stale_union_result_output: std.ArrayList(u8) = .empty;
+    defer stale_union_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_union_result, &stale_union_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
+}
+
 test "lower-c inferred local Result direct calls require MIR types" {
     const source =
         \\enum Error: u8 { failed = 1 }

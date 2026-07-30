@@ -5210,104 +5210,100 @@ const CEmitter = struct {
     }
 
     fn emitArrayCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const array_ty = self.arrayDirectCallResultTypeForInferredLocal(initializer) orelse return false;
+        const array_ty = self.directCallResultTypeForInferredLocal(initializer, isArrayDirectCallResultType) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, array_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
-    fn arrayDirectCallResultTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) ?ast.TypeExpr {
-        return switch (initializer.kind) {
-            .grouped => |inner| self.arrayDirectCallResultTypeForInferredLocal(inner.*),
-            .call => |call| blk: {
-                const fn_name = calleeIdentName(call.callee.*) orelse break :blk null;
-                const fact = self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null) orelse break :blk null;
-                const resolved = self.resolveAliasType(fact.target_ty);
-                break :blk if (resolved.kind == .array) fact.target_ty else null;
-            },
-            else => null,
-        };
+    fn isArrayDirectCallResultType(self: *CEmitter, ty: ast.TypeExpr) bool {
+        return self.resolveAliasType(ty).kind == .array;
     }
 
     fn emitSliceCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const slice_ty = self.sliceDirectCallResultTypeForInferredLocal(initializer) orelse return false;
+        const slice_ty = self.directCallResultTypeForInferredLocal(initializer, isSliceDirectCallResultType) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, slice_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
-    fn sliceDirectCallResultTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) ?ast.TypeExpr {
-        return switch (initializer.kind) {
-            .grouped => |inner| self.sliceDirectCallResultTypeForInferredLocal(inner.*),
-            .call => |call| blk: {
-                const fn_name = calleeIdentName(call.callee.*) orelse break :blk null;
-                const fact = self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null) orelse break :blk null;
-                const resolved = self.resolveAliasType(fact.target_ty);
-                break :blk if (resolved.kind == .slice) fact.target_ty else null;
-            },
-            else => null,
-        };
+    fn isSliceDirectCallResultType(self: *CEmitter, ty: ast.TypeExpr) bool {
+        return self.resolveAliasType(ty).kind == .slice;
     }
 
     fn emitEnumCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const enum_ty = self.enumReturnTypeForExpr(initializer) orelse return false;
+        const enum_ty = self.directCallResultTypeForInferredLocal(initializer, isEnumDirectCallResultType) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, enum_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
+    fn isEnumDirectCallResultType(self: *CEmitter, ty: ast.TypeExpr) bool {
+        const enum_name = ast_query.typeName(self.resolveAliasType(ty)) orelse return false;
+        return self.enums.contains(enum_name);
+    }
+
     fn emitTaggedUnionCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const union_ty = self.taggedUnionReturnTypeForExpr(initializer) orelse return false;
+        const union_ty = self.qualifiedUnionResultTypeForInferredLocal(initializer) orelse
+            self.directCallResultTypeForInferredLocal(initializer, isTaggedUnionDirectCallResultType) orelse
+            return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, union_ty)) orelse union_ty;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
+    fn qualifiedUnionResultTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) ?ast.TypeExpr {
+        return switch (initializer.kind) {
+            .grouped => |inner| self.qualifiedUnionResultTypeForInferredLocal(inner.*),
+            .call => if (self.mirTargetTypeFactAt(.qualified_union_result, initializer.span)) |fact| fact.target_ty else null,
+            else => null,
+        };
+    }
+
+    fn isTaggedUnionDirectCallResultType(self: *CEmitter, ty: ast.TypeExpr) bool {
+        const type_name = ast_query.typeName(self.resolveAliasType(ty)) orelse return false;
+        return self.tagged_unions.contains(type_name);
+    }
+
     fn emitResultCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const result_ty = self.resultDirectCallResultTypeForInferredLocal(initializer) orelse return false;
+        const result_ty = self.directCallResultTypeForInferredLocal(initializer, isResultDirectCallResultType) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, result_ty)) orelse result_ty;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
-    fn resultDirectCallResultTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) ?ast.TypeExpr {
-        return switch (initializer.kind) {
-            .grouped => |inner| self.resultDirectCallResultTypeForInferredLocal(inner.*),
-            .call => |call| blk: {
-                const fn_name = calleeIdentName(call.callee.*) orelse break :blk null;
-                const fact = self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null) orelse break :blk null;
-                const resolved = self.resolveAliasType(fact.target_ty);
-                const is_result = switch (resolved.kind) {
-                    .generic => |generic| std.mem.eql(u8, generic.base.text, "Result"),
-                    else => false,
-                };
-                break :blk if (is_result) fact.target_ty else null;
-            },
-            else => null,
+    fn isResultDirectCallResultType(self: *CEmitter, ty: ast.TypeExpr) bool {
+        const resolved = self.resolveAliasType(ty);
+        return switch (resolved.kind) {
+            .generic => |generic| std.mem.eql(u8, generic.base.text, "Result"),
+            else => false,
         };
     }
 
     fn emitNullableCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const nullable_ty = self.nullableDirectCallResultTypeForInferredLocal(initializer) orelse return false;
+        const nullable_ty = self.directCallResultTypeForInferredLocal(initializer, isNullableDirectCallResultType) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, nullable_ty)) orelse nullable_ty;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
-    fn nullableDirectCallResultTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) ?ast.TypeExpr {
+    fn isNullableDirectCallResultType(self: *CEmitter, ty: ast.TypeExpr) bool {
+        return self.resolveAliasType(ty).kind == .nullable;
+    }
+
+    fn directCallResultTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr, comptime matches: fn (*CEmitter, ast.TypeExpr) bool) ?ast.TypeExpr {
         return switch (initializer.kind) {
-            .grouped => |inner| self.nullableDirectCallResultTypeForInferredLocal(inner.*),
+            .grouped => |inner| self.directCallResultTypeForInferredLocal(inner.*, matches),
             .call => |call| blk: {
                 const fn_name = calleeIdentName(call.callee.*) orelse break :blk null;
                 const fact = self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null) orelse break :blk null;
-                const resolved = self.resolveAliasType(fact.target_ty);
-                break :blk if (resolved.kind == .nullable) fact.target_ty else null;
+                break :blk if (matches(self, fact.target_ty)) fact.target_ty else null;
             },
             else => null,
         };
