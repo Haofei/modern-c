@@ -199,14 +199,18 @@ Deliverables:
 
 Current baseline:
 
-- `emit-map` consumes the same generated C bytes used for the map and records
-  their SHA-256 digest in the map header.
+- `emit-map` builds an `ArtifactBundle` header for the generated source-map
+  payload.
+- The bundle records the SHA-256 digest of the same generated C bytes used for
+  the map.
 - `emit-map` also records the exact source SHA-256 supplied by the request layer
   and the lowering profile/check/stub options used to produce the artifact.
 - `emit-map` records a SHA-256 digest over the MIR metadata and fact tables it
   consumes for source-map correlation.
-- Full toolchain/source-map digest binding remains open until `ArtifactBundle`
-  exists.
+- The bundle records the SHA-256 digest of the source-map payload (`# columns`
+  plus `entry` rows), so consumers can detect map-body substitution.
+- Full toolchain identity and standalone consumer mismatch-rejection tooling
+  remain open.
 
 Closure criteria:
 

@@ -22,6 +22,19 @@ pub const Metadata = struct {
     stub_asm: ?bool = null,
 };
 
+pub const ArtifactBundle = struct {
+    generated_artifact_sha256: [Sha256.digest_length]u8,
+    source_map_payload_sha256: [Sha256.digest_length]u8,
+    mir_facts_sha256: [Sha256.digest_length]u8,
+    source_sha256: ?[Sha256.digest_length]u8,
+    profile: ?[]const u8,
+    checks_optimize: ?bool,
+    checks_ksan: ?bool,
+    checks_msan: ?bool,
+    checks_csan: ?bool,
+    stub_asm: ?bool,
+};
+
 pub fn appendSourceMap(
     allocator: std.mem.Allocator,
     module: ast.Module,
@@ -35,20 +48,12 @@ pub fn appendSourceMap(
     var line_index = try buildGeneratedLineIndex(allocator, generated_c);
     defer line_index.deinit(allocator);
 
-    try out.appendSlice(allocator, "# mcmap v1\n");
-    try appendDigestHeader(allocator, out, "generated_artifact_sha256", generated_c);
-    try appendMirFactsDigestHeader(allocator, out, mir_module);
-    try appendOptionalDigestHeader(allocator, out, "source_sha256", metadata.source_sha256);
-    try appendOptionalStringHeader(allocator, out, "lower_profile", metadata.profile);
-    try appendOptionalBoolHeader(allocator, out, "lower_checks_optimize", metadata.checks_optimize);
-    try appendOptionalBoolHeader(allocator, out, "lower_checks_ksan", metadata.checks_ksan);
-    try appendOptionalBoolHeader(allocator, out, "lower_checks_msan", metadata.checks_msan);
-    try appendOptionalBoolHeader(allocator, out, "lower_checks_csan", metadata.checks_csan);
-    try appendOptionalBoolHeader(allocator, out, "lower_stub_asm", metadata.stub_asm);
-    try out.appendSlice(allocator, "# columns: kind symbol source_line source_column source_len generated_c_line source_path generated_c_path typed_ast_node mir_block object_symbol source_module source_qualname symbol_kind visibility backend_name origin\n");
+    var payload: std.ArrayList(u8) = .empty;
+    defer payload.deinit(allocator);
+    try payload.appendSlice(allocator, "# columns: kind symbol source_line source_column source_len generated_c_line source_path generated_c_path typed_ast_node mir_block object_symbol source_module source_qualname symbol_kind visibility backend_name origin\n");
     var mapper = SourceMapEmitter{
         .allocator = allocator,
-        .out = out,
+        .out = &payload,
         .source_path = source_path,
         .generated_c_path = generated_c_path orelse "-",
         .line_index = line_index.items,
@@ -56,6 +61,27 @@ pub fn appendSourceMap(
         .module_name = moduleNameFromPath(source_path),
     };
     try mapper.emitModule(module);
+
+    var mir_facts_input: std.ArrayList(u8) = .empty;
+    defer mir_facts_input.deinit(allocator);
+    try appendMirFactsDigestInput(allocator, &mir_facts_input, mir_module);
+
+    const bundle = ArtifactBundle{
+        .generated_artifact_sha256 = sha256Bytes(generated_c),
+        .source_map_payload_sha256 = sha256Bytes(payload.items),
+        .mir_facts_sha256 = sha256Bytes(mir_facts_input.items),
+        .source_sha256 = metadata.source_sha256,
+        .profile = metadata.profile,
+        .checks_optimize = metadata.checks_optimize,
+        .checks_ksan = metadata.checks_ksan,
+        .checks_msan = metadata.checks_msan,
+        .checks_csan = metadata.checks_csan,
+        .stub_asm = metadata.stub_asm,
+    };
+
+    try out.appendSlice(allocator, "# mcmap v1\n");
+    try appendArtifactBundleHeaders(allocator, out, bundle);
+    try out.appendSlice(allocator, payload.items);
 }
 
 pub fn appendLineDirective(
@@ -71,19 +97,29 @@ pub fn appendLineDirective(
     try out.appendSlice(allocator, "\"\n");
 }
 
-fn appendDigestHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, bytes: []const u8) !void {
+fn appendArtifactBundleHeaders(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bundle: ArtifactBundle) !void {
+    try appendDigestValueHeader(allocator, out, "generated_artifact_sha256", bundle.generated_artifact_sha256);
+    try appendDigestValueHeader(allocator, out, "source_map_payload_sha256", bundle.source_map_payload_sha256);
+    try appendDigestValueHeader(allocator, out, "mir_facts_sha256", bundle.mir_facts_sha256);
+    try appendOptionalDigestHeader(allocator, out, "source_sha256", bundle.source_sha256);
+    try appendOptionalStringHeader(allocator, out, "lower_profile", bundle.profile);
+    try appendOptionalBoolHeader(allocator, out, "lower_checks_optimize", bundle.checks_optimize);
+    try appendOptionalBoolHeader(allocator, out, "lower_checks_ksan", bundle.checks_ksan);
+    try appendOptionalBoolHeader(allocator, out, "lower_checks_msan", bundle.checks_msan);
+    try appendOptionalBoolHeader(allocator, out, "lower_checks_csan", bundle.checks_csan);
+    try appendOptionalBoolHeader(allocator, out, "lower_stub_asm", bundle.stub_asm);
+}
+
+fn sha256Bytes(bytes: []const u8) [Sha256.digest_length]u8 {
     var digest: [Sha256.digest_length]u8 = undefined;
     Sha256.hash(bytes, &digest, .{});
+    return digest;
+}
+
+fn appendDigestValueHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, digest: [Sha256.digest_length]u8) !void {
     try out.print(allocator, "# {s}=", .{name});
     try appendHexBytes(allocator, out, &digest);
     try out.appendSlice(allocator, "\n");
-}
-
-fn appendMirFactsDigestHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: *const mir.Module) !void {
-    var serialized: std.ArrayList(u8) = .empty;
-    defer serialized.deinit(allocator);
-    try appendMirFactsDigestInput(allocator, &serialized, module);
-    try appendDigestHeader(allocator, out, "mir_facts_sha256", serialized.items);
 }
 
 fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: *const mir.Module) !void {

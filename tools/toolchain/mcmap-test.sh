@@ -78,6 +78,13 @@ require_sha_header_present() {
     }
 }
 
+mcmap_payload_sha256() {
+    local map="$1"
+    local payload="$W/$(basename "$map").payload"
+    awk 'found { print } /^# columns:/ { found=1; print }' "$map" > "$payload"
+    sha256_file "$payload"
+}
+
 # 1. Stability: two emissions are byte-identical (stable IDs).
 "$MCC" emit-map "$SRC" > "$W/a.mcmap" 2>/dev/null
 "$MCC" emit-map "$SRC" > "$W/b.mcmap" 2>/dev/null
@@ -88,6 +95,7 @@ MAP="$W/a.mcmap"
 
 "$MCC" emit-c "$SRC" > "$W/generated.c" 2>/dev/null
 require_sha_header generated_artifact_sha256 "$(sha256_file "$W/generated.c")" "$MAP"
+require_sha_header source_map_payload_sha256 "$(mcmap_payload_sha256 "$MAP")" "$MAP"
 require_sha_header_present mir_facts_sha256 "$MAP"
 require_sha_header source_sha256 "$(sha256_file "$LOADED_SRC")" "$MAP"
 require_header lower_profile kernel "$MAP"
@@ -100,6 +108,7 @@ require_header lower_stub_asm false "$MAP"
 "$MCC" emit-map "$SRC" --profile=hosted --checks=elide-proven,ksan --stub-asm > "$W/hosted.mcmap" 2>/dev/null
 "$MCC" emit-c "$SRC" --profile=hosted --checks=elide-proven,ksan --stub-asm > "$W/hosted.c" 2>/dev/null
 require_sha_header generated_artifact_sha256 "$(sha256_file "$W/hosted.c")" "$W/hosted.mcmap"
+require_sha_header source_map_payload_sha256 "$(mcmap_payload_sha256 "$W/hosted.mcmap")" "$W/hosted.mcmap"
 require_sha_header_present mir_facts_sha256 "$W/hosted.mcmap"
 require_sha_header source_sha256 "$(sha256_file "$LOADED_SRC")" "$W/hosted.mcmap"
 require_header lower_profile hosted "$W/hosted.mcmap"
@@ -164,4 +173,4 @@ esac
 grep -qx "mc_renamed_export" "$W/c.syms"   || { echo "FAIL: mcmap-test — renamed symbol absent from C object"; exit 1; }
 grep -qx "mc_renamed_export" "$W/l.syms"   || { echo "FAIL: mcmap-test — renamed symbol absent from LLVM object"; exit 1; }
 
-echo "PASS: mcmap-test — stable typed-AST/MIR IDs, generated/source/MIR-facts digest + lowering-option metadata, and every exported object_symbol (incl. the #[backend_name] rename) matches the real C and LLVM object symbols"
+echo "PASS: mcmap-test — stable typed-AST/MIR IDs, generated/source/MIR-facts/map-payload digest + lowering-option metadata, and every exported object_symbol (incl. the #[backend_name] rename) matches the real C and LLVM object symbols"
