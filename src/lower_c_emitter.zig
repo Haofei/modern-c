@@ -7476,13 +7476,13 @@ const CEmitter = struct {
 
     fn memberFieldType(self: *CEmitter, base: ast.Expr, field_name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         if (indexExpr(base)) |index| {
-            if (self.arrayTypeForExpr(index.base.*, locals)) |array_ty| {
-                return self.memberFieldTypeFromAggregate(array_ty.kind.array.child.*, field_name);
-            }
-            const base_ty = self.operandEmitType(index.base.*, locals) orelse self.exprSourceTypeForEmission(index.base.*, locals) orelse return null;
-            if (self.resolveAliasType(base_ty).kind == .slice) {
-                return self.memberFieldTypeFromAggregate(self.resolveAliasType(base_ty).kind.slice.child.*, field_name);
-            }
+            const base_ty = self.arrayOrSliceBaseTypeForEmission(index.base.*, locals) orelse return null;
+            const element_ty = switch (self.resolveAliasType(base_ty).kind) {
+                .array => |array| array.child.*,
+                .slice => |slice| slice.child.*,
+                else => return null,
+            };
+            return self.memberFieldTypeFromAggregate(element_ty, field_name);
         }
         const base_ty = self.operandEmitType(base, locals) orelse self.exprSourceTypeForEmission(base, locals) orelse return null;
         return self.memberFieldTypeFromAggregate(base_ty, field_name);
