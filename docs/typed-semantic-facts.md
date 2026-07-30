@@ -471,6 +471,9 @@ context no longer carries the function declaration map, so call-result
 authority cannot be reintroduced there without changing the inventory. The same
 context also no longer carries the owned-target hook; owned fact consumption
 stays in the emitter/lowering contexts that explicitly need ownership identity.
+The C memory-view/DMA context also dropped its unused alias table handle; byte
+view, DMA, and MaybeUninit lowering now expose only the MIR facts and emission
+hooks they actually consume.
 
 | Family | Budget class | Reduction condition |
 |---|---|---|

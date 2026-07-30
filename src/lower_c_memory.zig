@@ -24,7 +24,6 @@ pub const Context = struct {
     out: *std.ArrayList(u8),
     indent: *usize,
     temp_index: *usize,
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
     emit_expr_with_target: EmitExprWithTargetFn,

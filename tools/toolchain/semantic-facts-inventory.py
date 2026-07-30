@@ -1408,6 +1408,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "const target_ty = call.type_args[0];": 0,
     },
     "src/lower_c_memory.zig": {
+        "type_aliases: *const std.StringHashMap(ast.TypeExpr)": 0,
+        "ctx.type_aliases": 0,
         "mir.byteViewCallTargetKind(call)": 0,
         "byteViewCallKind(call.callee.*)": 0,
         "mir_target_type(ctx.emit_ctx, .byte_view_source": 1,
