@@ -4295,11 +4295,12 @@ const CEmitter = struct {
     }
 
     fn indexedElementType(self: *CEmitter, index: ast_query.IndexExpr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        if (self.arrayTypeForExpr(index.base.*, locals)) |array_ty| return array_ty.kind.array.child.*;
-        const base_ty = self.operandEmitType(index.base.*, locals) orelse self.exprSourceTypeForEmission(index.base.*, locals) orelse return null;
-        const resolved = self.resolveAliasType(base_ty);
-        if (resolved.kind == .slice) return resolved.kind.slice.child.*;
-        return null;
+        const base_ty = self.arrayOrSliceBaseTypeForEmission(index.base.*, locals) orelse return null;
+        return switch (self.resolveAliasType(base_ty).kind) {
+            .array => |array| array.child.*,
+            .slice => |slice| slice.child.*,
+            else => null,
+        };
     }
 
     fn indexedMemberPathFinalType(self: *CEmitter, index: ast_query.IndexExpr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
