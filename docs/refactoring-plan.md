@@ -175,8 +175,8 @@ Current baseline:
   MIR/fact consumer, or mechanics-only code.
 - `VerifiedProgram` exposes a MIR-backed `SourceSpellingView` for symbol
   spelling. Legacy `syntax_module` remains only because declaration metadata has
-  not yet been fully normalized. LLVM runtime hook suppression now consumes that
-  view instead of scanning AST declarations for hook names.
+  not yet been fully normalized. C and LLVM runtime hook suppression now consume
+  that view instead of scanning AST declarations for hook names.
 
 Deliverables:
 

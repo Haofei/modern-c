@@ -1,9 +1,11 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const lower_c = @import("lower_c.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
+const lower_c_runtime = @import("lower_c_runtime.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
@@ -60,6 +62,34 @@ test "lower-c nullable narrowing with long identifiers never falls back to const
     try expectContains(output.items, expected_present);
     try expectContains(output.items, expected_value);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (0)") == null);
+}
+
+test "lower-c runtime hook suppression uses MIR source spelling view" {
+    const source =
+        \\export fn mc_ksan_check(addr: usize, size: usize) -> void {}
+        \\export fn mc_ksan_store(addr: usize, size: usize) -> void {}
+    ;
+    var parsed = try test_support.parseModule("c_runtime_hook_source_spelling.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    const source_spelling = backend_mod.SourceSpellingView{ .symbols = module_mir.symbol_identities };
+    try lower_c_runtime.appendHeaderAndSanitizerHooks(
+        std.testing.allocator,
+        source_spelling,
+        module_mir,
+        &output,
+        "/* test-profile */\n",
+    );
+
+    try expectNotContains(output.items, "MC_WEAK void mc_ksan_check");
+    try expectNotContains(output.items, "MC_WEAK void mc_ksan_store");
+    try expectContains(output.items, "MC_WEAK void mc_ksan_poison");
+    try expectContains(output.items, "MC_WEAK void mc_csan_read");
 }
 
 test "lower-c value optional pointer derefs lower race-tolerantly" {

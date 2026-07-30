@@ -1073,6 +1073,15 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_c.zig": {
         "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)": 1,
+        "program.source_spelling": 1,
+        "source_spelling: backend_mod.SourceSpellingView": 1,
+        "source_spelling.validateAgainstMir(typed_mir.*)": 1,
+        "try lower_c_runtime.appendHeaderAndSanitizerHooks(allocator, source_spelling": 1,
+    },
+    "src/lower_c_runtime.zig": {
+        "fn moduleDefinesHook(source_spelling: backend.SourceSpellingView": 1,
+        "source_spelling.functionSpelling(function)": 1,
+        "pub fn appendHeaderAndSanitizerHooks(": 1,
     },
     "src/sema.zig": {
         "fn checkIntegerLiteralInitializer": 1,
@@ -1594,6 +1603,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "MIR lowering admission rejects unknown qualified union constructor call instruction types": 1,
     },
     "src/lower_c_tests.zig": {
+        "lower-c runtime hook suppression uses MIR source spelling view": 1,
         "lower-c DMA calls consume MIR identities and complete types": 1,
         "lower-c runtime asserts require MIR bool condition types": 1,
         "lower-c ordinary direct calls require MIR result and argument types": 1,

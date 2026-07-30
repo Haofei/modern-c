@@ -42,7 +42,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    return appendCProfileWithMir(allocator, program.syntax_module, program.typed_mir, out, opts.profile, opts.source_path, opts.checks, opts.stub_asm, opts.reporter);
+    return appendCProfileWithMirSourceSpelling(allocator, program.syntax_module, program.typed_mir, program.source_spelling, out, opts.profile, opts.source_path, opts.checks, opts.stub_asm, opts.reporter);
 }
 
 fn backendEmitMap(
@@ -103,15 +103,31 @@ fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast.Module, o
 }
 
 pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast.Module, typed_mir: *const mir.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
+    return appendCProfileWithMirSourceSpelling(allocator, module, typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
+}
+
+fn appendCProfileWithMirSourceSpelling(
+    allocator: std.mem.Allocator,
+    module: ast.Module,
+    typed_mir: *const mir.Module,
+    source_spelling: backend_mod.SourceSpellingView,
+    out: *std.ArrayList(u8),
+    profile: Profile,
+    source_path: ?[]const u8,
+    checks: backend_mod.Checks,
+    stub_asm: bool,
+    reporter: ?*diagnostics.Reporter,
+) anyerror!void {
     mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err) {
         error.StaleMirTargetTypeFacts => return error.UnsupportedCEmission,
         else => return err,
     };
+    if (!source_spelling.validateAgainstMir(typed_mir.*)) return error.UnsupportedCEmission;
     const profile_marker = switch (profile) {
         .kernel => "/* mc-profile: kernel (freestanding) */\n",
         .hosted => "/* mc-profile: hosted (links libc + -lm) */\n",
     };
-    try lower_c_runtime.appendHeaderAndSanitizerHooks(allocator, module, out, profile_marker);
+    try lower_c_runtime.appendHeaderAndSanitizerHooks(allocator, source_spelling, typed_mir.*, out, profile_marker);
     try lower_c_runtime.appendCheckedArithmeticHelpers(allocator, out);
     try lower_c_runtime.appendMemoryAccessHelpers(allocator, out, checks.ksan, checks.msan, checks.csan);
 

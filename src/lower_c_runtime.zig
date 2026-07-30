@@ -6,8 +6,9 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const backend = @import("backend.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
+const mir = @import("mir.zig");
 
 // The sanitizer shadow-hook symbols (mirrors `sanitizer_hooks` in lower_llvm.zig). Each gets a
 // weak no-op `define` in the C preamble that a linked sanitizer runtime overrides — UNLESS the
@@ -22,21 +23,22 @@ const sanitizer_hooks = [_][]const u8{
     "mc_csan_write",
 };
 
-// True if the MODULE provides a `fn` definition (a body) named `hook` — a pure-MC sanitizer
-// runtime. An `extern fn` declaration (no body) does not count as a definition.
-fn moduleDefinesHook(module: ast.Module, hook: []const u8) bool {
-    for (module.decls) |decl| {
-        if (decl.kind == .fn_decl) {
-            const fn_decl = decl.kind.fn_decl;
-            if (fn_decl.body != null and std.mem.eql(u8, fn_decl.name.text, hook)) return true;
-        }
+// True if verified MIR contains a non-extern function whose source spelling is
+// the sanitizer hook. This keeps runtime-hook suppression on the backend
+// spelling table instead of scanning AST declarations for semantic admission.
+fn moduleDefinesHook(source_spelling: backend.SourceSpellingView, module_mir: mir.Module, hook: []const u8) bool {
+    for (module_mir.functions) |function| {
+        if (function.is_extern) continue;
+        const spelling = source_spelling.functionSpelling(function) orelse continue;
+        if (std.mem.eql(u8, spelling, hook)) return true;
     }
     return false;
 }
 
 pub fn appendHeaderAndSanitizerHooks(
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    source_spelling: backend.SourceSpellingView,
+    module_mir: mir.Module,
     out: *std.ArrayList(u8),
     profile_marker: []const u8,
 ) !void {
@@ -114,7 +116,7 @@ pub fn appendHeaderAndSanitizerHooks(
     // `mc_csan_write` (D2.3). Only module-defined hooks are suppressed; all others keep the
     // weak no-op the linked sanitizer runtime overrides with a strong definition.
     for (sanitizer_hooks) |hook| {
-        if (moduleDefinesHook(module, hook)) continue;
+        if (moduleDefinesHook(source_spelling, module_mir, hook)) continue;
         try out.print(allocator, "MC_WEAK void {s}(uintptr_t addr, uintptr_t size) {{ (void)addr; (void)size; }}\n", .{hook});
     }
 }
