@@ -41,8 +41,9 @@ typed successor mirrors, built MIR functions carry `typed_symbol_id` entries
 backed by a module-owned `SymbolIdentity` table, representation-sensitive instructions and
 `RepresentationFact` rows double-write typed `ValueId` identities, each function
 also double-writes typed `TypeId` result identities for representation-sensitive
-instructions/facts, each function owns `ValueIdentity` and `TypeIdentity` tables
-for those typed ids, and
+instructions/facts and typed `SpanId` source identities for those rows, each
+function owns `ValueIdentity`, `TypeIdentity`, and `SpanIdentity` tables for
+those typed ids, and
 `mir-identity-inventory-test` gates those seeds. This is a migration anchor only;
 legacy string/value/type identity remains live until the later Phase 2 slices
 move those domains onto typed IDs.
