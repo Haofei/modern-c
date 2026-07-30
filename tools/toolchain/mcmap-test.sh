@@ -27,6 +27,7 @@ CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 LOADED_SRC="$W/loaded-source.mc"
+MCMAP_VERIFY="$HERE/tools/toolchain/mcmap-verify.py"
 # loader.loadCombinedSource appends a separator newline for this no-import root.
 cat "$SRC" > "$LOADED_SRC"
 printf '\n' >> "$LOADED_SRC"
@@ -104,6 +105,7 @@ require_header lower_checks_ksan false "$MAP"
 require_header lower_checks_msan false "$MAP"
 require_header lower_checks_csan false "$MAP"
 require_header lower_stub_asm false "$MAP"
+python3 "$MCMAP_VERIFY" --map "$MAP" --artifact "$W/generated.c" --source "$LOADED_SRC" >/dev/null
 
 "$MCC" emit-map "$SRC" --profile=hosted --checks=elide-proven,ksan --stub-asm > "$W/hosted.mcmap" 2>/dev/null
 "$MCC" emit-c "$SRC" --profile=hosted --checks=elide-proven,ksan --stub-asm > "$W/hosted.c" 2>/dev/null
@@ -117,6 +119,21 @@ require_header lower_checks_ksan true "$W/hosted.mcmap"
 require_header lower_checks_msan false "$W/hosted.mcmap"
 require_header lower_checks_csan false "$W/hosted.mcmap"
 require_header lower_stub_asm true "$W/hosted.mcmap"
+python3 "$MCMAP_VERIFY" --map "$W/hosted.mcmap" --artifact "$W/hosted.c" --source "$LOADED_SRC" >/dev/null
+
+# Consumer mismatch rejection: a substituted map body or wrong artifact must not
+# verify against the bundle headers.
+cp "$MAP" "$W/tampered-payload.mcmap"
+printf 'entry kind="tamper"\n' >> "$W/tampered-payload.mcmap"
+if python3 "$MCMAP_VERIFY" --map "$W/tampered-payload.mcmap" --artifact "$W/generated.c" --source "$LOADED_SRC" >/dev/null 2>&1; then
+    echo "FAIL: mcmap-test — verifier accepted a map with a tampered payload"; exit 1
+fi
+
+cp "$W/generated.c" "$W/tampered.c"
+printf '\n/* tamper */\n' >> "$W/tampered.c"
+if python3 "$MCMAP_VERIFY" --map "$MAP" --artifact "$W/tampered.c" --source "$LOADED_SRC" >/dev/null 2>&1; then
+    echo "FAIL: mcmap-test — verifier accepted the wrong generated artifact"; exit 1
+fi
 
 # 2. Every entry row has a non-empty typed_ast_node and mir_block, and the AST IDs are unique.
 rows="$(grep -c '^entry ' "$MAP" || true)"
@@ -135,7 +152,7 @@ fi
 
 # 3. Object-symbol correlation (needs clang + llc + nm).
 if ! command -v "$CLANG" >/dev/null 2>&1 || ! command -v "$LLC" >/dev/null 2>&1 || ! command -v nm >/dev/null 2>&1; then
-    echo "PASS: mcmap-test — stable typed-AST/MIR IDs validated (skipped object correlation: clang/llc/nm absent)"
+    echo "PASS: mcmap-test — stable typed-AST/MIR IDs and mcmap consumer mismatch rejection validated (skipped object correlation: clang/llc/nm absent)"
     exit 0
 fi
 
@@ -173,4 +190,4 @@ esac
 grep -qx "mc_renamed_export" "$W/c.syms"   || { echo "FAIL: mcmap-test — renamed symbol absent from C object"; exit 1; }
 grep -qx "mc_renamed_export" "$W/l.syms"   || { echo "FAIL: mcmap-test — renamed symbol absent from LLVM object"; exit 1; }
 
-echo "PASS: mcmap-test — stable typed-AST/MIR IDs, generated/source/MIR-facts/map-payload digest + lowering-option metadata, and every exported object_symbol (incl. the #[backend_name] rename) matches the real C and LLVM object symbols"
+echo "PASS: mcmap-test — stable typed-AST/MIR IDs, generated/source/MIR-facts/map-payload digest + lowering-option metadata, mcmap consumer mismatch rejection, and every exported object_symbol (incl. the #[backend_name] rename) matches the real C and LLVM object symbols"

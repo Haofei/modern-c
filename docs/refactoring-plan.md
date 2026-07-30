@@ -32,6 +32,26 @@ phase or are explicitly scoped to an experimental profile.
 | Product/TCB scope | Open | Keep selfhost, production kernel, Agent runtime, and vendored runtimes profile-scoped. |
 | Kernel secure loading | Open | Production loaders must accept opaque exact-byte `VerifiedBundle` capabilities, not raw bytes plus metadata. |
 
+## 2026-07 execution policy
+
+The refactor is intentionally narrow: stabilize the compiler core before adding
+more product surface.
+
+Default priority:
+
+1. compiler semantic authority;
+2. backend admission and artifact provenance;
+3. gate/profile generation;
+4. kernel and Agent production trust boundaries.
+
+Work that does not close one of those priorities should be treated as
+experimental profile work, not release-blocking core work. In particular, avoid
+expanding selfhost coverage, advanced LSP features, production kernel claims,
+runtime vendoring, or new backend surface while Phases 2-4 remain open.
+
+This policy does not remove existing gates. It prevents new implementation
+complexity from becoming mandatory before the semantic boundary is stable.
+
 ## Non-negotiable rules
 
 1. One slice changes one invariant family.
@@ -43,6 +63,12 @@ phase or are explicitly scoped to an experimental profile.
    authority.
 5. `review-risk-register.yaml` is the only open/closed blocker ledger.
 6. Experimental profiles must not silently become production claims.
+7. A refactor slice must delete, quarantine, or inventory at least one old path;
+   adding a new abstraction while leaving the old authority path untracked does
+   not count as progress.
+8. New docs are allowed only when they become canonical source material. Status
+   updates, remediation reports, and one-off review conclusions go under
+   `docs/archive/` or are folded into this file and the risk register.
 
 ## Phase 0 — Documentation and scope control
 
@@ -209,8 +235,11 @@ Current baseline:
   consumes for source-map correlation.
 - The bundle records the SHA-256 digest of the source-map payload (`# columns`
   plus `entry` rows), so consumers can detect map-body substitution.
-- Full toolchain identity and standalone consumer mismatch-rejection tooling
-  remain open.
+- `tools/toolchain/mcmap-verify.py` verifies map-payload and generated-artifact
+  digests, and `mcmap-test` proves tampered map bodies and wrong artifacts are
+  rejected.
+- Full toolchain identity and shared artifact metadata across `emit-c`,
+  `emit-llvm`, `emit-map`, and `build` remain open.
 
 Closure criteria:
 
@@ -340,27 +369,41 @@ Phases 7-9 can be prepared in parallel only as manifest/evidence work. They
 should not consume compiler-core implementation time until Phases 2-4 are closed
 or a release profile explicitly requires them.
 
-## First implementation slices
+## Implementation queue
 
-Use this backlog for the next bounded patches:
+This is the current bounded patch queue. Keep each row independently
+reviewable; do not merge rows merely because the files overlap.
 
-1. Retire one remaining optional/result backend inference path by routing it
-   through existing typed representation or target-type facts.
-2. Update the T3/T4 backend authority inventory in the same patch that retires
-   the helper.
-3. Add an artifact metadata header to source-map output and verify artifact
-   digest mismatch rejection.
-4. Introduce a generated gate manifest for a small existing subset before moving
-   the whole build inventory.
-5. Decide HIR authority and update `lower-hir` / `verify-hir` docs and tests.
-6. Add a profile manifest skeleton for `compiler-subset` and
-   `llvm-experimental`.
-7. Prototype exact-byte `VerifiedBundle` admission as a new API while keeping raw
-   loader APIs quarantined to tests/demos.
+| Order | Slice | Primary files | Required proof | Retires or prevents |
+|---:|---|---|---|---|
+| 1 | Add standalone `.mcmap` consumer verification and mismatch rejection. | `tools/toolchain/`, `build/qemu.zig` if a new gate is needed, `docs/refactoring-plan.md` | `mcmap-test` proves payload and artifact tampering are rejected. | Source-map consumers trusting unrelated artifacts or substituted map bodies. |
+| 2 | Move one optional/result lowering decision from backend inference to typed representation facts. | `src/mir_representation.zig`, `src/lower_c_*`, `src/lower_llvm_*` | C/LLVM focused optional/result fixtures plus semantic-facts inventory. | One backend-local optional/result classifier. |
+| 3 | Reject verified MIR with `unknown` type/value identity at backend admission. | `src/backend.zig`, `src/mir_model.zig`, `src/mir_verify_util.zig` | Malformed MIR/admission regression and `test-unit`. | Backend fallback behavior for unknown verified facts. |
+| 4 | Narrow `VerifiedProgram` by moving backend-needed spelling into explicit source/symbol tables. | `src/backend.zig`, `src/main.zig`, backend entrypoints | Backend registry path and CLI path use the same admission object. | Direct AST access for symbol spelling mechanics. |
+| 5 | Decide HIR authority. Either promote it into the production path or mark it inspection-only with tests. | `src/hir.zig`, `src/main.zig`, `README.md`, `docs/` | `lower-hir`/`verify-hir` contract tests and docs agree. | Half-authoritative HIR drift. |
+| 6 | Convert the first MIR instruction family to tagged-union shape. Start with calls or optional tests. | `src/mir_model.zig`, `src/mir.zig`, verifier, both backends | Malformed-field combinations become unrepresentable or rejected. | `kind + optional fields` illegal states for that family. |
+| 7 | Introduce a small generated gate manifest for 5-10 existing compiler-core gates. | `build/`, `tools/ci/`, `docs/` | Generated build rows match the old hand-written rows; dev-gates test covers it. | Stringly gate drift for the pilot subset. |
+| 8 | Add profile manifests for `compiler-subset`, `llvm-experimental`, and `selfhost-experimental`. | `docs/`, optional `tools/ci/` | Profile docs can be generated from the manifest and name their blocking risks. | Accidental promotion of LLVM/selfhost into broad production claims. |
+| 9 | Make `mcc build` final executable output transactional. | `src/main.zig`, toolchain tests | Interrupted/failed build does not corrupt the previous output; concurrent temp names do not collide. | Non-atomic build artifact writes. |
+| 10 | Prototype exact-byte `VerifiedBundle` admission as a new production-shaped API. | `kernel/core/production_ops.mc`, `kernel/core/elf_loader.mc`, `kernel/crypto/` | Tamper/substitution tests prove raw bytes cannot reach the production loader path. | “verify A, load B” API shape. |
 
-Each slice should end with:
+Every slice must end with:
 
 - a focused regression test;
-- the relevant inventory check;
-- `zig build test-unit` or a narrower equivalent where appropriate;
-- docs/risk-register update only if blocker status changes.
+- the relevant inventory check when one exists;
+- `zig build test-unit` or a documented narrower equivalent;
+- docs/risk-register update only if blocker status changes;
+- no new duplicate status document.
+
+## Explicit deferrals
+
+These areas stay useful, but they should not consume core refactor capacity until
+their owning profile becomes the active release target:
+
+| Area | Current treatment | Re-entry condition |
+|---|---|---|
+| LLVM as equal production backend | Experimental/differential backend while typed MIR is still open. | Phases 2-3 close for the relevant semantic families. |
+| Selfhost | Bootstrap experiment, not a second language authority. | Main compiler typed MIR/backend seam is stable enough to define a selfhost subset manifest. |
+| Advanced LSP features | Keep existing features working; avoid expanding workspace intelligence. | Persistent `CompilationSession`/query service exists. |
+| Production kernel / Agent runtime | Profile-scoped; QEMU evidence is surrogate. | `VerifiedBundle`, capability mint, persistence, and real-board gates are active profile blockers. |
+| New vendored runtimes | Do not enter default production TCB. | Profile manifest names the runtime, CVE owner, gates, and release blocker policy. |
