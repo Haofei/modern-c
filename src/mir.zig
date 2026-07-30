@@ -1409,8 +1409,7 @@ pub fn validateKnownFactTypesForLowering(module: Module) error{UnknownMirLowerin
                 else => {},
             }
             for (block.instructions) |instruction| {
-                if (instruction.kind == .assign and valueTypeIsUnknownPlaceholder(instruction.result_ty)) return error.UnknownMirLoweringType;
-                if (callInstructionRequiresKnownType(function, instruction) and valueTypeIsUnknownPlaceholder(instruction.result_ty)) return error.UnknownMirLoweringType;
+                if (instructionRequiresKnownLoweringType(instruction) and valueTypeIsUnknownPlaceholder(instruction.result_ty)) return error.UnknownMirLoweringType;
             }
         }
         for (function.range_facts) |fact| {
@@ -1438,12 +1437,51 @@ fn valueTypeIsUnknownPlaceholder(ty: ValueType) bool {
     };
 }
 
-fn callInstructionRequiresKnownType(function: Function, instruction: Instruction) bool {
-    if (instruction.kind != .call) return false;
-    if (std.mem.eql(u8, instruction.detail, "bind") or
-        std.mem.eql(u8, instruction.detail, "ok") or
-        std.mem.eql(u8, instruction.detail, "err")) return true;
-    return hasTargetTypeFactAt(function, .qualified_union_result, instruction.line, instruction.column);
+fn instructionRequiresKnownLoweringType(instruction: Instruction) bool {
+    return switch (instruction.kind) {
+        .param,
+        .local,
+        .assign,
+        .expr,
+        .unary,
+        .binary,
+        .add_overflow,
+        .cmp_bounds,
+        .index,
+        .typed_load,
+        .call,
+        .indirect_call,
+        .call_target,
+        .target_type,
+        .unchecked_assume,
+        .address_deref,
+        .address_conversion,
+        .address_operation,
+        .representation_use,
+        .integer_literal_conversion,
+        .nullability_conversion,
+        .assert_condition,
+        .asm_effect,
+        .defer_cleanup,
+        .return_value,
+        => true,
+
+        .contract_begin,
+        .contract_end,
+        .ffi_check,
+        .usage_check,
+        .mmio_check,
+        .representation_check,
+        .conversion_check,
+        .aggregate_check,
+        .result_check,
+        .switch_check,
+        .assignment_check,
+        .arithmetic_domain_check,
+        .operator_check,
+        .unsafe_check,
+        => false,
+    };
 }
 
 pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTargetTypeFacts, StaleMirTargetTypeFacts }!void {
@@ -1468,13 +1506,6 @@ pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTarge
 
 fn targetTypeHasSourcePoint(line: usize, column: usize) bool {
     return line != 0 and column != 0;
-}
-
-fn hasTargetTypeFactAt(function: Function, kind: TargetTypeKind, line: usize, column: usize) bool {
-    for (function.target_type_facts) |fact| {
-        if (fact.kind == kind and fact.source.line == line and fact.source.column == column) return true;
-    }
-    return false;
 }
 
 fn targetTypeKindForInstruction(instruction: Instruction) ?TargetTypeKind {
@@ -4949,6 +4980,7 @@ const FunctionBuilder = struct {
         if (self.reflectionCallTarget(call)) |target| return target.result_type_expr;
         if (self.byteViewCallTarget(call)) |target| return target.result_type_expr;
         if (self.enumRawCallTarget(call)) |target| return target.result_type_expr;
+        if (self.domainCallTarget(call) catch null) |target| return target.result_type_expr;
         if (self.mmioCallTarget(call)) |target| return if (target.kind == .mmio_read) target.result_type_expr else null;
         if (self.rawManyOffsetCallTarget(call)) |target| return target.result_type_expr;
         if (self.constGetCallTarget(call)) |target| return target.result_type_expr;

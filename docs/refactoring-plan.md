@@ -133,19 +133,15 @@ Current baseline:
   before emission.
 - C and LLVM backend entrypoints now share `mir.validateLoweringAdmission()`;
   call-target, target-type, representation, integer, range, function-return,
-  terminator, and assignment instruction type positions reject the `.unknown`
-  type placeholder before lowering.
+  terminator, and all runtime/fact-bearing instruction type positions reject
+  the `.unknown` type placeholder before lowering. Diagnostic-only check
+  instructions remain the explicit `.unknown` allowlist.
 - Scalar/domain conversion call-target result types are MIR-owned, including
   `try_from` as `Result<T, ConversionError>`, rather than falling back through
   generic call inference.
-- Assignment MIR instructions now carry the resolved target/source lowering
-  type instead of a debug-only `.unknown` placeholder.
-- Target-typed `bind`, `ok`, and `err` call instructions now carry the
-  contextual result type already owned by their MIR call-target/target-type
-  facts.
-- Qualified tagged-union constructor call instructions, such as
-  `Token.number(...)` / `Token.eof()`, now carry the self-typed union result
-  already owned by `qualified_union_result` facts.
+- Assignment, target-typed constructor, and qualified tagged-union constructor
+  call instructions carry their resolved MIR-owned lowering type instead of a
+  debug-only `.unknown` placeholder.
 - Inventory checks anchor the migrated surface.
 
 Implementation order:
@@ -397,7 +393,7 @@ reviewable; do not merge rows merely because the files overlap.
 |---:|---|---|---|---|
 | 1 | Add standalone `.mcmap` consumer verification and mismatch rejection. | `tools/toolchain/`, `build/qemu.zig` if a new gate is needed, `docs/refactoring-plan.md` | `mcmap-test` proves payload and artifact tampering are rejected. | Source-map consumers trusting unrelated artifacts or substituted map bodies. |
 | 2 | Move one optional/result lowering decision from backend inference to typed representation facts. | `src/mir_representation.zig`, `src/lower_c_*`, `src/lower_llvm_*` | C/LLVM focused optional/result fixtures plus semantic-facts inventory. | One backend-local optional/result classifier. |
-| 3 | Reject verified MIR with `unknown` type/value identity at backend admission. | `src/backend.zig`, `src/mir_model.zig`, `src/mir_verify_util.zig` | Malformed MIR/admission regression and `test-unit`. | Backend fallback behavior for unknown verified facts. |
+| 3 | Reject verified MIR with `unknown` runtime instruction type identity at backend admission. | `src/mir.zig`, `src/mir_model.zig`, `src/mir_tests.zig` | Malformed MIR/admission regression and `test-unit`. | Backend fallback behavior for unknown runtime instruction types. |
 | 4 | Narrow `VerifiedProgram` by moving backend-needed spelling into explicit source/symbol tables. | `src/backend.zig`, `src/main.zig`, backend entrypoints | Backend registry path and CLI path use the same admission object. | Direct AST access for symbol spelling mechanics. |
 | 5 | Decide HIR authority. Either promote it into the production path or mark it inspection-only with tests. | `src/hir.zig`, `src/main.zig`, `README.md`, `docs/` | `lower-hir`/`verify-hir` contract tests and docs agree. | Half-authoritative HIR drift. |
 | 6 | Convert the first MIR instruction family to tagged-union shape. Start with calls or optional tests. | `src/mir_model.zig`, `src/mir.zig`, verifier, both backends | Malformed-field combinations become unrepresentable or rejected. | `kind + optional fields` illegal states for that family. |

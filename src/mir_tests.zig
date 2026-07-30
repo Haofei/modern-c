@@ -742,6 +742,36 @@ test "MIR lowering admission rejects unknown assign instruction types" {
     return error.TestUnexpectedResult;
 }
 
+test "MIR lowering admission rejects unknown runtime instruction types" {
+    const source =
+        \\fn add_value(x: u32) -> u32 {
+        \\    return x + 1;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_unknown_runtime_instruction_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "add_value").?;
+    for (function.blocks) |*block| {
+        for (block.instructions) |*instruction| {
+            if (instruction.kind != .binary) continue;
+            instruction.result_ty = .unknown;
+            try std.testing.expectError(error.UnknownMirLoweringType, mir.validateKnownFactTypesForLowering(typed_mir));
+            try std.testing.expectError(error.UnknownMirLoweringType, mir.validateLoweringAdmission(typed_mir));
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
 test "MIR lowering admission rejects unknown contextual call instruction types" {
     const source =
         \\enum E { bad }
@@ -2841,6 +2871,37 @@ test "MIR owns arithmetic domain call identities and complete types" {
     }
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
+    try mir.validateLoweringAdmission(typed_mir);
+}
+
+test "MIR owns inferred local types for arithmetic domain call results" {
+    const source =
+        \\type Ticks = counter<u64>;
+        \\fn inferred_bounded(now: Ticks, start: Ticks, max: Duration<u64>) -> Result<Duration<u64>, AmbiguousCounterInterval> {
+        \\    let value = Ticks.elapsed_bounded(now, start, max);
+        \\    return value;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_inferred_domain_call_local_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "inferred_bounded").?;
+    const domain_fact = targetTypeFactByKind(function, .domain_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Result", typeExprHeadName(domain_fact.target_ty).?);
+    const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("value", local_fact.target_owner.?);
+    try std.testing.expectEqualStrings("Result", typeExprHeadName(local_fact.target_ty).?);
+    try mir.validateLoweringAdmission(typed_mir);
 }
 
 test "MIR owns const_get base result and index facts" {
