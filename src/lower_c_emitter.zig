@@ -2034,11 +2034,6 @@ const CEmitter = struct {
         return self.exprResolvesToFloat(expr, locals);
     }
 
-    fn exprSourceTypeForCall(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.exprSourceTypeForEmission(expr, locals);
-    }
-
     fn emitBlockItemsForFlow(ctx: *anyopaque, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitBlockItems(block, locals, return_ty);

@@ -1182,6 +1182,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mirTargetTypeFactAt(.raw_result": 3,
         "emitSequencedCallArgTemp(call.args[1], locals, call.type_args[0])": 0,
         "floatCTypeName(node.type_args[0])": 0,
+        "fn exprSourceTypeForCall(": 0,
         "fn emitPointerToPAddrTargetCast(": 1,
         "fn mirConstGetIndexAt(": 1,
         "rawMethodReturnTypeForCall": 0,
