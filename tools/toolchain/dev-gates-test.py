@@ -37,6 +37,15 @@ def assert_gates(module, paths: Sequence[str], expected: Sequence[str]) -> None:
         fail(f"{', '.join(paths)} checks {checks!r}, expected no focused shell checks")
 
 
+def assert_gates_include(module, paths: Sequence[str], expected: Sequence[str]) -> None:
+    gates, checks, _ = module.select_gates(list(paths))
+    missing = [gate for gate in expected if gate not in gates]
+    if missing:
+        fail(f"{', '.join(paths)} gates {gates!r}, missing {missing!r}")
+    if checks:
+        fail(f"{', '.join(paths)} checks {checks!r}, expected no focused shell checks")
+
+
 def assert_checks(module, paths: Sequence[str], expected: Sequence[str]) -> None:
     gates, checks, _ = module.select_gates(list(paths))
     if gates:
@@ -218,6 +227,9 @@ def main() -> None:
     assert_route(module, ["docs/lowering-coverage.md"], ["lowering-coverage-inventory-test", "lowering-coverage"], ["git diff --check"])
     assert_gates(module, ["tools/toolchain/semantic-facts-inventory.py"], ["semantic-facts-inventory-test"])
     assert_route(module, ["docs/typed-semantic-facts.md"], ["semantic-facts-inventory-test"], ["git diff --check"])
+    assert_gates(module, ["tools/toolchain/compilation-session-inventory.py"], ["compilation-session-inventory-test"])
+    assert_gates_include(module, ["src/main.zig"], ["compilation-session-inventory-test"])
+    assert_route(module, ["docs/refactoring-plan.md"], ["compilation-session-inventory-test"], ["git diff --check"])
     assert_gates(module, ["tools/toolchain/compiler-coverage.sh"], ["compiler-coverage"])
     assert_gates(module, ["tools/toolchain/compiler-coverage-baseline.tsv"], ["compiler-coverage"])
     assert_route(module, ["docs/compiler-coverage.md"], ["compiler-coverage"], ["git diff --check"])

@@ -205,6 +205,15 @@ RULES: tuple[Rule, ...] = (
         "semantic fact inventory changes need the semantic facts gate",
     ),
     Rule(
+        (
+            "tools/toolchain/compilation-session-inventory.py",
+            "src/main.zig",
+            "docs/refactoring-plan.md",
+        ),
+        ("compilation-session-inventory-test",),
+        "compiler session context changes need the compilation session gate",
+    ),
+    Rule(
         ("tools/toolchain/compiler-coverage.sh", "tools/toolchain/compiler-coverage-baseline.tsv", "docs/compiler-coverage.md"),
         ("compiler-coverage",),
         "compiler coverage ratchet changes need the compiler coverage gate",
