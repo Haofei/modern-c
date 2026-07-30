@@ -950,6 +950,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub const SourceSpellingView = struct": 1,
         "source_spelling: SourceSpellingView": 1,
         "source_spelling.validateAgainstMir(typed_mir.*)": 1,
+        "syntax_module: ast.Module": 2,
         "pub fn functionSpelling(self: SourceSpellingView": 0,
         "pub fn definesFunctionSpelling(self: SourceSpellingView": 1,
         "VerifiedProgram exposes MIR-owned source spelling view": 1,
@@ -1076,6 +1077,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_c.zig": {
         "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)": 1,
+        "program.syntax_module": 2,
         "program.source_spelling": 1,
         "source_spelling: backend_mod.SourceSpellingView": 1,
         "source_spelling.validateAgainstMir(typed_mir.*)": 1,
@@ -1394,6 +1396,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "isTrapCallee(": 0,
     },
     "src/lower_llvm.zig": {
+        "program.syntax_module": 1,
         "program.source_spelling": 1,
         "source_spelling: backend_mod.SourceSpellingView": 1,
         "source_spelling.validateAgainstMir(module_mir.*)": 1,

@@ -197,7 +197,9 @@ Current baseline:
   backend-local `moduleDefinesHook` helpers are exact-zero gated. Function-level
   spelling lookup is no longer part of the backend-facing public view; external
   backend consumers get symbol spelling by typed `SymbolId` or the narrow
-  runtime-hook predicate.
+  runtime-hook predicate. The remaining legacy `program.syntax_module` ingress
+  points in C/LLVM backend entry shims are exact-count gated so AST access cannot
+  expand while typed MIR normalization is still in progress.
 
 Deliverables:
 
