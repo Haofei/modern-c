@@ -1339,6 +1339,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn operandIsBoolForEmission(": 0,
         "fn sourceExpressionResultIsBool(": 0,
         "fn binaryOpProducesBool(": 0,
+        "fn sourceCompoundNumericExpressionRequiresResultFact(": 0,
         "pub fn taggedUnionTypeForExpr(": 1,
         "pub fn operandEmitType(": 1,
         "pub fn arrayTypeForExpr(": 1,

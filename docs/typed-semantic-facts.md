@@ -398,6 +398,9 @@ boolean-producing syntax reaches one local MIR `expression_result` check. The
 duplicate no-local-fallback identifier type helper has been merged into the
 single identifier source-type query because both paths already reject shadowed
 locals without a source type before considering globals. The
+compound numeric-expression missing-fact predicate has likewise been folded into
+the numeric result admission path, so source compound numeric expressions have a
+single local `expression_result` requirement. The
 remaining `lower_c_infer` public entrypoints are now individually exact-count
 gated in the semantic-facts inventory so this registered inference surface
 cannot grow without an explicit inventory update. Direct-call index lowering now
