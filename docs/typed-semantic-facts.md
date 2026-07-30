@@ -476,7 +476,9 @@ view, DMA, and MaybeUninit lowering now expose only the MIR facts and emission
 hooks they actually consume. The C leaf-call temp context also stopped carrying
 the alias table for bitcast temporaries; `bitcast_target` is now consumed as the
 MIR-owned target type and C spelling remains delegated to the emitter's type
-view.
+view. The direct C conversion bitcast emitter follows the same rule: it consumes
+the MIR `bitcast_target` row directly instead of re-resolving that target through
+the backend alias table.
 
 | Family | Budget class | Reduction condition |
 |---|---|---|

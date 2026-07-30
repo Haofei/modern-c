@@ -1319,6 +1319,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "ctx.mir_target_type(ctx.emit_ctx, .conversion_target": 1,
         "ctx.mir_target_type(ctx.emit_ctx, .bitcast_source": 1,
         "ctx.mir_target_type(ctx.emit_ctx, .bitcast_target": 1,
+        "const mir_target_ty = ctx.mir_target_type(ctx.emit_ctx, .bitcast_target": 0,
+        "lower_c_alias.resolveAliasType(ctx.type_aliases, mir_target_ty)": 0,
         "resolveAliasType(ctx.type_aliases, call.type_args[0])": 0,
         "numeric_expr_type:": 0,
         "expr_source_type": 0,
