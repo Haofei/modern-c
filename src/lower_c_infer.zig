@@ -10,7 +10,6 @@ const ast_query = @import("ast_query.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_model = @import("lower_c_model.zig");
-const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
 
@@ -20,7 +19,6 @@ const LocalInfo = lower_c_model.LocalInfo;
 const calleeIdentName = ast_query.calleeIdentName;
 const exprIsNumericLiteral = lower_c_expr.exprIsNumericLiteral;
 const isNumericValueBinaryOp = lower_c_expr.isNumericValueBinaryOp;
-const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
 const isBoolType = lower_c_type.isBoolType;
 const isNumericStorageType = lower_c_type.isNumericStorageType;
 const sameCStorageType = lower_c_type.sameCStorageType;
@@ -77,18 +75,6 @@ fn sliceBaseTypeForZeroSpanSlice(ctx: TypeQueryContext, expr: ast.Expr, locals: 
     };
 }
 
-fn sliceReturnTypeForIndexBase(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
-    return switch (expr.kind) {
-        .call => |call| callSliceResultType(ctx, call),
-        .grouped => |inner| blk: {
-            const inferred = sliceReturnTypeForIndexBase(ctx, inner.*) orelse break :blk null;
-            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
-            break :blk requireExpressionResultType(ctx, expr, inferred);
-        },
-        else => null,
-    };
-}
-
 fn callSliceResultType(ctx: TypeQueryContext, call: anytype) ?ast.TypeExpr {
     const return_ty = callReturnType(ctx, call) orelse return null;
     return if (return_ty.kind == .slice) return_ty else null;
@@ -99,37 +85,6 @@ pub fn sliceTypeForBase(ctx: TypeQueryContext, ty: ast.TypeExpr, span: ast.Span)
     return switch (resolved.kind) {
         .slice => resolved,
         .array => |node| .{ .span = span, .kind = .{ .slice = .{ .mutability = .mut, .child = node.child } } },
-        else => null,
-    };
-}
-
-fn arrayReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
-    return switch (expr.kind) {
-        .call => |node| blk: {
-            const ret_ty = callReturnType(ctx, node) orelse break :blk null;
-            break :blk if (ret_ty.kind == .array) ret_ty else null;
-        },
-        .grouped => |inner| blk: {
-            const inferred = arrayReturnTypeForExpr(ctx, inner.*) orelse break :blk null;
-            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
-            break :blk requireExpressionResultType(ctx, expr, inferred);
-        },
-        else => null,
-    };
-}
-
-fn enumReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
-    return switch (expr.kind) {
-        .call => |node| blk: {
-            const ret_ty = callReturnType(ctx, node) orelse break :blk null;
-            const enum_name = typeName(ret_ty) orelse break :blk null;
-            break :blk if (ctx.enums.contains(enum_name)) ret_ty else null;
-        },
-        .grouped => |inner| blk: {
-            const inferred = enumReturnTypeForExpr(ctx, inner.*) orelse break :blk null;
-            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
-            break :blk requireExpressionResultType(ctx, expr, inferred);
-        },
         else => null,
     };
 }
@@ -252,21 +207,6 @@ fn binaryOpProducesBool(op: ast.BinaryOp) bool {
     };
 }
 
-fn nullableReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
-    return switch (expr.kind) {
-        .call => |node| blk: {
-            const ret_ty = callReturnType(ctx, node) orelse break :blk null;
-            break :blk if (resolveAliasType(ctx, ret_ty).kind == .nullable) ret_ty else null;
-        },
-        .grouped => |inner| blk: {
-            const inferred = nullableReturnTypeForExpr(ctx, inner.*) orelse break :blk null;
-            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
-            break :blk requireExpressionResultType(ctx, expr, inferred);
-        },
-        else => null,
-    };
-}
-
 fn taggedUnionReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |node| blk: {
@@ -299,38 +239,6 @@ pub fn taggedUnionTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
     };
     const type_name = typeName(resolveAliasType(ctx, ty)) orelse return null;
     return if (ctx.tagged_unions.contains(type_name)) ty else null;
-}
-
-fn resultReturnTypeForCall(ctx: TypeQueryContext, call: anytype) ?ast.TypeExpr {
-    const ret_ty = callReturnType(ctx, call) orelse return null;
-    const resolved = resolveAliasType(ctx, ret_ty);
-    return if (resultPayloadTypeForTag(resolved, "ok") != null and resultPayloadTypeForTag(resolved, "err") != null) ret_ty else null;
-}
-
-fn resultTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    if (resultTypeFromSourceExpr(ctx, expr, locals)) |ty| return ty;
-    return switch (expr.kind) {
-        .ident => |ident| blk: {
-            const info = locals.get(ident.text) orelse break :blk null;
-            break :blk info.result_ty;
-        },
-        .call => |node| resultReturnTypeForCall(ctx, node),
-        .grouped => |inner| blk: {
-            const inferred = resultTypeForExpr(ctx, inner.*, locals) orelse break :blk null;
-            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
-            break :blk requireExpressionResultType(ctx, expr, inferred);
-        },
-        else => null,
-    };
-}
-
-fn resultTypeFromSourceExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    const ty = switch (expr.kind) {
-        .cast => |node| node.ty.*,
-        else => operandEmitType(ctx, expr, locals) orelse return null,
-    };
-    const resolved = resolveAliasType(ctx, ty);
-    return if (resultPayloadTypeForTag(resolved, "ok") != null and resultPayloadTypeForTag(resolved, "err") != null) ty else null;
 }
 
 pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {

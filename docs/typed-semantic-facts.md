@@ -369,7 +369,10 @@ consume the existing MIR-owned `qualified_union_result` fact instead of falling
 back to tagged-union source-type inference. The C emitter no longer keeps
 per-family `arrayReturnTypeForExpr`, `resultTypeForExpr`, `enumReturnTypeForExpr`,
 `nullableReturnTypeForExpr`, or `taggedUnionReturnTypeForExpr` wrappers; direct
-call result typing goes through the shared MIR-owned helper.
+call result typing goes through the shared MIR-owned helper. The now-unreferenced
+private C-infer `sliceReturnTypeForIndexBase`, array/enum/nullable return, and
+Result expression classifiers have been removed rather than retained as dormant
+backend-local semantic fallbacks.
 The old recursive source-type fallback is retained only for
 compiler-generated zero-span bases.
 Direct slice-call index bases now use the same MIR-owned direct-call result
