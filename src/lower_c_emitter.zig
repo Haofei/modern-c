@@ -5210,19 +5210,45 @@ const CEmitter = struct {
     }
 
     fn emitArrayCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const array_ty = self.arrayReturnTypeForExpr(initializer) orelse return false;
+        const array_ty = self.arrayDirectCallResultTypeForInferredLocal(initializer) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, array_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
+    fn arrayDirectCallResultTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) ?ast.TypeExpr {
+        return switch (initializer.kind) {
+            .grouped => |inner| self.arrayDirectCallResultTypeForInferredLocal(inner.*),
+            .call => |call| blk: {
+                const fn_name = calleeIdentName(call.callee.*) orelse break :blk null;
+                const fact = self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null) orelse break :blk null;
+                const resolved = self.resolveAliasType(fact.target_ty);
+                break :blk if (resolved.kind == .array) fact.target_ty else null;
+            },
+            else => null,
+        };
+    }
+
     fn emitSliceCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const slice_ty = self.sliceReturnTypeForExpr(initializer, locals) orelse return false;
+        const slice_ty = self.sliceDirectCallResultTypeForInferredLocal(initializer) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, slice_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
+    }
+
+    fn sliceDirectCallResultTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) ?ast.TypeExpr {
+        return switch (initializer.kind) {
+            .grouped => |inner| self.sliceDirectCallResultTypeForInferredLocal(inner.*),
+            .call => |call| blk: {
+                const fn_name = calleeIdentName(call.callee.*) orelse break :blk null;
+                const fact = self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null) orelse break :blk null;
+                const resolved = self.resolveAliasType(fact.target_ty);
+                break :blk if (resolved.kind == .slice) fact.target_ty else null;
+            },
+            else => null,
+        };
     }
 
     fn emitEnumCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {

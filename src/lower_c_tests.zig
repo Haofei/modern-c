@@ -3396,6 +3396,13 @@ test "lower-c inferred local array and slice calls require MIR types" {
     defer missing_array_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_array, &missing_array_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
+    var missing_array_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_array_result.deinit();
+    try removeTargetTypeKindForFunction(&missing_array_result, "array_caller", .direct_call_result);
+    var missing_array_result_output: std.ArrayList(u8) = .empty;
+    defer missing_array_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_array_result, &missing_array_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+
     var stale_array = try mir.build(std.testing.allocator, parsed.module);
     defer stale_array.deinit();
     try renameTargetTypeFactForFunction(&stale_array, "array_caller", .inferred_local, "u64");
@@ -3403,12 +3410,33 @@ test "lower-c inferred local array and slice calls require MIR types" {
     defer stale_array_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_array, &stale_array_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
+    var stale_array_result = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_array_result.deinit();
+    try renameTargetTypeFactForFunction(&stale_array_result, "array_caller", .direct_call_result, "u64");
+    var stale_array_result_output: std.ArrayList(u8) = .empty;
+    defer stale_array_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_array_result, &stale_array_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+
+    var missing_slice_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_slice_result.deinit();
+    try removeTargetTypeKindForFunction(&missing_slice_result, "slice_caller", .direct_call_result);
+    var missing_slice_result_output: std.ArrayList(u8) = .empty;
+    defer missing_slice_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_slice_result, &missing_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+
     var stale_slice = try mir.build(std.testing.allocator, parsed.module);
     defer stale_slice.deinit();
     try renameTargetTypeFactForFunction(&stale_slice, "slice_caller", .inferred_local, "u64");
     var stale_slice_output: std.ArrayList(u8) = .empty;
     defer stale_slice_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_slice, &stale_slice_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+
+    var stale_slice_result = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_slice_result.deinit();
+    try renameTargetTypeFactForFunction(&stale_slice_result, "slice_caller", .direct_call_result, "u64");
+    var stale_slice_result_output: std.ArrayList(u8) = .empty;
+    defer stale_slice_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_slice_result, &stale_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local Result direct calls require MIR types" {
