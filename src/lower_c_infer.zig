@@ -342,7 +342,7 @@ pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Stri
             }
             // Async lowering creates zero-span state-machine members after
             // source facts are built; their resolved declaration is authority.
-            const base_ty = operandEmitType(ctx, node.base.*, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, node.base.*, locals) orelse return null;
+            const base_ty = operandEmitType(ctx, node.base.*, locals) orelse return null;
             const struct_name = structNameFromType(ctx, base_ty) orelse return null;
             const struct_decl = ctx.structs.get(struct_name) orelse return null;
             for (struct_decl.fields) |field| {

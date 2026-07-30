@@ -78,15 +78,16 @@ budgeted family still needs a later migration, reduction, or accepted limitation
 decision.
 
 Within that budget, C's legacy `source_type_for_expr` callback is exact-count
-gated: one callback slot and three remaining fallback call sites in
+gated: one callback slot and two remaining fallback call sites in
 `src/lower_c_infer.zig`. The generic `Result<T, E>` and tagged-union
 source-expression fallbacks have been removed, and zero-span address-of deref
 pointee inference now requires the addressed operand to have an `operandEmitType`
-result instead of delegating to generic source typing. Explicit casts keep their
-declared target type, and other Result/tagged-union expression typing now goes
-through `operandEmitType` or the existing ident/call/grouped paths. The remaining
-sites are quarantine boundaries, not new authority; future migration slices must
-reduce the count or replace them with typed facts.
+result instead of delegating to generic source typing. Zero-span member base
+typing now follows the same rule. Explicit casts keep their declared target type,
+and other Result/tagged-union expression typing now goes through `operandEmitType`
+or the existing ident/call/grouped paths. The remaining sites are quarantine
+boundaries, not new authority; future migration slices must reduce the count or
+replace them with typed facts.
 
 The completed scalar pointer deref default audit records the current C/LLVM
 decision entry points and default behavior for missing provenance. It closes the
