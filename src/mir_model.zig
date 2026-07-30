@@ -22,6 +22,10 @@ fn TypedIndex(comptime name: []const u8) type {
         pub fn isValid(self: @This()) bool {
             return self.raw != invalid.raw;
         }
+
+        pub fn eql(self: @This(), other: @This()) bool {
+            return self.raw == other.raw;
+        }
     };
 }
 
@@ -155,6 +159,7 @@ pub const Instruction = struct {
     target_owner: ?[]const u8 = null,
     value_id: ?[]const u8 = null,
     contract_region_id: ?usize = null,
+    typed_value_id: ?ValueId = null,
     line: usize,
     column: usize,
     source_offset: usize = 0,
@@ -522,6 +527,7 @@ pub const RepresentationFact = struct {
     detail: []const u8,
     result_ty: ValueType,
     value_id: []const u8,
+    typed_value_id: ValueId = .invalid,
     source: SourcePoint,
 };
 

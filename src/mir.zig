@@ -1433,6 +1433,7 @@ fn functionHasMatchingRepresentationFact(function: Function, instruction: Instru
         if (fact.source.line != instruction.line or fact.source.column != instruction.column) continue;
         if (!std.mem.eql(u8, fact.detail, instruction.detail)) continue;
         if (!std.mem.eql(u8, fact.value_id, value_id)) continue;
+        if (!representationTypedValueIdsCompatible(instruction, fact)) continue;
         return true;
     }
     return false;
@@ -1447,10 +1448,18 @@ fn functionHasMatchingRepresentationInstruction(function: Function, fact: Repres
             if (instruction.line != fact.source.line or instruction.column != fact.source.column) continue;
             if (!std.mem.eql(u8, instruction.detail, fact.detail)) continue;
             if (!std.mem.eql(u8, instruction.value_id orelse "none", fact.value_id)) continue;
+            if (!representationTypedValueIdsCompatible(instruction, fact)) continue;
             return true;
         }
     }
     return false;
+}
+
+fn representationTypedValueIdsCompatible(instruction: Instruction, fact: RepresentationFact) bool {
+    if (instruction.typed_value_id) |typed_value_id| {
+        return fact.typed_value_id.isValid() and fact.typed_value_id.eql(typed_value_id);
+    }
+    return !fact.typed_value_id.isValid();
 }
 
 fn sameRepresentationValueType(left: ValueType, right: ValueType) bool {
@@ -3462,6 +3471,7 @@ const FunctionBuilder = struct {
     local_types: std.StringHashMap(ValueType),
     local_type_exprs: std.StringHashMap(ast.TypeExpr),
     local_mutability: std.StringHashMap(bool),
+    value_ids: std.StringHashMap(ValueId),
     // Bindings introduced by a successful nullable-pointer pattern are
     // non-null by construction for that arm. Keep the representation fact for
     // backend admission, but do not invent a runtime trap edge for their use.
@@ -3556,6 +3566,7 @@ const FunctionBuilder = struct {
             .local_types = std.StringHashMap(ValueType).init(allocator),
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
             .local_mutability = std.StringHashMap(bool).init(allocator),
+            .value_ids = std.StringHashMap(ValueId).init(allocator),
             .proven_nonnull_bindings = std.StringHashMap(void).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
             .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
@@ -3627,6 +3638,7 @@ const FunctionBuilder = struct {
             .local_types = std.StringHashMap(ValueType).init(allocator),
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
             .local_mutability = std.StringHashMap(bool).init(allocator),
+            .value_ids = std.StringHashMap(ValueId).init(allocator),
             .proven_nonnull_bindings = std.StringHashMap(void).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
             .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
@@ -3678,6 +3690,7 @@ const FunctionBuilder = struct {
         self.local_types.deinit();
         self.local_type_exprs.deinit();
         self.local_mutability.deinit();
+        self.value_ids.deinit();
         self.proven_nonnull_bindings.deinit();
         self.local_function_aliases.deinit();
         self.local_aggregate_pointer_aliases.deinit();
@@ -3770,6 +3783,8 @@ const FunctionBuilder = struct {
         self.local_type_exprs = std.StringHashMap(ast.TypeExpr).init(self.allocator);
         self.local_mutability.deinit();
         self.local_mutability = std.StringHashMap(bool).init(self.allocator);
+        self.value_ids.deinit();
+        self.value_ids = std.StringHashMap(ValueId).init(self.allocator);
         self.proven_nonnull_bindings.deinit();
         self.proven_nonnull_bindings = std.StringHashMap(void).init(self.allocator);
         self.local_function_aliases.deinit();
@@ -6874,12 +6889,14 @@ const FunctionBuilder = struct {
 
     fn addInstrWithValue(self: *FunctionBuilder, kind: Instruction.Kind, detail: []const u8, ty: ValueType, span: ast.Span, value_id: ?[]const u8) !void {
         const resolved_value_id = value_id orelse defaultInstructionValueId(kind, detail);
+        const typed_value_id = if (resolved_value_id) |id| try self.internValueId(id) else null;
         try self.blocks.items[self.current].instructions.append(self.allocator, .{
             .kind = kind,
             .result_ty = ty,
             .detail = detail,
             .value_id = resolved_value_id,
             .contract_region_id = if (kind == .unchecked_assume) self.active_contract_region_id else null,
+            .typed_value_id = typed_value_id,
             .line = span.line,
             .column = span.column,
             .source_offset = span.offset,
@@ -6891,9 +6908,18 @@ const FunctionBuilder = struct {
                 .detail = detail,
                 .result_ty = ty,
                 .value_id = resolved_value_id orelse "none",
+                .typed_value_id = typed_value_id orelse .invalid,
                 .source = .{ .line = span.line, .column = span.column },
             });
         }
+    }
+
+    fn internValueId(self: *FunctionBuilder, spelling: []const u8) !ValueId {
+        const entry = try self.value_ids.getOrPut(spelling);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = ValueId.fromIndex(self.value_ids.count() - 1);
+        }
+        return entry.value_ptr.*;
     }
 
     fn addRuntimeRepresentationCheck(self: *FunctionBuilder, ty: ValueType, span: ast.Span, value_id: []const u8) !void {

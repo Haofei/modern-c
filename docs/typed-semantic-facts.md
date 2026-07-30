@@ -37,9 +37,11 @@ slice, not the migration of those families.
 The typed MIR identity migration has started with `BlockId`: `src/mir_model.zig`
 defines the typed ID family (`SourceId`, `NodeId`, `SymbolId`, `TypeId`,
 `ValueId`, `BlockId`, and `SpanId`), built MIR blocks carry a `typed_id` plus
-typed successor mirrors, and `mir-identity-inventory-test` gates that seed. This
-is a migration anchor only; legacy string/value/type identity remains live until
-the later Phase 2 slices move those domains onto typed IDs.
+typed successor mirrors, representation-sensitive instructions and
+`RepresentationFact` rows double-write typed `ValueId` identities, and
+`mir-identity-inventory-test` gates those seeds. This is a migration anchor
+only; legacy string/value/type identity remains live until the later Phase 2
+slices move those domains onto typed IDs.
 
 The completed backend AST-inference budget sets the current shrinking budget to
 eight registered backend families. This closes the budget action slice; each
@@ -327,7 +329,7 @@ at entry instead of treating the AST as a second representation authority.
 | Boundary | Evidence |
 |---|---|
 | Owned fact model | `src/mir_model.zig` owns `RepresentationFact` rows in `Function.representation_facts`; `src/mir.zig` records rows through the `representationFactKind` producer path. |
-| Stable identity key | Facts match by instruction kind, result type, source point, detail, and `value_id`; `lower-mir` prints both instruction `value_id=...` and `mir representation_fact ... value_id=...` rows. |
+| Stable identity key | Facts match by instruction kind, result type, source point, detail, textual `value_id`, and the typed `ValueId` mirror when present; `lower-mir` prints the legacy instruction `value_id=...` and `mir representation_fact ... value_id=...` rows. |
 | Flow-proven nonnull bindings | A nullable-pointer `if let` or switch binding records a scope-local nonnull proof. Uses still emit matching typed-load and representation-check facts, but the statically discharged check has no `InvalidRepresentation` trap edge. Shadowed bindings restore the outer proof state; ordinary pointer parameters remain trapping. |
 | Backend admission gate | C calls `validateRepresentationFactsForLowering` from `appendCProfileWithMir`; LLVM calls it from `appendLlvmCheckedMir`. |
 | Missing-fact rejection | `lower-c rejects prebuilt MIR with missing representation facts` and `LLVM rejects prebuilt MIR with missing representation facts` remove required rows and expect `InvalidMirRepresentationFacts`. |

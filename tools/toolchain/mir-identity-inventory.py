@@ -42,6 +42,9 @@ def main() -> int:
         "pub const ValueId = TypedIndex(\"ValueId\");",
         "pub const BlockId = TypedIndex(\"BlockId\");",
         "pub const SpanId = TypedIndex(\"SpanId\");",
+        "pub fn eql(self: @This(), other: @This()) bool {",
+        "typed_value_id: ?ValueId = null,",
+        "typed_value_id: ValueId = .invalid,",
         "typed_id: BlockId = .invalid,",
         "typed_successors: []BlockId = &.{},",
     ):
@@ -53,16 +56,24 @@ def main() -> int:
         ".typed_successors = typed_successors,",
         "if (block.typed_id.isValid() and block.typed_id.index() != block.id) return blockLastSpan(block);",
         "if (block.typed_successors.len != 0) {",
+        "value_ids: std.StringHashMap(ValueId),",
+        "fn internValueId(self: *FunctionBuilder, spelling: []const u8) !ValueId {",
+        ".typed_value_id = typed_value_id,",
+        "fn representationTypedValueIdsCompatible(instruction: Instruction, fact: RepresentationFact) bool {",
         "pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: *std.ArrayList(u8)) !void {",
     ):
         require_contains("src/mir.zig", needle)
 
     for needle in (
         "const BlockId = mir.BlockId;",
+        "const ValueId = mir.ValueId;",
         'test "MIR block model carries typed block identity"',
         'test "MIR verifier rejects typed successor drift in CFG"',
+        'test "MIR representation admission rejects typed value identity drift"',
         "try std.testing.expectEqual(BlockId.fromIndex(block.id), block.typed_id);",
         "try std.testing.expectEqual(block.successors.len, block.typed_successors.len);",
+        "try std.testing.expectEqual(read_fn.representation_facts[0].typed_value_id, read_fn.representation_facts[2].typed_value_id);",
+        "read_fn.representation_facts[0].typed_value_id = ValueId.fromIndex(4096);",
     ):
         require_contains("src/mir_tests.zig", needle)
 

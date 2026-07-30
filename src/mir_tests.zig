@@ -16,6 +16,7 @@ const PointerProvenanceInvalidationReason = mir.PointerProvenanceInvalidationRea
 const RangeFact = mir.RangeFact;
 const TrapEdge = mir.TrapEdge;
 const TrapKind = mir.TrapKind;
+const ValueId = mir.ValueId;
 const ValueType = mir.ValueType;
 
 test "MIR block model carries typed block identity" {
@@ -4459,19 +4460,30 @@ test "MIR dump exposes representation value identities" {
     try std.testing.expectEqual(.typed_load, return_fn.representation_facts[0].kind);
     try std.testing.expectEqualStrings("p", return_fn.representation_facts[0].detail);
     try std.testing.expectEqualStrings("p", return_fn.representation_facts[0].value_id);
+    try std.testing.expect(return_fn.representation_facts[0].typed_value_id.isValid());
     try std.testing.expectEqual(.representation_check, return_fn.representation_facts[1].kind);
     try std.testing.expectEqualStrings("nonnull_pointer", return_fn.representation_facts[1].detail);
     try std.testing.expectEqualStrings("p", return_fn.representation_facts[1].value_id);
+    try std.testing.expectEqual(return_fn.representation_facts[0].typed_value_id, return_fn.representation_facts[1].typed_value_id);
     try std.testing.expectEqual(@as(usize, 3), read_fn.representation_facts.len);
     try std.testing.expectEqual(.typed_load, read_fn.representation_facts[0].kind);
     try std.testing.expectEqualStrings("p", read_fn.representation_facts[0].detail);
     try std.testing.expectEqualStrings("p", read_fn.representation_facts[0].value_id);
+    try std.testing.expect(read_fn.representation_facts[0].typed_value_id.isValid());
     try std.testing.expectEqual(.representation_check, read_fn.representation_facts[1].kind);
     try std.testing.expectEqualStrings("nonnull_pointer", read_fn.representation_facts[1].detail);
     try std.testing.expectEqualStrings("p", read_fn.representation_facts[1].value_id);
+    try std.testing.expectEqual(read_fn.representation_facts[0].typed_value_id, read_fn.representation_facts[1].typed_value_id);
     try std.testing.expectEqual(.representation_use, read_fn.representation_facts[2].kind);
     try std.testing.expectEqualStrings("deref_base", read_fn.representation_facts[2].detail);
     try std.testing.expectEqualStrings("p", read_fn.representation_facts[2].value_id);
+    try std.testing.expectEqual(read_fn.representation_facts[0].typed_value_id, read_fn.representation_facts[2].typed_value_id);
+    for (read_fn.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.value_id) |value_id| if (std.mem.eql(u8, value_id, "p")) {
+            try std.testing.expect(instruction.typed_value_id != null);
+            try std.testing.expectEqual(read_fn.representation_facts[0].typed_value_id, instruction.typed_value_id.?);
+        };
+    };
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
@@ -4486,6 +4498,32 @@ test "MIR dump exposes representation value identities" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=return_ptr_param kind=typed_load detail=p type=*mut value_id=p recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=return_ptr_param kind=representation_check detail=nonnull_pointer type=*mut value_id=p recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=read_ptr_param kind=representation_use detail=deref_base type=*mut value_id=p recorded=true") != null);
+}
+
+test "MIR representation admission rejects typed value identity drift" {
+    const source =
+        \\fn read_ptr_param(p: *mut u8) -> u8 {
+        \\    return p.*;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_representation_typed_value_drift.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    var read_fn = functionByNameMut(&typed_mir, "read_ptr_param").?;
+    try std.testing.expect(read_fn.representation_facts.len > 0);
+    read_fn.representation_facts[0].typed_value_id = ValueId.fromIndex(4096);
+    try std.testing.expectError(error.InvalidMirRepresentationFacts, mir.validateRepresentationFactsForLowering(typed_mir));
 }
 
 test "MIR records typed pointer provenance facts for direct globals and pointer arrays" {

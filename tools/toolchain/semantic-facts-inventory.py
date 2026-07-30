@@ -750,7 +750,8 @@ ANCHORS: dict[str, list[str]] = {
         'std.mem.eql(u8, command, "lower-mir")',
         'std.mem.eql(u8, command, "lower-ir")',
         "try ir.appendFacts",
-        "try mir.appendDumpOpt",
+        "try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.LowerMirFailed)",
+        "try mir.appendDumpFromMir",
         "try ir.appendLowerIr",
     ],
     "src/numeric.zig": [
@@ -791,6 +792,7 @@ ANCHORS: dict[str, list[str]] = {
     ],
     "src/mir.zig": [
         "pub fn appendDumpOpt",
+        "pub fn appendDumpFromMir",
         '"mir range_fact',
         '"mir bounds_fact',
         '"mir integer_fact',
