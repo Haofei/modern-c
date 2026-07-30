@@ -1184,6 +1184,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "floatCTypeName(node.type_args[0])": 0,
         "fn exprSourceTypeForCall(": 0,
         "const base_ty = self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;": 0,
+        "self.sliceTypeForBase(self.exprSourceTypeForEmission(node.base.*, locals) orelse return null": 0,
         "fn sliceBaseTypeForEmission(": 1,
         "fn emitPointerToPAddrTargetCast(": 1,
         "fn mirConstGetIndexAt(": 1,

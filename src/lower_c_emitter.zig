@@ -7733,7 +7733,7 @@ const CEmitter = struct {
             .slice => |node| if (expr.span.line != 0 and expr.span.column != 0)
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
-                self.sliceTypeForBase(self.exprSourceTypeForEmission(node.base.*, locals) orelse return null, node.base.*.span),
+                self.sliceTypeForBase(self.sliceBaseTypeForEmission(node.base.*, locals) orelse return null, node.base.*.span),
             .grouped => |inner| blk: {
                 const inferred = self.exprSourceTypeForEmission(inner.*, locals) orelse break :blk null;
                 if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
