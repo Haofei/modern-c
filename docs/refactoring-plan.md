@@ -30,7 +30,7 @@ phase or are explicitly scoped to an experimental profile.
 | Artifact/source-map provenance | Partially remediated | Bind artifact bytes, source maps, options, toolchain identity, and MIR/fact digests in one metadata object. |
 | Gate governance | Manifest covers compiler-core + governance gates | Expand `gate-manifest.json` from checked gate ownership to generated build/CI/doc rows. |
 | Product/TCB scope | In progress | Keep selfhost, production kernel, Agent runtime, and vendored runtimes profile-scoped through `profile-manifest.json`. |
-| Kernel secure loading | Open | Production loaders must accept opaque exact-byte `VerifiedBundle` capabilities, not raw bytes plus metadata. |
+| Kernel secure loading | Prototype in progress | A production-shaped exact-byte `VerifiedBundle` admission path exists; crypto SHA-256/signature policy, raw production loader removal, persistence, audit, and hardware qualification remain open. |
 
 ## Milestone cut lines
 
@@ -427,6 +427,17 @@ Closure criteria:
 
 Risk links: `KERNEL-VERIFIED-BUNDLE`, `KERNEL-CAPABILITY-MINT`
 
+Current baseline:
+
+- `bundle_verify_and_admit_image` binds image base, image length, and the current
+  image hash into an opaque `VerifiedBundle` token.
+- `elf_load_verified_bundle_for` rejects substituted, retargeted, or tampered
+  bytes before delegating to the legacy raw ELF loader.
+- The digest is still the FNV-era bridge used by the existing metadata path; the
+  production chain still requires SHA-256/signature policy, persistent
+  rollback/audit identity, removal of raw production loader admission, and real
+  hardware qualification.
+
 ## Phase 9 — Real-board production qualification
 
 Purpose: separate QEMU surrogate evidence from hardware production evidence.
@@ -482,7 +493,7 @@ reviewable; do not merge rows merely because the files overlap.
 | 4 | Expand `gate-manifest.json` from checked compiler-core/governance rows to generated build/CI/doc rows. | `docs/gate-manifest.json`, `build/`, `tools/ci/`, `tools/toolchain/` | Generated projection matches hand-written rows before replacement; `gate-manifest-test`, `ci-pass-gates-test`, `parallel-runner-test`. | Stringly gate drift beyond the checked manifest subset. |
 | 5 | Add per-vendored TCB component metadata and advisory status to the profile/TCB manifest surface. | `docs/profile-manifest.json`, `docs/vendoring.md`, `third_party/*/README.vendored.md`, `tools/toolchain/vendoring-test.py` | Vendoring/profile gates prove every profile TCB component has owner, upstream, revision, license, and advisory status. | Runtime TCBs becoming implicit in unrelated production profiles. |
 | 6 | Share artifact metadata across `emit-c`, `emit-llvm`, `emit-map`, and `build`. | `src/main.zig`, `src/backend.zig`, `src/lower_c_map.zig`, `tools/toolchain/mcmap-verify.py` | `mcmap-test`, `path-remap-test`, `mcc-build-test`, and a metadata digest smoke. | Source maps or build outputs carrying weaker provenance than emit-map. |
-| 7 | Prototype exact-byte `VerifiedBundle` admission as a new production-shaped API. | `kernel/core/production_ops.mc`, `kernel/core/elf_loader.mc`, `kernel/crypto/` | Tamper/substitution tests prove raw bytes cannot reach the production loader path. | “verify A, load B” API shape. |
+| 7 | Prototype exact-byte `VerifiedBundle` admission as a new production-shaped API. | `kernel/core/production_ops.mc`, `kernel/core/elf_loader.mc`, `kernel/crypto/` | Tamper/substitution tests prove the verified-loader wrapper rejects mismatched current bytes. | “verify A, load B” production-loader shape. |
 
 Every slice must end with:
 

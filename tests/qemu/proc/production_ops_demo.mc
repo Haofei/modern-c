@@ -1,5 +1,8 @@
 import "kernel/core/production_ops.mc";
 
+global g_bundle_image: [4]u8;
+global g_bundle_other: [4]u8;
+
 fn action_code(a: RuntimeAction) -> u32 {
     switch a {
         .Allow => { return 0; }
@@ -49,6 +52,45 @@ export fn production_ops_run() -> u32 {
             }
         }
     }
+
+    let image_base: usize = (&g_bundle_image) as usize;
+    let other_base: usize = (&g_bundle_other) as usize;
+    unsafe {
+        raw.store<u8>(phys(image_base + 0), 1);
+        raw.store<u8>(phys(image_base + 1), 2);
+        raw.store<u8>(phys(image_base + 2), 3);
+        raw.store<u8>(phys(image_base + 3), 4);
+        raw.store<u8>(phys(other_base + 0), 1);
+        raw.store<u8>(phys(other_base + 1), 2);
+        raw.store<u8>(phys(other_base + 2), 3);
+        raw.store<u8>(phys(other_base + 3), 4);
+    }
+    let exact_hash: u64 = bundle_hash_bytes(image_base, 4);
+    var exact: BundleHeader = bundle_header_init(.Agent, 10, 1, 41, 7, exact_hash, 256);
+    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, image_base, 4) {
+        ok(vb) => {
+            if !verified_bundle_has_exact_bytes(vb) { pass = 0; }
+            if verified_bundle_image_base(vb) != image_base { pass = 0; }
+            if verified_bundle_image_len(vb) != 4 { pass = 0; }
+            if !verified_bundle_matches_image(vb, image_base, 4) { pass = 0; }
+            if verified_bundle_matches_image(vb, other_base, 4) { pass = 0; }
+            unsafe { raw.store<u8>(phys(image_base + 2), 9); }
+            if verified_bundle_matches_image(vb, image_base, 4) { pass = 0; }
+            unsafe { raw.store<u8>(phys(image_base + 2), 3); }
+        }
+        err(e) => { pass = 0; }
+    }
+    exact.image_hash = exact_hash ^ 1;
+    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, image_base, 4) {
+        ok(vb) => { pass = 0; }
+        err(e) => {
+            switch e {
+                .BadImageHash => {}
+                _ => { pass = 0; }
+            }
+        }
+    }
+
     agent.signature_len = 0;
     switch bundle_validate_metadata(&agent, .Agent, 1, 8, 12, 7) {
         ok(v) => { pass = 0; }

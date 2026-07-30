@@ -102,12 +102,12 @@ risks:
     severity: critical
     scope: kernel-secure-boot
     status: open
-    admitted_subset_status: not-production-qualified
+    admitted_subset_status: exact-byte-prototype-gated
     blocks:
       - production-kernel
       - secure-boot-claim
       - untrusted-agent-loading
-    summary: Loader admission must consume an opaque exact-byte VerifiedBundle created by crypto and policy verification.
+    summary: A production-shaped exact-byte VerifiedBundle wrapper now binds current image bytes before ELF loading, but crypto SHA-256/signature policy, persistence/audit identity, raw production-loader closure, and hardware qualification remain open.
 
   - id: KERNEL-CAPABILITY-MINT
     severity: high
