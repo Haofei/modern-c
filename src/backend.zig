@@ -112,6 +112,19 @@ pub const SourceSpellingView = struct {
         return self.symbolSpelling(function.typed_symbol_id);
     }
 
+    /// True when verified MIR contains a non-extern function definition whose
+    /// source spelling matches `name`. Backends use this for emission mechanics
+    /// such as runtime-hook stub suppression; the query is intentionally
+    /// MIR-backed so it cannot rescan syntax declarations as semantic authority.
+    pub fn definesFunctionSpelling(self: SourceSpellingView, typed_mir: mir.Module, name: []const u8) bool {
+        for (typed_mir.functions) |function| {
+            if (function.is_extern) continue;
+            const spelling = self.functionSpelling(function) orelse continue;
+            if (std.mem.eql(u8, spelling, name)) return true;
+        }
+        return false;
+    }
+
     pub fn validateAgainstMir(self: SourceSpellingView, typed_mir: mir.Module) bool {
         if (self.symbols.len != typed_mir.symbol_identities.len) return false;
         for (self.symbols, typed_mir.symbol_identities) |left, right| {
@@ -269,4 +282,6 @@ test "VerifiedProgram exposes MIR-owned source spelling view" {
         "add_one",
         program.source_spelling.functionSpelling(module_mir.functions[0]).?,
     );
+    try std.testing.expect(program.source_spelling.definesFunctionSpelling(module_mir, "add_one"));
+    try std.testing.expect(!program.source_spelling.definesFunctionSpelling(module_mir, "missing"));
 }

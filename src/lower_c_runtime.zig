@@ -23,18 +23,6 @@ const sanitizer_hooks = [_][]const u8{
     "mc_csan_write",
 };
 
-// True if verified MIR contains a non-extern function whose source spelling is
-// the sanitizer hook. This keeps runtime-hook suppression on the backend
-// spelling table instead of scanning AST declarations for semantic admission.
-fn moduleDefinesHook(source_spelling: backend.SourceSpellingView, module_mir: mir.Module, hook: []const u8) bool {
-    for (module_mir.functions) |function| {
-        if (function.is_extern) continue;
-        const spelling = source_spelling.functionSpelling(function) orelse continue;
-        if (std.mem.eql(u8, spelling, hook)) return true;
-    }
-    return false;
-}
-
 pub fn appendHeaderAndSanitizerHooks(
     allocator: std.mem.Allocator,
     source_spelling: backend.SourceSpellingView,
@@ -116,7 +104,7 @@ pub fn appendHeaderAndSanitizerHooks(
     // `mc_csan_write` (D2.3). Only module-defined hooks are suppressed; all others keep the
     // weak no-op the linked sanitizer runtime overrides with a strong definition.
     for (sanitizer_hooks) |hook| {
-        if (moduleDefinesHook(source_spelling, module_mir, hook)) continue;
+        if (source_spelling.definesFunctionSpelling(module_mir, hook)) continue;
         try out.print(allocator, "MC_WEAK void {s}(uintptr_t addr, uintptr_t size) {{ (void)addr; (void)size; }}\n", .{hook});
     }
 }

@@ -950,11 +950,13 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub const SourceSpellingView = struct": 1,
         "source_spelling: SourceSpellingView": 1,
         "source_spelling.validateAgainstMir(typed_mir.*)": 1,
+        "pub fn definesFunctionSpelling(self: SourceSpellingView": 1,
         "VerifiedProgram exposes MIR-owned source spelling view": 1,
     },
     "src/lower_llvm_prelude.zig": {
-        "fn moduleDefinesHook(source_spelling: backend.SourceSpellingView": 1,
-        "source_spelling.functionSpelling(function)": 1,
+        "fn moduleDefinesHook(source_spelling: backend.SourceSpellingView": 0,
+        "source_spelling.functionSpelling(function)": 0,
+        "source_spelling.definesFunctionSpelling(module_mir, hook)": 4,
         "pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source_spelling: backend.SourceSpellingView": 1,
         "pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source_spelling: backend.SourceSpellingView": 1,
     },
@@ -1079,8 +1081,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try lower_c_runtime.appendHeaderAndSanitizerHooks(allocator, source_spelling": 1,
     },
     "src/lower_c_runtime.zig": {
-        "fn moduleDefinesHook(source_spelling: backend.SourceSpellingView": 1,
-        "source_spelling.functionSpelling(function)": 1,
+        "fn moduleDefinesHook(source_spelling: backend.SourceSpellingView": 0,
+        "source_spelling.functionSpelling(function)": 0,
+        "source_spelling.definesFunctionSpelling(module_mir, hook)": 1,
         "pub fn appendHeaderAndSanitizerHooks(": 1,
     },
     "src/sema.zig": {

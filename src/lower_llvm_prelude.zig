@@ -18,20 +18,6 @@ const sanitizer_hooks = [_][]const u8{
     "mc_csan_write",
 };
 
-// True if the verified MIR module itself provides a function definition whose
-// symbol spelling is `hook`. A pure-MC sanitizer runtime does
-// `export fn mc_ksan_check(...) {...}`; in that case we must NOT also emit our
-// auto weak no-op `define`, or the symbol would be doubly-defined (invalid IR).
-// Extern declarations do not count as definitions.
-fn moduleDefinesHook(source_spelling: backend.SourceSpellingView, module_mir: mir.Module, hook: []const u8) bool {
-    for (module_mir.functions) |function| {
-        if (function.is_extern) continue;
-        const spelling = source_spelling.functionSpelling(function) orelse continue;
-        if (std.mem.eql(u8, spelling, hook)) return true;
-    }
-    return false;
-}
-
 pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source_spelling: backend.SourceSpellingView, module_mir: mir.Module) !void {
     // The checked-arithmetic / bounds / unreachable trap hooks. Like the C backend (which emits
     // them as per-unit `static inline ... __builtin_trap()`), emit a WEAK trapping `define` for
@@ -46,7 +32,7 @@ pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), sourc
         "mc_trap_NullUnwrap",            "mc_trap_Unreachable",
     };
     for (trap_hooks) |hook| {
-        if (moduleDefinesHook(source_spelling, module_mir, hook)) continue;
+        if (source_spelling.definesFunctionSpelling(module_mir, hook)) continue;
         try out.print(allocator, "define weak void @{s}() noreturn {{\n  call void @llvm.trap()\n  unreachable\n}}\n", .{hook});
     }
     try out.appendSlice(allocator, "\n");
@@ -63,7 +49,7 @@ pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), sourc
         // If the module defines this hook itself (a pure-MC sanitizer runtime), yield to that
         // definition: its `export fn` is emitted through normal MIR emission. Emitting the auto
         // weak `define` here too would doubly-define the symbol.
-        if (moduleDefinesHook(source_spelling, module_mir, hook)) continue;
+        if (source_spelling.definesFunctionSpelling(module_mir, hook)) continue;
         try out.print(allocator, "define weak void @{s}(i64 %a, i64 %b) {{\n  ret void\n}}\n", .{hook});
     }
     try out.appendSlice(allocator, "\n");
@@ -79,7 +65,7 @@ pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayLis
         "mc_trap_NullUnwrap",            "mc_trap_Unreachable",
     };
     for (trap_hooks) |hook| {
-        if (!moduleDefinesHook(source_spelling, module_mir, hook))
+        if (!source_spelling.definesFunctionSpelling(module_mir, hook))
             try out.print(allocator, "declare void @{s}() noreturn\n", .{hook});
     }
     try out.appendSlice(allocator,
@@ -90,7 +76,7 @@ pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayLis
         \\
     );
     for (sanitizer_hooks) |hook| {
-        if (!moduleDefinesHook(source_spelling, module_mir, hook))
+        if (!source_spelling.definesFunctionSpelling(module_mir, hook))
             try out.print(allocator, "declare void @{s}(i64, i64)\n", .{hook});
     }
     try out.appendSlice(allocator, "\n");

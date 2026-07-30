@@ -32,6 +32,23 @@ phase or are explicitly scoped to an experimental profile.
 | Product/TCB scope | In progress | Keep selfhost, production kernel, Agent runtime, and vendored runtimes profile-scoped through `profile-manifest.json`. |
 | Kernel secure loading | Open | Production loaders must accept opaque exact-byte `VerifiedBundle` capabilities, not raw bytes plus metadata. |
 
+## Milestone cut lines
+
+Use these milestones to decide what belongs in the active refactor branch. A
+change that does not advance the current milestone should stay out unless it is
+a small bug fix or a profile-specific gate repair.
+
+| Milestone | Target | Accept | Defer |
+|---|---|---|---|
+| M1 — semantic core | Typed MIR and backend authority stop expanding. | Retire backend-local inference helpers, move facts behind typed IDs, make malformed MIR states rejected earlier. | New syntax, new runtime surface, selfhost expansion, advanced LSP features. |
+| M2 — artifact identity | Every emitted artifact has the same provenance strength. | Shared artifact metadata for `emit-c`, `emit-llvm`, `emit-map`, and `build`; source-map/artifact digest verification. | Release polish that does not consume the shared metadata object. |
+| M3 — governance single-source | Gate/profile/release claims are generated or checked from manifests. | Expand `gate-manifest.json`, add TCB component metadata, remove manual counters from active docs. | New status/remediation Markdown pages. |
+| M4 — kernel trust chain | Production-shaped loading cannot express verify-A/load-B. | Exact-byte `VerifiedBundle` prototype, privileged capability mint isolation, substitution tests. | Real production-kernel claims before M4 has typed APIs and tests. |
+
+Only M1 is allowed to take broad compiler-core implementation time by default.
+M2 and M3 may proceed when they touch already-modified files or unblock evidence
+generation. M4 starts as a prototype until the compiler core stops moving.
+
 ## 2026-07 execution policy
 
 The refactor is intentionally narrow: stabilize the compiler core before adding
@@ -176,7 +193,8 @@ Current baseline:
 - `VerifiedProgram` exposes a MIR-backed `SourceSpellingView` for symbol
   spelling. Legacy `syntax_module` remains only because declaration metadata has
   not yet been fully normalized. C and LLVM runtime hook suppression now consume
-  that view instead of scanning AST declarations for hook names.
+  the shared `SourceSpellingView.definesFunctionSpelling` query; duplicate
+  backend-local `moduleDefinesHook` helpers are exact-zero gated.
 
 Deliverables:
 

@@ -67,12 +67,13 @@ typed instruction identity without a verifier diagnostic.
 through this explicit view instead of treating the AST as the source-spelling
 table. Legacy `syntax_module` remains present for declaration metadata that has
 not yet been normalized. C and LLVM runtime hook suppression already consume
-this view when deciding whether to emit weak/default trap and sanitizer hook
-bodies; the AST is no longer the authority for that prelude symbol-spelling
-decision.
+the shared `SourceSpellingView.definesFunctionSpelling` query when deciding
+whether to emit weak/default trap and sanitizer hook bodies; per-backend
+`moduleDefinesHook` helpers are exact-zero gated, and the AST is no longer the
+authority for that prelude symbol-spelling decision.
 
 The completed backend AST-inference budget sets the current shrinking budget to
-eight registered backend families. This closes the budget action slice; each
+seven registered backend families. This closes the budget action slice; each
 budgeted family still needs a later migration, reduction, or accepted limitation
 decision.
 
