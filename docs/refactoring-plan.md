@@ -103,6 +103,14 @@ Risk register links:
 
 Purpose: stop treating type/value/symbol spelling as semantic identity.
 
+Current status:
+
+- Block identity now has a typed `BlockId` seed in `src/mir_model.zig`.
+  The legacy numeric `Block.id` remains for compatibility, but built MIR blocks
+  also carry `typed_id = BlockId.fromIndex(block.id)`.
+- `mir-identity-inventory-test` gates the typed ID definitions, `BlockId`
+  builder assignment, and the unit test that checks the public block model.
+
 Work:
 
 - Introduce stable `SourceId`, `NodeId`, `SymbolId`, `TypeId`, `ValueId`, and

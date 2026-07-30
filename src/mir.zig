@@ -72,6 +72,13 @@ pub const AddressClass = mir_model.AddressClass;
 pub const PointerKind = mir_model.PointerKind;
 pub const PointerShape = mir_model.PointerShape;
 pub const ResultShape = mir_model.ResultShape;
+pub const SourceId = mir_model.SourceId;
+pub const NodeId = mir_model.NodeId;
+pub const SymbolId = mir_model.SymbolId;
+pub const TypeId = mir_model.TypeId;
+pub const ValueId = mir_model.ValueId;
+pub const BlockId = mir_model.BlockId;
+pub const SpanId = mir_model.SpanId;
 pub const ValueType = mir_model.ValueType;
 pub const Instruction = mir_model.Instruction;
 pub const Terminator = mir_model.Terminator;
@@ -3696,6 +3703,7 @@ const FunctionBuilder = struct {
         for (self.blocks.items) |*block| {
             try blocks.append(self.allocator, .{
                 .id = block.id,
+                .typed_id = BlockId.fromIndex(block.id),
                 .kind = block.kind,
                 .instructions = try block.instructions.toOwnedSlice(self.allocator),
                 .successors = try block.successors.toOwnedSlice(self.allocator),

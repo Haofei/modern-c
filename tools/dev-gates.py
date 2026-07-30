@@ -214,6 +214,18 @@ RULES: tuple[Rule, ...] = (
         "compiler session context changes need the compilation session gate",
     ),
     Rule(
+        (
+            "tools/toolchain/mir-identity-inventory.py",
+            "src/mir_model.zig",
+            "src/mir.zig",
+            "src/mir_tests.zig",
+            "docs/refactoring-plan.md",
+            "docs/typed-semantic-facts.md",
+        ),
+        ("mir-identity-inventory-test",),
+        "typed MIR identity changes need the MIR identity inventory gate",
+    ),
+    Rule(
         ("tools/toolchain/compiler-coverage.sh", "tools/toolchain/compiler-coverage-baseline.tsv", "docs/compiler-coverage.md"),
         ("compiler-coverage",),
         "compiler coverage ratchet changes need the compiler coverage gate",

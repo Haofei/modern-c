@@ -6,6 +6,7 @@ const parser = @import("parser.zig");
 const mir = @import("mir.zig");
 
 const Block = mir.Block;
+const BlockId = mir.BlockId;
 const ContractRegion = mir.ContractRegion;
 const Function = mir.Function;
 const Instruction = mir.Instruction;
@@ -16,6 +17,32 @@ const RangeFact = mir.RangeFact;
 const TrapEdge = mir.TrapEdge;
 const TrapKind = mir.TrapKind;
 const ValueType = mir.ValueType;
+
+test "MIR block model carries typed block identity" {
+    const source =
+        \\fn main() -> u32 {
+        \\    return 1;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_block_id.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+
+    var module_mir = try mir.build(std.testing.allocator, module);
+    defer module_mir.deinit();
+
+    const main_fn = functionByName(module_mir, "main").?;
+    try std.testing.expect(main_fn.blocks.len > 0);
+    for (main_fn.blocks) |block| {
+        try std.testing.expect(block.typed_id.isValid());
+        try std.testing.expectEqual(block.id, block.typed_id.index());
+        try std.testing.expectEqual(BlockId.fromIndex(block.id), block.typed_id);
+    }
+}
 
 fn functionByName(module: mir.Module, name: []const u8) ?mir.Function {
     for (module.functions) |function| {

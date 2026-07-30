@@ -2,6 +2,37 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 
+fn TypedIndex(comptime name: []const u8) type {
+    _ = name;
+    return struct {
+        raw: u32,
+
+        pub const invalid: @This() = .{ .raw = std.math.maxInt(u32) };
+
+        pub fn fromIndex(index_value: usize) @This() {
+            std.debug.assert(index_value < std.math.maxInt(u32));
+            return .{ .raw = @intCast(index_value) };
+        }
+
+        pub fn index(self: @This()) usize {
+            std.debug.assert(self.raw != invalid.raw);
+            return self.raw;
+        }
+
+        pub fn isValid(self: @This()) bool {
+            return self.raw != invalid.raw;
+        }
+    };
+}
+
+pub const SourceId = TypedIndex("SourceId");
+pub const NodeId = TypedIndex("NodeId");
+pub const SymbolId = TypedIndex("SymbolId");
+pub const TypeId = TypedIndex("TypeId");
+pub const ValueId = TypedIndex("ValueId");
+pub const BlockId = TypedIndex("BlockId");
+pub const SpanId = TypedIndex("SpanId");
+
 pub const TrapKind = enum {
     IntegerOverflow,
     DivideByZero,
@@ -496,6 +527,7 @@ pub const RepresentationFact = struct {
 
 pub const Block = struct {
     id: usize,
+    typed_id: BlockId = .invalid,
     kind: []const u8,
     instructions: []Instruction,
     successors: []usize,
