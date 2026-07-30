@@ -54,12 +54,12 @@ pub fn sliceReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
     return switch (expr.kind) {
         .call => |call| sliceReturnTypeForCall(ctx, call),
         // Real source slices have an exact MIR result type. Generated
-        // zero-span nodes retain the base-derived fallback because no
-        // source-keyed fact can identify them.
+        // zero-span nodes retain only a narrow base-derived path for values
+        // already described by call return facts or operand emission facts.
         .slice => |node| if (expr.span.line != 0 and expr.span.column != 0)
             ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span)
         else blk: {
-            const base_ty = ctx.source_type_for_expr(ctx.source_ctx, node.base.*, locals) orelse break :blk null;
+            const base_ty = sliceBaseTypeForZeroSpanSlice(ctx, node.base.*, locals) orelse break :blk null;
             const inferred = sliceTypeForBase(ctx, base_ty, node.base.*.span) orelse break :blk null;
             break :blk requireExpressionResultType(ctx, expr, inferred);
         },
@@ -69,6 +69,18 @@ pub fn sliceReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
             break :blk requireExpressionResultType(ctx, expr, inferred);
         },
         else => null,
+    };
+}
+
+fn sliceBaseTypeForZeroSpanSlice(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .call => |call| callReturnType(ctx, call),
+        .grouped => |inner| blk: {
+            const inferred = sliceBaseTypeForZeroSpanSlice(ctx, inner.*, locals) orelse break :blk null;
+            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+            break :blk requireExpressionResultType(ctx, expr, inferred);
+        },
+        else => operandEmitType(ctx, expr, locals),
     };
 }
 
