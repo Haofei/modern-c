@@ -41,14 +41,6 @@ const sema_tests = @import("sema_tests.zig");
 const spec_tests = @import("spec_tests.zig");
 const symbols = @import("symbols.zig");
 
-// File-origin boundaries of the import-flattened source (loader.loadCombinedSourceWithBoundaries),
-// set once per invocation in `run` and consumed by the semantic checker to enforce the orphan
-// rule for `impl` blocks of `opaque struct`s (a peer `impl` in a different file may not name the
-// type's private fields). Null when no module was loaded (e.g. `fmt`, which bypasses the loader).
-var combined_boundaries: ?[]const loader.FileBoundary = null;
-var combined_module_graph: ?*const loader.ModuleGraph = null;
-var active_visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in;
-
 const usage =
     \\usage:
     \\  mcc --help
@@ -130,45 +122,108 @@ const usage =
     \\
 ;
 
-// Generated artifacts (lowered HIR/IR/C, facts, verification reports) go to
-// stdout unless a command-specific output path is provided; diagnostics and logs
-// stay on stderr.
-var stdout_io: std.Io = undefined;
 const max_input_bytes = 64 * 1024 * 1024;
 
-fn writeStdout(bytes: []const u8) !void {
-    std.Io.File.stdout().writeStreamingAll(stdout_io, bytes) catch |err| switch (err) {
-        error.BrokenPipe => return,
-        else => return err,
-    };
-}
+const CompilationSession = struct {
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    // File-origin boundaries of the import-flattened source
+    // (loader.loadCombinedSourceWithBoundaries), set once per source-loading
+    // invocation and consumed by diagnostics/sema/name transforms. Null when no
+    // module was loaded (e.g. `fmt`, which bypasses the loader).
+    file_boundaries: ?[]const loader.FileBoundary = null,
+    module_graph: ?*const loader.ModuleGraph = null,
+    visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in,
 
-fn writeOutputPath(path: []const u8, bytes: []const u8) !void {
-    // Materialize artifacts through a sibling temporary file and atomically
-    // replace the destination only after the complete write succeeds. A failed
-    // or killed compilation therefore cannot truncate a previously valid
-    // artifact or expose a partially written one.
-    var atomic_file = std.Io.Dir.cwd().createFileAtomic(stdout_io, path, .{
-        .replace = true,
-    }) catch |err| {
-        std.debug.print("error: unable to write output \"{s}\": {s}\n", .{ path, @errorName(err) });
-        return error.OutputWriteFailed;
-    };
-    defer atomic_file.deinit(stdout_io);
-    atomic_file.file.writeStreamingAll(stdout_io, bytes) catch |err| {
-        std.debug.print("error: unable to write output \"{s}\": {s}\n", .{ path, @errorName(err) });
-        return error.OutputWriteFailed;
-    };
-    atomic_file.replace(stdout_io) catch |err| {
-        std.debug.print("error: unable to commit output \"{s}\": {s}\n", .{ path, @errorName(err) });
-        return error.OutputWriteFailed;
-    };
-}
+    fn init(allocator: std.mem.Allocator, io: std.Io) CompilationSession {
+        return .{
+            .allocator = allocator,
+            .io = io,
+        };
+    }
 
-fn writeArtifact(bytes: []const u8, output_path: ?[]const u8) !void {
-    if (output_path) |path| return writeOutputPath(path, bytes);
-    return writeStdout(bytes);
-}
+    fn writeStdout(self: *CompilationSession, bytes: []const u8) !void {
+        std.Io.File.stdout().writeStreamingAll(self.io, bytes) catch |err| switch (err) {
+            error.BrokenPipe => return,
+            else => return err,
+        };
+    }
+
+    fn writeOutputPath(self: *CompilationSession, path: []const u8, bytes: []const u8) !void {
+        // Materialize artifacts through a sibling temporary file and atomically
+        // replace the destination only after the complete write succeeds. A
+        // failed or killed compilation therefore cannot truncate a previously
+        // valid artifact or expose a partially written one.
+        var atomic_file = std.Io.Dir.cwd().createFileAtomic(self.io, path, .{
+            .replace = true,
+        }) catch |err| {
+            std.debug.print("error: unable to write output \"{s}\": {s}\n", .{ path, @errorName(err) });
+            return error.OutputWriteFailed;
+        };
+        defer atomic_file.deinit(self.io);
+        atomic_file.file.writeStreamingAll(self.io, bytes) catch |err| {
+            std.debug.print("error: unable to write output \"{s}\": {s}\n", .{ path, @errorName(err) });
+            return error.OutputWriteFailed;
+        };
+        atomic_file.replace(self.io) catch |err| {
+            std.debug.print("error: unable to commit output \"{s}\": {s}\n", .{ path, @errorName(err) });
+            return error.OutputWriteFailed;
+        };
+    }
+
+    fn writeArtifact(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8) !void {
+        if (output_path) |path| return self.writeOutputPath(path, bytes);
+        return self.writeStdout(bytes);
+    }
+
+    fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {
+        var reporter = diagnostics.Reporter.init(self.allocator, path, source);
+        reporter.file_boundaries = self.file_boundaries;
+        return reporter;
+    }
+
+    fn parseModuleOrReport(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ast.Module {
+        return self.parseModuleOrReportMode(source, allocator, diag, true);
+    }
+
+    fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {
+        var p = parser.Parser.init(source, diag);
+        var module = p.parseModule(allocator) catch |err| {
+            if (render_errors) diag.render();
+            return err;
+        };
+        module.visibility_mode = self.visibility_mode;
+        const resolved = name_resolve.transformWithGraph(allocator, module, self.module_graph) catch |err| {
+            if (render_errors) diag.render();
+            return err;
+        };
+        // Lower `async fn` / `await` to stackless Future state machines BEFORE
+        // monomorphize/sema, so the move/borrow checker and both backends only
+        // ever see ordinary MC. No-op for modules without any `async fn`
+        // (passes the module through untouched).
+        const lowered = async_lower.transform(allocator, resolved, diag) catch |err| {
+            if (render_errors) diag.render();
+            return err;
+        };
+        try generic_precheck.check(allocator, lowered, diag, self.file_boundaries);
+        if (diag.has_errors) {
+            if (render_errors) diag.render();
+            return error.ParseFailed;
+        }
+        const specialized = monomorphize.transformReport(allocator, lowered, diag) catch |err| {
+            if (render_errors) diag.render();
+            return err;
+        };
+        if (diag.has_errors) {
+            if (render_errors) diag.render();
+            return error.ParseFailed;
+        }
+        return mangle_private.transform(allocator, specialized, self.file_boundaries) catch |err| {
+            if (render_errors) diag.render();
+            return err;
+        };
+    }
+};
 
 fn readStdinAlloc(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
     var stdin_reader: std.Io.File.Reader = .initStreaming(std.Io.File.stdin(), io, &.{});
@@ -201,7 +256,7 @@ pub fn main(init: std.process.Init) !void {
 
 fn runMain(init: std.process.Init) !void {
     const allocator = init.gpa;
-    stdout_io = init.io;
+    var session = CompilationSession.init(allocator, init.io);
     // Flush the lowering-coverage trace on every exit path (no-op unless armed via
     // the MC_LOWER_COV env var). Placed first so it covers all `try`/error returns.
     lower_cov.init(init.io, init.environ_map.get("MC_LOWER_COV"));
@@ -214,18 +269,18 @@ fn runMain(init: std.process.Init) !void {
     const command = args.next() orelse return failUsage();
     if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "help")) {
         if (args.next() != null) return failUsage();
-        try writeStdout(usage);
+        try session.writeStdout(usage);
         return;
     }
     if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "version")) {
         if (args.next() != null) return failUsage();
-        try writeStdout("mcc " ++ build_options.version ++ "\n");
+        try session.writeStdout("mcc " ++ build_options.version ++ "\n");
         return;
     }
     if (std.mem.eql(u8, command, "explain")) {
         const code = args.next() orelse return failUsage();
         if (args.next() != null) return failUsage();
-        try runExplain(allocator, code);
+        try runExplain(&session, code);
         return;
     }
     const path = args.next() orelse return failUsage();
@@ -233,7 +288,7 @@ fn runMain(init: std.process.Init) !void {
         error.InvalidArgs => return failUsage(),
     };
     if (!std.mem.eql(u8, command, "fmt") and !cli.Options.isSourceLoadingCommand(command)) return failUsage();
-    active_visibility_mode = options.visibility_mode;
+    session.visibility_mode = options.visibility_mode;
     const is_emit_layout = cli.Options.isEmitLayout(command);
     const is_emit_c_struct = cli.Options.isEmitCStruct(command);
     const reads_stdin = std.mem.eql(u8, path, "-");
@@ -252,7 +307,7 @@ fn runMain(init: std.process.Init) !void {
     // `fmt` operates on the raw file (not the import-flattened source) and is token-preserving;
     // it bypasses the parse/sema pipeline entirely.
     if (std.mem.eql(u8, command, "fmt")) {
-        try runFmt(allocator, path, root_source, options.check_fmt);
+        try runFmt(&session, path, root_source, options.check_fmt);
         return;
     }
 
@@ -288,59 +343,59 @@ fn runMain(init: std.process.Init) !void {
             var out: std.ArrayList(u8) = .empty;
             defer out.deinit(allocator);
             try load_diag.appendJson(&out);
-            try writeStdout(out.items);
+            try session.writeStdout(out.items);
         } else {
             load_diag.render();
         }
         return error.ImportNotFound;
     }
-    combined_boundaries = loaded.boundaries;
-    defer combined_boundaries = null;
-    combined_module_graph = &loaded.graph;
-    defer combined_module_graph = null;
+    session.file_boundaries = loaded.boundaries;
+    defer session.file_boundaries = null;
+    session.module_graph = &loaded.graph;
+    defer session.module_graph = null;
 
     if (std.mem.eql(u8, command, "lex")) {
-        try runLex(allocator, path, source);
+        try runLex(&session, path, source);
     } else if (std.mem.eql(u8, command, "symbols")) {
-        try runSymbols(allocator, path, source);
+        try runSymbols(&session, path, source);
     } else if (std.mem.eql(u8, command, "check")) {
-        try runCheck(allocator, path, source, options.json_diagnostics);
+        try runCheck(&session, path, source, options.json_diagnostics);
     } else if (std.mem.eql(u8, command, "run-trap")) {
-        try runTrap(allocator, path, source);
+        try runTrap(&session, path, source);
     } else if (std.mem.eql(u8, command, "facts")) {
-        try runFacts(allocator, path, source);
+        try runFacts(&session, path, source);
     } else if (std.mem.eql(u8, command, "lower-hir")) {
-        try runLowerHir(allocator, path, source);
+        try runLowerHir(&session, path, source);
     } else if (std.mem.eql(u8, command, "verify-hir")) {
-        try runVerifyHir(allocator, path, source);
+        try runVerifyHir(&session, path, source);
     } else if (std.mem.eql(u8, command, "lower-mir")) {
-        try runLowerMir(allocator, path, source, options.checks.optimize);
+        try runLowerMir(&session, path, source, options.checks.optimize);
     } else if (std.mem.eql(u8, command, "verify")) {
-        try runVerify(allocator, path, source, options.checks.optimize);
+        try runVerify(&session, path, source, options.checks.optimize);
     } else if (std.mem.eql(u8, command, "lower-ir")) {
-        try runLowerIr(allocator, path, source);
+        try runLowerIr(&session, path, source);
     } else if (std.mem.eql(u8, command, "lower-c")) {
-        try runLowerC(allocator, path, source);
+        try runLowerC(&session, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
         const remapped_source_path = try options.remappedSourcePath(allocator, path);
         defer if (remapped_source_path) |p| allocator.free(p);
-        try runEmitC(allocator, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.output_path);
+        try runEmitC(&session, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.output_path);
     } else if (std.mem.eql(u8, command, "build")) {
         const remapped_source_path = try options.remappedSourcePath(allocator, path);
         defer if (remapped_source_path) |p| allocator.free(p);
-        try runBuild(allocator, init.io, path, remapped_source_path orelse path, source, options.output_path.?, init.environ_map.get("CLANG") orelse "clang");
+        try runBuild(&session, path, remapped_source_path orelse path, source, options.output_path.?, init.environ_map.get("CLANG") orelse "clang");
     } else if (std.mem.eql(u8, command, "emit-map")) {
         const remapped_source_path = try options.remappedSourcePath(allocator, path);
         defer if (remapped_source_path) |p| allocator.free(p);
-        try runEmitMap(allocator, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.output_path);
+        try runEmitMap(&session, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.output_path);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        try runEmitLlvm(allocator, path, source, options.checks, options.stub_asm, options.targetArch(), options.linux_kernel, options.output_path);
+        try runEmitLlvm(&session, path, source, options.checks, options.stub_asm, options.targetArch(), options.linux_kernel, options.output_path);
     } else if (std.mem.eql(u8, command, "list-tests")) {
-        try runListTests(allocator, path, source);
+        try runListTests(&session, path, source);
     } else if (is_emit_layout) {
-        try runEmitLayout(allocator, path, source, options.structs_flag.?);
+        try runEmitLayout(&session, path, source, options.structs_flag.?);
     } else if (is_emit_c_struct) {
-        try runEmitCStruct(allocator, path, source, options.structs_flag.?);
+        try runEmitCStruct(&session, path, source, options.structs_flag.?);
     } else {
         return failUsage();
     }
@@ -376,24 +431,26 @@ fn isExpectedCliFailure(err: anyerror) bool {
     };
 }
 
-fn runExplain(allocator: std.mem.Allocator, code: []const u8) !void {
+fn runExplain(session: *CompilationSession, code: []const u8) !void {
+    const allocator = session.allocator;
     const text = try diagnostic_explain.explain(allocator, code) orelse {
         std.debug.print("error: unknown diagnostic code: {s}\n", .{code});
         return error.ExplainFailed;
     };
     defer allocator.free(text);
-    try writeStdout(text);
+    try session.writeStdout(text);
 }
 
-fn runLowerHir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = initReporter(allocator, path, source);
+fn runLowerHir(session: *CompilationSession, path: []const u8, source: []const u8) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -404,18 +461,19 @@ fn runLowerHir(allocator: std.mem.Allocator, path: []const u8, source: []const u
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try hir.appendDump(allocator, module, &output);
-    try writeStdout(output.items);
+    try session.writeStdout(output.items);
 }
 
-fn runVerifyHir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = initReporter(allocator, path, source);
+fn runVerifyHir(session: *CompilationSession, path: []const u8, source: []const u8) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -426,18 +484,19 @@ fn runVerifyHir(allocator: std.mem.Allocator, path: []const u8, source: []const 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try hir.appendVerificationFacts(allocator, module, &output);
-    try writeStdout(output.items);
+    try session.writeStdout(output.items);
 }
 
-fn runLowerMir(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool) !void {
-    var diag = initReporter(allocator, path, source);
+fn runLowerMir(session: *CompilationSession, path: []const u8, source: []const u8, optimize: bool) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -448,18 +507,19 @@ fn runLowerMir(allocator: std.mem.Allocator, path: []const u8, source: []const u
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try mir.appendDumpOpt(allocator, module, &output, .{ .optimize = optimize });
-    try writeStdout(output.items);
+    try session.writeStdout(output.items);
 }
 
-fn runVerify(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool) !void {
-    var diag = initReporter(allocator, path, source);
+fn runVerify(session: *CompilationSession, path: []const u8, source: []const u8, optimize: bool) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -468,7 +528,7 @@ fn runVerify(allocator: std.mem.Allocator, path: []const u8, source: []const u8,
     }
 
     var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = combined_boundaries;
+    checker.file_boundaries = session.file_boundaries;
     checker.optimize = optimize;
     checker.checkModule(module);
     if (diag.has_errors) {
@@ -488,15 +548,10 @@ fn failUsage() !void {
     return error.InvalidArgs;
 }
 
-fn initReporter(allocator: std.mem.Allocator, path: []const u8, source: []const u8) diagnostics.Reporter {
-    var reporter = diagnostics.Reporter.init(allocator, path, source);
-    reporter.file_boundaries = combined_boundaries;
-    return reporter;
-}
-
 // `mcc fmt <file>` prints the canonically-formatted source to stdout. `mcc fmt --check <file>`
 // prints nothing and exits nonzero if the file is not already formatted (for CI / editors).
-fn runFmt(allocator: std.mem.Allocator, path: []const u8, source: []const u8, check: bool) !void {
+fn runFmt(session: *CompilationSession, path: []const u8, source: []const u8, check: bool) !void {
+    const allocator = session.allocator;
     const formatted = try fmt.format(allocator, source);
     defer allocator.free(formatted);
     if (check) {
@@ -506,28 +561,29 @@ fn runFmt(allocator: std.mem.Allocator, path: []const u8, source: []const u8, ch
         }
         return;
     }
-    try writeStdout(formatted);
+    try session.writeStdout(formatted);
 }
 
 // `mcc symbols <file>` prints a JSON symbol index (defs + refs with spans) for
 // the language server. Parse failures are reported as structured incomplete
 // results; internal/resource failures return nonzero rather than masquerading as
 // a clean empty file.
-fn runSymbols(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = initReporter(allocator, path, source);
+fn runSymbols(session: *CompilationSession, path: []const u8, source: []const u8) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = parseModuleOrReport(source, parse_allocator, &diag) catch |err| switch (err) {
+    const module = session.parseModuleOrReport(source, parse_allocator, &diag) catch |err| switch (err) {
         error.ParseFailed => {
-            try writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_PARSE_FAILED\",\"message\":\"symbol indexing aborted after parse diagnostics\"}]}\n");
+            try session.writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_PARSE_FAILED\",\"message\":\"symbol indexing aborted after parse diagnostics\"}]}\n");
             return error.ParseFailed;
         },
         else => {
-            try writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_SYMBOLS_INTERNAL\",\"message\":\"symbol indexing aborted by an internal error\"}]}\n");
+            try session.writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_SYMBOLS_INTERNAL\",\"message\":\"symbol indexing aborted by an internal error\"}]}\n");
             return err;
         },
     };
@@ -536,11 +592,11 @@ fn runSymbols(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try symbols.emitJson(allocator, module, &diag, &output);
-    try writeStdout(output.items);
+    try session.writeStdout(output.items);
 }
 
-fn runLex(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = initReporter(allocator, path, source);
+fn runLex(session: *CompilationSession, path: []const u8, source: []const u8) !void {
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var lx = lexer.Lexer.init(source, &diag);
@@ -565,51 +621,53 @@ fn runLex(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !v
     }
 }
 
-fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8, json_diagnostics: bool) !void {
-    var diag = initReporter(allocator, path, source);
+fn runCheck(session: *CompilationSession, path: []const u8, source: []const u8, json_diagnostics: bool) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = parseModuleOrReportMode(source, parse_allocator, &diag, false) catch |err| {
+    const module = session.parseModuleOrReportMode(source, parse_allocator, &diag, false) catch |err| {
         if (diag.has_errors) {
-            try emitCheckDiagnostics(allocator, &diag, json_diagnostics);
+            try emitCheckDiagnostics(session, &diag, json_diagnostics);
         }
         return err;
     };
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
-        try emitCheckDiagnostics(allocator, &diag, json_diagnostics);
+        try emitCheckDiagnostics(session, &diag, json_diagnostics);
         return error.CheckFailed;
     }
 
     var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = combined_boundaries;
+    checker.file_boundaries = session.file_boundaries;
     checker.checkModule(module);
     if (diag.has_errors) {
-        try emitCheckDiagnostics(allocator, &diag, json_diagnostics);
+        try emitCheckDiagnostics(session, &diag, json_diagnostics);
         return error.CheckFailed;
     }
 
     if (json_diagnostics) {
-        try emitCheckDiagnostics(allocator, &diag, true);
+        try emitCheckDiagnostics(session, &diag, true);
     } else {
         std.debug.print("parsed {d} top-level declarations\n", .{module.decls.len});
     }
 }
 
-fn emitCheckDiagnostics(allocator: std.mem.Allocator, diag: *diagnostics.Reporter, json_diagnostics: bool) !void {
+fn emitCheckDiagnostics(session: *CompilationSession, diag: *diagnostics.Reporter, json_diagnostics: bool) !void {
     if (!json_diagnostics) {
         diag.render();
         return;
     }
+    const allocator = session.allocator;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
     try diag.appendJson(&out);
-    try writeStdout(out.items);
+    try session.writeStdout(out.items);
 }
 
 // `mcc list-tests <file>` prints, one per line, the name of every `#[test]`-attributed
@@ -618,15 +676,16 @@ fn emitCheckDiagnostics(allocator: std.mem.Allocator, diag: *diagnostics.Reporte
 // each in its own process (a trap => fail) and reports pass/fail per name. This is the
 // language-side discovery hook — no codegen change, so a `#[test]` function lowers like
 // any other on both backends.
-fn runListTests(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = initReporter(allocator, path, source);
+fn runListTests(session: *CompilationSession, path: []const u8, source: []const u8) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -654,18 +713,19 @@ fn runListTests(allocator: std.mem.Allocator, path: []const u8, source: []const 
         try out.appendSlice(allocator, name);
         try out.append(allocator, '\n');
     }
-    try writeStdout(out.items);
+    try session.writeStdout(out.items);
 }
 
-fn runFacts(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = initReporter(allocator, path, source);
+fn runFacts(session: *CompilationSession, path: []const u8, source: []const u8) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -676,18 +736,19 @@ fn runFacts(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(allocator);
     try ir.appendFacts(allocator, module, &facts);
-    try writeStdout(facts.items);
+    try session.writeStdout(facts.items);
 }
 
-fn runLowerIr(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = initReporter(allocator, path, source);
+fn runLowerIr(session: *CompilationSession, path: []const u8, source: []const u8) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -698,18 +759,19 @@ fn runLowerIr(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try ir.appendLowerIr(allocator, module, &output);
-    try writeStdout(output.items);
+    try session.writeStdout(output.items);
 }
 
-fn runTrap(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = initReporter(allocator, path, source);
+fn runTrap(session: *CompilationSession, path: []const u8, source: []const u8) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -740,15 +802,16 @@ fn runTrap(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !
     }
 }
 
-fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var diag = initReporter(allocator, path, source);
+fn runLowerC(session: *CompilationSession, path: []const u8, source: []const u8) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -759,19 +822,20 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try lower_c.appendInspection(allocator, module, &output);
-    try writeStdout(output.items);
+    try session.writeStdout(output.items);
 }
 
-fn runEmitC(allocator: std.mem.Allocator, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, output_path: ?[]const u8) !void {
+fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, output_path: ?[]const u8) !void {
+    const allocator = session.allocator;
     const optimize = checks.optimize;
-    var diag = initReporter(allocator, path, source);
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -780,7 +844,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, artifact_source_path
     }
 
     var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = combined_boundaries;
+    checker.file_boundaries = session.file_boundaries;
     checker.optimize = optimize;
     checker.checkModule(module);
     if (diag.has_errors) {
@@ -819,18 +883,20 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, artifact_source_path
         },
         else => return err,
     };
-    try writeArtifact(output.items, output_path);
+    try session.writeArtifact(output.items, output_path);
 }
 
-fn runBuild(allocator: std.mem.Allocator, io: std.Io, path: []const u8, artifact_source_path: []const u8, source: []const u8, output_path: []const u8, clang_bin: []const u8) !void {
-    var diag = initReporter(allocator, path, source);
+fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, output_path: []const u8, clang_bin: []const u8) !void {
+    const allocator = session.allocator;
+    const io = session.io;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -839,7 +905,7 @@ fn runBuild(allocator: std.mem.Allocator, io: std.Io, path: []const u8, artifact
     }
 
     var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = combined_boundaries;
+    checker.file_boundaries = session.file_boundaries;
     checker.checkModule(module);
     if (diag.has_errors) {
         diag.render();
@@ -877,7 +943,7 @@ fn runBuild(allocator: std.mem.Allocator, io: std.Io, path: []const u8, artifact
     const tmp_c = try std.fmt.allocPrint(allocator, "{s}.mc-build-{d}.c", .{ output_path, std.Thread.getCurrentId() });
     defer allocator.free(tmp_c);
     defer std.Io.Dir.cwd().deleteFile(io, tmp_c) catch {};
-    try writeOutputPath(tmp_c, hosted_c.items);
+    try session.writeOutputPath(tmp_c, hosted_c.items);
 
     const tmp_exe = try std.fmt.allocPrint(allocator, "{s}.mc-build-{d}-{d}.out", .{
         output_path,
@@ -933,9 +999,9 @@ fn runBuild(allocator: std.mem.Allocator, io: std.Io, path: []const u8, artifact
         std.debug.print("mcc build: unable to commit {s}: {s}\n", .{ output_path, @errorName(err) });
         return error.BuildFailed;
     };
-    try writeStdout("mcc build: wrote ");
-    try writeStdout(output_path);
-    try writeStdout("\n");
+    try session.writeStdout("mcc build: wrote ");
+    try session.writeStdout(output_path);
+    try session.writeStdout("\n");
 }
 
 fn appendHostedBuildWrapper(allocator: std.mem.Allocator, raw_c: []const u8, out: *std.ArrayList(u8), source_path: []const u8) !void {
@@ -1000,16 +1066,17 @@ fn isCIdentifierContinue(ch: u8) bool {
     return isCIdentifierStart(ch) or (ch >= '0' and ch <= '9');
 }
 
-fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, output_path: ?[]const u8) !void {
+fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, output_path: ?[]const u8) !void {
+    const allocator = session.allocator;
     const optimize = checks.optimize;
-    var diag = initReporter(allocator, path, source);
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -1018,7 +1085,7 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, artifact_source_pa
     }
 
     var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = combined_boundaries;
+    checker.file_boundaries = session.file_boundaries;
     checker.optimize = optimize;
     checker.checkModule(module);
     if (diag.has_errors) {
@@ -1061,19 +1128,20 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, artifact_source_pa
         .stub_asm = stub_asm,
         .reporter = &diag,
     });
-    try writeArtifact(output.items, output_path);
+    try session.writeArtifact(output.items, output_path);
 }
 
-fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, linux_kernel: bool, output_path: ?[]const u8) !void {
+fn runEmitLlvm(session: *CompilationSession, path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, linux_kernel: bool, output_path: ?[]const u8) !void {
+    const allocator = session.allocator;
     const optimize = checks.optimize;
-    var diag = initReporter(allocator, path, source);
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -1082,7 +1150,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
     }
 
     var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = combined_boundaries;
+    checker.file_boundaries = session.file_boundaries;
     checker.optimize = optimize;
     checker.checkModule(module);
     if (diag.has_errors) {
@@ -1123,7 +1191,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
         },
         else => return err,
     };
-    try writeArtifact(output.items, output_path);
+    try session.writeArtifact(output.items, output_path);
 }
 
 fn reportBackendUnsupportedFallback(diag: *diagnostics.Reporter, module: ast.Module, backend_name: []const u8) void {
@@ -1150,15 +1218,16 @@ fn backendUnsupportedFallbackSpan(module: ast.Module) ast.Span {
 // `emit-layout`: emit a generated C header asserting MC's authoritative layout (sizeof + each
 // field offset) for the comma-separated structs in `--structs=`. A C runtime that hand-mirrors
 // one of these structs includes the header, so any MC↔C layout drift becomes a compile error.
-fn runEmitLayout(allocator: std.mem.Allocator, path: []const u8, source: []const u8, structs_csv: []const u8) !void {
-    var diag = initReporter(allocator, path, source);
+fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []const u8, structs_csv: []const u8) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -1167,7 +1236,7 @@ fn runEmitLayout(allocator: std.mem.Allocator, path: []const u8, source: []const
     }
 
     var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = combined_boundaries;
+    checker.file_boundaries = session.file_boundaries;
     checker.checkModule(module);
     if (diag.has_errors) {
         diag.render();
@@ -1197,7 +1266,7 @@ fn runEmitLayout(allocator: std.mem.Allocator, path: []const u8, source: []const
         },
         else => return err,
     };
-    try writeStdout(output.items);
+    try session.writeStdout(output.items);
 }
 
 // `emit-c-struct` (hardening A2): emit a generated C header with the FULL struct *definitions* for
@@ -1206,15 +1275,16 @@ fn runEmitLayout(allocator: std.mem.Allocator, path: []const u8, source: []const
 // `_Static_assert`s as a cross-check. A C runtime includes this header and drops its hand-written
 // mirror, so the MC struct becomes the single source of truth and MC↔C drift is impossible (there
 // is no second declaration to diverge).
-fn runEmitCStruct(allocator: std.mem.Allocator, path: []const u8, source: []const u8, structs_csv: []const u8) !void {
-    var diag = initReporter(allocator, path, source);
+fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []const u8, structs_csv: []const u8) !void {
+    const allocator = session.allocator;
+    var diag = session.initReporter(path, source);
     defer diag.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -1223,7 +1293,7 @@ fn runEmitCStruct(allocator: std.mem.Allocator, path: []const u8, source: []cons
     }
 
     var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = combined_boundaries;
+    checker.file_boundaries = session.file_boundaries;
     checker.checkModule(module);
     if (diag.has_errors) {
         diag.render();
@@ -1252,50 +1322,7 @@ fn runEmitCStruct(allocator: std.mem.Allocator, path: []const u8, source: []cons
         },
         else => return err,
     };
-    try writeStdout(output.items);
-}
-
-fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ast.Module {
-    return parseModuleOrReportMode(source, allocator, diag, true);
-}
-
-fn parseModuleOrReportMode(source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {
-    var p = parser.Parser.init(source, diag);
-    var module = p.parseModule(allocator) catch |err| {
-        if (render_errors) diag.render();
-        return err;
-    };
-    module.visibility_mode = active_visibility_mode;
-    const resolved = name_resolve.transformWithGraph(allocator, module, combined_module_graph) catch |err| {
-        if (render_errors) diag.render();
-        return err;
-    };
-    // Lower `async fn` / `await` to stackless Future state machines BEFORE monomorphize/sema, so
-    // the move/borrow checker and both backends only ever see ordinary MC. No-op for modules
-    // without any `async fn` (passes the module through untouched).
-    const lowered = async_lower.transform(allocator, resolved, diag) catch |err| {
-        if (render_errors) diag.render();
-        return err;
-    };
-    try generic_precheck.check(allocator, lowered, diag, combined_boundaries);
-    if (diag.has_errors) {
-        if (render_errors) diag.render();
-        return error.CheckFailed;
-    }
-    // Specialize comptime-parameter type-generic functions (section 22). This is
-    // a no-op for modules without any such function, so non-generic code is
-    // passed through untouched.
-    const specialized = monomorphize.transformReport(allocator, lowered, diag) catch |err| {
-        if (render_errors) diag.render();
-        return err;
-    };
-    // G22: uniquify file-private top-level names that collide across imported files (§30).
-    // No-op unless two strict files each define a file-private value of the same name; keeps
-    // the flat namespace for every non-colliding `pub`/`export` name.
-    return mangle_private.transform(allocator, specialized, combined_boundaries) catch |err| {
-        if (render_errors) diag.render();
-        return err;
-    };
+    try session.writeStdout(output.items);
 }
 
 test {

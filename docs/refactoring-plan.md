@@ -59,6 +59,15 @@ Risk register links:
 
 Purpose: make one compiler request a real object instead of process-global state.
 
+Current status:
+
+- `src/main.zig` now creates a request-scoped `CompilationSession` for allocator,
+  IO, file-boundary, module-graph, and visibility state.
+- The old `combined_boundaries`, `combined_module_graph`,
+  `active_visibility_mode`, and `stdout_io` module globals are removed.
+- Remaining Phase 1 work is pipeline de-duplication and an explicit in-process
+  reentrancy test.
+
 Work:
 
 - Add `CompilationSession` with allocator, IO handles, source manager,
