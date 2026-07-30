@@ -13,13 +13,26 @@ and keep experimental product surfaces out of production claims.
 | Area | Status | Decision |
 |---|---|---|
 | Compiler request state | Closed for the admitted subset | Keep `CompilationSession` as the request boundary and extend it only through tests. |
-| Typed MIR identity | In progress | Continue migrating type/value/symbol/span identity from strings and AST side channels into typed MIR tables. |
+| Typed MIR identity | In progress | Continue migrating type/value/symbol/span identity from strings and AST side channels into typed MIR tables. Do not expand backend semantics while this is open. |
 | Backend semantic authority | Open | Backends must become consumers of verified facts, not secondary semantic analyzers. |
 | HIR authority | Open | Either promote HIR to the production semantic boundary or keep it as a generated inspection view. |
 | Artifact/source-map provenance | Open | Bind emitted bytes, source maps, options, toolchain identity, and MIR/fact digests together. |
 | Build gate governance | Open | Move stringly gate lists into one generated manifest. |
 | Product/TCB scope | Open | Keep selfhost, LLVM parity, kernel production, Agent runtime, and vendored runtimes profile-scoped until their blockers close. |
 | Kernel secure loading | Open | Production loading must consume exact-byte `VerifiedBundle` capabilities, not raw bytes plus metadata. |
+
+## Planning horizon
+
+Use three horizons instead of one large undifferentiated roadmap:
+
+| Horizon | Target | Must finish | Explicitly out of scope |
+|---|---|---|---|
+| H1 | Stabilize compiler-core authority | Phases 2-4 | Kernel production, selfhost expansion, new language surface. |
+| H2 | Make artifacts and gates auditable | Phases 5-7 | Real hardware qualification except evidence-schema preparation. |
+| H3 | Close production kernel trust boundaries | Phases 8-9 | Any production claim before exact-byte load and hardware evidence exist. |
+
+Every slice should be small enough to review as one invariant change. If a slice
+needs more than one semantic authority migration, split it.
 
 ## Non-negotiable rules
 
@@ -93,13 +106,15 @@ Current baseline:
 - MIR already has typed seeds for block, function symbol, value, type, and span
   identity.
 - Representation-sensitive instructions and facts mirror typed value/type/span
-  IDs; target-type facts mirror typed result types and owner symbols where an
-  owner exists. Verifier/admission checks reject drift.
+  IDs.
+- Target-type facts mirror typed result types and owner symbols where an owner
+  exists. Verifier/admission checks reject result/owner drift.
 - Inventory checks anchor the current typed identity surface.
 
 Next slices, in order:
 
-1. Add typed `SymbolId` mirrors to target-type owner facts and direct-call instruction metadata.
+1. Mirror target-type source identity with `SpanId` and make admission reject
+   stale source-span fact drift.
 2. Move optional/result representation facts fully behind typed IDs.
 3. Move ABI/layout-sensitive facts behind `TypeId`/layout-table IDs.
 4. Remove `unknown` from verified MIR admission; allow it only in builder/debug states.
@@ -135,6 +150,13 @@ Deliverables:
 - Keep backend fallback policies explicit: conservative lowering, source-spanned
   diagnostic, or verifier failure.
 
+First target:
+
+- Create a backend-surface inventory that lists every C/LLVM helper still
+  reading AST/type spelling for semantic decisions.
+- For each migrated fact family, update the inventory in the same commit that
+  deletes or quarantines the old helper.
+
 Closure criteria:
 
 - Production backend code cannot access AST nodes for semantic decisions.
@@ -151,7 +173,7 @@ Risk links:
 
 Purpose: remove the current half-authoritative HIR state.
 
-Decision required:
+Decision required before broad MIR/backend cleanup:
 
 - Option A: promote HIR to the production boundary:
   `Syntax AST -> Resolved/Typed HIR -> Typed MIR -> Backend`.
@@ -166,6 +188,8 @@ Closure criteria:
 
 - There is no second semantic path where HIR says one thing and production MIR/codegen consumes another.
 - `mcc lower-hir` / `verify-hir` output is documented as either production input or inspection output.
+- Backends and MIR builder have one declared upstream semantic source for every
+  type/control/effect/layout/provenance fact.
 
 Risk links:
 
@@ -213,6 +237,7 @@ Closure criteria:
 - Adding, renaming, or deleting a blocking gate requires editing exactly one manifest row.
 - Deleted or skipped blocking gates fail CI with a clear error.
 - Release evidence names the same gate IDs as local builds.
+- Documentation does not contain manually maintained gate pass/fail counters.
 
 Risk links:
 
@@ -311,17 +336,34 @@ Phases 7-9 can be prepared in parallel only as profile-manifest work. They
 should not consume compiler-core implementation time until Phases 2-4 are closed
 or a release profile explicitly requires them.
 
+## Slice rules
+
+Each implementation slice must:
+
+- change one invariant family only;
+- include a focused regression test that fails without the code change;
+- update the relevant inventory script when an architectural seam is introduced;
+- update this plan or [`review-risk-register.yaml`](review-risk-register.yaml)
+  only when status or closure criteria materially change;
+- leave the worktree in a state where at least the focused gate and inventory
+  gate pass.
+
+Do not close a phase because a document says the direction is implemented.
+Close it only when production code can no longer express the bad state.
+
 ## Near-term implementation backlog
 
 Use this backlog for the next engineering slices:
 
-1. Mirror target-type owner identity with `SymbolId` and make admission reject
-   stale direct-call owner facts.
+1. Mirror target-type source identity with `SpanId` and make admission reject
+   stale target-type source facts.
 2. Move optional/result representation lowering to typed fact consumers only.
 3. Add a backend-surface inventory row for every remaining C/LLVM semantic helper.
 4. Remove or quarantine the first migrated backend-local inference helper.
 5. Add artifact digest metadata to source-map output.
 6. Introduce the first generated gate manifest for a small subset of existing gates.
+7. Decide HIR authority explicitly and update `mcc lower-hir` / `verify-hir`
+   documentation to match the decision.
 
 Each slice should end with:
 
