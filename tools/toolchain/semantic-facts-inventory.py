@@ -1183,6 +1183,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "emitSequencedCallArgTemp(call.args[1], locals, call.type_args[0])": 0,
         "floatCTypeName(node.type_args[0])": 0,
         "fn exprSourceTypeForCall(": 0,
+        "const base_ty = self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;": 0,
+        "fn sliceBaseTypeForEmission(": 1,
         "fn emitPointerToPAddrTargetCast(": 1,
         "fn mirConstGetIndexAt(": 1,
         "rawMethodReturnTypeForCall": 0,

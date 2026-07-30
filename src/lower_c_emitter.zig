@@ -5097,7 +5097,7 @@ const CEmitter = struct {
     }
 
     fn emitSliceExpr(self: *CEmitter, node: anytype, slice_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !void {
-        const base_ty = self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
+        const base_ty = self.sliceBaseTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
         const inferred_slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedCEmission;
         const slice_ty = (self.mirTargetTypeFactAt(.expression_result, slice_span) orelse return error.UnsupportedCEmission).target_ty;
         if (!sema_type.sameTypeSyntax(self.resolveAliasType(slice_ty), self.resolveAliasType(inferred_slice_ty))) return error.UnsupportedCEmission;
@@ -5110,6 +5110,20 @@ const CEmitter = struct {
         try self.emitSliceBoundsGuard(slice_span, n, slice_name);
         try self.emitSliceBasePtr(node.base.*, locals, resolved);
         try self.out.print(self.allocator, " + mc_start{d}, .len = mc_end{d} - mc_start{d} }}; }})", .{ n, n, n });
+    }
+
+    fn sliceBaseTypeForEmission(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (self.arrayTypeForExpr(base, locals)) |ty| return ty;
+        if (self.sliceReturnTypeForExpr(base, locals)) |ty| return ty;
+        if (self.operandEmitType(base, locals)) |ty| return ty;
+        // Compiler-generated zero-span nodes have no source-keyed
+        // expression_result fact. Keep the old bounded path only for those
+        // synthetic bases; source bases must be typed through MIR-aware
+        // array/slice/operand queries above.
+        if (base.span.line == 0 and base.span.column == 0) {
+            return self.exprSourceTypeForEmission(base, locals);
+        }
+        return null;
     }
 
     fn emitSliceRangePrelude(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), resolved_base_ty: ast.TypeExpr, temp_id: usize) !void {
